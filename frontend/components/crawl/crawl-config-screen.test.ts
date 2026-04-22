@@ -1,8 +1,8 @@
-import { describe, expect, it } from"vitest";
+import { describe, expect, it } from "vitest";
 
-import { buildDispatch } from"./crawl-config-screen";
-import type { FieldRow } from"./shared";
-import type { CrawlConfig } from"../../lib/api/types";
+import { buildDispatch } from "./crawl-config-screen";
+import type { FieldRow } from "./shared";
+import type { CrawlConfig } from "../../lib/api/types";
 
 function baseConfig(overrides: Partial<CrawlConfig> = {}): CrawlConfig {
  return {

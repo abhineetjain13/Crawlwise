@@ -63,25 +63,25 @@ export function uniqueFields(values: string[]) {
 }
 
 export function cleanRequestedField(value: string) {
- return String(value ||"").replace(/\s+/g,"").trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 export function uniqueRequestedFields(values: string[]) {
- const deduped: string[] = [];
- const seen = new Set<string>();
- for (const value of values) {
- const cleaned = cleanRequestedField(value);
- if (!cleaned) {
- continue;
- }
- const dedupeKey = cleaned.toLocaleLowerCase();
- if (seen.has(dedupeKey)) {
- continue;
- }
- seen.add(dedupeKey);
- deduped.push(cleaned);
- }
- return deduped;
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const cleaned = cleanRequestedField(value);
+    if (!cleaned) {
+      continue;
+    }
+    const dedupeKey = cleaned.toLocaleLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    deduped.push(cleaned);
+  }
+  return deduped;
 }
 
 export function uniqueNumbers(values: number[]) {
@@ -229,8 +229,8 @@ export function decodeUrlsForDisplay<T>(value: T): T {
 
 export function humanizeFieldName(value: string) {
  const normalized = String(value ||"")
- .replace(/[_-]+/g,"")
- .replace(/\s+/g,"")
+ .replace(/[_-]+/g, " ")
+ .replace(/\s+/g, " ")
  .trim();
  if (!normalized) return"";
  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
@@ -304,9 +304,8 @@ export function extractionVerdictTone(verdict: string) {
 }
 
 export function humanizeVerdict(verdict: string) {
- return verdict.replace(/_/g,"").replace(/\b\w/g, (char) => char.toUpperCase());
+  return verdict.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
-
 export type QualityLevel ="high"|"medium"|"low"|"unknown";
 
 export type QualitySnapshot = {
@@ -536,35 +535,37 @@ export const LogTerminal = memo(function LogTerminal({
  live?: boolean;
  viewportRef?: RefObject<HTMLDivElement | null>;
 }>) {
- const ref = useLogViewport(logs.length, viewportRef);
- return (
- <div
- ref={ref}
- className="crawl-terminal min-h-[50vh] max-h-[72vh] space-y-1.5 overflow-y-auto"
- role="log"
- aria-live={live ?"polite":"off"}
- aria-atomic="false"
- >
- {logs.length ? (
- logs.map((log) => (
- <div key={log.id} className="font-mono text-sm leading-6">
- <span className="text-muted">[{formatTimeHms(log.created_at)}]</span>{""}
- <span
- className={cn(
-"text-sm font-semibold text-muted uppercase inline-flex items-center px-1.5 py-0.5",
- logTone(log.level),
- )}
- >
- {normalizeLogLevel(log.level)}
- </span>{""}
- <span>{sanitizeLogMessage(log.message)}</span>
- </div>
- ))
- ) : (
- <div className="text-sm leading-[1.55] text-muted">{live ?"Waiting for log output...":"No logs captured for this run."}</div>
- )}
- </div>
- );
+  const ref = useLogViewport(logs.length, viewportRef);
+  return (
+    <div
+      ref={ref}
+      className="crawl-terminal min-h-[50vh] max-h-[72vh] space-y-1.5 overflow-y-auto"
+      role="log"
+      aria-live={live ? "polite" : "off"}
+      aria-atomic="false"
+    >
+      {logs.length
+        ? logs.map((log) => (
+            <div key={log.id} className="font-mono text-sm leading-6">
+              <span className="text-muted">[{formatTimeHms(log.created_at)}]</span>{" "}
+              <span
+                className={cn(
+                  "text-sm font-semibold text-muted uppercase inline-flex items-center px-1.5 py-0.5",
+                  logTone(log.level),
+                )}
+              >
+                {normalizeLogLevel(log.level)}
+              </span>{" "}
+              <span>{sanitizeLogMessage(log.message)}</span>
+            </div>
+          ))
+        : (
+            <div className="font-mono text-sm leading-6 text-muted">
+              {live ? "Logs are loading..." : "No logs yet"}
+            </div>
+          )}
+    </div>
+  );
 });
 
 export function SettingSection({

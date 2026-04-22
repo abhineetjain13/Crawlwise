@@ -246,6 +246,71 @@ def test_fingerprint_generator_normalizes_default_string_settings(
     assert constructed == [(("chrome",), ("desktop",), ("en-US",))]
 
 
+def test_fingerprint_generator_ignores_mapping_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed: list[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = []
+
+    class _FakeGenerator:
+        def __init__(self, *, browser, os, device, locale) -> None:
+            del os
+            constructed.append((tuple(browser), tuple(device), tuple(locale)))
+
+        def generate(self):
+            return SimpleNamespace(
+                screen=SimpleNamespace(width=1280, height=720, devicePixelRatio=1),
+                navigator=SimpleNamespace(
+                    userAgent="Mozilla/5.0 Chrome/145.0.0.0",
+                    language="en-US",
+                    maxTouchPoints=0,
+                    userAgentData={"brands": [], "mobile": False},
+                ),
+                headers={"Accept": "text/html"},
+            )
+
+    monkeypatch.setattr(browser_identity, "FingerprintGenerator", _FakeGenerator)
+    monkeypatch.setattr(browser_identity, "_FINGERPRINT_GENERATOR", None)
+    monkeypatch.setattr(browser_identity, "_FINGERPRINT_GENERATOR_CONFIG", None)
+    monkeypatch.setattr(
+        browser_identity.crawler_runtime_settings,
+        "fingerprint_browser",
+        {"chrome": True},
+    )
+    monkeypatch.setattr(
+        browser_identity.crawler_runtime_settings,
+        "fingerprint_device",
+        {"desktop": True},
+    )
+    monkeypatch.setattr(
+        browser_identity.crawler_runtime_settings,
+        "fingerprint_locale",
+        {"en-US": True},
+    )
+
+    browser_identity._fingerprint_generator()
+
+    assert constructed == [((), (), ())]
+
+
+def test_coherent_sec_ch_headers_accepts_tuple_brand_entries() -> None:
+    headers = browser_identity._coherent_sec_ch_headers(
+        {
+            "brands": (
+                {"brand": "Chromium", "version": "145"},
+                {"brand": "Google Chrome", "version": "145"},
+            ),
+            "mobile": False,
+            "platform": "Windows",
+        }
+    )
+
+    assert headers["sec-ch-ua"] == (
+        '"Chromium";v="145", "Google Chrome";v="145"'
+    )
+    assert headers["sec-ch-ua-mobile"] == "?0"
+    assert headers["sec-ch-ua-platform"] == '"Windows"'
+
+
 @pytest.mark.asyncio
 async def test_shared_browser_runtime_passes_generated_context_options(
     monkeypatch: pytest.MonkeyPatch,

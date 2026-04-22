@@ -152,7 +152,10 @@ def validate_xpath_candidate(
 
 def build_absolute_xpath(node: Tag | NavigableString) -> str | None:
     if isinstance(node, NavigableString):
-        node = node.parent
+        parent = node.parent
+        if not isinstance(parent, Tag):
+            return None
+        node = parent
     if not isinstance(node, Tag):
         return None
     soup = _document_root(node)

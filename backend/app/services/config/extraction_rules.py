@@ -157,6 +157,21 @@ DETAIL_BLOCKED_TOKENS: tuple[str, ...] = (
     "subscribe",
     "wishlist",
 )
+DETAIL_UTILITY_PATH_TOKENS: tuple[str, ...] = (
+    "account",
+    "cart",
+    "faq",
+    "faqs",
+    "help",
+    "login",
+    "logout",
+    "mywishlist",
+    "returns",
+    "search",
+    "signin",
+    "support",
+    "wishlist",
+)
 DETAIL_EXPAND_SELECTORS: tuple[str, ...] = (
     "summary",
     "details > summary",
@@ -270,6 +285,7 @@ __all__ = sorted(
         "DETAIL_BLOCKED_TOKENS",
         "DETAIL_EXPAND_KEYWORD_EXTENSIONS",
         "DETAIL_EXPAND_SELECTORS",
+        "DETAIL_UTILITY_PATH_TOKENS",
         "DETAIL_TITLE_SOURCE_RANKS",
         "DYNAMIC_FIELD_NAME_MAX_TOKENS",
         "JOB_ERROR_PAGE_HEADINGS",

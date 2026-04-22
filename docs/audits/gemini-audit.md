@@ -2,9 +2,8 @@
 Section 0: Delta Table (longitudinal)
 Finding ID	Previous Status	Current Status	Evidence
 RC-1	platform_url_normalizers.py hardcodes ADP OCP violation	FIXED	app/services/acquirer.py lines 34-35 (delegates to normalize_adapter_acquisition_url)
-LN-1	normalize_decimal_price corrupts numeric strings	NOT FOUND	Cannot verify; normalizers.py file contents were not provided in the prompt.
-LN-2	extract_page_images(exclude_linked_detail_images=True)	FIXED	app/services/detail_extractor.py line 117 (exclude_linked_detail_images=False)
-LN-3	_listing_title_is_noise allows numeric-only titles	FIXED	app/services/listing_extractor.py line 256 (if cleaned.isdigit(): return True)
+LN-1	normalize_decimal_price corrupts numeric strings	DEFERRED	Cannot verify; normalizers.py file was not available during this audit cycle.
+LN-2	extract_page_images(exclude_linked_detail_images=True)	FIXED	app/services/detail_extractor.py line 117 (exclude_linked_detail_images=False)LN-3	_listing_title_is_noise allows numeric-only titles	FIXED	app/services/listing_extractor.py line 256 (if cleaned.isdigit(): return True)
 LN-4	read_network_payload_body reads unbounded payloads to memory	PERSISTS	app/services/acquisition/browser_capture.py line 348 (body_bytes = await response.body())
 Section 1–8: Dimension Scores
 Dimension: D1. SOLID / DRY / KISS
@@ -81,12 +80,10 @@ Because Playwright's Python API does not natively stream response.body(), we mus
 Open app/services/acquisition/browser_capture.py.
 Locate read_network_payload_body.
 Wrap await response.body() in an asyncio.wait_for.
-Calculate a strict timeout based on the payload_budget (e.g., 2 seconds for a 3MB budget).
+Calculate timeout dynamically: calculated_timeout = max(2.0, payload_budget_bytes / (1.5 * 1024 * 1024))  # assumes 1.5 MB/s minimum
 Acceptance criteria
 
-body_bytes = await response.body() is wrapped in asyncio.wait_for(response.body(), timeout=2.0).
-
-asyncio.TimeoutError is caught and returns NetworkPayloadReadResult(body=None, outcome="too_large").
+body_bytes = await response.body() is wrapped in asyncio.wait_for(response.body(), timeout=calculated_timeout).asyncio.TimeoutError is caught and returns NetworkPayloadReadResult(body=None, outcome="too_large").
 
 grep -n "await response.body()" app/services/acquisition/browser_capture.py no longer shows an unwrapped call.
 WORK ORDER LN-5: Unblock Event Loop during HTML Regex

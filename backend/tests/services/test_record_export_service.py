@@ -249,8 +249,8 @@ def test_listing_adapter_records_use_shared_surface_normalization() -> None:
     record = rows[0]
     assert record["title"] == "Boy Brow"
     assert record["description"] == "Inspired by the flexible formula of mustache pomade."
-    assert record["additional_images"] == ["https://cdn.example.com/boy-brow-2.jpg"]
     assert record["_source"] == "shopify_adapter"
+    assert "additional_images" not in record
     assert "variants" not in record
     assert "variant_axes" not in record
     assert "selected_variant" not in record

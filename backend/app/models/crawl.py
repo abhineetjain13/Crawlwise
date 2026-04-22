@@ -410,6 +410,8 @@ def _merge_run_quality_summary(
         if isinstance(url_quality.get("listing_completeness"), dict)
         else {}
     )
+    if not isinstance(listing_completeness, dict):
+        listing_completeness = {}
     if listing_completeness.get("applicable") and not listing_completeness.get(
         "complete", True
     ):
@@ -421,6 +423,8 @@ def _merge_run_quality_summary(
         if isinstance(url_quality.get("variant_completeness"), dict)
         else {}
     )
+    if not isinstance(variant_completeness, dict):
+        variant_completeness = {}
     if variant_completeness.get("applicable") and not variant_completeness.get(
         "complete", True
     ):

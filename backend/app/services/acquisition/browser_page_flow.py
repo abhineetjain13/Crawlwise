@@ -405,10 +405,14 @@ async def settle_browser_page_impl(
     networkidle_timed_out = False
     networkidle_skip_reason = None
     explicit_require_networkidle = bool(readiness_policy.get("require_networkidle"))
+    is_listing_surface = "listing" in str(surface or "").lower()
     implicit_networkidle_attempt = bool(
         not current_probe["is_ready"]
         and not explicit_require_networkidle
-        and not current_probe.get("structured_data_present")
+        and (
+            is_listing_surface
+            or not current_probe.get("structured_data_present")
+        )
     )
     if not current_probe["is_ready"] and (
         explicit_require_networkidle or implicit_networkidle_attempt
@@ -624,6 +628,7 @@ def build_browser_diagnostics(
         "network_payload_count": capture_summary.network_payload_count,
         "malformed_network_payloads": capture_summary.malformed_network_payloads,
         "network_payload_read_failures": capture_summary.network_payload_read_failures,
+        "network_payload_read_timeouts": capture_summary.network_payload_read_timeouts,
         "closed_network_payloads": capture_summary.closed_network_payloads,
         "skipped_oversized_network_payloads": capture_summary.skipped_oversized_network_payloads,
         "dropped_network_payload_events": capture_summary.dropped_payload_events,
@@ -693,6 +698,7 @@ async def _generate_page_markdown(
     html: str,
     surface: str | None = None,
 ) -> str:
+    detail_surface = "detail" in str(surface or "").strip().lower()
     soup = BeautifulSoup(str(html or ""), "html.parser")
     for node in list(soup.find_all(True)):
         if not isinstance(getattr(node, "attrs", None), dict):
@@ -715,7 +721,7 @@ async def _generate_page_markdown(
         ).lower()
         if any(token in attr_text for token in _MARKDOWN_NOISE_TOKENS):
             node.decompose()
-    if "detail" in str(surface or "").strip().lower():
+    if detail_surface:
         _prune_detail_markdown_noise(soup)
     content_root = _select_markdown_root(soup)
     body_or_soup = soup.body if soup.body is not None else soup
@@ -727,8 +733,10 @@ async def _generate_page_markdown(
             or len(full_link_lines) > len(link_lines)
         ):
             markdown, link_lines = full_markdown, full_link_lines
-    if "detail" in str(surface or "").strip().lower():
+    if detail_surface:
         markdown, link_lines = _filter_detail_markdown_payload(markdown, link_lines)
+        if not markdown:
+            link_lines = []
     if link_lines:
         markdown = (
             f"{markdown}\n\nVisible links:\n" + "\n".join(link_lines[:120])

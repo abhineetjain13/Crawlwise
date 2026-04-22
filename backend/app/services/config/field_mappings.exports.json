@@ -92,7 +92,6 @@
             "sku",
             "barcode",
             "product_id",
-            "handle",
             "part_number",
             "price",
             "sale_price",
@@ -115,6 +114,7 @@
             "care",
             "features",
             "specifications",
+            "product_details",
             "product_attributes",
             "tags",
             "variant_count",
@@ -874,8 +874,17 @@
             "specifications",
             "details",
             "technical_details",
-            "product_details",
             "the_details"
+          ]
+        }
+      },
+      {
+        "key": "product_details",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "product_details",
+            "product details"
           ]
         }
       },

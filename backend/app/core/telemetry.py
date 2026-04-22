@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any
 from collections.abc import MutableMapping
 from contextvars import ContextVar, Token
+from typing import Any, cast
 from uuid import uuid4
 
+structlog: Any | None = None
 try:
-    import structlog
+    import structlog as _structlog
+    structlog = _structlog
 except ImportError:  # pragma: no cover - optional dependency fallback
-    structlog = None
+    pass
 
 _correlation_id_ctx: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 _LOGGING_CONFIGURED = False
@@ -41,12 +43,12 @@ def configure_logging() -> None:
         _LOGGING_CONFIGURED = True
         return
 
-    shared_processors = [
+    shared_processors = cast(list[Any], [
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         _add_correlation_id,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-    ]
+    ])
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=shared_processors,
         processors=[

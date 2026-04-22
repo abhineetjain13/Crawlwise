@@ -132,7 +132,7 @@
             "article.product",
             "[itemscope][itemtype*='Product']",
             ".thumbnail[itemscope]",
-            "[class*='ProductCard']",
+            "[class*='productcard' i]",
             "[class*='product-tile']",
             "[class*='SearchResultTile']",
             "[class*='AllEditionsItem-tile']",

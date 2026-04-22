@@ -633,19 +633,21 @@ async def recover_listing_page_content(
 ) -> dict[str, object]:
     diagnostics: dict[str, object] = {
         "status": "attempted",
-        "clicked_count": 0,
-        "actions_taken": [],
         "limit": int(crawler_runtime_settings.listing_recovery_max_actions),
     }
+    clicked_count = 0
+    actions_taken: list[str] = []
     max_actions = max(0, int(crawler_runtime_settings.listing_recovery_max_actions))
     if max_actions == 0:
+        diagnostics["clicked_count"] = clicked_count
+        diagnostics["actions_taken"] = actions_taken
         diagnostics["status"] = "disabled"
         return diagnostics
 
     helper_result = TraversalResult(requested_mode="recovery")
     wait_ms = max(0, int(crawler_runtime_settings.listing_recovery_post_action_wait_ms))
     for action_name, pattern, message in _LISTING_RECOVERY_ACTIONS:
-        if diagnostics["clicked_count"] >= max_actions:
+        if clicked_count >= max_actions:
             diagnostics["status"] = "interaction_limit_reached"
             break
         locator = (
@@ -662,8 +664,8 @@ async def recover_listing_page_content(
         await _emit_event(on_event, "info", f"{message}...")
         if not await _click_with_retry(page, locator, result=helper_result):
             continue
-        diagnostics["clicked_count"] += 1
-        diagnostics["actions_taken"].append(action_name)
+        clicked_count += 1
+        actions_taken.append(action_name)
         if wait_ms > 0:
             await page.wait_for_timeout(wait_ms)
         try:
@@ -683,9 +685,11 @@ async def recover_listing_page_content(
     if diagnostics["status"] == "attempted":
         diagnostics["status"] = (
             "recovered"
-            if diagnostics["clicked_count"] > 0
+            if clicked_count > 0
             else "no_actionable_elements"
         )
+    diagnostics["clicked_count"] = clicked_count
+    diagnostics["actions_taken"] = actions_taken
     diagnostics["click_retries"] = helper_result.click_retries
     return diagnostics
 
@@ -1442,6 +1446,8 @@ async def count_listing_cards(page, *, surface: str, allow_heuristic: bool = Tru
         resolved = 0
     if resolved > 0:
         return resolved
+    if allow_heuristic:
+        return await _heuristic_card_count(page, surface=surface)
     return 0
 
 
@@ -1449,46 +1455,103 @@ async def _card_count(page, *, surface: str) -> int:
     return await count_listing_cards(page, surface=surface)
 
 
-async def _heuristic_card_count(page) -> int:
+async def _heuristic_card_count(page, *, surface: str) -> int:
+    html = await get_page_html(page)
+    if not html:
+        return 0
+    parser = LexborHTMLParser(html)
+    seen: set[str] = set()
+    count = 0
     try:
-        count = await page.evaluate(
-            """
-            (containerSelector) => {
-              const positive = ['card', 'item', 'listing', 'product', 'result', 'tile', 'record', 'entry'];
-              const negative = ['nav', 'menu', 'header', 'footer', 'breadcrumb', 'toolbar', 'filter', 'sort', 'sidebar', 'pagination'];
-              const priceRe = /(?:rs\\.?|inr|[$£€])\\s*\\d|\\b\\d[\\d,]{2,}\\b/i;
-              const nodes = document.querySelectorAll(containerSelector);
-              let scoreHits = 0;
-              let scanned = 0;
-              for (const node of nodes) {
-                scanned += 1;
-                if (scanned > 4000) break;
-                const tag = (node.tagName || '').toLowerCase();
-                if (tag === 'header' || tag === 'nav' || tag === 'footer') continue;
-                const signature = [node.className || '', node.id || '', node.getAttribute('role') || '', node.getAttribute('aria-label') || '']
-                  .join(' ')
-                  .toLowerCase();
-                if (negative.some((token) => signature.includes(token))) continue;
-                const anchors = node.querySelectorAll('a[href]').length;
-                if (anchors === 0 || anchors > 12) continue;
-                const text = (node.textContent || '').replace(/\\s+/g, ' ').trim();
-                if (text.length < 12 || text.length > 2200) continue;
-                const hasPositive = positive.some((token) => signature.includes(token));
-                if (hasPositive || anchors <= 3 || priceRe.test(text)) {
-                  scoreHits += 1;
-                }
-              }
-              return scoreHits;
-            }
-            """,
-            LISTING_FALLBACK_CONTAINER_SELECTOR,
-        )
+        nodes = parser.css(LISTING_FALLBACK_CONTAINER_SELECTOR)
     except Exception:
         return 0
+    for node in nodes:
+        fragment = str(node.html or "").strip()
+        if not fragment or fragment in seen:
+            continue
+        seen.add(fragment)
+        if _listing_fragment_score(node) <= 0:
+            continue
+        if _node_supports_listing_heuristic(node, surface=surface):
+            if _node_contains_nested_listing_candidates(node, surface=surface):
+                continue
+            count += 1
+    return count
+
+
+def _node_supports_listing_heuristic(node, *, surface: str) -> bool:
+    signature = _listing_node_signature(node)
+    has_positive_signature = any(
+        token in signature for token in LISTING_STRUCTURE_POSITIVE_HINTS
+    )
+    has_price = _node_text_has_price(node)
+    has_detail_link = _node_has_detail_like_link(node, surface=surface)
+    has_media = _node_has_listing_media(node)
+    if has_detail_link:
+        return True
+    if has_price and (has_positive_signature or has_media):
+        return True
+    return has_positive_signature and has_media
+
+
+def _node_contains_nested_listing_candidates(node, *, surface: str) -> bool:
+    node_fragment = str(node.html or "").strip()
     try:
-        return max(0, int(count or 0))
-    except (TypeError, ValueError):
-        return 0
+        descendants = node.css(LISTING_FALLBACK_CONTAINER_SELECTOR)
+    except Exception:
+        return False
+    for descendant in descendants:
+        if str(descendant.html or "").strip() == node_fragment:
+            continue
+        if _listing_fragment_score(descendant) <= 0:
+            continue
+        if _node_supports_listing_heuristic(descendant, surface=surface):
+            return True
+    return False
+
+
+def _listing_node_signature(node) -> str:
+    attrs = getattr(node, "attributes", {}) or {}
+    return " ".join(
+        [
+            str(attrs.get("class") or ""),
+            str(attrs.get("id") or ""),
+            str(attrs.get("role") or ""),
+            str(attrs.get("aria-label") or ""),
+        ]
+    ).lower()
+
+
+def _node_text_has_price(node) -> bool:
+    return bool(_PRICE_HINT_RE.search(str(node.text(strip=True) or "").strip()))
+
+
+def _node_has_listing_media(node) -> bool:
+    try:
+        return bool(node.css("img, picture img, picture source"))
+    except Exception:
+        return False
+
+
+def _node_has_detail_like_link(node, *, surface: str) -> bool:
+    href_tokens = (
+        ("/job/", "/jobs/", "/viewjob", "showjob=", "/careers/")
+        if str(surface or "").strip().lower().startswith("job_")
+        else ("/products/", "/product/", "/p/", "/dp/", "/item/")
+    )
+    try:
+        anchors = node.css("a[href]")
+    except Exception:
+        return False
+    for anchor in anchors[:6]:
+        attrs = getattr(anchor, "attributes", {}) or {}
+        href = str(attrs.get("href") or "").strip().lower()
+        if not href or href.startswith(("#", "javascript:")):
+            continue
+        if any(token in href for token in href_tokens):
+            return True
+    return False
 
 
 def _snapshot_progressed(previous: dict[str, int], current: dict[str, int]) -> bool:

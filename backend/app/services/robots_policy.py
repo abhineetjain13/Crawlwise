@@ -16,7 +16,7 @@ ROBOTS_ALLOWED = "allowed"
 ROBOTS_DISALLOWED = "disallowed"
 ROBOTS_MISSING = "missing"
 ROBOTS_FETCH_FAILURE = "fetch_failure"
-_ROBOTS_CACHE = TTLCache(
+_ROBOTS_CACHE: TTLCache[str, "_RobotsSnapshot"] = TTLCache(
     maxsize=crawler_runtime_settings.robots_cache_size,
     ttl=crawler_runtime_settings.robots_cache_ttl,
 )

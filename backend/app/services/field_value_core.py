@@ -67,6 +67,7 @@ LONG_TEXT_FIELDS = {
     "description",
     "features",
     "materials",
+    "product_details",
     "qualifications",
     "requirements",
     "responsibilities",
@@ -124,6 +125,49 @@ def same_host(base_url: str, candidate_url: str) -> bool:
     base_host = (urlparse(base_url).hostname or "").lower()
     candidate_host = (urlparse(candidate_url).hostname or "").lower()
     return bool(candidate_host) and candidate_host == base_host
+
+
+_MULTI_PART_PUBLIC_SUFFIXES = frozenset(
+    {
+        "ac.in",
+        "co.in",
+        "co.jp",
+        "co.kr",
+        "co.nz",
+        "co.uk",
+        "com.au",
+        "com.br",
+        "com.cn",
+        "com.mx",
+        "com.sg",
+        "com.tr",
+        "edu.au",
+        "gov.in",
+        "gov.uk",
+        "net.au",
+        "org.au",
+        "org.uk",
+    }
+)
+
+
+def registrable_host(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower().strip(".")
+    if not host:
+        return ""
+    parts = [part for part in host.split(".") if part]
+    if len(parts) <= 2:
+        return host
+    suffix = ".".join(parts[-2:])
+    if suffix in _MULTI_PART_PUBLIC_SUFFIXES and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def same_site(base_url: str, candidate_url: str) -> bool:
+    base_site = registrable_host(base_url)
+    candidate_site = registrable_host(candidate_url)
+    return bool(candidate_site) and candidate_site == base_site
 
 
 def clean_record(record: dict[str, Any]) -> dict[str, Any]:

@@ -42,7 +42,7 @@ async def selectors_list(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
     domain: str = "",
-    surface: str = "generic",
+    surface: str = "",
 ) -> list[SelectorRecordResponse]:
     return [
         SelectorRecordResponse.model_validate(row)

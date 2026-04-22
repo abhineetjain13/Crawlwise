@@ -4,6 +4,7 @@ import logging as _logging
 import platform as _platform
 import re as _re
 import threading as _threading
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import SimpleNamespace as _SimpleNamespace
 from typing import Any
@@ -120,8 +121,13 @@ def _normalize_fingerprint_setting(value: object) -> tuple[str, ...]:
     if isinstance(value, str):
         normalized = str(value).strip()
         return (normalized,) if normalized else ()
+    if not isinstance(value, Iterable) or isinstance(
+        value,
+        (bytes, bytearray, Mapping),
+    ):
+        return ()
     normalized_values: list[str] = []
-    for item in list(value or []):
+    for item in value:
         normalized = str(item).strip()
         if normalized:
             normalized_values.append(normalized)
@@ -311,7 +317,13 @@ def _coherent_client_hints_from_user_agent(
 
 
 def _coherent_sec_ch_headers(user_agent_data: dict[str, object]) -> dict[str, str]:
-    brands = user_agent_data.get("brands") or []
+    raw_brands = user_agent_data.get("brands")
+    brands = (
+        list(raw_brands)
+        if isinstance(raw_brands, Iterable)
+        and not isinstance(raw_brands, (str, bytes, bytearray, Mapping))
+        else []
+    )
     sec_ch_ua = ", ".join(
         f'"{str(item.get("brand") or "").replace("\"", "")}";v="{str(item.get("version") or "").replace("\"", "")}"'
         for item in brands

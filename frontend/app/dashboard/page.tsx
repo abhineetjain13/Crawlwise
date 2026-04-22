@@ -1,12 +1,11 @@
 "use client";
 
-import { useQuery, useQueryClient } from"@tanstack/react-query";
-import type { Route } from"next";
-import Link from"next/link";
-import { useState } from"react";
-import { Activity, ArrowUpRight, Globe, Hash, LayoutDashboard, RefreshCw } from"lucide-react";
-
-import { Badge, Button, StatCard } from"../../components/ui/primitives";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { Route } from "next";
+import Link from "next/link";
+import { useState } from "react";
+import { Activity, ArrowUpRight, Globe, Hash, LayoutDashboard, RefreshCw } from "lucide-react";
+import { Badge, Button, StatCard } from "../../components/ui/primitives";
 import {
  DataRegionEmpty,
  EmptyPanel,
@@ -17,44 +16,42 @@ import {
  SkeletonRows,
  StatusDot,
  SurfacePanel,
-} from"../../components/ui/patterns";
-import { api } from"../../lib/api";
-import type { CrawlRun } from"../../lib/api/types";
-import { getDomain } from"../../lib/format/domain";
+} from "../../components/ui/patterns";
+import { api } from "../../lib/api";
+import type { CrawlRun } from "../../lib/api/types";
+import { getDomain } from "../../lib/format/domain";
 import {
  dashboardStatusBarColor,
  dashboardStatusLabel as statusLabel,
  dashboardStatusTone as statusTone,
  runExecutionLabel,
  runExecutionTone,
-} from"../../lib/ui/status";
+} from "../../lib/ui/status";
 
 /* ─── Domain bar ─────────────────────────────────────────────────────────── */
 function DomainBar({
- domain,
- count,
- max,
+  domain,
+  count,
+  max,
 }: Readonly<{ domain: string; count: number; max: number }>) {
- const pct = max > 0 ? Math.round((count / max) * 100) : 0;
- return (
- <div className="flex items-center gap-3 py-1.5">
- <span
- className="min-w-0 flex-1 truncate font-mono text-sm font-medium leading-[1.4] text-accent hover:text-accent-hover text-secondary"
- title={domain}
- >
- {domain}
- </span>
- <div className="flex items-center gap-2">
- <div className="h-1.5 w-28 overflow-hidden rounded-full bg-[var(--border)]">
- <div
- className="h-full rounded-full bg-[var(--metric-domains-color)] transition-[width] duration-700"
- style={{ width: `${pct}%` }}
- />
- </div>
- <span className="w-7 text-right text-sm leading-[1.45] tabular-nums text-muted">{count}</span>
- </div>
- </div>
- );
+  const pct = max > 0 ? Math.round((count / max) * 100) : 0;
+  return (
+    <div className="flex items-center gap-3 py-1.5">
+      <span
+        className="min-w-0 flex-1 truncate font-mono text-sm font-medium leading-[1.4] text-secondary"
+        title={domain}
+      >
+        {domain}
+      </span>
+      <div className="h-1.5 w-28 overflow-hidden rounded-full bg-[var(--border)]">
+        <div
+          className="h-full rounded-full bg-[var(--metric-domains-color)] transition-[width] duration-700"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="w-7 text-right text-sm leading-[1.45] tabular-nums text-muted">{count}</span>
+    </div>
+  );
 }
 
 /* ─── Status distribution row ────────────────────────────────────────────── */
@@ -77,34 +74,27 @@ function StatusSegment({
 
 /* ─── Run activity row ───────────────────────────────────────────────────── */
 function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
- const domain = getDomain(run.url);
- const recordCount = run.result_summary?.record_count ?? 0;
+  const domain = getDomain(run.url);
+  const recordCount = run.result_summary?.record_count ?? 0;
 
- return (
- <Link
- href={`/crawl?run_id=${run.id}` as Route}
- className="no-underline group flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 transition-colors hover:bg-[var(--bg-elevated)]"
- >
- {/* Status dot */}
- <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
- {/* Domain */}
- <span className="min-w-0 flex-1 truncate font-mono text-sm font-medium leading-[1.4] text-accent hover:text-accent-hover text-primary transition-colors group-hover:text-accent">
- {domain || `Run #${run.id}`}
- </span>
- {/* Record count */}
- {typeof recordCount ==="number"&& recordCount > 0 ? (
- <span className="shrink-0 text-sm leading-[1.45] tabular-nums text-muted">
- {recordCount.toLocaleString()} rec
- </span>
- ) : null}
- {/* Badge */}
- <Badge tone={runExecutionTone(run.status, run.result_summary)}>
- {runExecutionLabel(run.status, run.result_summary)}
- </Badge>
- {/* Arrow */}
- <ArrowUpRight className="size-3 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100"/>
- </Link>
- );
+  return (
+    <Link
+      href={`/crawl?run_id=${run.id}` as Route}
+      className="no-underline group flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 transition-colors hover:bg-[var(--bg-elevated)]"
+    >
+      <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
+      <span className="min-w-0 flex-1 truncate font-mono text-sm font-medium leading-[1.4] text-primary transition-colors group-hover:text-accent">
+        {domain || `Run #${run.id}`}
+      </span>
+      <span className="text-sm leading-[1.45] tabular-nums text-muted">
+        {recordCount.toLocaleString()} rec
+      </span>
+      <Badge tone={runExecutionTone(run.status, run.result_summary)}>
+        {runExecutionLabel(run.status, run.result_summary)}
+      </Badge>
+      <ArrowUpRight className="size-3 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100" />
+    </Link>
+  );
 }
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
@@ -215,8 +205,8 @@ export default function DashboardPage() {
  {/* Recent runs */}
  <SurfacePanel>
  <div className="flex items-center justify-between border-b border-[var(--divider)] px-4 py-3">
- <SectionHeader title="Recent Runs"description="Last 10 jobs"/>
- <Link href="/runs"className="link-accent no-underline text-sm font-medium leading-[1.4] hover:underline">
+ <SectionHeader title="Recent Runs" description="Last 10 jobs"/>
+ <Link href="/runs" className="link-accent no-underline text-sm font-medium leading-[1.4] hover:underline">
  View all
  </Link>
  </div>
@@ -234,12 +224,10 @@ export default function DashboardPage() {
  )}
  </div>
  </SurfacePanel>
-
  {/* Top domains */}
  <SurfacePanel>
  <div className="border-b border-[var(--divider)] px-4 py-3">
- <SectionHeader title="Top Domains"description="By run count"/>
- </div>
+ <SectionHeader title="Top Domains" description="By run count"/> </div>
  <div className="p-4">
  {isLoading ? (
  <SkeletonRows count={5} />

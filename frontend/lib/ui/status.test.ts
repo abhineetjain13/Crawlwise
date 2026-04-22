@@ -1,6 +1,6 @@
-import { describe, expect, it } from"vitest";
+import { describe, expect, it } from "vitest";
 
-import { runExecutionLabel, runExecutionTone } from"./status";
+import { runExecutionLabel, runExecutionTone } from "./status";
 
 describe("runExecutionStatus", () => {
  it("downgrades completed zero-result runs to warning", () => {

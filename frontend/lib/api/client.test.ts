@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from"vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 

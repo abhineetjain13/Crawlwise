@@ -490,7 +490,6 @@ def test_extract_ecommerce_detail_returns_normalized_record() -> None:
     assert record["features"] == "Lightweight body Long battery life"
     assert record["materials"] == "Cotton blend"
     assert record["care"] == "Machine wash"
-    assert record["handle"] == "widget-prime"
     assert record["available_sizes"] == "S, M, L"
     assert record["variant_axes"] == {"size": ["S", "M", "L"]}
     assert isinstance(record["_confidence"], dict)
@@ -554,6 +553,103 @@ def test_extract_ecommerce_detail_rejects_site_shell_with_listing_payload_pollut
                 },
             }
         ],
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_prefers_requested_identity_on_same_site_utility_redirect() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Online Shopping for Men &amp; Women Clothing, Accessories at The Souled Store</title>
+        <meta property="og:title" content="Buy Oversized T-Shirt: Bear Minimum Oversized T-Shirts Online" />
+        <meta property="og:description" content="Shop for Oversized T-Shirt: Bear Minimum Oversized T-Shirts Online" />
+        <meta property="og:url" content="https://www.thesouledstore.com/product/oversized-tshirts-bear-minimum?gte=1" />
+        <meta property="og:image" content="https://prod-img.thesouledstore.com/public/theSoul/uploads/catalog/product/1749147636_7690605.jpg" />
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Oversized T-Shirt: Bear Minimum Oversized T-Shirts By The Souled Store",
+          "image": "https://prod-img.thesouledstore.com/public/theSoul/uploads/catalog/product/1749147636_7690605.jpg",
+          "sku": "305537",
+          "description": "Shop for Oversized T-Shirt: Bear Minimum Oversized T-Shirts Online",
+          "offers": {
+            "@type": "Offer",
+            "priceCurrency": "INR",
+            "availability": "InStock",
+            "price": "1199",
+            "url": "https://www.thesouledstore.com/product/oversized-tshirts-bear-minimum?gte=1"
+          },
+          "brand": {
+            "@type": "Thing",
+            "name": "The Souled Store"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <div class="wishlistDiv">Wishlist shell</div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.thesouledstore.com/mywishlist",
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url="https://www.thesouledstore.com/product/oversized-tshirts-bear-minimum?gte=1",
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["url"] == "https://www.thesouledstore.com/product/oversized-tshirts-bear-minimum?gte=1"
+    assert record["source_url"] == "https://www.thesouledstore.com/product/oversized-tshirts-bear-minimum?gte=1"
+    assert record["title"] == "Oversized T-Shirt: Bear Minimum Oversized T-Shirts By The Souled Store"
+    assert record["sku"] == "305537"
+
+
+def test_extract_ecommerce_detail_rejects_same_site_utility_redirect_with_mismatched_product_payload() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Avatar: Fire Bender Oversized T-Shirts By Avatar: The Last Airbender" />
+        <meta property="og:description" content="Shop for Avatar: Fire Bender Oversized T-Shirts Online" />
+        <meta property="og:image" content="https://prod-img.thesouledstore.com/public/theSoul/uploads/catalog/product/1753379330_3880870.jpg" />
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Avatar: Fire Bender Oversized T-Shirts By Avatar: The Last Airbender",
+          "image": "https://prod-img.thesouledstore.com/public/theSoul/uploads/catalog/product/1753379330_3880870.jpg",
+          "sku": "309454",
+          "description": "Shop for Avatar: Fire Bender Oversized T-Shirts Online",
+          "offers": {
+            "@type": "Offer",
+            "priceCurrency": "INR",
+            "availability": "InStock",
+            "price": "1199",
+            "url": "https://www.thesouledstore.com/product/avatar-fire-bender-menoversized-tshirt?gte=1"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <section class="faq-wrapper">
+          <h2>Returns, Exchange &amp; Refund</h2>
+        </section>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.thesouledstore.com/faqs",
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url="https://www.thesouledstore.com/product/marvel-spider-x-venom-oversized-tshirt?gte=1",
     )
 
     assert rows == []
@@ -888,6 +984,96 @@ def test_extract_ecommerce_listing_preserves_functional_query_params() -> None:
     assert len(rows) == 1
     assert rows[0]["url"] == "https://example.com/products/widget-prime?variant=blue"
     assert rows[0]["source_url"] == "https://example.com/collections/widgets?sort=featured"
+
+
+def test_extract_ecommerce_listing_keeps_same_site_cross_subdomain_detail_links() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="https://www.indiamart.com/proddetail/widget-prime-123.html">
+            <img src="https://img.indiamart.com/widget-prime.jpg" alt="Widget Prime" />
+            <h2 class="product-title">Widget Prime</h2>
+          </a>
+          <div class="price">₹71</div>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://dir.indiamart.com/impcat/widgets.html",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["url"] == "https://www.indiamart.com/proddetail/widget-prime-123.html"
+    assert rows[0]["title"] == "Widget Prime"
+    assert rows[0]["price"] == "71"
+
+
+def test_extract_ecommerce_listing_treats_proddetail_paths_as_detail_links() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="https://www.indiamart.com/proddetail/widget-prime-123.html">
+            <h2 class="product-title">Widget Prime</h2>
+          </a>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://dir.indiamart.com/impcat/widgets.html",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["url"] == "https://www.indiamart.com/proddetail/widget-prime-123.html"
+    assert rows[0]["title"] == "Widget Prime"
+
+
+def test_extract_ecommerce_listing_falls_back_to_original_dom_when_cleaned_dom_strips_card_headers() -> None:
+    html = """
+    <html>
+      <body>
+        <ul>
+          <li>
+            <article class="product-card">
+              <header>
+                <a href="https://www.indiamart.com/proddetail/widget-prime-123.html">
+                  <img src="https://img.indiamart.com/widget-prime.jpg" alt="Widget Prime" />
+                  <h2 class="product-title">Widget Prime</h2>
+                </a>
+              </header>
+              <section class="product-info">
+                <div class="price">₹71</div>
+              </section>
+            </article>
+          </li>
+        </ul>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://dir.indiamart.com/impcat/widgets.html",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["url"] == "https://www.indiamart.com/proddetail/widget-prime-123.html"
+    assert rows[0]["title"] == "Widget Prime"
+    assert rows[0]["price"] == "71"
+    assert rows[0]["image_url"] == "https://img.indiamart.com/widget-prime.jpg"
 
 
 def test_extract_ecommerce_listing_does_not_treat_repeated_testimonials_as_products() -> None:

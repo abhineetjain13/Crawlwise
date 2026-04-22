@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.services.adapters.myntra import MyntraAdapter
@@ -73,6 +75,36 @@ def test_extract_ecommerce_detail_from_opengraph() -> None:
     assert record["availability"] == "in_stock"
     assert record["image_url"] == "https://example.com/images/og-widget.jpg"
     assert record["url"] == "https://example.com/products/og-widget"
+    assert record["_source"] == "opengraph"
+
+
+def test_extract_ecommerce_detail_keeps_page_url_when_opengraph_url_is_site_root() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Personal Blender">
+        <meta property="og:type" content="product">
+        <meta property="og:image" content="https://demo.spreecommerce.org/images/personal-blender.jpg">
+        <meta property="og:url" content="https://demo.spreecommerce.org">
+        <meta property="product:price:amount" content="149.99">
+        <meta property="product:price:currency" content="USD">
+        <meta property="product:availability" content="in stock">
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://demo.spreecommerce.org/us/en/products/personal-blender",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Personal Blender"
+    assert record["url"] == "https://demo.spreecommerce.org/us/en/products/personal-blender"
     assert record["_source"] == "opengraph"
 
 
@@ -183,7 +215,6 @@ def test_extract_ecommerce_detail_from_array_style_nuxt_payload() -> None:
     assert record["title"] == "Nuxt Payload Widget"
     assert record["brand"] == "Acme"
     assert record["vendor"] == "Acme"
-    assert record["handle"] == "nuxt-payload-widget"
     assert record["product_id"] == "4242"
     assert record["category"] == "Gadgets"
     assert record["_source"] == "js_state"
@@ -222,7 +253,6 @@ def test_extract_ecommerce_detail_from_nuxt_payload_with_self_referential_wrappe
     record = rows[0]
     assert record["title"] == "Nuxt Payload Widget"
     assert record["brand"] == "Acme"
-    assert record["handle"] == "nuxt-payload-widget"
     assert record["_source"] == "js_state"
 
 
@@ -627,6 +657,55 @@ def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_j
     assert record["variants"][0]["option_values"] == {"size": "S", "color": "Black"}
 
 
+def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availability() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Bear Minimum Oversized T-Shirt</h1>
+        <div class="product-varient-section">
+          <p>Please select a size.</p>
+          <ul class="sizelist">
+            <li class="oval outstock">
+              <input id="size_0_0" disabled type="radio" name="sub_prod_0" />
+              <label for="size_0_0"><span>XXS</span></label>
+              <section class="total-stock">0 Left</section>
+            </li>
+            <li class="oval selected">
+              <input id="size_0_1" checked type="radio" name="sub_prod_0" />
+              <label for="size_0_1"><span>XS</span></label>
+              <section class="total-stock">17 Left</section>
+            </li>
+            <li class="oval">
+              <input id="size_0_2" type="radio" name="sub_prod_0" />
+              <label for="size_0_2"><span>S</span></label>
+              <section class="total-stock">75 Left</section>
+            </li>
+          </ul>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.thesouledstore.com/product/oversized-tshirts-bear-minimum",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {"size": ["XXS", "XS", "S"]}
+    assert record["available_sizes"] == "XXS, XS, S"
+    assert record["availability"] == "in_stock"
+    assert record["selected_variant"]["option_values"] == {"size": "XS"}
+    assert record["selected_variant"]["availability"] == "in_stock"
+    assert record["variants"][0]["availability"] == "out_of_stock"
+    assert record["variants"][0]["stock_quantity"] == 0
+    assert record["variants"][1]["availability"] == "in_stock"
+    assert record["variants"][1]["stock_quantity"] == 17
+
+
 def test_extract_ecommerce_detail_skips_unnamed_dom_variant_groups() -> None:
     html = """
     <html>
@@ -933,6 +1012,314 @@ def test_extract_detail_keeps_dom_images_live_when_structured_data_only_has_prim
     ]
 
 
+def test_extract_ecommerce_detail_prefers_full_dom_description_and_keeps_product_details_separate() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Headless + Omnichannel in a pill">
+        <meta property="og:description" content="Launch new markets fast">
+        <meta property="og:image" content="https://storefront1.saleor.cloud/media/thumbnails/products/saleor-headless-omnichannel-book_thumbnail_1024.webp">
+      </head>
+      <body>
+        <main>
+          <h1>Headless + Omnichannel in a pill</h1>
+          <section>
+            <h2>Description</h2>
+            <p><strong>Launch new markets fast</strong></p>
+            <p>Compact, actionable insights for modern retail.</p>
+            <p>Headless + Omnichannel in a Pill explains how businesses can:</p>
+            <ul>
+              <li>Rapidly launch new markets</li>
+              <li>Localize content efficiently</li>
+              <li>Deliver seamless omnichannel experiences</li>
+            </ul>
+            <p>It also covers:</p>
+            <ul>
+              <li>Mobile, web, and in-store integration</li>
+              <li>Emerging channels and technologies</li>
+              <li>Headless architecture benefits</li>
+            </ul>
+          </section>
+          <section>
+            <button aria-controls="product-details-panel">Product Details</button>
+            <section id="product-details-panel">
+              <dl>
+                <div><dt>Publisher</dt><dd>Digital Audio</dd></div>
+                <div><dt>Description Summary</dt><dd>A fast-paced guide to launching new markets with headless and omnichannel strategies.</dd></div>
+                <div><dt>Lector</dt><dd>Sophia Keller</dd></div>
+                <div><dt>Release Date</dt><dd>2022-06-15</dd></div>
+              </dl>
+            </section>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://demo.saleor.io/default-channel/products/headless-omnichannel-commerce",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["description", "product_details"],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["description"].startswith("Launch new markets fast Compact, actionable insights for modern retail.")
+    assert "Rapidly launch new markets" in record["description"]
+    assert "Headless architecture benefits" in record["description"]
+    assert record["product_details"] == (
+        "Publisher Digital Audio Description Summary A fast-paced guide to launching new markets "
+        "with headless and omnichannel strategies. Lector Sophia Keller Release Date 2022-06-15"
+    )
+    assert "specifications" not in record
+
+
+def test_extract_ecommerce_detail_keeps_dom_tier_live_for_product_details_without_requested_fields() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Headless + Omnichannel in a pill",
+          "brand": {"name": "Audiobooks"},
+          "description": "Launch new markets fast",
+          "image": "https://storefront1.saleor.cloud/media/thumbnails/products/saleor-headless-omnichannel-book_thumbnail_1024.webp",
+          "offers": {
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Headless + Omnichannel in a pill</h1>
+          <section>
+            <h2>Description</h2>
+            <p><strong>Launch new markets fast</strong></p>
+            <p>Compact, actionable insights for modern retail.</p>
+            <p>Headless architecture benefits.</p>
+          </section>
+          <section>
+            <button aria-controls="product-details-panel">Product Details</button>
+            <section id="product-details-panel">
+              <dl>
+                <div><dt>Publisher</dt><dd>Digital Audio</dd></div>
+                <div><dt>Description Summary</dt><dd>A fast-paced guide to launching new markets with headless and omnichannel strategies.</dd></div>
+              </dl>
+            </section>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://demo.saleor.io/default-channel/products/headless-omnichannel-commerce",
+        "ecommerce_detail",
+        max_records=5,
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.55}
+        },
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "Headless architecture benefits" in record["description"]
+    assert record["product_details"] == (
+        "Publisher Digital Audio Description Summary A fast-paced guide to launching new markets "
+        "with headless and omnichannel strategies."
+    )
+    assert record["_extraction_tiers"]["current"] == "dom"
+    assert record["_extraction_tiers"]["early_exit"] is None
+
+
+def test_extract_ecommerce_detail_dedupes_next_image_proxy_duplicates() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Headless + Omnichannel in a pill">
+        <meta property="og:image" content="https://storefront1.saleor.cloud/media/thumbnails/products/saleor-headless-omnichannel-book_thumbnail_1024.webp">
+      </head>
+      <body>
+        <main>
+          <h1>Headless + Omnichannel in a pill</h1>
+          <section class="gallery">
+            <img src="https://storefront1.saleor.cloud/media/thumbnails/products/saleor-headless-omnichannel-book_thumbnail_1024.webp" alt="Book cover">
+            <img src="https://demo.saleor.io/_next/image?url=https%3A%2F%2Fstorefront1.saleor.cloud%2Fmedia%2Fthumbnails%2Fproducts%2Fsaleor-headless-omnichannel-book_thumbnail_1024.webp&w=1080&q=75" alt="Book cover transformed">
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://demo.saleor.io/default-channel/products/headless-omnichannel-commerce",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["image_url"] == (
+        "https://storefront1.saleor.cloud/media/thumbnails/products/saleor-headless-omnichannel-book_thumbnail_1024.webp"
+    )
+    assert "additional_images" not in record
+
+
+def test_extract_ecommerce_detail_keeps_real_description_when_dom_sections_only_see_tabs() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Airdopes Supreme Long Playback Earbuds">
+        <meta property="og:description" content="Experience superior sound with boAt Airdopes Supreme — 50H playback, AI ENx, Cinematic Spatial Audio and BEAST Mode.">
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Airdopes Supreme Long Playback Earbuds",
+          "brand": {"name": "boAt"},
+          "offers": {
+            "price": "1399",
+            "priceCurrency": "INR",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Airdopes Supreme Long Playback Earbuds</h1>
+          <div class="product-description">
+            Experience superior sound with boAt Airdopes Supreme — 50H playback, AI ENx, Cinematic Spatial Audio and BEAST Mode.
+          </div>
+          <section>
+            <h2>Description</h2>
+            <div>
+              <button>Description</button>
+              <button>specifications</button>
+              <button>Reviews (192)</button>
+            </div>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.boat-lifestyle.com/products/airdopes-supreme-long-playback-earbuds",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["description"] == (
+        "Experience superior sound with boAt Airdopes Supreme — 50H playback, AI ENx, "
+        "Cinematic Spatial Audio and BEAST Mode."
+    )
+    assert "handle" not in record
+
+
+def test_extract_ecommerce_detail_maps_anchor_hash_product_description_upstream() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Superman: Krypto The Superdog Oversized T-Shirts By DC Comics™",
+          "description": "Shop for Superman: Crypto Men Oversized Fit T-shirts Online",
+          "brand": {"name": "DC Comics™"},
+          "offers": {
+            "price": "899",
+            "priceCurrency": "INR",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Superman: Krypto The Superdog</h1>
+          <div id="accordion">
+            <div class="card">
+              <div role="tab" id="headingOne" class="card-header">
+                <h5 class="mb-0 accordianheading">
+                  <a data-toggle="collapse" data-parent="#accordion" href="#collapseOne" aria-expanded="true" aria-controls="collapseOne">
+                    Product Details
+                  </a>
+                </h5>
+              </div>
+              <div id="collapseOne" role="tabpanel" aria-labelledby="headingOne" class="collapse show">
+                <div class="card-block">
+                  <p><b>Material &amp; Care:</b><br>Premium Heavy Gauge Fabric<br>100% Cotton<br>Machine Wash</p>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div role="tab" id="headingTwo" class="card-header">
+                <h5 class="mb-0 accordianheading">
+                  <a data-toggle="collapse" data-parent="#accordion" href="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
+                    Product Description
+                  </a>
+                </h5>
+              </div>
+              <div id="collapseTwo" role="tabpanel" aria-labelledby="headingTwo" class="collapse">
+                <div class="card-block">
+                  <p><b>Official Licensed Superman Oversized T-Shirt.</b></p>
+                  <p>Shop for Superman: Krypto The Superdog Oversized T-Shirts at The Souled Store.</p>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div role="tab" id="headingArtist" class="card-header">
+                <h5 class="mb-0 accordianheading">
+                  <a data-toggle="collapse" data-parent="#accordion" href="#collapseArtist" aria-expanded="false" aria-controls="collapseArtist">
+                    Artist's Details
+                  </a>
+                </h5>
+              </div>
+              <div id="collapseArtist" role="tabpanel" aria-labelledby="headingArtist" class="collapse">
+                <div class="card-block">
+                  <p>Suit up with Justice League merchandise.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.thesouledstore.com/product/men-oversized-fit-superman-crypto?gte=1",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["description"] == (
+        "Official Licensed Superman Oversized T-Shirt. "
+        "Shop for Superman: Krypto The Superdog Oversized T-Shirts at The Souled Store."
+    )
+    assert record["product_details"] == (
+        "Material & Care: Premium Heavy Gauge Fabric 100% Cotton Machine Wash"
+    )
+    assert record["_field_sources"]["description"] == ["json_ld", "dom_sections"]
+    assert "dom_sections" in record["_field_sources"]["product_details"]
+
+
 def test_extract_ecommerce_detail_filters_zara_copy_code_from_dom_variants() -> None:
     html = """
     <html>
@@ -1152,3 +1539,29 @@ def test_extract_detail_matches_exact_requested_section_label_without_collapsing
     assert record["_extraction_tiers"]["current"] == "dom"
     assert record["_extraction_tiers"]["early_exit"] is None
     assert "benefits" not in record
+
+
+def test_extract_detail_keeps_company_details_body_for_requested_custom_field() -> None:
+    html = Path(
+        "artifacts/runs/8/pages/dc80e38b20c25b9b.html"
+    ).read_text(encoding="utf-8", errors="ignore")
+
+    rows = extract_records(
+        html,
+        "https://www.tradeindia.com/products/calcium-carbonate-powder-c10587655.html",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["company_details"],
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.55}
+        },
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["company_details"].startswith(
+        "Lyotex Lifesciences Private Limited is a reliable name in the manufacturing"
+    )
+    assert "Business Type Manufacturer, Supplier, Trading Company" in record["company_details"]
+    assert "GST NO 27AAECL9071B1ZK" in record["company_details"]
+    assert record["_field_sources"]["company_details"] == ["dom_sections"]

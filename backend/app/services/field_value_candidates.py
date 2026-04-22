@@ -231,19 +231,19 @@ def collect_structured_candidates(
                 )
                 if isinstance(raw_value, list):
                     if canonical in STRUCTURED_MULTI_FIELDS:
-                        value = raw_value
+                        coerced_value: object = raw_value
                     else:
-                        value = " ".join(
+                        coerced_value = " ".join(
                             text
                             for item in raw_value
                             if (text := text_or_none(item))
                         )
                 else:
-                    value = raw_value
+                    coerced_value = raw_value
                 add_candidate(
                     candidates,
                     canonical,
-                    coerce_field_value(canonical, value, page_url),
+                    coerce_field_value(canonical, coerced_value, page_url),
                 )
         for key, value in payload.items():
             if str(key).startswith("@"):
@@ -400,18 +400,18 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
             return rows or None
         return ", ".join(rows) if rows else None
     if field_name in LONG_TEXT_FIELDS:
-        rows: list[str] = []
-        seen: set[str] = set()
+        text_rows: list[str] = []
+        text_seen: set[str] = set()
         for value in values:
             text = coerce_text(value)
             if not text:
                 continue
             lowered = text.lower()
-            if lowered in seen:
+            if lowered in text_seen:
                 continue
-            seen.add(lowered)
-            rows.append(text)
-        return "\n\n".join(rows) if rows else None
+            text_seen.add(lowered)
+            text_rows.append(text)
+        return "\n\n".join(text_rows) if text_rows else None
     return values[0]
 
 
@@ -420,14 +420,12 @@ def _deep_merge_structured_dict(
     incoming: dict[str, object],
 ) -> dict[str, object]:
     merged = dict(base)
-    incoming_option_keys = {
-        str(key)
-        for key in (
-            incoming.get("option_values", {}).keys()
-            if isinstance(incoming.get("option_values"), dict)
-            else ()
-        )
-    }
+    incoming_option_values = incoming.get("option_values")
+    incoming_option_keys = (
+        {str(key) for key in incoming_option_values.keys()}
+        if isinstance(incoming_option_values, dict)
+        else set()
+    )
     for key, value in incoming.items():
         normalized_key = str(key)
         existing = merged.get(normalized_key)

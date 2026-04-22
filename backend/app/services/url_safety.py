@@ -165,7 +165,15 @@ async def validate_proxy_endpoint(proxy_url: str) -> ValidatedTarget:
 async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
     attempts = max(1, int(crawler_runtime_settings.dns_resolution_retries) + 1)
     families = dns_resolution_families()
-    records: list[tuple[object, ...]] | None = None
+    records: list[
+        tuple[
+            socket.AddressFamily,
+            socket.SocketKind,
+            int,
+            str,
+            tuple[str, int] | tuple[str, int, int, int],
+        ]
+    ] | None = None
     last_error: socket.gaierror | None = None
     for attempt in range(1, attempts + 1):
         for family in families:

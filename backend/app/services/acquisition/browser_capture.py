@@ -55,6 +55,7 @@ class BrowserNetworkCaptureSummary:
     captured_network_payload_bytes: int
     malformed_network_payloads: int
     network_payload_read_failures: int
+    network_payload_read_timeouts: int
     closed_network_payloads: int
     skipped_oversized_network_payloads: int
     dropped_payload_events: int
@@ -87,6 +88,7 @@ class BrowserNetworkCapture:
         self._payload_read_failures = 0
         self._payload_closed_failures = 0
         self._oversized_payloads = 0
+        self._payload_read_timeouts = 0
         self._captured_bytes = 0
         self._dropped_payload_events = 0
 
@@ -175,6 +177,7 @@ class BrowserNetworkCapture:
                 captured_network_payload_bytes=self._captured_bytes,
                 malformed_network_payloads=self._malformed_payloads,
                 network_payload_read_failures=self._payload_read_failures,
+                network_payload_read_timeouts=self._payload_read_timeouts,
                 closed_network_payloads=self._payload_closed_failures,
                 skipped_oversized_network_payloads=self._oversized_payloads,
                 dropped_payload_events=self._dropped_payload_events,
@@ -234,6 +237,10 @@ class BrowserNetworkCapture:
         if body_result.outcome == "too_large":
             async with self._lock:
                 self._oversized_payloads += 1
+            return
+        if body_result.outcome == "timeout":
+            async with self._lock:
+                self._payload_read_timeouts += 1
             return
         if body_result.outcome == "read_error":
             async with self._lock:
@@ -429,14 +436,13 @@ async def read_network_payload_body(
         surface=surface,
         endpoint_info=endpoint_info,
     )
-    headers = getattr(response, "headers", None)
     try:
         body_bytes = await asyncio.wait_for(
             response.body(),
             timeout=_payload_read_timeout_seconds(),
         )
     except asyncio.TimeoutError:
-        return NetworkPayloadReadResult(body=None, outcome="too_large")
+        return NetworkPayloadReadResult(body=None, outcome="timeout")
     except Exception as exc:
         if is_response_closed_error(exc):
             return NetworkPayloadReadResult(

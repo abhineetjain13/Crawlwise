@@ -540,18 +540,21 @@ async def _log_extraction_outcome(
     acquisition_result,
     records: list[dict[str, object]],
 ) -> None:
-    adapter = getattr(acquisition_result, "adapter_name", "generic") or "generic"
+    adapter_name = str(getattr(acquisition_result, "adapter_name", "") or "").strip()
+    extraction_label = (
+        f"{adapter_name} adapter" if adapter_name else "generic extraction path"
+    )
     if records:
         await _log_pipeline_event(
             context,
             "info",
-            f"Extracted {len(records)} records using {adapter} adapter",
+            f"Extracted {len(records)} records using {extraction_label}",
         )
         return
     await _log_pipeline_event(
         context,
         "warning",
-        f"Extraction yielded 0 records (adapter: {adapter})",
+        f"Extraction yielded 0 records ({extraction_label})",
     )
 
 async def _retry_empty_extraction_with_browser(
@@ -718,6 +721,7 @@ async def _run_record_extraction(
         acquisition_result.final_url,
         context.surface,
         max_records=context.config.max_records,
+        requested_page_url=context.url,
         requested_fields=list(context.requested_fields),
         adapter_records=acquisition_result.adapter_records,
         network_payloads=acquisition_result.network_payloads,
@@ -749,6 +753,7 @@ async def _extract_records_from_preserved_browser_html(
         acquisition_result.final_url,
         context.surface,
         max_records=context.config.max_records,
+        requested_page_url=context.url,
         requested_fields=list(context.requested_fields),
         adapter_records=acquisition_result.adapter_records,
         network_payloads=acquisition_result.network_payloads,

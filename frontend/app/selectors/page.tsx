@@ -295,9 +295,8 @@ export default function SelectorsPage() {
  setSavingAccepted(false);
  }
  if (failedFields.length) {
- setLoadError(`Unable to save ${failedFields.join(",")}. Saved rows stay marked as saved; failed rows remain accepted for retry.`);
- }
- }
+ setLoadError(`Unable to save ${failedFields.join(", ")}. Saved rows stay marked as saved; failed rows remain accepted for retry.`);
+ } }
 
  return (
  <div className="page-stack">

@@ -67,7 +67,7 @@ export function dashboardStatusDotColor(status: string): string {
 }
 
 export function humanizeStatus(status: string): string {
- return String(status ||"").replace(/_/g,"").trim();
+  return String(status || "").replace(/_/g, " ").trim();
 }
 
 export function runExecutionTone(

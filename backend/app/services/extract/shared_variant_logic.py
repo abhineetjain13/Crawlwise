@@ -94,12 +94,62 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
 
 def iter_variant_choice_groups(soup: Any) -> list[Any]:
     groups: list[Any] = []
+    seen_ids: set[int] = set()
     for container in soup.select(VARIANT_CHOICE_GROUP_SELECTOR):
         if resolve_variant_group_name(container):
             groups.append(container)
+            seen_ids.add(id(container))
+        if len(groups) >= 8:
+            break
+    if len(groups) >= 8:
+        return groups
+    for node in soup.select("input[type='radio'], input[type='checkbox']"):
+        axis_name = resolve_variant_group_name(node)
+        if not axis_name:
+            continue
+        candidate = _variant_choice_container_for_input(node, axis_name=axis_name)
+        if candidate is None or id(candidate) in seen_ids:
+            continue
+        groups.append(candidate)
+        seen_ids.add(id(candidate))
         if len(groups) >= 8:
             break
     return groups
+
+
+def _variant_choice_container_for_input(node: Any, *, axis_name: str) -> Any | None:
+    parent = getattr(node, "parent", None)
+    while parent is not None:
+        if not hasattr(parent, "select"):
+            parent = getattr(parent, "parent", None)
+            continue
+        matching_inputs = [
+            item
+            for item in parent.select("input[type='radio'], input[type='checkbox']")
+            if resolve_variant_group_name(item) == axis_name
+        ]
+        if len(matching_inputs) < 2:
+            parent = getattr(parent, "parent", None)
+            continue
+        class_attr = parent.get("class") if hasattr(parent, "get") else None
+        class_probe = (
+            " ".join(str(value) for value in class_attr)
+            if isinstance(class_attr, list)
+            else str(class_attr or "")
+        ).lower()
+        tag_name = str(getattr(parent, "name", "") or "").lower()
+        role = str(parent.get("role") or "").lower() if hasattr(parent, "get") else ""
+        if (
+            role == "radiogroup"
+            or tag_name in {"fieldset", "ul", "ol"}
+            or any(hint in class_probe for hint in ("color", "size", "swatch", "variant"))
+            or resolve_variant_group_name(parent)
+        ):
+            return parent
+        if len(matching_inputs) <= 12 and tag_name in {"div", "section"}:
+            return parent
+        parent = getattr(parent, "parent", None)
+    return None
 
 
 def split_variant_axes(

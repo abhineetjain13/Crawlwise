@@ -15,7 +15,7 @@ except (
 
     class Celery:  # type: ignore[no-redef]
         def __init__(self, *_args, **_kwargs) -> None:
-            self.conf = {}
+            self.conf: dict[str, object] = {}
             self.control = SimpleNamespace(revoke=lambda *_args, **_kwargs: None)
 
         def task(self, *dargs, **dkwargs):

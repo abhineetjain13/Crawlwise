@@ -8,8 +8,12 @@ _RUNTIME_METRICS_KEY = "crawl:runtime:metrics"
 def incr(metric_name: str, amount: int = 1) -> None:
     if not metric_name:
         return
+
+    async def _incr(redis) -> object:
+        return await redis.hincrby(_RUNTIME_METRICS_KEY, metric_name, int(amount))
+
     schedule_fail_open(
-        lambda redis: redis.hincrby(_RUNTIME_METRICS_KEY, metric_name, int(amount)),
+        _incr,
         operation_name=f"runtime_metrics.incr:{metric_name}",
     )
 

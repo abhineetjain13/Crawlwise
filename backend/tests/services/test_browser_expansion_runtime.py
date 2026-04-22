@@ -381,6 +381,44 @@ async def test_browser_fetch_fast_paths_ready_listing_cards_without_networkidle(
 
 
 @pytest.mark.asyncio
+async def test_browser_fetch_listing_does_not_treat_product_titles_as_extractable_fields() -> None:
+    selectors = list(CARD_SELECTORS.get("ecommerce") or [])
+    page = _FakeExpansionPage(
+        base_html="""
+        <html>
+          <body>
+            <section class="product-card-grid">
+              <article class="product-card">
+                <h2>Batman Wayne Industries</h2>
+                <p>Relaxed fit cotton shirt with oversized graphic print.</p>
+              </article>
+              <article class="product-card">
+                <h2>Venom Pure Destruction</h2>
+                <p>Heavyweight jersey shirt with all-over print.</p>
+              </article>
+            </section>
+          </body>
+        </html>
+        """,
+        selector_counts={selector: 2 for selector in selectors[:1]},
+        card_count=2,
+    )
+    page.card_selectors = set(selectors)
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/collections/widgets",
+        5,
+        surface="ecommerce_listing",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
+
+
+@pytest.mark.asyncio
 async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_listing() -> None:
     original_optimistic_wait_ms = (
         crawler_runtime_settings.browser_navigation_optimistic_wait_ms
@@ -400,7 +438,7 @@ async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_lis
                     "surface": "ecommerce_listing",
                     "is_ready": False,
                     "detail_like": False,
-                    "structured_data_present": False,
+                    "structured_data_present": True,
                     "visible_text_length": 20,
                     "detail_hint_count": 0,
                     "listing_card_count": 0,
@@ -412,7 +450,7 @@ async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_lis
                     "surface": "ecommerce_listing",
                     "is_ready": False,
                     "detail_like": False,
-                    "structured_data_present": False,
+                    "structured_data_present": True,
                     "visible_text_length": 24,
                     "detail_hint_count": 0,
                     "listing_card_count": 0,
@@ -422,9 +460,9 @@ async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_lis
                 {
                     "url": "https://example.com/spa/listing",
                     "surface": "ecommerce_listing",
-                    "is_ready": True,
+                    "is_ready": False,
                     "detail_like": False,
-                    "structured_data_present": False,
+                    "structured_data_present": True,
                     "visible_text_length": 260,
                     "detail_hint_count": 0,
                     "listing_card_count": 0,
@@ -468,7 +506,7 @@ async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_lis
 
 
 @pytest.mark.asyncio
-async def test_probe_browser_readiness_uses_visible_text_fallback_for_unmatched_listing() -> None:
+async def test_probe_browser_readiness_does_not_fast_path_listing_on_visible_text_alone() -> None:
     page = _FakeExpansionPage(
         base_html="<html><body>" + ("Catalog entry " * 40) + "</body></html>",
     )
@@ -485,7 +523,7 @@ async def test_probe_browser_readiness_uses_visible_text_fallback_for_unmatched_
     assert probe["visible_text_length"] >= (
         int(crawler_runtime_settings.browser_readiness_visible_text_min) * 2
     )
-    assert probe["is_ready"] is True
+    assert probe["is_ready"] is False
 
 
 @pytest.mark.asyncio
@@ -828,7 +866,7 @@ async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view(
 
     assert "Widget Prime" in result.page_markdown
     assert "Built for long mileage." in result.page_markdown
-    assert "Visible links:" in result.page_markdown
+    assert "Visible links:" not in result.page_markdown
     assert "SEMANTIC ACCESSIBILITY SNAPSHOT" in result.page_markdown
 
 
@@ -1468,6 +1506,45 @@ async def test_expand_detail_content_prefers_requested_section_labels_over_unrel
     assert diagnostics["clicked_count"] == 1
     assert diagnostics["expanded_elements"] == ["details"]
     assert page.expanded is True
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_skips_navigation_anchors_that_match_generic_keywords() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html><body>
+          <a href="/returns-and-refunds">Returns &amp; refunds</a>
+          <a href="/about-us">About us</a>
+          <a href="/careers">Careers</a>
+        </body></html>
+        """,
+        labels=[
+            {
+                "label": "returns & refunds",
+                "attributes": {"href": "/returns-and-refunds"},
+                "tag_name": "a",
+            },
+            {
+                "label": "about us",
+                "attributes": {"href": "/about-us"},
+                "tag_name": "a",
+            },
+            {
+                "label": "careers",
+                "attributes": {"href": "/careers"},
+                "tag_name": "a",
+            },
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["title", "size", "availability"],
+    )
+
+    assert diagnostics["clicked_count"] == 0
+    assert page.expanded is False
 
 
 @pytest.mark.asyncio

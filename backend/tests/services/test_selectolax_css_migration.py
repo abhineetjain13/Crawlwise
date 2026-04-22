@@ -97,6 +97,94 @@ def test_listing_extractor_preserves_css_card_field_output() -> None:
     assert rows[0]["review_count"] == 128
 
 
+def test_listing_extractor_prefers_row_detail_link_and_name_over_breadcrumb_links() -> None:
+    html = """
+    <html>
+      <body>
+        <table class="catalog-list__body-main">
+          <tr class="catalog-list__body-header">
+            <td>Image</td>
+            <td>Item No.</td>
+            <td>Description</td>
+          </tr>
+          <tr>
+            <td align="center">
+              <span class="blCatalogImagePopup">
+                <img
+                  src="https://img.bricklink.com/ItemImage/ST/0/1428-1.t1.png"
+                  alt="Set No: 1428 Name: Small Soccer Set 1 {Kabaya Version}"
+                />
+              </span>
+            </td>
+            <td nowrap>
+              <a href="/v2/catalog/catalogitem.page?S=1428-1">1428-1</a>
+              (<a href="catalogItemInv.asp?S=1428-1">Inv</a>)
+            </td>
+            <td>
+              <strong>Small Soccer Set 1 {Kabaya Version}</strong>
+              <br />
+              20 Parts, 1 Minifigure, 2002
+              <br />
+              <a href="catalog.asp">Catalog</a>:
+              <a href="catalogTree.asp?itemType=S">Sets</a>:
+              <a href="/catalogList.asp?catType=S&catString=473">Sports</a>:
+              <a href="/catalogList.asp?catType=S&catString=473.224">Soccer</a>
+            </td>
+          </tr>
+          <tr>
+            <td align="center">
+              <span class="blCatalogImagePopup">
+                <img
+                  src="https://img.bricklink.com/ItemImage/ST/0/1428-2.t1.png"
+                  alt="Set No: 1428 Name: Small Soccer Set 1 polybag"
+                />
+              </span>
+            </td>
+            <td nowrap>
+              <a href="/v2/catalog/catalogitem.page?S=1428-2">1428-2</a>
+              (<a href="catalogItemInv.asp?S=1428-2">Inv</a>)
+            </td>
+            <td>
+              <strong>Small Soccer Set 1 polybag</strong>
+              <br />
+              20 Parts, 1 Minifigure, 2002
+              <br />
+              <a href="catalog.asp">Catalog</a>:
+              <a href="catalogTree.asp?itemType=S">Sets</a>:
+              <a href="/catalogList.asp?catType=S&catString=473">Sports</a>:
+              <a href="/catalogList.asp?catType=S&catString=473.224">Soccer</a>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://www.bricklink.com/catalogList.asp?catType=S&catString=473",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.bricklink.com/catalogList.asp?catType=S&catString=473",
+            "_source": "dom_listing",
+            "title": "Small Soccer Set 1 {Kabaya Version}",
+            "image_url": "https://img.bricklink.com/ItemImage/ST/0/1428-1.t1.png",
+            "url": "https://www.bricklink.com/v2/catalog/catalogitem.page?S=1428-1",
+        },
+        {
+            "source_url": "https://www.bricklink.com/catalogList.asp?catType=S&catString=473",
+            "_source": "dom_listing",
+            "title": "Small Soccer Set 1 polybag",
+            "image_url": "https://img.bricklink.com/ItemImage/ST/0/1428-2.t1.png",
+            "url": "https://www.bricklink.com/v2/catalog/catalogitem.page?S=1428-2",
+        },
+    ]
+
+
 def test_listing_extractor_does_not_remove_body_for_sidebar_layouts() -> None:
     html = """
     <html>

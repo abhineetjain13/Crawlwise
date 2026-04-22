@@ -11,8 +11,15 @@ _STATIC_EXPORTS = load_export_data(str(_EXPORTS_PATH))
 for _name, _value in _STATIC_EXPORTS.items():
     globals()[_name] = _value
 
+if isinstance(FIELD_ALIASES, dict):
+    description_aliases = list(FIELD_ALIASES.get("description") or [])
+    for alias in ("description", "product description", "product_description"):
+        if alias not in description_aliases:
+            description_aliases.append(alias)
+    FIELD_ALIASES["description"] = description_aliases
+
 DOM_HIGH_VALUE_FIELDS: dict[str, frozenset[str]] = {
-    "ecommerce_detail": frozenset({"additional_images", "description", "specifications"}),
+    "ecommerce_detail": frozenset({"additional_images", "description", "specifications", "product_details"}),
     "job_detail": frozenset({"description", "responsibilities", "qualifications"}),
 }
 DOM_OPTIONAL_CUE_FIELDS: dict[str, frozenset[str]] = {

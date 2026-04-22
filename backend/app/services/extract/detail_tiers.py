@@ -7,6 +7,7 @@ from typing import Any
 @dataclass(slots=True)
 class DetailTierState:
     page_url: str
+    requested_page_url: str | None
     surface: str
     requested_fields: list[str] | None
     fields: list[str]
@@ -26,6 +27,7 @@ def materialize_detail_tier(
     state.completed_tiers.append(tier_name)
     return materialize_record(
         page_url=state.page_url,
+        requested_page_url=state.requested_page_url,
         surface=state.surface,
         requested_fields=state.requested_fields,
         fields=state.fields,

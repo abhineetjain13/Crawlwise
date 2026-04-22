@@ -20,10 +20,7 @@ def as_int(value: object) -> int:
                 return int(float(raw_value))
             except ValueError:
                 return 0
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
+    return 0
 
 
 def merge_url_verdicts(current: object, patch: object) -> list[str]:

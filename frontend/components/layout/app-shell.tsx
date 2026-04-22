@@ -1,11 +1,11 @@
 "use client";
 
-import { useQuery } from"@tanstack/react-query";
-import Link from"next/link";
-import type { Route } from"next";
-import { usePathname, useRouter } from"next/navigation";
-import { useEffect, useState } from"react";
-import type { ComponentType, ReactNode } from"react";
+import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
+import type { Route } from "next";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import type { ComponentType, ReactNode } from "react";
 import {
  Activity,
  ChevronLeft,
@@ -20,17 +20,17 @@ import {
  Trash2,
  X,
  Zap,
-} from"lucide-react";
+} from "lucide-react";
 
-import { api } from"../../lib/api";
-import { httpErrorStatus } from"../../lib/api/client";
-import { STORAGE_KEYS } from"../../lib/constants/storage-keys";
-import { cn } from"../../lib/utils";
-import { getAuthSessionQueryOptions, isAuthRoute } from"./auth-session-query";
-import { Button } from"../ui/primitives";
-import type { TopBarState } from"./top-bar-context";
-import { TopBarProvider, useTopBarHeader } from"./top-bar-context";
-import { ThemeToggle } from"../ui/theme-toggle";
+import { api } from "../../lib/api";
+import { httpErrorStatus } from "../../lib/api/client";
+import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
+import { cn } from "../../lib/utils";
+import { getAuthSessionQueryOptions, isAuthRoute } from "./auth-session-query";
+import { Button } from "../ui/primitives";
+import type { TopBarState } from "./top-bar-context";
+import { TopBarProvider, useTopBarHeader } from "./top-bar-context";
+import { ThemeToggle } from "../ui/theme-toggle";
 
 const navGroups = [
  {
@@ -196,11 +196,11 @@ function AuthShell({ children }: Readonly<{ children: ReactNode }>) {
  </div>
  </section>
  <aside className="auth-shell-aside">
- <div className="auth-shell-orb"aria-hidden="true"/>
+          <div className="auth-shell-orb" aria-hidden="true" />
  <div className="auth-shell-side-inner">
  <div className="auth-shell-ticker">
  <div className="auth-shell-ticker-head">
- <span className="auth-shell-pulse"aria-hidden="true"/>
+              <span className="auth-shell-pulse" aria-hidden="true" />
  <span>Live across your workspace</span>
  </div>
  {authTickerRows.map((row) => (
@@ -233,7 +233,7 @@ function LogoMark({
  return (
  <div className="app-logo app-logo-collapsed">
  <div className="app-logo-mark">
- <Zap className="size-3.5"strokeWidth={2.4} />
+                <Zap className="size-3.5" strokeWidth={2.4} />
  </div>
  </div>
  );
@@ -278,7 +278,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
  </button>
  </div>
 
- <nav className="app-sidebar-nav"aria-label="Main navigation">
+            <nav className="app-sidebar-nav" aria-label="Main navigation">
  {navGroups.map((group) => (
  <div key={group.label} className="app-sidebar-group">
  {!collapsed && <p className="app-sidebar-group-label">{group.label}</p>}

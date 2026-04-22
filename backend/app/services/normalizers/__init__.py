@@ -154,11 +154,11 @@ def _normalize_int(value: object) -> int | str:
         return ""
     match = _NUMERIC_TEXT_RE.search(text.replace(",", ""))
     if match is None:
-        return None
+        return ""
     try:
         return int(Decimal(match.group(0)))
     except (InvalidOperation, ValueError):
-        return None
+        return ""
 
 
 def _normalize_availability(value: object) -> str:

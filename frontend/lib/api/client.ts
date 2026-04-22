@@ -212,8 +212,7 @@ async function requestWithParser<T>(
  throw lastError;
  }
  if (lastFetchError) {
- throw new Error(`Failed to reach backend API. Tried: ${candidateBaseUrls.join(",")}`);
- }
+ throw new Error(`Failed to reach backend API. Tried: ${candidateBaseUrls.join(", ")}`); }
  throw lastError ?? new ApiError("Request failed", 500,"");
 }
 

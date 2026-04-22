@@ -1,9 +1,9 @@
 "use client";
 
-import * as React from"react";
-import { useId } from"react";
-import type { ComponentPropsWithoutRef, ReactNode } from"react";
-import { cn } from"../../lib/utils";
+import * as React from "react";
+import { useId } from "react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { cn } from "../../lib/utils";
 
 function colorWithAlpha(color: string | undefined, alphaPercent: number) {
  const normalized = String(color ??"").trim();
@@ -155,7 +155,7 @@ export function Dropdown<T extends string>({
  ? `${dropdownId}-option-${activeIndex}-${sanitizeIdSegment(options[activeIndex].value)}`
  : undefined;
  if (process.env.NODE_ENV ==="development"&& activeIndex === -1 && options.length > 0) {
- console.warn(`Dropdown: value"${value}"not found in options`);
+      console.warn(`Dropdown: value "${value}" not found in options`);
  }
  function scheduleClose() {
  closeTimerRef.current = window.setTimeout(() => setOpen(false), 120) as unknown as number;
@@ -193,7 +193,7 @@ export function Dropdown<T extends string>({
  }, [open]);
 
  function handleKeyDown(e: React.KeyboardEvent) {
- if (!open && (e.key ==="Enter"|| e.key ===""|| e.key ==="ArrowDown")) {
+ if (!open && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
  e.preventDefault();
  setOpen(true);
  return;
@@ -207,11 +207,10 @@ export function Dropdown<T extends string>({
  e.preventDefault();
  const prev = (activeIndex - 1 + options.length) % options.length;
  onChange(options[prev].value);
- } else if (e.key ==="Enter"|| e.key ==="") {
+ } else if (e.key === "Enter" || e.key === " ") {
  e.preventDefault();
  setOpen(false);
- }
- }
+ } }
 
  const selectedLabel = options[activeIndex]?.label ?? value;
 

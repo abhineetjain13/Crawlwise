@@ -399,7 +399,7 @@ async def test_read_network_payload_body_marks_generic_read_failures_explicitly(
 
 
 @pytest.mark.asyncio
-async def test_read_network_payload_body_maps_read_timeouts_to_too_large(
+async def test_read_network_payload_body_maps_read_timeouts_to_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _FakeResponse(b"x")
@@ -413,7 +413,7 @@ async def test_read_network_payload_body_maps_read_timeouts_to_too_large(
 
     result = await read_network_payload_body(response)
 
-    assert result.outcome == "too_large"
+    assert result.outcome == "timeout"
     assert result.body is None
     assert response.body_calls == 0
 

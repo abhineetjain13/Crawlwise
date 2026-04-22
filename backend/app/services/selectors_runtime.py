@@ -131,7 +131,9 @@ async def list_selector_records(
     domain: str,
     surface: str = "generic",
 ) -> list[dict[str, object]]:
-    if not str(domain or "").strip():
+    normalized_domain = str(domain or "").strip().lower()
+    normalized_surface = str(surface or "").strip().lower()
+    if not normalized_domain:
         records: list[dict[str, object]] = []
         for memory in await _all_domain_memories(session):
             for row in selector_rules_from_memory(memory):
@@ -142,13 +144,30 @@ async def list_selector_records(
                     "surface": memory.surface,
                 })
         return records
-    memory = await load_domain_memory(session, domain=domain, surface=surface)
+    if not normalized_surface:
+        records: list[dict[str, object]] = []
+        for memory in await _all_domain_memories(session):
+            if memory.domain != normalized_domain:
+                continue
+            for row in selector_rules_from_memory(memory):
+                records.append({
+                    **dict(row),
+                    "id": int(row.get("id") or 0),
+                    "domain": memory.domain,
+                    "surface": memory.surface,
+                })
+        return records
+    memory = await load_domain_memory(
+        session,
+        domain=normalized_domain,
+        surface=normalized_surface,
+    )
     return [
         {
             **dict(row),
             "id": int(row.get("id") or 0),
-            "domain": str(domain or "").strip().lower(),
-            "surface": str(surface or "").strip().lower(),
+            "domain": normalized_domain,
+            "surface": normalized_surface,
         }
         for row in selector_rules_from_memory(memory)
     ]

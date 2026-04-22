@@ -1,19 +1,19 @@
 "use client";
 
-import { Globe, Plus, Shield, SlidersHorizontal, Sparkles } from"lucide-react";
-import type { Route } from"next";
-import { useRouter } from"next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from"react";
+import { Globe, Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
+import type { Route } from "next";
+import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import { InlineAlert, PageHeader, SectionHeader, TabBar } from"../ui/patterns";
-import { Button, Card, Dropdown, Input, Textarea } from"../ui/primitives";
-import { api } from"../../lib/api";
-import type { AdvancedCrawlMode, CrawlConfig, CrawlDomain } from"../../lib/api/types";
-import { CRAWL_DEFAULTS, CRAWL_LIMITS } from"../../lib/constants/crawl-defaults";
-import { getNormalizedDomain } from"../../lib/format/domain";
-import { STORAGE_KEYS } from"../../lib/constants/storage-keys";
-import { UI_DELAYS } from"../../lib/constants/timing";
-import { telemetryErrorPayload, trackEvent } from"../../lib/telemetry/events";
+import { InlineAlert, PageHeader, SectionHeader, TabBar } from "../ui/patterns";
+import { Button, Card, Dropdown, Input, Textarea } from "../ui/primitives";
+import { api } from "../../lib/api";
+import type { AdvancedCrawlMode, CrawlConfig, CrawlDomain } from "../../lib/api/types";
+import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
+import { getNormalizedDomain } from "../../lib/format/domain";
+import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
+import { UI_DELAYS } from "../../lib/constants/timing";
+import { telemetryErrorPayload, trackEvent } from "../../lib/telemetry/events";
 import {
  AdditionalFieldInput,
  clampNumber,
@@ -36,8 +36,7 @@ import {
  normalizeField,
  uniqueFields,
  uniqueRequestedFields,
-} from"./shared";
-
+} from "./shared";
 type CrawlConfigScreenProps = {
  requestedTab: CrawlTab | null;
  requestedCategoryMode: CategoryMode | null;
@@ -87,20 +86,21 @@ export function CrawlConfigScreen({
  const activeMode = crawlTab ==="category"? categoryMode : pdpMode;
  const surface = deriveSurface(crawlDomain, crawlTab);
 
- useEffect(() => {
- if (bulkPrefillRouteSyncGuardRef.current) {
- if (requestedTab ==="pdp") {
- bulkPrefillRouteSyncGuardRef.current = false;
- }
- return;
- }
- const nextTab = requestedTab ??"category";
- const nextCategoryMode = requestedCategoryMode ??"single";
- const nextPdpMode = requestedPdpMode ??"single";
- setCrawlTab((current) => (current === nextTab ? current : nextTab));
- setCategoryMode((current) => (current === nextCategoryMode ? current : nextCategoryMode));
- setPdpMode((current) => (current === nextPdpMode ? current : nextPdpMode));
- }, [requestedCategoryMode, requestedPdpMode, requestedTab]);
+useEffect(() => {
+  if (bulkPrefillRouteSyncGuardRef.current) {
+    if (requestedTab === "pdp") {
+      bulkPrefillRouteSyncGuardRef.current = false;
+    } else {
+      return;
+    }
+  }
+  const nextTab = requestedTab ?? "category";
+  const nextCategoryMode = requestedCategoryMode ?? "single";
+  const nextPdpMode = requestedPdpMode ?? "single";
+  setCrawlTab((current) => (current === nextTab ? current : nextTab));
+  setCategoryMode((current) => (current === nextCategoryMode ? current : nextCategoryMode));
+  setPdpMode((current) => (current === nextPdpMode ? current : nextPdpMode));
+}, [requestedCategoryMode, requestedPdpMode, requestedTab]);
 
  useEffect(() => {
  const routeMode = crawlTab ==="category"? requestedCategoryMode : requestedPdpMode;
@@ -439,7 +439,7 @@ export function CrawlConfigScreen({
  <div className="page-stack">
  <PageHeader title="Crawl Studio"/>
 
- <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch"onSubmit={(event) => void startCrawl(event)}>
+        <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
  <div className="page-stack">
  <Card className="section-card">
  <SectionHeader
@@ -819,8 +819,7 @@ function buildExtractionContract(fieldRows: FieldRow[]) {
  }
  const reason = validateAdditionalFieldName(fieldName);
  if (reason) {
- throw new Error(`Invalid manual field"${row.fieldName || fieldName}": ${reason}`);
- }
+ throw new Error(`Invalid manual field "${row.fieldName || fieldName}": ${reason}`); }
  return {
  field_name: fieldName,
  css_selector: cssSelector || undefined,
@@ -837,7 +836,7 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
  const invalidAdditionalField = additionalFields.find((field) => validateAdditionalFieldName(field));
  if (invalidAdditionalField) {
  const reason = validateAdditionalFieldName(invalidAdditionalField);
- throw new Error(`Invalid additional field"${invalidAdditionalField}": ${reason}`);
+      throw new Error(`Invalid additional field "${invalidAdditionalField}": ${reason}`);
  }
  const resolvedAdvancedMode = config.advanced_enabled ? config.advanced_mode : null;
  const surface = deriveSurface(config.domain, config.module);

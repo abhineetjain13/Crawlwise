@@ -853,6 +853,7 @@ async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
     visible = await _interactive_handle_is_visible(handle)
     aria_label = await _interactive_handle_attr(handle, "aria-label")
     title = await _interactive_handle_attr(handle, "title")
+    href = await _interactive_handle_attr(handle, "href")
     aria_controls = await _interactive_handle_attr(handle, "aria-controls")
     aria_expanded = await _interactive_handle_attr(handle, "aria-expanded")
     data_qa_action = await _interactive_handle_attr(handle, "data-qa-action")
@@ -869,6 +870,7 @@ async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
         "probe": probe,
         "aria_label": aria_label,
         "title": title,
+        "href": href,
         "aria_controls": aria_controls,
         "aria_expanded": aria_expanded,
         "data_qa_action": data_qa_action,

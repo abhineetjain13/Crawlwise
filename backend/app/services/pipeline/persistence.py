@@ -12,6 +12,7 @@ from app.services.artifact_store import (
     persist_png_artifact_from_file,
 )
 from app.services.publish.metadata import refresh_record_commit_metadata
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 def _string_list(value: object) -> list[str]:
@@ -147,7 +148,35 @@ async def persist_extracted_records(
     raw_html_path: str | None = None,
 ) -> int:
     persisted = 0
-    seen_identities: set[str] = set()
+    candidate_identity_keys = {
+        identity_key
+        for record in records
+        for identity_key in (
+            _record_identity_key(
+                str(
+                    dict(record).get("url")
+                    or dict(record).get("source_url")
+                    or acquisition_result.final_url
+                )
+            ),
+        )
+        if identity_key
+    }
+    existing_identities: set[str] = set()
+    if candidate_identity_keys:
+        existing_identities = {
+            str(identity_key)
+            for identity_key in (
+                await session.scalars(
+                    select(CrawlRecord.url_identity_key).where(
+                        CrawlRecord.run_id == run.id,
+                        CrawlRecord.url_identity_key.in_(candidate_identity_keys),
+                    )
+                )
+            )
+            if identity_key
+        }
+    seen_identities: set[str] = set(existing_identities)
     for record in records:
         data = {
             key: value

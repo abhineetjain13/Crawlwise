@@ -1,12 +1,11 @@
-import { describe, expect, it } from"vitest";
-
+import { describe, expect, it } from "vitest";
 import {
  buildXPathForElement,
  inferSelectorSurface,
  mergeSelectorRows,
  selectRelevantSelectorRecords,
  xpathLiteral,
-} from"../app/selectors/page";
+} from "../app/selectors/page";
 
 describe("selectors page helpers", () => {
  it("infers job detail when fields or URL are job-oriented", () => {
@@ -151,14 +150,12 @@ describe("selectors page helpers", () => {
 
  it("builds a unique XPath from the loaded preview DOM", () => {
  document.body.innerHTML = `
- <main>
- <section class="product-gallery">
- <button aria-label="Black"data-testid="color-swatch">
- <span>Black</span>
- </button>
- </section>
- </main>
- `;
+<main>
+<section class="product-gallery">
+ <button aria-label="Black" data-testid="color-swatch"> </button>
+</section>
+</main>
+`;
 
  const element = document.querySelector("[data-testid='color-swatch']");
  expect(element).not.toBeNull();
@@ -173,7 +170,7 @@ describe("selectors page helpers", () => {
  it("builds a valid XPath literal when the value contains both quote types", () => {
  const literal = xpathLiteral(`it's"cool"`);
 
- expect(literal).toBe(`concat('it',"'", 's"cool"')`);
+ expect(literal).toBe(`concat('it',"'",'s"cool"')`);
  expect(document.evaluate(`string(${literal})`, document, null, XPathResult.STRING_TYPE, null).stringValue).toBe(`it's"cool"`);
  });
 });

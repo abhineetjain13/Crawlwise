@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from bs4 import BeautifulSoup
@@ -410,9 +410,10 @@ def _curl_fetch_sync(
 ) -> PageFetchResult:
     from curl_cffi import requests as curl_requests
 
+    impersonate_target = cast(object, crawler_runtime_settings.curl_impersonate_target)
     response = curl_requests.get(
         url,
-        impersonate=crawler_runtime_settings.curl_impersonate_target,
+        impersonate=impersonate_target,
         allow_redirects=True,
         timeout=timeout_seconds,
         proxy=proxy,

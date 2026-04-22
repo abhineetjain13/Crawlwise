@@ -19,10 +19,11 @@ DOM-first; LLM is opt-in normalization only, never the primary extraction mechan
 | Step | File | Why |
 |------|------|-----|
 | 1 | `docs/CODEBASE_MAP.md` | Tells you where every file lives and which bucket owns it |
-| 2 | `docs/ENGINEERING_STRATEGY.md` | Tells you the anti-patterns you must not introduce |
-| 3 | `docs/INVARIANTS.md` | Tells you the runtime contracts you must not break |
-| 4 | `docs/agent/SKILLS.md` | Look up the recipe for your current task before starting |
+| 2 | `docs/BUSINESS_LOGIC.md` | Tells you the critical product decision points and which owners make them |
+| 3 | `docs/ENGINEERING_STRATEGY.md` | Tells you the anti-patterns you must not introduce |
+| 4 | `docs/INVARIANTS.md` | Tells you the runtime contracts you must not break |
 | 5 | `docs/plans/ACTIVE.md` | Check if there is an active plan pointer; if yes, open the linked plan file and work from that document |
+| 6 | `docs/agent/SKILLS.md` | Look up the recipe for your current task before starting |
 
 For backend detail: `docs/backend-architecture.md`
 For frontend detail: `docs/frontend-architecture.md`
@@ -91,6 +92,7 @@ $env:PYTHONPATH='.'
 
 - `AGENTS.md` — session bootstrap only. Keep under 200 lines.
 - `docs/CODEBASE_MAP.md` — file-to-bucket map. Update when files move or are added.
+- `docs/BUSINESS_LOGIC.md` — critical product/business decision points and their owning files.
 - `docs/ENGINEERING_STRATEGY.md` — principles + named anti-patterns. The most important doc for preventing bloat.
 - `docs/INVARIANTS.md` — must-preserve runtime rules. Only changes when a contract genuinely changes.
 - `docs/backend-architecture.md` — detailed backend reference. Update when subsystem behavior changes.

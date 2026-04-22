@@ -6,6 +6,7 @@ from app.services.field_value_dom import (
     extract_heading_sections,
     extract_page_images,
     extract_selector_values,
+    requested_content_extractability,
 )
 
 
@@ -250,6 +251,118 @@ def test_extract_heading_sections_reads_nested_wrapped_accordion_content() -> No
     }
 
 
+def test_extract_heading_sections_keeps_adjacent_heading_sections_bound_to_their_own_content() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <div class="product-specification">
+              <h2 class="product-details-title">Product Specifications</h2>
+              <table class="spec-table">
+                <tbody>
+                  <tr><td>Storage</td><td>Dry Place</td></tr>
+                  <tr><td>Grade</td><td>Medicine Grade</td></tr>
+                </tbody>
+              </table>
+              <h2 class="coy-details-title">Company Details</h2>
+              <div class="seo-content">
+                <div>Lyotex Lifesciences Private Limited manufactures botanical extracts.</div>
+              </div>
+              <div class="business-details">
+                <div class="detail-row">
+                  <div class="info-block">
+                    <div class="info-rt">
+                      <p>Business Type</p>
+                      <p>Manufacturer, Supplier, Trading Company</p>
+                    </div>
+                  </div>
+                  <div class="info-block">
+                    <div class="info-rt">
+                      <p>GST NO</p>
+                      <p>27AAECL9071B1ZK</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    sections = extract_heading_sections(soup)
+
+    assert sections["Product Specifications"] == "Storage Dry Place Grade Medicine Grade"
+    assert sections["Company Details"].startswith(
+        "Lyotex Lifesciences Private Limited manufactures botanical extracts."
+    )
+    assert "Business Type Manufacturer, Supplier, Trading Company" in sections["Company Details"]
+    assert "GST NO 27AAECL9071B1ZK" in sections["Company Details"]
+
+
+def test_extract_heading_sections_resolves_anchor_hash_accordion_panels() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <div id="accordion">
+              <div class="card">
+                <div role="tab" id="headingOne" class="card-header">
+                  <h5 class="mb-0 accordianheading">
+                    <a data-toggle="collapse" data-parent="#accordion" href="#collapseOne" aria-expanded="true" aria-controls="collapseOne">
+                      Product Details
+                    </a>
+                  </h5>
+                </div>
+                <div id="collapseOne" role="tabpanel" aria-labelledby="headingOne" class="collapse show">
+                  <div class="card-block">
+                    <p><b>Material &amp; Care:</b><br>Premium Heavy Gauge Fabric</p>
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <div role="tab" id="headingTwo" class="card-header">
+                  <h5 class="mb-0 accordianheading">
+                    <a data-toggle="collapse" data-parent="#accordion" href="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
+                      Product Description
+                    </a>
+                  </h5>
+                </div>
+                <div id="collapseTwo" role="tabpanel" aria-labelledby="headingTwo" class="collapse">
+                  <div class="card-block">
+                    <p>Official Licensed Superman Oversized T-Shirt.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <div role="tab" id="headingArtist" class="card-header">
+                  <h5 class="mb-0 accordianheading">
+                    <a data-toggle="collapse" data-parent="#accordion" href="#collapseArtist" aria-expanded="false" aria-controls="collapseArtist">
+                      Artist's Details
+                    </a>
+                  </h5>
+                </div>
+                <div id="collapseArtist" role="tabpanel" aria-labelledby="headingArtist" class="collapse">
+                  <div class="card-block">
+                    <p>Suit up with Justice League merchandise.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    sections = extract_heading_sections(soup)
+
+    assert sections["Product Details"] == "Material & Care: Premium Heavy Gauge Fabric"
+    assert sections["Product Description"] == "Official Licensed Superman Oversized T-Shirt."
+    assert sections["Artist's Details"] == "Suit up with Justice League merchandise."
+
+
 def test_extract_heading_sections_skips_review_and_index_panels() -> None:
     soup = BeautifulSoup(
         """
@@ -274,6 +387,60 @@ def test_extract_heading_sections_skips_review_and_index_panels() -> None:
     sections = extract_heading_sections(soup)
 
     assert sections == {}
+
+
+def test_requested_content_extractability_ignores_arbitrary_heading_labels() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <section>
+              <h2>Batman Wayne Industries</h2>
+              <p>Relaxed fit cotton shirt with oversized graphic print.</p>
+            </section>
+            <section>
+              <h2>Description</h2>
+              <p>Garment dyed cotton with a camp collar.</p>
+            </section>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    extractability = requested_content_extractability(
+        soup,
+        surface="ecommerce_detail",
+        requested_fields=None,
+    )
+
+    assert "batman_wayne_industries" not in extractability["extractable_fields"]
+    assert extractability["section_fields"] == ["description"]
+
+
+def test_requested_content_extractability_keeps_explicit_requested_section_labels() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <section>
+              <h2>Features &amp; Benefits</h2>
+              <p>NITROFOAM midsole with PUMAGRIP outsole.</p>
+            </section>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    extractability = requested_content_extractability(
+        soup,
+        surface="ecommerce_detail",
+        requested_fields=["Features & Benefits"],
+    )
+
+    assert extractability["matched_requested_fields"] == ["features_benefits"]
+    assert "features_benefits" in extractability["extractable_fields"]
 
 
 def test_extract_heading_sections_does_not_map_action_labels_to_product_title() -> None:

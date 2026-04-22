@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,17 +49,24 @@ async def wait_for_listing_readiness_impl(
 
     if not override:
         return {}
+    raw_selectors = override.get("selectors")
+    if not isinstance(raw_selectors, Iterable) or isinstance(raw_selectors, (str, bytes)):
+        return {}
     selectors = [
         str(selector or "").strip()
-        for selector in list(override.get("selectors") or [])
+        for selector in raw_selectors
         if str(selector or "").strip()
     ]
     if not selectors:
         return {}
-    max_wait_ms = int(
-        override.get("max_wait_ms")
-        or crawler_runtime_settings.listing_readiness_max_wait_ms
-        or 0
+    max_wait_value = override.get("max_wait_ms")
+    safe_fallback = _coerce_int(
+        crawler_runtime_settings.listing_readiness_max_wait_ms,
+        fallback=0,
+    )
+    max_wait_ms = _coerce_int(
+        max_wait_value,
+        fallback=safe_fallback,
     )
     if max_wait_ms <= 0:
         return {}
@@ -124,10 +132,20 @@ async def probe_browser_readiness_impl(
     matched_listing_selectors = 0
     if is_listing:
         listing_card_count = await listing_card_signal_count_impl(page, surface=surface)
+        raw_override_selectors = (
+            listing_override.get("selectors")
+            if isinstance(listing_override, dict)
+            else None
+        )
         matched_listing_selectors = await count_matching_selectors(
             page,
-            selectors=list(listing_override.get("selectors") or [])
-            if isinstance(listing_override, dict)
+            selectors=[
+                str(selector or "").strip()
+                for selector in raw_override_selectors
+                if str(selector or "").strip()
+            ]
+            if isinstance(raw_override_selectors, Iterable)
+            and not isinstance(raw_override_selectors, (str, bytes))
             else [],
         )
     if is_detail:
@@ -144,12 +162,7 @@ async def probe_browser_readiness_impl(
             listing_card_count >= int(crawler_runtime_settings.listing_min_items)
             or matched_listing_selectors > 0
         )
-        heuristic_ready = bool(
-            not selector_match
-            and visible_text_length
-            >= int(crawler_runtime_settings.browser_readiness_visible_text_min) * 2
-        )
-        is_ready = selector_match or heuristic_ready
+        is_ready = selector_match
     else:
         is_ready = visible_text_length >= int(
             crawler_runtime_settings.browser_readiness_visible_text_min
@@ -196,6 +209,25 @@ async def count_matching_selectors(page: Any, *, selectors: list[str]) -> int:
         except (TypeError, ValueError):
             continue
     return matches
+
+
+def _coerce_int(value: object, *, fallback: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, (str, bytes)):
+        text = value.decode() if isinstance(value, bytes) else value
+        text = text.strip()
+        if not text:
+            return fallback
+        try:
+            return int(text)
+        except ValueError:
+            return fallback
+    return fallback
 
 
 def classify_browser_outcome_impl(

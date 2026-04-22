@@ -1,7 +1,7 @@
 "use client";
 
-import { createContext, useContext, useMemo, useRef, useSyncExternalStore } from"react";
-import type { ReactNode } from"react";
+import { createContext, useContext, useMemo, useRef, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 
 export type TopBarState = {
  title?: ReactNode;

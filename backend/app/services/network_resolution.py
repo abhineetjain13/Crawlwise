@@ -22,8 +22,10 @@ def address_family_preference() -> AddressFamilyPreference:
         )
         or "auto"
     ).strip().lower()
-    if value in {"ipv4", "ipv6"}:
-        return value
+    if value == "ipv4":
+        return "ipv4"
+    if value == "ipv6":
+        return "ipv6"
     return "auto"
 
 
@@ -51,14 +53,18 @@ def build_async_http_client(
         force_ipv4=force_ipv4,
     )
     merged_headers = default_request_headers(headers=headers)
-    client_kwargs: dict[str, object] = {
-        "follow_redirects": follow_redirects,
-        "timeout": timeout,
-        "headers": merged_headers,
-    }
     if transport is not None:
-        client_kwargs["transport"] = transport
-    return httpx.AsyncClient(**client_kwargs)
+        return httpx.AsyncClient(
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            headers=merged_headers,
+            transport=transport,
+        )
+    return httpx.AsyncClient(
+        follow_redirects=follow_redirects,
+        timeout=timeout,
+        headers=merged_headers,
+    )
 
 
 def default_request_headers(

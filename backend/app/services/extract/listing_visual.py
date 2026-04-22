@@ -86,8 +86,10 @@ def _normalized_visual_elements(
 
 
 def _coerce_visual_number(value: object) -> int:
+    if value is None:
+        return 0
     try:
-        return int(float(value or 0))
+        return int(float(value))
     except (TypeError, ValueError):
         return 0
 

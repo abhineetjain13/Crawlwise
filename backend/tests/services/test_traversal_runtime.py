@@ -977,7 +977,7 @@ async def test_count_listing_cards_uses_zara_product_grid_selector() -> None:
 
 
 @pytest.mark.asyncio
-async def test_count_listing_cards_does_not_fallback_to_heuristics_when_selectors_miss(
+async def test_count_listing_cards_falls_back_to_heuristics_when_selectors_miss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _ZeroLocator:
@@ -989,13 +989,96 @@ async def test_count_listing_cards_does_not_fallback_to_heuristics_when_selector
             del selector
             return _ZeroLocator()
 
-        async def evaluate(self, script: str, selectors: list[str] | None = None) -> int:
-            del selectors
+        async def evaluate(self, script: str, arg: Any | None = None) -> int | None:
+            del arg
             if "querySelectorAll(selector).length" in script:
                 return 0
-            if "const positive =" in script:
-                return 7
+            return None
+
+        async def content(self) -> str:
+            return """
+            <html>
+              <body>
+                <section class="results-grid">
+                  <article class="product-card">
+                    <a href="/products/widget-a"><img src="/a.jpg" alt="A" />Widget A</a>
+                  </article>
+                  <article class="product-card">
+                    <a href="/products/widget-b"><img src="/b.jpg" alt="B" />Widget B</a>
+                  </article>
+                  <article class="product-card">
+                    <a href="/products/widget-c"><img src="/c.jpg" alt="C" />Widget C</a>
+                  </article>
+                  <article class="product-card">
+                    <a href="/products/widget-d"><img src="/d.jpg" alt="D" />Widget D</a>
+                  </article>
+                  <article class="product-card">
+                    <a href="/products/widget-e"><img src="/e.jpg" alt="E" />Widget E</a>
+                  </article>
+                  <article class="product-card">
+                    <a href="/products/widget-f"><img src="/f.jpg" alt="F" />Widget F</a>
+                  </article>
+                  <article class="product-card">
+                    <a href="/products/widget-g"><img src="/g.jpg" alt="G" />Widget G</a>
+                  </article>
+                </section>
+              </body>
+            </html>
+            """
+
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.CARD_SELECTORS",
+        {"ecommerce": [".product-card"], "jobs": [".job-card"]},
+    )
+
+    count = await count_listing_cards(_SelectorPage(), surface="ecommerce_listing")
+
+    assert count == 7
+
+
+@pytest.mark.asyncio
+async def test_count_listing_cards_heuristic_rejects_detail_sections_with_support_links(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ZeroLocator:
+        async def count(self) -> int:
             return 0
+
+    class _SelectorPage:
+        def locator(self, selector: str) -> _ZeroLocator:
+            del selector
+            return _ZeroLocator()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> int | None:
+            del arg
+            if "querySelectorAll(selector).length" in script:
+                return 0
+            return None
+
+        async def content(self) -> str:
+            return """
+            <html>
+              <body>
+                <main>
+                  <section class="product-details">
+                    <h2>Shipping information</h2>
+                    <p>Read the delivery policy and returns process for this product.</p>
+                    <a href="/shipping">Shipping policy</a>
+                  </section>
+                  <section class="product-details">
+                    <h2>Warranty</h2>
+                    <p>Find the product warranty terms and support instructions here.</p>
+                    <a href="/support/warranty">Warranty terms</a>
+                  </section>
+                  <section class="product-details">
+                    <h2>Care guide</h2>
+                    <p>Learn how to clean and maintain the product after purchase.</p>
+                    <a href="/support/care">Care guide</a>
+                  </section>
+                </main>
+              </body>
+            </html>
+            """
 
     monkeypatch.setattr(
         "app.services.acquisition.traversal.CARD_SELECTORS",

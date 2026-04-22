@@ -124,3 +124,44 @@ async def test_selectors_api_preview_test_and_suggest(
     )
     assert suggest_response.status_code == 200
     assert suggest_response.json()["suggestions"]["title"][0]["css_selector"] == ".custom-title"
+
+
+@pytest.mark.asyncio
+async def test_selectors_api_lists_all_domain_records_when_surface_is_omitted(
+    selector_api_client: AsyncClient,
+) -> None:
+    first_response = await selector_api_client.post(
+        "/api/selectors",
+        json={
+            "domain": "example.com",
+            "surface": "ecommerce_detail",
+            "field_name": "price",
+            "css_selector": ".detail-price",
+        },
+    )
+    second_response = await selector_api_client.post(
+        "/api/selectors",
+        json={
+            "domain": "example.com",
+            "surface": "generic",
+            "field_name": "title",
+            "css_selector": "h1",
+        },
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+
+    list_response = await selector_api_client.get(
+        "/api/selectors",
+        params={"domain": "example.com"},
+    )
+
+    assert list_response.status_code == 200
+    assert {
+        (row["surface"], row["field_name"])
+        for row in list_response.json()
+    } == {
+        ("ecommerce_detail", "price"),
+        ("generic", "title"),
+    }

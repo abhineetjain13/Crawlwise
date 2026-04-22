@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from app.services.config.extraction_rules import DETAIL_BLOCKED_TOKENS
@@ -11,6 +12,31 @@ from app.services.field_policy import (
     NORMALIZED_REQUESTED_FIELD_ALIASES,
     normalize_requested_field,
 )
+
+
+def _coerce_int(value: object, *, fallback: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, (str, bytes)):
+        text = value.decode() if isinstance(value, bytes) else value
+        text = text.strip()
+        if not text:
+            return fallback
+        try:
+            return int(text)
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes, dict)):
+        return []
+    return [str(item) for item in value]
 
 
 def detail_expansion_skip(reason: str) -> dict[str, object]:
@@ -74,15 +100,15 @@ async def expand_detail_content_if_needed_impl(
         if dom.get("clicked_count", 0) or aom.get("clicked_count", 0)
         else "attempted",
         "reason": "missing_detail_content",
-        "clicked_count": int(dom.get("clicked_count", 0) or 0)
-        + int(aom.get("clicked_count", 0) or 0),
+        "clicked_count": _coerce_int(dom.get("clicked_count"), fallback=0)
+        + _coerce_int(aom.get("clicked_count"), fallback=0),
         "expanded_elements": [
-            *list(dom.get("expanded_elements") or []),
-            *list(aom.get("expanded_elements") or []),
+            *_string_list(dom.get("expanded_elements")),
+            *_string_list(aom.get("expanded_elements")),
         ],
         "interaction_failures": [
-            *list(dom.get("interaction_failures") or []),
-            *list(aom.get("interaction_failures") or []),
+            *_string_list(dom.get("interaction_failures")),
+            *_string_list(aom.get("interaction_failures")),
         ],
         "dom": dom,
         "aom": aom,
@@ -141,7 +167,7 @@ async def expand_all_interactive_elements_impl(
         except Exception as exc:
             interaction_failures.append(f"locator_failed:{selector}:{exc}")
             continue
-        diagnostics["buttons_found"] = int(diagnostics["buttons_found"]) + len(candidates)
+        diagnostics["buttons_found"] = _coerce_int(diagnostics["buttons_found"]) + len(candidates)
         selector_clicks = 0
         for handle in candidates:
             if clicked_count >= max_interactions:
@@ -157,6 +183,7 @@ async def expand_all_interactive_elements_impl(
                 probe = str(snapshot.get("probe") or "").strip().lower()
                 label = str(snapshot.get("label") or "").strip().lower()
                 aria_expanded = str(snapshot.get("aria_expanded") or "").strip().lower()
+                href = str(snapshot.get("href") or "").strip().lower()
                 aria_controls = str(snapshot.get("aria_controls") or "").strip()
                 data_qa_action = str(snapshot.get("data_qa_action") or "").strip().lower()
                 class_name = str(snapshot.get("class_name") or "").strip().lower()
@@ -178,6 +205,13 @@ async def expand_all_interactive_elements_impl(
                     token in f"{data_qa_action} {class_name}"
                     for token in ("size selector", "size-selector", "open-size-selector")
                 )
+                navigational_anchor = bool(
+                    tag_name == "a"
+                    and href
+                    and not href.startswith(("#", "javascript:", "mailto:", "tel:"))
+                    and not aria_controls
+                    and not size_toggle_hint
+                )
                 if any(
                     token in non_content_probe
                     for token in (
@@ -188,6 +222,8 @@ async def expand_all_interactive_elements_impl(
                         "wishlist",
                     )
                 ):
+                    continue
+                if navigational_anchor:
                     continue
                 if (
                     probe
@@ -285,6 +321,9 @@ async def expand_interactive_elements_via_accessibility_impl(
         "expanded_elements": [],
         "interaction_failures": [],
     }
+    clicked_count = 0
+    expanded_elements: list[str] = []
+    interaction_failures: list[str] = []
     accessibility = getattr(page, "accessibility", None)
     snapshot_fn = getattr(accessibility, "snapshot", None)
     if snapshot_fn is None:
@@ -325,7 +364,7 @@ async def expand_interactive_elements_via_accessibility_impl(
         try:
             locator_factory = getattr(page, "get_by_role", None)
             if locator_factory is None:
-                diagnostics["interaction_failures"].append("get_by_role_unavailable")
+                interaction_failures.append("get_by_role_unavailable")
                 diagnostics["status"] = "locator_unavailable"
                 break
             locator = locator_factory(role, name=name, exact=True)
@@ -341,14 +380,17 @@ async def expand_interactive_elements_via_accessibility_impl(
                 await page.wait_for_timeout(
                     int(crawler_runtime_settings.accordion_expand_wait_ms)
                 )
-            diagnostics["clicked_count"] += 1
-            diagnostics["expanded_elements"].append(name)
+            clicked_count += 1
+            expanded_elements.append(name)
         except Exception as exc:
-            diagnostics["interaction_failures"].append(str(exc))
+            interaction_failures.append(str(exc))
     if diagnostics["status"] == "attempted":
         diagnostics["status"] = (
-            "expanded" if diagnostics["clicked_count"] > 0 else "no_matches"
+            "expanded" if clicked_count > 0 else "no_matches"
         )
+    diagnostics["clicked_count"] = clicked_count
+    diagnostics["expanded_elements"] = expanded_elements
+    diagnostics["interaction_failures"] = interaction_failures
     diagnostics["elapsed_ms"] = elapsed_ms(started_at)
     return diagnostics
 
@@ -380,7 +422,8 @@ def accessibility_expand_candidates_impl(
         ):
             seen.add(candidate)
             results.append(candidate)
-        for child in list(node.get("children") or []):
+        children = node.get("children")
+        for child in children if isinstance(children, list) else []:
             if isinstance(child, dict):
                 _walk(child)
 

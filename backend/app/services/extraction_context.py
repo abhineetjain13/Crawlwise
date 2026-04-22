@@ -53,7 +53,7 @@ def prepare_extraction_context(html: str) -> ExtractionContext:
     cleaned_html = parser.html
     return ExtractionContext(
         original_html=html,
-        cleaned_html=cleaned_html,
+        cleaned_html=cleaned_html or "",
         dom_parser=parser,
     )
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString, PageElement, Tag
 
 from app.services.field_policy import HTML_SECTION_FIELDS, normalize_requested_field
 
@@ -21,7 +24,7 @@ def extract_job_sections(html: str) -> dict[str, str]:
         if section not in HTML_SECTION_FIELDS:
             continue
         collected: list[str] = []
-        for sibling in heading.next_siblings:
+        for sibling in _iter_page_siblings(heading.next_siblings):
             sibling_name = getattr(sibling, "name", "")
             if sibling_name in {"h1", "h2", "h3", "strong"}:
                 break
@@ -36,8 +39,17 @@ def extract_job_sections(html: str) -> dict[str, str]:
         value = " ".join(collected).strip()
         if not value:
             continue
+        combined_parts = [mapped_value, value] if (mapped_value := mapped.get(section)) else [value]
         combined = " ".join(
-            piece for piece in (mapped.get(section), value) if str(piece or "").strip()
+            piece for piece in combined_parts if str(piece or "").strip()
         )
         mapped[section] = " ".join(combined.split()).strip()
     return mapped
+
+
+def _iter_page_siblings(
+    siblings: Iterator[PageElement],
+) -> Iterator[Tag | NavigableString]:
+    for sibling in siblings:
+        if isinstance(sibling, (Tag, NavigableString)):
+            yield sibling

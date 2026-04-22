@@ -194,9 +194,12 @@ Current live behavior:
 - adapter-owned acquisition URL normalization now runs before runtime policy selection, so platform-specific URL cleanup stays in adapters instead of generic acquisition code
 - browser diagnostics now classify `browser_reason` and `browser_outcome`, record phase timings and HTML bytes, and preserve failed browser-attempt evidence even when the final acquisition method stays HTTP
 - browser rendering now probes extractability at `domcontentloaded`, skips optimistic/network-idle/readiness waits when content is already usable, and limits detail expansion with bounded DOM-first then accessibility-assisted fallback
+- listing readiness no longer fast-paths from thin shell text alone; listing surfaces now require actual listing evidence before browser acquisition is considered ready
+- detail expansion now skips plain navigation anchors with real `href`s (for example footer/about/careers/returns links) unless they behave like true in-page expanders, which prevents Souled Store-style utility-page navigations during PDP acquisition
 - blocked-page detection is evidence-based: anti-bot vendor markers alone do not block a page, but challenge-specific signals such as CAPTCHA-delivery elements and corroborating blocker text do
 - browser outcomes now distinguish challenge pages, low-content terminal shells, and explicit navigation/page-closed failures instead of collapsing them into generic browser HTML
 - listing traversal now captures bounded per-step listing snapshots for extraction instead of concatenating full rendered DOMs across page turns, and diagnostics expose traversal fragment count plus traversal HTML bytes
+- listing-card counting now falls back to the shared heuristic when configured selectors miss a real grid, and the shared ecommerce selector set accepts case-variant `productCard`-style class names instead of requiring a single casing convention
 - traversal-enabled browser fetches now retain both traversal-composed HTML and the full rendered HTML so the pipeline can retry extraction once when traversal fragments produce zero records
 - browser block classification now preserves usable listing/detail content when vendor markers and challenge widgets coexist with clear extractable signals, instead of forcing a blocked verdict from anti-bot evidence alone
 - traversal stop reasons remain diagnostic when the first rendered listing page is already usable: no-progress traversal keeps the full rendered HTML as the primary payload and only downgrades to `traversal_failed` when listing evidence is still below threshold
@@ -250,18 +253,27 @@ Important implemented features:
 - extraction runtime now short-circuits raw XML sitemap/listing payloads into deterministic URL records before HTML DOM parsing, which keeps sitemap targets out of the expensive BeautifulSoup listing path
 - ecommerce detail title selection now ranks structured sources ahead of raw DOM headings, rejects noisy DOM `<h1>/<title>` values such as promo or generic-results text, and only promotes fallback titles when the replacement source is materially stronger
 - ecommerce detail extraction now drops low-signal site-shell records when the surviving title still resolves to site-brand chrome and no real product anchors survive, preventing stale SPA/detail misses from being persisted as false product successes
+- ecommerce-detail extraction now threads the originally requested PDP URL through materialization so same-site utility redirects can either preserve the requested product identity when the product metadata still matches or drop the row entirely when the utility page is carrying mismatched stale product data
 - detail extraction now has a DOM variant fallback for `ecommerce_detail` pages when structured data and JS state leave variant axes empty
+- DOM variant recovery now recognizes radio/checkbox-based size and color groups, associates labels via `for`/parent label structure, and carries stock-derived availability (`0 Left`, `17 Left`, etc.) into `variants` and `selected_variant`
 - JS-state ecommerce-detail mapping now scores candidate product payloads so richer nested PDP nodes beat shallow landing/navigation shells, and generic direct-axis variant keys such as `condition`, `grade`, `storage`, and `memory` are normalized without adapter-specific branches
 - DOM listing extraction no longer accepts the first non-empty candidate set; it now ranks structured, DOM, and browser-captured rendered-card candidates by record quality and keeps visual elements as a last-resort fallback only
+- listing extraction may retry the original uncleaned DOM when noise-removal cleanup strips card detail-link evidence from the cleaned DOM, which protects header-nested product links on sites such as IndiaMART without weakening global cleanup rules
 - listing title filtering now rejects numeric-only titles before persistence, and detail DOM image fallback keeps linked gallery media instead of dropping anchored product thumbnails
+- generic ecommerce detail-path recognition now includes vendor-common routes such as `/proddetail/`, and listing anchor selection accepts same-site cross-subdomain detail links instead of requiring an exact hostname match
 - DOM image extraction now scores likely product-gallery media higher and filters obvious tracking, logo, and spacer assets before building `additional_images`
+- image dedupe now canonicalizes Next.js-style image proxy URLs back to their underlying asset, so transformed `/_next/image?...` duplicates do not survive as fake `additional_images` beside the same hero image
 - ecommerce-detail DOM completion now treats missing `additional_images` as a high-value gap, so structured-data early exit does not suppress DOM gallery recovery when only a primary image was found upstream
 - DOM section extraction now follows accordion/tab structures through `aria-controls`, native `details/summary`, and common wrapped content containers before falling back to plain heading-sibling scans
+- requested-content extractability now only promotes canonical or explicitly requested section labels, preventing arbitrary product headings from being treated as synthetic extractable fields in browser diagnostics and DOM-completion gating
 - raw requested field labels are preserved through crawl creation, and ecommerce-detail DOM section matching now checks those exact requested labels before collapsing to broader canonical aliases; composite headings such as `Features & Benefits` therefore extract into `features_benefits` instead of being silently reduced to a generic alias like `benefits`
 - surface alias lookup now keeps normalized requested labels addressable as identity mappings as well as exact requested-field keys, so custom dynamic fields continue to flow through candidate collection even when they do not collapse to a built-in alias
 - requested custom ecommerce-detail fields now keep DOM completion active when matching section headings are present, so structured-data early exit does not hide fields such as `product_story` after detail expansion
 - DOM variant fallback now materializes concrete variant rows, keeps `variant_count` aligned with those rows, and avoids widening an already authoritative `selected_variant` choice with later DOM-only axis noise
+- ecommerce-detail long-text ranking now prefers explicit DOM sections over thinner structured blurbs when the page exposes a real description/spec-style accordion body, and `product_details` remains a separate field instead of being collapsed into `specifications`
 - long-text candidate intake now rejects low-signal placeholders such as single-word review/schema values or accordion index labels before they can win `description` / `specifications`, and selector-backed long-text fields must expose non-interactive prose rather than button/tab indexes
+- ecommerce-detail output no longer exposes platform slug fields such as `handle` by default; those values remain requestable explicitly, but the default user-facing detail schema stays limited to higher-signal commerce fields
+- DOM section intake now rejects very short non-prose tab/button label clusters before they can override a real product description or specifications body
 - ecommerce-detail JS-state product detection now requires real commerce cues instead of accepting arbitrary titled image blocks, and JS-state image harvesting filters payment, logo, bookmark, swatch, and video assets before they can outrank structured product media
 - output schema validation now applies to listing surfaces as well as detail surfaces before persistence, so type mismatches on listing records are nullified instead of silently bypassing validation
 - pipeline post-processing now has two bounded optional recovery layers: selector self-heal for detail pages, and a snapshot-backed `direct_record_extraction` LLM task that only replaces weak deterministic record sets when the LLM result scores better
@@ -285,6 +297,7 @@ Responsibilities:
 - persist HTML artifacts plus browser diagnostics/screenshot sidecars when a browser attempt occurred
 - keep artifact I/O and `CrawlRecord` persistence out of the orchestration hot path in `pipeline/core.py`
 - write `CrawlRecord` rows and update run summaries
+- skip already-persisted `(run_id, url_identity_key)` identities on rerun/re-entry so detail/listing retries stay idempotent instead of failing the run on a duplicate-key insert
 
 Current verdict rules:
 

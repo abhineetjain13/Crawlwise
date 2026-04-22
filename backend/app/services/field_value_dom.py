@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import regex as regex_lib
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse, unquote
 
 from bs4 import BeautifulSoup, Tag
 from lxml import etree
@@ -131,7 +131,8 @@ def _looks_like_image_asset_url(url: str) -> bool:
 
 
 def canonical_image_url(url: str) -> str:
-    parsed = urlparse(str(url or "").strip())
+    effective_url = _effective_image_url(url)
+    parsed = urlparse(str(effective_url or "").strip())
     filtered_query = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
@@ -147,7 +148,27 @@ def canonical_image_url(url: str) -> str:
     ).lower()
 
 
-def image_candidate_score(url: str) -> tuple[int, int, int]:
+def _effective_image_url(url: str) -> str:
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    path = str(parsed.path or "").lower()
+    if "/_next/image" not in path:
+        return text
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    wrapped = str(query.get("url") or "").strip()
+    if not wrapped:
+        return text
+    return unquote(wrapped) or text
+
+
+def _is_proxy_image_url(url: str) -> bool:
+    path = str(urlparse(str(url or "").strip()).path or "").lower()
+    return "/_next/image" in path
+
+
+def image_candidate_score(url: str) -> tuple[int, int, int, int]:
     parsed = urlparse(str(url or "").strip())
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     numeric_params = {
@@ -168,7 +189,7 @@ def image_candidate_score(url: str) -> tuple[int, int, int]:
     width = _int_param(*_WIDTH_NAMES)
     height = _int_param(*_HEIGHT_NAMES)
     area = width * height if width and height else max(width, height)
-    return (area, width, height)
+    return (0 if _is_proxy_image_url(url) else 1, area, width, height)
 
 
 def dedupe_image_urls(urls: list[str]) -> list[str]:
@@ -455,7 +476,14 @@ def extract_xpath_values(
         logger.warning("Failed to evaluate xpath selector for %s: %s", field_name, xpath)
         return []
     values: list[object] = []
-    for match in matches[:12]:
+    if isinstance(matches, list):
+        limited_matches = matches[:12]
+    else:
+        try:
+            limited_matches = list(matches)[:12]
+        except TypeError:
+            limited_matches = [matches]
+    for match in limited_matches:
         if hasattr(match, "text_content"):
             raw_value = match.text_content()
         else:
@@ -713,7 +741,7 @@ def _section_text(node: Tag, *, label: str = "") -> str:
     return text
 
 
-def _extract_sibling_content(node: Tag) -> str:
+def _extract_sibling_content(node: Tag, *, label: str = "") -> str:
     values: list[str] = []
     for sibling in node.next_siblings:
         if isinstance(sibling, Tag) and sibling.name in _SECTION_STOP_TAGS:
@@ -723,10 +751,39 @@ def _extract_sibling_content(node: Tag) -> str:
         )
         if not text:
             continue
+        if isinstance(sibling, Tag) and not _section_text_is_meaningful(
+            sibling,
+            label=label,
+            text=text,
+        ):
+            continue
         values.append(text)
-        if len(values) >= 4 or sum(len(item) for item in values) >= 1000:
+        if len(values) >= 8 or sum(len(item) for item in values) >= 1200:
             break
     return " ".join(values)
+
+
+def _section_target_ids(node: Tag) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    candidates = [node, *node.select("[aria-controls], a[href^='#']")[:6]]
+    for candidate in candidates:
+        if not isinstance(candidate, Tag):
+            continue
+        for raw_value in (
+            candidate.get("aria-controls"),
+            candidate.get("href"),
+        ):
+            target = clean_text(raw_value)
+            if not target:
+                continue
+            if target.startswith("#"):
+                target = target[1:]
+            if not target or target in seen:
+                continue
+            seen.add(target)
+            targets.append(target)
+    return targets
 
 
 def _section_text_is_meaningful(
@@ -756,7 +813,7 @@ def _section_text_is_meaningful(
             and str(candidate.get("role") or "").strip().lower()
             not in {"button", "tab"}
         )
-        if interactive_count >= 3 and content_count == 0:
+        if interactive_count >= 2 and content_count == 0:
             return False
     return True
 
@@ -801,6 +858,28 @@ def _find_wrapped_section_content(node: Tag, *, label: str) -> str:
         parent = container.parent
         container = parent if isinstance(parent, Tag) else None
     return best_text
+
+
+def _section_content_is_heading_like(
+    text: str,
+    *,
+    label: str,
+    root: BeautifulSoup | Tag,
+) -> bool:
+    cleaned = clean_text(text)
+    lowered = cleaned.lower()
+    if not lowered:
+        return False
+    if lowered == clean_text(label).lower():
+        return True
+    if _is_section_label(cleaned) and len(cleaned.split()) <= 6 and not any(
+        token in cleaned for token in ".:;!?\n"
+    ):
+        for heading in safe_select(root, _SECTION_LABEL_SELECTOR):
+            heading_label = _section_label_text(heading)
+            if heading_label and lowered == heading_label.lower():
+                return True
+    return False
 
 
 def _first_matching_text(node: Tag, selectors: tuple[str, ...]) -> str:
@@ -876,8 +955,7 @@ def _extract_product_materials(root: BeautifulSoup | Tag) -> str:
 
 def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
     label = _section_label_text(node)
-    target_id = clean_text(node.get("aria-controls"))
-    if target_id:
+    for target_id in _section_target_ids(node):
         target = root.find(id=target_id)
         if isinstance(target, Tag):
             text = _section_text(target, label=label)
@@ -899,11 +977,14 @@ def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
             ) and not _section_matches_page_heading(root, text):
                 return text
 
+    sibling_content = _extract_sibling_content(node, label=label)
     wrapped = _find_wrapped_section_content(node, label=label)
     if wrapped and not _section_matches_page_heading(root, wrapped):
-        return wrapped
-
-    sibling_content = _extract_sibling_content(node)
+        if not (
+            sibling_content
+            and _section_content_is_heading_like(wrapped, label=label, root=root)
+        ):
+            return wrapped
     if _section_text_is_meaningful(
         node,
         label=label,
@@ -952,10 +1033,7 @@ def requested_content_extractability(
     section_fields = {
         normalized
         for label in extract_heading_sections(root).keys()
-        for normalized in (
-            alias_lookup.get(normalize_field_key(label)),
-            exact_requested_field_key(label),
-        )
+        for normalized in (alias_lookup.get(normalize_field_key(label)),)
         if normalized
     }
     fields = surface_fields(surface, requested_fields)
