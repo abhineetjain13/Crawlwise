@@ -18,7 +18,11 @@ from app.services.config.extraction_rules import (
     SEMANTIC_SECTION_NOISE,
 )
 from app.services.config.surface_hints import detail_path_hints
-from app.services.field_policy import normalize_field_key, normalize_requested_field
+from app.services.field_policy import (
+    exact_requested_field_key,
+    normalize_field_key,
+    normalize_requested_field,
+)
 
 from app.services.field_value_candidates import add_candidate
 from app.services.field_value_core import (
@@ -126,7 +130,7 @@ def _looks_like_image_asset_url(url: str) -> bool:
     return "format=" in query or "fm=" in query
 
 
-def _canonical_image_url(url: str) -> str:
+def canonical_image_url(url: str) -> str:
     parsed = urlparse(str(url or "").strip())
     filtered_query = [
         (key, value)
@@ -143,7 +147,7 @@ def _canonical_image_url(url: str) -> str:
     ).lower()
 
 
-def _image_candidate_score(url: str) -> tuple[int, int, int]:
+def image_candidate_score(url: str) -> tuple[int, int, int]:
     parsed = urlparse(str(url or "").strip())
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     numeric_params = {
@@ -167,14 +171,22 @@ def _image_candidate_score(url: str) -> tuple[int, int, int]:
     return (area, width, height)
 
 
-def _dedupe_image_urls(urls: list[str]) -> list[str]:
+def dedupe_image_urls(urls: list[str]) -> list[str]:
     best_by_key: dict[str, tuple[tuple[int, int, int], int, str]] = {}
     order: list[str] = []
     for index, url in enumerate(urls):
-        canonical = _canonical_image_url(url)
+        lowered = str(url or "").strip().lower()
+        if (
+            not lowered
+            or lowered.endswith(".mp4")
+            or any(token in lowered for token in NON_PRODUCT_IMAGE_HINTS)
+            or any(token in lowered for token in NON_PRODUCT_PROVIDER_HINTS)
+        ):
+            continue
+        canonical = canonical_image_url(url)
         if not canonical:
             continue
-        score = _image_candidate_score(url)
+        score = image_candidate_score(url)
         current = best_by_key.get(canonical)
         if current is None:
             best_by_key[canonical] = (score, index, url)
@@ -264,6 +276,8 @@ def _gallery_image_score(node: Tag, candidate_url: str) -> int:
     score = 0
     if any(hint in context for hint in PRODUCT_GALLERY_CONTEXT_HINTS):
         score += 4
+    elif node.find_parent(["main"]) is not None and _looks_like_image_asset_url(candidate_url):
+        score += 2
     width = str(node.get("width") or "").strip()
     height = str(node.get("height") or "").strip()
     try:
@@ -561,7 +575,7 @@ def extract_page_images(
             key=lambda row: (-int(row[0]), int(row[1]), str(row[2])),
         )
     ]
-    return _dedupe_image_urls(ordered)[:12]
+    return dedupe_image_urls(ordered)[:12]
 
 
 def extract_label_value_pairs(root: BeautifulSoup | Tag) -> list[tuple[str, str]]:
@@ -647,6 +661,27 @@ _SECTION_CONTAINER_SELECTORS = (
     "[class*='spec' i]",
 )
 _SECTION_STOP_TAGS = {"h1", "h2", "h3", "h4", "h5", "summary"}
+_MATERIAL_TEXT_HINTS = (
+    "acrylic",
+    "cashmere",
+    "composition",
+    "cotton",
+    "elastane",
+    "fabric",
+    "leather",
+    "linen",
+    "material",
+    "nylon",
+    "polyester",
+    "rayon",
+    "shell",
+    "silk",
+    "spandex",
+    "suede",
+    "trim",
+    "viscose",
+    "wool",
+)
 
 
 def _section_label_text(node: Tag) -> str:
@@ -726,6 +761,24 @@ def _section_text_is_meaningful(
     return True
 
 
+def _page_heading_text(root: BeautifulSoup | Tag) -> str:
+    heading = root.select_one("main h1, article h1, h1")
+    if isinstance(heading, Tag):
+        return clean_text(heading.get_text(" ", strip=True)).lower()
+    return ""
+
+
+def _section_matches_page_heading(
+    root: BeautifulSoup | Tag,
+    text: str,
+) -> bool:
+    lowered_text = clean_text(text).lower()
+    if not lowered_text:
+        return False
+    page_heading = _page_heading_text(root)
+    return bool(page_heading) and lowered_text == page_heading
+
+
 def _find_wrapped_section_content(node: Tag, *, label: str) -> str:
     container: Tag | None = node
     best_text = ""
@@ -750,6 +803,77 @@ def _find_wrapped_section_content(node: Tag, *, label: str) -> str:
     return best_text
 
 
+def _first_matching_text(node: Tag, selectors: tuple[str, ...]) -> str:
+    for selector in selectors:
+        candidate = node.select_one(selector)
+        if isinstance(candidate, Tag):
+            text = clean_text(candidate.get_text(" ", strip=True))
+            if text:
+                return text
+    return ""
+
+
+def _looks_like_materials_text(text: str) -> bool:
+    lowered = clean_text(text).lower()
+    if not lowered:
+        return False
+    if "%" in lowered:
+        return True
+    return any(token in lowered for token in _MATERIAL_TEXT_HINTS)
+
+
+def _extract_product_materials(root: BeautifulSoup | Tag) -> str:
+    for container in safe_select(
+        root,
+        ".product-detail-composition, [class*='detailed-composition' i]",
+    ):
+        rows: list[str] = []
+        for part in safe_select(
+            container,
+            "li.product-detail-composition__part, li[class*='composition__part' i]",
+        ):
+            part_name = _first_matching_text(
+                part,
+                (
+                    ".product-detail-composition__part-name",
+                    "[class*='part-name' i]",
+                ),
+            )
+            area_rows: list[str] = []
+            for area in safe_select(
+                part,
+                "li.product-detail-composition__area, li[class*='composition__area' i]",
+            ):
+                area_name = _first_matching_text(
+                    area,
+                    (
+                        ".product-detail-composition__part-name",
+                        "[class*='part-name' i]",
+                    ),
+                )
+                values = [
+                    clean_text(item.get_text(" ", strip=True))
+                    for item in area.select("ul > li")
+                    if clean_text(item.get_text(" ", strip=True))
+                ]
+                if not values:
+                    continue
+                if area_name:
+                    area_rows.append(f"{area_name}: {'; '.join(values)}")
+                else:
+                    area_rows.append("; ".join(values))
+            if part_name and area_rows:
+                rows.append(f"{part_name}: {' '.join(area_rows)}")
+            elif area_rows:
+                rows.extend(area_rows)
+        if rows:
+            return "\n".join(dict.fromkeys(rows))
+        text = clean_text(container.get_text(" ", strip=True))
+        if len(text) >= 12 and _looks_like_materials_text(text):
+            return text
+    return ""
+
+
 def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
     label = _section_label_text(node)
     target_id = clean_text(node.get("aria-controls"))
@@ -761,7 +885,7 @@ def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
                 target,
                 label=label,
                 text=text,
-            ):
+            ) and not _section_matches_page_heading(root, text):
                 return text
 
     if node.name == "summary":
@@ -772,15 +896,19 @@ def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
                 parent,
                 label=label,
                 text=text,
-            ):
+            ) and not _section_matches_page_heading(root, text):
                 return text
 
     wrapped = _find_wrapped_section_content(node, label=label)
-    if wrapped:
+    if wrapped and not _section_matches_page_heading(root, wrapped):
         return wrapped
 
     sibling_content = _extract_sibling_content(node)
-    if _section_text_is_meaningful(node, label=label, text=sibling_content):
+    if _section_text_is_meaningful(
+        node,
+        label=label,
+        text=sibling_content,
+    ) and not _section_matches_page_heading(root, sibling_content):
         return sibling_content
     return ""
 
@@ -798,7 +926,68 @@ def extract_heading_sections(root: BeautifulSoup | Tag) -> dict[str, str]:
         content = _extract_section_content(heading, root)
         if len(content) >= 12:
             sections.setdefault(heading_text, content)
+    materials = _extract_product_materials(root)
+    if materials:
+        sections.setdefault("Composition", materials)
     return sections
+
+
+def requested_content_extractability(
+    root: BeautifulSoup | Tag,
+    *,
+    surface: str,
+    requested_fields: list[str] | None,
+    selector_rules: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    requested = {
+        normalized
+        for value in list(requested_fields or [])
+        for normalized in (
+            exact_requested_field_key(value),
+            normalize_requested_field(value),
+        )
+        if normalized
+    }
+    alias_lookup = surface_alias_lookup(surface, requested_fields)
+    section_fields = {
+        normalized
+        for label in extract_heading_sections(root).keys()
+        for normalized in (
+            alias_lookup.get(normalize_field_key(label)),
+            exact_requested_field_key(label),
+        )
+        if normalized
+    }
+    fields = surface_fields(surface, requested_fields)
+    dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
+    dom_pattern_fields = {
+        field_name
+        for field_name in fields
+        if (
+            selector := str(dom_patterns.get(field_name) or "").strip()
+        ) and bool(safe_select(root, selector))
+    }
+    selector_backed_fields = {
+        normalize_field_key(str(row.get("field_name") or ""))
+        for row in list(selector_rules or [])
+        if isinstance(row, dict)
+        and bool(row.get("is_active", True))
+        and (
+            str(row.get("css_selector") or "").strip()
+            or str(row.get("xpath") or "").strip()
+            or str(row.get("regex") or "").strip()
+        )
+    }
+    extractable_fields = section_fields | dom_pattern_fields | selector_backed_fields
+    matched_requested_fields = sorted(requested & extractable_fields)
+    return {
+        "verified": bool(matched_requested_fields or (not requested and section_fields)),
+        "matched_requested_fields": matched_requested_fields,
+        "extractable_fields": sorted(extractable_fields),
+        "section_fields": sorted(section_fields),
+        "dom_pattern_fields": sorted(dom_pattern_fields),
+        "selector_backed_fields": sorted(field for field in selector_backed_fields if field),
+    }
 
 
 def apply_selector_fallbacks(
@@ -859,7 +1048,9 @@ def apply_selector_fallbacks(
         for value in extract_selector_values(root, selector, field_name, page_url):
             _add(field_name, value, "dom_selector")
     for label, value in extract_label_value_pairs(root):
-        normalized_label = normalize_requested_field(label) or normalize_field_key(label)
+        normalized_label = normalize_field_key(label)
         canonical = alias_lookup.get(normalized_label)
+        if not canonical:
+            canonical = alias_lookup.get(normalize_requested_field(label))
         if canonical:
             _add(canonical, coerce_field_value(canonical, value, page_url), "dom_selector")

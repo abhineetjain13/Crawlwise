@@ -171,7 +171,7 @@ def test_record_to_markdown_includes_page_context_from_raw_data() -> None:
 
     markdown = record_export_service.record_to_markdown(row)
 
-    assert "## Page Context" in markdown
+    assert "## Page Context" not in markdown
     assert "Visible links:" in markdown
     assert "Widget Prime" in markdown
 

@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, Copy, ExternalLink, Plus, Trash2 } from "lucide-react";
 
-import { Badge, Button, Input, Select, Tooltip } from "../../components/ui/primitives";
+import { Badge, Button, Dropdown, Input, Tooltip } from "../../components/ui/primitives";
 import {
   DataRegionEmpty,
   DataRegionError,
@@ -37,13 +37,13 @@ function RunRow({
   const domain = getDomain(run.url);
 
   return (
-    <tr className="group">
+    <tr className="group relative hover:z-50">
       {/* Domain + URL */}
-      <td>
+      <td className="overflow-visible">
         <div className="flex items-center gap-2.5">
           <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
           <div className="flex min-w-0 items-center gap-2">
-            <Tooltip content={run.url}>
+            <Tooltip content={run.url} align="start">
               <Link
                 href={`/crawl?run_id=${run.id}`}
                 className="link-accent no-underline block max-w-[280px] truncate font-mono text-xs font-medium leading-[1.4] text-primary transition-colors"
@@ -209,21 +209,22 @@ export default function RunsPage() {
               className="text-mono-body"
             />
           </div>
-          <Select
-            aria-label="Filter by status"
+          <Dropdown<StatusFilter>
+            ariaLabel="Filter by status"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            onChange={setStatusFilter}
+            options={[
+              { value: "", label: "All statuses" },
+              { value: "completed", label: "Completed" },
+              { value: "running", label: "Running" },
+              { value: "pending", label: "Pending" },
+              { value: "paused", label: "Paused" },
+              { value: "failed", label: "Failed" },
+              { value: "killed", label: "Killed" },
+              { value: "proxy_exhausted", label: "Proxy Exhausted" },
+            ]}
             className="w-full md:w-[180px]"
-          >
-            <option value="">All statuses</option>
-            <option value="completed">Completed</option>
-            <option value="running">Running</option>
-            <option value="pending">Pending</option>
-            <option value="paused">Paused</option>
-            <option value="failed">Failed</option>
-            <option value="killed">Killed</option>
-            <option value="proxy_exhausted">Proxy Exhausted</option>
-          </Select>
+          />
           <Button onClick={applyFilters} size="sm">Filter</Button>
           <Button variant="ghost" onClick={resetFilters} size="sm">Reset</Button>
         </div>

@@ -10,9 +10,10 @@ from bs4 import BeautifulSoup
 from w3lib.url import url_query_cleaner
 
 from app.services.config.extraction_rules import CURRENCY_SYMBOL_MAP
-from app.services.config.field_mappings import CANONICAL_SCHEMAS
+from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_policy import (
+    exact_requested_field_key,
     expand_requested_fields,
     field_allowed_for_surface,
     get_surface_field_aliases,
@@ -202,6 +203,12 @@ def strip_record_tracking_params(
 def surface_fields(surface: str, requested_fields: list[str] | None) -> list[str]:
     normalized_surface = str(surface or "").strip().lower()
     fields = list(CANONICAL_SCHEMAS.get(normalized_surface, ALL_CANONICAL_FIELDS))
+    if "url" not in fields:
+        fields.append("url")
+    for field_name in list(requested_fields or []):
+        exact_field = exact_requested_field_key(field_name)
+        if exact_field and exact_field not in fields:
+            fields.append(exact_field)
     for field_name in expand_requested_fields(list(requested_fields or [])):
         if field_name and field_name not in fields:
             fields.append(field_name)
@@ -215,11 +222,19 @@ def surface_alias_lookup(
     fields = surface_fields(surface, requested_fields)
     aliases = get_surface_field_aliases(surface)
     lookup: dict[str, str] = {}
+    for requested in list(requested_fields or []):
+        normalized_requested = normalize_field_key(requested)
+        exact_field = exact_requested_field_key(requested)
+        if normalized_requested and exact_field:
+            lookup[normalized_requested] = exact_field
     for canonical in fields:
         normalized_canonical = normalize_field_key(canonical)
         if normalized_canonical:
             lookup[normalized_canonical] = canonical
-        for alias in list(aliases.get(canonical, [])):
+        canonical_aliases = list(aliases.get(canonical, []))
+        if not canonical_aliases:
+            canonical_aliases = list(FIELD_ALIASES.get(canonical, []))
+        for alias in canonical_aliases:
             normalized_alias = normalize_field_key(alias)
             if normalized_alias:
                 lookup[normalized_alias] = canonical

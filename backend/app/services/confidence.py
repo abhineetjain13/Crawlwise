@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from app.services.config.extraction_rules import SOURCE_TIERS, SURFACE_WEIGHTS
+from app.services.field_policy import canonical_requested_fields
 
 _GENERIC_TITLE_RE = re.compile(
     r"^(product|item|details?|job|career opportunity|untitled|listing)$",
@@ -60,11 +61,7 @@ def score_record_confidence(
         source_tier_weights[tier_name] += weight
         penalties.extend(penalty_items)
 
-    requested = [
-        str(item or "").strip().lower()
-        for item in list(requested_fields or [])
-        if str(item or "").strip()
-    ]
+    requested = canonical_requested_fields(requested_fields or [])
     requested_found = [
         field_name for field_name in requested if record.get(field_name) not in (None, "", [], {})
     ]

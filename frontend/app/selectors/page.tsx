@@ -4,7 +4,7 @@ import { AlertCircle, Check, CheckCircle2, Plus, Search, Sparkles, Trash2 } from
 import { useState } from "react";
 
 import { EmptyPanel, InlineAlert, PageHeader, SectionHeader } from "../../components/ui/patterns";
-import { Badge, Button, Card, Input, Select, Textarea } from "../../components/ui/primitives";
+import { Badge, Button, Card, Dropdown, Input, Textarea } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
 import { httpErrorStatus } from "../../lib/api/client";
 import type {
@@ -397,14 +397,15 @@ export default function SelectorsPage() {
 
                         <label className="grid gap-1">
                           <span className="field-label">Type</span>
-                          <Select
+                          <Dropdown<SelectorKind>
                             value={row.kind}
-                            onChange={(event) => updateRow(row.key, { kind: event.target.value as SelectorKind, state: nextEditedState(row.state) })}
-                          >
-                            <option value="xpath">XPath</option>
-                            <option value="css_selector">CSS</option>
-                            <option value="regex">Regex</option>
-                          </Select>
+                            onChange={(kind) => updateRow(row.key, { kind, state: nextEditedState(row.state) })}
+                            options={[
+                              { value: "xpath", label: "XPath" },
+                              { value: "css_selector", label: "CSS" },
+                              { value: "regex", label: "Regex" },
+                            ]}
+                          />
                         </label>
 
                         <label className="grid gap-1" htmlFor={selectorInputId}>

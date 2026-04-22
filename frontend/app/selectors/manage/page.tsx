@@ -4,7 +4,7 @@ import { Pencil, RefreshCcw, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { EmptyPanel, InlineAlert, PageHeader, SectionHeader } from "../../../components/ui/patterns";
-import { Badge, Button, Card, Input, Select } from "../../../components/ui/primitives";
+import { Badge, Button, Card, Dropdown, Input } from "../../../components/ui/primitives";
 import { api } from "../../../lib/api";
 import type { SelectorRecord, SelectorUpdatePayload } from "../../../lib/api/types";
 
@@ -181,11 +181,15 @@ export default function DomainMemoryManagePage() {
                             </label>
                             <label className="grid gap-1">
                               <span className="field-label">Type</span>
-                              <Select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as EditDraft["kind"] })}>
-                                <option value="xpath">XPath</option>
-                                <option value="css_selector">CSS</option>
-                                <option value="regex">Regex</option>
-                              </Select>
+                              <Dropdown<EditDraft["kind"]>
+                                value={draft.kind}
+                                onChange={(kind) => setDraft({ ...draft, kind })}
+                                options={[
+                                  { value: "xpath", label: "XPath" },
+                                  { value: "css_selector", label: "CSS" },
+                                  { value: "regex", label: "Regex" },
+                                ]}
+                              />
                             </label>
                             <div className="flex items-end justify-end gap-2">
                               <Button type="button" variant="secondary" onClick={cancelEdit}>

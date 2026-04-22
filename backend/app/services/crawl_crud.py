@@ -17,7 +17,7 @@ from app.services.crawl_utils import (
     validate_extraction_contract,
 )
 from app.services.db_utils import escape_like_pattern
-from app.services.field_policy import expand_requested_fields, normalize_field_key
+from app.services.field_policy import normalize_field_key, preserve_requested_fields
 from app.services.llm_config_service import snapshot_active_configs
 from app.services.normalizers import normalize_value
 from app.services.run_config_snapshot import snapshot_extraction_runtime_settings
@@ -36,6 +36,9 @@ async def create_crawl_run(
         normalize_target_url(value) for value in (payload.get("urls") or [])
     ]
     urls = [value for value in (payload.get("urls") or []) if value]
+    if payload.get("run_type") == "batch" and urls:
+        settings = settings_view.with_updates(urls=urls).as_dict()
+        settings_view = CrawlRunSettings.from_value(settings)
     primary_url = payload.get("url") or (urls[0] if urls else "")
     normalized_surface = str(payload.get("surface") or "").strip().lower()
     if not normalized_surface:
@@ -45,9 +48,10 @@ async def create_crawl_run(
     domain_requested_fields = await load_domain_requested_fields(
         session, url=primary_url, surface=normalized_surface
     )
-    requested_fields = expand_requested_fields(
+    requested_fields = preserve_requested_fields(
         [
             *domain_requested_fields,
+            *(payload.get("requested_fields") or []),
             *(payload.get("additional_fields") or []),
         ]
     )

@@ -497,6 +497,68 @@ def test_extract_ecommerce_detail_returns_normalized_record() -> None:
     assert record["_confidence"]["level"] in {"medium", "high"}
 
 
+def test_extract_ecommerce_detail_rejects_site_shell_with_listing_payload_pollution() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Practice Software Testing">
+        <meta property="og:image" content="https://practicesoftwaretesting.com/assets/img/barn-2400x1600.avif">
+        <meta property="og:description" content="Modern application used to learn software testing or test automation.">
+        <title>Practice Software Testing</title>
+      </head>
+      <body>
+        <main>
+          <article class="product-card">
+            <a href="/product/01KPSB7HREA049EFVP5SV8Z46Y">
+              <img class="card-img-top" alt="Combination Pliers" src="assets/img/products/pliers01.avif">
+              <span class="price">$14.15</span>
+            </a>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://practicesoftwaretesting.com/#/product/01HB",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["title", "price", "image_url", "description", "category", "brand"],
+        network_payloads=[
+            {
+                "url": "https://api.practicesoftwaretesting.com/products?page=1",
+                "endpoint_type": "generic_json",
+                "body": {
+                    "current_page": 1,
+                    "data": [
+                        {
+                            "id": "01KPSB7HREA049EFVP5SV8Z46Y",
+                            "name": "Combination Pliers",
+                            "description": "Listing summary for pliers.",
+                            "price": "14.15",
+                            "brand": "ForgeFlex Tools",
+                            "image": "https://practicesoftwaretesting.com/assets/img/products/pliers01.avif",
+                            "url": "https://practicesoftwaretesting.com/#/product/01KPSB7HREA049EFVP5SV8Z46Y",
+                        },
+                        {
+                            "id": "01KPSB7HREA049EFVP5SV8Z470",
+                            "name": "Bolt Cutters",
+                            "description": "Listing summary for cutters.",
+                            "price": "24.99",
+                            "brand": "ForgeFlex Tools",
+                            "image": "https://practicesoftwaretesting.com/assets/img/products/pliers03.avif",
+                            "url": "https://practicesoftwaretesting.com/#/product/01KPSB7HREA049EFVP5SV8Z470",
+                        },
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert rows == []
+
+
 def test_extract_job_detail_returns_requested_sections() -> None:
     html = """
     <html>
@@ -1098,6 +1160,100 @@ def test_extract_detail_keeps_dom_stage_for_high_scoring_js_state_when_long_text
     assert "Rubber outsole" in record["specifications"]
     assert record["_extraction_tiers"]["current"] == "dom"
     assert record["_extraction_tiers"]["early_exit"] is None
+
+
+def test_extract_detail_uses_requested_custom_fields_from_network_payloads() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Whirlpool">
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Whirlpool",
+          "brand": {"name": "Whirlpool"},
+          "offers": {
+            "price": "16690",
+            "priceCurrency": "INR",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Whirlpool</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://india.whirlpool.in/vitamagic-pro-192l-3-star-radiant-steel-auto-defrost-single-door-refrigerator-radiant-steel-y/p?sc=1",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["capacity", "energy_rating"],
+        network_payloads=[
+            {
+                "url": "https://india.whirlpool.in/productBySKU/1506",
+                "endpoint_type": "generic_json",
+                "body": {
+                    "ProductName": "Vitamagic Pro 192L 3 Star Radiant Steel Auto Defrost Single Door Refrigerator - Radiant Steel-Y",
+                    "BrandName": "Whirlpool",
+                    "DetailUrl": "/vitamagic-pro-192l-3-star-radiant-steel-auto-defrost-single-door-refrigerator-radiant-steel-y/p",
+                    "ProductSpecifications": [
+                        {"FieldName": "Capacity(L)", "FieldValues": ["192 L"]},
+                        {"FieldName": "Energy Rating", "FieldValues": ["3 Star"]},
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Vitamagic Pro 192L 3 Star Radiant Steel Auto Defrost Single Door Refrigerator - Radiant Steel-Y"
+    assert record["capacity"] == "192 L"
+    assert record["energy_rating"] == "3 Star"
+    assert record["_field_sources"]["title"][0] == "network_payload"
+
+
+def test_extract_detail_keeps_long_product_titles_that_include_star_ratings() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Whirlpool">
+      </head>
+      <body>
+        <h1>Whirlpool</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://india.whirlpool.in/example/p?sc=1",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["energy_rating"],
+        network_payloads=[
+            {
+                "url": "https://india.whirlpool.in/productBySKU/1506",
+                "endpoint_type": "generic_json",
+                "body": {
+                    "ProductName": "Vitamagic Pro 192L 3 Star Radiant Steel Refrigerator",
+                    "BrandName": "Whirlpool",
+                    "DetailUrl": "/example/p",
+                    "ProductSpecifications": [
+                        {"FieldName": "Energy Rating", "FieldValues": ["3 Star"]},
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Vitamagic Pro 192L 3 Star Radiant Steel Refrigerator"
 
 
 def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record_is_complete() -> None:

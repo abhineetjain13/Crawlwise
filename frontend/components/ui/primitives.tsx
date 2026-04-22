@@ -13,6 +13,11 @@ function colorWithAlpha(color: string | undefined, alphaPercent: number) {
   return `color-mix(in srgb, ${normalized} ${alphaPercent}%, transparent)`;
 }
 
+function sanitizeIdSegment(value: string) {
+  const normalized = String(value).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  return normalized.replace(/^-+|-+$/g, "") || "option";
+}
+
 /* ─── Card ───────────────────────────────────────────────────────────────── */
 export function Card({
   children,
@@ -123,6 +128,162 @@ export function Select(props: ComponentPropsWithoutRef<"select">) {
   );
 }
 
+/* ─── Dropdown (Clerk-style custom select) ───────────────────────────────── */
+export function Dropdown<T extends string>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+  className,
+  disabled = false,
+}: Readonly<{
+  value: T;
+  onChange: (value: T) => void;
+  options: Array<{ value: T; label: string }>;
+  ariaLabel?: string;
+  className?: string;
+  disabled?: boolean;
+}>) {
+  const [open, setOpen] = React.useState(false);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const closeTimerRef = React.useRef<number | undefined>(undefined);
+  const dropdownId = useId().replace(/[^a-zA-Z0-9_-]+/g, "") || "dropdown";
+  const activeIndex = options.findIndex((o) => o.value === value);
+  const listboxId = `${dropdownId}-listbox`;
+  const activeDescendant =
+    activeIndex >= 0
+      ? `${dropdownId}-option-${activeIndex}-${sanitizeIdSegment(options[activeIndex].value)}`
+      : undefined;
+  if (process.env.NODE_ENV === "development" && activeIndex === -1 && options.length > 0) {
+    console.warn(`Dropdown: value "${value}" not found in options`);
+  }
+  function scheduleClose() {
+    closeTimerRef.current = window.setTimeout(() => setOpen(false), 120) as unknown as number;
+  }
+
+  function cancelClose() {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = undefined;
+    }
+  }
+
+  React.useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (!open && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
+      e.preventDefault();
+      setOpen(true);
+      return;
+    }
+    if (!open) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const next = (activeIndex + 1) % options.length;
+      onChange(options[next].value);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const prev = (activeIndex - 1 + options.length) % options.length;
+      onChange(options[prev].value);
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setOpen(false);
+    }
+  }
+
+  const selectedLabel = options[activeIndex]?.label ?? value;
+
+  return (
+    <div
+      ref={containerRef}
+      className={cn("relative", className)}
+      onMouseEnter={() => { if (!disabled) { cancelClose(); setOpen(true); } }}
+      onMouseLeave={() => { if (open) scheduleClose(); }}
+    >
+      <button
+        type="button"
+        role="combobox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-controls={listboxId}
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        onKeyDown={handleKeyDown}
+        className="focus-ring flex h-[var(--control-height)] w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 text-left text-[0.875rem] font-medium leading-[1.4] text-[var(--text-primary)] transition-[border-color,box-shadow] hover:border-[var(--border-strong)] focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_var(--accent-subtle)]"
+      >
+        <span className="truncate">{selectedLabel}</span>
+        <svg
+          className={cn("size-3.5 shrink-0 text-muted transition-transform duration-150", open && "rotate-180")}
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M4 6l4 4 4-4" />
+        </svg>
+      </button>
+      {open ? (
+        <div
+          id={listboxId}
+          role="listbox"
+          aria-activedescendant={activeDescendant}
+          className="absolute left-0 z-50 mt-1 min-w-full rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-[var(--shadow-lg)] animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)]"
+        >
+          {options.map((option, index) => {
+            const optionId = `${dropdownId}-option-${index}-${sanitizeIdSegment(option.value)}`;
+            return (
+              <button
+                key={option.value}
+                id={optionId}
+                role="option"
+                aria-selected={option.value === value}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                onMouseDown={(e) => e.preventDefault()}
+                className={cn(
+                  "flex w-full items-center px-3 py-2 text-[0.8125rem] leading-[1.35] transition-colors",
+                  option.value === value
+                    ? "bg-[var(--accent-subtle)] text-[var(--accent)] font-medium"
+                    : "text-[var(--text-primary)] hover:bg-[var(--bg-alt)]",
+                )}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /* ─── Button ─────────────────────────────────────────────────────────────── */
 export function Button({
   className,
@@ -210,14 +371,14 @@ export function Toggle({
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={cn(
-        "focus-ring relative inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors",
-        checked ? "bg-[var(--accent)] shadow-[0_8px_18px_color-mix(in_srgb,var(--accent)_26%,transparent)]" : "bg-[var(--border-strong)]",
+        "focus-ring relative inline-flex h-[20px] w-[36px] shrink-0 cursor-pointer items-center rounded-full transition-colors",
+        checked ? "bg-[var(--accent)]" : "bg-[var(--border-strong)]",
       )}
     >
       <span
         className={cn(
-          "inline-block h-3.5 w-3.5 rounded-full bg-[var(--accent-fg)] shadow-[0_3px_10px_rgba(0,0,0,0.18)] transition-transform",
-          checked ? "translate-x-[14px]" : "translate-x-0.5"
+          "inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+          checked ? "translate-x-[16px]" : "translate-x-[2px]"
         )}
       />
     </button>
@@ -364,7 +525,8 @@ export function Tooltip({
   children,
   content,
   className,
-}: Readonly<{ children: ReactNode; content: string; className?: string }>) {
+  align = "center",
+}: Readonly<{ children: ReactNode; content: string; className?: string; align?: "center" | "start" }>) {
   const tooltipId = useId();
   const child = React.Children.only(children);
   const enhancedChild = React.isValidElement(child)
@@ -378,14 +540,20 @@ export function Tooltip({
         id={tooltipId}
         role="tooltip"
         className={cn(
-          "pointer-events-none absolute bottom-full left-1/2 mb-2 w-max max-w-[320px] -translate-x-1/2",
+          "pointer-events-none absolute bottom-full mb-2 w-max max-w-[min(420px,calc(100vw-24px))]",
+          align === "start" ? "left-0 translate-x-0" : "left-1/2 -translate-x-1/2",
           "tooltip-surface rounded-[var(--radius-md)] bg-[var(--bg-panel)] px-2 py-1.5 shadow-[var(--shadow-lg)]",
           "text-[11px] font-medium leading-normal text-[var(--text-primary)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
           "z-50 break-words",
         )}
       >
         {content}
-        <div className="absolute -bottom-[6px] left-1/2 size-2.5 -translate-x-1/2 rotate-45 border-b border-r border-[var(--border-strong)] bg-[var(--bg-panel)]" />
+        <div
+          className={cn(
+            "absolute -bottom-[6px] size-2.5 rotate-45 border-b border-r border-[var(--border-strong)] bg-[var(--bg-panel)]",
+            align === "start" ? "left-3" : "left-1/2 -translate-x-1/2",
+          )}
+        />
       </div>
     </div>
   );

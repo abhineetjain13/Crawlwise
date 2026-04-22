@@ -6,7 +6,7 @@ from app.models.crawl import CrawlRun
 from app.services.confidence import score_record_confidence
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
-from app.services.field_policy import field_allowed_for_surface
+from app.services.field_policy import canonical_requested_fields, field_allowed_for_surface
 from app.services.field_value_core import coerce_field_value, finalize_record
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,7 +47,7 @@ async def apply_direct_record_llm_fallback(
         surface=run.surface,
         html_text=html,
         markdown_text=page_markdown,
-        requested_fields=list(run.requested_fields or []),
+        requested_fields=canonical_requested_fields(run.requested_fields or []),
         existing_records=records,
     )
     if not payload:
@@ -62,11 +62,11 @@ async def apply_direct_record_llm_fallback(
     if _record_set_quality_signature(
         candidate_records,
         surface=run.surface,
-        requested_fields=list(run.requested_fields or []),
+        requested_fields=canonical_requested_fields(run.requested_fields or []),
     ) <= _record_set_quality_signature(
         records,
         surface=run.surface,
-        requested_fields=list(run.requested_fields or []),
+        requested_fields=canonical_requested_fields(run.requested_fields or []),
     ):
         return records
     return candidate_records
@@ -195,7 +195,7 @@ def _normalize_direct_llm_records(
         canonical_record["_confidence"] = score_record_confidence(
             canonical_record,
             surface=run.surface,
-            requested_fields=list(run.requested_fields or []),
+            requested_fields=canonical_requested_fields(run.requested_fields or []),
         )
         canonical_record["_self_heal"] = {
             "enabled": True,

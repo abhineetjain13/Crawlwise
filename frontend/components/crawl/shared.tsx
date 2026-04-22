@@ -62,6 +62,28 @@ export function uniqueFields(values: string[]) {
   return Array.from(new Set(values.map(normalizeField).filter(Boolean)));
 }
 
+export function cleanRequestedField(value: string) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+export function uniqueRequestedFields(values: string[]) {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const cleaned = cleanRequestedField(value);
+    if (!cleaned) {
+      continue;
+    }
+    const dedupeKey = cleaned.toLocaleLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    deduped.push(cleaned);
+  }
+  return deduped;
+}
+
 export function uniqueNumbers(values: number[]) {
   return Array.from(new Set(values));
 }
@@ -71,7 +93,14 @@ export function uniqueStrings(values: string[]) {
 }
 
 export function normalizeField(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, "_");
+  return value
+    .trim()
+    .replace(/&/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 export function deriveSurface(domain: CrawlDomain, module: CrawlTab): CrawlSurface {
@@ -115,24 +144,22 @@ const DAY_OF_WEEK_FIELD_NAMES = new Set([
 ]);
 
 export function validateAdditionalFieldName(value: string) {
-  const normalized = normalizeField(value);
-  if (!normalized) {
+  const cleaned = cleanRequestedField(value);
+  const normalized = normalizeField(cleaned);
+  if (!cleaned) {
     return "Field name cannot be empty.";
   }
-  if (normalized.length < 2) {
+  if (cleaned.length < 2) {
     return "Field name must be at least 2 characters.";
   }
-  if (normalized.length > 60) {
+  if (cleaned.length > 60) {
     return "Field name must be 60 characters or fewer.";
   }
-  if (!/^[a-z0-9_]+$/.test(normalized)) {
-    return "Use only letters, numbers, and underscores.";
+  if (!normalized) {
+    return "Field name must include letters or numbers.";
   }
-  if ((normalized.match(/_/g) ?? []).length >= 5) {
+  if ((cleaned.match(/\s+/g) ?? []).length >= 7 || (normalized.match(/_/g) ?? []).length >= 7) {
     return "Field name is too sentence-like. Keep it concise.";
-  }
-  if (/^[a-z]+(?:[A-Z][a-z0-9]*)+$/.test(value.trim())) {
-    return "Use snake_case instead of schema-style type names.";
   }
   if (SCHEMA_TYPE_FIELD_NAMES.has(normalized)) {
     return "Field name looks like a schema type. Use a business field.";
@@ -570,8 +597,8 @@ export function SettingSection({
           : "hover:bg-[var(--bg-alt)]/50",
       )}
     >
-      <div className="flex min-h-[68px] items-center justify-between gap-4 px-4 py-4">
-        <div className="flex min-w-0 items-center gap-3.5">
+      <div className="flex items-center justify-between gap-4 px-5 py-3.5">
+        <div className="flex min-w-0 items-center gap-3">
           <div
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors",
@@ -582,14 +609,11 @@ export function SettingSection({
           >
             {renderedIcon}
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <div className="text-sm font-semibold text-primary leading-none">{label}</div>
-              <Tooltip content={description}>
-                <Info className="size-3 text-muted hover:text-secondary cursor-help transition-colors" />
-              </Tooltip>
-            </div>
-            <p className="mt-1 text-xs leading-[1.45] text-muted">{description}</p>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="text-sm font-semibold tracking-[-0.01em] text-primary leading-none">{label}</div>
+            <Tooltip content={description}>
+              <Info className="size-3.5 text-muted hover:text-secondary cursor-help transition-colors" />
+            </Tooltip>
           </div>
         </div>
         <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
@@ -597,11 +621,11 @@ export function SettingSection({
       {children ? (
         <div
           className={cn(
-            "overflow-hidden transition-[max-height] duration-200 ease-out",
-            checked ? "max-h-[500px]" : "max-h-0",
+            "transition-[max-height] duration-200 ease-out",
+            checked ? "max-h-[500px] overflow-visible" : "max-h-0 overflow-hidden",
           )}
         >
-          <div className="border-t border-[var(--divider)] bg-[var(--setting-body-bg)] p-4 space-y-4">{children}</div>
+          <div className="border-t border-[var(--divider)] bg-[var(--setting-body-bg)] px-5 py-4 space-y-3">{children}</div>
         </div>
       ) : null}
     </div>
@@ -628,41 +652,41 @@ export function SliderRow({
   suffix?: string;
 }>) {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-border bg-[var(--slider-row-bg)] px-3 py-1.5 shadow-[var(--slider-row-highlight)]">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <div className="text-sm font-semibold text-primary leading-none">{label}</div>
-          <button
-            type="button"
-            onClick={onReset}
-            aria-label={`Reset ${label}`}
-            className="text-muted transition-colors hover:text-primary"
-          >
-            <RotateCcw className="size-3" aria-hidden="true" />
-          </button>
-        </div>
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={min}
-            max={max}
-            step={step}
-            value={clampNumber(value, min, max, min)}
-            onChange={(event) => onChange(event.target.value)}
-            className="slider-control w-28"
-          />
-          <div className="relative">
-            <Input
-              value={value}
-              onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
-              onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
-              className="h-7 w-16 rounded-[var(--radius-md)] border-none bg-transparent pr-5 text-right font-mono text-xs leading-[1.5] tabular-nums text-accent focus:ring-0"
-            />
-            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-xs leading-[1.45] lowercase text-accent opacity-60">
-              {suffix ?? ""}
-            </span>
-          </div>
-        </div>
+    <div className="grid grid-cols-[110px_1fr_88px] items-center gap-x-3 py-1">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span className="text-[0.8125rem] font-medium text-secondary whitespace-nowrap leading-none">{label}</span>
+        <button
+          type="button"
+          onClick={onReset}
+          aria-label={`Reset ${label}`}
+          className="text-muted transition-colors hover:text-primary"
+        >
+          <RotateCcw className="size-3" aria-hidden="true" />
+        </button>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={clampNumber(value, min, max, min)}
+        onChange={(event) => onChange(event.target.value)}
+        className="slider-control w-full"
+      />
+      <div className="relative">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={value}
+          onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
+          onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
+          className="h-7 w-full rounded-[var(--radius-md)] border border-border bg-[var(--slider-value-bg)] py-0 pl-2.5 pr-8 text-right font-mono text-[0.8125rem] leading-none tabular-nums text-[var(--text-primary)] focus:ring-0 focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)]"
+        />
+        {suffix ? (
+          <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] leading-none lowercase text-muted">
+            {suffix}
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -681,20 +705,20 @@ export function AdditionalFieldInput({
   onCommit: (value: string) => void;
   onRemove: (value: string) => void;
 }>) {
-  const chips = uniqueFields([...fields, ...parseLines(value.replace(/,/g, "\n"))]);
+  const chips = uniqueRequestedFields([...fields, ...parseLines(value.replace(/,/g, "\n"))]);
   const [validationHint, setValidationHint] = useState<string | null>(null);
 
   function commitField(candidate: string) {
-    const normalized = normalizeField(candidate);
-    if (!normalized) {
+    const cleaned = cleanRequestedField(candidate);
+    if (!cleaned) {
       return;
     }
-    const validationError = validateAdditionalFieldName(normalized);
+    const validationError = validateAdditionalFieldName(cleaned);
     if (validationError) {
-      setValidationHint(`Skipped "${normalized}": ${validationError}`);
+      setValidationHint(`Skipped "${cleaned}": ${validationError}`);
       return;
     }
-    onCommit(normalized);
+    onCommit(cleaned);
   }
 
   function handleChange(next: string) {
@@ -718,10 +742,10 @@ export function AdditionalFieldInput({
         value={value}
         onChange={(event) => handleChange(event.target.value)}
         onBlur={handleBlur}
-        placeholder="price, sku, availability, brand"
+        placeholder="price, sku, Features & Benefits, Product Story"
         className="text-mono-body"
       />
-      <p className="text-xs leading-[1.45] text-muted">Use short snake_case names (2-60 chars).</p>
+      <p className="text-[0.8125rem] leading-[1.5] text-secondary">Use short field labels or exact section headings (2-60 chars).</p>
       {validationHint ? <p className="text-xs leading-[1.45] text-danger">{validationHint}</p> : null}
       {chips.length ? (
         <div className="flex flex-wrap gap-1.5">
@@ -731,9 +755,10 @@ export function AdditionalFieldInput({
               type="button"
               onClick={() => onRemove(field)}
               aria-label={`Remove ${field}`}
-              className="surface-muted inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs leading-[1.45] text-foreground"
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-2 py-1 text-xs leading-[1.45] text-[var(--text-secondary)]"
             >
-              <X className="size-3.5" aria-hidden="true" />
+              <X className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{field}</span>
             </button>
           ))}
         </div>

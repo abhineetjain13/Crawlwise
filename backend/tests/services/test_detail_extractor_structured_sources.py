@@ -771,6 +771,113 @@ def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fall
     }
 
 
+def test_extract_ecommerce_detail_allows_dom_variants_to_fill_weak_js_state_variants() -> None:
+    html = """
+    <html>
+      <head>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "product": {
+                "id": 9001,
+                "title": "Trail Runner",
+                "variants": [
+                  {
+                    "id": "weak-1",
+                    "sku": "TRAIL-WEAK"
+                  }
+                ]
+              }
+            }
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Trail Runner</h1>
+        <label>
+          Size
+          <select name="size">
+            <option value="">Choose size</option>
+            <option value="s">S</option>
+            <option value="m">M</option>
+          </select>
+        </label>
+        <div class="color-swatch-group" aria-label="Color">
+          <button type="button" aria-label="Black"></button>
+          <button type="button" aria-label="Olive"></button>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {"size": ["S", "M"], "color": ["Black", "Olive"]}
+    assert len(record["variants"]) == 4
+    assert record["selected_variant"]["option_values"] == {"size": "S", "color": "Black"}
+
+
+def test_extract_ecommerce_detail_merges_deduped_additional_images_across_js_state_and_dom() -> None:
+    html = """
+    <html>
+      <head>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "product": {
+                "id": 9001,
+                "title": "Trail Runner",
+                "images": [
+                  {"src": "https://cdn.example.com/products/trail-runner-1.jpg?width=400"},
+                  {"src": "https://cdn.example.com/products/trail-runner-2.jpg?width=400"},
+                  {"src": "https://cdn.example.com/assets/payment-badge.svg"}
+                ],
+                "variants": []
+              }
+            }
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main class="pdp-main">
+          <h1>Trail Runner</h1>
+          <section class="hero-media">
+            <img src="https://cdn.example.com/products/trail-runner-1.jpg?width=1200" alt="Trail Runner front view" />
+            <img src="https://cdn.example.com/products/trail-runner-2.jpg?width=1200" alt="Trail Runner side view" />
+            <img src="https://cdn.example.com/products/trail-runner-3.jpg?width=1200" alt="Trail Runner outsole" />
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["image_url"] == "https://cdn.example.com/products/trail-runner-1.jpg?width=1200"
+    assert record["additional_images"] == [
+        "https://cdn.example.com/products/trail-runner-2.jpg?width=1200",
+        "https://cdn.example.com/products/trail-runner-3.jpg?width=1200",
+    ]
+
+
 def test_extract_ecommerce_detail_filters_zara_copy_code_from_dom_variants() -> None:
     html = """
     <html>
@@ -818,3 +925,175 @@ def test_extract_ecommerce_detail_filters_zara_copy_code_from_dom_variants() -> 
     }
     assert record["variant_count"] == 6
     assert record["selected_variant"]["option_values"]["color"] == "Black"
+
+
+def test_extract_ecommerce_detail_maps_zara_composition_block_to_materials() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>CONTRAST RIBBED T-SHIRT WITH RUFFLES</h1>
+          <div class="product-detail-description">
+            <p>SLIM FIT - ROUND NECK - REGULAR LENGTH - SHORT SLEEVES</p>
+          </div>
+          <ul class="product-detail-actions product-detail-info__product-actions">
+            <li class="product-detail-actions__action">
+              <button class="product-detail-size-guide-action product-detail-actions__action-button">
+                <span>Product Measurements</span>
+              </button>
+            </li>
+            <li class="product-detail-actions__action product-detail-actions__clevercare">
+              <button class="product-detail-actions__action-button">
+                Composition, care &amp; origin
+              </button>
+            </li>
+          </ul>
+        </main>
+        <div class="product-detail-view__secondary-content">
+          <div class="product-detail-composition product-detail-view__detailed-composition">
+            <ul>
+              <li class="product-detail-composition__item product-detail-composition__part">
+                <span class="product-detail-composition__part-name">OUTER SHELL</span>
+                <ul>
+                  <li class="product-detail-composition__item product-detail-composition__area">
+                    <span class="product-detail-composition__part-name">MAIN FABRIC</span>
+                    <ul><li>96% cotton</li><li>4% elastane</li></ul>
+                  </li>
+                  <li class="product-detail-composition__item product-detail-composition__area">
+                    <span class="product-detail-composition__part-name">SECONDARY FABRIC</span>
+                    <ul><li>100% cotton</li></ul>
+                  </li>
+                </ul>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.zara.com/in/en/contrast-ribbed-t-shirt-with-ruffles-p01044154.html",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["materials", "dimensions"],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["materials"] == (
+        "OUTER SHELL: MAIN FABRIC: 96% cotton; 4% elastane "
+        "SECONDARY FABRIC: 100% cotton"
+    )
+    assert record["_field_sources"]["materials"] == ["dom_sections"]
+    assert "dimensions" not in record
+
+
+def test_extract_detail_keeps_requested_custom_dom_sections_live_past_structured_early_exit() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Darter Pro",
+          "description": "Instant cushioning for everyday road runs.",
+          "brand": {"name": "PUMA"},
+          "image": "https://example.com/darter-pro.jpg",
+          "offers": {
+            "price": "99.00",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Darter Pro</h1>
+          <section>
+            <h2>Product Story</h2>
+            <p>
+              Hit new strides in the Darter Pro with a lightweight mesh upper and
+              responsive cushioning built for daily miles.
+            </p>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/darter-pro",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["product story"],
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.55}
+        },
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "lightweight mesh upper" in record["product_story"]
+    assert record["_field_sources"]["product_story"] == ["dom_sections"]
+    assert record["_extraction_tiers"]["current"] == "dom"
+    assert record["_extraction_tiers"]["early_exit"] is None
+
+
+def test_extract_detail_matches_exact_requested_section_label_without_collapsing_it() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Deviate Nitro Elite 4",
+          "description": "Race-ready road running shoes.",
+          "brand": {"name": "PUMA"},
+          "offers": {
+            "price": "230.00",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Deviate Nitro Elite 4</h1>
+          <section>
+            <h2>FEATURES &amp; BENEFITS</h2>
+            <ul>
+              <li>NITROFOAM Elite delivers lightweight responsiveness.</li>
+              <li>PWRPLATE drives energy transfer through toe-off.</li>
+            </ul>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://in.puma.com/in/en/pd/deviate-nitro-elite-4-run-club-mens-road-running-shoes/312907?swatch=01",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["Features & Benefits"],
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.55}
+        },
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "NITROFOAM Elite" in record["features_benefits"]
+    assert "PWRPLATE drives energy transfer" in record["features_benefits"]
+    assert record["_field_sources"]["features_benefits"] == ["dom_sections"]
+    assert record["_extraction_tiers"]["current"] == "dom"
+    assert record["_extraction_tiers"]["early_exit"] is None
+    assert "benefits" not in record

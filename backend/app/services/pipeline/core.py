@@ -32,7 +32,11 @@ from app.services.field_value_core import (
     strip_html_tags,
     validate_record_for_surface,
 )
-from app.services.field_policy import field_allowed_for_surface, normalize_requested_field
+from app.services.field_policy import (
+    canonical_requested_fields,
+    field_allowed_for_surface,
+    normalize_requested_field,
+)
 from app.services.llm_config_service import resolve_run_config
 from app.services.llm_runtime import (
     extract_missing_fields,
@@ -74,8 +78,6 @@ from .runtime_helpers import (
 from .types import URLProcessingConfig, URLProcessingResult
 
 logger = logging.getLogger(__name__)
-_LISTING_SIGNAL_FIELDS = ("title", "url", "price", "image_url", "brand")
-
 __all__ = [
     "STAGE_ACQUIRE",
     "STAGE_EXTRACT",
@@ -448,12 +450,6 @@ async def _run_extraction_stage(
         records,
     )
     await _log_extraction_outcome(context, acquisition_result, records)
-    records, selector_rules = await _retry_thin_listing_with_browser(
-        context,
-        fetched,
-        records=records,
-        selector_rules=selector_rules,
-    )
     records, selector_rules = await _retry_empty_extraction_with_browser(
         context,
         fetched,
@@ -573,36 +569,6 @@ async def _retry_empty_extraction_with_browser(
     browser_result = await _acquire_browser_retry_result(context, fetched, retry_reason="empty_extraction")
     fetched.acquisition_result = browser_result
     return await _extract_records_for_acquisition(context, fetched)
-
-async def _retry_thin_listing_with_browser(
-    context: _URLProcessingContext,
-    fetched: _FetchedURLStage,
-    *,
-    records: list[dict[str, object]],
-    selector_rules: list[dict[str, object]],
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    acquisition_result = fetched.acquisition_result
-    retry_decision = _thin_listing_browser_retry_decision(context, acquisition_result, records)
-    if not retry_decision["should_retry"]:
-        return records, selector_rules
-    await _log_pipeline_event(context, "info", f"Thin listing extraction ({len(records)} record(s)); retrying browser recovery actions for {context.url}")
-    try:
-        browser_result = await _acquire_browser_retry_result(context, fetched, retry_reason="thin_listing")
-    except (RuntimeError, ValueError, TypeError, OSError):
-        return records, selector_rules
-    retry_fetched = _FetchedURLStage(
-        context=context,
-        acquisition_result=browser_result,
-        url_metrics=build_url_metrics(browser_result, requested_fields=list(context.requested_fields)),
-    )
-    retry_records, retry_selector_rules = await _extract_records_for_acquisition(context, retry_fetched)
-    if not _listing_retry_improved(records, retry_records):
-        await _log_pipeline_event(context, "info", f"Browser recovery retry did not improve listing extraction ({len(retry_records)} vs {len(records)})")
-        return records, selector_rules
-    fetched.acquisition_result = retry_fetched.acquisition_result
-    fetched.url_metrics = retry_fetched.url_metrics
-    await _log_pipeline_event(context, "info", f"Browser recovery retry improved listing extraction ({len(records)} -> {len(retry_records)} record(s))")
-    return retry_records, retry_selector_rules
 
 async def _acquire_browser_retry_result(
     context: _URLProcessingContext,
@@ -853,94 +819,6 @@ def _empty_extraction_browser_retry_decision(
         return {"should_retry": False, "reason": "json_response"}
     return {"should_retry": True, "reason": "empty_non_browser_html"}
 
-def _thin_listing_browser_retry_decision(
-    context: _URLProcessingContext,
-    acquisition_result: AcquisitionResult,
-    records: list[dict[str, object]],
-) -> dict[str, object]:
-    if "listing" not in context.surface:
-        return {"should_retry": False, "reason": "non_listing_surface"}
-    if not bool(crawler_runtime_settings.listing_recovery_enabled):
-        return {"should_retry": False, "reason": "disabled"}
-    try:
-        threshold = max(1, int(crawler_runtime_settings.listing_recovery_min_records_threshold or 5))
-    except (TypeError, ValueError):
-        threshold = 5  # sensible default
-    below_count_threshold = len(records) < threshold
-    if not below_count_threshold and not _listing_records_look_low_quality(records):
-        return {"should_retry": False, "reason": "enough_records"}
-    if str(getattr(acquisition_result, "method", "") or "").strip().lower() != "browser":
-        return {"should_retry": False, "reason": "non_browser_acquisition"}
-    if bool(getattr(acquisition_result, "blocked", False)):
-        return {"should_retry": False, "reason": "blocked"}
-    browser_diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
-    if not bool(browser_diagnostics.get("traversal_activated") or browser_diagnostics.get("requested_traversal_mode")):
-        return {"should_retry": False, "reason": "traversal_not_requested"}
-    return {
-        "should_retry": True,
-        "reason": "thin_listing" if below_count_threshold else "low_quality_listing",
-    }
-
-def _listing_records_look_low_quality(records: list[dict[str, object]]) -> bool:
-    if not records:
-        return True
-    populated_counts: list[int] = []
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        populated_counts.append(
-            sum(
-                record.get(field_name) not in (None, "", [], {})
-                for field_name in _LISTING_SIGNAL_FIELDS
-            )
-        )
-    if not populated_counts:
-        return True
-    average_populated = sum(populated_counts) / max(1, len(populated_counts))
-    raw_min_populated_fields = (
-        crawler_runtime_settings.listing_recovery_min_populated_fields_per_record
-    )
-    try:
-        min_populated_fields = (
-            float(raw_min_populated_fields)
-            if raw_min_populated_fields is not None
-            else 0.0
-        )
-    except (TypeError, ValueError):
-        min_populated_fields = 0.0
-    return average_populated < min_populated_fields
-
-def _listing_retry_improved(
-    previous_records: list[dict[str, object]],
-    retry_records: list[dict[str, object]],
-) -> bool:
-    if len(retry_records) > len(previous_records):
-        return True
-    if len(retry_records) < len(previous_records):
-        return False
-    return _listing_record_population_signature(retry_records) > _listing_record_population_signature(
-        previous_records
-    )
-
-def _listing_record_population_signature(
-    records: list[dict[str, object]],
-) -> tuple[int, int, int]:
-    populated_counts = [
-        sum(
-            record.get(field_name) not in (None, "", [], {})
-            for field_name in _LISTING_SIGNAL_FIELDS
-        )
-        for record in records
-        if isinstance(record, dict)
-    ]
-    if not populated_counts:
-        return (0, 0, 0)
-    return (
-        int(round(sum(populated_counts) / max(1, len(populated_counts)) * 100)),
-        max(populated_counts),
-        sum(populated_counts),
-    )
-
 async def _load_selector_rules(
     context: _URLProcessingContext,
     page_url: str,
@@ -1037,7 +915,7 @@ async def apply_llm_fallback(
 ) -> list[dict[str, object]]:
     updated_records: list[dict[str, object]] = []
     domain = normalize_domain(page_url)
-    requested_fields = list(run.requested_fields or [])
+    requested_fields = canonical_requested_fields(run.requested_fields or [])
     for record in records:
         next_record = dict(record)
         confidence = mapping_or_empty(next_record.get("_confidence"))

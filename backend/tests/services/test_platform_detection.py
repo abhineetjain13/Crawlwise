@@ -121,14 +121,14 @@ def test_resolve_browser_readiness_policy_requires_networkidle_for_platform_trav
 
     assert platform_policy["require_networkidle"] is True
     assert platform_policy["networkidle_reason"] == "platform-readiness"
-    assert platform_policy["navigation_wait_until"] == "networkidle"
+    assert platform_policy["navigation_wait_until"] == "domcontentloaded"
     assert platform_policy["listing_override"]["platform"] == "workday"
     assert detail_policy["require_networkidle"] is True
     assert detail_policy["networkidle_reason"] == "detail-surface"
-    assert detail_policy["navigation_wait_until"] == "networkidle"
+    assert detail_policy["navigation_wait_until"] == "domcontentloaded"
     assert traversal_policy["require_networkidle"] is True
     assert traversal_policy["networkidle_reason"] == "traversal"
-    assert traversal_policy["navigation_wait_until"] == "networkidle"
+    assert traversal_policy["navigation_wait_until"] == "domcontentloaded"
     assert default_policy["require_networkidle"] is False
     assert default_policy["networkidle_reason"] is None
     assert default_policy["navigation_wait_until"] == "domcontentloaded"
@@ -141,6 +141,7 @@ def test_resolve_browser_readiness_policy_uses_spree_canary_override() -> None:
 
     assert policy["require_networkidle"] is True
     assert policy["networkidle_reason"] == "platform-readiness"
+    assert policy["navigation_wait_until"] == "domcontentloaded"
     assert policy["listing_override"] == {
         "platform": "spree_commerce",
         "domain": "demo.spreecommerce.org",

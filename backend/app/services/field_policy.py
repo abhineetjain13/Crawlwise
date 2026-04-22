@@ -9,7 +9,6 @@ from app.services.config.field_mappings import (
     INTERNAL_ONLY_FIELDS,
 )
 
-_CAMEL_BOUNDARY_RE = re.compile(r"(?<!^)(?=[A-Z])")
 _NON_FIELD_RE = re.compile(r"[^a-z0-9.]+")
 _REQUESTED_FIELD_PREFIXES = ("product_", "item_", "job_")
 _ALL_CANONICAL_FIELDS = frozenset(
@@ -65,6 +64,14 @@ def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
         ecommerce_aliases = {
             canonical: list(values) for canonical, values in aliases.items()
         }
+        for field_name, field_aliases in {
+            "capacity": ("capacity_l", "capacity_liter", "capacity_litre", "capacity_liters", "capacity_litres"),
+            "energy_rating": ("energy_rating", "energy_star_rating", "star_rating"),
+        }.items():
+            bucket = ecommerce_aliases.setdefault(field_name, [])
+            for alias in field_aliases:
+                if alias not in bucket:
+                    bucket.append(alias)
         category_aliases = ecommerce_aliases.get("category")
         if category_aliases is not None:
             ecommerce_aliases["category"] = [
@@ -89,11 +96,13 @@ def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
 
 
 def normalize_field_key(value: str | None) -> str:
-    text = " ".join(str(value or "").split()).strip().lower()
+    text = " ".join(str(value or "").split()).strip()
     if not text:
         return ""
     text = text.replace("&", " ")
-    text = _CAMEL_BOUNDARY_RE.sub("_", text)
+    text = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", text)
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    text = text.lower()
     text = _NON_FIELD_RE.sub("_", text)
     return re.sub(r"_+", "_", text).strip("_.")
 
@@ -239,6 +248,19 @@ def normalize_requested_field(value: str | None) -> str:
     return best_match or text
 
 
+def exact_requested_field_key(value: str | None) -> str:
+    text = normalize_field_key(value)
+    if not text:
+        return ""
+    if text.startswith("sections."):
+        text = text.split(".", 1)[1]
+    for candidate in _requested_field_candidates(text):
+        canonical = _ALIAS_TO_CANONICAL.get(candidate)
+        if canonical:
+            return canonical
+    return text
+
+
 def _requested_field_candidates(text: str) -> list[str]:
     candidates = [text]
     for prefix in _REQUESTED_FIELD_PREFIXES:
@@ -256,6 +278,25 @@ def expand_requested_fields(values: Iterable[str] | None) -> list[str]:
         if normalized and normalized not in expanded:
             expanded.append(normalized)
     return expanded
+
+
+def canonical_requested_fields(values: Iterable[str] | None) -> list[str]:
+    return expand_requested_fields(values)
+
+
+def preserve_requested_fields(values: Iterable[str] | None) -> list[str]:
+    preserved: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        cleaned = " ".join(str(value or "").split()).strip()
+        if not cleaned:
+            continue
+        dedupe_key = cleaned.casefold()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        preserved.append(cleaned)
+    return preserved
 
 
 def normalize_review_target(surface: str, field_name: str | None) -> str:

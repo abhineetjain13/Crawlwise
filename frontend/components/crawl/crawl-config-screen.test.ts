@@ -158,4 +158,19 @@ describe("buildDispatch", () => {
       },
     ]);
   });
+
+  it("preserves raw additional field labels in dispatch settings", () => {
+    const dispatch = buildDispatch(
+      baseConfig({
+        module: "pdp",
+        mode: "batch",
+        target_url: "",
+        bulk_urls: "https://example.com/p/1",
+        additional_fields: ["Features & Benefits", "Product Story"],
+      }),
+    );
+
+    expect(dispatch.additionalFields).toEqual(["Features & Benefits", "Product Story"]);
+    expect(dispatch.settings.additional_fields).toEqual(["Features & Benefits", "Product Story"]);
+  });
 });

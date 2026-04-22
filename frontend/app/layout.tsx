@@ -1,7 +1,8 @@
 import "./globals.css";
 import { AppShell } from "../components/layout/app-shell";
 import { QueryProvider } from "../components/ui/query-provider";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
+import localFont from "next/font/local";
 
 const mainFont = Inter({
   subsets: ["latin"],
@@ -9,10 +10,14 @@ const mainFont = Inter({
   weight: ["400", "500", "600", "700"],
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jetbrains-mono",
-  weight: ["400", "500", "600"],
+const cascadiaMono = localFont({
+  src: [
+    { path: "../public/fonts/CascadiaMono-400.ttf", weight: "400" },
+    { path: "../public/fonts/CascadiaMono-500.ttf", weight: "500" },
+    { path: "../public/fonts/CascadiaMono-600.ttf", weight: "600" },
+  ],
+  variable: "--font-cascadia-mono",
+  display: "swap",
 });
 
 // Runs before first paint to set theme and prevent FOUC
@@ -30,7 +35,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${mainFont.variable} ${jetbrainsMono.variable}`}>
+      <body className={`${mainFont.variable} ${cascadiaMono.variable}`}>
         <QueryProvider>
           <AppShell>{children}</AppShell>
         </QueryProvider>

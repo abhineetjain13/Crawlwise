@@ -565,7 +565,7 @@ def record_to_markdown(row: CrawlRecord) -> str:
 
     page_markdown = stringify_markdown_value(raw_data.get("page_markdown"))
     if page_markdown and str(source_trace.get("type") or "") != "listing_fallback":
-        lines.extend(["", "## Page Context", "", render_markdown_block(page_markdown)])
+        lines.extend(["", render_markdown_block(page_markdown)])
 
     return "\n".join(lines).strip()
 

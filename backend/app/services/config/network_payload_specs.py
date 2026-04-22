@@ -13,6 +13,65 @@ PayloadMappingSpec = dict[
 NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH: Final[int] = (
     crawler_runtime_settings.network_payload_signature_min_match
 )
+NETWORK_PAYLOAD_PRODUCT_SIGNATURE: Final[frozenset[str]] = frozenset(
+    {
+        "availability",
+        "body_html",
+        "brand",
+        "brand_name",
+        "category",
+        "compare_at_price",
+        "currency",
+        "description",
+        "detail_url",
+        "image",
+        "image_url",
+        "images",
+        "inventory_quantity",
+        "name",
+        "price",
+        "product_name",
+        "product_specifications",
+        "product_title",
+        "product_type",
+        "sku",
+        "title",
+        "url",
+        "variant",
+        "variants",
+        "vendor",
+    }
+)
+NETWORK_PAYLOAD_JOB_SIGNATURE: Final[frozenset[str]] = frozenset(
+    {
+        "title",
+        "description",
+        "location",
+        "company",
+        "apply_url",
+        "posted_date",
+        "employment_type",
+        "salary",
+        "department",
+        "qualifications",
+        "responsibilities",
+        "benefits",
+        "remote",
+        "date_posted",
+        "datePosted",
+        "applyUrl",
+        "job_type",
+        "content",
+        "absolute_url",
+        "company_name",
+    }
+)
+NETWORK_PAYLOAD_LIST_COLLECTION_KEYS: Final[frozenset[str]] = frozenset(
+    {"data", "edges", "items", "listings", "nodes", "products", "records", "results"}
+)
+NETWORK_PAYLOAD_DETAIL_CONTAINER_KEYS: Final[frozenset[str]] = frozenset(
+    {"item", "job", "posting", "product", "record"}
+)
 
 
 NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {

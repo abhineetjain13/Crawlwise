@@ -111,6 +111,7 @@ Current UI settings behavior reflects the backend contract:
 - `respect_robots_txt`
 - proxy input
 - additional fields
+- additional fields are dispatched as the operator typed them (trimmed/deduped only); the UI no longer rewrites labels like `Features & Benefits` into snake_case before the backend sees them
 
 ### 3.4 Run workspace
 

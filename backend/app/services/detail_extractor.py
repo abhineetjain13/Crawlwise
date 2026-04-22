@@ -61,8 +61,10 @@ from app.services.field_value_candidates import (
 )
 from app.services.field_value_dom import (
     apply_selector_fallbacks,
+    dedupe_image_urls,
     extract_heading_sections,
     extract_page_images,
+    requested_content_extractability,
 )
 from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.js_state_helpers import select_variant
@@ -76,6 +78,7 @@ from app.services.extract.shared_variant_logic import (
     split_variant_axes,
     variant_dom_cues_present,
 )
+from app.services.field_policy import exact_requested_field_key
 from app.services.extract.detail_tiers import (
     DetailTierState,
     collect_authoritative_tier,
@@ -112,7 +115,7 @@ def _detail_title_is_noise(title: object) -> bool:
         return True
     if len(cleaned) < 4 or cleaned.isdigit():
         return True
-    if "star" in lowered and RATING_RE.search(lowered):
+    if "star" in lowered and RATING_RE.search(lowered) and len(cleaned.split()) <= 4:
         return True
     if lowered in LISTING_TITLE_CTA_TITLES:
         return True
@@ -454,15 +457,6 @@ def _winning_candidates_for_field(
         winning_source,
     )
 
-def _merged_structured_field_value(
-    field_name: str,
-    ordered_candidates: list[tuple[str | None, object]],
-) -> object | None:
-    return finalize_candidate_value(
-        field_name,
-        [value for _, value in ordered_candidates],
-    )
-
 def _selector_self_heal_config(
     extraction_runtime_snapshot: dict[str, object] | None,
 ) -> dict[str, object]:
@@ -501,7 +495,14 @@ def _materialize_record(
 ) -> dict[str, Any]:
     record: dict[str, Any] = {"source_url": page_url, "url": page_url}
     selected_field_sources: dict[str, str] = {}
+    merged_images, merged_image_source = _materialize_image_fields(
+        surface=surface,
+        candidates=candidates,
+        candidate_sources=candidate_sources,
+    )
     for field_name in fields:
+        if field_name in {"image_url", "additional_images"}:
+            continue
         ordered_candidates = _ordered_candidates_for_field(
             surface,
             field_name,
@@ -510,7 +511,7 @@ def _materialize_record(
         )
         winning_values, selected_source = _winning_candidates_for_field(ordered_candidates)
         finalized = (
-            _merged_structured_field_value(field_name, ordered_candidates)
+            finalize_candidate_value(field_name, [value for _, value in ordered_candidates])
             if field_name in STRUCTURED_OBJECT_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS
             else finalize_candidate_value(field_name, winning_values)
         )
@@ -518,6 +519,12 @@ def _materialize_record(
             record[field_name] = finalized
             if selected_source:
                 selected_field_sources[field_name] = selected_source
+    if merged_images:
+        record["image_url"] = merged_images[0]
+        if len(merged_images) > 1:
+            record["additional_images"] = merged_images[1:]
+        if merged_image_source:
+            selected_field_sources["image_url"] = merged_image_source
     promoted = _promote_detail_title(
         record,
         page_url=page_url,
@@ -548,40 +555,120 @@ def _materialize_record(
     }
     return finalize_record(record, surface=surface)
 def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
-    primary_image = text_or_none(record.get("image_url"))
     raw_additional_images = record.get("additional_images")
-    if raw_additional_images in (None, "", [], {}):
-        return
-    filtered: list[str] = []
-    seen: set[str] = set()
-    if primary_image:
-        seen.add(primary_image.lower())
-    values = (
+    additional_images = (
         list(raw_additional_images)
         if isinstance(raw_additional_images, (list, tuple, set))
-        else [raw_additional_images]
+        else ([raw_additional_images] if raw_additional_images not in (None, "", [], {}) else [])
     )
-    for value in values:
-        image = text_or_none(value)
-        if not image:
-            continue
-        lowered = image.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        filtered.append(image)
-    if filtered:
-        record["additional_images"] = filtered
+    values: list[str] = []
+    for raw_value in (
+        record.get("image_url"),
+        *additional_images,
+    ):
+        image = text_or_none(raw_value)
+        if image:
+            values.append(image)
+    merged = dedupe_image_urls(values)
+    if not merged:
+        record.pop("image_url", None)
+        record.pop("additional_images", None)
+        return
+    record["image_url"] = merged[0]
+    if len(merged) > 1:
+        record["additional_images"] = merged[1:]
         return
     record.pop("additional_images", None)
 
 
-def _variant_fields_are_empty(candidates: dict[str, list[object]]) -> bool:
-    return not any(candidates.get(field_name) for field_name in VARIANT_DOM_FIELD_NAMES)
+def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> bool:
+    title = text_or_none(record.get("title")) or ""
+    if not _title_needs_promotion(title, page_url=page_url):
+        return False
+    strong_detail_fields = (
+        "brand",
+        "sku",
+        "part_number",
+        "barcode",
+        "availability",
+        "variant_axes",
+        "variants",
+        "selected_variant",
+    )
+    return not any(record.get(field_name) not in (None, "", [], {}) for field_name in strong_detail_fields)
 
 
-def _should_collect_dom_variants(candidates: dict[str, list[object]]) -> bool:
-    return _variant_fields_are_empty(candidates) or not candidates.get("variants")
+def _variant_axis_value_count(value: object) -> int:
+    if not isinstance(value, dict):
+        return 0
+    return sum(len([item for item in values if text_or_none(item)]) for values in value.values() if isinstance(values, list))
+
+
+def _variant_rows_with_option_values(value: object) -> int:
+    if not isinstance(value, list):
+        return 0
+    return sum(1 for row in value if isinstance(row, dict) and isinstance(row.get("option_values"), dict) and bool(row.get("option_values")))
+
+
+def _variant_signal_strength(*, variant_axes: object, variants: object, selected_variant: object) -> tuple[int, int, int, int, int]:
+    return (
+        len(variant_axes) if isinstance(variant_axes, dict) else 0,
+        _variant_axis_value_count(variant_axes),
+        len(variants) if isinstance(variants, list) else 0,
+        _variant_rows_with_option_values(variants),
+        int(
+            isinstance(selected_variant, dict)
+            and isinstance(selected_variant.get("option_values"), dict)
+            and bool(selected_variant.get("option_values"))
+        ),
+    )
+
+
+def _should_collect_dom_variants(
+    candidates: dict[str, list[object]],
+    dom_variants: dict[str, object],
+) -> bool:
+    if not any(candidates.get(field_name) for field_name in VARIANT_DOM_FIELD_NAMES):
+        return True
+    existing_variant_axes = finalize_candidate_value("variant_axes", list(candidates.get("variant_axes") or []))
+    existing_variants = finalize_candidate_value("variants", list(candidates.get("variants") or []))
+    existing_selected_variant = finalize_candidate_value("selected_variant", list(candidates.get("selected_variant") or []))
+    existing_strength = _variant_signal_strength(
+        variant_axes=existing_variant_axes,
+        variants=existing_variants,
+        selected_variant=existing_selected_variant,
+    )
+    if 0 in existing_strength[:4] or existing_strength[-1] == 0:
+        return True
+    dom_strength = _variant_signal_strength(
+        variant_axes=dom_variants.get("variant_axes"),
+        variants=dom_variants.get("variants"),
+        selected_variant=dom_variants.get("selected_variant"),
+    )
+    return dom_strength > existing_strength
+
+
+def _materialize_image_fields(
+    *,
+    surface: str,
+    candidates: dict[str, list[object]],
+    candidate_sources: dict[str, list[str]],
+) -> tuple[list[str], str | None]:
+    values: list[str] = []
+    primary_source: str | None = None
+    ordered_candidates = [
+        *_ordered_candidates_for_field(surface, "image_url", candidates, candidate_sources),
+        *_ordered_candidates_for_field(surface, "additional_images", candidates, candidate_sources),
+    ]
+    for source, raw_value in ordered_candidates:
+        if primary_source is None and source:
+            primary_source = source
+        items = raw_value if isinstance(raw_value, list) else [raw_value]
+        for item in items:
+            image = text_or_none(item)
+            if image:
+                values.append(image)
+    return dedupe_image_urls(values), primary_source
 
 
 def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
@@ -776,7 +863,10 @@ def _title_needs_promotion(title: str, *, page_url: str) -> bool:
         return True
     if not host:
         return False
-    return normalized_title == host.removeprefix("www.").split(".", 1)[0]
+    host_label = host.removeprefix("www.").split(".", 1)[0]
+    compact_title = re.sub(r"[^a-z0-9]+", "", normalized_title)
+    compact_host = re.sub(r"[^a-z0-9]+", "", host_label)
+    return compact_title == compact_host
 
 
 def _missing_requested_fields(
@@ -785,7 +875,7 @@ def _missing_requested_fields(
 ) -> set[str]:
     missing: set[str] = set()
     for field_name in list(requested_fields or []):
-        normalized = str(field_name or "").strip().lower()
+        normalized = exact_requested_field_key(str(field_name or ""))
         if normalized and record.get(normalized) in (None, "", [], {}):
             missing.add(normalized)
     return missing
@@ -800,33 +890,36 @@ def _requires_dom_completion(
     soup: BeautifulSoup,
 ) -> bool:
     normalized_surface = str(surface or "").strip().lower()
+    requested_missing_fields = _missing_requested_fields(record, requested_fields)
     if normalized_surface == "ecommerce_detail" and variant_dom_cues_present(soup):
         if any(
             record.get(field_name) in (None, "", [], {})
             for field_name in ("variant_axes", "variants", "selected_variant")
         ):
             return True
-    alias_lookup = surface_alias_lookup(surface, requested_fields)
+    extractability = requested_content_extractability(
+        soup,
+        surface=surface,
+        requested_fields=requested_fields,
+        selector_rules=selector_rules,
+    )
+    extractable_fields = set(extractability.get("extractable_fields") or [])
     high_value_fields = set(DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
-    advertised_dom_sections = {
-        normalized
-        for label in extract_heading_sections(soup).keys()
-        for normalized in [alias_lookup.get(label.lower())]
-        if normalized in high_value_fields
-    }
+    advertised_high_value_fields = extractable_fields & high_value_fields
     missing_high_value_fields = {
         field_name
-        for field_name in advertised_dom_sections
+        for field_name in advertised_high_value_fields
         if record.get(field_name) in (None, "", [], {})
     }
     missing_high_value_fields.update(
         {
             field_name
             for field_name in high_value_fields
-            if field_name in _missing_requested_fields(record, requested_fields)
+            if field_name in requested_missing_fields
         }
     )
-    requested_missing_fields = _missing_requested_fields(record, requested_fields)
+    if extractable_fields & requested_missing_fields:
+        return True
     if missing_high_value_fields or requested_missing_fields & high_value_fields:
         return True
     optional_cue_fields = {
@@ -834,22 +927,9 @@ def _requires_dom_completion(
         for field_name in set(DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ())
         if record.get(field_name) in (None, "", [], {})
     }
-    dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
-    for field_name in optional_cue_fields:
-        selector = str(dom_patterns.get(field_name) or "").strip()
-        if selector and soup.select(selector):
-            return True
-    selector_backed_fields = {
-        str(row.get("field_name") or "").strip().lower()
-        for row in list(selector_rules or [])
-        if isinstance(row, dict)
-        and bool(row.get("is_active", True))
-        and (
-            str(row.get("css_selector") or "").strip()
-            or str(row.get("xpath") or "").strip()
-            or str(row.get("regex") or "").strip()
-        )
-    }
+    if optional_cue_fields & set(extractability.get("dom_pattern_fields") or []):
+        return True
+    selector_backed_fields = set(extractability.get("selector_backed_fields") or [])
     return bool(requested_missing_fields & selector_backed_fields)
 
 
@@ -896,17 +976,7 @@ def build_detail_record(
     field_sources: dict[str, list[str]] = {}
     fields = surface_fields(surface, requested_fields)
     selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
-    state = DetailTierState(
-        page_url=page_url,
-        surface=surface,
-        requested_fields=requested_fields,
-        fields=fields,
-        candidates=candidates,
-        candidate_sources=candidate_sources,
-        field_sources=field_sources,
-        extraction_runtime_snapshot=extraction_runtime_snapshot,
-        completed_tiers=[],
-    )
+    state = DetailTierState(page_url=page_url, surface=surface, requested_fields=requested_fields, fields=fields, candidates=candidates, candidate_sources=candidate_sources, field_sources=field_sources, extraction_runtime_snapshot=extraction_runtime_snapshot, completed_tiers=[])
     js_state_record = map_js_state_to_fields(
         harvest_js_state_objects(None, context.cleaned_html),
         surface=surface,
@@ -923,11 +993,7 @@ def build_detail_record(
         collect_record_candidates=_collect_record_candidates,
         map_network_payloads_to_fields=map_network_payloads_to_fields,
     )
-    record = materialize_detail_tier(
-        state,
-        tier_name="authoritative",
-        materialize_record=_materialize_record,
-    )
+    record = materialize_detail_tier(state, tier_name="authoritative", materialize_record=_materialize_record)
 
     collect_structured_data_tier(
         state,
@@ -936,11 +1002,7 @@ def build_detail_record(
         collect_structured_source_payloads=collect_structured_source_payloads,
         collect_structured_payload_candidates=_collect_structured_payload_candidates,
     )
-    record = materialize_detail_tier(
-        state,
-        tier_name="structured_data",
-        materialize_record=_materialize_record,
-    )
+    record = materialize_detail_tier(state, tier_name="structured_data", materialize_record=_materialize_record)
     if (
         float(record["_confidence"]["score"])
         >= float(selector_self_heal["threshold"])
@@ -960,11 +1022,7 @@ def build_detail_record(
         js_state_record=js_state_record,
         collect_record_candidates=_collect_record_candidates,
     )
-    record = materialize_detail_tier(
-        state,
-        tier_name="js_state",
-        materialize_record=_materialize_record,
-    )
+    record = materialize_detail_tier(state, tier_name="js_state", materialize_record=_materialize_record)
 
     collect_dom_tier(
         state,
@@ -976,11 +1034,7 @@ def build_detail_record(
         should_collect_dom_variants=_should_collect_dom_variants,
         add_sourced_candidate=_add_sourced_candidate,
     )
-    record = materialize_detail_tier(
-        state,
-        tier_name="dom",
-        materialize_record=_materialize_record,
-    )
+    record = materialize_detail_tier(state, tier_name="dom", materialize_record=_materialize_record)
     if surface == "ecommerce_detail" and _title_needs_promotion(
         text_or_none(record.get("title")) or "",
         page_url=page_url,
@@ -1032,6 +1086,11 @@ def extract_detail_records(
         selector_rules=selector_rules,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
     )
+    if surface == "ecommerce_detail" and _looks_like_site_shell_record(
+        record,
+        page_url=page_url,
+    ):
+        return []
     if record_score(record) <= 0:
         return []
     return [record]

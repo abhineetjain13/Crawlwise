@@ -210,6 +210,41 @@ def collect_structured_candidates(
                         canonical,
                         coerce_field_value(canonical, item.get("value"), page_url),
                     )
+        if {
+            normalize_field_key(str(key or ""))
+            for key in payload.keys()
+        } & {"field_name", "field_value", "field_values"}:
+            label = normalize_requested_field(
+                payload.get("FieldName") or payload.get("fieldName") or payload.get("field_name")
+            ) or normalize_field_key(
+                payload.get("FieldName") or payload.get("fieldName") or payload.get("field_name")
+            )
+            canonical = alias_lookup.get(label)
+            if canonical:
+                raw_value = (
+                    payload.get("FieldValues")
+                    or payload.get("fieldValues")
+                    or payload.get("field_values")
+                    or payload.get("FieldValue")
+                    or payload.get("fieldValue")
+                    or payload.get("field_value")
+                )
+                if isinstance(raw_value, list):
+                    if canonical in STRUCTURED_MULTI_FIELDS:
+                        value = raw_value
+                    else:
+                        value = " ".join(
+                            text
+                            for item in raw_value
+                            if (text := text_or_none(item))
+                        )
+                else:
+                    value = raw_value
+                add_candidate(
+                    candidates,
+                    canonical,
+                    coerce_field_value(canonical, value, page_url),
+                )
         for key, value in payload.items():
             if str(key).startswith("@"):
                 collect_structured_candidates(
@@ -337,6 +372,15 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                     continue
                 seen_rows.add(fingerprint)
                 merged_rows.append(row)
+        if field_name == "variants" and any(
+            isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))
+            for row in merged_rows
+        ):
+            merged_rows = [
+                row
+                for row in merged_rows
+                if isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))
+            ]
         return merged_rows or None
     if field_name in STRUCTURED_MULTI_FIELDS:
         rows: list[str] = []

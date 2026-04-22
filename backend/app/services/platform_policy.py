@@ -400,7 +400,7 @@ def resolve_browser_readiness_policy(
         "listing_override": listing_override,
         "require_networkidle": require_networkidle,
         "networkidle_reason": networkidle_reason,
-        "navigation_wait_until": "networkidle" if require_networkidle else "domcontentloaded",
+        "navigation_wait_until": "domcontentloaded",
     }
 
 

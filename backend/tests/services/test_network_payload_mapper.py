@@ -427,3 +427,110 @@ def test_ghost_route_rejects_navigation_payloads_with_price_like_noise() -> None
     )
 
     assert rows == []
+
+
+def test_ghost_route_rejects_listing_envelope_for_detail_surface() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://api.example.com/products?page=1",
+                "endpoint_type": "generic_json",
+                "body": {
+                    "current_page": 1,
+                    "data": [
+                        {
+                            "id": "prod-1",
+                            "name": "Combination Pliers",
+                            "description": "Listing summary for pliers.",
+                            "price": "14.15",
+                            "brand": "ForgeFlex Tools",
+                            "image": "https://cdn.example.com/pliers.jpg",
+                            "url": "https://example.com/product/prod-1",
+                        },
+                        {
+                            "id": "prod-2",
+                            "name": "Bolt Cutters",
+                            "description": "Listing summary for cutters.",
+                            "price": "24.99",
+                            "brand": "ForgeFlex Tools",
+                            "image": "https://cdn.example.com/cutters.jpg",
+                            "url": "https://example.com/product/prod-2",
+                        },
+                    ],
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://example.com/#/product/short-fragment",
+    )
+
+    assert rows == []
+
+
+def test_ghost_route_maps_vtex_style_product_payload_with_requested_custom_fields() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://india.whirlpool.in/productBySKU/1506",
+                "endpoint_type": "generic_json",
+                "body": {
+                    "ProductName": "Vitamagic Pro 192L 3 Star Radiant Steel Auto Defrost Single Door Refrigerator - Radiant Steel-Y",
+                    "BrandName": "Whirlpool",
+                    "ImageUrl": "https://whirlpoolindia.vteximg.com.br/arquivos/ids/175375-55-55/fridge.jpg",
+                    "DetailUrl": "/vitamagic-pro-192l-3-star-radiant-steel-auto-defrost-single-door-refrigerator-radiant-steel-y/p",
+                    "ProductSpecifications": [
+                        {
+                            "FieldName": "Capacity(L)",
+                            "FieldValues": ["192 L"],
+                        },
+                        {
+                            "FieldName": "Energy Rating",
+                            "FieldValues": ["3 Star"],
+                        },
+                        {
+                            "FieldName": "Special Features",
+                            "FieldValues": ["Auto Defrost Technology"],
+                        },
+                    ],
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://india.whirlpool.in/vitamagic-pro-192l-3-star-radiant-steel-auto-defrost-single-door-refrigerator-radiant-steel-y/p?sc=1",
+        requested_fields=["capacity", "energy_rating"],
+    )
+
+    assert rows == [
+        {
+            "title": "Vitamagic Pro 192L 3 Star Radiant Steel Auto Defrost Single Door Refrigerator - Radiant Steel-Y",
+            "brand": "Whirlpool",
+            "image_url": "https://whirlpoolindia.vteximg.com.br/arquivos/ids/175375-55-55/fridge.jpg",
+            "url": "https://india.whirlpool.in/vitamagic-pro-192l-3-star-radiant-steel-auto-defrost-single-door-refrigerator-radiant-steel-y/p",
+            "capacity": "192 L",
+            "energy_rating": "3 Star",
+            "features": "Auto Defrost Technology",
+        }
+    ]
+
+
+def test_ghost_route_rejects_product_payload_whose_url_does_not_match_current_detail_page() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://india.whirlpool.in/api/catalog",
+                "endpoint_type": "generic_json",
+                "body": {
+                    "ProductName": "Refrigerators",
+                    "BrandName": "Whirlpool",
+                    "DetailUrl": "/refrigerators",
+                    "Price": "16690",
+                    "Description": "Home Care Plan - Annual Maintenance Contract 1 Year",
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://india.whirlpool.in/vitamagic-pro-192l-3-star-radiant-steel-auto-defrost-single-door-refrigerator-radiant-steel-y/p?sc=1",
+        requested_fields=["capacity"],
+    )
+
+    assert rows == []

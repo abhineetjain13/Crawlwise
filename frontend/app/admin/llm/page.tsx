@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, PlugZap, Plus, Trash2 } from "lucide-react";
 
-import { Card, Button, Input, Select } from "../../../components/ui/primitives";
+import { Card, Button, Dropdown, Input } from "../../../components/ui/primitives";
 import { InlineAlert, PageHeader, SectionHeader } from "../../../components/ui/patterns";
 import { api } from "../../../lib/api";
 import type {
@@ -123,27 +123,23 @@ export default function AdminLlmPage() {
           <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-1.5">
               <span className="field-label">Provider</span>
-              <Select
+              <Dropdown<string>
                 value={form.provider}
-                onChange={(event) => {
-                  const provider = event.target.value;
+                onChange={(provider) => {
                   const nextModel = providers.find((row) => row.provider === provider)?.recommended_models?.[0] ?? "";
                   setForm((current) => ({ ...current, provider, model: nextModel || current.model }));
                 }}
-              >
-                {providers.map((provider) => (
-                  <option key={provider.provider} value={provider.provider}>{provider.label}</option>
-                ))}
-              </Select>
+                options={providers.map((provider) => ({ value: provider.provider, label: provider.label }))}
+              />
             </label>
 
             <label className="grid gap-1.5">
               <span className="field-label">Task</span>
-              <Select value={form.task_type} onChange={(event) => setForm((current) => ({ ...current, task_type: event.target.value }))}>
-                {TASK_TYPES.map((taskType) => (
-                  <option key={taskType} value={taskType}>{taskType}</option>
-                ))}
-              </Select>
+              <Dropdown<string>
+                value={form.task_type}
+                onChange={(task_type) => setForm((current) => ({ ...current, task_type }))}
+                options={TASK_TYPES.map((taskType) => ({ value: taskType, label: taskType }))}
+              />
             </label>
 
             <label className="grid gap-1.5 md:col-span-2">

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 import jmespath
 
 from app.services.config.network_payload_specs import (
+    NETWORK_PAYLOAD_DETAIL_CONTAINER_KEYS,
+    NETWORK_PAYLOAD_JOB_SIGNATURE,
+    NETWORK_PAYLOAD_LIST_COLLECTION_KEYS,
+    NETWORK_PAYLOAD_PRODUCT_SIGNATURE,
     NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH,
     NETWORK_PAYLOAD_SPECS,
 )
@@ -13,19 +19,20 @@ from app.services.field_value_candidates import (
     collect_structured_candidates,
     finalize_candidate_value,
 )
+from app.services.field_policy import normalize_field_key
 from app.services.field_value_core import (
     STRUCTURED_MULTI_FIELDS,
     surface_alias_lookup,
     surface_fields,
 )
 
-_PRODUCT_SIGNATURE: frozenset[str] = frozenset({"price", "sku", "name", "description", "title", "brand", "availability", "image", "images", "currency", "vendor", "product_type", "category", "compare_at_price", "variants", "inventory_quantity", "body_html"})
-_JOB_SIGNATURE: frozenset[str] = frozenset({"title", "description", "location", "company", "apply_url", "posted_date", "employment_type", "salary", "department", "qualifications", "responsibilities", "benefits", "remote", "date_posted", "datePosted", "applyUrl", "job_type", "content", "absolute_url", "company_name"})
-
 _GHOST_ROUTE_COMPATIBLE_SURFACES = {
     "ecommerce_detail",
     "job_detail",
 }
+_DETAIL_URL_IGNORE_TOKENS: frozenset[str] = frozenset(
+    {"detail", "details", "dp", "item", "job", "p", "product", "products"}
+)
 
 
 def map_network_payloads_to_fields(
@@ -33,6 +40,7 @@ def map_network_payloads_to_fields(
     *,
     surface: str,
     page_url: str,
+    requested_fields: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_surface = str(surface or "").strip().lower()
     surface_specs = NETWORK_PAYLOAD_SPECS.get(normalized_surface, ())
@@ -52,6 +60,7 @@ def map_network_payloads_to_fields(
             body,
             surface=normalized_surface,
             page_url=page_url,
+            requested_fields=requested_fields,
         )
         if ghost_mapped:
             rows.append(ghost_mapped)
@@ -188,7 +197,11 @@ def _first_non_empty_path(body: object, paths: object) -> Any:
 def _collect_keys(body: object, *, depth: int = 0, limit: int = 2) -> set[str]:
     if depth > limit or not isinstance(body, dict):
         return set()
-    keys = set(body.keys())
+    keys = {
+        normalized
+        for key in body.keys()
+        if (normalized := normalize_field_key(str(key or "")))
+    }
     for value in body.values():
         if isinstance(value, dict):
             keys |= _collect_keys(value, depth=depth + 1, limit=limit)
@@ -200,17 +213,17 @@ def _collect_keys(body: object, *, depth: int = 0, limit: int = 2) -> set[str]:
 
 
 def _looks_like_product_api(body: object) -> bool:
-    return _matches_signature(body, _PRODUCT_SIGNATURE)
+    return _matches_signature(body, NETWORK_PAYLOAD_PRODUCT_SIGNATURE)
 
 
 def _looks_like_job_api(body: object) -> bool:
-    return _matches_signature(body, _JOB_SIGNATURE)
+    return _matches_signature(body, NETWORK_PAYLOAD_JOB_SIGNATURE)
 
 
 def _body_matches_signature_quick(body: dict[str, object]) -> bool:
-    return _matches_signature(body, _PRODUCT_SIGNATURE, depth=1) or _matches_signature(
+    return _matches_signature(body, NETWORK_PAYLOAD_PRODUCT_SIGNATURE, depth=1) or _matches_signature(
         body,
-        _JOB_SIGNATURE,
+        NETWORK_PAYLOAD_JOB_SIGNATURE,
         depth=1,
     )
 
@@ -219,8 +232,8 @@ def _infer_surface_from_body(body: object) -> str | None:
     if not isinstance(body, dict):
         return None
     keys = _collect_keys(body)
-    product_score = len(keys & _PRODUCT_SIGNATURE)
-    job_score = len(keys & _JOB_SIGNATURE)
+    product_score = len(keys & NETWORK_PAYLOAD_PRODUCT_SIGNATURE)
+    job_score = len(keys & NETWORK_PAYLOAD_JOB_SIGNATURE)
     if (
         product_score >= NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH
         and product_score >= job_score
@@ -236,7 +249,10 @@ def _ghost_route_payload(
     *,
     surface: str,
     page_url: str,
+    requested_fields: list[str] | None,
 ) -> dict[str, Any] | None:
+    if _looks_like_multi_record_collection(body):
+        return None
     inferred_surface = _infer_surface_from_body(body)
     if not inferred_surface:
         return None
@@ -248,18 +264,26 @@ def _ghost_route_payload(
         return None
     if _looks_like_navigation_payload(body):
         return None
-    if not _has_detail_anchor(body, inferred_surface=inferred_surface, page_url=page_url):
+    if not _has_detail_anchor(
+        body,
+        inferred_surface=inferred_surface,
+        page_url=page_url,
+        requested_fields=requested_fields,
+    ):
         return None
-    alias_lookup = surface_alias_lookup(inferred_surface, None)
+    alias_lookup = surface_alias_lookup(inferred_surface, requested_fields)
     candidates: dict[str, list[object]] = {}
     collect_structured_candidates(body, alias_lookup, page_url, candidates)
     result: dict[str, Any] = {}
-    for field_name in surface_fields(inferred_surface, None):
+    for field_name in surface_fields(inferred_surface, requested_fields):
         finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
         if finalized not in (None, "", [], {}):
             if field_name in STRUCTURED_MULTI_FIELDS and not isinstance(finalized, list):
                 continue
             result[field_name] = finalized
+    url = finalize_candidate_value("url", candidates.get("url", []))
+    if url not in (None, "", [], {}):
+        result["url"] = url
     result = _finalize_detail_result(result)
     return result or None
 
@@ -274,6 +298,39 @@ def _matches_signature(
         isinstance(body, dict)
         and len(_collect_keys(body, limit=depth) & signature)
         >= NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH
+    )
+
+
+def _looks_like_multi_record_collection(body: object) -> bool:
+    if not isinstance(body, dict):
+        return False
+    if any(isinstance(body.get(key), dict) for key in NETWORK_PAYLOAD_DETAIL_CONTAINER_KEYS):
+        return False
+    return _contains_multi_record_collection(body, depth=0)
+
+
+def _contains_multi_record_collection(body: object, *, depth: int) -> bool:
+    if depth > 1 or not isinstance(body, dict):
+        return False
+    for key, value in body.items():
+        normalized_key = str(key or "").strip().lower()
+        if normalized_key in NETWORK_PAYLOAD_LIST_COLLECTION_KEYS and _list_looks_like_records(value):
+            return True
+        if isinstance(value, dict) and _contains_multi_record_collection(value, depth=depth + 1):
+            return True
+    return False
+
+
+def _list_looks_like_records(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    dict_items = [item for item in value[:5] if isinstance(item, dict)]
+    if len(dict_items) < 2:
+        return False
+    return all(
+        _matches_signature(item, NETWORK_PAYLOAD_PRODUCT_SIGNATURE, depth=1)
+        or _matches_signature(item, NETWORK_PAYLOAD_JOB_SIGNATURE, depth=1)
+        for item in dict_items[:3]
     )
 
 
@@ -331,10 +388,11 @@ def _has_detail_anchor(
     *,
     inferred_surface: str,
     page_url: str,
+    requested_fields: list[str] | None,
 ) -> bool:
     if not isinstance(body, dict):
         return False
-    alias_lookup = surface_alias_lookup(inferred_surface, None)
+    alias_lookup = surface_alias_lookup(inferred_surface, requested_fields)
     candidates: dict[str, list[object]] = {}
     collect_structured_candidates(body, alias_lookup, page_url, candidates)
     title = finalize_candidate_value("title", candidates.get("title", []))
@@ -343,7 +401,20 @@ def _has_detail_anchor(
         price = finalize_candidate_value("price", candidates.get("price", []))
         sku = finalize_candidate_value("sku", candidates.get("sku", []))
         brand = finalize_candidate_value("brand", candidates.get("brand", []))
-        return bool(title and price and (sku or brand or url))
+        url_matches_page = _detail_url_matches_page(url, page_url)
+        if url not in (None, "", [], {}) and not url_matches_page:
+            return False
+        informative_fields = (
+            field_name
+            for field_name, values in candidates.items()
+            if field_name not in {"brand", "sku", "title", "url", "vendor"}
+            and finalize_candidate_value(field_name, values) not in (None, "", [], {})
+        )
+        return bool(
+            title
+            and (sku or brand or url_matches_page)
+            and (price or any(True for _ in informative_fields))
+        )
     if inferred_surface == "job_detail":
         company = finalize_candidate_value("company", candidates.get("company", []))
         location = finalize_candidate_value("location", candidates.get("location", []))
@@ -362,3 +433,35 @@ def _finalize_detail_result(result: dict[str, Any]) -> dict[str, Any]:
     if result.get("apply_url") and not result.get("url"):
         result["url"] = result["apply_url"]
     return result
+
+
+def _detail_url_matches_page(candidate_url: object, page_url: str) -> bool:
+    candidate = str(candidate_url or "").strip()
+    if not candidate:
+        return False
+    candidate_parts = urlparse(candidate)
+    page_parts = urlparse(page_url)
+    candidate_host = str(candidate_parts.hostname or "").strip().lower()
+    page_host = str(page_parts.hostname or "").strip().lower()
+    if candidate_host and page_host and candidate_host != page_host:
+        return False
+    candidate_path = str(candidate_parts.path or "").rstrip("/").lower()
+    page_path = str(page_parts.path or "").rstrip("/").lower()
+    if not candidate_path or not page_path:
+        return False
+    if candidate_path == page_path:
+        return True
+    candidate_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", candidate_path)
+        if len(token) >= 2 and token not in _DETAIL_URL_IGNORE_TOKENS
+    }
+    page_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", page_path)
+        if len(token) >= 2 and token not in _DETAIL_URL_IGNORE_TOKENS
+    }
+    if not candidate_tokens or not page_tokens:
+        return False
+    overlap = candidate_tokens & page_tokens
+    return len(overlap) >= min(2, len(candidate_tokens))

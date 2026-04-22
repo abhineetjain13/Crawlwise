@@ -1,6 +1,6 @@
 # Backend Architecture
 
-> Last updated: 2026-04-21
+> Last updated: 2026-04-22
 >
 > Canonical detailed backend reference. This is the merged replacement for the older split architecture docs.
 
@@ -60,7 +60,13 @@ Important route groups:
 - `url` and/or `urls`
 - `surface`: `ecommerce_listing | ecommerce_detail | job_listing | job_detail | automobile_listing | automobile_detail | tabular`
 - `settings`
+- `requested_fields`
 - `additional_fields`
+
+Current live behavior:
+
+- batch and crawl run creation preserve raw user-entered `requested_fields` / `additional_fields` on the run, while runtime-only canonicalization happens later when extraction and confidence scoring need alias matching
+- batch run settings persist the resolved `urls` list inside `CrawlRunSettings`, so `_batch_runtime.py` fans out the same URL set that the create request submitted
 
 `CrawlRunSettings` normalizes settings for storage/runtime. Important fields include:
 
@@ -195,6 +201,7 @@ Current live behavior:
 - browser block classification now preserves usable listing/detail content when vendor markers and challenge widgets coexist with clear extractable signals, instead of forcing a blocked verdict from anti-bot evidence alone
 - traversal stop reasons remain diagnostic when the first rendered listing page is already usable: no-progress traversal keeps the full rendered HTML as the primary payload and only downgrades to `traversal_failed` when listing evidence is still below threshold
 - detail-page expansion is field-aware and commerce-safe: requested fields now contribute expansion tokens, blocked action labels such as add-to-cart/login are skipped, and ARIA-driven affordances (`aria-expanded`, `aria-controls`, tabs, summaries) are considered even when the initial detail readiness probe already looks usable
+- detail-page expansion now short-circuits when the current rendered DOM already exposes the requested section headings, avoiding unrelated follow-up clicks that would otherwise mutate an already-extractable detail page
 - thin browser listing results can trigger one bounded recovery re-acquisition that performs ordered listing actions (`clear filters`, `view all`, `next page`) before traversal/extraction, and the pipeline only keeps the retry when it improves record count
 - browser acquisition now generates internal `page_markdown` context from rendered HTML plus visible links and the accessibility snapshot; detail-page serialization prunes review/Q&A/payment containers and drops low-signal chrome lines before persistence so semantic expansion stays anchored to product content instead of whole-page UI noise
 - browser screenshots are staged to temp files inside the artifacts area and then persisted by the pipeline, avoiding large in-memory PNG handoffs on the hot path
@@ -236,15 +243,20 @@ Important implemented features:
 - `structured_sources.py` now integrates extruct-backed microdata and Open Graph extraction, with fallback parsing when dependencies are unavailable
 - Nuxt `__NUXT_DATA__` payload revival is live in structured-source harvesting
 - `network_payload_mapper.py` now uses declarative specs from `config/network_payload_specs.py`, and browser-side endpoint classification derives its path tokens from that same spec source instead of maintaining a parallel capture-only token table
+- network payload detail inference now keeps its signature/list-container config in `config/network_payload_specs.py`, recognizes normalized camel/Pascal-case commerce keys (`ProductName`, `DetailUrl`, `FieldValues`), and rejects product/detail payloads whose explicit URL anchor does not match the current detail page
+- generic ghost-route payload fallback now rejects multi-record listing envelopes for detail surfaces, so paginated product-list APIs cannot masquerade as a single detail payload just because one row happens to expose product-like keys
 - tracking-parameter stripping is live in field-value normalization via `w3lib`
 - platform registry config in `config/platforms.json` now owns adapter registration metadata, network signatures, JS-state mappings, and listing-readiness selectors/waits
 - extraction runtime now short-circuits raw XML sitemap/listing payloads into deterministic URL records before HTML DOM parsing, which keeps sitemap targets out of the expensive BeautifulSoup listing path
 - ecommerce detail title selection now ranks structured sources ahead of raw DOM headings, rejects noisy DOM `<h1>/<title>` values such as promo or generic-results text, and only promotes fallback titles when the replacement source is materially stronger
+- ecommerce detail extraction now drops low-signal site-shell records when the surviving title still resolves to site-brand chrome and no real product anchors survive, preventing stale SPA/detail misses from being persisted as false product successes
 - detail extraction now has a DOM variant fallback for `ecommerce_detail` pages when structured data and JS state leave variant axes empty
 - DOM listing extraction no longer accepts the first non-empty candidate set; it now ranks structured, DOM, and browser-captured rendered-card candidates by record quality and keeps visual elements as a last-resort fallback only
 - listing title filtering now rejects numeric-only titles before persistence, and detail DOM image fallback keeps linked gallery media instead of dropping anchored product thumbnails
 - DOM image extraction now scores likely product-gallery media higher and filters obvious tracking, logo, and spacer assets before building `additional_images`
 - DOM section extraction now follows accordion/tab structures through `aria-controls`, native `details/summary`, and common wrapped content containers before falling back to plain heading-sibling scans
+- raw requested field labels are preserved through crawl creation, and ecommerce-detail DOM section matching now checks those exact requested labels before collapsing to broader canonical aliases; composite headings such as `Features & Benefits` therefore extract into `features_benefits` instead of being silently reduced to a generic alias like `benefits`
+- requested custom ecommerce-detail fields now keep DOM completion active when matching section headings are present, so structured-data early exit does not hide fields such as `product_story` after detail expansion
 - DOM variant fallback now materializes concrete variant rows, keeps `variant_count` aligned with those rows, and avoids widening an already authoritative `selected_variant` choice with later DOM-only axis noise
 - long-text candidate intake now rejects low-signal placeholders such as single-word review/schema values or accordion index labels before they can win `description` / `specifications`, and selector-backed long-text fields must expose non-interactive prose rather than button/tab indexes
 - ecommerce-detail JS-state product detection now requires real commerce cues instead of accepting arbitrary titled image blocks, and JS-state image harvesting filters payment, logo, bookmark, swatch, and video assets before they can outrank structured product media

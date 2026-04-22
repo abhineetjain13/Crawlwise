@@ -61,6 +61,7 @@ def collect_authoritative_tier(
         network_payloads,
         surface=state.surface,
         page_url=state.page_url,
+        requested_fields=state.requested_fields,
     ):
         collect_record_candidates(
             mapped_payload,
@@ -138,8 +139,15 @@ def collect_dom_tier(
         state.field_sources,
         selector_rules=selector_rules,
     )
-    if state.surface == "ecommerce_detail" and should_collect_dom_variants(state.candidates):
-        for field_name, value in extract_variants_from_dom(soup).items():
+    if state.surface == "ecommerce_detail":
+        dom_variants = extract_variants_from_dom(soup)
+    else:
+        dom_variants = {}
+    if state.surface == "ecommerce_detail" and should_collect_dom_variants(
+        state.candidates,
+        dom_variants,
+    ):
+        for field_name, value in dom_variants.items():
             add_sourced_candidate(
                 state.candidates,
                 state.candidate_sources,

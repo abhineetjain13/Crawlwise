@@ -347,7 +347,9 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
     assert result.browser_diagnostics["phase_timings_ms"]["readiness_wait"] == 0
     assert result.browser_diagnostics["networkidle_skip_reason"] == "fast_path_ready"
     assert result.browser_diagnostics["detail_expansion"]["reason"] == "missing_detail_content"
+    assert result.browser_diagnostics["detail_expansion"]["status"] == "attempted"
     assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 0
+    assert page.goto_calls == ["domcontentloaded"]
     assert page.wait_timeout_calls == []
     assert "networkidle" not in page.load_state_calls
 
@@ -617,6 +619,82 @@ async def test_browser_fetch_expands_requested_field_sections_even_when_probe_is
 
 
 @pytest.mark.asyncio
+async def test_browser_fetch_skips_detail_expansion_when_requested_section_is_already_extractable() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html><body>
+          <h1>Widget Prime</h1>
+          <section>
+            <h2>FEATURES &amp; BENEFITS</h2>
+            <p>Responsive foam and carbon plate propulsion.</p>
+          </section>
+        </body></html>
+        """,
+        labels=[
+            {
+                "label": "new",
+                "attributes": {"aria-controls": "nav-new"},
+            }
+        ],
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        requested_fields=["Features & Benefits"],
+        runtime_provider=_fake_runtime,
+    )
+
+    assert "Responsive foam and carbon plate propulsion." in result.html
+    assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 0
+    assert (
+        result.browser_diagnostics["detail_expansion"]["reason"]
+        == "requested_content_already_extractable"
+    )
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_expands_requested_dom_pattern_content_without_heading_sections() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html><body>
+          <main>
+            <h1>Widget Prime</h1>
+            <button aria-controls="materials-panel">Materials</button>
+            <div id="materials-panel">
+              <div class="material-composition">Full-grain leather upper.</div>
+            </div>
+          </main>
+        </body></html>
+        """,
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+        runtime_provider=_fake_runtime,
+    )
+
+    assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 0
+    assert (
+        result.browser_diagnostics["detail_expansion"]["reason"]
+        == "requested_content_already_extractable"
+    )
+    assert result.browser_diagnostics["detail_expansion"]["extractability"]["matched_requested_fields"] == [
+        "materials"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_expand_detail_content_if_needed_skips_aom_when_page_is_already_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -635,6 +713,9 @@ async def test_expand_detail_content_if_needed_skips_aom_when_page_is_already_re
         readiness_probe={"is_ready": True, "detail_like": True},
     )
 
+    assert diagnostics["status"] == "attempted"
+    assert diagnostics["reason"] == "missing_detail_content"
+    assert diagnostics["clicked_count"] == 0
     assert diagnostics["aom"]["status"] == "skipped"
     assert diagnostics["aom"]["reason"] == "not_needed"
 
@@ -1009,6 +1090,61 @@ async def test_generate_page_markdown_skips_review_qa_and_payment_noise_on_detai
 
 
 @pytest.mark.asyncio
+async def test_generate_page_markdown_skips_detail_noise_and_preserves_content_labels() -> None:
+    markdown = await browser_page_flow._generate_page_markdown(
+        _FakeExpansionPage(base_html="<html><body></body></html>"),
+        html="""
+        <html>
+          <body>
+            <main>
+              <a href="#main">Skip to main content</a>
+              <h1>RUSTIC T-SHIRT WITH BUTTONS</h1>
+              <p>Put it in your basket</p>
+              <p>Add</p>
+              <p>Product Measurements</p>
+              <p>Check in-store availability</p>
+              <p>Shipping, exchanges and returns</p>
+              <p>Composition : 60% cotton, 40% polyester</p>
+            </main>
+          </body>
+        </html>
+        """,
+        surface="ecommerce_detail",
+    )
+
+    assert "RUSTIC T-SHIRT WITH BUTTONS" in markdown
+    assert "Composition : 60% cotton, 40% polyester" in markdown
+    assert "Skip to main content" not in markdown
+    assert "Put it in your basket" not in markdown
+    assert "Product Measurements" not in markdown
+    assert "Check in-store availability" not in markdown
+    assert "Shipping, exchanges and returns" not in markdown
+    assert "Visible links:" not in markdown
+
+
+@pytest.mark.asyncio
+async def test_generate_page_markdown_keeps_label_value_lines_with_real_content() -> None:
+    markdown = await browser_page_flow._generate_page_markdown(
+        _FakeExpansionPage(base_html="<html><body></body></html>"),
+        html="""
+        <html>
+          <body>
+            <main>
+              <h1>Widget Prime</h1>
+              <p>Product Measurements: Chest 40 in, Length 28 in</p>
+              <p>Shipping, exchanges and returns: Free returns within 30 days</p>
+            </main>
+          </body>
+        </html>
+        """,
+        surface="ecommerce_detail",
+    )
+
+    assert "Product Measurements: Chest 40 in, Length 28 in" in markdown
+    assert "Shipping, exchanges and returns: Free returns within 30 days" in markdown
+
+
+@pytest.mark.asyncio
 async def test_detail_expansion_keywords_include_ecommerce_fallbacks_without_requested_fields() -> None:
     default_keywords = browser_runtime.detail_expansion_keywords("ecommerce_detail")
     requested_keywords = browser_runtime.detail_expansion_keywords(
@@ -1057,6 +1193,87 @@ async def test_expand_all_interactive_elements_matches_keywords_from_class_names
     )
 
     assert diagnostics["clicked_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_expand_all_interactive_elements_prioritizes_requested_measurements_over_media_zoom() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {
+                "label": "enlarge image rustic t-shirt",
+                "attributes": {
+                    "aria-label": "Enlarge image rustic t-shirt",
+                    "data-qa-action": "media-zoom",
+                    "class": "product-detail-image product-detail-view__main-image",
+                },
+                "tag_name": "button",
+            },
+            {
+                "label": "product measurements",
+                "attributes": {
+                    "class": "product-detail-actions__action-button",
+                    "data-qa-action": "open-interactive-size-guide-accordion",
+                },
+                "tag_name": "button",
+            },
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["product measurements"],
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["product measurements"]
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_if_needed_attempts_generic_ecommerce_expansion_when_ready() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {
+                "label": "shipping and returns",
+                "attributes": {"aria-controls": "shipping-panel"},
+                "tag_name": "button",
+            }
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_detail_content_if_needed(
+        page,
+        surface="ecommerce_detail",
+        readiness_probe={"is_ready": True, "detail_like": True},
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert page.expanded is True
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_if_needed_attempts_ready_job_detail_without_requested_fields() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {
+                "label": "responsibilities",
+                "attributes": {"aria-controls": "responsibilities-panel"},
+                "tag_name": "button",
+            }
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_detail_content_if_needed(
+        page,
+        surface="job_detail",
+        readiness_probe={"is_ready": True, "detail_like": True},
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert page.expanded is True
 
 
 @pytest.mark.asyncio
@@ -1146,6 +1363,70 @@ async def test_expand_detail_content_skips_menu_toggles() -> None:
 
 
 @pytest.mark.asyncio
+async def test_expand_detail_content_prefers_requested_section_labels_over_unrelated_nav() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html><body>
+          <button aria-controls='nav-new'>New</button>
+          <button aria-controls='nav-men'>Men</button>
+          <button aria-controls='details-panel'>Details</button>
+        </body></html>
+        """,
+        labels=[
+            {
+                "label": "new",
+                "attributes": {"aria-controls": "nav-new"},
+                "tag_name": "button",
+            },
+            {
+                "label": "men",
+                "attributes": {"aria-controls": "nav-men"},
+                "tag_name": "button",
+            },
+            {
+                "label": "details",
+                "attributes": {"aria-controls": "details-panel"},
+                "tag_name": "button",
+            },
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["Details"],
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["details"]
+    assert page.expanded is True
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_does_not_match_requested_keywords_from_hidden_probe_only() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><button aria-controls='lifestyle-panel'>Lifestyle</button></body></html>",
+        labels=[
+            {
+                "label": "lifestyle",
+                "probe": "details drawer",
+                "attributes": {"aria-controls": "lifestyle-panel"},
+                "tag_name": "button",
+            }
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["Details"],
+    )
+
+    assert diagnostics["clicked_count"] == 0
+    assert page.expanded is False
+
+
+@pytest.mark.asyncio
 async def test_browser_fetch_waits_for_challenge_recovery_before_settling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1189,7 +1470,8 @@ async def test_browser_fetch_waits_for_challenge_recovery_before_settling(
 
     assert "Widget Prime" in result.html
     assert page.wait_timeout_calls
-    assert page.goto_calls == ["networkidle"]
+    assert page.goto_calls == ["domcontentloaded"]
+    assert page.load_state_calls == ["networkidle"]
 
 
 @pytest.mark.asyncio
@@ -1803,7 +2085,7 @@ async def test_browser_fetch_records_navigation_timing_when_fallback_navigation_
         exc=excinfo.value,
     )
 
-    assert page.goto_calls == ["networkidle", "domcontentloaded", "commit"]
+    assert page.goto_calls == ["domcontentloaded", "commit"]
     assert diagnostics["navigation_strategy"] == "commit"
     assert diagnostics["phase_timings_ms"]["navigation"] >= 0
 
@@ -1974,6 +2256,53 @@ async def test_browser_fetch_prefers_rendered_html_when_progress_traversal_fragm
 
     assert "Widget Two" in result.html
     assert "traversal_composed_html" in result.artifacts
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_runs_listing_recovery_when_thin_listing_retry_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakeExpansionPage(
+        base_html=(
+            "<html><body>"
+            "<button>View all</button>"
+            "<article class='product-card'><a href='/products/widget-1'>Widget One</a></article>"
+            "</body></html>"
+        ),
+    )
+    page.url = "https://example.com/collections/widgets"
+    calls = {"count": 0}
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    async def _fake_recover_listing_page_content(*args, **kwargs):
+        del args, kwargs
+        calls["count"] += 1
+        return {
+            "status": "recovered",
+            "clicked_count": 1,
+            "actions_taken": ["view_all"],
+        }
+
+    monkeypatch.setattr(
+        browser_runtime,
+        "recover_listing_page_content",
+        _fake_recover_listing_page_content,
+    )
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/collections/widgets",
+        5,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        listing_recovery_mode="thin-listing retry",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert calls["count"] == 1
+    assert result.browser_diagnostics["listing_recovery"]["status"] == "recovered"
+    assert result.browser_diagnostics["listing_recovery"]["requested_mode"] == "thin_listing"
 
 
 @pytest.mark.asyncio

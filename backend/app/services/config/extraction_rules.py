@@ -243,6 +243,7 @@ SOURCE_TIERS: dict[str, tuple[str, float]] = {
     "microdata": ("structured", 0.88),
     "opengraph": ("structured", 0.84),
     "embedded_json": ("structured", 0.84),
+    "selector_rule": ("dom", 0.79),
     "dom_selector": ("dom", 0.78),
     "dom_sections": ("dom", 0.76),
     "dom_images": ("dom", 0.74),

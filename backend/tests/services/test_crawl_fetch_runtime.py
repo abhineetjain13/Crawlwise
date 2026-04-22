@@ -220,6 +220,108 @@ async def test_fetch_page_waits_for_host_slot_before_http_attempt(
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_preserves_requested_fields_on_http_to_browser_escalation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requested_fields: list[str] | None = None
+
+    async def _fake_curl(url: str, timeout_seconds: float, *, proxy: str | None = None):
+        del timeout_seconds, proxy
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body>challenge</body></html>",
+            status_code=403,
+            method="curl_cffi",
+            blocked=False,
+        )
+
+    async def _fake_should_escalate(*args, **kwargs):
+        del args, kwargs
+        return True
+
+    async def _fake_run_browser_attempts(
+        context,
+        *,
+        reason: str,
+        requested_fields: list[str] | None = None,
+        listing_recovery_mode: str | None = None,
+        proxies: list[str | None] | None = None,
+    ):
+        del context, reason, listing_recovery_mode, proxies
+        nonlocal captured_requested_fields
+        captured_requested_fields = list(requested_fields or [])
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html><body><h1>Widget</h1></body></html>",
+            status_code=200,
+            method="browser",
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "_should_escalate_to_browser_async",
+        _fake_should_escalate,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "_run_browser_attempts",
+        _fake_run_browser_attempts,
+    )
+
+    await crawl_fetch_runtime.fetch_page(
+        "https://example.com/products/widget",
+        surface="ecommerce_detail",
+        requested_fields=["product measurements"],
+    )
+
+    assert captured_requested_fields == ["product measurements"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_preserves_requested_fields_on_browser_first_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requested_fields: list[str] | None = None
+
+    async def _fake_run_browser_attempts(
+        context,
+        *,
+        reason: str,
+        requested_fields: list[str] | None = None,
+        listing_recovery_mode: str | None = None,
+        proxies: list[str | None] | None = None,
+    ):
+        del context, reason, listing_recovery_mode, proxies
+        nonlocal captured_requested_fields
+        captured_requested_fields = list(requested_fields or [])
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html><body><h1>Widget</h1></body></html>",
+            status_code=200,
+            method="browser",
+        )
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "_run_browser_attempts",
+        _fake_run_browser_attempts,
+    )
+
+    await crawl_fetch_runtime.fetch_page(
+        "https://example.com/products/widget",
+        surface="ecommerce_detail",
+        prefer_browser=True,
+        requested_fields=["product measurements"],
+    )
+
+    assert captured_requested_fields == ["product measurements"]
+
+
+@pytest.mark.asyncio
 async def test_read_network_payload_body_rejects_oversized_body_before_decode() -> None:
     response = _FakeResponse(b"x" * 3_500_000)
 

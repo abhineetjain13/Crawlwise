@@ -6,7 +6,11 @@ from typing import Any
 
 from app.services.config.extraction_rules import DETAIL_BLOCKED_TOKENS
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.field_policy import normalize_requested_field
+from app.services.field_policy import (
+    exact_requested_field_key,
+    NORMALIZED_REQUESTED_FIELD_ALIASES,
+    normalize_requested_field,
+)
 
 
 def detail_expansion_skip(reason: str) -> dict[str, object]:
@@ -107,6 +111,7 @@ async def expand_all_interactive_elements_impl(
         "max_elapsed_ms": max_elapsed_ms,
     }
     keywords = detail_expansion_keywords(surface, requested_fields=requested_fields)
+    requested_keywords = requested_field_tokens(requested_fields)
     expanded_elements: list[str] = []
     interaction_failures: list[str] = []
     max_interactions = max(
@@ -156,7 +161,15 @@ async def expand_all_interactive_elements_impl(
                 data_qa_action = str(snapshot.get("data_qa_action") or "").strip().lower()
                 class_name = str(snapshot.get("class_name") or "").strip().lower()
                 tag_name = str(snapshot.get("tag_name") or "").strip().lower()
-                keyword_probe = " ".join(part for part in (probe, class_name) if part).strip()
+                requested_keyword_probe = " ".join(
+                    part for part in (label, aria_controls, data_qa_action) if part
+                ).strip()
+                keyword_probe = " ".join(
+                    part for part in (label, probe, data_qa_action, class_name) if part
+                ).strip()
+                non_content_probe = " ".join(
+                    part for part in (label, probe, data_qa_action, class_name) if part
+                ).strip()
                 candidate_key = (label or probe, aria_controls, tag_name)
                 if candidate_key in seen_candidates:
                     continue
@@ -165,10 +178,39 @@ async def expand_all_interactive_elements_impl(
                     token in f"{data_qa_action} {class_name}"
                     for token in ("size selector", "size-selector", "open-size-selector")
                 )
+                if any(
+                    token in non_content_probe
+                    for token in (
+                        "add-to-wishlist",
+                        "gallery",
+                        "media-zoom",
+                        "thumbnail",
+                        "wishlist",
+                    )
+                ):
+                    continue
                 if (
                     probe
                     and any(token in probe for token in DETAIL_BLOCKED_TOKENS)
                     and not size_toggle_hint
+                ):
+                    continue
+                matches_requested_keywords = bool(
+                    requested_keywords
+                    and any(
+                        keyword in requested_keyword_probe
+                        for keyword in requested_keywords
+                    )
+                )
+                matches_generic_keywords = any(
+                    keyword in keyword_probe for keyword in keywords
+                )
+                if (
+                    list(requested_fields or [])
+                    and not (
+                        matches_requested_keywords
+                        or size_toggle_hint
+                    )
                 ):
                     continue
                 looks_expandable = bool(
@@ -184,7 +226,8 @@ async def expand_all_interactive_elements_impl(
                     or aria_expanded == "false"
                     or aria_controls
                     or tag_name == "summary"
-                    or any(keyword in keyword_probe for keyword in keywords)
+                    or matches_requested_keywords
+                    or matches_generic_keywords
                 )
                 if not looks_expandable:
                     continue
@@ -345,13 +388,22 @@ def requested_field_tokens(requested_fields: list[str] | None) -> tuple[str, ...
     tokens: list[str] = []
     seen: set[str] = set()
     for field_name in list(requested_fields or []):
-        normalized = normalize_requested_field(str(field_name or ""))
-        if not normalized:
-            continue
-        for token in re.split(r"[_\W]+", normalized):
+        exact_key = exact_requested_field_key(str(field_name or ""))
+        for token in re.split(r"[_\W]+", exact_key):
             cleaned = str(token or "").strip().lower()
             if len(cleaned) < 3 or cleaned in seen:
                 continue
             seen.add(cleaned)
             tokens.append(cleaned)
+        normalized = normalize_requested_field(str(field_name or ""))
+        if not normalized:
+            continue
+        aliases = NORMALIZED_REQUESTED_FIELD_ALIASES.get(normalized, [normalized])
+        for alias in aliases:
+            for token in re.split(r"[_\W]+", str(alias or "")):
+                cleaned = str(token or "").strip().lower()
+                if len(cleaned) < 3 or cleaned in seen:
+                    continue
+                seen.add(cleaned)
+                tokens.append(cleaned)
     return tuple(tokens)

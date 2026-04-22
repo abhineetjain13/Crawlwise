@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { api } from "../../../lib/api";
 import type { Paginated, User } from "../../../lib/api/types";
 import { formatAdminUserDate as formatDate } from "../../../lib/format/date";
-import { Badge, Button, Card, Input, Metric, Select } from "../../../components/ui/primitives";
+import { Badge, Button, Card, Dropdown, Input, Metric } from "../../../components/ui/primitives";
 import {
   DataRegionEmpty,
   DataRegionLoading,
@@ -75,15 +75,16 @@ export default function AdminUsersPage() {
               placeholder="Search by email"
             />
           </div>
-          <Select
+          <Dropdown<StatusFilter>
             value={status}
-            onChange={(event) => setStatus(event.target.value as StatusFilter)}
+            onChange={setStatus}
+            options={[
+              { value: "all", label: "All Statuses" },
+              { value: "active", label: "Active" },
+              { value: "inactive", label: "Inactive" },
+            ]}
             className="sm:min-w-[180px]"
-          >
-            <option value="all">All Statuses</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </Select>
+          />
         </div>
         {updateError ? <InlineAlert message={updateError} /> : null}
 
@@ -106,20 +107,20 @@ export default function AdminUsersPage() {
                   <tr key={user.id}>
                     <td className="text-sm font-medium leading-[1.45] text-foreground">{user.email}</td>
                     <td>
-                      <Select
+                      <Dropdown<User["role"]>
                         value={user.role}
-                        onChange={(event) => {
-                          const role = event.target.value as User["role"];
+                        onChange={(role) => {
                           if (role === "user" || role === "admin") {
                             void updateUser(user.id, { role });
                           }
                         }}
                         disabled={pendingUserId === user.id}
+                        options={[
+                          { value: "user", label: "user" },
+                          { value: "admin", label: "admin" },
+                        ]}
                         className="min-w-24"
-                      >
-                        <option value="user">user</option>
-                        <option value="admin">admin</option>
-                      </Select>
+                      />
                     </td>
                     <td>
                       <Badge tone={user.is_active ? "success" : "danger"}>

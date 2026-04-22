@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.models.crawl import ReviewPromotion
 from app.services.domain_utils import normalize_domain
+from app.services.field_policy import canonical_requested_fields
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,12 +65,7 @@ def refresh_record_commit_metadata(
     }
     source_trace["field_discovery"] = field_discovery
 
-    requested_fields = [
-        normalized
-        for item in list(run.requested_fields or [])
-        for normalized in [str(item or "").strip().lower()]
-        if normalized
-    ]
+    requested_fields = canonical_requested_fields(run.requested_fields or [])
     found_fields = {
         key
         for key, payload in field_discovery.items()

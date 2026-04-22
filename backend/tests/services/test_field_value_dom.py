@@ -276,6 +276,72 @@ def test_extract_heading_sections_skips_review_and_index_panels() -> None:
     assert sections == {}
 
 
+def test_extract_heading_sections_does_not_map_action_labels_to_product_title() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <main>
+              <h1>CONTRAST RIBBED T-SHIRT WITH RUFFLES</h1>
+              <ul class="product-detail-actions product-detail-info__product-actions">
+                <li class="product-detail-actions__action">
+                  <button class="product-detail-size-guide-action product-detail-actions__action-button">
+                    <span>Product Measurements</span>
+                  </button>
+                </li>
+                <li class="product-detail-actions__action product-detail-actions__clevercare">
+                  <button class="product-detail-actions__action-button">
+                    Composition, care &amp; origin
+                  </button>
+                </li>
+              </ul>
+            </main>
+            <div class="product-detail-composition product-detail-view__detailed-composition">
+              <ul>
+                <li class="product-detail-composition__item product-detail-composition__part">
+                  <span class="product-detail-composition__part-name">OUTER SHELL</span>
+                  <ul>
+                    <li class="product-detail-composition__item product-detail-composition__area">
+                      <span class="product-detail-composition__part-name">MAIN FABRIC</span>
+                      <ul><li>96% cotton</li><li>4% elastane</li></ul>
+                    </li>
+                  </ul>
+                </li>
+              </ul>
+            </div>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    sections = extract_heading_sections(soup)
+
+    assert sections == {
+        "Composition": "OUTER SHELL: MAIN FABRIC: 96% cotton; 4% elastane"
+    }
+
+
+def test_extract_heading_sections_skips_non_material_fallback_text_in_composition_container() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <main><h1>Widget Prime</h1></main>
+            <div class="product-detail-composition product-detail-view__detailed-composition">
+              Delivery in 3-5 business days. See the size guide for measurements.
+            </div>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    sections = extract_heading_sections(soup)
+
+    assert "Composition" not in sections
+
+
 def test_extract_selector_values_skips_long_text_section_indexes() -> None:
     soup = BeautifulSoup(
         """

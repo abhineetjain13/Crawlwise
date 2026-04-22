@@ -305,31 +305,6 @@ async def test_auto_traversal_prefers_paginate_and_collects_multiple_pages() -> 
 
 
 @pytest.mark.asyncio
-async def test_recover_listing_page_content_clicks_view_all_then_next_page() -> None:
-    page = _FakePage(
-        surface="ecommerce_listing",
-        initial_state=_State(
-            html="<div>page-1</div>",
-            card_count=2,
-            scroll_height=1200,
-            controls={"next_page"},
-            role_controls=[
-                {"role": "button", "name": "View All Products"},
-            ],
-            next_href="https://example.com/listing?page=2",
-        ),
-    )
-
-    diagnostics = await traversal_module.recover_listing_page_content(page)
-
-    assert diagnostics["status"] == "recovered"
-    assert diagnostics["clicked_count"] == 2
-    assert diagnostics["actions_taken"] == ["view_all", "next_page"]
-    assert page.role_clicks == ["View All Products"]
-    assert page.goto_calls == ["https://example.com/listing?page=2"]
-
-
-@pytest.mark.asyncio
 async def test_paginate_traversal_does_not_append_duplicate_html_without_progress() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
@@ -365,6 +340,48 @@ async def test_paginate_traversal_does_not_append_duplicate_html_without_progres
 
     assert result.stop_reason == "paginate_no_progress"
     assert [f for f, _ in result.html_fragments] == ["<div>page-1</div>"]
+
+
+@pytest.mark.asyncio
+async def test_paginate_traversal_stops_when_card_count_stays_zero() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1 chrome</div>",
+            card_count=0,
+            scroll_height=1200,
+            controls={"next_page"},
+            next_href="https://example.com/listing?page=2",
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1 chrome</div>",
+                card_count=0,
+                scroll_height=1200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=2",
+            ),
+            _State(
+                html="<div>page-2 different chrome</div>",
+                card_count=0,
+                scroll_height=1200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=3",
+            ),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=3,
+        max_scrolls=1,
+    )
+
+    assert result.stop_reason == "paginate_no_progress"
+    assert result.progress_events == 0
+    assert result.pages_advanced == 0
 
 
 @pytest.mark.asyncio

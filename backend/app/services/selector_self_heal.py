@@ -17,7 +17,7 @@ from app.services.domain_memory_service import (
     selector_rules_from_memory,
 )
 from app.services.domain_utils import normalize_domain
-from app.services.field_policy import field_allowed_for_surface
+from app.services.field_policy import canonical_requested_fields, field_allowed_for_surface
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import extract_selector_value, validate_or_convert_xpath
 
@@ -161,11 +161,7 @@ def selector_self_heal_targets(
     record: dict[str, object],
 ) -> list[str]:
     confidence = mapping_or_empty(record.get("_confidence"))
-    requested_fields = [
-        str(field_name or "").strip().lower()
-        for field_name in list(run.requested_fields or [])
-        if str(field_name or "").strip()
-    ]
+    requested_fields = canonical_requested_fields(run.requested_fields or [])
     targets: list[str] = []
     for field_name in requested_fields:
         if (
@@ -216,11 +212,7 @@ async def apply_selector_self_heal(
         confidence_score = _safe_float(confidence.get("score"), default=1.0)
         requested_missing_fields = [
             field_name
-            for field_name in [
-                str(value or "").strip().lower()
-                for value in list(run.requested_fields or [])
-                if str(value or "").strip()
-            ]
+            for field_name in canonical_requested_fields(run.requested_fields or [])
             if next_record.get(field_name) in (None, "", [], {})
         ]
         if confidence_score >= threshold:
@@ -268,7 +260,7 @@ async def apply_selector_self_heal(
             page_url,
             run.surface,
             max_records=1,
-            requested_fields=list(run.requested_fields or []),
+            requested_fields=canonical_requested_fields(run.requested_fields or []),
             adapter_records=adapter_records,
             network_payloads=network_payloads,
             selector_rules=candidate_rules,

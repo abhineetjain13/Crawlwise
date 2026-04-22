@@ -64,7 +64,7 @@ async def test_create_crawl_run_sets_pending_and_preserves_surface(
 
 
 @pytest.mark.asyncio
-async def test_create_crawl_run_expands_domain_and_alias_requested_fields(
+async def test_create_crawl_run_preserves_raw_additional_fields_and_keeps_domain_fields(
     db_session: AsyncSession,
     test_user,
 ) -> None:
@@ -100,7 +100,27 @@ async def test_create_crawl_run_expands_domain_and_alias_requested_fields(
     )
 
     assert "materials" in run.requested_fields
-    assert "care" in run.requested_fields
+    assert "care instructions" in run.requested_fields
+    assert "care" not in run.requested_fields
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_preserves_exact_custom_additional_field_labels(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/product/widget",
+            "surface": "ecommerce_detail",
+            "additional_fields": ["Features & Benefits", "Product Story"],
+        },
+    )
+
+    assert run.requested_fields == ["Features & Benefits", "Product Story"]
 
 
 @pytest.mark.asyncio

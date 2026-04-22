@@ -71,6 +71,8 @@ class _FetchRuntimeContext:
     max_scrolls: int
     on_event: object | None
     browser_reason: str | None
+    requested_fields: list[str]
+    listing_recovery_mode: str | None
     proxies: list[str | None]
     traversal_required: bool
     runtime_policy: dict[str, object]
@@ -251,6 +253,8 @@ async def fetch_page(
         max_scrolls=max_scrolls,
         on_event=on_event,
         browser_reason=browser_reason,
+        requested_fields=list(requested_fields or []),
+        listing_recovery_mode=str(listing_recovery_mode or "").strip() or None,
         proxies=_resolve_proxy_attempts(proxy_list),
         traversal_required=should_run_traversal(surface, traversal_mode),
         runtime_policy=resolve_platform_runtime_policy(url, surface=surface),
@@ -269,8 +273,8 @@ async def fetch_page(
                 traversal_required=context.traversal_required,
                 host_preference_enabled=False,
             ),
-            requested_fields=requested_fields,
-            listing_recovery_mode=listing_recovery_mode,
+            requested_fields=context.requested_fields,
+            listing_recovery_mode=context.listing_recovery_mode,
         )
 
     http_result, vendor_block_confirmed = await _run_http_fetch_chain(context)
@@ -288,8 +292,8 @@ async def fetch_page(
             return await _run_browser_attempts(
                 context,
                 reason=browser_reason or "http-escalation",
-                requested_fields=requested_fields,
-                listing_recovery_mode=listing_recovery_mode,
+                requested_fields=context.requested_fields,
+                listing_recovery_mode=context.listing_recovery_mode,
             )
         except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
             _attach_exception_browser_diagnostics(
@@ -322,6 +326,16 @@ async def _run_browser_attempts(
     proxies: list[str | None] | None = None,
 ) -> PageFetchResult:
     last_browser_error: Exception | None = None
+    browser_requested_fields = (
+        list(context.requested_fields)
+        if requested_fields is None
+        else list(requested_fields)
+    )
+    recovery_mode = (
+        str(context.listing_recovery_mode or "").strip() or None
+        if listing_recovery_mode is None
+        else str(listing_recovery_mode or "").strip() or None
+    )
     for proxy in list(proxies or context.proxies):
         try:
             await wait_for_host_slot(context.url)
@@ -333,8 +347,8 @@ async def _run_browser_attempts(
                 browser_reason=reason,
                 surface=context.surface,
                 traversal_mode=context.traversal_mode,
-                requested_fields=requested_fields,
-                listing_recovery_mode=listing_recovery_mode,
+                requested_fields=browser_requested_fields,
+                listing_recovery_mode=recovery_mode,
                 max_pages=context.max_pages,
                 max_scrolls=context.max_scrolls,
                 on_event=context.on_event,
@@ -493,6 +507,8 @@ async def _handle_http_result(
         browser_result = await _run_browser_attempts(
             context,
             reason=browser_reason,
+            requested_fields=context.requested_fields,
+            listing_recovery_mode=context.listing_recovery_mode,
             proxies=[proxy],
         )
         if bool(browser_result.blocked):

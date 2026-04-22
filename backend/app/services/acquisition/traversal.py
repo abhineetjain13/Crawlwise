@@ -61,8 +61,6 @@ _LISTING_RECOVERY_ACTIONS: tuple[tuple[str, str, str], ...] = (
     ("view_all", r"(view all|see all|shop all|show all)", "Expanding the listing view"),
     ("next_page", r"(next|older|›|»|>)", "Advancing pagination"),
 )
-
-
 @dataclass(slots=True)
 class TraversalResult:
     requested_mode: str | None
@@ -527,7 +525,7 @@ async def _run_paginate_traversal(
         )
         if card_gain > 0:
             best_card_gain = max(best_card_gain, card_gain)
-        if page.url != current_url or _snapshot_progressed(previous, current):
+        if _paginate_snapshot_progressed(previous, current):
             await _append_html_fragment(page, result, surface=surface)
             result.progress_events += 1
             message = (
@@ -595,43 +593,6 @@ async def _find_actionable_locator(page, selector_group: str):
     return None
 
 
-async def recover_listing_page_content(
-    page,
-    *,
-    on_event=None,
-) -> dict[str, object]:
-    diagnostics: dict[str, object] = {"status": "attempted", "clicked_count": 0, "actions_taken": [], "limit": int(crawler_runtime_settings.listing_recovery_max_actions)}
-    max_actions = max(0, int(crawler_runtime_settings.listing_recovery_max_actions))
-    if max_actions == 0:
-        diagnostics["status"] = "disabled"
-        return diagnostics
-
-    helper_result = TraversalResult(requested_mode="recovery")
-    wait_ms = max(0, int(crawler_runtime_settings.listing_recovery_post_action_wait_ms))
-    for action_name, pattern, message in _LISTING_RECOVERY_ACTIONS:
-        if diagnostics["clicked_count"] >= max_actions:
-            diagnostics["status"] = "interaction_limit_reached"
-            break
-        locator = await _find_actionable_locator(page, "next_page") if action_name == "next_page" else await _find_aom_actionable_locator(page, selector_group=action_name, name_pattern=pattern)
-        if locator is None:
-            continue
-        await _emit_event(on_event, "info", f"{message}...")
-        if not await _click_with_retry(page, locator, result=helper_result):
-            continue
-        diagnostics["clicked_count"] += 1
-        diagnostics["actions_taken"].append(action_name)
-        if wait_ms > 0:
-            await page.wait_for_timeout(wait_ms)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=int(crawler_runtime_settings.traversal_settle_networkidle_timeout_ms))
-        except Exception:
-            logger.debug("Listing recovery networkidle wait timed out for action=%s url=%s", action_name, getattr(page, "url", ""), exc_info=True)
-    if diagnostics["status"] == "attempted":
-        diagnostics["status"] = "recovered" if diagnostics["clicked_count"] > 0 else "no_actionable_elements"
-    diagnostics["click_retries"] = helper_result.click_retries
-    return diagnostics
-
-
 async def _find_generic_next_page_locator(page):
     for selector in (
         "a[rel='next']",
@@ -663,6 +624,70 @@ async def _find_generic_next_page_locator(page):
             )
             continue
     return None
+
+
+async def recover_listing_page_content(
+    page,
+    *,
+    on_event=None,
+) -> dict[str, object]:
+    diagnostics: dict[str, object] = {
+        "status": "attempted",
+        "clicked_count": 0,
+        "actions_taken": [],
+        "limit": int(crawler_runtime_settings.listing_recovery_max_actions),
+    }
+    max_actions = max(0, int(crawler_runtime_settings.listing_recovery_max_actions))
+    if max_actions == 0:
+        diagnostics["status"] = "disabled"
+        return diagnostics
+
+    helper_result = TraversalResult(requested_mode="recovery")
+    wait_ms = max(0, int(crawler_runtime_settings.listing_recovery_post_action_wait_ms))
+    for action_name, pattern, message in _LISTING_RECOVERY_ACTIONS:
+        if diagnostics["clicked_count"] >= max_actions:
+            diagnostics["status"] = "interaction_limit_reached"
+            break
+        locator = (
+            await _find_actionable_locator(page, "next_page")
+            if action_name == "next_page"
+            else await _find_aom_actionable_locator(
+                page,
+                selector_group=action_name,
+                name_pattern=pattern,
+            )
+        )
+        if locator is None:
+            continue
+        await _emit_event(on_event, "info", f"{message}...")
+        if not await _click_with_retry(page, locator, result=helper_result):
+            continue
+        diagnostics["clicked_count"] += 1
+        diagnostics["actions_taken"].append(action_name)
+        if wait_ms > 0:
+            await page.wait_for_timeout(wait_ms)
+        try:
+            await page.wait_for_load_state(
+                "networkidle",
+                timeout=int(
+                    crawler_runtime_settings.traversal_settle_networkidle_timeout_ms
+                ),
+            )
+        except Exception:
+            logger.debug(
+                "Listing recovery networkidle wait timed out for action=%s url=%s",
+                action_name,
+                getattr(page, "url", ""),
+                exc_info=True,
+            )
+    if diagnostics["status"] == "attempted":
+        diagnostics["status"] = (
+            "recovered"
+            if diagnostics["clicked_count"] > 0
+            else "no_actionable_elements"
+        )
+    diagnostics["click_retries"] = helper_result.click_retries
+    return diagnostics
 
 
 async def _find_aom_actionable_locator(
@@ -1478,6 +1503,16 @@ def _snapshot_progressed(previous: dict[str, int], current: dict[str, int]) -> b
     ):
         return True
     return False
+
+
+def _paginate_snapshot_progressed(previous: dict[str, int], current: dict[str, int]) -> bool:
+    previous_count = int(previous.get("card_count", 0))
+    current_count = int(current.get("card_count", 0))
+    if current_count > previous_count:
+        return True
+    if previous_count <= 0 and current_count <= 0:
+        return False
+    return _snapshot_progressed(previous, current)
 
 
 def _is_marginal_card_gain(*, card_gain: int, best_gain: int, current_count: int) -> bool:

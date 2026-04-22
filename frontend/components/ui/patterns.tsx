@@ -73,13 +73,13 @@ export function SectionHeader({
 }>) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0 flex-1 space-y-1.5">
+      <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-center gap-2">
           {Icon && <Icon className="size-3.5 shrink-0 text-[var(--text-muted)]" />}
           <h2 className="panel-title">{title}</h2>
         </div>
         {description ? (
-          <div className="panel-subtitle w-full">{description}</div>
+          <div className="panel-subtitle w-full" style={{ maxWidth: "none" }}>{description}</div>
         ) : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
@@ -120,11 +120,11 @@ export function TabBar({
             aria-pressed={value === option.value}
             onClick={() => onChange(option.value)}
             className={cn(
-              "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-xs leading-[1.4] font-bold transition-all",
+              "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-[0.8125rem] leading-[1.35] font-semibold transition-all",
               padX,
               value === option.value
                 ? "border-b-[3px] border-[var(--accent)] text-accent"
-                : "border-b-[3px] border-transparent text-muted hover:text-primary hover:border-[var(--border)]",
+                : "border-b-[3px] border-transparent text-secondary hover:text-primary hover:border-[var(--border)]",
             )}
           >
             {option.label}
@@ -148,11 +148,11 @@ export function TabBar({
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            "relative z-10 inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-[4px] py-0 text-[11px] leading-[1.45] font-bold transition-all duration-200",
+            "relative z-10 inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-[4px] py-0 text-[0.8125rem] leading-[1.35] font-semibold tracking-[-0.01em] transition-all duration-200",
             padX,
             value === option.value
-              ? "bg-[var(--accent)] text-white"
-              : "text-muted hover:text-primary",
+              ? "bg-[var(--accent)] text-white shadow-[0_1px_2px_rgba(15,23,42,0.12)]"
+              : "text-secondary hover:text-primary",
           )}
         >
           {option.label}

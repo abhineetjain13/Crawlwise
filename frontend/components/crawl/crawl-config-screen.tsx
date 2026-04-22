@@ -1,12 +1,12 @@
 "use client";
 
-import { Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Globe, Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { InlineAlert, PageHeader, SectionHeader, TabBar } from "../ui/patterns";
-import { Button, Card, Input, Select, Textarea } from "../ui/primitives";
+import { Button, Card, Dropdown, Input, Textarea } from "../ui/primitives";
 import { api } from "../../lib/api";
 import type { AdvancedCrawlMode, CrawlConfig, CrawlDomain } from "../../lib/api/types";
 import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
@@ -35,6 +35,7 @@ import {
   validateAdditionalFieldName,
   normalizeField,
   uniqueFields,
+  uniqueRequestedFields,
 } from "./shared";
 
 type CrawlConfigScreenProps = {
@@ -135,7 +136,7 @@ export function CrawlConfigScreen({
         }
         setBulkUrls(parsed.urls.join("\n"));
         if (Array.isArray(parsed.additional_fields)) {
-          setAdditionalFields(uniqueFields(parsed.additional_fields));
+          setAdditionalFields(uniqueRequestedFields(parsed.additional_fields));
         }
         router.replace("/crawl?module=pdp&mode=batch" as Route);
       }
@@ -438,15 +439,15 @@ export function CrawlConfigScreen({
     <div className="page-stack">
       <PageHeader title="Crawl Studio" />
 
-      <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
+      <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
         <div className="page-stack">
-          <Card className="space-y-5">
+          <Card className="section-card">
             <SectionHeader
               title="Target URL"
               description="Choose the crawl type, set your entry point, and define which fields should be captured."
             />
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-3">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <TabBar
                   value={crawlTab}
                   onChange={(value) => {
@@ -496,8 +497,10 @@ export function CrawlConfigScreen({
               </div>
               <Button
                 variant="accent"
+                size="lg"
                 type="submit"
                 disabled={!canPreview(config, fieldRows) || isSubmitting}
+                className="min-w-[124px] justify-self-start lg:justify-self-end"
               >
                 {isSubmitting ? "Starting..." : "Start Crawl"}
               </Button>
@@ -537,11 +540,11 @@ export function CrawlConfigScreen({
                   />
                   <label
                     htmlFor="csv-file-input"
-                    className="cursor-pointer rounded-md bg-[var(--accent)] px-3 py-2 text-xs font-medium text-white hover:bg-[var(--accent-hover)] transition-colors"
+                    className="cursor-pointer rounded-[var(--radius-md)] bg-[var(--accent)] px-3 py-1.5 text-[0.8125rem] font-medium text-white hover:bg-[var(--accent-hover)] transition-colors"
                   >
                     Choose file
                   </label>
-                  <span className="text-sm text-muted">
+                  <span className="text-xs text-muted">
                     {csvFile ? csvFile.name : "No file chosen"}
                   </span>
                 </div>
@@ -569,7 +572,7 @@ export function CrawlConfigScreen({
               value={additionalDraft}
               fields={additionalFields}
               onChange={setAdditionalDraft}
-              onCommit={(value) => setAdditionalFields((current) => uniqueFields([...current, value]))}
+              onCommit={(value) => setAdditionalFields((current) => uniqueRequestedFields([...current, value]))}
               onRemove={(value) => setAdditionalFields((current) => current.filter((field) => field !== value))}
             />
           </Card>
@@ -581,7 +584,7 @@ export function CrawlConfigScreen({
                 description="Auto-load saved domain memory, generate selector suggestions on demand, or add manual overrides."
               />
               <div className="flex justify-end lg:pt-0.5">
-                <div className="inline-flex flex-wrap items-center justify-end gap-2 rounded-2xl border border-border/80 bg-background-elevated/90 p-1.5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+                <div className="inline-flex flex-wrap items-center justify-end gap-2 rounded-[18px] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-1.5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
                   <Button
                     variant="ghost"
                     type="button"
@@ -608,8 +611,8 @@ export function CrawlConfigScreen({
                 </div>
               </div>
             </div>
-            {loadingDomainMemory ? <p className="text-xs text-muted">Loading saved domain memory…</p> : null}
-            {fieldConfigMessage ? <p className="text-xs text-success">{fieldConfigMessage}</p> : null}
+            {loadingDomainMemory ? <p className="text-[0.8125rem] leading-[1.5] text-secondary">Loading saved domain memory…</p> : null}
+            {fieldConfigMessage ? <p className="text-[0.8125rem] leading-[1.5] text-success">{fieldConfigMessage}</p> : null}
             {fieldConfigError ? <InlineAlert message={fieldConfigError} /> : null}
             <div className="space-y-3">
               {fieldRows.length ? (
@@ -653,7 +656,7 @@ export function CrawlConfigScreen({
                   ))}
                 </>
               ) : (
-                <div className="surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[1.55] text-muted">
+                <div className="surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[1.55] text-secondary">
                   No selector rows yet.
                 </div>
               )}
@@ -667,131 +670,122 @@ export function CrawlConfigScreen({
 
         <div className="h-full xl:self-stretch">
           <div className="h-full xl:sticky xl:top-[68px]">
-          <Card className="section-card flex h-full flex-col">
-            <SectionHeader title="Crawl Settings" description="Set crawl behaviour and network controls." />
-            <div className="page-stack flex-1">
-              <div className="space-y-2 px-1">
-                <div className="field-label">Domain</div>
-                <TabBar
-                  value={crawlDomain}
-                  compact
-                  onChange={(value) => {
-                    if (value === "commerce" || value === "jobs") {
-                      setCrawlDomain(value);
-                    }
-                  }}
-                  options={[
-                    { value: "commerce", label: "Commerce" },
-                    { value: "jobs", label: "Jobs" },
-                  ]}
-                />
-              </div>
-              <div className="divide-y divide-[var(--divider)]">
-                <SettingSection
-                  label="Smart Extraction"
-                  description="AI-assisted enrichment"
-                  icon={<Sparkles className="size-4" />}
-                  checked={smartExtraction}
-                  onChange={setSmartExtraction}
-                />
-                <SettingSection
-                  label="Advanced Crawl"
-                  description="Pagination, scrolling, and limits."
-                  icon={<SlidersHorizontal className="size-4" />}
-                  checked={advancedEnabled}
-                  onChange={setAdvancedEnabled}
-                >
-                  <div className="space-y-4 px-1 py-3">
-                    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
-                      <div className="text-sm font-medium leading-[1.45] text-foreground text-secondary">Mode</div>
-                      <Select
-                        aria-label="Advanced crawl mode"
-                        value={advancedMode}
-                        onChange={(event) => {
-                          const next = event.target.value;
-                          if (ADVANCED_MODE_OPTIONS.has(next as AdvancedCrawlMode)) {
-                            setAdvancedMode(next as AdvancedCrawlMode);
-                          }
-                        }}
-                        className="h-9 w-full"
-                      >
-                        <option value="auto">Auto</option>
-                        <option value="scroll">Scroll</option>
-                        <option value="load_more">Load More</option>
-                        <option value="view_all">View All</option>
-                        <option value="paginate">Paginate</option>
-                      </Select>
-                    </div>
-
+            <Card className="section-card flex h-full flex-col overflow-hidden">
+              <SectionHeader title="Crawl Settings" description="Set crawl behaviour and network controls." />
+              <div className="page-stack flex-1">
+                <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-3">
+                  <div className="field-label">Domain</div>
+                  <TabBar
+                    value={crawlDomain}
+                    compact
+                    onChange={(value) => {
+                      if (value === "commerce" || value === "jobs") {
+                        setCrawlDomain(value);
+                      }
+                    }}
+                    options={[
+                      { value: "commerce", label: "Commerce" },
+                      { value: "jobs", label: "Jobs" },
+                    ]}
+                  />
+                </div>
+                <div className="divide-y divide-[var(--divider)]">
+                  <SettingSection
+                    label="Smart Extraction"
+                    description="AI-assisted enrichment"
+                    icon={<Sparkles className="size-4" />}
+                    checked={smartExtraction}
+                    onChange={setSmartExtraction}
+                  />
+                  <SettingSection
+                    label="Advanced Crawl"
+                    description="Pagination, scrolling, and limits."
+                    icon={<SlidersHorizontal className="size-4" />}
+                    checked={advancedEnabled}
+                    onChange={setAdvancedEnabled}
+                  >
                     <div className="space-y-3">
-                      <SliderRow
-                        label="Request Delay"
-                        value={requestDelay}
-                        min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS}
-                        max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
-                        step={100}
-                        suffix=" ms"
-                        onChange={setRequestDelay}
-                        onReset={() => setRequestDelay(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS))}
-                      />
-                      <SliderRow
-                        label="Max Records"
-                        value={maxRecords}
-                        min={CRAWL_LIMITS.MIN_RECORDS}
-                        max={CRAWL_LIMITS.MAX_RECORDS}
-                        step={1}
-                        onChange={setMaxRecords}
-                        onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
-                      />
-                      <SliderRow
-                        label="Max Pages"
-                        value={maxPages}
-                        min={CRAWL_LIMITS.MIN_PAGES}
-                        max={CRAWL_LIMITS.MAX_PAGES}
-                        step={1}
-                        onChange={setMaxPages}
-                        onReset={() => setMaxPages(String(CRAWL_DEFAULTS.MAX_PAGES))}
-                      />
-                      <SliderRow
-                        label="Max Scrolls"
-                        value={maxScrolls}
-                        min={CRAWL_LIMITS.MIN_SCROLLS}
-                        max={CRAWL_LIMITS.MAX_SCROLLS}
-                        step={1}
-                        onChange={setMaxScrolls}
-                        onReset={() => setMaxScrolls(String(CRAWL_DEFAULTS.MAX_SCROLLS))}
+                      <div className="grid grid-cols-[100px_1fr] items-center gap-3">
+                        <div className="field-label">Mode</div>
+                        <Dropdown<AdvancedCrawlMode>
+                          ariaLabel="Advanced crawl mode"
+                          value={advancedMode}
+                          onChange={(next) => {
+                            if (ADVANCED_MODE_OPTIONS.has(next)) {
+                              setAdvancedMode(next);
+                            }
+                          }}
+                          options={[
+                            { value: "auto", label: "Auto" },
+                            { value: "scroll", label: "Scroll" },
+                            { value: "load_more", label: "Load More" },
+                            { value: "view_all", label: "View All" },
+                            { value: "paginate", label: "Paginate" },
+                          ]}
+                          className=""
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <SliderRow
+                          label="Request Delay"
+                          value={requestDelay}
+                          min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS}
+                          max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
+                          step={100}
+                          suffix=" ms"
+                          onChange={setRequestDelay}
+                          onReset={() => setRequestDelay(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS))}
+                        />
+                        <SliderRow
+                          label="Max Records"
+                          value={maxRecords}
+                          min={CRAWL_LIMITS.MIN_RECORDS}
+                          max={CRAWL_LIMITS.MAX_RECORDS}
+                          step={10}
+                          onChange={setMaxRecords}
+                          onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
+                        />
+                        <SliderRow
+                          label="Max Pages"
+                          value={maxPages}
+                          min={CRAWL_LIMITS.MIN_PAGES}
+                          max={CRAWL_LIMITS.MAX_PAGES}
+                          step={10}
+                          onChange={setMaxPages}
+                          onReset={() => setMaxPages(String(CRAWL_DEFAULTS.MAX_PAGES))}
+                        />
+                      </div>
+                    </div>
+                  </SettingSection>
+                  <SettingSection
+                    label="Respect robots.txt"
+                    description="Skip disallowed paths and honor crawl-delay."
+                    icon={<Shield className="size-4" />}
+                    checked={respectRobotsTxt}
+                    onChange={setRespectRobotsTxt}
+                  />
+                  <SettingSection
+                    label="Proxy"
+                    description="Use a proxy pool."
+                    icon={<Globe className="size-4" />}
+                    checked={proxyEnabled}
+                    onChange={setProxyEnabled}
+                  >
+                    <div className="space-y-2">
+                      <div className="field-label">Proxy Pool</div>
+                      <Textarea
+                        value={proxyInput}
+                        onChange={(event) => setProxyInput(event.target.value)}
+                        placeholder={"host:port\nhost:port:user:pass"}
+                        className="min-h-[104px] text-mono-body leading-[1.55]"
+                        aria-label="Proxy pool input"
                       />
                     </div>
-                  </div>
-                </SettingSection>
-                <SettingSection
-                  label="Respect robots.txt"
-                  description="Skip disallowed paths and honor crawl-delay."
-                  icon={<Shield className="size-4" />}
-                  checked={respectRobotsTxt}
-                  onChange={setRespectRobotsTxt}
-                />
-                <SettingSection
-                  label="Proxy"
-                  description="Use a proxy pool."
-                  icon={<Shield className="size-4" />}
-                  checked={proxyEnabled}
-                  onChange={setProxyEnabled}
-                >
-                  <div className="space-y-3 px-1 py-3">
-                    <div className="field-label">Proxy Pool</div>
-                    <Textarea
-                      value={proxyInput}
-                      onChange={(event) => setProxyInput(event.target.value)}
-                      placeholder={"host:port\nhost:port:user:pass"}
-                      className="min-h-[104px] font-mono text-sm leading-[1.55]"
-                      aria-label="Proxy pool input"
-                    />
-                  </div>
-                </SettingSection>
+                  </SettingSection>
+                </div>
               </div>
-            </div>
-          </Card>
+            </Card>
           </div>
         </div>
       </form>
@@ -839,7 +833,7 @@ function buildExtractionContract(fieldRows: FieldRow[]) {
 }
 
 export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): PendingDispatch {
-  const additionalFields = uniqueFields(config.additional_fields);
+  const additionalFields = uniqueRequestedFields(config.additional_fields);
   const invalidAdditionalField = additionalFields.find((field) => validateAdditionalFieldName(field));
   if (invalidAdditionalField) {
     const reason = validateAdditionalFieldName(invalidAdditionalField);

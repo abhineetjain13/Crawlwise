@@ -293,3 +293,82 @@ async def test_process_run_enforces_url_timeout_from_settings(
     assert run.status == "completed"
     assert run.result_summary["extraction_verdict"] == "error"
     assert run.result_summary["url_verdicts"] == ["error"]
+
+
+@pytest.mark.asyncio
+async def test_process_batch_run_preserves_requested_fields_for_every_url(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "urls": [
+                "https://example.com/products/widget-1",
+                "https://example.com/products/widget-2",
+            ],
+            "surface": "ecommerce_detail",
+            "requested_fields": ["materials"],
+        },
+    )
+    captured_requested_fields: list[list[str]] = []
+
+    async def _fake_acquire(request):
+        captured_requested_fields.append(list(request.requested_fields))
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+
+    await process_run(db_session, run.id)
+
+    assert captured_requested_fields == [["materials"], ["materials"]]
+
+
+@pytest.mark.asyncio
+async def test_process_batch_run_preserves_exact_requested_section_labels_for_every_url(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "urls": [
+                "https://example.com/products/widget-1",
+                "https://example.com/products/widget-2",
+            ],
+            "surface": "ecommerce_detail",
+            "additional_fields": ["Features & Benefits"],
+        },
+    )
+    captured_requested_fields: list[list[str]] = []
+
+    async def _fake_acquire(request):
+        captured_requested_fields.append(list(request.requested_fields))
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+
+    await process_run(db_session, run.id)
+
+    assert captured_requested_fields == [
+        ["Features & Benefits"],
+        ["Features & Benefits"],
+    ]
