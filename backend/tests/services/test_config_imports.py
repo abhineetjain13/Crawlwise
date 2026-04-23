@@ -76,6 +76,20 @@ def test_invalid_traversal_mode_raises_configuration_error() -> None:
         settings.traversal_mode()
 
 
+def test_auto_traversal_requires_advanced_mode_flag_from_ui_runs() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "advanced_enabled": False,
+            "fetch_profile": {
+                "traversal_mode": "auto",
+            },
+        }
+    )
+
+    assert settings.traversal_mode() is None
+    assert settings.normalized_for_storage()["fetch_profile"]["traversal_mode"] is None
+
+
 def test_crawl_run_settings_preserves_advanced_mode_storage_contract() -> None:
     settings = CrawlRunSettings.from_value(
         {

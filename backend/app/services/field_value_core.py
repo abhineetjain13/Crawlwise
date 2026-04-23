@@ -454,6 +454,28 @@ def coerce_structured_scalar(
     return coerce_text(value)
 
 
+def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
+    text = coerce_text(value)
+    if not text:
+        return None
+    cleaned = text
+    if field_name == "color":
+        match = re.fullmatch(r"select\s+(.+?)\s+color", cleaned, flags=re.I)
+        if match is not None:
+            cleaned = clean_text(match.group(1))
+        cleaned = re.sub(r"^color\s*:\s*", "", cleaned, flags=re.I)
+        cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
+        cleaned = re.split(r"\bsize(?:\s*\([^)]*\))?\b", cleaned, maxsplit=1, flags=re.I)[0]
+        cleaned = clean_text(cleaned)
+        if not cleaned or re.search(r"\d+\s*x\s*\d+", cleaned):
+            return None
+    elif field_name == "size":
+        cleaned = re.sub(r"^size\s*:\s*", "", cleaned, flags=re.I)
+        cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
+        cleaned = clean_text(cleaned)
+    return cleaned or None
+
+
 def coerce_location(value: object) -> str | None:
     if isinstance(value, dict):
         address = value.get("address")
@@ -524,11 +546,14 @@ def extract_urls(value: object, page_url: str) -> list[str]:
         embedded_urls = re.findall(r"https?://[^\s,]+", text)
         if len(embedded_urls) >= 2:
             for candidate in embedded_urls:
-                absolute = absolute_url(page_url, candidate)
+                absolute = absolute_url(
+                    page_url,
+                    _trim_trailing_url_candidate(candidate),
+                )
                 if absolute:
                     results.append(absolute)
             return results
-        absolute = absolute_url(page_url, text)
+        absolute = absolute_url(page_url, _trim_trailing_url_candidate(text))
         if absolute:
             results.append(absolute)
         return results
@@ -550,6 +575,17 @@ def extract_urls(value: object, page_url: str) -> list[str]:
         seen.add(normalized)
         deduped.append(candidate)
     return deduped
+
+
+def _trim_trailing_url_candidate(value: str) -> str:
+    trimmed = str(value or "").rstrip(".,:;!?}'\"")
+    while trimmed.endswith((")", "]")):
+        closer = trimmed[-1]
+        opener = "(" if closer == ")" else "["
+        if trimmed.count(closer) <= trimmed.count(opener):
+            break
+        trimmed = trimmed[:-1].rstrip(".,:;!?}'\"")
+    return trimmed
 
 
 def coerce_variant_axes(value: object) -> dict[str, list[str]] | None:
@@ -588,11 +624,15 @@ def coerce_availability_dict(value: object) -> str | None:
     for key in explicit_keys:
         candidate = value.get(key)
         if candidate not in (None, "", [], {}):
+            if isinstance(candidate, bool):
+                return "in_stock" if candidate else "out_of_stock"
             return coerce_text(candidate)
     if len(value) == 1:
         for key in ("name", "value"):
             candidate = value.get(key)
             if candidate not in (None, "", [], {}):
+                if isinstance(candidate, bool):
+                    return "in_stock" if candidate else "out_of_stock"
                 return coerce_text(candidate)
     return None
 
@@ -632,9 +672,12 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             or value.get("value")
         )
     if field_name in {"color", "size"}:
-        return coerce_structured_scalar(
-            value,
-            keys=(field_name, "name", "title", "label", "value", "text"),
+        return _sanitize_option_scalar(
+            field_name,
+            coerce_structured_scalar(
+                value,
+                keys=(field_name, "name", "title", "label", "value", "text"),
+            ),
         )
     # Reject non-numeric sentinel strings for price fields (e.g. "unavailable", "contact us")
     if field_name in _PRICE_FIELD_NAMES and isinstance(value, str):
@@ -677,6 +720,8 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             if value.get(key) not in (None, "", [], {}):
                 return coerce_text(value.get(key))
         return None
+    if field_name == "availability" and isinstance(value, bool):
+        return "in_stock" if value else "out_of_stock"
     if field_name == "availability" and isinstance(value, dict):
         return coerce_availability_dict(value)
     if field_name in URL_FIELDS:

@@ -8,6 +8,8 @@ from urllib.parse import unquote, urlsplit
 
 from defusedxml import ElementTree as ET
 
+from app.services.acquisition.runtime import classify_blocked_page
+from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.detail_extractor import (
     _backfill_detail_price_from_html,
     _normalize_variant_record,
@@ -32,6 +34,7 @@ from app.services.field_policy import (
 )
 from app.services.extract.listing_candidate_ranking import best_listing_candidate_set
 from app.services.listing_extractor import (
+    _finalize_listing_price_fields,
     _detail_like_path,
     _listing_title_is_noise,
     _url_is_structural,
@@ -89,8 +92,14 @@ def extract_records(
     )
     if json_records:
         if "listing" in surface:
-            return json_records[:max_records]
+            return [
+                _finalize_listing_price_fields(dict(row))
+                for row in json_records[:max_records]
+                if isinstance(row, dict)
+            ]
         return _postprocess_detail_records(json_records[:max_records], html=html)
+    if _html_is_blocked_extraction_shell(html):
+        return []
     if "listing" in surface:
         adapter_rows: list[dict[str, Any]] = []
         if adapter_records:
@@ -126,6 +135,16 @@ def extract_records(
             listing_rows,
             network_payloads=network_payloads,
         )
+        adapter_rows = [
+            _finalize_listing_price_fields(dict(row))
+            for row in adapter_rows
+            if isinstance(row, dict)
+        ]
+        listing_rows = [
+            _finalize_listing_price_fields(dict(row))
+            for row in listing_rows
+            if isinstance(row, dict)
+        ]
         if adapter_rows and listing_rows:
             candidate_rows = best_listing_candidate_set(
                 [
@@ -163,6 +182,45 @@ def extract_records(
         )[:max_records],
         html=html,
     )
+
+
+def _html_is_blocked_extraction_shell(html: str) -> bool:
+    lowered = str(html or "").lower()
+    if not lowered.strip():
+        return False
+    classification = classify_blocked_page(html, 0)
+    if classification.blocked:
+        return True
+    blocked_phrases = [
+        str(phrase or "").strip().lower()
+        for phrase in BLOCK_SIGNATURES.get("phrases", [])
+        if str(phrase or "").strip()
+    ]
+    active_markers = [
+        str(item.get("marker") or "").strip().lower()
+        for item in BLOCK_SIGNATURES.get("active_provider_markers", [])
+        if isinstance(item, dict) and str(item.get("marker") or "").strip()
+    ]
+    html_markers = [
+        str(marker or "").strip().lower()
+        for marker in (
+            BLOCK_SIGNATURES.get("challenge_elements", {}).get("html_markers", {}) or {}
+        ).keys()
+        if str(marker or "").strip()
+    ]
+    title_patterns = [
+        str(pattern or "").strip()
+        for pattern in BLOCK_SIGNATURES.get("title_regexes", [])
+        if str(pattern or "").strip()
+    ]
+    phrase_hit = any(phrase in lowered for phrase in blocked_phrases)
+    active_provider_hit = any(marker in lowered for marker in active_markers)
+    challenge_html_hit = any(marker in lowered for marker in html_markers)
+    title_hit = any(
+        re.search(pattern, lowered, re.IGNORECASE) is not None
+        for pattern in title_patterns
+    )
+    return (active_provider_hit or challenge_html_hit) and (phrase_hit or title_hit)
 
 
 def _postprocess_detail_records(
@@ -605,6 +663,8 @@ def _raw_json_record(
         if not record.get("url"):
             record["url"] = _raw_json_url(payload, page_url, fallback_index=fallback_index)
         cleaned = finalize_record(record, surface=surface)
+        if "listing" in surface:
+            cleaned = _finalize_listing_price_fields(cleaned)
         return cleaned if len(cleaned) > 2 else {}
     title = coerce_text(payload)
     if not title:

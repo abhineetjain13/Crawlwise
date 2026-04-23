@@ -24,6 +24,7 @@ const apiMock = vi.hoisted(() => ({
  getDomainRecipe: vi.fn(),
  promoteDomainRecipeSelectors: vi.fn(),
  saveDomainRunProfile: vi.fn(),
+ applyDomainRecipeFieldAction: vi.fn(),
  deleteSelector: vi.fn(),
  exportCsv: vi.fn(() =>"/export.csv"),
  exportJson: vi.fn(() =>"/export.json"),
@@ -78,6 +79,36 @@ function makeDomainRecipe(): DomainRecipe {
  found: ["title","price"],
  missing: ["brand"],
  },
+ acquisition_evidence: {
+ actual_fetch_method:"browser",
+ browser_used: true,
+ browser_reason:"http-escalation",
+ acquisition_summary: {
+ browser_used_urls: 1,
+ acquisition_ms_total: 4200,
+ },
+ cookie_memory_available: true,
+ },
+ field_learning: [
+ {
+ field_name:"price",
+ value:"Rs. 999",
+ source_labels: ["dom_selector"],
+ selector_kind:"css_selector",
+ selector_value:".price",
+ source_record_ids: [1],
+ feedback: null,
+ },
+ {
+ field_name:"brand",
+ value:"Acme",
+ source_labels: ["json_ld"],
+ selector_kind: null,
+ selector_value: null,
+ source_record_ids: [1],
+ feedback: null,
+ },
+ ],
  selector_candidates: [
  {
  candidate_key:"price|css_selector|.price",
@@ -213,6 +244,7 @@ describe("CrawlRunScreen", () => {
  apiMock.getDomainRecipe.mockResolvedValue(makeDomainRecipe());
  apiMock.promoteDomainRecipeSelectors.mockResolvedValue([]);
  apiMock.saveDomainRunProfile.mockResolvedValue(makeDomainRecipe().saved_run_profile);
+ apiMock.applyDomainRecipeFieldAction.mockResolvedValue({});
  apiMock.deleteSelector.mockResolvedValue(undefined);
  });
 
@@ -241,6 +273,23 @@ describe("CrawlRunScreen", () => {
 
  expect(await screen.findByText("Widget Prime")).toBeInTheDocument();
  expect(screen.getByText("Built for long mileage.")).toBeInTheDocument();
+ });
+
+ it("reports when no reusable cookie state was observed for a browser run", async () => {
+ apiMock.getDomainRecipe.mockResolvedValue({
+ ...makeDomainRecipe(),
+ acquisition_evidence: {
+ ...makeDomainRecipe().acquisition_evidence,
+ cookie_memory_available: false,
+ },
+ });
+
+ renderRunScreen();
+
+ const learningButtons = await screen.findAllByRole("button", { name:"Learning"});
+ fireEvent.click(learningButtons.at(-1)!);
+
+ expect(await screen.findByText(/Cookie Memory: No reusable state observed/i)).toBeInTheDocument();
  });
 
  it("renders completed summary chips from persisted backend values", async () => {
@@ -508,41 +557,76 @@ describe("CrawlRunScreen", () => {
  fireEvent.click(button);
 
  expect(apiMock.exportCsv).toHaveBeenCalledWith(101);
-  expect(clickSpy).toHaveBeenCalledTimes(1);
-  } finally {
-  clickSpy.mockRestore();
-  }
+ expect(clickSpy).toHaveBeenCalledTimes(1);
+ } finally {
+ clickSpy.mockRestore();
+ }
  });
 
- it("renders the completed-run domain recipe panel", async () => {
+ it("renders completed-run learning and run-config tabs", async () => {
  renderRunScreen();
 
- expect(await screen.findByText("Requested Field Coverage")).toBeInTheDocument();
- expect(screen.getByText((content) => content.includes("Requested:") && content.includes("title, price, brand"))).toBeInTheDocument();
- expect(screen.getByText(/Browser required/i)).toBeInTheDocument();
- expect(screen.getByText(/Accordion: \.details-accordion/i)).toBeInTheDocument();
- expect(screen.getByRole("button", { name:"Save Selected Selectors"})).toBeInTheDocument();
+ expect(await screen.findByRole("button", { name:"Learning"})).toBeInTheDocument();
+ expect(screen.getByRole("button", { name:"Run Config"})).toBeInTheDocument();
+
+ fireEvent.click(screen.getByRole("button", { name:"Learning"}));
+ expect(await screen.findByRole("heading", { name:"Run Learning" })).toBeInTheDocument();
+ expect(screen.getAllByRole("button", { name:"Keep" }).length).toBeGreaterThan(0);
+
+ fireEvent.click(screen.getByRole("button", { name:"Run Config"}));
+ expect(await screen.findByRole("heading", { name:"Run Config" })).toBeInTheDocument();
  expect(screen.getByRole("button", { name:"Save Run Profile"})).toBeInTheDocument();
  });
 
- it("promotes selected recipe selectors from the completed-run panel", async () => {
- renderRunScreen();
-
- expect(await screen.findByText("Requested Field Coverage")).toBeInTheDocument();
- fireEvent.click(screen.getAllByRole("checkbox")[0]);
- fireEvent.click(screen.getByRole("button", { name:"Save Selected Selectors"}));
-
- await waitFor(() => {
- expect(apiMock.promoteDomainRecipeSelectors).toHaveBeenCalledWith(101, {
- selectors: [
+ it("renders structured learning values with JSON serialization", async () => {
+ apiMock.getDomainRecipe.mockResolvedValue({
+ ...makeDomainRecipe(),
+ field_learning: [
  {
- candidate_key:"price|css_selector|.price",
- field_name:"price",
+ field_name:"variant_axes",
+ value: { Size: ["S","M"] },
+ source_labels: ["dom_selector"],
  selector_kind:"css_selector",
- selector_value:".price",
- sample_value:"Rs. 999",
+ selector_value:".sizes",
+ source_record_ids: [1],
+ feedback: null,
  },
  ],
+ });
+
+ renderRunScreen();
+
+ fireEvent.click(await screen.findByRole("button", { name:"Learning"}));
+ expect(await screen.findByText(/Value: \{"Size":\["S","M"\]\}/)).toBeInTheDocument();
+ });
+
+ it("applies keep and reject field learning actions from the completed-run panel", async () => {
+ renderRunScreen();
+
+ fireEvent.click(await screen.findByRole("button", { name:"Learning"}));
+ expect(await screen.findByRole("heading", { name:"Run Learning" })).toBeInTheDocument();
+ const keepButtons = screen.getAllByRole("button", { name:"Keep" });
+ const rejectButtons = screen.getAllByRole("button", { name:"Reject" });
+
+ fireEvent.click(keepButtons[0]);
+ await waitFor(() => {
+ expect(apiMock.applyDomainRecipeFieldAction).toHaveBeenCalledWith(101, {
+ field_name:"price",
+ action:"keep",
+ selector_kind:"css_selector",
+ selector_value:".price",
+ source_record_ids: [1],
+ });
+ });
+
+ fireEvent.click(rejectButtons[1]);
+ await waitFor(() => {
+ expect(apiMock.applyDomainRecipeFieldAction).toHaveBeenCalledWith(101, {
+ field_name:"brand",
+ action:"reject",
+ selector_kind: null,
+ selector_value: null,
+ source_record_ids: [1],
  });
  });
  });
@@ -550,7 +634,8 @@ describe("CrawlRunScreen", () => {
  it("saves the edited domain run profile from the completed-run panel", async () => {
  renderRunScreen();
 
- expect(await screen.findByText("Requested Field Coverage")).toBeInTheDocument();
+ fireEvent.click(await screen.findByRole("button", { name:"Run Config"}));
+ expect(await screen.findByRole("heading", { name:"Run Config" })).toBeInTheDocument();
  fireEvent.change(screen.getByRole("combobox", { name:"Fetch Mode" }), { target: { value:"browser_only" } });
  fireEvent.change(screen.getByRole("textbox", { name:"Geo Country" }), { target: { value:"US" } });
  fireEvent.click(screen.getByRole("button", { name:"Save Run Profile"}));
@@ -566,17 +651,6 @@ describe("CrawlRunScreen", () => {
  }),
  }),
  });
- });
- });
-
- it("deletes an existing saved selector from the completed-run panel", async () => {
- renderRunScreen();
-
- const deleteButton = await screen.findByRole("button", { name:"Delete Saved Selector" });
- fireEvent.click(deleteButton);
-
- await waitFor(() => {
- expect(apiMock.deleteSelector).toHaveBeenCalledWith(22);
  });
  });
 });

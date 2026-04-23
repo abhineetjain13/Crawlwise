@@ -376,8 +376,17 @@ def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionReq
         requested_fields=list(context.requested_fields),
         requested_field_selectors={},
         acquisition_profile=acquisition_profile,
-        on_event=None,
+        on_event=_pipeline_acquisition_event_logger(context),
     )
+
+
+def _pipeline_acquisition_event_logger(
+    context: _URLProcessingContext,
+):
+    async def _log(level: str, message: str) -> None:
+        await _log_pipeline_event(context, level, message)
+
+    return _log
 
 async def _run_acquisition_stage(
     context: _URLProcessingContext,

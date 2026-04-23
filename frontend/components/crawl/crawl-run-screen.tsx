@@ -22,7 +22,7 @@ import {
 import { Badge, Button, Card, Input, Tooltip } from"../ui/primitives";
 import { api } from"../../lib/api";
 import { getApiWebSocketBaseUrl } from"../../lib/api/client";
-import type { CrawlLog, CrawlRecord, CrawlRun, DomainRecipe, DomainRecipeSelectorCandidate, DomainRunProfile, ResultSummaryQualityLevel } from"../../lib/api/types";
+import type { CrawlLog, CrawlRecord, CrawlRun, DomainRunProfile, ResultSummaryQualityLevel } from"../../lib/api/types";
 import { CRAWL_DEFAULTS } from"../../lib/constants/crawl-defaults";
 import { ACTIVE_STATUSES } from"../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from"../../lib/constants/storage-keys";
@@ -71,7 +71,7 @@ function defaultDomainRunProfile(): DomainRunProfile {
  extraction_source:"raw_html",
  js_mode:"auto",
  include_iframes: false,
- traversal_mode:"auto",
+ traversal_mode: null,
  request_delay_ms: 500,
  max_pages: 10,
  max_scrolls: 10,
@@ -117,30 +117,24 @@ function cloneDomainRunProfile(profile: DomainRunProfile | null | undefined): Do
  };
 }
 
-function affordanceValues(recipe: DomainRecipe | undefined) {
- if (!recipe) {
- return [];
+function renderLearningValue(value: unknown) {
+ if (value == null) {
+ return "—";
  }
- const values: string[] = [];
- if (recipe.affordance_candidates.browser_required) {
- values.push("Browser required");
+ if (
+ typeof value ==="string"
+ || typeof value ==="number"
+ || typeof value ==="boolean"
+ || typeof value ==="bigint"
+ || typeof value ==="symbol"
+ ) {
+ return String(value);
  }
- if (recipe.affordance_candidates.iframe_promotion) {
- values.push(`Iframe promotion: ${recipe.affordance_candidates.iframe_promotion}`);
+ try {
+ return JSON.stringify(value);
+ } catch {
+ return "[unserializable]";
  }
- for (const value of recipe.affordance_candidates.accordions) {
- values.push(`Accordion: ${value}`);
- }
- for (const value of recipe.affordance_candidates.tabs) {
- values.push(`Tab: ${value}`);
- }
- for (const value of recipe.affordance_candidates.carousels) {
- values.push(`Carousel: ${value}`);
- }
- for (const value of recipe.affordance_candidates.shadow_hosts) {
- values.push(`Shadow host: ${value}`);
- }
- return values;
 }
 
 function isSafeHref(href: string) {
@@ -157,9 +151,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  const router = useRouter();
  const [selectedIds, setSelectedIds] = useState<number[]>([]);
  const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
- const [selectedRecipeCandidates, setSelectedRecipeCandidates] = useState<string[]>([]);
  const [recipeProfile, setRecipeProfile] = useState<DomainRunProfile>(() => defaultDomainRunProfile());
- const [recipeActionPending, setRecipeActionPending] = useState<"selectors"|"profile"|`delete:${number}`| null>(null);
+ const [recipeActionPending, setRecipeActionPending] = useState<"profile"|`field:${string}:${"keep"|"reject"}`| null>(null);
  const [recipeActionError, setRecipeActionError] = useState("");
  const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
  const [runActionPending, setRunActionPending] = useState<"kill"| null>(null);
@@ -259,15 +252,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  const logs = useMemo(() => logItems.slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS), [logItems]);
  const markdown = markdownQuery.data ??"";
  const domainRecipe = domainRecipeQuery.data;
- const selectorCandidatesByField = useMemo(() => {
- const grouped = new Map<string, DomainRecipeSelectorCandidate[]>();
- for (const candidate of domainRecipe?.selector_candidates ?? []) {
- const field = String(candidate.field_name || "").trim() || "unknown";
- grouped.set(field, [...(grouped.get(field) ?? []), candidate]);
- }
- return Array.from(grouped.entries()).sort((left, right) => left[0].localeCompare(right[0]));
- }, [domainRecipe?.selector_candidates]);
- const affordanceItems = useMemo(() => affordanceValues(domainRecipe), [domainRecipe]);
  const recordsJson = useMemo(
  () =>
  outputTab ==="json"
@@ -313,6 +297,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  error: markdownQuery.error,
  refetch: markdownQuery.refetch,
  },
+ {
+ key:"domain-recipe",
+ label:"domain recipe",
+ error: domainRecipeQuery.error,
+ refetch: domainRecipeQuery.refetch,
+ },
  ].filter((panel) => panel.error);
 
  useEffect(() => {
@@ -320,11 +310,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  return;
  }
  setRecipeProfile(cloneDomainRunProfile(domainRecipe.saved_run_profile));
- setSelectedRecipeCandidates((current) =>
- current.filter((candidateKey) =>
- domainRecipe.selector_candidates.some((candidate) => candidate.candidate_key === candidateKey),
- ),
- );
  setRecipeActionError("");
  }, [domainRecipe]);
 
@@ -502,11 +487,10 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  setLogItems([]);
  setLogCursorAfterId(undefined);
  setLogSocketConnected(false);
- setSelectedRecipeCandidates([]);
  setRecipeProfile(defaultDomainRunProfile());
  setRecipeActionPending(null);
  setRecipeActionError("");
- }, [runId]);
+}, [runId]);
 
  useEffect(() => {
  if (!run) {
@@ -697,33 +681,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  router.replace("/crawl?module=pdp&mode=batch");
  }
 
- async function saveSelectedRecipeSelectors() {
- if (!selectedRecipeCandidates.length) {
- return;
- }
- setRecipeActionPending("selectors");
- setRecipeActionError("");
- try {
- await api.promoteDomainRecipeSelectors(runId, {
- selectors: (domainRecipe?.selector_candidates ?? [])
- .filter((candidate) => selectedRecipeCandidates.includes(candidate.candidate_key))
- .map((candidate) => ({
- candidate_key: candidate.candidate_key,
- field_name: candidate.field_name,
- selector_kind: candidate.selector_kind,
- selector_value: candidate.selector_value,
- sample_value: candidate.sample_value ?? null,
- })),
- });
- setSelectedRecipeCandidates([]);
- await refetchDomainRecipeQuery();
- } catch (error) {
- setRecipeActionError(error instanceof Error ? error.message :"Unable to save selected selectors.");
- } finally {
- setRecipeActionPending(null);
- }
- }
-
  async function saveRecipeRunProfile() {
  setRecipeActionPending("profile");
  setRecipeActionError("");
@@ -739,14 +696,21 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
  }
 
- async function deleteSavedRecipeSelector(selectorId: number) {
- setRecipeActionPending(`delete:${selectorId}`);
+ async function applyFieldLearningAction(fieldName: string, action: "keep" | "reject", selectorKind?: string | null, selectorValue?: string | null, sourceRecordIds?: number[]) {
+ const pendingKey = `field:${fieldName}:${action}` as const;
+ setRecipeActionPending(pendingKey);
  setRecipeActionError("");
  try {
- await api.deleteSelector(selectorId);
+ await api.applyDomainRecipeFieldAction(runId, {
+ field_name: fieldName,
+ action,
+ selector_kind: selectorKind ?? null,
+ selector_value: selectorValue ?? null,
+ source_record_ids: sourceRecordIds ?? [],
+ });
  await refetchDomainRecipeQuery();
  } catch (error) {
- setRecipeActionError(error instanceof Error ? error.message :"Unable to delete the saved selector.");
+ setRecipeActionError(error instanceof Error ? error.message : `Unable to ${action} this field learning signal.`);
  } finally {
  setRecipeActionPending(null);
  }
@@ -907,120 +871,310 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
  {!showRunLoadingState && terminal ? (
  <div className="space-y-4">
+ <Card className="section-card">
+ {runErrorMessage ? <InlineAlert tone="danger"message={runErrorMessage} /> : null}
+ {runActionError ? <InlineAlert tone="danger"message={runActionError} /> : null}
+ <RunWorkspaceShell
+ header={
+ run?.url ? (
+ <a
+ href={run.url}
+ target="_blank"
+ rel="noreferrer"
+ className="link-accent block truncate text-sm font-medium leading-[1.4] underline-offset-2 hover:underline"
+ >
+ {run.url}
+ </a>
+ ) : (
+ <p className="text-sm leading-[1.55] text-muted">Waiting for completed run data.</p>
+ )
+ }
+ actions={
+ <>
+ {listingRun && batchFromResultsUrls.length ? (
+ <Button variant="accent"type="button"onClick={triggerBatchCrawlFromResults}>
+ <ArrowRightCircle className="size-3.5"/>
+ {batchFromResultsLabel}
+ </Button>
+ ) : null}
+ <Button variant="secondary"type="button"onClick={() => void downloadExport("csv")}>
+ <Download className="size-3.5"/>
+ Excel (CSV)
+ </Button>
+ <Button variant="secondary"type="button"onClick={() => void downloadExport("json")}>
+ <Download className="size-3.5"/>
+ JSON
+ </Button>
+ <Button variant="secondary"type="button"onClick={() => void downloadExport("markdown")}>
+ <Download className="size-3.5"/>
+ Markdown
+ </Button>
+ </>
+ }
+ tabs={
+ <TabBar
+ value={outputTab}
+ variant="underline"
+ onChange={(value) => setOutputTab(value as OutputTabKey)}
+ options={[
+ { value:"table", label: `Table (${summary.records})` },
+ { value:"json", label:"JSON"},
+ { value:"markdown", label:"Markdown"},
+ { value:"logs", label:"Logs"},
+ { value:"learning", label:"Learning"},
+ { value:"run_config", label:"Run Config"},
+ ]}
+ />
+ }
+ summary={
+ <RunSummaryChips
+ duration={summary.duration}
+ verdict={humanizeVerdict(verdict)}
+ quality={humanizeQuality(completedQualityLevel)}
+ />
+ }
+ content={
+ <>
+ {outputTab ==="table"? (
+ <div className="space-y-3 min-h-[55vh]">
+ {tableRecordsQuery.isLoading && !tableRecords.length ? (
+ <DataRegionLoading count={5} className="px-0"/>
+ ) : tableRecords.length ? (
+ <div className="space-y-3">
+ <RecordsTable
+ records={filteredTableRecords}
+ visibleColumns={visibleColumns}
+ fieldQualityScores={fieldQualityScores}
+ selectedIds={selectedIds}
+ onSelectAll={(checked) => setSelectedIds(checked ? filteredTableRecords.map((record) => record.id) : [])}
+ onToggleRow={(id, checked) =>
+ setSelectedIds((current) =>
+ checked ? uniqueNumbers([...current, id]) : current.filter((value) => value !== id),
+ )
+ }
+ />
+ {hasMoreTableRecords ? (
+ <div className="surface-muted flex items-center justify-between rounded-lg px-3 py-2 text-sm leading-[1.45] text-muted">
+ <span>
+ Showing {tableRecords.length} of {tableTotal} records
+ </span>
+ <Button
+ variant="secondary"
+ type="button"
+ onClick={() => setTablePage((current) => current + 1)}
+ >
+ Load More
+ </Button>
+ </div>
+ ) : null}
+ {tableRecords.length < tableTotal && hasMoreTableRecords ? (
+ <InlineAlert
+ tone="warning"
+ message={`Table view is currently showing ${tableRecords.length} of ${tableTotal} records. Load more rows or export JSON/CSV for the full dataset.`}
+ />
+ ) : null}
+ </div>
+ ) : (
+ <DataRegionEmpty
+ title="No records captured yet"
+ description="Records will appear here once extraction returns rows."
+ className="px-0"
+ />
+ )}
+ </div>
+ ) : null}
+
+ {outputTab ==="json"? (
+ <div className="relative min-h-[55vh]">
+ <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+ <Button variant="ghost"type="button"onClick={() => void copyJson(records)}>
+ <Copy className="size-3.5"/>
+ Copy
+ </Button>
+ </div>
+ <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto pt-14 pb-4">
+ {recordsJson}
+ </pre>
+ {hasMoreJsonRecords ? (
+ <div className="surface-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-sm leading-[1.45] text-muted">
+ <span>
+ JSON previewing {jsonRecords.length} of {recordsTotal} records
+ </span>
+ <Button
+ variant="secondary"
+ type="button"
+ onClick={() => setJsonVisibleCount((current) => current + CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4)}
+ >
+ Load More JSON
+ </Button>
+ </div>
+ ) : null}
+ {records.length < recordsTotal && recordsFetchCapReached ? (
+ <InlineAlert
+ tone="warning"
+ message={`JSON preview capped at ${records.length} records for performance. Use JSON export for all ${recordsTotal} records.`}
+ />
+ ) : null}
+ </div>
+ ) : null}
+
+ {outputTab ==="markdown"? (
+ <div className="relative min-h-[55vh]">
+ <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+ <Button
+ variant="ghost"
+ type="button"
+ onClick={() => void navigator.clipboard.writeText(markdown)}
+ disabled={!markdown}
+ >
+ <Copy className="size-3.5"/>
+ Copy
+ </Button>
+ </div>
+ {markdownQuery.isLoading && !markdown ? (
+ <div className="surface-muted space-y-2 rounded-lg px-3 pb-3 pt-12">
+ {Array.from({ length: 8 }, (_, index) => (
+ <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]"/>
+ ))}
+ </div>
+ ) : markdown ? (
+ <div className="surface-muted min-h-[55vh] max-h-[72vh] rounded-lg overflow-y-auto px-3 pb-3 pt-12">
+ <article className="markdown-document max-w-none">
+ <ReactMarkdown
+ remarkPlugins={[remarkGfm]}
+ components={{
+ a: ({ node: _node, ...props }) =>
+ props.href && isSafeHref(props.href) ? (
+ <a {...props} target="_blank"rel="noopener noreferrer"/>
+ ) : (
+ <span>{props.children}</span>
+ ),
+ }}
+ >
+ {markdown}
+ </ReactMarkdown>
+ </article>
+ </div>
+ ) : (
+ <div className="surface-muted grid min-h-40 place-items-center rounded-lg border-dashed text-sm leading-[1.55] text-muted">
+ No markdown is available for this run.
+ </div>
+ )}
+ </div>
+ ) : null}
+
+ {outputTab ==="logs"? (
+ <div className="min-h-[55vh]">
+ <LogTerminal logs={logs} viewportRef={logViewportRef} />
+ </div>
+ ) : null}
+
+ {outputTab ==="learning"? (
+ <div className="space-y-4 min-h-[55vh]">
  {domainRecipeQuery.isLoading ? (
  <Card className="section-card">
- <SectionHeader title="Domain Recipe" description="Loading selector promotion and saved-profile data for this run." />
+ <SectionHeader title="Run Learning" description="Loading keep and reject recommendations for this run." />
  </Card>
  ) : domainRecipe ? (
+ <div className="space-y-4">
+ {recipeActionError ? <InlineAlert tone="danger" message={recipeActionError} /> : null}
  <Card className="section-card space-y-4">
  <SectionHeader
- title="Domain Recipe"
- description={`Promotion and saved defaults for ${domainRecipe.domain} on ${domainRecipe.surface}.`}
+ title="Run Learning"
+ description={`Review extraction evidence for ${domainRecipe.domain} on ${domainRecipe.surface}. Keep what should compound, reject what should not.`}
  />
- {recipeActionError ? <InlineAlert tone="danger" message={recipeActionError} /> : null}
- <div className="grid gap-4 xl:grid-cols-2">
- <div className="space-y-2">
- <div className="field-label">Requested Field Coverage</div>
+ <div className="grid gap-3 md:grid-cols-2">
  <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[1.5] text-secondary">
+ <div className="field-label mb-1">Requested Coverage</div>
  Requested: {domainRecipe.requested_field_coverage.requested.join(", ") || "None"}
  <br />
  Found: {domainRecipe.requested_field_coverage.found.join(", ") || "None"}
  <br />
  Missing: {domainRecipe.requested_field_coverage.missing.join(", ") || "None"}
  </div>
- </div>
- <div className="space-y-2">
- <div className="field-label">Affordance Hints</div>
- {affordanceItems.length ? (
  <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[1.5] text-secondary">
- {affordanceItems.map((item) => (
- <div key={item}>{item}</div>
- ))}
- </div>
- ) : (
- <div className="surface-muted rounded-lg border-dashed px-3 py-3 text-sm leading-[1.5] text-secondary">
- No affordance hints were captured for this run.
- </div>
- )}
+ <div className="field-label mb-1">Acquisition Evidence</div>
+ Method: {domainRecipe.acquisition_evidence.actual_fetch_method || "—"}
+ <br />
+ Browser Used: {domainRecipe.acquisition_evidence.browser_used ? "Yes" : "No"}
+ <br />
+ Browser Reason: {domainRecipe.acquisition_evidence.browser_reason || "—"}
+ <br />
+ Cookie Memory: {domainRecipe.acquisition_evidence.cookie_memory_available ? "Saved" : domainRecipe.acquisition_evidence.browser_used ? "No reusable state observed" : "Not applicable"}
  </div>
  </div>
 
  <div className="space-y-3">
- <div className="flex items-center justify-between gap-3">
  <div>
- <div className="field-label mb-0">Selector Candidates</div>
- <p className="mt-1 text-sm leading-[1.45] text-secondary">Promote only the winning selectors that proved out on this completed run.</p>
+ <div className="field-label mb-0">Field Learning</div>
+ <p className="mt-1 text-sm leading-[1.45] text-secondary">Keep accepted field evidence or reject bad field evidence for future runs on this domain and surface.</p>
  </div>
- <Button
- variant="accent"
- type="button"
- onClick={() => void saveSelectedRecipeSelectors()}
- disabled={!selectedRecipeCandidates.length || recipeActionPending === "selectors"}
- >
- {recipeActionPending === "selectors" ? "Saving..." : "Save Selected Selectors"}
- </Button>
- </div>
- {selectorCandidatesByField.length ? (
- <div className="space-y-3">
- {selectorCandidatesByField.map(([fieldName, candidates]) => (
- <div key={fieldName} className="rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-3">
- <div className="mb-2 flex items-center justify-between gap-3">
- <div className="text-sm font-medium text-foreground">{fieldName}</div>
- <div className="text-xs text-muted">{candidates.length} candidate{candidates.length === 1 ? "" : "s"}</div>
- </div>
+ {domainRecipe.field_learning.length ? (
  <div className="space-y-2">
- {candidates.map((candidate) => (
- <label key={candidate.candidate_key} className="flex items-start gap-3 rounded-lg border border-[var(--divider)] bg-background px-3 py-2 text-sm leading-[1.45]">
- <input
- type="checkbox"
- checked={selectedRecipeCandidates.includes(candidate.candidate_key)}
- disabled={candidate.already_saved}
- onChange={(event) =>
- setSelectedRecipeCandidates((current) =>
- event.target.checked
- ? Array.from(new Set([...current, candidate.candidate_key]))
- : current.filter((value) => value !== candidate.candidate_key),
- )
- }
- />
+ {domainRecipe.field_learning.map((item) => {
+ const keepPending = recipeActionPending === `field:${item.field_name}:keep`;
+ const rejectPending = recipeActionPending === `field:${item.field_name}:reject`;
+ return (
+ <div key={`${item.field_name}:${item.selector_kind ?? "source"}:${item.selector_value ?? item.source_labels.join(",")}`} className="rounded-lg border border-[var(--divider)] bg-background px-3 py-3 text-sm">
+ <div className="flex flex-wrap items-start justify-between gap-3">
  <div className="min-w-0 flex-1">
  <div className="flex flex-wrap items-center gap-2">
- <span className="font-medium text-foreground">{candidate.selector_kind}</span>
- <code className="truncate text-xs">{candidate.selector_value}</code>
- {candidate.already_saved ? <Badge tone="success">Saved</Badge> : <Badge tone="neutral">New</Badge>}
+ <span className="font-medium text-foreground">{item.field_name}</span>
+ {item.selector_kind ? <Badge tone="info">{item.selector_kind}</Badge> : <Badge tone="neutral">non-selector</Badge>}
+ {item.feedback ? <Badge tone={item.feedback.action === "reject" ? "warning" : "success"}>{item.feedback.action}</Badge> : null}
  </div>
  <div className="mt-1 text-xs text-muted">
- Sample: {candidate.sample_value || "—"} · Final source: {candidate.final_field_source || "—"}
+ Value: {renderLearningValue(item.value)} · Sources: {item.source_labels.join(", ") || "—"}
  </div>
+ {item.selector_value ? <code className="mt-2 block truncate text-xs">{item.selector_value}</code> : null}
  </div>
- {candidate.saved_selector_id ? (
- <Button
- variant="ghost"
- type="button"
- onClick={() => void deleteSavedRecipeSelector(candidate.saved_selector_id!)}
- disabled={recipeActionPending === `delete:${candidate.saved_selector_id}`}
- >
- {recipeActionPending === `delete:${candidate.saved_selector_id}` ? "Deleting..." : "Delete Saved Selector"}
+ <div className="flex flex-wrap gap-2">
+ <Button variant="secondary" type="button" size="sm" disabled={recipeActionPending !== null} onClick={() => void applyFieldLearningAction(item.field_name, "keep", item.selector_kind, item.selector_value, item.source_record_ids)}>
+ {keepPending ? "Keeping..." : "Keep"}
  </Button>
- ) : null}
- </label>
- ))}
+ <Button variant="ghost" type="button" size="sm" disabled={recipeActionPending !== null} onClick={() => void applyFieldLearningAction(item.field_name, "reject", item.selector_kind, item.selector_value, item.source_record_ids)}>
+ {rejectPending ? "Rejecting..." : "Reject"}
+ </Button>
  </div>
  </div>
- ))}
+ </div>
+ );
+ })}
  </div>
  ) : (
  <div className="surface-muted rounded-lg border-dashed px-3 py-3 text-sm leading-[1.5] text-secondary">
- No selector candidates are available for promotion on this run.
+ No field learning signals were captured for this run.
  </div>
  )}
  </div>
+ </Card>
+ </div>
+ ) : (
+ <DataRegionEmpty
+ title="No learning data available"
+ description="This run did not produce reusable field-learning evidence."
+ className="px-0"
+ />
+ )}
+ </div>
+ ) : null}
 
- <div className="space-y-3">
+ {outputTab ==="run_config"? (
+ <div className="space-y-4 min-h-[55vh]">
+ {domainRecipeQuery.isLoading ? (
+ <Card className="section-card">
+ <SectionHeader title="Run Config" description="Loading saved run profile defaults for this domain." />
+ </Card>
+ ) : domainRecipe ? (
+ <Card className="section-card space-y-4">
+ <SectionHeader
+ title="Run Config"
+ description={`Edit and save the reusable fetch profile for ${domainRecipe.domain}. These defaults are applied to future single-URL runs on ${domainRecipe.surface}.`}
+ />
+ {recipeActionError ? <InlineAlert tone="danger" message={recipeActionError} /> : null}
  <div className="flex items-center justify-between gap-3">
- <div>
- <div className="field-label mb-0">Saved Run Profile</div>
- <p className="mt-1 text-sm leading-[1.45] text-secondary">Edit the reusable fetch, locality, and diagnostics defaults for future single-URL crawls on this domain.</p>
+ <div className="text-sm leading-[1.5] text-secondary">
+ Saved profile source run: {domainRecipe.saved_run_profile?.source_run_id ?? "—"} · Last saved: {domainRecipe.saved_run_profile?.saved_at ?? "Not saved yet"}
  </div>
  <Button
  variant="accent"
@@ -1101,18 +1255,19 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <span className="field-label">Traversal Mode</span>
  <select
  aria-label="Traversal Mode"
- value={recipeProfile.fetch_profile.traversal_mode}
+ value={recipeProfile.fetch_profile.traversal_mode ?? ""}
  onChange={(event) =>
  setRecipeProfile((current) => ({
  ...current,
  fetch_profile: {
  ...current.fetch_profile,
- traversal_mode: event.target.value as DomainRunProfile["fetch_profile"]["traversal_mode"],
+ traversal_mode: (event.target.value || null) as DomainRunProfile["fetch_profile"]["traversal_mode"],
  },
  }))
  }
  className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
  >
+ <option value="">Off</option>
  <option value="auto">Auto</option>
  <option value="scroll">Scroll</option>
  <option value="load_more">Load More</option>
@@ -1270,203 +1425,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  Capture Browser Diagnostics
  </label>
  </div>
- </div>
  </Card>
- ) : null}
-
- <Card className="section-card">
- {runErrorMessage ? <InlineAlert tone="danger"message={runErrorMessage} /> : null}
- {runActionError ? <InlineAlert tone="danger"message={runActionError} /> : null}
- <RunWorkspaceShell
- header={
- run?.url ? (
- <a
- href={run.url}
- target="_blank"
- rel="noreferrer"
- className="link-accent block truncate text-sm font-medium leading-[1.4] underline-offset-2 hover:underline"
- >
- {run.url}
- </a>
- ) : (
- <p className="text-sm leading-[1.55] text-muted">Waiting for completed run data.</p>
- )
- }
- actions={
- <>
- {listingRun && batchFromResultsUrls.length ? (
- <Button variant="accent"type="button"onClick={triggerBatchCrawlFromResults}>
- <ArrowRightCircle className="size-3.5"/>
- {batchFromResultsLabel}
- </Button>
- ) : null}
- <Button variant="secondary"type="button"onClick={() => void downloadExport("csv")}>
- <Download className="size-3.5"/>
- Excel (CSV)
- </Button>
- <Button variant="secondary"type="button"onClick={() => void downloadExport("json")}>
- <Download className="size-3.5"/>
- JSON
- </Button>
- <Button variant="secondary"type="button"onClick={() => void downloadExport("markdown")}>
- <Download className="size-3.5"/>
- Markdown
- </Button>
- </>
- }
- tabs={
- <TabBar
- value={outputTab}
- variant="underline"
- onChange={(value) => setOutputTab(value as OutputTabKey)}
- options={[
- { value:"table", label: `Table (${summary.records})` },
- { value:"json", label:"JSON"},
- { value:"markdown", label:"Markdown"},
- { value:"logs", label:"Logs"},
- ]}
- />
- }
- summary={
- <RunSummaryChips
- duration={summary.duration}
- verdict={humanizeVerdict(verdict)}
- quality={humanizeQuality(completedQualityLevel)}
- />
- }
- content={
- <>
- {outputTab ==="table"? (
- <div className="space-y-3 min-h-[55vh]">
- {tableRecordsQuery.isLoading && !tableRecords.length ? (
- <DataRegionLoading count={5} className="px-0"/>
- ) : tableRecords.length ? (
- <div className="space-y-3">
- <RecordsTable
- records={filteredTableRecords}
- visibleColumns={visibleColumns}
- fieldQualityScores={fieldQualityScores}
- selectedIds={selectedIds}
- onSelectAll={(checked) => setSelectedIds(checked ? filteredTableRecords.map((record) => record.id) : [])}
- onToggleRow={(id, checked) =>
- setSelectedIds((current) =>
- checked ? uniqueNumbers([...current, id]) : current.filter((value) => value !== id),
- )
- }
- />
- {hasMoreTableRecords ? (
- <div className="surface-muted flex items-center justify-between rounded-lg px-3 py-2 text-sm leading-[1.45] text-muted">
- <span>
- Showing {tableRecords.length} of {tableTotal} records
- </span>
- <Button
- variant="secondary"
- type="button"
- onClick={() => setTablePage((current) => current + 1)}
- >
- Load More
- </Button>
- </div>
- ) : null}
- {tableRecords.length < tableTotal && hasMoreTableRecords ? (
- <InlineAlert
- tone="warning"
- message={`Table view is currently showing ${tableRecords.length} of ${tableTotal} records. Load more rows or export JSON/CSV for the full dataset.`}
- />
- ) : null}
- </div>
  ) : (
  <DataRegionEmpty
- title="No records captured yet"
- description="Records will appear here once extraction returns rows."
+ title="No run profile available"
+ description="This run did not produce a domain profile payload."
  className="px-0"
  />
  )}
- </div>
- ) : null}
-
- {outputTab ==="json"? (
- <div className="relative min-h-[55vh]">
- <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
- <Button variant="ghost"type="button"onClick={() => void copyJson(records)}>
- <Copy className="size-3.5"/>
- Copy
- </Button>
- </div>
- <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto pt-14 pb-4">
- {recordsJson}
- </pre>
- {hasMoreJsonRecords ? (
- <div className="surface-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-sm leading-[1.45] text-muted">
- <span>
- JSON previewing {jsonRecords.length} of {recordsTotal} records
- </span>
- <Button
- variant="secondary"
- type="button"
- onClick={() => setJsonVisibleCount((current) => current + CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4)}
- >
- Load More JSON
- </Button>
- </div>
- ) : null}
- {records.length < recordsTotal && recordsFetchCapReached ? (
- <InlineAlert
- tone="warning"
- message={`JSON preview capped at ${records.length} records for performance. Use JSON export for all ${recordsTotal} records.`}
- />
- ) : null}
- </div>
- ) : null}
-
- {outputTab ==="markdown"? (
- <div className="relative min-h-[55vh]">
- <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
- <Button
- variant="ghost"
- type="button"
- onClick={() => void navigator.clipboard.writeText(markdown)}
- disabled={!markdown}
- >
- <Copy className="size-3.5"/>
- Copy
- </Button>
- </div>
- {markdownQuery.isLoading && !markdown ? (
- <div className="surface-muted space-y-2 rounded-lg px-3 pb-3 pt-12">
- {Array.from({ length: 8 }, (_, index) => (
- <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]"/>
- ))}
- </div>
- ) : markdown ? (
- <div className="surface-muted min-h-[55vh] max-h-[72vh] rounded-lg overflow-y-auto px-3 pb-3 pt-12">
- <article className="markdown-document max-w-none">
- <ReactMarkdown
- remarkPlugins={[remarkGfm]}
- components={{
- a: ({ node: _node, ...props }) =>
- props.href && isSafeHref(props.href) ? (
- <a {...props} target="_blank"rel="noopener noreferrer"/>
- ) : (
- <span>{props.children}</span>
- ),
- }}
- >
- {markdown}
- </ReactMarkdown>
- </article>
- </div>
- ) : (
- <div className="surface-muted grid min-h-40 place-items-center rounded-lg border-dashed text-sm leading-[1.55] text-muted">
- No markdown is available for this run.
- </div>
- )}
- </div>
- ) : null}
-
- {outputTab ==="logs"? (
- <div className="min-h-[55vh]">
- <LogTerminal logs={logs} viewportRef={logViewportRef} />
  </div>
  ) : null}
  </>

@@ -41,7 +41,7 @@ export type PendingDispatch = {
  additionalFields: string[];
  csvFile: File | null;
 };
-export type OutputTabKey ="table"|"json"|"markdown"|"logs";
+export type OutputTabKey ="table"|"json"|"markdown"|"logs"|"learning"|"run_config";
 type IconElementProps = {
  className?: string;
 };
@@ -177,8 +177,8 @@ export function parseLines(value: string) {
  .filter(Boolean);
 }
 
-export function clampNumber(value: string, min: number, max: number, fallback: number) {
- const parsed = Number.parseInt(value, 10);
+export function clampNumber(value: string | number, min: number, max: number, fallback: number) {
+ const parsed = Number.parseInt(String(value), 10);
  if (Number.isNaN(parsed)) return fallback;
  return Math.min(max, Math.max(min, parsed));
 }
@@ -635,6 +635,7 @@ export function SettingSection({
 
 export function SliderRow({
  label,
+ description,
  value,
  min,
  max,
@@ -642,8 +643,10 @@ export function SliderRow({
  onChange,
  onReset,
  suffix,
+ grouped = false,
 }: Readonly<{
  label: string;
+ description?: string;
  value: string;
  min: number;
  max: number;
@@ -651,11 +654,24 @@ export function SliderRow({
  onChange: (value: string) => void;
  onReset: () => void;
  suffix?: string;
+ grouped?: boolean;
 }>) {
  return (
- <div className="grid grid-cols-[110px_1fr_88px] items-center gap-x-3 py-1">
+ <div
+ className={cn(
+ "grid gap-2.5 md:grid-cols-[132px_minmax(0,1fr)_96px] md:items-center",
+ grouped
+ ? "px-3 py-3"
+ : "rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4",
+ )}
+ >
  <div className="flex items-center gap-1.5 min-w-0">
- <span className="text-sm font-medium text-secondary whitespace-nowrap leading-normal">{label}</span>
+ <span className="text-sm font-medium text-secondary leading-normal">{label}</span>
+ {description ? (
+ <Tooltip content={description}>
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ ) : null}
  <button
  type="button"
  onClick={onReset}
@@ -681,7 +697,7 @@ export function SliderRow({
  value={value}
  onChange={(event) => onChange(event.target.value.replace(/[^\d]/g,""))}
  onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
- className="h-7 w-full rounded-[var(--radius-md)] border border-border bg-[var(--slider-value-bg)] py-0 pl-2.5 pr-8 text-right font-mono text-sm leading-normal tabular-nums text-[var(--text-primary)] focus:ring-0 focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)]"
+ className="h-9 w-full rounded-[var(--radius-md)] border border-border bg-[var(--slider-value-bg)] py-0 pl-2.5 pr-8 text-right font-mono text-sm leading-normal tabular-nums text-[var(--text-primary)] focus:ring-0 focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)]"
  />
  {suffix ? (
  <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-sm leading-normal lowercase text-muted">

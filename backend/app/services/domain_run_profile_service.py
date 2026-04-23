@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import DomainRunProfile
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.domain_utils import normalize_domain
 
 _FETCH_MODE_VALUES = {
     "auto",
@@ -34,6 +35,11 @@ def _clean_str(value: object) -> str | None:
 def _coerce_choice(value: object, allowed: set[str], *, default: str) -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in allowed else default
+
+
+def _coerce_optional_choice(value: object, allowed: set[str]) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in allowed else None
 
 
 def _coerce_nullable_text(value: object) -> str | None:
@@ -73,6 +79,13 @@ def normalize_domain_run_profile(
     locality_profile = dict(payload.get("locality_profile") or {})
     diagnostics_profile = dict(payload.get("diagnostics_profile") or {})
     normalized_saved_at = saved_at or datetime.now(UTC).isoformat()
+    normalized_source_run_id = _coerce_int(
+        source_run_id,
+        default=0,
+        minimum=0,
+    )
+    if normalized_source_run_id <= 0:
+        raise ValueError("source_run_id must be a positive integer")
     return {
         "version": 1,
         "fetch_profile": {
@@ -92,10 +105,9 @@ def normalize_domain_run_profile(
                 default="auto",
             ),
             "include_iframes": bool(fetch_profile.get("include_iframes", False)),
-            "traversal_mode": _coerce_choice(
+            "traversal_mode": _coerce_optional_choice(
                 fetch_profile.get("traversal_mode"),
                 _TRAVERSAL_MODE_VALUES,
-                default="auto",
             ),
             "request_delay_ms": _coerce_int(
                 fetch_profile.get("request_delay_ms"),
@@ -136,7 +148,7 @@ def normalize_domain_run_profile(
                 diagnostics_profile.get("capture_browser_diagnostics", True)
             ),
         },
-        "source_run_id": int(source_run_id),
+        "source_run_id": normalized_source_run_id,
         "saved_at": normalized_saved_at,
     }
 
@@ -147,12 +159,14 @@ async def load_domain_run_profile(
     domain: str,
     surface: str,
 ) -> DomainRunProfile | None:
+    normalized_domain = normalize_domain(domain or "")
+    normalized_surface = str(surface or "").strip().lower()
     try:
         result = await session.execute(
             select(DomainRunProfile)
             .where(
-                DomainRunProfile.domain == str(domain or "").strip().lower(),
-                DomainRunProfile.surface == str(surface or "").strip().lower(),
+                DomainRunProfile.domain == normalized_domain,
+                DomainRunProfile.surface == normalized_surface,
             )
             .order_by(DomainRunProfile.updated_at.desc(), DomainRunProfile.id.desc())
             .limit(1)
@@ -165,6 +179,36 @@ async def load_domain_run_profile(
     return result.scalar_one_or_none()
 
 
+async def list_domain_run_profiles(
+    session: AsyncSession,
+    *,
+    domain: str = "",
+    surface: str = "",
+) -> list[DomainRunProfile]:
+    statement = select(DomainRunProfile)
+    normalized_domain = normalize_domain(domain or "") if domain else ""
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_domain:
+        statement = statement.where(DomainRunProfile.domain == normalized_domain)
+    if normalized_surface:
+        statement = statement.where(DomainRunProfile.surface == normalized_surface)
+    try:
+        result = await session.execute(
+            statement.order_by(
+                DomainRunProfile.domain.asc(),
+                DomainRunProfile.surface.asc(),
+                DomainRunProfile.updated_at.desc(),
+                DomainRunProfile.id.desc(),
+            )
+        )
+    except ProgrammingError as exc:
+        if "domain_run_profiles" not in str(exc).lower():
+            raise
+        await session.rollback()
+        return []
+    return list(result.scalars().all())
+
+
 async def save_domain_run_profile(
     session: AsyncSession,
     *,
@@ -173,7 +217,7 @@ async def save_domain_run_profile(
     profile: object,
     source_run_id: int,
 ) -> dict[str, object]:
-    normalized_domain = str(domain or "").strip().lower()
+    normalized_domain = normalize_domain(domain or "")
     normalized_surface = str(surface or "").strip().lower()
     existing = await load_domain_run_profile(
         session,

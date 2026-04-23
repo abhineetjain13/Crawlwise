@@ -16,8 +16,12 @@ from app.services.crawl_crud import (
     create_crawl_run,
     delete_run,
 )
-from app.services.domain_run_profile_service import save_domain_run_profile
+from app.services.domain_run_profile_service import (
+    normalize_domain_run_profile,
+    save_domain_run_profile,
+)
 from app.services.crawl_state import get_control_request, update_run_status
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -183,6 +187,61 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
     assert run.settings["fetch_profile"]["request_delay_ms"] == 900
     assert run.settings["locality_profile"]["geo_country"] == "IN"
     assert run.settings["diagnostics_profile"]["capture_network"] == "matched_only"
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_disables_auto_traversal_when_advanced_mode_is_off(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/collections/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {
+                "advanced_enabled": False,
+                "fetch_profile": {
+                    "traversal_mode": "auto",
+                },
+            },
+        },
+    )
+
+    assert run.settings["advanced_enabled"] is False
+    assert run.settings["traversal_mode"] is None
+    assert run.settings["fetch_profile"]["traversal_mode"] is None
+
+
+def test_normalize_domain_run_profile_rejects_invalid_source_run_id() -> None:
+    with pytest.raises(ValueError, match="source_run_id must be a positive integer"):
+        normalize_domain_run_profile({}, source_run_id="invalid")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_save_domain_run_profile_propagates_programming_error_from_profile_load(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_load_domain_run_profile(*args, **kwargs):
+        del args, kwargs
+        raise ProgrammingError("select 1", {}, Exception("missing table"))
+
+    monkeypatch.setattr(
+        "app.services.domain_run_profile_service.load_domain_run_profile",
+        _fake_load_domain_run_profile,
+    )
+
+    with pytest.raises(ProgrammingError):
+        await save_domain_run_profile(
+            db_session,
+            domain="example.com",
+            surface="ecommerce_detail",
+            profile={},
+            source_run_id=91,
+        )
 
 
 @pytest.mark.asyncio

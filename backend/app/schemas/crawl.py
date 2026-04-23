@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.schemas.selectors import SelectorRecordResponse
 
 _DISPLAY_HIDDEN_RECORD_FIELDS = {"page_markdown", "table_markdown", "record_type"}
 
@@ -143,15 +144,69 @@ class DomainRecipeAffordanceCandidates(BaseModel):
     browser_required: bool = False
 
 
+class DomainRecipeAcquisitionEvidence(BaseModel):
+    actual_fetch_method: str | None = None
+    browser_used: bool = False
+    browser_reason: str | None = None
+    acquisition_summary: dict = Field(default_factory=dict)
+    cookie_memory_available: bool = False
+
+
+class DomainRecipeFieldFeedback(BaseModel):
+    action: str
+    source_kind: str
+    source_value: str | None = None
+    source_run_id: int | None = None
+    created_at: datetime
+
+
+class DomainRecipeFieldLearningItem(BaseModel):
+    field_name: str
+    value: Any
+    source_labels: list[str] = Field(default_factory=list)
+    selector_kind: str | None = None
+    selector_value: str | None = None
+    source_record_ids: list[int] = Field(default_factory=list)
+    feedback: DomainRecipeFieldFeedback | None = None
+
+
+class DomainFieldFeedbackRecordResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    domain: str
+    surface: str
+    field_name: str
+    action: Literal["keep", "reject"]
+    source_kind: str
+    source_value: str | None = None
+    source_run_id: int | None = None
+    selector_kind: str | None = None
+    selector_value: str | None = None
+    source_record_ids: list[int] = Field(default_factory=list)
+    created_at: datetime
+
+
 class DomainRunFetchProfile(BaseModel):
-    fetch_mode: str = "auto"
-    extraction_source: str = "raw_html"
-    js_mode: str = "auto"
+    fetch_mode: Literal["auto", "http_only", "browser_only", "http_then_browser"] = "auto"
+    extraction_source: Literal[
+        "raw_html",
+        "rendered_dom",
+        "rendered_dom_visual",
+        "network_payload_first",
+    ] = "raw_html"
+    js_mode: Literal["auto", "enabled", "disabled"] = "auto"
     include_iframes: bool = False
-    traversal_mode: str = "auto"
-    request_delay_ms: int = 100
-    max_pages: int = 5
-    max_scrolls: int = 8
+    traversal_mode: Literal[
+        "auto",
+        "scroll",
+        "load_more",
+        "view_all",
+        "paginate",
+    ] | None = None
+    request_delay_ms: int = Field(default=100, ge=0, le=60_000)
+    max_pages: int = Field(default=5, ge=1, le=100)
+    max_scrolls: int = Field(default=8, ge=0, le=100)
 
 
 class DomainRunLocalityProfile(BaseModel):
@@ -174,7 +229,7 @@ class DomainRunProfilePayload(BaseModel):
     locality_profile: DomainRunLocalityProfile = Field(default_factory=DomainRunLocalityProfile)
     diagnostics_profile: DomainRunDiagnosticsProfile = Field(default_factory=DomainRunDiagnosticsProfile)
     source_run_id: int | None = None
-    saved_at: str | None = None
+    saved_at: datetime | None = None
 
 
 class DomainRecipeResponse(BaseModel):
@@ -182,9 +237,11 @@ class DomainRecipeResponse(BaseModel):
     domain: str
     surface: str
     requested_field_coverage: DomainRecipeRequestedCoverage
+    acquisition_evidence: DomainRecipeAcquisitionEvidence = Field(default_factory=DomainRecipeAcquisitionEvidence)
+    field_learning: list[DomainRecipeFieldLearningItem] = Field(default_factory=list)
     selector_candidates: list[DomainRecipeSelectorCandidate] = Field(default_factory=list)
     affordance_candidates: DomainRecipeAffordanceCandidates = Field(default_factory=DomainRecipeAffordanceCandidates)
-    saved_selectors: list[dict[str, object]] = Field(default_factory=list)
+    saved_selectors: list[SelectorRecordResponse] = Field(default_factory=list)
     saved_run_profile: DomainRunProfilePayload | None = None
 
 
@@ -192,6 +249,27 @@ class DomainRunProfileLookupResponse(BaseModel):
     domain: str
     surface: str
     saved_run_profile: DomainRunProfilePayload | None = None
+
+
+class DomainRunProfileRecordResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    domain: str
+    surface: str
+    profile: DomainRunProfilePayload
+    created_at: datetime
+    updated_at: datetime
+
+
+class DomainCookieMemoryRecordResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    domain: str
+    cookie_count: int
+    origin_count: int
+    updated_at: datetime
 
 
 class DomainRecipeSelectorPromotionItem(BaseModel):
@@ -208,6 +286,14 @@ class DomainRecipePromoteSelectorsRequest(BaseModel):
 
 class DomainRecipeSaveRunProfileRequest(BaseModel):
     profile: DomainRunProfilePayload
+
+
+class DomainRecipeFieldActionRequest(BaseModel):
+    field_name: str
+    action: Literal["keep", "reject"]
+    selector_kind: str | None = None
+    selector_value: str | None = None
+    source_record_ids: list[int] = Field(default_factory=list)
 
 
 class LLMCommitItem(FieldCommitItem):

@@ -191,7 +191,7 @@ export type DomainRunProfile = {
  extraction_source: "raw_html"|"rendered_dom"|"rendered_dom_visual"|"network_payload_first";
  js_mode: "auto"|"enabled"|"disabled";
  include_iframes: boolean;
- traversal_mode: "auto"|"scroll"|"load_more"|"view_all"|"paginate";
+ traversal_mode: "auto"|"scroll"|"load_more"|"view_all"|"paginate"| null;
  request_delay_ms: number;
  max_pages: number;
  max_scrolls: number;
@@ -235,6 +235,28 @@ export type DomainRecipe = {
  found: string[];
  missing: string[];
  };
+ acquisition_evidence: {
+ actual_fetch_method: string | null;
+ browser_used: boolean;
+ browser_reason: string | null;
+ acquisition_summary: Record<string, unknown>;
+ cookie_memory_available: boolean;
+ };
+ field_learning: Array<{
+ field_name: string;
+ value: unknown;
+ source_labels: string[];
+ selector_kind: string | null;
+ selector_value: string | null;
+ source_record_ids: number[];
+ feedback: {
+ action: string;
+ source_kind: string;
+ source_value: string | null;
+ source_run_id: number | null;
+ created_at: string;
+ } | null;
+ }>;
  selector_candidates: DomainRecipeSelectorCandidate[];
  affordance_candidates: {
  accordions: string[];
@@ -252,6 +274,38 @@ export type DomainRunProfileLookup = {
  domain: string;
  surface: string;
  saved_run_profile: DomainRunProfile | null;
+};
+
+export type DomainRunProfileRecord = {
+ id: number;
+ domain: string;
+ surface: string;
+ profile: DomainRunProfile;
+ created_at: string;
+ updated_at: string;
+};
+
+export type DomainCookieMemoryRecord = {
+ id: number;
+ domain: string;
+ cookie_count: number;
+ origin_count: number;
+ updated_at: string;
+};
+
+export type DomainFieldFeedbackRecord = {
+ id: number;
+ domain: string;
+ surface: string;
+ field_name: string;
+ action: string;
+ source_kind: string;
+ source_value: string | null;
+ source_run_id: number | null;
+ selector_kind: string | null;
+ selector_value: string | null;
+ source_record_ids: number[];
+ created_at: string;
 };
 
 export type FieldCommitPayload = {

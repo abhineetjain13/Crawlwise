@@ -1223,13 +1223,6 @@ select.control-select:focus {
   color: var(--text-primary);
 }
 
-.app-logo-subtitle {
-  font-size: var(--text-sm);
-  
-  
-  color: var(--text-muted);
-}
-
 .app-icon-button {
   width: 26px;
   height: 26px;
@@ -1547,26 +1540,6 @@ html[data-theme="dark"] .auth-shell-aside {
 
 .auth-shell-ticker-meta,
 .auth-shell-ticker-time {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.auth-shell-quote {
-  margin: 0;
-  color: var(--text-primary);
-}
-
-.auth-shell-quote p {
-  margin: 0;
-  font-family: var(--font-serif);
-  font-size: 1.125rem;
-  font-style: italic;
-  line-height: 1.45;
-  
-}
-
-.auth-shell-quote footer {
-  margin-top: 14px;
   color: var(--text-muted);
   font-size: var(--text-sm);
 }

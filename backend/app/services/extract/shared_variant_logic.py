@@ -150,7 +150,9 @@ def resolve_variant_group_name(node: Any) -> str:
     label = node.find_parent("label") if hasattr(node, "find_parent") else None
     if label is not None and tag_name not in {"input", "button", "option"}:
         raw_candidates.append(label.get_text(" ", strip=True))
-    fieldset = node.find_parent("fieldset") if hasattr(node, "find_parent") else None
+    fieldset = node if tag_name == "fieldset" else (
+        node.find_parent("fieldset") if hasattr(node, "find_parent") else None
+    )
     if fieldset is not None:
         legend = fieldset.find("legend")
         if legend is not None:
@@ -181,6 +183,16 @@ def resolve_variant_group_name(node: Any) -> str:
             ):
                 return normalized_name
             return cleaned_name
+    if hasattr(node, "select"):
+        for child in node.select(
+            "[data-option-name], [aria-label], [data-testid], [data-qa-action], [role='radio'], input, button"
+        )[:24]:
+            inferred_child = infer_variant_group_name(child)
+            if inferred_child:
+                return inferred_child
+    nearby = _nearby_variant_group_name(node)
+    if nearby:
+        return nearby
     return clean_text(inferred_name)
 
 
@@ -197,6 +209,39 @@ def _node_attr_can_hold_group_label(node: Any) -> bool:
         return True
     input_count = len(node.select("input[type='radio'], input[type='checkbox']"))
     return input_count >= 2 or tag_name in {"div", "section", "ul", "ol", "form"}
+
+
+def _nearby_variant_group_name(node: Any) -> str:
+    current = node
+    for _ in range(4):
+        sibling = getattr(current, "previous_sibling", None)
+        while sibling is not None:
+            if hasattr(sibling, "get_text"):
+                extracted = _semantic_group_label_from_text(sibling.get_text(" ", strip=True))
+                if extracted:
+                    return extracted
+            sibling = getattr(sibling, "previous_sibling", None)
+        parent = getattr(current, "parent", None)
+        if parent is None:
+            break
+        current = parent
+    return ""
+
+
+def _semantic_group_label_from_text(value: object) -> str:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    candidates = [
+        cleaned,
+        clean_text(cleaned.split(":", 1)[0]),
+        clean_text(cleaned.split("(", 1)[0]),
+    ]
+    for candidate in candidates:
+        normalized = normalized_variant_axis_key(candidate)
+        if normalized in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+            return normalized
+    return ""
 
 
 def _looks_like_variant_axis_name(value: object) -> bool:

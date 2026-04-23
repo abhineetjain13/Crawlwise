@@ -254,12 +254,19 @@ async def fetch_page(
     on_event=None,
 ) -> PageFetchResult:
     url = _ensure_scheme(url)
+    resolved_timeout_source = timeout_seconds
+    if resolved_timeout_source is None:
+        resolved_timeout_source = (
+            crawler_runtime_settings.acquisition_attempt_timeout_seconds
+        )
+    if resolved_timeout_source is None:
+        raise ValueError(
+            "fetch_page requires timeout_seconds or "
+            "crawler_runtime_settings.acquisition_attempt_timeout_seconds"
+        )
     context = _FetchRuntimeContext(
         url=url,
-        resolved_timeout=float(
-            timeout_seconds
-            or crawler_runtime_settings.acquisition_attempt_timeout_seconds
-        ),
+        resolved_timeout=float(resolved_timeout_source),
         run_id=run_id,
         surface=surface,
         traversal_mode=traversal_mode,

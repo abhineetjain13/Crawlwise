@@ -4,6 +4,15 @@ import { buildDispatch } from "./crawl-config-screen";
 import type { FieldRow } from "./shared";
 import type { CrawlConfig, DomainRunProfile } from "../../lib/api/types";
 
+type DomainRunProfileOverrides = {
+ version?: number;
+ fetch_profile?: Partial<DomainRunProfile["fetch_profile"]>;
+ locality_profile?: Partial<DomainRunProfile["locality_profile"]>;
+ diagnostics_profile?: Partial<DomainRunProfile["diagnostics_profile"]>;
+ source_run_id?: DomainRunProfile["source_run_id"];
+ saved_at?: DomainRunProfile["saved_at"];
+};
+
 function baseConfig(overrides: Partial<CrawlConfig> = {}): CrawlConfig {
  return {
  module: "category",
@@ -22,15 +31,15 @@ function baseConfig(overrides: Partial<CrawlConfig> = {}): CrawlConfig {
  };
 }
 
-function baseProfile(overrides: Partial<DomainRunProfile> = {}): DomainRunProfile {
+function baseProfile(overrides: DomainRunProfileOverrides = {}): DomainRunProfile {
  return {
- version: 1,
+ version: overrides.version ?? 1,
  fetch_profile: {
  fetch_mode: "auto",
  extraction_source: "raw_html",
  js_mode: "auto",
  include_iframes: false,
- traversal_mode: "auto",
+ traversal_mode: null,
  request_delay_ms: 2000,
  max_pages: 5,
  max_scrolls: 10,
@@ -157,7 +166,7 @@ describe("buildDispatch", () => {
  runProfile: baseProfile({
  fetch_profile: {
  fetch_mode: "browser_only",
- traversal_mode: "auto",
+ traversal_mode: "paginate",
  },
  diagnostics_profile: {
  capture_html: true,
@@ -174,7 +183,7 @@ describe("buildDispatch", () => {
  expect(dispatch.settings.advanced_mode).toBeNull();
  expect(dispatch.settings.fetch_profile).toMatchObject({
  fetch_mode: "browser_only",
- traversal_mode: "auto",
+ traversal_mode: null,
  });
  expect(dispatch.settings.diagnostics_profile).toEqual({
  capture_html: true,
@@ -214,7 +223,7 @@ describe("buildDispatch", () => {
  expect(dispatch.urls).toEqual(["https://example.com/p/1", "https://example.com/p/2"]);
  expect(dispatch.settings.urls).toEqual(["https://example.com/p/1", "https://example.com/p/2"]);
  expect(dispatch.settings.fetch_profile).toMatchObject({
- traversal_mode: "auto",
+ traversal_mode: null,
  });
  });
 

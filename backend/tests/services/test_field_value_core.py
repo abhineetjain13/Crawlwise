@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.services.field_value_core import (
     extract_currency_code,
+    extract_urls,
     strip_tracking_query_params,
     validate_and_clean,
     validate_record_for_surface,
@@ -122,3 +123,27 @@ def test_extract_currency_code_supports_rs_price_prefixes() -> None:
 
 def test_extract_currency_code_ignores_non_currency_uppercase_acronyms() -> None:
     assert extract_currency_code("SKU 499") is None
+
+
+def test_extract_urls_trims_trailing_punctuation_from_embedded_urls() -> None:
+    urls = extract_urls(
+        "Docs: https://example.com/alpha), https://example.com/beta.",
+        "https://base.example",
+    )
+
+    assert urls == [
+        "https://example.com/alpha",
+        "https://example.com/beta",
+    ]
+
+
+def test_extract_urls_preserves_balanced_parentheses_and_brackets() -> None:
+    urls = extract_urls(
+        "Docs: https://example.com/release_(2026), https://example.com/archive/[spring].",
+        "https://base.example",
+    )
+
+    assert urls == [
+        "https://example.com/release_(2026)",
+        "https://example.com/archive/[spring]",
+    ]

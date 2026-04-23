@@ -124,13 +124,24 @@ _TRAVERSAL_MODES = {"paginate", "scroll", "load_more", "single", "sitemap", "cra
 def resolve_traversal_mode(settings: object) -> str | None:
     """Resolve and validate the traversal mode from settings."""
     settings_view = _settings_view(settings)
+    advanced_enabled_value = settings_view.get("advanced_enabled")
+    advanced_enabled = (
+        settings_view.advanced_enabled()
+        if hasattr(settings_view, "advanced_enabled")
+        else bool(advanced_enabled_value)
+    )
+    advanced_flag_present = (
+        settings_view.has("advanced_enabled")
+        if hasattr(settings_view, "has")
+        else advanced_enabled_value is not None
+    )
     fetch_profile = settings_view.get("fetch_profile")
     if isinstance(fetch_profile, dict) and fetch_profile:
         fetch_profile_mode = str(fetch_profile.get("traversal_mode") or "").strip().lower()
         if fetch_profile_mode in {"", "none"}:
             return None
         if fetch_profile_mode == "auto":
-            return "auto"
+            return "auto" if (advanced_enabled or not advanced_flag_present) else None
         if fetch_profile_mode == "pagination":
             fetch_profile_mode = "paginate"
         if fetch_profile_mode == "infinite_scroll":
@@ -143,17 +154,6 @@ def resolve_traversal_mode(settings: object) -> str | None:
         raise CrawlerConfigurationError(
             f"Unsupported traversal_mode: {fetch_profile_mode}"
         )
-    advanced_enabled_value = settings_view.get("advanced_enabled")
-    advanced_enabled = (
-        settings_view.advanced_enabled()
-        if hasattr(settings_view, "advanced_enabled")
-        else bool(advanced_enabled_value)
-    )
-    advanced_flag_present = (
-        settings_view.has("advanced_enabled")
-        if hasattr(settings_view, "has")
-        else advanced_enabled_value is not None
-    )
     if advanced_flag_present and not advanced_enabled:
         return None
     # Preserve user-owned advanced mode semantics from the unified crawl UI.

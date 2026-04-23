@@ -9,7 +9,10 @@ import type {
  CrawlSurface,
  Dashboard,
  DomainRecipe,
+ DomainCookieMemoryRecord,
+ DomainFieldFeedbackRecord,
  DomainRunProfileLookup,
+ DomainRunProfileRecord,
  DomainRunProfile,
  FieldCommitPayload,
  FieldCommitResponse,
@@ -46,6 +49,8 @@ export const api = {
  me: () => apiClient.get<User>("/api/auth/me"),
  dashboard: () => apiClient.get<Dashboard>("/api/dashboard"),
  resetApplicationData: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-data", {}),
+ resetCrawlData: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-crawl-data", {}),
+ resetDomainMemory: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-domain-memory", {}),
  createCrawl: (payload: CrawlCreatePayload) => apiClient.post<{ run_id: number }>("/api/crawls", payload),
  createCsvCrawl: (payload: {
  file: File;
@@ -108,6 +113,24 @@ export const api = {
  query.set("surface", params.surface);
  return apiClient.get<DomainRunProfileLookup>(withQuery("/api/crawls/domain-run-profile", query));
  },
+ listDomainRunProfiles: (params?: { domain?: string; surface?: string }) => {
+ const query = new URLSearchParams();
+ if (params?.domain) query.set("domain", params.domain);
+ if (params?.surface) query.set("surface", params.surface);
+ return apiClient.get<DomainRunProfileRecord[]>(withQuery("/api/crawls/domain-memory/run-profiles", query));
+ },
+ listDomainCookieMemory: (params?: { domain?: string }) => {
+ const query = new URLSearchParams();
+ if (params?.domain) query.set("domain", params.domain);
+ return apiClient.get<DomainCookieMemoryRecord[]>(withQuery("/api/crawls/domain-memory/cookies", query));
+ },
+ listDomainFieldFeedback: (params?: { domain?: string; surface?: string; limit?: number }) => {
+ const query = new URLSearchParams();
+ if (params?.domain) query.set("domain", params.domain);
+ if (params?.surface) query.set("surface", params.surface);
+ if (params?.limit !== undefined) query.set("limit", String(params.limit));
+ return apiClient.get<DomainFieldFeedbackRecord[]>(withQuery("/api/crawls/domain-memory/field-feedback", query));
+ },
  getDomainRecipe: (runId: number) => apiClient.get<DomainRecipe>(`/api/crawls/${runId}/domain-recipe`),
  promoteDomainRecipeSelectors: (
  runId: number,
@@ -125,6 +148,16 @@ export const api = {
  runId: number,
  payload: { profile: DomainRunProfile },
  ) => apiClient.post<DomainRunProfile>(`/api/crawls/${runId}/domain-recipe/save-run-profile`, payload),
+ applyDomainRecipeFieldAction: (
+ runId: number,
+ payload: {
+ field_name: string;
+ action: "keep"|"reject";
+ selector_kind?: string | null;
+ selector_value?: string | null;
+ source_record_ids?: number[];
+ },
+ ) => apiClient.post<Record<string, unknown>>(`/api/crawls/${runId}/domain-recipe/field-action`, payload),
  listUsers: (params?: { search?: string; is_active?: boolean }) => {
  const query = new URLSearchParams();
  if (params?.search) query.set("search", params.search);

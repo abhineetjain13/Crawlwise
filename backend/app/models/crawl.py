@@ -560,3 +560,55 @@ class DomainRunProfile(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class DomainCookieMemory(Base):
+    __tablename__ = "domain_cookie_memory"
+    __table_args__ = (
+        Index(
+            "uq_domain_cookie_memory_domain",
+            "domain",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), index=True)
+    storage_state: Mapped[dict] = mapped_column(JSONB, default=dict)
+    state_fingerprint: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class DomainFieldFeedback(Base):
+    __tablename__ = "domain_field_feedback"
+    __table_args__ = (
+        Index(
+            "ix_domain_field_feedback_domain_surface",
+            "domain",
+            "surface",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), index=True)
+    surface: Mapped[str] = mapped_column(String(40), index=True)
+    field_name: Mapped[str] = mapped_column(String(128), index=True)
+    action: Mapped[str] = mapped_column(String(32))
+    source_kind: Mapped[str] = mapped_column(String(32))
+    source_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )

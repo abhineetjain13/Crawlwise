@@ -9,6 +9,8 @@ from app.schemas.crawl import CrawlRunResponse, DashboardResponse
 from app.services.dashboard_service import (
     build_dashboard,
     build_operational_metrics,
+    reset_crawl_data,
+    reset_domain_memory,
     reset_application_data,
 )
 from fastapi import APIRouter, Depends
@@ -38,6 +40,22 @@ async def dashboard_reset_data(
     _: Annotated[User, Depends(require_admin)],
 ) -> dict:
     return await reset_application_data(session)
+
+
+@router.post("/reset-crawl-data")
+async def dashboard_reset_crawl_data(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_admin)],
+) -> dict:
+    return await reset_crawl_data(session)
+
+
+@router.post("/reset-domain-memory")
+async def dashboard_reset_domain_memory(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_admin)],
+) -> dict:
+    return await reset_domain_memory(session)
 
 
 @router.get("/metrics")

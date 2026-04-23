@@ -4,7 +4,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
+from app.models.crawl import (
+    CrawlRecord,
+    CrawlRun,
+    DomainCookieMemory,
+    DomainFieldFeedback,
+    ReviewPromotion,
+)
 from app.services.config.extraction_rules import REVIEW_CONTAINER_KEYS
 from app.services.db_utils import mapping_or_empty
 from app.services.domain_run_profile_service import (
@@ -21,8 +27,16 @@ from app.services.selectors_runtime import (
     list_selector_records,
     update_selector_record,
 )
+from sqlalchemy import desc
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 async def _load_domain_mapping(
@@ -391,23 +405,89 @@ async def build_domain_recipe_payload(
     )
     requested_fields = [str(value) for value in list(run.requested_fields or []) if str(value or "").strip()]
     selector_candidates: dict[str, dict[str, object]] = {}
+    field_learning: dict[tuple[str, str, str], dict[str, object]] = {}
     browser_required = False
+    actual_fetch_method: str | None = None
+    browser_reason: str | None = None
+    affordance_candidates = {
+        "accordions": [],
+        "tabs": [],
+        "carousels": [],
+        "shadow_hosts": [],
+        "iframe_promotion": None,
+        "browser_required": False,
+    }
+    feedback_index = await _latest_field_feedback_index(
+        session,
+        domain=domain,
+        surface=run.surface,
+    )
     for record in records:
         source_trace = mapping_or_empty(record.source_trace)
         acquisition = mapping_or_empty(source_trace.get("acquisition"))
         browser_diagnostics = mapping_or_empty(acquisition.get("browser_diagnostics"))
+        if actual_fetch_method is None:
+            method = str(acquisition.get("method") or "").strip()
+            if method:
+                actual_fetch_method = method
+        if browser_reason is None:
+            next_browser_reason = str(browser_diagnostics.get("browser_reason") or "").strip().lower()
+            if next_browser_reason:
+                browser_reason = next_browser_reason
         if (
             str(acquisition.get("method") or "").strip().lower() == "browser"
             and str(browser_diagnostics.get("browser_reason") or "").strip().lower()
             in {"http-escalation", "vendor-block", "traversal-required", "host-preference"}
         ):
             browser_required = True
+        _merge_affordance_candidates(
+            affordance_candidates,
+            acquisition=acquisition,
+            browser_diagnostics=browser_diagnostics,
+        )
         field_discovery = mapping_or_empty(source_trace.get("field_discovery"))
         for field_name, payload in field_discovery.items():
             payload_map = payload if isinstance(payload, dict) else {}
             selector_trace = mapping_or_empty(payload_map.get("selector_trace"))
             selector_kind = str(selector_trace.get("selector_kind") or "").strip()
             selector_value = str(selector_trace.get("selector_value") or "").strip()
+            source_labels = [
+                str(value)
+                for value in list(payload_map.get("sources") or [])
+                if str(value or "").strip()
+            ]
+            if payload_map.get("status") == "found" and payload_map.get("value") not in (None, "", [], {}):
+                learning_key = (
+                    str(field_name or "").strip().lower(),
+                    selector_kind,
+                    selector_value or (source_labels[-1] if source_labels else ""),
+                )
+                feedback_row = feedback_index.get(learning_key)
+                learning_entry = field_learning.setdefault(
+                    learning_key,
+                    {
+                        "field_name": str(field_name or "").strip().lower(),
+                        "value": payload_map.get("value"),
+                        "source_labels": source_labels,
+                        "selector_kind": selector_kind or None,
+                        "selector_value": selector_value or None,
+                        "source_record_ids": [],
+                        "feedback": (
+                            _serialize_feedback_row(feedback_row)
+                            if feedback_row is not None
+                            else None
+                        ),
+                    },
+                )
+                learning_entry["source_record_ids"] = sorted(
+                    {
+                        int(value)
+                        for value in [
+                            *list(learning_entry.get("source_record_ids") or []),
+                            record.id,
+                        ]
+                    }
+                )
             if not selector_kind or not selector_value:
                 continue
             candidate_key = f"{field_name}|{selector_kind}|{selector_value}"
@@ -446,6 +526,8 @@ async def build_domain_recipe_payload(
         domain=domain,
         surface=run.surface,
     )
+    cookie_memory_exists = await _domain_cookie_memory_exists(session, domain=domain)
+    affordance_candidates["browser_required"] = browser_required
     return {
         "run_id": run.id,
         "domain": domain,
@@ -455,6 +537,21 @@ async def build_domain_recipe_payload(
             "found": [field for field in requested_fields if field in found_fields],
             "missing": [field for field in requested_fields if field not in found_fields],
         },
+        "acquisition_evidence": {
+            "actual_fetch_method": actual_fetch_method,
+            "browser_used": actual_fetch_method == "browser",
+            "browser_reason": browser_reason,
+            "acquisition_summary": mapping_or_empty(run.result_summary).get("acquisition_summary") or {},
+            "cookie_memory_available": cookie_memory_exists,
+        },
+        "field_learning": sorted(
+            field_learning.values(),
+            key=lambda row: (
+                str(row.get("field_name") or ""),
+                str(row.get("selector_kind") or ""),
+                str(row.get("selector_value") or ""),
+            ),
+        ),
         "selector_candidates": sorted(
             selector_candidates.values(),
             key=lambda row: (
@@ -463,14 +560,7 @@ async def build_domain_recipe_payload(
                 str(row.get("selector_value") or ""),
             ),
         ),
-        "affordance_candidates": {
-            "accordions": [],
-            "tabs": [],
-            "carousels": [],
-            "shadow_hosts": [],
-            "iframe_promotion": None,
-            "browser_required": browser_required,
-        },
+        "affordance_candidates": affordance_candidates,
         "saved_selectors": saved_selectors,
         "saved_run_profile": (
             dict(saved_profile_record.profile or {})
@@ -485,18 +575,44 @@ async def promote_domain_recipe_selectors(
     *,
     run: CrawlRun,
     selectors: list[dict[str, object]],
+    commit: bool = True,
 ) -> list[dict[str, object]]:
     domain = normalize_domain(run.url)
+    def _selector_signature(
+        *,
+        field_name: object,
+        selector_kind: object,
+        selector_value: object,
+    ) -> tuple[str, str, str]:
+        return (
+            str(field_name or "").strip().lower(),
+            str(selector_kind or "").strip().lower(),
+            str(selector_value or "").strip(),
+        )
+
+    def _saved_selector_signature(row: dict[str, object]) -> tuple[str, str, str]:
+        if row.get("css_selector"):
+            selector_kind = "css_selector"
+            selector_value = row.get("css_selector")
+        elif row.get("xpath"):
+            selector_kind = "xpath"
+            selector_value = row.get("xpath")
+        else:
+            selector_kind = "regex"
+            selector_value = row.get("regex")
+        return _selector_signature(
+            field_name=row.get("field_name"),
+            selector_kind=selector_kind,
+            selector_value=selector_value,
+        )
+
     existing = await list_selector_records(
         session,
         domain=domain,
         surface=run.surface,
     )
     by_signature = {
-        (
-            str(row.get("field_name") or "").strip().lower(),
-            str(row.get("css_selector") or row.get("xpath") or row.get("regex") or "").strip(),
-        ): row
+        _saved_selector_signature(row): row
         for row in existing
     }
     saved_rows: list[dict[str, object]] = []
@@ -517,14 +633,23 @@ async def promote_domain_recipe_selectors(
             "status": "validated",
             "is_active": True,
         }
-        signature = (field_name, selector_value)
+        signature = _selector_signature(
+            field_name=field_name,
+            selector_kind=selector_kind,
+            selector_value=selector_value,
+        )
         existing_row = by_signature.get(signature)
-        if isinstance(existing_row, dict):
+        if (
+            isinstance(existing_row, dict)
+            and "id" in existing_row
+            and existing_row["id"] is not None
+        ):
             saved_rows.append(
                 await update_selector_record(
                     session,
                     selector_id=int(existing_row["id"]),
                     payload=payload,
+                    commit=commit,
                 )
             )
             continue
@@ -534,6 +659,7 @@ async def promote_domain_recipe_selectors(
                 domain=domain,
                 surface=run.surface,
                 payload=payload,
+                commit=commit,
             )
         )
     return [row for row in saved_rows if isinstance(row, dict)]
@@ -552,3 +678,211 @@ async def save_domain_recipe_run_profile(
         profile=profile,
         source_run_id=run.id,
     )
+
+
+async def apply_domain_recipe_field_action(
+    session: AsyncSession,
+    *,
+    run: CrawlRun,
+    action: dict[str, object],
+) -> dict[str, object]:
+    domain = normalize_domain(run.url)
+    field_name = normalize_field_key(action.get("field_name"))
+    action_name = str(action.get("action") or "").strip().lower()
+    selector_kind = str(action.get("selector_kind") or "").strip().lower()
+    selector_value = str(action.get("selector_value") or "").strip()
+    if not field_name or action_name not in {"keep", "reject"}:
+        raise ValueError("Invalid domain recipe field action.")
+
+    source_kind = "selector" if selector_kind and selector_value else "field_source"
+    source_value = selector_value or None
+    try:
+        if action_name == "keep" and selector_kind and selector_value:
+            await promote_domain_recipe_selectors(
+                session,
+                run=run,
+                selectors=[
+                    {
+                        "field_name": field_name,
+                        "selector_kind": selector_kind,
+                        "selector_value": selector_value,
+                    }
+                ],
+                commit=False,
+            )
+        if action_name == "reject" and selector_kind and selector_value:
+            existing = await list_selector_records(
+                session,
+                domain=domain,
+                surface=run.surface,
+            )
+            for row in existing:
+                matched_value = (
+                    row.get("css_selector")
+                    if selector_kind == "css_selector"
+                    else row.get("xpath")
+                    if selector_kind == "xpath"
+                    else row.get("regex")
+                )
+                if (
+                    normalize_field_key(row.get("field_name")) == field_name
+                    and str(matched_value or "").strip() == selector_value
+                    and row.get("id") is not None
+                ):
+                    await update_selector_record(
+                        session,
+                        selector_id=int(row["id"]),
+                        payload={"is_active": False},
+                        commit=False,
+                    )
+                    break
+
+        feedback = DomainFieldFeedback(
+            domain=domain,
+            surface=run.surface,
+            field_name=field_name,
+            action=action_name,
+            source_kind=source_kind,
+            source_value=source_value,
+            source_run_id=run.id,
+            payload={
+                "selector_kind": selector_kind or None,
+                "selector_value": selector_value or None,
+                "source_record_ids": [
+                    parsed
+                    for parsed in (
+                        _safe_int(value)
+                        for value in list(action.get("source_record_ids") or [])
+                    )
+                    if parsed is not None
+                ],
+            },
+        )
+        session.add(feedback)
+        await session.commit()
+        await session.refresh(feedback)
+        return _serialize_feedback_row(feedback)
+    except Exception:
+        await session.rollback()
+        raise
+
+
+async def list_domain_field_feedback(
+    session: AsyncSession,
+    *,
+    domain: str = "",
+    surface: str = "",
+    limit: int = 50,
+) -> list[dict[str, object]]:
+    statement = select(DomainFieldFeedback).order_by(
+        desc(DomainFieldFeedback.created_at),
+        desc(DomainFieldFeedback.id),
+    )
+    if domain:
+        statement = statement.where(DomainFieldFeedback.domain == domain)
+    if surface:
+        statement = statement.where(DomainFieldFeedback.surface == surface)
+    rows = list((await session.execute(statement.limit(max(1, limit)))).scalars().all())
+    return [_serialize_feedback_record(row) for row in rows]
+
+
+async def _domain_cookie_memory_exists(
+    session: AsyncSession,
+    *,
+    domain: str,
+) -> bool:
+    result = await session.execute(
+        select(DomainCookieMemory.id)
+        .where(DomainCookieMemory.domain == domain)
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _latest_field_feedback_index(
+    session: AsyncSession,
+    *,
+    domain: str,
+    surface: str,
+) -> dict[tuple[str, str, str], DomainFieldFeedback]:
+    rows = list(
+        (
+            await session.execute(
+                select(DomainFieldFeedback)
+                .where(
+                    DomainFieldFeedback.domain == domain,
+                    DomainFieldFeedback.surface == surface,
+                )
+                .order_by(desc(DomainFieldFeedback.created_at), desc(DomainFieldFeedback.id))
+            )
+        ).scalars().all()
+    )
+    index: dict[tuple[str, str, str], DomainFieldFeedback] = {}
+    for row in rows:
+        key = (
+            str(row.field_name or "").strip().lower(),
+            str((row.payload or {}).get("selector_kind") or "").strip(),
+            str(row.source_value or "").strip(),
+        )
+        index.setdefault(key, row)
+    return index
+
+
+def _serialize_feedback_row(row: DomainFieldFeedback) -> dict[str, object]:
+    return {
+        "action": row.action,
+        "source_kind": row.source_kind,
+        "source_value": row.source_value,
+        "source_run_id": row.source_run_id,
+        "created_at": row.created_at,
+    }
+
+
+def _serialize_feedback_record(row: DomainFieldFeedback) -> dict[str, object]:
+    payload = row.payload or {}
+    return {
+        "id": row.id,
+        "domain": row.domain,
+        "surface": row.surface,
+        "field_name": row.field_name,
+        "action": row.action,
+        "source_kind": row.source_kind,
+        "source_value": row.source_value,
+        "source_run_id": row.source_run_id,
+        "selector_kind": payload.get("selector_kind"),
+        "selector_value": payload.get("selector_value"),
+        "source_record_ids": [
+            parsed
+            for parsed in (
+                _safe_int(value)
+                for value in list(payload.get("source_record_ids") or [])
+            )
+            if parsed is not None
+        ],
+        "created_at": row.created_at,
+    }
+
+
+def _merge_affordance_candidates(
+    affordance_candidates: dict[str, object],
+    *,
+    acquisition: dict[str, object],
+    browser_diagnostics: dict[str, object],
+) -> None:
+    if not affordance_candidates.get("iframe_promotion"):
+        final_url = str(acquisition.get("final_url") or "").strip()
+        if final_url and final_url != str(acquisition.get("requested_url") or "").strip():
+            affordance_candidates["iframe_promotion"] = final_url
+    detail_expansion = mapping_or_empty(browser_diagnostics.get("detail_expansion"))
+    for label in _string_values(detail_expansion.get("expanded_elements")):
+        if label not in affordance_candidates["accordions"]:
+            affordance_candidates["accordions"].append(label)
+    for label in _string_values(mapping_or_empty(detail_expansion.get("aom")).get("expanded_elements")):
+        if label not in affordance_candidates["tabs"]:
+            affordance_candidates["tabs"].append(label)
+
+
+def _string_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item or "").strip()]

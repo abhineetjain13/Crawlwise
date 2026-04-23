@@ -6,6 +6,7 @@ export const POLLING_INTERVALS = {
 } as const;
 
 export const UI_DELAYS = {
+ DEBOUNCE_MS: 250,
  PHASE_TRANSITION_MS: 1500,
  BANNER_AUTO_HIDE_MS: 5000,
 } as const;

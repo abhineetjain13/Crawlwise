@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from collections.abc import Mapping
 from pathlib import Path
 
+from app.core.database import SessionLocal
 from app.core.config import settings
+from app.models.crawl import DomainCookieMemory
+from app.services.domain_utils import normalize_domain
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 def validate_cookie_policy_config() -> None:
     if settings.cookie_store_dir.exists() and not settings.cookie_store_dir.is_dir():
@@ -57,6 +63,35 @@ async def load_storage_state_for_run(run_id: int | None) -> dict[str, object] | 
     return _clone_storage_state(state)
 
 
+async def load_storage_state_for_domain(
+    domain: str | None,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, object] | None:
+    normalized_domain = normalize_domain(domain or "")
+    if not normalized_domain:
+        return None
+    if session is None:
+        async with SessionLocal() as owned_session:
+            return await load_storage_state_for_domain(
+                normalized_domain,
+                session=owned_session,
+            )
+    result = await session.execute(
+            select(DomainCookieMemory)
+            .where(DomainCookieMemory.domain == normalized_domain)
+            .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
+            .limit(1)
+    )
+    row = result.scalar_one_or_none()
+    if row is None or not isinstance(row.storage_state, Mapping):
+        return None
+    normalized_state = _normalize_storage_state(row.storage_state)
+    if not normalized_state["cookies"] and not normalized_state["origins"]:
+        return None
+    return normalized_state
+
+
 async def persist_storage_state_for_run(
     run_id: int | None,
     storage_state: Mapping[str, object] | object,
@@ -77,6 +112,97 @@ async def persist_storage_state_for_run(
         )
 
 
+async def persist_storage_state_for_domain(
+    domain: str | None,
+    storage_state: Mapping[str, object] | object,
+    *,
+    session: AsyncSession | None = None,
+) -> bool:
+    normalized_domain = normalize_domain(domain or "")
+    if not normalized_domain or not isinstance(storage_state, Mapping):
+        return False
+    normalized_state = _normalize_storage_state(storage_state)
+    if not normalized_state["cookies"] and not normalized_state["origins"]:
+        return False
+    fingerprint = _storage_state_fingerprint(normalized_state)
+    if session is None:
+        async with SessionLocal() as owned_session:
+            result = await owned_session.execute(
+                select(DomainCookieMemory)
+                .where(DomainCookieMemory.domain == normalized_domain)
+                .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row is not None and str(row.state_fingerprint or "") == fingerprint:
+                return False
+            if row is None:
+                row = DomainCookieMemory(
+                    domain=normalized_domain,
+                    storage_state=normalized_state,
+                    state_fingerprint=fingerprint,
+                )
+                owned_session.add(row)
+            else:
+                row.storage_state = normalized_state
+                row.state_fingerprint = fingerprint
+            await owned_session.commit()
+            return True
+    result = await session.execute(
+            select(DomainCookieMemory)
+            .where(DomainCookieMemory.domain == normalized_domain)
+            .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
+            .limit(1)
+    )
+    row = result.scalar_one_or_none()
+    if row is not None and str(row.state_fingerprint or "") == fingerprint:
+        return False
+    if row is None:
+        row = DomainCookieMemory(
+            domain=normalized_domain,
+            storage_state=normalized_state,
+            state_fingerprint=fingerprint,
+        )
+        session.add(row)
+    else:
+        row.storage_state = normalized_state
+        row.state_fingerprint = fingerprint
+    await session.flush()
+    return False
+
+
+async def list_domain_cookie_memory(
+    domain: str | None = None,
+    *,
+    session: AsyncSession | None = None,
+) -> list[dict[str, object]]:
+    normalized_domain = normalize_domain(domain or "") if domain else ""
+    if session is None:
+        async with SessionLocal() as owned_session:
+            return await list_domain_cookie_memory(
+                domain,
+                session=owned_session,
+            )
+    statement = select(DomainCookieMemory).order_by(
+            DomainCookieMemory.domain.asc(),
+            DomainCookieMemory.updated_at.desc(),
+            DomainCookieMemory.id.desc(),
+    )
+    if normalized_domain:
+        statement = statement.where(DomainCookieMemory.domain == normalized_domain)
+    rows = list((await session.execute(statement)).scalars().all())
+    return [
+        {
+            "id": row.id,
+            "domain": row.domain,
+            "cookie_count": len(_normalize_storage_state(row.storage_state).get("cookies") or []),
+            "origin_count": len(_normalize_storage_state(row.storage_state).get("origins") or []),
+            "updated_at": row.updated_at,
+        }
+        for row in rows
+    ]
+
+
 def _normalized_run_id(run_id: int | None) -> int | None:
     if run_id is None:
         return None
@@ -84,6 +210,15 @@ def _normalized_run_id(run_id: int | None) -> int | None:
         return int(run_id)
     except (TypeError, ValueError):
         return None
+
+
+def _storage_state_fingerprint(storage_state: Mapping[str, object]) -> str:
+    payload = json.dumps(
+        _normalize_storage_state(storage_state),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _storage_state_path(run_id: int) -> Path:

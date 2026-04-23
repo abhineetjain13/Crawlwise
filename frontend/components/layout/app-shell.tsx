@@ -213,12 +213,6 @@ function AuthShell({ children }: Readonly<{ children: ReactNode }>) {
  </div>
  ))}
  </div>
- <blockquote className="auth-shell-quote">
- <p>
- “Our merch team stood up 40 new source crawls in a week without writing a single scraper.”
- </p>
- <footer>Dan K., Director of Data Ops</footer>
- </blockquote>
  </div>
  </aside>
  </div>
@@ -246,7 +240,6 @@ function LogoMark({
  </div>
  <div className="app-logo-copy">
  <span className="app-logo-title">CrawlerAI</span>
- <span className="app-logo-subtitle">Feedonomics</span>
  </div>
  </div>
  );
@@ -326,15 +319,15 @@ function ShellContent({
  const header = useTopBarHeader();
  const topBar = header ?? getFallbackHeader(pathname);
  const router = useRouter();
- const [isResetting, setIsResetting] = useState(false);
+ const [resetPending, setResetPending] = useState<"crawl" | "memory" | null>(null);
 
- async function handleResetData() {
- if (!confirm("Delete crawl data and generated artifacts? This clears runs, records, logs, review promotions, artifacts, cookies, and learned selector/domain mappings. User accounts and LLM config remain.")) {
+ async function handleResetCrawlData() {
+ if (!confirm("Delete crawl runs, records, logs, artifacts, and runtime cookie files? Learned domain memory will be preserved.")) {
  return;
  }
- setIsResetting(true);
+ setResetPending("crawl");
  try {
- await api.resetApplicationData();
+ await api.resetCrawlData();
  globalThis.location.reload();
  } catch (error) {
  const status = httpErrorStatus(error);
@@ -348,10 +341,37 @@ function ShellContent({
  );
  return;
  }
- const message = error instanceof Error ? error.message :"Failed to reset application data.";
+ const message = error instanceof Error ? error.message :"Failed to reset crawl data.";
  globalThis.alert(message);
  } finally {
- setIsResetting(false);
+ setResetPending(null);
+ }
+ }
+
+ async function handleResetDomainMemory() {
+ if (!confirm("Delete learned domain memory only? This clears saved selectors, saved run profiles, cookie memory, and field feedback without deleting crawl history.")) {
+ return;
+ }
+ setResetPending("memory");
+ try {
+ await api.resetDomainMemory();
+ globalThis.location.reload();
+ } catch (error) {
+ const status = httpErrorStatus(error);
+ if (status === 401) {
+ router.replace("/login");
+ return;
+ }
+ if (status === 403) {
+ globalThis.alert(
+"The API refused reset (admin-only on an older backend build, or a stale session). Stop and restart the FastAPI server so it loads the latest code, then try again, or sign out and sign back in.",
+ );
+ return;
+ }
+ const message = error instanceof Error ? error.message :"Failed to reset domain memory.";
+ globalThis.alert(message);
+ } finally {
+ setResetPending(null);
  }
  }
 
@@ -375,14 +395,26 @@ function ShellContent({
  <Button
  type="button"
  onClick={() => {
- void handleResetData();
+ void handleResetCrawlData();
  }}
- disabled={isResetting}
+ disabled={resetPending !== null}
  variant="secondary"
  size="sm"
  >
  <Trash2 className="size-3.5"/>
- {isResetting ?"Resetting...":"Reset"}
+ {resetPending === "crawl" ?"Resetting Crawl Data...":"Reset Crawl Data"}
+ </Button>
+ <Button
+ type="button"
+ onClick={() => {
+ void handleResetDomainMemory();
+ }}
+ disabled={resetPending !== null}
+ variant="secondary"
+ size="sm"
+ >
+ <Trash2 className="size-3.5"/>
+ {resetPending === "memory" ?"Resetting Domain Memory...":"Reset Domain Memory"}
  </Button>
  <ThemeToggle compact />
  </div>
@@ -458,7 +490,7 @@ function getFallbackHeader(pathname: string): TopBarState {
  if (pathname.startsWith("/crawl")) return { title:"Crawl Studio", description:"Configure sources, run jobs, and monitor execution."};
  if (pathname.startsWith("/runs/")) return { title:"Run Details", description:"Inspect a crawl run, logs, and extracted output."};
  if (pathname.startsWith("/runs")) return { title:"Run History", description:"Review and manage previously submitted crawls."};
- if (pathname.startsWith("/selectors/manage")) return { title:"Domain Memory", description:"Manage saved selector memory by domain and surface."};
+ if (pathname.startsWith("/selectors/manage")) return { title:"Domain Memory", description:"Inspect learned selectors and saved run profiles by domain and surface."};
  if (pathname.startsWith("/selectors")) return { title:"Selector Tool", description:"Suggest, test, and validate field selectors."};
  if (pathname.startsWith("/admin/users")) return { title:"Users", description:"Manage workspace access and roles."};
  if (pathname.startsWith("/admin/llm")) return { title:"LLM Config", description:"Control provider settings and prompts."};

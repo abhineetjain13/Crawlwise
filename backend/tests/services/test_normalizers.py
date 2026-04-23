@@ -38,3 +38,11 @@ def test_normalize_decimal_price_preserves_decimal_strings_without_currency_symb
 
 def test_normalize_decimal_price_supports_suffix_currency_and_decimal_comma() -> None:
     assert normalize_decimal_price("62,99 €") == "62.99"
+
+
+def test_normalize_value_price_rejects_ambiguous_integer_strings_without_context() -> None:
+    assert normalize_value("price", "126") == ""
+
+
+def test_normalize_value_price_normalizes_clean_decimal_strings() -> None:
+    assert normalize_value("price", "0012.50") == "12.50"

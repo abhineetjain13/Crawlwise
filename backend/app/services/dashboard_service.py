@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from app.core.config import PROJECT_ROOT, settings
@@ -10,7 +11,10 @@ from app.models.crawl import (
     CrawlLog,
     CrawlRecord,
     CrawlRun,
+    DomainCookieMemory,
+    DomainFieldFeedback,
     DomainMemory,
+    DomainRunProfile,
     ReviewPromotion,
 )
 from app.models.llm import LLMCostLog
@@ -102,21 +106,54 @@ async def build_dashboard(session: AsyncSession, *, user_id: int | None = None) 
 
 
 async def reset_application_data(session: AsyncSession) -> dict:
+    async with _session_transaction(session):
+        crawl_reset = await _reset_crawl_data_db(session)
+        memory_reset = await _reset_domain_memory_db(session)
+    return {
+        **crawl_reset,
+        **await _reset_crawl_runtime_state(),
+        **memory_reset,
+    }
+
+
+async def reset_crawl_data(session: AsyncSession) -> dict:
+    async with _session_transaction(session):
+        counts = await _reset_crawl_data_db(session)
+    return {
+        **counts,
+        **await _reset_crawl_runtime_state(),
+    }
+
+
+async def reset_domain_memory(session: AsyncSession) -> dict:
+    async with _session_transaction(session):
+        return await _reset_domain_memory_db(session)
+
+
+async def _reset_crawl_data_db(session: AsyncSession) -> dict:
     counts = {
         "crawl_runs_deleted": await _count_rows(session, CrawlRun),
         "crawl_records_deleted": await _count_rows(session, CrawlRecord),
         "crawl_logs_deleted": await _count_rows(session, CrawlLog),
         "review_promotions_deleted": await _count_rows(session, ReviewPromotion),
         "llm_cost_logs_deleted": await _count_rows(session, LLMCostLog),
-        "domain_memory_deleted": await _count_rows(session, DomainMemory),
     }
-    try:
-        await _reset_database_tables(session)
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
+    await _reset_crawl_data_tables(session)
+    return counts
 
+
+async def _reset_domain_memory_db(session: AsyncSession) -> dict:
+    counts = {
+        "domain_memory_deleted": await _count_rows(session, DomainMemory),
+        "domain_run_profiles_deleted": await _count_rows(session, DomainRunProfile),
+        "domain_cookie_memory_deleted": await _count_rows(session, DomainCookieMemory),
+        "domain_field_feedback_deleted": await _count_rows(session, DomainFieldFeedback),
+    }
+    await _reset_domain_memory_tables(session)
+    return counts
+
+
+async def _reset_crawl_runtime_state() -> dict:
     await reset_fetch_runtime_state()
     await reset_pacing_state()
     await reset_robots_policy_cache()
@@ -128,12 +165,21 @@ async def reset_application_data(session: AsyncSession) -> dict:
         for path in _legacy_artifact_paths()
     )
     return {
-        **counts,
         "artifacts_removed": artifacts_removed,
         "legacy_artifacts_removed": legacy_artifacts_removed,
         "cookies_removed": cookies_removed,
         "knowledge_base_reset": False,
     }
+
+
+@asynccontextmanager
+async def _session_transaction(session: AsyncSession):
+    had_outer_transaction = session.in_transaction()
+    transaction = session.begin_nested() if had_outer_transaction else session.begin()
+    async with transaction:
+        yield
+    if had_outer_transaction:
+        await session.commit()
 
 
 async def _count_rows(session: AsyncSession, model: type) -> int:
@@ -142,27 +188,24 @@ async def _count_rows(session: AsyncSession, model: type) -> int:
     )
 
 
-async def _reset_database_tables(session: AsyncSession) -> None:
+async def _reset_crawl_data_tables(session: AsyncSession) -> None:
     bind = session.get_bind()
     dialect_name = bind.dialect.name if bind is not None else ""
-    if dialect_name == "postgresql":
-        await session.execute(
-            text(
-                "TRUNCATE TABLE "
-                "crawl_logs, crawl_records, review_promotions, "
-                "llm_cost_log, domain_memory, crawl_runs "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
-        return
-
     await session.execute(delete(CrawlLog))
     await session.execute(delete(CrawlRecord))
     await session.execute(delete(ReviewPromotion))
     await session.execute(delete(LLMCostLog))
-    await session.execute(delete(DomainMemory))
     await session.execute(delete(CrawlRun))
-    if dialect_name == "sqlite":
+    if dialect_name == "postgresql":
+        await _reset_postgres_identities(
+            session,
+            "crawl_logs",
+            "crawl_records",
+            "review_promotions",
+            "llm_cost_log",
+            "crawl_runs",
+        )
+    elif dialect_name == "sqlite":
         sqlite_sequence_exists = (
             await session.execute(
                 text(
@@ -177,10 +220,62 @@ async def _reset_database_tables(session: AsyncSession) -> None:
                     "DELETE FROM sqlite_sequence "
                     "WHERE name IN ("
                     "'crawl_logs', 'crawl_records', 'review_promotions', "
-                    "'llm_cost_log', 'domain_memory', 'crawl_runs'"
+                    "'llm_cost_log', 'crawl_runs'"
                     ")"
                 )
             )
+
+
+async def _reset_domain_memory_tables(session: AsyncSession) -> None:
+    bind = session.get_bind()
+    dialect_name = bind.dialect.name if bind is not None else ""
+    await session.execute(delete(DomainFieldFeedback))
+    await session.execute(delete(DomainCookieMemory))
+    await session.execute(delete(DomainRunProfile))
+    await session.execute(delete(DomainMemory))
+    if dialect_name == "postgresql":
+        await _reset_postgres_identities(
+            session,
+            "domain_field_feedback",
+            "domain_cookie_memory",
+            "domain_run_profiles",
+            "domain_memory",
+        )
+    elif dialect_name == "sqlite":
+        sqlite_sequence_exists = (
+            await session.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'sqlite_sequence'"
+                )
+            )
+        ).scalar()
+        if sqlite_sequence_exists:
+            await session.execute(
+                text(
+                    "DELETE FROM sqlite_sequence "
+                    "WHERE name IN ("
+                    "'domain_field_feedback', 'domain_cookie_memory', "
+                    "'domain_run_profiles', 'domain_memory'"
+                    ")"
+                )
+            )
+
+
+async def _reset_postgres_identities(
+    session: AsyncSession,
+    *table_names: str,
+) -> None:
+    for table_name in table_names:
+        sequence_name = (
+            await session.execute(
+                text("SELECT pg_get_serial_sequence(:table_name, 'id')"),
+                {"table_name": table_name},
+            )
+        ).scalar_one_or_none()
+        if not sequence_name:
+            continue
+        await session.execute(text(f"ALTER SEQUENCE {sequence_name} RESTART WITH 1"))
 
 
 def _reset_directory(path, *, create_if_missing: bool = True) -> int:

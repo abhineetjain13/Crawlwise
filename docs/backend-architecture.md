@@ -55,9 +55,11 @@ Important route groups:
 Domain-recipe routes now live under `api/crawls.py`:
 
 - `GET /api/crawls/domain-run-profile` — lookup saved run-profile defaults by normalized `(domain, surface)` for single-URL Crawl Studio auto-load
-- `GET /api/crawls/{run_id}/domain-recipe` — completed-run payload containing requested-field coverage, grouped winning selector candidates, affordance hints, saved selectors, and the saved domain run profile
+- `GET /api/crawls/{run_id}/domain-recipe` — completed-run payload containing requested-field coverage, grouped winning selector candidates, acquisition evidence, per-field learning state, affordance hints, saved selectors, and the saved domain run profile
 - `POST /api/crawls/{run_id}/domain-recipe/promote-selectors` — promote selected winning selector candidates into exact-surface domain memory
 - `POST /api/crawls/{run_id}/domain-recipe/save-run-profile` — save the reusable fetch/locality/diagnostics profile for the run's normalized `(domain, surface)`
+- `POST /api/crawls/{run_id}/domain-recipe/field-action` — keep/reject field-local learning evidence and deactivate exact-surface saved selectors when a selector-backed field is rejected
+- `GET /api/crawls/domain-memory/cookies` — compact domain-scoped cookie-memory summary for the Domain Memory workspace
 
 ## 4. Crawl Request and Settings Contract
 
@@ -208,7 +210,7 @@ Current live behavior:
 - fetch results carry headers, blocked state, browser diagnostics, transient browser artifacts, and network payload metadata
 - browser runtime is pooled and exposes runtime snapshots
 - `browserforge`-backed context identity is active
-- browser contexts now reload and persist per-run Playwright storage state via `acquisition/cookie_store.py`, so same-run follow-up requests can reuse cookies/localStorage/consent state instead of always starting from a blank context
+- browser contexts now reload the per-run temp Playwright storage state first and then fall back to domain-scoped `DomainCookieMemory`, so future runs can reuse learned cookies/localStorage/consent state for the same domain without rewriting unchanged state on every context close
 - traversal is explicit and separate from browser escalation
 - JSON-expected acquisition now stays in `acquisition/http_client.py`; adapters consume decoded payloads instead of compensating for transport quirks
 - browser network interception is bounded through a small response-queue worker pool with per-endpoint payload budgets instead of untracked background tasks
@@ -359,12 +361,14 @@ Current storage/runtime model:
 - selector/domain memory is stored by normalized `(domain, surface)`
 - selectors are persisted inside `DomainMemory`
 - reusable run defaults are persisted separately in `DomainRunProfile`, keyed by the same normalized `(domain, surface)` scope but never mixed into selector rows or `DomainMemory.selectors`
+- reusable browser cookie/local-storage state is persisted separately in `DomainCookieMemory`, keyed by normalized domain only, because acquisition reuse is host-level rather than surface-level
+- completed-run field keep/reject actions are persisted separately in `DomainFieldFeedback`, keyed by normalized `(domain, surface)` and the field/source that was accepted or rejected
 - runtime can layer surface-specific and generic rules
 - `GET /api/selectors` can now list all selector records for a domain across surfaces when `surface` is omitted, which is what the frontend uses for domain-memory management and crawl-config prefill
 - selector self-heal reuses stamped extraction runtime snapshot data
 - selector self-heal persists only validated improvements and reuses domain memory on later runs before attempting another synthesis pass
 - once reused domain-memory rules satisfy the requested fields for a record, the pipeline does not launch a second generic selector-synthesis round just because confidence remains low
-- completed runs now expose a first-pass Domain Recipe workflow: only winning selector candidates that contributed to final fields are eligible for promotion, affordance hints stay non-executable, and the same screen lets the user edit/save the shared domain run profile for future runs
+- completed runs now expose a Domain Recipe workflow that combines acquisition evidence, field-local keep/reject actions, selector promotion, and saved run-profile editing in one surface; rejecting a selector-backed field deactivates the exact matching saved selector for that `(domain, surface)` without mutating unrelated memory
 
 ### 6.7 LLM admin and runtime
 
@@ -402,6 +406,8 @@ Primary models:
 - `CrawlRecord`
 - `CrawlLog`
 - `DomainRunProfile`
+- `DomainCookieMemory`
+- `DomainFieldFeedback`
 - `ReviewPromotion`
 - `LLMConfig`
 - `LLMCostLog`
@@ -413,6 +419,7 @@ Notable current schema direction:
 - max-records trigger support
 - URL identity keys on records
 - domain-memory storage
+- split crawl-data reset versus domain-memory reset, so destructive cleanup no longer wipes learned selectors/profiles/cookies by default
 
 ## 8. Record, Review, and Provenance Contracts
 

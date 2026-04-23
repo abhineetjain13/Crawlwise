@@ -73,24 +73,24 @@ class CrawlRunSettings:
 
     def fetch_profile(self) -> dict[str, object]:
         stored = _mapping(self.data.get("fetch_profile"))
+        traversal_mode = self.traversal_mode()
         if stored:
             return {
                 "fetch_mode": str(stored.get("fetch_mode") or "auto").strip().lower() or "auto",
                 "extraction_source": str(stored.get("extraction_source") or "raw_html").strip().lower() or "raw_html",
                 "js_mode": str(stored.get("js_mode") or "auto").strip().lower() or "auto",
                 "include_iframes": bool(stored.get("include_iframes", False)),
-                "traversal_mode": str(stored.get("traversal_mode") or "auto").strip().lower() or "auto",
+                "traversal_mode": traversal_mode,
                 "request_delay_ms": self.sleep_ms(),
                 "max_pages": self.max_pages(),
                 "max_scrolls": self.max_scrolls(),
             }
-        traversal_mode = self.traversal_mode()
         return {
             "fetch_mode": "auto",
             "extraction_source": "raw_html",
             "js_mode": "auto",
             "include_iframes": False,
-            "traversal_mode": traversal_mode or "auto",
+            "traversal_mode": traversal_mode,
             "request_delay_ms": self.sleep_ms(),
             "max_pages": self.max_pages(),
             "max_scrolls": self.max_scrolls(),

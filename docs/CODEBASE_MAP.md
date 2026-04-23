@@ -20,7 +20,7 @@
 
 | File | Purpose |
 |------|---------|
-| `crawls.py` | Create runs, CSV ingestion, pause/resume/kill, commit fields/LLM, logs, websocket, domain-recipe/profile routes |
+| `crawls.py` | Create runs, CSV ingestion, pause/resume/kill, commit fields/LLM, logs, websocket, domain-recipe/profile/field-action/cookie-memory routes |
 | `records.py` | List records, JSON/CSV/MD/artifact/discoverist exports, provenance |
 | `review.py` | Review payload, artifact HTML, save approved mapping |
 | `selectors.py` | Selector CRUD, suggest, test, preview-html |
@@ -49,6 +49,8 @@
 | `CrawlLog` | `crawl.py` | id, run_id, level, message |
 | `DomainMemory` | `crawl.py` | domain, surface, selectors JSONB — scoped by `(domain, surface)` |
 | `DomainRunProfile` | `crawl.py` | domain, surface, profile JSONB — reusable execution profile scoped by `(domain, surface)` |
+| `DomainCookieMemory` | `crawl.py` | domain, storage_state JSONB, state_fingerprint — reusable browser cookie/local-storage memory scoped by domain |
+| `DomainFieldFeedback` | `crawl.py` | domain, surface, field_name, action, source_kind/value — completed-run keep/reject learning history |
 | `ReviewPromotion` | `crawl.py` | run_id, domain, surface, approved_schema JSONB |
 | `LLMConfig` | `llm.py` | provider, model, task_type, api_key_encrypted, budgets |
 | `LLMCostLog` | `llm.py` | provider, run_id, input_tokens, cost_usd |
@@ -99,7 +101,7 @@ POST /api/crawls → crawl_ingestion_service → crawl_crud.create_crawl_run
 | `acquisition/browser_readiness.py` | DOM readiness probe (selectors, network-idle, load events) |
 | `acquisition/traversal.py` | Listing pagination + load-more: bounded per-step snapshots |
 | `acquisition/pacing.py` | Host-level rate limiting state |
-| `acquisition/cookie_store.py` | Per-run browser storage-state persistence (cookies/localStorage) and cookie policy enforcement |
+| `acquisition/cookie_store.py` | Per-run temp browser storage-state persistence plus domain-scoped cookie-memory load/save/list helpers |
 | `crawl_fetch_runtime.py` | `fetch_page()` — the HTTP/browser decision, escalation, block detection |
 | `robots_policy.py` | robots.txt fetch, parse, allow/disallow checks |
 | `url_safety.py` | SSRF + public-target validation |

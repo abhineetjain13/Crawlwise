@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 import harness_support
 import run_test_sites_acceptance
+from app.schemas.user import UserResponse
 from app.services.acquisition_plan import AcquisitionPlan
 from harness_support import (
     build_explicit_sites,
@@ -746,6 +747,28 @@ async def test_ensure_harness_user_id_bootstraps_local_defaults_without_env(
     assert user_id == user.id
     assert user.role == "harness"
     assert bool(user.hashed_password)
+
+
+@pytest.mark.asyncio
+async def test_harness_default_user_serializes_through_user_response(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("HARNESS_EMAIL", raising=False)
+    monkeypatch.delenv("HARNESS_PASSWORD", raising=False)
+    monkeypatch.delenv("HARNESS_ROLE", raising=False)
+
+    user_id = await harness_support._ensure_harness_user_id(db_session)
+    user = (
+        await db_session.execute(
+            select(harness_support.User).where(harness_support.User.id == user_id)
+        )
+    ).scalar_one()
+
+    response = UserResponse.model_validate(user, from_attributes=True)
+
+    assert response.email == "harness@local.invalid"
 
 
 @pytest.mark.asyncio

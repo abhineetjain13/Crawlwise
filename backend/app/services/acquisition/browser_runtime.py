@@ -32,7 +32,9 @@ from app.services.acquisition.browser_identity import (
     clear_browser_identity_cache,
 )
 from app.services.acquisition.cookie_store import (
+    load_storage_state_for_domain,
     load_storage_state_for_run,
+    persist_storage_state_for_domain,
     persist_storage_state_for_run,
 )
 from app.services.acquisition.browser_page_flow import (
@@ -73,6 +75,7 @@ from app.services.config.extraction_rules import (
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
+from app.services.domain_utils import normalize_domain
 from app.services.field_value_core import clean_text
 from app.services.platform_policy import resolve_listing_readiness_override
 
@@ -180,7 +183,13 @@ class SharedBrowserRuntime:
         return build_playwright_context_options(run_id=run_id)
 
     @asynccontextmanager
-    async def page(self, *, proxy: str | None = None, run_id: int | None = None):
+    async def page(
+        self,
+        *,
+        proxy: str | None = None,
+        run_id: int | None = None,
+        domain: str | None = None,
+    ):
         await self._ensure()
         await self._update_queue_count(1)
         try:
@@ -197,6 +206,8 @@ class SharedBrowserRuntime:
         try:
             context_options = self._build_context_options(run_id=run_id)
             storage_state = await load_storage_state_for_run(run_id)
+            if not storage_state:
+                storage_state = await load_storage_state_for_domain(domain)
             if storage_state:
                 context_options["storage_state"] = storage_state
             if proxy:
@@ -211,7 +222,11 @@ class SharedBrowserRuntime:
         finally:
             await self._update_active_contexts(-1)
             if context is not None:
-                await _persist_context_storage_state(context, run_id=run_id)
+                await _persist_context_storage_state(
+                    context,
+                    run_id=run_id,
+                    domain=domain,
+                )
                 try:
                     await context.close()
                 except Exception:
@@ -311,9 +326,14 @@ async def _block_unneeded_route(route: Any) -> None:
 
 
 @asynccontextmanager
-async def temporary_browser_page(*, proxy: str, run_id: int | None = None):
+async def temporary_browser_page(
+    *,
+    proxy: str,
+    run_id: int | None = None,
+    domain: str | None = None,
+):
     runtime = await get_browser_runtime()
-    async with runtime.page(proxy=proxy, run_id=run_id) as page:
+    async with runtime.page(proxy=proxy, run_id=run_id, domain=domain) as page:
         yield page
 
 async def get_browser_runtime() -> SharedBrowserRuntime:
@@ -392,8 +412,10 @@ async def _persist_context_storage_state(
     context: Any,
     *,
     run_id: int | None,
+    domain: str | None,
 ) -> None:
-    if run_id is None:
+    normalized_domain = str(domain or "").strip()
+    if run_id is None and not normalized_domain:
         return
     storage_state_fn = getattr(context, "storage_state", None)
     if storage_state_fn is None:
@@ -403,14 +425,24 @@ async def _persist_context_storage_state(
     except Exception:
         logger.debug("Failed to capture browser storage state for run_id=%s", run_id, exc_info=True)
         return
-    try:
-        await persist_storage_state_for_run(run_id, storage_state)
-    except Exception:
-        logger.error(
-            "Failed to persist browser storage state for run_id=%s",
-            run_id,
-            exc_info=True,
-        )
+    if run_id is not None:
+        try:
+            await persist_storage_state_for_run(run_id, storage_state)
+        except Exception:
+            logger.error(
+                "Failed to persist browser storage state for run_id=%s",
+                run_id,
+                exc_info=True,
+            )
+    if normalized_domain:
+        try:
+            await persist_storage_state_for_domain(normalized_domain, storage_state)
+        except Exception:
+            logger.error(
+                "Failed to persist browser storage state for domain=%s",
+                normalized_domain,
+                exc_info=True,
+            )
 
 
 def _build_payload_capture(*, surface: str) -> _BrowserNetworkCapture:
@@ -469,11 +501,16 @@ async def browser_fetch(
     proxied_page_factory=temporary_browser_page,
     blocked_html_checker=is_blocked_html_async,
 ) -> PageFetchResult:
+    normalized_domain = normalize_domain(url)
     if proxy:
-        page_context = proxied_page_factory(proxy=proxy, run_id=run_id)
+        page_context = proxied_page_factory(
+            proxy=proxy,
+            run_id=run_id,
+            domain=normalized_domain,
+        )
     else:
         runtime = await runtime_provider()
-        page_context = runtime.page(run_id=run_id)
+        page_context = runtime.page(run_id=run_id, domain=normalized_domain)
     async with page_context as page:
         await _emit_browser_event(
             on_event,

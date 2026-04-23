@@ -74,6 +74,7 @@ _PRICE_NODE_SELECTORS = (
     "[aria-label*='price']",
 )
 _PROMINENT_TITLE_TAGS = {"strong", "b", "h1", "h2", "h3", "h4", "h5", "h6"}
+_REVIEW_TITLE_RE = re.compile(r"^\s*\d[\d,\s]*\s+reviews?\s*$", re.I)
 
 
 def _structured_listing_record(
@@ -111,7 +112,24 @@ def _structured_listing_record(
         return {}
     if _url_is_structural(url, page_url):
         return {}
-    return finalize_record(record, surface=surface)
+    return _finalize_listing_price_fields(finalize_record(record, surface=surface))
+
+
+def _finalize_listing_price_fields(record: dict[str, Any]) -> dict[str, Any]:
+    if record.get("price") in (None, "", [], {}):
+        for fallback_field in ("sale_price", "original_price"):
+            fallback_price = record.get(fallback_field)
+            if fallback_price not in (None, "", [], {}):
+                record["price"] = fallback_price
+                break
+    if record.get("price") in (None, "", [], {}) and record.get("currency") not in (
+        None,
+        "",
+        [],
+        {},
+    ):
+        record.pop("currency", None)
+    return record
 
 
 def _url_is_structural(url: str, page_url: str) -> bool:
@@ -330,6 +348,8 @@ def _listing_title_is_noise(title: str) -> bool:
     if not lowered:
         return True
     if cleaned.isdigit():
+        return True
+    if _REVIEW_TITLE_RE.fullmatch(cleaned):
         return True
     if "star" in lowered and RATING_RE.search(lowered):
         return True
@@ -910,6 +930,46 @@ def _extract_page_images_from_node(root, page_url: str) -> list[str]:
     return values[:12]
 
 
+def _extract_image_title_hint(root) -> str | None:
+    for node in _node_css(root, "img"):
+        for attr_name in ("alt", "title", "aria-label"):
+            candidate = clean_text(_node_attr(node, attr_name))
+            if not candidate or _listing_title_is_noise(candidate):
+                continue
+            return candidate
+    return None
+
+
+def _title_token_overlap(left: str, right: str) -> int:
+    left_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", clean_text(left).lower())
+        if len(token) >= 3 and token not in {"and", "for", "the", "with"}
+    }
+    right_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", clean_text(right).lower())
+        if len(token) >= 3 and token not in {"and", "for", "the", "with"}
+    }
+    if not left_tokens or not right_tokens:
+        return 0
+    return len(left_tokens & right_tokens)
+
+
+def _should_replace_title_with_image_hint(title: str, image_title_hint: str | None) -> bool:
+    hint = clean_text(image_title_hint)
+    current = clean_text(title)
+    if not hint or _listing_title_is_noise(hint):
+        return False
+    if not current:
+        return True
+    if current == hint:
+        return False
+    if _listing_title_is_noise(current):
+        return True
+    return _title_token_overlap(current, hint) == 0
+
+
 def _extract_label_value_pairs_from_node(root) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     for tr in _node_css(root, "tr"):
@@ -997,12 +1057,15 @@ def _listing_record_from_card(
     anchor_node, url, anchor_text, anchor_score = primary_anchor
     title_node = title_node or anchor_node
     title_score = _card_title_score(title_node)
+    image_title_hint = _extract_image_title_hint(card)
     title = clean_text(
         _node_attr(title_node, "title")
         or _node_attr(title_node, "alt")
         or _node_text(title_node)
         or anchor_text
     )
+    if _should_replace_title_with_image_hint(title, image_title_hint):
+        title = clean_text(image_title_hint)
     if len(title) < 4 or _listing_title_is_noise(title):
         return None
     if anchor_score < 4 and title_score < 8:

@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from app.services.domain_memory_service import load_domain_memory, save_domain_memory
-from app.services.selectors_runtime import create_selector_record, fetch_selector_document
+from app.services.selectors_runtime import (
+    create_selector_record,
+    fetch_selector_document,
+    update_selector_record,
+)
 
 
 @pytest.mark.asyncio
@@ -82,3 +86,32 @@ async def test_create_selector_record_normalizes_duplicate_ids_before_append(db_
 async def test_fetch_selector_document_rejects_private_targets() -> None:
     with pytest.raises(ValueError):
         await fetch_selector_document("http://localhost/internal")
+
+
+@pytest.mark.asyncio
+async def test_update_selector_record_returns_committed_memory_timestamps(db_session) -> None:
+    created = await create_selector_record(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        payload={
+            "field_name": "title",
+            "css_selector": "h1",
+            "source": "manual",
+        },
+    )
+
+    updated = await update_selector_record(
+        db_session,
+        selector_id=created["id"],
+        payload={"sample_value": "Widget Prime"},
+    )
+    memory = await load_domain_memory(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+    )
+
+    assert updated is not None
+    assert memory is not None
+    assert updated["updated_at"] == memory.updated_at

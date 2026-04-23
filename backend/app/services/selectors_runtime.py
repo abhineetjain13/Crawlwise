@@ -192,6 +192,7 @@ async def create_selector_record(
     domain: str,
     surface: str,
     payload: dict[str, object],
+    commit: bool = True,
 ) -> dict[str, object]:
     normalized_domain = str(domain or "").strip().lower()
     normalized_surface = str(surface or "").strip().lower() or "generic"
@@ -223,7 +224,10 @@ async def create_selector_record(
         surface=normalized_surface,
         selectors=selector_payload_from_rules(rules),
     )
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     memory = await load_domain_memory(
         session,
         domain=normalized_domain,
@@ -243,6 +247,7 @@ async def update_selector_record(
     *,
     selector_id: int,
     payload: dict[str, object],
+    commit: bool = True,
 ) -> dict[str, object] | None:
     await _ensure_unique_selector_ids(session)
     for memory in await _all_domain_memories(session):
@@ -284,7 +289,15 @@ async def update_selector_record(
             platform=memory.platform,
             selectors=selector_payload_from_rules(rules),
         )
-        await session.commit()
+        if commit:
+            await session.commit()
+        else:
+            await session.flush()
+        refreshed_memory = await load_domain_memory(
+            session,
+            domain=memory.domain,
+            surface=memory.surface,
+        )
         refreshed = next(
             row for row in rules if int(row.get("id") or 0) == int(selector_id)
         )
@@ -292,8 +305,12 @@ async def update_selector_record(
             "domain": memory.domain,
             "surface": memory.surface,
             **refreshed,
-            "created_at": memory.created_at,
-            "updated_at": memory.updated_at,
+            "created_at": (
+                refreshed_memory.created_at if refreshed_memory is not None else None
+            ),
+            "updated_at": (
+                refreshed_memory.updated_at if refreshed_memory is not None else None
+            ),
         }
     return None
 

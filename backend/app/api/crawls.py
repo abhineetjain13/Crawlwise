@@ -14,9 +14,13 @@ from app.models.user import User
 from app.schemas.common import LogEntryResponse, PaginatedResponse, PaginationMeta
 from app.schemas.crawl import (
     CrawlCreate,
+    DomainCookieMemoryRecordResponse,
+    DomainFieldFeedbackRecordResponse,
+    DomainRecipeFieldActionRequest,
     DomainRecipePromoteSelectorsRequest,
     DomainRecipeResponse,
     DomainRunProfileLookupResponse,
+    DomainRunProfileRecordResponse,
     DomainRecipeSaveRunProfileRequest,
     CrawlRunResponse,
     FieldCommitRequest,
@@ -24,6 +28,7 @@ from app.schemas.crawl import (
     LLMCommitRequest,
     LLMCommitResponse,
 )
+from app.services.acquisition.cookie_store import list_domain_cookie_memory
 from app.services.crawl_access_service import (
     RUN_NOT_FOUND_DETAIL,
     user_can_access_run,
@@ -43,10 +48,15 @@ from app.services.crawl_ingestion_service import (
 )
 from app.services.crawl_service import kill_run, pause_run, resume_run
 from app.services.crawl_state import TERMINAL_STATUSES
-from app.services.domain_run_profile_service import load_domain_run_profile
+from app.services.domain_run_profile_service import (
+    list_domain_run_profiles,
+    load_domain_run_profile,
+)
 from app.services.domain_utils import normalize_domain
 from app.services.review import (
+    apply_domain_recipe_field_action,
     build_domain_recipe_payload,
+    list_domain_field_feedback,
     promote_domain_recipe_selectors,
     save_domain_recipe_run_profile,
 )
@@ -287,6 +297,83 @@ async def crawls_domain_run_profile_lookup(
     )
 
 
+@router.get("/domain-run-profiles")
+async def crawls_domain_run_profiles(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _user: Annotated[User, Depends(get_current_user)],
+    domain: str = "",
+    surface: str = "",
+) -> list[DomainRunProfileRecordResponse]:
+    rows = await list_domain_run_profiles(
+        session,
+        domain=domain,
+        surface=surface,
+    )
+    return [
+        DomainRunProfileRecordResponse(
+            id=row.id,
+            domain=row.domain,
+            surface=row.surface,
+            profile=dict(row.profile or {}),
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/domain-memory/run-profiles")
+async def crawls_domain_memory_run_profiles(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _user: Annotated[User, Depends(get_current_user)],
+    domain: str = "",
+    surface: str = "",
+) -> list[DomainRunProfileRecordResponse]:
+    rows = await list_domain_run_profiles(
+        session,
+        domain=domain,
+        surface=surface,
+    )
+    return [
+        DomainRunProfileRecordResponse(
+            id=row.id,
+            domain=row.domain,
+            surface=row.surface,
+            profile=dict(row.profile or {}),
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/domain-memory/cookies")
+async def crawls_domain_memory_cookies(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _user: Annotated[User, Depends(get_current_user)],
+    domain: str = "",
+) -> list[DomainCookieMemoryRecordResponse]:
+    rows = await list_domain_cookie_memory(domain, session=session)
+    return [DomainCookieMemoryRecordResponse.model_validate(row) for row in rows]
+
+
+@router.get("/domain-memory/field-feedback")
+async def crawls_domain_memory_field_feedback(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _user: Annotated[User, Depends(get_current_user)],
+    domain: str = "",
+    surface: str = "",
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[DomainFieldFeedbackRecordResponse]:
+    rows = await list_domain_field_feedback(
+        session,
+        domain=domain,
+        surface=surface,
+        limit=limit,
+    )
+    return [DomainFieldFeedbackRecordResponse.model_validate(row) for row in rows]
+
+
 @router.get("")
 async def crawls_list(
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -436,6 +523,28 @@ async def crawls_save_domain_run_profile(
         run=run,
         profile=payload.profile.model_dump(),
     )
+
+
+@router.post("/{run_id}/domain-recipe/field-action", responses=RUN_NOT_FOUND_RESPONSE)
+async def crawls_domain_recipe_field_action(
+    run_id: int,
+    payload: DomainRecipeFieldActionRequest,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, object]:
+    run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
+    try:
+        return await apply_domain_recipe_field_action(
+            session,
+            run=run,
+            action=payload.model_dump(),
+        )
+    except ValueError as exc:
+        await session.rollback()
+        _raise_http_from_value_error(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            exc=exc,
+        )
 
 
 @router.post("/{run_id}/resume", responses=RUN_CONFLICT_RESPONSE)

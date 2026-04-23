@@ -1047,6 +1047,20 @@ async def test_fetch_page_stops_http_waterfall_after_vendor_confirmed_block(
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_requires_a_timeout_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        crawl_fetch_runtime.crawler_runtime_settings,
+        "acquisition_attempt_timeout_seconds",
+        None,
+    )
+
+    with pytest.raises(ValueError, match="fetch_page requires timeout_seconds"):
+        await crawl_fetch_runtime.fetch_page("https://example.com/products/widget")
+
+
+@pytest.mark.asyncio
 async def test_fetch_page_prefers_browser_after_vendor_blocked_host_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -172,8 +172,14 @@ def _normalize_int(value: object) -> int | str:
 
 
 def _normalize_availability(value: object) -> str:
+    if isinstance(value, bool):
+        return "in_stock" if value else "out_of_stock"
     text = _normalize_text(value)
     lowered = text.lower()
+    if lowered in {"true", "1", "yes"}:
+        return "in_stock"
+    if lowered in {"false", "0", "no"}:
+        return "out_of_stock"
     flat_tokens = [
         (token, normalized)
         for normalized, tokens in _AVAILABILITY_TOKENS.items()
@@ -198,9 +204,9 @@ def normalize_value(field_name: str, value: object) -> object:
         return _normalize_availability(value)
     if normalized_field in _DECIMAL_FIELDS:
         if isinstance(value, str):
-            candidate = _canonicalize_decimal_candidate(value)
-            if candidate is not None and re.fullmatch(r"[-+]?\d+(?:\.\d+)?", candidate):
-                return candidate
+            trimmed = value.strip()
+            if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", trimmed):
+                return normalize_decimal_price(trimmed) or ""
         result = normalize_decimal_price(value)
         return result if result is not None else ""
     if normalized_field.endswith("_count") or normalized_field in _INTEGER_FIELDS:

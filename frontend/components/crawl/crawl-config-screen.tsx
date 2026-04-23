@@ -1,15 +1,14 @@
 "use client";
 
-import { Globe, Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Globe, Info, Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { InlineAlert, PageHeader, SectionHeader, TabBar } from "../ui/patterns";
-import { Button, Dropdown, Card, Input, Textarea } from "../ui/primitives";
+import { Button, Dropdown, Card, Input, Textarea, Toggle, Tooltip } from "../ui/primitives";
 import { api } from "../../lib/api";
 import type {
- AdvancedCrawlMode,
  CrawlConfig,
  CrawlDomain,
  DomainRunProfile,
@@ -53,7 +52,8 @@ type StudioMode = "quick" | "advanced";
 type FetchMode = DomainRunProfile["fetch_profile"]["fetch_mode"];
 type ExtractionSource = DomainRunProfile["fetch_profile"]["extraction_source"];
 type JsMode = DomainRunProfile["fetch_profile"]["js_mode"];
-type TraversalMode = DomainRunProfile["fetch_profile"]["traversal_mode"];
+type TraversalMode = NonNullable<DomainRunProfile["fetch_profile"]["traversal_mode"]>;
+type TraversalDropdownValue = TraversalMode | "off";
 type CaptureNetworkMode = DomainRunProfile["diagnostics_profile"]["capture_network"];
 type DiagnosticsPreset = "lean" | "standard" | "deep_debug";
 
@@ -82,6 +82,10 @@ const CAPTURE_NETWORK_OPTIONS = new Set<CaptureNetworkMode>([
  "matched_only",
  "all_small_json",
 ]);
+const RUN_SETUP_ICON_CLASS =
+ "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--setting-icon-active-shadow)]";
+const ADVANCED_CONTROL_ROW_CLASS = "grid gap-1.5 md:grid-cols-[132px_minmax(0,1fr)] md:items-center md:gap-3";
+const ADVANCED_SECTION_TITLE_CLASS = "flex items-center gap-1.5 text-base font-semibold text-foreground";
 
 const DIAGNOSTICS_PRESETS: Record<
  DiagnosticsPreset,
@@ -118,7 +122,7 @@ function defaultRunProfile(): DomainRunProfile {
  extraction_source: "raw_html",
  js_mode: "auto",
  include_iframes: false,
- traversal_mode: "auto",
+ traversal_mode: null,
  request_delay_ms: CRAWL_DEFAULTS.REQUEST_DELAY_MS,
  max_pages: CRAWL_DEFAULTS.MAX_PAGES,
  max_scrolls: CRAWL_DEFAULTS.MAX_SCROLLS,
@@ -820,7 +824,7 @@ export function CrawlConfigScreen({
  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
  <SectionHeader
  title="Field Configuration"
- description="Generate selector suggestions or add manual overrides"
+ description="Generate selector suggestions or add manual overrides."
  />
  <div className="flex justify-end lg:pt-0.5">
  <div className="inline-flex flex-wrap items-center justify-end gap-2 rounded-[18px] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-1.5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
@@ -908,11 +912,19 @@ export function CrawlConfigScreen({
 
  <div className="h-full xl:self-stretch">
  <div className="h-full xl:sticky xl:top-[68px]">
- <Card className="section-card flex h-full flex-col overflow-hidden">
- <SectionHeader title="Crawl Settings" description="Choose repeat-run defaults or exploratory controls for this crawl." />
- <div className="page-stack flex-1">
- <div className="flex items-center justify-between rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-3">
+ <Card className="section-card">
+ <SectionHeader
+ title="Run Setup"
+ description="Keep the run identity controls in view while you shape the crawl."
+ />
+ <div className="page-stack">
+ <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">
+ <div className="flex min-w-0 items-center gap-3">
+ <div className={RUN_SETUP_ICON_CLASS}>
+ <Globe className="size-4" />
+ </div>
  <div className="field-label mb-0">DOMAIN</div>
+ </div>
  <TabBar
  value={crawlDomain}
  compact
@@ -928,14 +940,17 @@ export function CrawlConfigScreen({
  />
  </div>
 
- <div className="flex items-center justify-between rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-3">
- <div>
+ <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">
+ <div className="flex min-w-0 items-center gap-3">
+ <div className={RUN_SETUP_ICON_CLASS}>
+ <SlidersHorizontal className="size-4" />
+ </div>
+ <div className="flex items-center gap-1.5">
  <div className="field-label mb-0">STUDIO MODE</div>
- <p className="mt-1 text-sm leading-[1.45] text-secondary">
- {studioMode === "quick"
- ? "Quick Mode uses saved domain defaults when present."
- : "Advanced Mode exposes the full fetch, locality, diagnostics, and selector controls."}
- </p>
+ <Tooltip content="Advanced Mode exposes the full fetch, locality, diagnostics, and selector controls.">
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ </div>
  </div>
  <TabBar
  value={studioMode}
@@ -952,23 +967,50 @@ export function CrawlConfigScreen({
  />
  </div>
 
+ <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">
+ <div className="flex min-w-0 items-center gap-3">
+ <div className={RUN_SETUP_ICON_CLASS}>
+ <Sparkles className="size-4" />
+ </div>
+ <div className="flex items-center gap-1.5">
+ <div className="field-label mb-0">LLM Enabled</div>
+ <Tooltip content="Per-run enrichment only. This does not overwrite saved domain defaults.">
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ </div>
+ </div>
+ <Toggle checked={smartExtraction} onChange={setSmartExtraction} ariaLabel="LLM enabled" />
+ </div>
+
  {singleUrlMode && savedProfileLoaded ? (
  <div className="rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-2 text-sm leading-[1.5] text-secondary">
  Saved domain profile active: <span className="font-medium text-foreground">{savedProfileDomain}</span> · {surfaceLabel(surface)}
  </div>
  ) : null}
+ </div>
+ </Card>
+ </div>
+ </div>
 
- <div className="divide-y divide-[var(--divider)]">
- <SettingSection
- label="LLM Gap Fill"
- description="Per-run enrichment only. Not saved to the domain profile."
- icon={<Sparkles className="size-4" />}
- checked={smartExtraction}
- onChange={setSmartExtraction}
+ {studioMode === "advanced" ? (
+ <Card className="section-card xl:col-span-2">
+ <SectionHeader
+ title="Advanced Settings"
+ icon={SlidersHorizontal}
+ description="Fine-tune fetch, limits, locality, and diagnostics for this exploratory run."
  />
-
- <div className="space-y-3 px-3 py-4">
- <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className="grid gap-5 xl:grid-cols-3">
+ <section className="space-y-5">
+ <div className="border-b border-[var(--divider)] pb-4">
+ <div className={ADVANCED_SECTION_TITLE_CLASS}>
+ <h3>Execution</h3>
+ <Tooltip content="Control how the crawler fetches, renders, and traverses the target.">
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ </div>
+ </div>
+ <div className="grid gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4">
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
  <div className="field-label">Fetch Mode</div>
  <Dropdown<FetchMode>
  ariaLabel="Fetch mode"
@@ -992,28 +1034,7 @@ export function CrawlConfigScreen({
  ]}
  />
  </div>
-
- {studioMode === "quick" ? (
- <div className="grid grid-cols-[132px_1fr] items-center gap-3">
- <div className="field-label">Diagnostics</div>
- <Dropdown<DiagnosticsPreset>
- ariaLabel="Diagnostics preset"
- value={diagnosticsPreset}
- onChange={(next) => {
- if (next === "lean" || next === "standard" || next === "deep_debug") {
- markProfileDirty((current) => applyDiagnosticsPreset(current, next));
- }
- }}
- options={[
- { value: "lean", label: "Lean" },
- { value: "standard", label: "Standard" },
- { value: "deep_debug", label: "Deep Debug" },
- ]}
- />
- </div>
- ) : (
- <>
- <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
  <div className="field-label">Extraction</div>
  <Dropdown<ExtractionSource>
  ariaLabel="Extraction source"
@@ -1037,8 +1058,7 @@ export function CrawlConfigScreen({
  ]}
  />
  </div>
-
- <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
  <div className="field-label">JS Mode</div>
  <Dropdown<JsMode>
  ariaLabel="JavaScript mode"
@@ -1061,7 +1081,44 @@ export function CrawlConfigScreen({
  ]}
  />
  </div>
-
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
+ <div className="field-label">Traversal</div>
+ <Dropdown<TraversalDropdownValue>
+ ariaLabel="Traversal mode"
+ value={runProfile.fetch_profile.traversal_mode ?? "off"}
+ onChange={(next) => {
+ if (next === "off") {
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ traversal_mode: null,
+ },
+ }));
+ return;
+ }
+ if (TRAVERSAL_MODE_OPTIONS.has(next)) {
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ traversal_mode: next,
+ },
+ }));
+ }
+ }}
+ options={[
+ { value: "off", label: "Off" },
+ { value: "auto", label: "Auto" },
+ { value: "scroll", label: "Scroll" },
+ { value: "load_more", label: "Load More" },
+ { value: "view_all", label: "View All" },
+ { value: "paginate", label: "Paginate" },
+ ]}
+ />
+ </div>
+ </div>
+ <div className="relative overflow-visible rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] divide-y divide-[var(--divider)] bg-[var(--bg-panel)]">
  <SettingSection
  label="Include iframes"
  description="Allow iframe content to participate in extraction and selector recovery."
@@ -1077,41 +1134,53 @@ export function CrawlConfigScreen({
  }))
  }
  />
-
- <div className="grid grid-cols-[132px_1fr] items-center gap-3">
- <div className="field-label">Traversal</div>
- <Dropdown<TraversalMode>
- ariaLabel="Traversal mode"
- value={runProfile.fetch_profile.traversal_mode}
- onChange={(next) => {
- if (TRAVERSAL_MODE_OPTIONS.has(next)) {
- markProfileDirty((current) => ({
- ...current,
- fetch_profile: {
- ...current.fetch_profile,
- traversal_mode: next,
- },
- }));
- }
- }}
- options={[
- { value: "auto", label: "Auto" },
- { value: "scroll", label: "Scroll" },
- { value: "load_more", label: "Load More" },
- { value: "view_all", label: "View All" },
- { value: "paginate", label: "Paginate" },
- ]}
+ <SettingSection
+ label="Respect robots.txt"
+ description="Skip disallowed paths and honor crawl-delay."
+ icon={<Shield className="size-4" />}
+ checked={respectRobotsTxt}
+ onChange={setRespectRobotsTxt}
+ />
+ <SettingSection
+ label="Proxy"
+ description="Use a proxy pool for this run."
+ icon={<Globe className="size-4" />}
+ checked={proxyEnabled}
+ onChange={setProxyEnabled}
+ >
+ <div className="space-y-2">
+ <div className="field-label">Proxy Pool</div>
+ <Textarea
+ value={proxyInput}
+ onChange={(event) => setProxyInput(event.target.value)}
+ placeholder={"host:port\nhost:port:user:pass"}
+ className="min-h-[104px] text-mono-body leading-[1.55]"
+ aria-label="Proxy pool input"
  />
  </div>
+ </SettingSection>
+ </div>
+ </section>
 
- <div className="space-y-2">
+ <section className="space-y-5 border-t border-[var(--divider)] pt-5 xl:border-t-0 xl:border-l xl:pl-6 xl:pt-0">
+ <div className="border-b border-[var(--divider)] pb-4">
+ <div className={ADVANCED_SECTION_TITLE_CLASS}>
+ <h3>Limits &amp; Locales</h3>
+ <Tooltip content="Set repeat-run bounds and regional hints before dispatch.">
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ </div>
+ </div>
+ <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] divide-y divide-[var(--divider)] bg-[var(--bg-panel)]">
  <SliderRow
  label="Request Delay"
+ description="Wait time between requests to the same target."
  value={String(runProfile.fetch_profile.request_delay_ms)}
  min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS}
  max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
  step={100}
  suffix="ms"
+ grouped
  onChange={(next) =>
  markProfileDirty((current) => ({
  ...current,
@@ -1138,10 +1207,12 @@ export function CrawlConfigScreen({
  />
  <SliderRow
  label="Max Pages"
+ description="Upper bound for paginated listing traversal."
  value={String(runProfile.fetch_profile.max_pages)}
  min={CRAWL_LIMITS.MIN_PAGES}
  max={CRAWL_LIMITS.MAX_PAGES}
  step={1}
+ grouped
  onChange={(next) =>
  markProfileDirty((current) => ({
  ...current,
@@ -1163,10 +1234,12 @@ export function CrawlConfigScreen({
  />
  <SliderRow
  label="Max Scrolls"
+ description="Upper bound for scroll-driven loading before the run stops expanding the page."
  value={String(runProfile.fetch_profile.max_scrolls)}
  min={CRAWL_LIMITS.MIN_SCROLLS}
  max={CRAWL_LIMITS.MAX_SCROLLS}
  step={1}
+ grouped
  onChange={(next) =>
  markProfileDirty((current) => ({
  ...current,
@@ -1188,16 +1261,23 @@ export function CrawlConfigScreen({
  />
  <SliderRow
  label="Max Records"
+ description="Cap the number of extracted rows persisted for this run."
  value={maxRecords}
  min={CRAWL_LIMITS.MIN_RECORDS}
  max={CRAWL_LIMITS.MAX_RECORDS}
  step={10}
+ grouped
  onChange={setMaxRecords}
  onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
  />
  </div>
-
- <div className="grid gap-3">
+ <div className="grid gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4">
+ <div className="flex items-center gap-1.5">
+ <div className="field-label">Locale Hints</div>
+ <Tooltip content="Keep country, language, and currency aligned with the market you want to simulate.">
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ </div>
  <label className="grid gap-1.5">
  <span className="field-label">Geo Country</span>
  <Input
@@ -1247,7 +1327,60 @@ export function CrawlConfigScreen({
  />
  </label>
  </div>
+ </section>
 
+ <section className="space-y-5 border-t border-[var(--divider)] pt-5 xl:border-t-0 xl:border-l xl:pl-6 xl:pt-0">
+ <div className="border-b border-[var(--divider)] pb-4">
+ <div className={ADVANCED_SECTION_TITLE_CLASS}>
+ <h3>Output &amp; Diagnostics</h3>
+ <Tooltip content="Choose what evidence and artifacts stay attached to this run.">
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ </div>
+ </div>
+ <div className="grid gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4">
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
+ <div className="field-label">Diagnostics</div>
+ <Dropdown<DiagnosticsPreset>
+ ariaLabel="Diagnostics preset"
+ value={diagnosticsPreset}
+ onChange={(next) => {
+ if (next === "lean" || next === "standard" || next === "deep_debug") {
+ markProfileDirty((current) => applyDiagnosticsPreset(current, next));
+ }
+ }}
+ options={[
+ { value: "lean", label: "Lean" },
+ { value: "standard", label: "Standard" },
+ { value: "deep_debug", label: "Deep Debug" },
+ ]}
+ />
+ </div>
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
+ <div className="field-label">Network Capture</div>
+ <Dropdown<CaptureNetworkMode>
+ ariaLabel="Network capture"
+ value={runProfile.diagnostics_profile.capture_network}
+ onChange={(next) => {
+ if (CAPTURE_NETWORK_OPTIONS.has(next)) {
+ markProfileDirty((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_network: next,
+ },
+ }));
+ }
+ }}
+ options={[
+ { value: "off", label: "Off" },
+ { value: "matched_only", label: "Matched Only" },
+ { value: "all_small_json", label: "All Small JSON" },
+ ]}
+ />
+ </div>
+ </div>
+ <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] divide-y divide-[var(--divider)] bg-[var(--bg-panel)]">
  <SettingSection
  label="Capture HTML"
  description="Persist the page HTML artifact for this run."
@@ -1278,29 +1411,6 @@ export function CrawlConfigScreen({
  }))
  }
  />
- <div className="grid grid-cols-[132px_1fr] items-center gap-3">
- <div className="field-label">Network Capture</div>
- <Dropdown<CaptureNetworkMode>
- ariaLabel="Network capture"
- value={runProfile.diagnostics_profile.capture_network}
- onChange={(next) => {
- if (CAPTURE_NETWORK_OPTIONS.has(next)) {
- markProfileDirty((current) => ({
- ...current,
- diagnostics_profile: {
- ...current.diagnostics_profile,
- capture_network: next,
- },
- }));
- }
- }}
- options={[
- { value: "off", label: "Off" },
- { value: "matched_only", label: "Matched Only" },
- { value: "all_small_json", label: "All Small JSON" },
- ]}
- />
- </div>
  <SettingSection
  label="Capture Response Headers"
  description="Preserve response-header diagnostics."
@@ -1331,40 +1441,11 @@ export function CrawlConfigScreen({
  }))
  }
  />
-
- <SettingSection
- label="Respect robots.txt"
- description="Skip disallowed paths and honor crawl-delay."
- icon={<Shield className="size-4" />}
- checked={respectRobotsTxt}
- onChange={setRespectRobotsTxt}
- />
- <SettingSection
- label="Proxy"
- description="Use a proxy pool."
- icon={<Globe className="size-4" />}
- checked={proxyEnabled}
- onChange={setProxyEnabled}
- >
- <div className="space-y-2">
- <div className="field-label">Proxy Pool</div>
- <Textarea
- value={proxyInput}
- onChange={(event) => setProxyInput(event.target.value)}
- placeholder={"host:port\nhost:port:user:pass"}
- className="min-h-[104px] text-mono-body leading-[1.55]"
- aria-label="Proxy pool input"
- />
  </div>
- </SettingSection>
- </>
- )}
- </div>
- </div>
+ </section>
  </div>
  </Card>
- </div>
- </div>
+ ) : null}
  </form>
  </div>
  );
@@ -1425,10 +1506,11 @@ export function buildDispatch(
  const surface = deriveSurface(config.domain, config.module);
  const runProfile = cloneRunProfile(options?.runProfile);
  const studioMode = options?.studioMode ?? "quick";
+ const traversalMode = studioMode === "advanced" ? runProfile.fetch_profile.traversal_mode : null;
  const commonSettings = {
  llm_enabled: config.smart_extraction,
  advanced_enabled: studioMode === "advanced",
- advanced_mode: studioMode === "advanced" ? runProfile.fetch_profile.traversal_mode : null,
+ advanced_mode: traversalMode,
  max_records: config.max_records,
  respect_robots_txt: config.respect_robots_txt,
  proxy_enabled: config.proxy_enabled,
@@ -1438,6 +1520,7 @@ export function buildDispatch(
  crawl_mode: config.mode,
  fetch_profile: {
  ...runProfile.fetch_profile,
+ traversal_mode: traversalMode,
  request_delay_ms: clampNumber(
  runProfile.fetch_profile.request_delay_ms,
  CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useId } from "react";
+import { createPortal } from "react-dom";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
@@ -516,32 +517,93 @@ export function Tooltip({
 }: Readonly<{ children: ReactNode; content: string; className?: string; align?:"center"|"start"}>) {
  const tooltipId = useId();
  const child = React.Children.only(children);
+ const anchorRef = React.useRef<HTMLDivElement>(null);
+ const tooltipRef = React.useRef<HTMLDivElement>(null);
+ const [open, setOpen] = React.useState(false);
+ const [position, setPosition] = React.useState<{ left: number; top: number }>({ left: 0, top: 0 });
  const enhancedChild = React.isValidElement(child)
  ? React.cloneElement(child, {"aria-describedby": tooltipId } as React.HTMLAttributes<HTMLElement>)
  : child;
 
+ const updatePosition = React.useCallback(() => {
+ if (!anchorRef.current || !tooltipRef.current) {
+ return;
+ }
+ const anchorRect = anchorRef.current.getBoundingClientRect();
+ const tooltipRect = tooltipRef.current.getBoundingClientRect();
+ const margin = 12;
+ const idealLeft =
+ align === "start"
+ ? anchorRect.left
+ : anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2;
+ const maxLeft = window.innerWidth - tooltipRect.width - margin;
+ const nextLeft = Math.min(Math.max(idealLeft, margin), Math.max(margin, maxLeft));
+ const nextTop = Math.max(margin, anchorRect.top - tooltipRect.height - 8);
+ setPosition({ left: nextLeft, top: nextTop });
+ }, [align, setPosition]);
+
+ React.useLayoutEffect(() => {
+ if (!open) {
+ return;
+ }
+ updatePosition();
+ }, [open, content, updatePosition]);
+
+ React.useEffect(() => {
+ if (!open) {
+ return;
+ }
+ const handleLayout = () => updatePosition();
+ window.addEventListener("resize", handleLayout);
+ window.addEventListener("scroll", handleLayout, true);
+ return () => {
+ window.removeEventListener("resize", handleLayout);
+ window.removeEventListener("scroll", handleLayout, true);
+ };
+ }, [open, updatePosition]);
+
  return (
- <div className={cn("group relative flex items-center", className)}>
- {enhancedChild}
  <div
+ ref={anchorRef}
+ className={cn("relative flex items-center", className)}
+ onMouseEnter={() => setOpen(true)}
+ onMouseLeave={() => setOpen(false)}
+ onFocus={() => setOpen(true)}
+ onBlur={(event) => {
+ if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+ setOpen(false);
+ }
+ }}
+ >
+ {enhancedChild}
+ {open && typeof document !== "undefined"
+ ? createPortal(
+ <div
+ ref={tooltipRef}
  id={tooltipId}
  role="tooltip"
  className={cn(
-"pointer-events-none absolute bottom-full mb-2 w-max max-w-[min(420px,calc(100vw-24px))]",
- align ==="start"?"left-0 translate-x-0":"left-1/2 -translate-x-1/2",
-"tooltip-surface rounded-[var(--radius-md)] bg-[var(--bg-panel)] px-2 py-1.5 shadow-[var(--shadow-lg)]",
-"text-sm font-medium leading-normal text-[var(--text-primary)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
-"z-50 break-words",
+ "pointer-events-none fixed w-max max-w-[min(420px,calc(100vw-24px))]",
+ "tooltip-surface rounded-[var(--radius-md)] bg-[var(--bg-panel)] px-2 py-1.5 shadow-[var(--shadow-lg)]",
+ "text-sm font-medium leading-normal text-[var(--text-primary)] z-[200] break-words",
  )}
+ style={{ left: `${position.left}px`, top: `${position.top}px` }}
  >
  {content}
  <div
- className={cn(
-"absolute -bottom-[6px] size-2.5 rotate-45 border-b border-r border-[var(--border-strong)] bg-[var(--bg-panel)]",
- align ==="start"?"left-3":"left-1/2 -translate-x-1/2",
- )}
+ className="absolute -bottom-[6px] size-2.5 rotate-45 border-b border-r border-[var(--border-strong)] bg-[var(--bg-panel)]"
+ style={{
+ left:
+ align === "start"
+ ? "12px"
+ : "50%",
+ transform: align === "start" ? undefined : "translateX(-50%)",
+ }}
  />
- </div>
+ </div>,
+ document.body,
+ )
+ : null}
  </div>
  );
 }

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from app.core.dependencies import get_current_user, get_db
 from app.main import app
+from app.models.crawl import DomainFieldFeedback
 from app.services._batch_runtime import process_run
+from app.services.acquisition.cookie_store import persist_storage_state_for_domain
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.crawl_crud import create_crawl_run
 from app.services.domain_memory_service import save_domain_memory
@@ -122,6 +125,8 @@ async def test_crawls_domain_recipe_routes_round_trip(
     }
     assert recipe["affordance_candidates"]["browser_required"] is True
     assert {row["field_name"] for row in recipe["selector_candidates"]} == {"title", "price"}
+    assert recipe["acquisition_evidence"]["actual_fetch_method"] == "browser"
+    assert recipe["acquisition_evidence"]["browser_reason"] == "http-escalation"
 
     save_profile_response = await crawls_api_client.post(
         f"/api/crawls/{run.id}/domain-recipe/save-run-profile",
@@ -168,6 +173,25 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert lookup_after_save.status_code == 200
     assert lookup_after_save.json()["saved_run_profile"]["fetch_profile"]["fetch_mode"] == "http_then_browser"
 
+    list_profiles_response = await crawls_api_client.get(
+        "/api/crawls/domain-memory/run-profiles",
+        params={"domain": "example.com"},
+    )
+    assert list_profiles_response.status_code == 200
+    assert list_profiles_response.json()[0]["domain"] == "example.com"
+    assert list_profiles_response.json()[0]["surface"] == "ecommerce_detail"
+    assert list_profiles_response.json()[0]["profile"]["fetch_profile"]["fetch_mode"] == "http_then_browser"
+
+    normalized_profiles_response = await crawls_api_client.get(
+        "/api/crawls/domain-memory/run-profiles",
+        params={
+            "domain": "HTTPS://EXAMPLE.COM/products/domain-recipe-widget",
+            "surface": " ECOMMERCE_DETAIL ",
+        },
+    )
+    assert normalized_profiles_response.status_code == 200
+    assert len(normalized_profiles_response.json()) == 1
+
     promote_response = await crawls_api_client.post(
         f"/api/crawls/{run.id}/domain-recipe/promote-selectors",
         json={
@@ -199,3 +223,67 @@ async def test_crawls_domain_recipe_routes_round_trip(
     )
     assert promoted_candidate["already_saved"] is True
     assert promoted_candidate["saved_selector_id"] == promoted[0]["id"]
+
+    field_action_response = await crawls_api_client.post(
+        f"/api/crawls/{run.id}/domain-recipe/field-action",
+        json={
+            "field_name": "price",
+            "action": "reject",
+            "selector_kind": "css_selector",
+            "selector_value": ".run-price",
+            "source_record_ids": [1],
+        },
+    )
+    assert field_action_response.status_code == 200
+    assert field_action_response.json()["action"] == "reject"
+    feedback_rows = list(
+        (
+            await db_session.execute(select(DomainFieldFeedback))
+        ).scalars().all()
+    )
+    assert len(feedback_rows) == 1
+
+    await persist_storage_state_for_domain(
+        "example.com",
+        {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "abc",
+                    "domain": ".example.com",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        session=db_session,
+    )
+    cookies_response = await crawls_api_client.get(
+        "/api/crawls/domain-memory/cookies",
+        params={"domain": "example.com"},
+    )
+    assert cookies_response.status_code == 200
+    assert cookies_response.json()[0]["domain"] == "example.com"
+    assert cookies_response.json()[0]["cookie_count"] == 1
+
+    feedback_response = await crawls_api_client.get(
+        "/api/crawls/domain-memory/field-feedback",
+        params={"domain": "example.com", "surface": "ecommerce_detail"},
+    )
+    assert feedback_response.status_code == 200
+    feedback_payload = feedback_response.json()
+    assert len(feedback_payload) == 1
+    assert feedback_payload[0] == {
+        **feedback_payload[0],
+        "id": feedback_rows[0].id,
+        "domain": "example.com",
+        "surface": "ecommerce_detail",
+        "field_name": "price",
+        "action": "reject",
+        "source_kind": "selector",
+        "source_value": ".run-price",
+        "source_run_id": run.id,
+        "selector_kind": "css_selector",
+        "selector_value": ".run-price",
+        "source_record_ids": [1],
+    }

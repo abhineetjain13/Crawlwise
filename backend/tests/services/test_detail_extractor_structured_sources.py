@@ -676,16 +676,18 @@ def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_j
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["option1_name"] == "size"
-    assert record["option1_values"] == "S, M, L"
-    assert record["option2_name"] == "Color"
-    assert record["option2_values"] == "Black, Olive"
+    assert record["option1_name"] == "Color"
+    assert record["option1_values"] == "Black, Olive"
+    assert "option2_name" not in record
+    assert "option2_values" not in record
     assert record["available_sizes"] == "S, M, L"
     assert record["variant_axes"] == {"size": ["S", "M", "L"], "color": ["Black", "Olive"]}
     assert record["variant_count"] == 6
     assert isinstance(record["variants"], list)
     assert len(record["variants"]) == 6
     assert record["variants"][0]["option_values"] == {"size": "S", "color": "Black"}
+    assert "size" not in record["variants"][0]
+    assert "color" not in record["variants"][0]
 
 
 def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availability() -> None:
@@ -1961,3 +1963,40 @@ def test_extract_detail_keeps_company_details_body_for_requested_custom_field() 
     assert "Business Type Manufacturer, Supplier, Trading Company" in record["company_details"]
     assert "GST NO 27AAECL9071B1ZK" in record["company_details"]
     assert record["_field_sources"]["company_details"] == ["dom_sections"]
+
+
+def test_extract_detail_keeps_slug_match_when_identity_codes_disagree() -> None:
+    requested_url = "https://example.com/products/widget-premium?dwvar_ABCD1234_color=red"
+    html = """
+    <html>
+      <head>
+        <link rel="canonical" href="https://example.com/products/widget-premium?dwvar_EFGH5678_color=red" />
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Widget Premium",
+          "description": "Widget Premium for everyday use.",
+          "offers": {
+            "price": "19.99",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main><h1>Widget Premium</h1></main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/widget-premium?dwvar_EFGH5678_color=red",
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url=requested_url,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Widget Premium"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.services import crawl_fetch_runtime
@@ -18,6 +20,13 @@ def _js_shell_html() -> str:
       </body>
     </html>
     """
+
+
+def _read_optional_artifact_text(path: str) -> str:
+    artifact = Path(__file__).resolve().parents[2].joinpath(path)
+    if not artifact.exists():
+        pytest.skip(f"artifact fixture missing: {artifact}")
+    return artifact.read_text(encoding="utf-8", errors="ignore")
 
 
 def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts() -> None:
@@ -285,6 +294,284 @@ def test_extract_records_rejects_visual_artifact_auth_links() -> None:
     )
 
     assert rows == []
+
+
+def test_extract_records_prefers_image_hint_over_brand_or_review_title_noise() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-tile">
+          <a href="/p/laila-small-satchel/260083130S5S9IS1V.html">
+            <img src="/images/laila.jpg" alt="Laila Small Satchel">
+          </a>
+          <div class="tile-copy">
+            <a href="/p/laila-small-satchel/260083130S5S9IS1V.html">
+              <div class="font-bold">MICHAEL Michael Kors</div>
+            </a>
+            <a href="/p/laila-small-satchel/260083130S5S9IS1V.html">
+              <div class="line-clamp-2">Laila Small Satchel</div>
+            </a>
+          </div>
+          <a href="/p/laila-small-satchel/260083130S5S9IS1V.html">428 reviews</a>
+          <div class="price">$118.80</div>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/handbags",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/handbags",
+            "_source": "dom_listing",
+            "title": "Laila Small Satchel",
+            "price": "118.80",
+            "currency": "USD",
+            "review_count": 428,
+            "image_url": "https://www.belk.com/images/laila.jpg",
+            "url": "https://www.belk.com/p/laila-small-satchel/260083130S5S9IS1V.html",
+        }
+    ]
+
+
+def test_extract_records_filters_blocked_detail_artifact_html() -> None:
+    html = _read_optional_artifact_text("artifacts/runs/20/pages/41f3046f3de7bf0e.html")
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/p/michael-michael-kors-scarlett-medium-satchel-/260083130F4GETS2B.html",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert rows == []
+
+
+def test_extract_records_cleans_titles_from_belk_listing_artifact() -> None:
+    html = _read_optional_artifact_text("artifacts/runs/19/pages/a0c2607fa750138d.html")
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/shop-by-brand",
+        "ecommerce_listing",
+        max_records=12,
+    )
+
+    assert rows
+    titles = {str(row.get("title") or "") for row in rows[:12]}
+    assert "Laila Small Satchel" in titles
+    assert "Lucca Leather Hobo Bag" in titles
+    assert all("review" not in str(row.get("title") or "").lower() for row in rows[:12])
+    assert "Dooney & Bourke" not in titles
+
+
+def test_extract_records_belk_listing_artifact_does_not_emit_currency_without_price() -> None:
+    html = _read_optional_artifact_text("artifacts/runs/22/pages/5e2f27bc09df481d.html")
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/men/mens-clothing/pants/",
+        "ecommerce_listing",
+        max_records=100,
+    )
+
+    assert rows
+    assert all(
+        not (row.get("currency") and not row.get("price"))
+        for row in rows
+    )
+
+
+def test_extract_records_drops_orphan_listing_currency_without_price() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {
+              "@type": "ItemList",
+              "itemListElement": [
+                {
+                  "@type": "ListItem",
+                  "position": 1,
+                  "item": {
+                    "@type": "Product",
+                    "name": "Widget Prime",
+                    "url": "https://example.com/products/widget-prime",
+                    "offers": {
+                      "@type": "Offer",
+                      "priceCurrency": "USD"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=5,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/collections/widgets",
+            "_source": "structured_listing",
+            "title": "Widget Prime",
+            "url": "https://example.com/products/widget-prime",
+        }
+    ]
+
+
+def test_extract_records_rejects_redirected_belk_detail_artifact_identity_mismatch() -> None:
+    html = _read_optional_artifact_text("artifacts/runs/23/pages/ee049a2bdeed124a.html")
+    requested_url = (
+        "https://www.belk.com/p/haggar-premium-stretch-no-iron-khaki-classic-fit-hidden-expandable-"
+        "waistband-flat-front-pants/3200645HC10884.html?dwvar_3200645HC10884_color=251278239931"
+    )
+
+    rows = extract_records(
+        html,
+        requested_url,
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url=requested_url,
+    )
+
+    assert rows == []
+
+
+def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_artifact() -> None:
+    html = _read_optional_artifact_text("artifacts/runs/23/pages/ee049a2bdeed124a.html")
+    canonical_url = "https://www.belk.com/p/kenneth-cole-mens-reaction-urban-heather-dress-pants-/3200898KD00379.html"
+
+    rows = extract_records(
+        html,
+        canonical_url,
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["color"] == "HTR GREY"
+    assert record["variant_axes"] == {
+        "color": ["Black", "HTR GREY", "Blue"],
+        "size": [
+            "29 x 30",
+            "29 x 32",
+            "30 x 30",
+            "30 x 32",
+            "31 x 30",
+            "31 x 32",
+            "32 x 29",
+            "32 x 30",
+            "32 x 32",
+            "32 x 34",
+            "33 x 30",
+            "33 x 32",
+            "34 x 29",
+            "34 x 30",
+            "34 x 32",
+            "34 x 34",
+            "36 x 29",
+            "36 x 30",
+            "36 x 32",
+            "36 x 34",
+            "38 x 29",
+            "38 x 30",
+            "38 x 32",
+        ],
+    }
+    assert record["variant_count"] == 69
+    assert record["selected_variant"]["option_values"]["color"] == "HTR GREY"
+
+
+def test_extract_records_normalizes_belk_run_26_detail_variants_without_duplicate_axes() -> None:
+    html = _read_optional_artifact_text("artifacts/runs/26/pages/612cf7570cdbf8e1.html")
+    canonical_url = (
+        "https://www.belk.com/p/kim-rogers-womens-denim-capri-pants/180430334287262.html"
+        "?dwvar_180430334287262_color=460475611850"
+    )
+
+    rows = extract_records(
+        html,
+        canonical_url,
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Women's Denim Capri Pants"
+    assert record["availability"] == "in_stock"
+    assert record["option1_name"] == "color"
+    assert record["option1_values"] == "GRACE WASH, DIXIE WASH, WHITNEY WASH"
+    assert "option2_name" not in record
+    assert "option2_values" not in record
+    assert record["available_sizes"] == "6, 8, 10, 12, 14, 16, 18"
+    assert record["selected_variant"]["availability"] == "in_stock"
+    assert len(record["variants"]) == 21
+    assert all(variant.get("price") == "26.99" for variant in record["variants"])
+    assert all(variant.get("currency") == "USD" for variant in record["variants"])
+    assert all("availability" not in variant for variant in record["variants"])
+    assert record["variants"][0]["option_values"] == {"color": "GRACE WASH", "size": "6"}
+    assert "color" not in record["variants"][0]
+    assert "size" not in record["variants"][0]
+
+
+def test_extract_records_normalizes_boolean_availability_and_shared_variant_price_from_json() -> None:
+    html = """
+    {
+      "title": "Trail Runner",
+      "price": "26.99",
+      "currency": "USD",
+      "availability": true,
+      "variant_axes": {
+        "size": ["6", "8"],
+        "color": ["Blue", "Black"]
+      },
+      "variants": [
+        {"option_values": {"size": "6", "color": "Blue"}},
+        {"option_values": {"size": "8", "color": "Blue"}}
+      ],
+      "selected_variant": {
+        "option_values": {"size": "6", "color": "Blue"}
+      }
+    }
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+        content_type="application/json",
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["availability"] == "in_stock"
+    assert record["selected_variant"]["availability"] == "in_stock"
+    assert all(variant["price"] == "26.99" for variant in record["variants"])
+    assert all(variant["currency"] == "USD" for variant in record["variants"])
+    assert all("availability" not in variant for variant in record["variants"])
 
 
 def test_extract_records_prefers_rendered_listing_cards_over_thin_structured_records() -> None:

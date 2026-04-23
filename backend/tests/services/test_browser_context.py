@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 from types import SimpleNamespace
 
 import pytest
@@ -700,6 +701,35 @@ async def test_shared_browser_runtime_suppresses_storage_state_persist_failures(
 
 
 @pytest.mark.asyncio
+async def test_persist_context_storage_state_normalizes_domain_before_persist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeContext:
+        async def storage_state(self) -> dict[str, object]:
+            return {"cookies": [], "origins": []}
+
+    persisted_domains: list[str] = []
+
+    async def _persist_domain(domain: str, storage_state: dict[str, object]) -> None:
+        del storage_state
+        persisted_domains.append(domain)
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "persist_storage_state_for_domain",
+        _persist_domain,
+    )
+
+    await acquisition_browser_runtime._persist_context_storage_state(
+        FakeContext(),
+        run_id=None,
+        domain="  example.com  ",
+    )
+
+    assert persisted_domains == ["example.com"]
+
+
+@pytest.mark.asyncio
 async def test_shared_browser_runtime_snapshot_tracks_queue_without_private_semaphore_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -835,3 +865,28 @@ def test_browser_runtime_snapshot_reports_runtime_capacity_without_host_cache() 
 
     assert "preferred_hosts" not in snapshot
     assert "capacity" in snapshot
+
+
+@pytest.mark.asyncio
+async def test_persist_storage_state_for_domain_commits_owned_session(db_session) -> None:
+    domain = f"owned-session-{uuid4().hex}.example.test"
+    saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "abc",
+                    "domain": f".{domain}",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+    )
+
+    rows = await cookie_store.list_domain_cookie_memory(domain)
+
+    assert saved is True
+    assert len(rows) == 1
+    assert rows[0]["domain"] == domain
