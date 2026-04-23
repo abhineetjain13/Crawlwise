@@ -1,3 +1,7 @@
+> **Status:** DONE
+> **Archived:** 2026-04-23
+> **Reason:** verified complete
+
 # Plan: Commerce Core Stabilization and Modularity Pass
 
 **Created:** 2026-04-22

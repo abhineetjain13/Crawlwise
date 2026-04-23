@@ -1,3 +1,7 @@
+> **Status:** DONE
+> **Archived:** 2026-04-23
+> **Reason:** verified complete
+
 # Plan: Forensic Architecture Audit Remediation (D1–D8)
 
 **Created:** 2026-04-21

@@ -196,6 +196,47 @@ def test_map_js_state_to_fields_ignores_header_payment_state_before_real_product
     ]
 
 
+def test_map_js_state_to_fields_does_not_merge_variants_from_different_product_identity() -> None:
+    js_state_objects = {
+        "__INITIAL_STATE__": {
+            "catalog": {
+                "selected": {
+                    "product": {
+                        "id": "sku-123",
+                        "name": "Commuter Backpack",
+                        "handle": "commuter-backpack",
+                        "price": "89.50",
+                    }
+                }
+            }
+        },
+        "__NEXT_DATA__": {
+            "props": {
+                "pageProps": {
+                    "product": {
+                        "id": "sku-999",
+                        "title": "Trail Runner",
+                        "handle": "trail-runner",
+                        "variants": [
+                            {"id": 101, "price": 9900, "option1": "Black"},
+                            {"id": 102, "price": 10900, "option1": "Sand"},
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    mapped = map_js_state_to_fields(
+        js_state_objects,
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/commuter-backpack",
+    )
+
+    assert mapped["product_id"] == "sku-123"
+    assert mapped.get("variants") in (None, [])
+
+
 def test_map_network_payloads_to_fields_recovers_workday_job_detail_payload() -> None:
     mapped = map_network_payloads_to_fields(
         [

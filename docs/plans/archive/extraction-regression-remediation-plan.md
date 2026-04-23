@@ -1,3 +1,7 @@
+> **Status:** DONE
+> **Archived:** 2026-04-23
+> **Reason:** verified complete
+
 # Plan: Close Extraction Regressions From Old-to-New Port
 
 **Created:** 2026-04-21

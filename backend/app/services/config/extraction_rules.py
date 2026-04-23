@@ -81,11 +81,16 @@ LISTING_RENDERED_DETAIL_URL_HINTS: tuple[str, ...] = (
     "/dp/",
     "/item/",
 )
+CURRENCY_ALIAS_PATTERNS: dict[str, str] = {
+    r"\brs\.?\s*\d": "INR",
+}
 LISTING_UTILITY_TITLE_PATTERNS: tuple[str, ...] = (
     r"^\+?\s*(?:[$€£]|chf|usd|inr|rs\.?)?\s*[\d,.]+\s+shipping$",
     r"^(?:make offer\s*/\s*details|details\s*/\s*make offer)$",
     r"^(?:post a job|product help|product tips)$",
     r"^how posting dates work$",
+    r"^download(?:\s+the)?\s+.+\s+app$",
+    r"^shop all categories$",
     r"^(?:customer care|customer service|help|support|faq|about(?: us)?|returns?)$",
 )
 LISTING_UTILITY_TITLE_TOKENS: tuple[str, ...] = (
@@ -105,6 +110,7 @@ LISTING_UTILITY_TITLE_TOKENS: tuple[str, ...] = (
 LISTING_UTILITY_URL_TOKENS: tuple[str, ...] = (
     "/about",
     "/account",
+    "/categories",
     "/contact",
     "/customer-care",
     "/customer-service",

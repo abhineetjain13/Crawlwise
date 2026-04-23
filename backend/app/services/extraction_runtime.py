@@ -30,7 +30,13 @@ from app.services.field_policy import (
     canonical_fields_for_surface,
     normalize_field_key,
 )
-from app.services.listing_extractor import extract_listing_records
+from app.services.extract.listing_candidate_ranking import best_listing_candidate_set
+from app.services.listing_extractor import (
+    _detail_like_path,
+    _listing_title_is_noise,
+    _url_is_structural,
+    extract_listing_records,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.normalizers import normalize_decimal_price
 
@@ -86,9 +92,9 @@ def extract_records(
             return json_records[:max_records]
         return _postprocess_detail_records(json_records[:max_records], html=html)
     if "listing" in surface:
+        adapter_rows: list[dict[str, Any]] = []
         if adapter_records:
-            rows: list[dict[str, Any]] = []
-            for record in list(adapter_records or [])[:max_records]:
+            for record in list(adapter_records or [])[: max(1, int(max_records)) * 4]:
                 if not isinstance(record, dict):
                     continue
                 shaped = direct_record_to_surface_fields(
@@ -102,8 +108,7 @@ def extract_records(
                     },
                 )
                 if shaped.get("title") and shaped.get("url"):
-                    rows.append(shaped)
-            return _backfill_listing_rows_from_network(rows, network_payloads=network_payloads)
+                    adapter_rows.append(shaped)
         listing_rows = extract_listing_records(
             html,
             page_url,
@@ -113,7 +118,37 @@ def extract_records(
             selector_rules=selector_rules,
             network_payloads=network_payloads,
         )
-        return _backfill_listing_rows_from_network(listing_rows, network_payloads=network_payloads)
+        adapter_rows = _backfill_listing_rows_from_network(
+            adapter_rows,
+            network_payloads=network_payloads,
+        )
+        listing_rows = _backfill_listing_rows_from_network(
+            listing_rows,
+            network_payloads=network_payloads,
+        )
+        if adapter_rows and listing_rows:
+            candidate_rows = best_listing_candidate_set(
+                [
+                    ("adapter", adapter_rows),
+                    ("generic", listing_rows),
+                    ("generic_plus_adapter", [*listing_rows, *adapter_rows]),
+                ],
+                page_url=page_url,
+                surface=surface,
+                max_records=max_records,
+                title_is_noise=_listing_title_is_noise,
+                url_is_structural=_url_is_structural,
+                detail_like_url=lambda candidate_url: _detail_like_path(
+                    candidate_url,
+                    is_job=str(surface or "").startswith("job_"),
+                ),
+            )
+            return candidate_rows[:max_records]
+        if listing_rows:
+            return listing_rows[:max_records]
+        if adapter_rows:
+            return adapter_rows[:max_records]
+        return []
     return _postprocess_detail_records(
         extract_detail_records(
         html,

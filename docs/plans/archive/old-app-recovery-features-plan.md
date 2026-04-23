@@ -1,3 +1,7 @@
+> **Status:** DONE
+> **Archived:** 2026-04-23
+> **Reason:** verified complete
+
 # Plan: Port Old-App Recovery Features Through the Existing Markdown and Extraction Paths
 
 **Created:** 2026-04-21

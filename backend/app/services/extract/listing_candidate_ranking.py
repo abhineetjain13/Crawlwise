@@ -5,6 +5,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from app.services.config.extraction_rules import (
+    LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
@@ -14,6 +15,7 @@ from app.services.field_value_core import (
     PRICE_RE,
     absolute_url,
     clean_text,
+    extract_currency_code,
     finalize_record,
     same_host,
     same_site,
@@ -75,6 +77,7 @@ def rendered_listing_records(
         if _looks_like_utility_record(title=title, url=url):
             continue
         price_text, brand_text = _normalize_rendered_listing_fields(item)
+        currency_code = extract_currency_code(price_text)
         record = finalize_record(
             {
                 "source_url": page_url,
@@ -82,6 +85,7 @@ def rendered_listing_records(
                 "title": title,
                 "url": url,
                 "price": price_text,
+                "currency": currency_code,
                 "image_url": absolute_url(
                     page_url,
                     item.get("image_url") or item.get("image"),
@@ -167,6 +171,7 @@ def _prepare_listing_candidate_set(
     url_is_structural: Callable[[str, str], bool],
     detail_like_url: Callable[[str], bool] | None,
 ) -> list[dict[str, Any]]:
+    best_by_url: dict[str, tuple[int, int, dict[str, Any]]] = {}
     prepared: list[tuple[int, int, dict[str, Any]]] = []
     for order, record in enumerate(records):
         metrics = _listing_record_quality_metrics(
@@ -179,7 +184,16 @@ def _prepare_listing_candidate_set(
         )
         if _should_drop_record(metrics, surface=surface):
             continue
-        prepared.append((int(metrics.get("score", 0) or 0), order, record))
+        score = int(metrics.get("score", 0) or 0)
+        url = str(record.get("url") or "").strip()
+        if url:
+            existing = best_by_url.get(url)
+            candidate = (score, order, record)
+            if existing is None or (score, -order) > (existing[0], -existing[1]):
+                best_by_url[url] = candidate
+            continue
+        prepared.append((score, order, record))
+    prepared.extend(best_by_url.values())
     prepared.sort(key=lambda row: (-row[0], row[1]))
     return [record for _score, _order, record in prepared]
 
@@ -365,6 +379,14 @@ def _looks_like_utility_record(*, title: str, url: str) -> bool:
             for token in LISTING_UTILITY_TITLE_TOKENS
         ):
             return True
+    parsed = urlsplit(normalized_url)
+    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
+    if (
+        not parsed.query
+        and segments
+        and any(segment in LISTING_NON_LISTING_PATH_TOKENS for segment in segments)
+    ):
+        return True
     return bool(
         normalized_url
         and any(
@@ -387,6 +409,11 @@ def _unsupported_non_detail_ecommerce_merchandise_hint(*, title: str, url: str) 
     segments = [segment for segment in parsed.path.split("/") if segment]
     if len(segments) < 2:
         return False
+    normalized_segments = [segment.strip().lower() for segment in segments]
+    if "categories" in normalized_segments[:-1]:
+        return False
+    if any(segment in LISTING_NON_LISTING_PATH_TOKENS for segment in normalized_segments):
+        return False
     if any(segment in _EDITORIAL_PATH_SEGMENTS for segment in segments[:-1]):
         return False
     terminal = segments[-1]
@@ -396,6 +423,8 @@ def _unsupported_non_detail_ecommerce_merchandise_hint(*, title: str, url: str) 
         if len(token) >= 3
     ]
     if len(terminal_tokens) < 2:
+        return False
+    if any(token in LISTING_NON_LISTING_PATH_TOKENS for token in terminal_tokens):
         return False
     title_tokens = {
         token

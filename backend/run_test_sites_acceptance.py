@@ -27,6 +27,7 @@ from harness_support import (
 
 DEFAULT_TEST_SITES_PATH = Path(__file__).resolve().parent.parent / "TEST_SITES.md"
 DEFAULT_REPORT_DIR = Path("artifacts/test_sites_acceptance")
+_MISSING = object()
 
 
 async def _run_one(site: dict[str, str], mode: str) -> dict[str, object]:
@@ -38,6 +39,7 @@ async def _run_one(site: dict[str, str], mode: str) -> dict[str, object]:
         "mode": mode,
         "timeout_owner": timeout_owner_for_mode(mode),
         "bucket": site.get("bucket"),
+        "gate": site.get("gate"),
         "expected_failure_modes": list(site.get("expected_failure_modes") or []),
     }
     try:
@@ -57,12 +59,15 @@ async def _run_one(site: dict[str, str], mode: str) -> dict[str, object]:
     result["failure_mode"] = classify_failure_mode(result)
     result.update(evaluate_quality(site, result))
     result["expectation_met"] = _expectation_met(site, result)
+    hard_gate = str(site.get("gate") or "").strip().lower() == "hard"
     result["tracked_issue"] = (
-        bool(site.get("bucket"))
-        and not bool(result["expectation_met"])
-        and str(site.get("bucket")).strip().lower() not in {"must_pass", "known_blocked"}
+        not bool(result["expectation_met"])
+        and (
+            str(site.get("bucket") or "").strip().lower() not in {"must_pass", "known_blocked"}
+            or not hard_gate
+        )
     )
-    result["ok"] = bool(result["expectation_met"])
+    result["ok"] = bool(result["expectation_met"]) or not hard_gate
     return result
 
 
@@ -108,6 +113,9 @@ def _write_report(results: list[dict[str, object]], *, start_line: int, source_p
 
 
 def _expectation_met(site: dict[str, object], result: dict[str, object]) -> bool:
+    expected = dict(site.get("expected") or {})
+    if expected:
+        return _expected_contract_met(site, result, expected=expected)
     if site.get("quality_expectations"):
         bucket = str(site.get("bucket") or "").strip().lower()
         if bucket == "known_blocked":
@@ -127,6 +135,69 @@ def _expectation_met(site: dict[str, object], result: dict[str, object]) -> bool
     if bucket == "known_blocked":
         return failure_mode == "blocked"
     return failure_mode == "success"
+
+
+def _expected_contract_met(
+    site: dict[str, object],
+    result: dict[str, object],
+    *,
+    expected: dict[str, object],
+) -> bool:
+    record_count = int(result.get("records") or 0)
+    if record_count < int(expected.get("min_record_count") or 0):
+        return False
+    sample_record = dict(result.get("sample_record_data") or {})
+    for field_name in list(expected.get("fields_must_be_present") or []):
+        if _nested_value(sample_record, str(field_name)) is _MISSING:
+            return False
+    for field_name in list(expected.get("fields_must_not_be_null") or []):
+        if _nested_value(sample_record, str(field_name)) in (None, "", [], {}):
+            return False
+    min_variant_count = int(expected.get("min_variant_count") or 0)
+    if min_variant_count > 0:
+        variant_count = int(
+            dict(result.get("sample_semantics") or {}).get("variant_count") or 0
+        )
+        if variant_count < min_variant_count:
+            return False
+    if bool(expected.get("price_must_be_numeric")):
+        listing_contract = dict(result.get("listing_contract") or {})
+        surface = str((site.get("surface") or result.get("surface") or "")).strip().lower()
+        if surface.endswith("_listing"):
+            if int(listing_contract.get("price_numeric_count") or 0) <= 0:
+                return False
+        else:
+            price_value = _nested_value(sample_record, "price")
+            if price_value in (None, "", [], {}):
+                price_value = _nested_value(sample_record, "selected_variant.price")
+            if not _looks_numeric_price(price_value):
+                return False
+    if bool(expected.get("detail_urls_must_be_present")):
+        if not bool(dict(result.get("listing_contract") or {}).get("detail_urls_present")):
+            return False
+    return True
+
+
+def _nested_value(payload: dict[str, object], dotted_key: str) -> object:
+    current: object = payload
+    for segment in [part for part in str(dotted_key or "").split(".") if part]:
+        if not isinstance(current, dict):
+            return _MISSING
+        if segment not in current:
+            return _MISSING
+        current = current.get(segment)
+    return current
+
+
+def _looks_numeric_price(value: object) -> bool:
+    text = str(value or "").strip().replace(",", "")
+    if not text:
+        return False
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _console_safe(value: object) -> str:

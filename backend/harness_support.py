@@ -172,15 +172,20 @@ def build_explicit_sites(
 
 def load_site_set(path: Path, *, site_set_name: str) -> list[dict[str, object]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    site_sets = payload.get("site_sets") if isinstance(payload, dict) else None
-    if not isinstance(site_sets, dict):
+    if isinstance(payload, dict) and isinstance(payload.get("site_sets"), dict):
+        site_set = payload["site_sets"].get(site_set_name)
+        if not isinstance(site_set, dict):
+            raise ValueError(f"Unknown site set: {site_set_name}")
+        sites = site_set.get("sites")
+        if not isinstance(sites, list):
+            raise ValueError(f"Site set {site_set_name} has no sites list")
+    elif isinstance(payload, dict) and isinstance(payload.get("sites"), list):
+        manifest_name = str(payload.get("name") or path.stem).strip()
+        if site_set_name not in {"", manifest_name, path.stem}:
+            raise ValueError(f"Unknown site set: {site_set_name}")
+        sites = payload["sites"]
+    else:
         raise ValueError(f"Invalid site-set payload in {path}")
-    site_set = site_sets.get(site_set_name)
-    if not isinstance(site_set, dict):
-        raise ValueError(f"Unknown site set: {site_set_name}")
-    sites = site_set.get("sites")
-    if not isinstance(sites, list):
-        raise ValueError(f"Site set {site_set_name} has no sites list")
     rows: list[dict[str, object]] = []
     for item in sites:
         if not isinstance(item, dict):
@@ -188,25 +193,33 @@ def load_site_set(path: Path, *, site_set_name: str) -> list[dict[str, object]]:
         url = str(item.get("url") or "").strip()
         if not url:
             continue
-        rows.append(
-            {
-                "name": str(item.get("name") or url).strip(),
-                "url": url,
-                "surface": infer_surface(
-                    url,
-                    explicit_surface=item.get("surface"),
-                ),
-                "bucket": str(item.get("bucket") or "").strip().lower() or None,
-                "expected_failure_modes": [
-                    str(value).strip()
-                    for value in list(item.get("expected_failure_modes") or [])
-                    if str(value).strip()
-                ],
-                "artifact_run_id": _safe_int(item.get("artifact_run_id")) or None,
-                "seed_failure_mode": str(item.get("seed_failure_mode") or "").strip().lower() or None,
-                "quality_expectations": dict(item.get("quality_expectations") or {}) if isinstance(item.get("quality_expectations"), (dict, type(None))) else {},
-            }
-        )
+        row = {
+            "name": str(item.get("name") or url).strip(),
+            "url": url,
+            "surface": infer_surface(
+                url,
+                explicit_surface=item.get("surface"),
+            ),
+            "bucket": str(item.get("bucket") or "").strip().lower() or None,
+            "expected_failure_modes": [
+                str(value).strip()
+                for value in list(item.get("expected_failure_modes") or [])
+                if str(value).strip()
+            ],
+            "artifact_run_id": _safe_int(item.get("artifact_run_id")) or None,
+            "seed_failure_mode": str(item.get("seed_failure_mode") or "").strip().lower() or None,
+            "quality_expectations": dict(item.get("quality_expectations") or {}) if isinstance(item.get("quality_expectations"), (dict, type(None))) else {},
+        }
+        gate = str(item.get("gate") or "").strip().lower() or None
+        expected = dict(item.get("expected") or {}) if isinstance(item.get("expected"), dict) else {}
+        known_failure_mode = str(item.get("known_failure_mode") or "").strip() or None
+        if gate:
+            row["gate"] = gate
+        if expected:
+            row["expected"] = expected
+        if known_failure_mode:
+            row["known_failure_mode"] = known_failure_mode
+        rows.append(row)
     return rows
 
 
@@ -286,7 +299,7 @@ async def run_site_harness(*, url: str, surface: str, mode: str) -> dict[str, ob
         if mode == HARNESS_MODE_FULL_PIPELINE:
             await process_run(session, run.id)
             await session.refresh(run)
-            rows, total_records = await get_run_records(session, run.id, 1, 5)
+            rows, total_records = await get_run_records(session, run.id, 1, 100)
             return _persisted_run_result(
                 run=run,
                 rows=rows,
@@ -339,7 +352,7 @@ async def review_saved_run(
         ).scalar_one_or_none()
         if run is None:
             raise RuntimeError(f"Saved harness run {run_id} was not found")
-        rows, total_records = await get_run_records(session, run.id, 1, 5)
+        rows, total_records = await get_run_records(session, run.id, 1, 100)
         return _persisted_run_result(
             run=run,
             rows=rows,
@@ -603,8 +616,10 @@ def _persisted_run_result(
         "records": max(total_records, _safe_int(summary.get("record_count"))),
         "sample_title": str(data.get("title") or "")[:120],
         "sample_url": str(data.get("url") or "")[:240],
+        "sample_record_data": data,
         "sample_records": sample_records,
         "sample_semantics": _sample_semantics(data),
+        "listing_contract": _listing_contract(rows),
         "populated_fields": _populated_field_count(data),
         "sample_field_coverage": sample_audit["field_coverage"],
         "sample_utility_noise_hits": sample_audit["utility_noise_hits"],
@@ -634,6 +649,30 @@ def _sample_semantics(record: dict[str, object]) -> dict[str, object]:
             isinstance(selected_variant.get("option_values"), dict)
             and selected_variant.get("option_values")
         ),
+    }
+
+
+def _listing_contract(rows: list[object]) -> dict[str, object]:
+    detail_url_count = 0
+    price_present_count = 0
+    numeric_price_count = 0
+    sampled = 0
+    for row in list(rows or []):
+        data = dict(getattr(row, "data", {}) or {})
+        sampled += 1
+        row_url = str(data.get("url") or "").strip()
+        if row_url and not _looks_like_utility_record(title=data.get("title"), url=row_url):
+            detail_url_count += 1
+        if data.get("price") not in (None, "", [], {}):
+            price_present_count += 1
+            if _looks_numeric_price(data.get("price")):
+                numeric_price_count += 1
+    return {
+        "sampled_records": sampled,
+        "detail_url_count": detail_url_count,
+        "detail_urls_present": detail_url_count > 0,
+        "price_present_count": price_present_count,
+        "price_numeric_count": numeric_price_count,
     }
 
 
@@ -964,3 +1003,20 @@ def _safe_int(value: object) -> int:
         return 0 if value in (None, "") else int(str(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _looks_numeric_price(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    normalized = text
+    if "." in text and "," in text:
+        if text.rfind(",") > text.rfind("."):
+            normalized = text.replace(".", "").replace(",", ".")
+        else:
+            normalized = text.replace(",", "")
+    elif "," in text and re.fullmatch(r"^\d+,\d+$", text):
+        normalized = text.replace(",", ".")
+    elif "." in text and re.fullmatch(r"^\d{1,3}(?:\.\d{3})+$", text):
+        normalized = text.replace(".", "")
+    return bool(re.fullmatch(r"^\d+(?:\.\d+)?$", normalized))

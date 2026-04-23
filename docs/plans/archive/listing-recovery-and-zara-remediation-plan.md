@@ -1,3 +1,7 @@
+> **Status:** DONE
+> **Archived:** 2026-04-23
+> **Reason:** verified complete
+
 # Plan: Listing Recovery and Zara Remediation
 
 **Created:** 2026-04-21

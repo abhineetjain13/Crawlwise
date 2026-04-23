@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.field_value_core import (
+    extract_currency_code,
     strip_tracking_query_params,
     validate_and_clean,
     validate_record_for_surface,
@@ -112,3 +113,12 @@ def test_strip_tracking_query_params_keeps_short_flags_without_detail_context_tr
     )
 
     assert cleaned == "https://example.com/products/widget-prime?ls=r&variant=blue"
+
+
+def test_extract_currency_code_supports_rs_price_prefixes() -> None:
+    assert extract_currency_code("Rs. 3,990.00") == "INR"
+    assert extract_currency_code("INR 499") == "INR"
+
+
+def test_extract_currency_code_ignores_non_currency_uppercase_acronyms() -> None:
+    assert extract_currency_code("SKU 499") is None

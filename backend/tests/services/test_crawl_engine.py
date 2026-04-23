@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.services import crawl_fetch_runtime
+from app.services.detail_extractor import _normalize_variant_record
 from app.services.extraction_runtime import extract_records
 
 
@@ -343,6 +344,47 @@ def test_extract_records_prefers_rendered_listing_cards_over_thin_structured_rec
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
 
 
+def test_extract_records_prefers_generic_listing_rows_over_thin_adapter_rows() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.myntra.com/hand-towels",
+        "ecommerce_listing",
+        max_records=10,
+        adapter_records=[
+            {
+                "title": "Microfiber Face Towel",
+                "url": "https://www.myntra.com/products/microfiber-face-towel",
+                "brand": "Personal Touch Skincare",
+                "_source": "myntra_adapter",
+            }
+        ],
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Microfiber Face Towel",
+                    "url": "https://www.myntra.com/products/microfiber-face-towel",
+                    "price": "Rs. 499",
+                    "image_url": "https://assets.myntassets.com/assets/images/towel.jpg",
+                    "brand": "Personal Touch Skincare",
+                }
+            ]
+        },
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.myntra.com/hand-towels",
+            "_source": "rendered_listing",
+            "title": "Microfiber Face Towel",
+            "url": "https://www.myntra.com/products/microfiber-face-towel",
+            "price": "499",
+            "currency": "INR",
+            "image_url": "https://assets.myntassets.com/assets/images/towel.jpg",
+            "brand": "Personal Touch Skincare",
+        }
+    ]
+
+
 def test_extract_records_drops_rendered_listing_utility_rows_when_real_products_exist() -> None:
     rows = extract_records(
         "<html><body></body></html>",
@@ -495,6 +537,44 @@ def test_extract_records_drops_shallow_editorial_listing_links_without_product_s
     ]
 
 
+def test_extract_records_drops_rendered_listing_download_app_cta_rows() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.reverb.com/marketplace?product_type=electric-guitars",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Download the Reverb App",
+                    "url": "https://reverb.com/featured/reverb-app",
+                }
+            ]
+        },
+    )
+
+    assert rows == []
+
+
+def test_extract_records_drops_rendered_listing_category_hub_rows_without_supporting_signals() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.karenmillen.com/eu/categories/womens-trousers",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Womens Clothing",
+                    "url": "https://www.karenmillen.com/eu/categories/womens-clothing",
+                }
+            ]
+        },
+    )
+
+    assert rows == []
+
+
 def test_extract_records_recovers_rendered_listing_price_misfiled_as_brand() -> None:
     rows = extract_records(
         "<html><body></body></html>",
@@ -519,6 +599,7 @@ def test_extract_records_recovers_rendered_listing_price_misfiled_as_brand() -> 
             "_source": "rendered_listing",
             "title": "Cotton Linen Shirt Jacket Long Sleeve",
             "price": "3990.00",
+            "currency": "INR",
             "image_url": "https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_69_482443_3x4.jpg?width=300",
             "url": "https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
         }
@@ -610,7 +691,103 @@ def test_extract_records_rejects_external_rendered_listing_utility_links() -> No
             "_source": "rendered_listing",
             "title": "Canvas trainers",
             "price": "2799.00",
+            "currency": "INR",
             "url": "https://www2.hm.com/en_in/productpage.1309854002.html",
+        }
+    ]
+
+
+def test_extract_records_prefers_rich_dom_listing_rows_when_structured_rows_fill_limit() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {"@type": "Product", "name": "widget-one", "url": "/products/widget-one"},
+            {"@type": "Product", "name": "widget-two", "url": "/products/widget-two"},
+            {"@type": "Product", "name": "widget-three", "url": "/products/widget-three"},
+            {"@type": "Product", "name": "widget-four", "url": "/products/widget-four"},
+            {"@type": "Product", "name": "widget-five", "url": "/products/widget-five"}
+          ]
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <section class="product-grid">
+            <article class="product-card">
+              <a href="/products/widget-one"><img src="/images/widget-one.jpg" alt="Widget One" /><h2>Widget One</h2></a>
+              <span class="price">$19.99</span>
+            </article>
+            <article class="product-card">
+              <a href="/products/widget-two"><img src="/images/widget-two.jpg" alt="Widget Two" /><h2>Widget Two</h2></a>
+              <span class="price">$29.99</span>
+            </article>
+            <article class="product-card">
+              <a href="/products/widget-three"><img src="/images/widget-three.jpg" alt="Widget Three" /><h2>Widget Three</h2></a>
+              <span class="price">$39.99</span>
+            </article>
+            <article class="product-card">
+              <a href="/products/widget-four"><img src="/images/widget-four.jpg" alt="Widget Four" /><h2>Widget Four</h2></a>
+              <span class="price">$49.99</span>
+            </article>
+            <article class="product-card">
+              <a href="/products/widget-five"><img src="/images/widget-five.jpg" alt="Widget Five" /><h2>Widget Five</h2></a>
+              <span class="price">$59.99</span>
+            </article>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=5,
+    )
+
+    assert len(rows) == 5
+    assert all(row["_source"] == "dom_listing" for row in rows)
+    assert all(row["price"] for row in rows)
+
+
+def test_extract_records_recovers_listing_price_when_card_uses_currency_code_text() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <article class="product-card">
+            <a href="/products/teddy-tshirt">
+              <h2>Teddy T-shirt</h2>
+            </a>
+            <div class="price-copy">GBP 90</div>
+            <img src="https://cdn.example.com/teddy.jpg" alt="Teddy T-shirt" />
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/tees",
+        "ecommerce_listing",
+        max_records=5,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/collections/tees",
+            "_source": "dom_listing",
+            "title": "Teddy T-shirt",
+            "url": "https://example.com/products/teddy-tshirt",
+            "price": "90",
+            "currency": "GBP",
+            "image_url": "https://cdn.example.com/teddy.jpg",
         }
     ]
 
@@ -662,6 +839,7 @@ def test_extract_records_rejects_rendered_listing_cta_only_titles() -> None:
             "_source": "rendered_listing",
             "title": "Widget Prime",
             "price": "19.99",
+            "currency": "USD",
             "image_url": "https://www.discogs.com/images/widget-prime.jpg",
             "url": "https://www.discogs.com/products/widget-prime",
         }
@@ -1330,6 +1508,85 @@ def test_extract_ecommerce_detail_rejects_same_site_wrong_product_payload_withou
         "ecommerce_detail",
         max_records=10,
         requested_page_url="https://www.customink.com/t-shirts/medic-shirts",
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_rejects_fragment_backed_shell_payload_from_spa_root() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Practice Software Testing" />
+        <meta property="og:description" content="Modern application used to learn software testing or test automation." />
+        <meta property="og:url" content="https://www.practicesoftwaretesting.com/" />
+      </head>
+      <body>
+        <main>
+          <h1>Practice Software Testing</h1>
+          <label for="sort">Sort</label>
+          <select id="sort">
+            <option>Name (A - Z)</option>
+            <option>Name (Z - A)</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://practicesoftwaretesting.com/#/product/01HB",
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url="https://practicesoftwaretesting.com/#/product/01HB",
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_rejects_placeholder_not_found_title_without_product_signals() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Oops! The page you're looking for can't be found.</h1>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.vitacost.com/now-foods-ultra-omega-3-fish-oil-500-epa-250-dha-180-softgels",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_rejects_brand_shell_with_tracking_pixel_image() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Rockler Woodworking and Hardware" />
+        <meta property="og:image" content="https://www.facebook.com/tr?id=244606169432534&ev=PageView&noscript=1" />
+      </head>
+      <body>
+        <main>
+          <h1>Rockler Woodworking and Hardware</h1>
+          <p>Family-owned since 1954 Rockler is your go to source for high quality and innovative woodworking tools, hardware, lumber and expert advice.</p>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.rockler.com/jessem-mast-r-lift-ii-excel-router-lift",
+        "ecommerce_detail",
+        max_records=1,
     )
 
     assert rows == []
@@ -2394,6 +2651,20 @@ def test_extract_detail_keeps_valid_variant_axes_from_structured_options_alias()
         "weight": ["4.4 Lb", "0.4 Lb"],
         "flavour": ["Rich Chocolate", "Blue Tokai Coffee"],
     }
+
+
+def test_normalize_variant_record_tolerates_scalar_variant_axis_values() -> None:
+    record = {
+        "variant_axes": {
+            "size": ["M"],
+            "stock": 5,
+        }
+    }
+
+    _normalize_variant_record(record)
+
+    assert record["size"] == "M"
+    assert record["stock"] == "5"
 
 
 def test_extract_ecommerce_detail_does_not_infer_price_from_shell_chrome_text() -> None:

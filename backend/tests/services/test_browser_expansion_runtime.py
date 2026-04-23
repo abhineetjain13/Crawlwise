@@ -2404,6 +2404,61 @@ async def test_capture_rendered_listing_cards_keeps_merchandise_signal_for_utili
 
 
 @pytest.mark.asyncio
+async def test_capture_rendered_listing_cards_script_collects_lazy_image_candidates() -> None:
+    class _RegressionPage:
+        async def evaluate(self, script: str, arg: Any | None = None) -> list[dict[str, object]]:
+            del arg
+            assert "const srcsetUrls = (value)" in script
+            assert "for (const attr of ['src', 'data-src', 'data-original', 'data-image', 'data-lazy-src'])" in script
+            assert "for (const attr of ['srcset', 'data-srcset'])" in script
+            assert "return candidates.find((candidate) => !isWeakImageUrl(candidate)) || candidates[0] || '';" in script
+            return [
+                {
+                    "title": "Widget One",
+                    "url": "https://example.com/products/widget-one",
+                    "price": "$19.99",
+                    "image_url": "https://cdn.example.com/products/widget-one.jpg",
+                    "brand": "",
+                }
+            ]
+
+    rows = await browser_recovery.capture_rendered_listing_cards(
+        _RegressionPage(),
+        surface="ecommerce_listing",
+        limit=5,
+    )
+
+    assert rows == [
+        {
+            "title": "Widget One",
+            "url": "https://example.com/products/widget-one",
+            "price": "$19.99",
+            "image_url": "https://cdn.example.com/products/widget-one.jpg",
+            "brand": "",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_capture_rendered_listing_cards_script_scopes_image_candidates_to_image_container() -> None:
+    class _RegressionPage:
+        async def evaluate(self, script: str, arg: Any | None = None) -> list[dict[str, object]]:
+            del arg
+            assert "const imageScope = imageNode instanceof Element" in script
+            assert "imageNode.closest('picture') || imageNode.parentElement || imageNode" in script
+            assert "for (const node of imageScope.querySelectorAll('img, source'))" in script
+            return []
+
+    rows = await browser_recovery.capture_rendered_listing_cards(
+        _RegressionPage(),
+        surface="ecommerce_listing",
+        limit=5,
+    )
+
+    assert rows == []
+
+
+@pytest.mark.asyncio
 async def test_wait_for_listing_readiness_treats_only_playwright_timeout_as_recoverable() -> None:
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",

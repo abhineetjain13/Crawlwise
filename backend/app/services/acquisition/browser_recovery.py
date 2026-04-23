@@ -96,6 +96,61 @@ async def capture_rendered_listing_cards(
                     try { return new URL(href, location.href).href; } catch { return ''; }
                 };
                 const textOf = (node) => ((node?.innerText || node?.textContent || '').replace(/\\s+/g, ' ').trim());
+                const srcsetUrls = (value) => String(value || '')
+                    .split(',')
+                    .map((part) => part.trim().split(' ')[0]?.trim() || '')
+                    .filter(Boolean);
+                const isWeakImageUrl = (url) => {
+                    const lowered = String(url || '').toLowerCase();
+                    if (!lowered) return true;
+                    try {
+                        const parsed = new URL(lowered);
+                        const path = String(parsed.pathname || '');
+                        return /^\\/f_(?:auto|avif|jpeg|jpg|png|webp)$/i.test(path);
+                    } catch {
+                        return false;
+                    }
+                };
+                const imageCandidates = (card, imageNode) => {
+                    const candidates = [];
+                    const pushValue = (value) => {
+                        const resolved = toAbsolute(value);
+                        if (!resolved || /^data:/i.test(resolved)) return;
+                        candidates.push(resolved);
+                    };
+                    const pushNodeValues = (node) => {
+                        if (!(node instanceof Element)) return;
+                        if (node instanceof HTMLImageElement) {
+                            pushValue(node.currentSrc || '');
+                            pushValue(node.src || '');
+                        }
+                        for (const attr of ['src', 'data-src', 'data-original', 'data-image', 'data-lazy-src']) {
+                            pushValue(node.getAttribute?.(attr) || '');
+                        }
+                        for (const attr of ['srcset', 'data-srcset']) {
+                            for (const entry of srcsetUrls(node.getAttribute?.(attr) || '')) {
+                                pushValue(entry);
+                            }
+                        }
+                    };
+                    pushNodeValues(imageNode);
+                    const imageScope = imageNode instanceof Element
+                        ? (imageNode.closest('picture') || imageNode.parentElement || imageNode)
+                        : null;
+                    if (imageScope instanceof Element) {
+                        for (const node of imageScope.querySelectorAll('img, source')) {
+                            pushNodeValues(node);
+                        }
+                    }
+                    const unique = [];
+                    const seen = new Set();
+                    for (const candidate of candidates) {
+                        if (seen.has(candidate)) continue;
+                        seen.add(candidate);
+                        unique.push(candidate);
+                    }
+                    return unique;
+                };
                 const isDetailUrl = (url) => {
                     const lowered = String(url || '').toLowerCase();
                     return detailUrlHints.some((hint) => lowered.includes(hint));
@@ -166,9 +221,8 @@ async def capture_rendered_listing_cards(
                         const rawPrice = String(priceNode?.getAttribute?.('content') || priceNode?.getAttribute?.('data-price') || priceNode?.getAttribute?.('aria-label') || textOf(priceNode) || '').trim();
                         const price = (rawPrice.match(priceRegex)?.[0] || rawPrice).trim();
                         const imageUrl = (() => {
-                            if (imageNode instanceof HTMLImageElement) return toAbsolute(imageNode.currentSrc || imageNode.src || imageNode.getAttribute('src') || '');
-                            const srcset = String(imageNode?.getAttribute?.('srcset') || '');
-                            return toAbsolute(srcset.split(',')[0]?.trim()?.split(' ')[0] || '');
+                            const candidates = imageCandidates(card, imageNode);
+                            return candidates.find((candidate) => !isWeakImageUrl(candidate)) || candidates[0] || '';
                         })();
                         const brand = textOf(brandNode);
                         const loweredTitle = title.toLowerCase();

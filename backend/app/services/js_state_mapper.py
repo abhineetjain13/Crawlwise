@@ -149,6 +149,7 @@ def _map_ecommerce_detail_state(
     *,
     page_url: str,
 ) -> dict[str, Any]:
+    base_record: dict[str, Any] = {}
     for state_key, payload in js_state_objects.items():
         normalized_payload = _normalized_state_payload(state_key, payload)
         product, extractor = _extract_product_payload_from_normalized(
@@ -166,8 +167,42 @@ def _map_ecommerce_detail_state(
             ),
         )
         if mapped:
-            return mapped
-    return {}
+            if not base_record:
+                base_record = mapped
+            elif _mapped_product_identity_matches(base_record, mapped, page_url=page_url):
+                for field_name in (
+                    "variants",
+                    "variant_axes",
+                    "selected_variant",
+                    "variant_count",
+                ):
+                    if base_record.get(field_name) in (None, "", [], {}):
+                        field_value = mapped.get(field_name)
+                        if field_value not in (None, "", [], {}):
+                            base_record[field_name] = field_value
+            if base_record.get("variants") not in (None, "", [], {}):
+                break
+    return base_record
+
+
+def _mapped_product_identity_matches(
+    base_record: dict[str, Any],
+    mapped: dict[str, Any],
+    *,
+    page_url: str,
+) -> bool:
+    for field_name in ("product_id", "sku", "handle"):
+        base_value = text_or_none(base_record.get(field_name))
+        mapped_value = text_or_none(mapped.get(field_name))
+        if base_value and mapped_value:
+            return base_value == mapped_value
+    base_url = text_or_none(base_record.get("url")) or page_url
+    mapped_url = text_or_none(mapped.get("url")) or page_url
+    if base_url and mapped_url and base_url == mapped_url:
+        return True
+    base_title = text_or_none(base_record.get("title"))
+    mapped_title = text_or_none(mapped.get("title"))
+    return bool(base_title and mapped_title and base_title == mapped_title)
 
 
 def _extract_product_payload_from_normalized(

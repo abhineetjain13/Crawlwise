@@ -8,6 +8,13 @@ from app.services.adapters.myntra import MyntraAdapter
 from app.services.extraction_runtime import extract_records
 
 
+def _read_optional_artifact_text(path: str) -> str:
+    artifact = Path(path)
+    if not artifact.exists():
+        pytest.skip(f"artifact fixture missing: {artifact}")
+    return artifact.read_text(encoding="utf-8", errors="ignore")
+
+
 def test_extract_ecommerce_detail_from_microdata() -> None:
     html = """
     <html>
@@ -1933,9 +1940,7 @@ def test_extract_detail_matches_exact_requested_section_label_without_collapsing
 
 
 def test_extract_detail_keeps_company_details_body_for_requested_custom_field() -> None:
-    html = Path(
-        "artifacts/runs/8/pages/dc80e38b20c25b9b.html"
-    ).read_text(encoding="utf-8", errors="ignore")
+    html = _read_optional_artifact_text("artifacts/runs/8/pages/dc80e38b20c25b9b.html")
 
     rows = extract_records(
         html,

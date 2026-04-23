@@ -24,6 +24,8 @@ def test_normalize_decimal_price_rejects_ambiguous_integer_text_without_price_co
 
 def test_normalize_decimal_price_accepts_currency_context_for_integer_text() -> None:
     assert normalize_decimal_price("$126") == "126"
+    assert normalize_decimal_price("Rs. 499") == "499"
+    assert normalize_decimal_price("INR 499") == "499"
 
 
 def test_normalize_decimal_price_accepts_price_keyword_context_for_integer_text() -> None:

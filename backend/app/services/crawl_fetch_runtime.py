@@ -276,17 +276,22 @@ async def fetch_page(
         or context.traversal_required
     )
     if browser_first:
-        return await _run_browser_attempts(
-            context,
-            reason=_resolve_browser_reason(
+        browser_attempt_kwargs = {
+            "reason": _resolve_browser_reason(
                 browser_reason=browser_reason,
                 requires_browser=bool(context.runtime_policy.get("requires_browser")),
                 traversal_required=context.traversal_required,
                 host_preference_enabled=host_preference_enabled,
             ),
-            requested_fields=context.requested_fields,
-            listing_recovery_mode=context.listing_recovery_mode,
-            capture_page_markdown=capture_page_markdown,
+            "requested_fields": context.requested_fields,
+            "listing_recovery_mode": context.listing_recovery_mode,
+            "proxies": context.proxies,
+        }
+        if capture_page_markdown:
+            browser_attempt_kwargs["capture_page_markdown"] = True
+        return await _run_browser_attempts(
+            context,
+            **browser_attempt_kwargs,
         )
 
     http_result, vendor_block_confirmed = await _run_http_fetch_chain(context)
@@ -301,12 +306,17 @@ async def fetch_page(
             type(context.last_error).__name__,
         )
         try:
+            browser_attempt_kwargs = {
+                "reason": browser_reason or "http-escalation",
+                "requested_fields": context.requested_fields,
+                "listing_recovery_mode": context.listing_recovery_mode,
+                "proxies": context.proxies,
+            }
+            if capture_page_markdown:
+                browser_attempt_kwargs["capture_page_markdown"] = True
             return await _run_browser_attempts(
                 context,
-                reason=browser_reason or "http-escalation",
-                requested_fields=context.requested_fields,
-                listing_recovery_mode=context.listing_recovery_mode,
-                capture_page_markdown=capture_page_markdown,
+                **browser_attempt_kwargs,
             )
         except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
             _attach_exception_browser_diagnostics(

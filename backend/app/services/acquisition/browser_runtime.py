@@ -461,7 +461,7 @@ async def browser_fetch(
     traversal_mode: str | None = None,
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
-    capture_page_markdown: bool = False,
+    capture_page_markdown: bool = True,
     max_pages: int = 1,
     max_scrolls: int = 1,
     on_event=None,

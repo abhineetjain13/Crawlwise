@@ -1,45 +1,211 @@
 # Invariants
 
-These rules are the backend contract. Refactors may change structure, not these outcomes.
+These are the backend contracts. Violations are bugs, not style issues.
+**Each rule below includes what a violation looks like so there is no ambiguity.**
 
-## 1. User control ownership
+---
 
-1. User-selected crawl controls are authoritative. Do not silently rewrite `surface`, traversal intent, `proxy_list`, or `llm_enabled`.
-2. Surface remains explicit and user-owned even when heuristics or adapters suggest something else.
-3. Browser rendering escalation and traversal authorization are separate decisions. Rendering may escalate automatically; traversal only runs when settings allow it.
+## HOW TO USE THIS FILE
 
-## 2. Acquisition and runtime
+Before writing any code, read each rule that touches your subsystem.
+If your change would produce an output matching a VIOLATION signature below, stop and redesign.
+These rules override any plan doc, any inline comment, and any agent reasoning about "exceptions."
 
-4. Acquisition returns observational facts only: URL, final URL, status, method, headers, blocked state, network/browser diagnostics, and artifacts. Do not fabricate blocker causes or hidden retries.
-5. Preserve usable content over brittle anti-bot heuristics. Vendor markers alone are not enough to classify a page as blocked.
-6. Respect safety and policy boundaries: SSRF/public-target checks, robots handling when enabled, and policy-driven cookie reuse.
-7. Shared runtime behavior must remain config-driven. Tunables belong in `app/services/config/*`, not hardcoded service constants.
+---
 
-## 3. Extraction and records
+## 1. Config and Constants — Zero Tolerance
 
-8. Listing and detail extraction stay separate. Listing pages do not fall back into synthetic single-record detail behavior.
-9. A listing run with zero records produces `listing_detection_failed`, not a false success.
-10. All supported surfaces, including listing surfaces, pass schema/type validation before persistence; unsupported field types must be nulled instead of silently surviving.
-11. Persisted `record.data` contains only populated logical fields. Empty values, `_` internals, and raw manifest containers do not belong in the user-facing payload.
-12. `source_trace` and `discovered_data` must preserve provenance and reviewable metadata without leaking obsolete raw-container noise into normal API responses.
-13. Commerce/job extraction must filter page chrome and metadata noise before persistence.
+**Rule:** Every string token, timeout value, threshold, field name, URL pattern, and numeric constant
+that controls runtime behavior lives in `app/services/config/`. Nowhere else.
 
-## 4. Selectors, review, and memory
+**VIOLATION signatures — if your code matches any of these, it is wrong:**
+- A `.py` file outside `app/services/config/` contains a string like `"shopify"`, `"greenhouse"`, `"DataDome"`, a URL pattern, a timeout integer, or a field name as a bare constant
+- A new `constants.py`, `config.py`, or `settings.py` file is created inside any bucket folder
+- The same threshold or token appears in two different files
+- A dict or constant inside a service module silently overrides what `app/core/config.py` controls via env
 
-14. Domain memory is scoped by normalized `(domain, surface)`. Generic fallback may supplement a surface-specific rule set, not override the scoping model.
-15. Selector CRUD, review saves, and selector self-heal may improve future extraction, but they must remain explicit, diagnosable flows.
-16. Reused domain-memory selectors should satisfy later runs before new selector synthesis is attempted. Do not trigger another generic self-heal pass once the requested fields are already covered.
-17. Automatically synthesized selectors must be validated before they are saved or reused.
+**Fix:** Move the constant to the appropriate file in `app/services/config/` and import it. If no appropriate file exists, extend the nearest one. Do not create a new config file without confirming no existing config file can absorb it.
 
-## 5. LLM and snapshots
+---
 
-18. LLM use is opt-in at run time through settings and active config. It must not silently activate itself.
-19. Run snapshots are stable within a run. `llm_config_snapshot` and `extraction_runtime_snapshot` should prevent mid-run config drift.
-20. LLM failures should degrade gracefully and remain visible in diagnostics rather than corrupting extraction state.
+## 2. No Duplication Before Search
 
-## 6. Codebase shape
+**Rule:** Before creating any function, class, constant, or file, run a grep to confirm it does not already exist.
+If it exists, extend it. If a similar version exists, consolidate — do not create a parallel copy.
 
-21. Generic crawler paths stay generic. Do not hardcode tenant- or site-specific behavior in shared runtime or extraction code.
-22. Pipeline boundaries should use typed objects and explicit contracts rather than growing positional argument sprawl.
-23. CPU-bound parsing and sync third-party calls must not block async hot paths.
-24. If a rule is important enough to preserve, it should have a clear owning test.
+**VIOLATION signatures:**
+- Two functions in different files do the same normalization (e.g., price cleaning in both `detail_extractor.py` and `listing_extractor.py`)
+- A field alias defined in both `config/field_mappings.py` and a bucket-local dict
+- A new adapter that reimplements logic already in `field_value_core.py`
+- A plan doc that proposes the same fix as a closed plan that was never verified
+
+**Fix:** Grep first. Consolidate to the canonical owner. Delete the duplicate.
+
+---
+
+## 3. Extraction Model — How It Actually Works + 3 Known Bugs
+
+**How the candidate system works (correct, do not change):**
+All tiers (adapter, structured data, JS state, DOM) write into a shared `candidates` dict via `_add_sourced_candidate`. Field selection in `_materialize_record` is per-field independently — `_winning_candidates_for_field` picks the best source for each field slot separately. This means price can come from js_state while sku comes from DOM. This architecture is correct. Do not replace it with a record-level merge.
+
+**Source priority order (enforced by `SOURCE_PRIORITY` / `_SOURCE_PRIORITY_RANK`):**
+1. Platform adapter
+2. JSON-LD / Microdata
+3. Network payload intercept
+4. JS state
+5. DOM selector / heuristics
+6. LLM (opt-in gap-fill only)
+
+**Exception for structured object fields:** `variants`, `variant_axes`, `selected_variant` use `finalize_candidate_value` across ALL source candidates, not just the winner's. This is intentional — do not change it to winner-only.
+
+---
+
+**3 known bugs causing missing variants and missing prices. Fix these, do not work around them.**
+
+**Bug 1 — Early exit skips DOM variant collection. Owner: `build_detail_record` / `_requires_dom_completion`.**
+
+When JSON-LD produces a confident record (good title, price, images), the confidence threshold check exits before the DOM tier runs. `_extract_variants_from_dom` only runs during the DOM tier. Variants that live in DOM option controls (selects, chip groups) are never collected.
+
+Fix: `_requires_dom_completion` must return `True` when surface is `ecommerce_detail` AND `candidates` has no `variant_axes` AND `variant_dom_cues_present(soup)` is True. `variant_dom_cues_present` already exists in `extract/shared_variant_logic.py`.
+
+```python
+# Add to _requires_dom_completion:
+if (
+    surface == "ecommerce_detail"
+    and not candidates.get("variant_axes")
+    and variant_dom_cues_present(soup)
+):
+    return True
+```
+
+**Bug 2 — JS state returns on first matching object, discarding variant data in later objects. Owner: `_map_ecommerce_detail_state`.**
+
+`_map_ecommerce_detail_state` iterates `js_state_objects` and returns on the first `mapped` result. Sites with multiple hydration objects (one with base fields, one with full variant arrays) lose the variant data from the second object.
+
+Fix: iterate all objects; backfill variant fields from subsequent objects into the base record before returning.
+
+```python
+# Replace early return with:
+for field in ("variants", "variant_axes", "selected_variant", "variant_count"):
+    if base_record.get(field) in (None, [], {}) and mapped.get(field) not in (None, [], {}):
+        base_record[field] = mapped[field]
+```
+
+**Bug 3 — `_backfill_detail_price_from_html` and variant backfill not called after early exit. Owner: `build_detail_record`.**
+
+The early exit return path (end of structured_data tier) bypasses the post-tier backfill calls. Any record that exits early is missing these safety nets.
+
+Fix: call `_backfill_detail_price_from_html` and `_backfill_variants_from_dom_if_missing` before every return point in `build_detail_record`, including the early exit.
+
+---
+
+**VIOLATION signatures — do not introduce these:**
+- Replacing the per-field `candidates` + `_winning_candidates_for_field` system with a record-level merge or a single `winner` variable
+- Adding a new tier or source that writes directly to `record` instead of going through `_add_sourced_candidate`
+- Fixing missing variants by adding browser interaction before verifying Bug 1 and Bug 2 are fixed
+- Calling `_backfill_detail_price_from_html` only at the end of the full tier sequence but not after early exit paths
+
+---
+
+## 4. Delete Before Adding
+
+**Rule:** When fixing a bug or adding a feature, the first question is always:
+"What existing code can I delete or simplify?" Adding more code to compensate for broken existing code is a violation.
+
+**VIOLATION signatures:**
+- A new normalization pass added in `publish/` to fix values that `detail_extractor.py` already should have cleaned
+- A new fallback branch added in `pipeline/core.py` to handle a case that should be rejected upstream
+- A helper function added that duplicates logic in a file that was "too complex to refactor right now"
+- A plan that adds 3 new files without deleting any
+
+**Fix:** Trace the bad value upstream. Fix it at the source. Delete the downstream compensation if it existed.
+
+---
+
+## 5. User Control Ownership
+
+**Rule:** User-selected controls are authoritative. Do not silently rewrite `surface`, traversal intent, `proxy_list`, or `llm_enabled`.
+
+**VIOLATION signatures:**
+- Heuristics or adapters silently change the run's `surface` after creation
+- Traversal runs without settings authorizing it
+- LLM activates without both run settings AND active config enabling it
+
+---
+
+## 6. Acquisition — Observe, Do Not Fabricate
+
+**Rule:** Acquisition returns observational facts only: URL, final URL, status, method, headers, blocked state, diagnostics, and artifacts. It does not invent blocker causes, insert retries not in policy, or escalate without evidence.
+
+**VIOLATION signatures:**
+- Block detection classifies a page as blocked based on a vendor header alone when useful content is present and extractable
+- A retry happens that is not logged and visible in diagnostics
+- Browser escalation triggers for a URL that returned 200 with extractable content
+
+---
+
+## 7. Listing and Detail Stay Separate
+
+**Rule:** Listing extraction never falls back into single-record detail behavior. A listing run with zero records produces `listing_detection_failed`. It never produces a fake success with one row of page metadata.
+
+**VIOLATION signatures:**
+- A listing run returns 1 record containing the page title, OG description, or brand name
+- `verdict.py` returns `success` for a listing run that extracted zero product rows
+- `crawl_engine.py` routes a listing URL through `detail_extractor.py`
+
+---
+
+## 8. Persistence — User-Facing Payload Only
+
+**Rule:** `record.data` contains only populated logical fields. No empty values, no `_` internals, no raw manifest containers, no markdown with navigation links, no site chrome.
+
+**VIOLATION signatures:**
+- Exported CSV contains fields like `_raw`, `_source`, `__nuxt`, or empty string columns
+- `record.data` contains breadcrumb text, footer links, or support page anchors
+- Markdown in detail records contains visible-link sections appended after usable body content was already present
+
+---
+
+## 9. Domain Memory Scoping
+
+**Rule:** Domain memory is always scoped by normalized `(domain, surface)`. A selector for `example.com` on `ecommerce_detail` must never apply to `example.com` on `job_detail` or to `other.com` on any surface.
+
+**VIOLATION signatures:**
+- A `DomainMemory` lookup uses only `domain` without `surface`
+- Self-heal writes a new selector without verifying the target surface
+- Generic fallback selectors override a domain-specific rule for the same surface
+
+---
+
+## 10. LLM — Explicit, Degradable, Non-Primary
+
+**Rule:** LLM runs only when both run settings and active config enable it. LLM fills gaps left by deterministic sources — it is never the primary extractor. LLM failures must be visible in diagnostics and must not corrupt deterministic extraction state.
+
+**VIOLATION signatures:**
+- LLM fires on a run where `llm_enabled=False`
+- A deterministic field value is replaced by an LLM output without explicit gating
+- An LLM timeout or API error silently produces an empty record instead of a diagnostic log entry
+
+---
+
+## 11. Codebase Shape
+
+**Rule:** Generic crawler paths stay generic. Pipeline boundaries use typed objects. CPU-bound parsing does not block async hot paths.
+
+**VIOLATION signatures:**
+- `if "shopify" in url` or `if "greenhouse" in host` appears in `crawl_fetch_runtime.py`, `crawl_engine.py`, `_batch_runtime.py`, or any non-adapter file
+- A function returns a tuple of 4+ items instead of a typed object
+- A sync `requests.get()` or sync parsing call inside an `async def` function without `run_in_executor`
+
+---
+
+## 12. Plans Must Be Verified, Not Just Written
+
+**Rule:** A plan slice is not done until its verify step passes. A plan is not closed until `pytest tests -q` passes. Plans that are not verified are not done — they are abandoned, and their changes must be treated as untrusted.
+
+**VIOLATION signatures:**
+- A slice is marked DONE without running the verify command
+- A plan doc exists with status IN PROGRESS but no corresponding test run in the last session
+- A second plan is created to fix the same issue as a previous plan that was never verified
+
+**Fix:** If a plan was abandoned, treat its changes as potentially broken. Do not build on top of unverified work.

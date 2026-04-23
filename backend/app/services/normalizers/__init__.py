@@ -4,6 +4,8 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.services.config.extraction_rules import CURRENCY_CODES
+
 _DECIMAL_FIELDS = {
     "discount_amount",
     "discount_percentage",
@@ -33,8 +35,16 @@ _LIST_TEXT_FIELDS = {
 }
 _BOOLEAN_FIELDS = {"remote"}
 _NUMERIC_TEXT_RE = re.compile(r"[-+]?\d[\d.,]*")
+_CURRENCY_CODE_CONTEXT_PATTERN = "|".join(
+    re.escape(str(code).lower())
+    for code in tuple(CURRENCY_CODES or ())
+    if isinstance(code, str) and str(code).strip().lower() != "rs"
+) or r"(?!)"
 _CURRENCY_CONTEXT_RE = re.compile(
-    r"[$€£¥₹]|(?:^|\b)(?:price|sale|now|from|starting(?:\s+at)?|mrp|msrp|cost)\b",
+    (
+        r"[$€£¥₹]|(?:^|\b)(?:price|sale|now|from|starting(?:\s+at)?|mrp|msrp|cost|"
+        rf"{_CURRENCY_CODE_CONTEXT_PATTERN}|rs\.?)\b"
+    ),
     re.I,
 )
 _AVAILABILITY_TOKENS = {

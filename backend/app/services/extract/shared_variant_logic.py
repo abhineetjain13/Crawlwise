@@ -316,9 +316,14 @@ def split_variant_axes(
     single_value_attributes: dict[str, str] = {}
     forced = set(always_selectable_axes or ())
     for axis_name, values in dict(axes or {}).items():
+        raw_values = (
+            list(values)
+            if isinstance(values, (list, tuple, set))
+            else ([values] if values not in (None, "", [], {}) else [])
+        )
         cleaned_values = [
             str(value).strip()
-            for value in list(values or [])
+            for value in raw_values
             if str(value).strip()
         ]
         if not cleaned_values:

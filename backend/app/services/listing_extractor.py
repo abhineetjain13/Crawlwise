@@ -674,7 +674,18 @@ def _extract_price_signal_from_card(card) -> str | None:
     if candidates:
         candidates.sort(key=lambda row: (-row[0], row[1]))
         return candidates[0][2]
-    return extract_price_text(_node_text(card), prefer_last=True)
+    card_text = _node_text(card)
+    fallback_price = extract_price_text(card_text, prefer_last=True)
+    if not fallback_price:
+        return None
+    lowered_card_text = card_text.lower()
+    if any(symbol in card_text for symbol in ("$", "£", "€", "₹")):
+        return fallback_price
+    if re.search(r"\b(?:usd|eur|gbp|inr|cad|aud|jpy|zar|aed)\b", lowered_card_text):
+        return fallback_price
+    if re.search(r"\b(?:price|sale|from|now|only|msrp|mrp)\b", lowered_card_text):
+        return fallback_price
+    return None
 
 
 def _card_title_node(card) -> object | None:
@@ -1146,13 +1157,11 @@ def extract_listing_records(
         return records
 
     structured_records = _structured_stage()
-    structured_urls = {
-        str(record.get("url") or "")
-        for record in structured_records
-        if str(record.get("url") or "").strip()
-    }
-    remaining = max(1, int(max_records) - len(structured_records))
-    dom_records = _dom_stage(dom_parser, seed_urls=structured_urls, limit=remaining)
+    candidate_limit = max(1, int(max_records))
+    dom_records = _dom_stage(
+        dom_parser,
+        limit=candidate_limit,
+    )
     original_dom_records: list[dict[str, Any]] = []
     if context.original_html and context.original_html != context.cleaned_html:
         original_parser = LexborHTMLParser(context.original_html)
@@ -1169,8 +1178,7 @@ def extract_listing_records(
         if original_detail_anchor_count >= max(3, cleaned_detail_anchor_count + 2):
             original_dom_records = _dom_stage(
                 original_parser,
-                seed_urls=structured_urls,
-                limit=remaining,
+                limit=candidate_limit,
             )
             logger.debug(
                 "Using original listing DOM after cleaned DOM lost detail-link evidence for %s",
@@ -1199,7 +1207,7 @@ def extract_listing_records(
     candidate_sets: list[tuple[str, list[dict[str, Any]]]] = [
         ("structured", structured_records),
         ("dom", dom_records),
-        ("structured_plus_dom", [*structured_records, *dom_records]),
+        ("structured_plus_dom", [*dom_records, *structured_records]),
     ]
     if original_dom_records:
         candidate_sets.append(("original_dom", original_dom_records))

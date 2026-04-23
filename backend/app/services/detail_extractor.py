@@ -141,6 +141,32 @@ _LONG_TEXT_SOURCE_RANKS = {
     "dom_images": 12,
     "dom_text": 13,
 }
+_DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
+    re.compile(r"^404$"),
+    re.compile(r"^oops!? the page you(?:'|’)re looking for can(?:'|’)t be found\.?$", re.I),
+    re.compile(r"\bpage not found\b", re.I),
+    re.compile(r"\bnot found\b", re.I),
+    re.compile(r"\baccess denied\b", re.I),
+)
+
+
+def _detail_url_path_segments(url: str) -> list[str]:
+    parsed = urlparse(str(url or ""))
+    segments = [
+        segment
+        for segment in str(parsed.path or "").strip("/").split("/")
+        if segment
+    ]
+    fragment = str(parsed.fragment or "").strip()
+    if fragment:
+        fragment_path = fragment.split("?", 1)[0].split("&", 1)[0].strip()
+        if "/" in fragment_path:
+            segments.extend(
+                segment
+                for segment in fragment_path.strip("!/").split("/")
+                if segment
+            )
+    return segments
 
 def _field_source_rank(surface: str, field_name: str, source: str | None) -> int:
     if str(surface or "").strip().lower() == "ecommerce_detail":
@@ -176,11 +202,7 @@ def _detail_title_is_noise(title: object) -> bool:
     return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
 
 def _detail_title_from_url(page_url: str) -> str | None:
-    path_segments = [
-        segment
-        for segment in str(urlparse(page_url).path or "").strip("/").split("/")
-        if segment
-    ]
+    path_segments = _detail_url_path_segments(page_url)
     if not path_segments:
         return None
     for segment in reversed(path_segments):
@@ -544,15 +566,28 @@ def _preferred_detail_identity_url(
 
 
 def _detail_url_looks_like_product(url: str) -> bool:
-    path = str(urlparse(url).path or "").lower()
+    path_segments = _detail_url_path_segments(url)
+    path = f"/{'/'.join(path_segments)}".lower() if path_segments else ""
     if any(hint in path for hint in PRODUCT_URL_HINTS):
         return True
     segments = [segment for segment in path.split("/") if segment]
     if not segments:
         return False
-    terminal = segments[-1].strip().lower()
+    terminal = next(
+        (segment.strip().lower() for segment in reversed(segments) if segment.strip()),
+        "",
+    )
     if not terminal or terminal.isdigit():
-        return False
+        terminal = next(
+            (
+                segment.strip().lower()
+                for segment in reversed(segments[:-1])
+                if segment.strip() and not segment.strip().isdigit()
+            ),
+            "",
+        )
+        if not terminal:
+            return False
     if _detail_url_is_utility(url):
         return False
     if any(token in terminal for token in ("category", "collections", "search", "sale")):
@@ -563,7 +598,7 @@ def _detail_url_looks_like_product(url: str) -> bool:
 def _detail_url_is_utility(url: str) -> bool:
     path_tokens = {
         token
-        for token in re.split(r"[^a-z0-9]+", str(urlparse(url).path or "").lower())
+        for token in re.split(r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower())
         if token
     }
     return any(token in path_tokens for token in DETAIL_UTILITY_PATH_TOKENS)
@@ -814,11 +849,31 @@ def _prune_non_selectable_variant_axes(record: dict[str, Any]) -> None:
         variant_axes,
         always_selectable_axes=frozenset({"size"}),
     )
-    if selectable_axes:
-        record["variant_axes"] = selectable_axes
+    variant_option_axes = _variant_option_axis_names(record)
+    preserved_single_value_axes = {
+        axis_name: [axis_value]
+        for axis_name, axis_value in _single_value_attributes.items()
+        if axis_name in variant_option_axes
+    }
+    normalized_variant_axes = {**selectable_axes, **preserved_single_value_axes}
+    if normalized_variant_axes:
+        record["variant_axes"] = normalized_variant_axes
     else:
         record.pop("variant_axes", None)
-    allowed_axes = set(selectable_axes)
+    for field_name, field_value in _single_value_attributes.items():
+        if record.get(field_name) in (None, "", [], {}):
+            normalized_value = clean_text(field_value)
+            if normalized_value:
+                record[field_name] = normalized_value
+    for field_name, axis_values in normalized_variant_axes.items():
+        if record.get(field_name) not in (None, "", [], {}):
+            continue
+        if not isinstance(axis_values, list) or len(axis_values) != 1:
+            continue
+        normalized_value = clean_text(axis_values[0])
+        if normalized_value:
+            record[field_name] = normalized_value
+    allowed_axes = set(normalized_variant_axes)
     if not allowed_axes:
         return
     _prune_variant_option_values(record.get("selected_variant"), allowed_axes=allowed_axes)
@@ -827,6 +882,34 @@ def _prune_non_selectable_variant_axes(record: dict[str, Any]) -> None:
         return
     for variant in variants:
         _prune_variant_option_values(variant, allowed_axes=allowed_axes)
+
+
+def _variant_option_axis_names(record: dict[str, Any]) -> set[str]:
+    axis_names: set[str] = set()
+    selected_variant = record.get("selected_variant")
+    if isinstance(selected_variant, dict):
+        option_values = selected_variant.get("option_values")
+        if isinstance(option_values, dict):
+            axis_names.update(
+                str(axis_name).strip()
+                for axis_name in option_values
+                if str(axis_name).strip()
+            )
+    variants = record.get("variants")
+    if not isinstance(variants, list):
+        return axis_names
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        option_values = variant.get("option_values")
+        if not isinstance(option_values, dict):
+            continue
+        axis_names.update(
+            str(axis_name).strip()
+            for axis_name in option_values
+            if str(axis_name).strip()
+        )
+    return axis_names
 
 
 def _prune_variant_option_values(
@@ -909,6 +992,12 @@ def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
 
 def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> bool:
     title = text_or_none(record.get("title")) or ""
+    field_sources = record.get("_field_sources") if isinstance(record.get("_field_sources"), dict) else {}
+    title_sources = {
+        str(source).strip()
+        for source in list(field_sources.get("title") or [])
+        if str(source).strip()
+    }
     if _detail_title_is_noise(title):
         return True
     generic_detail_fields = (
@@ -931,6 +1020,25 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         record.get(field_name) not in (None, "", [], {})
         for field_name in generic_detail_fields
     )
+    if (
+        "url_slug" in title_sources
+        and float((record.get("_confidence") or {}).get("score") or 0.0) < 0.5
+        and str(record.get("_source") or "").strip() in {"opengraph", "json_ld_page_level", "microdata"}
+        and not any(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in strong_detail_fields
+        )
+    ):
+        return True
+    if (
+        _detail_title_looks_like_placeholder(title)
+        and not has_generic_detail_fields
+        and not any(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in strong_detail_fields
+        )
+    ):
+        return True
     if not _title_needs_promotion(title, page_url=page_url):
         if (
             _title_looks_like_brand_shell(title, page_url=page_url)
@@ -939,7 +1047,11 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
                 record.get(field_name) not in (None, "", [], {})
                 for field_name in strong_detail_fields
             )
-            and _description_looks_like_shell_copy(record.get("description"))
+            and (
+                _description_looks_like_shell_copy(record.get("description"))
+                or _detail_image_looks_like_tracking_or_shell(record.get("image_url"))
+                or len(clean_text(record.get("description"))) <= 120
+            )
         ):
             return True
         if not _detail_url_is_utility(page_url):
@@ -968,12 +1080,45 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
     return not any(record.get(field_name) not in (None, "", [], {}) for field_name in strong_detail_fields)
 
 
+def _detail_title_looks_like_placeholder(title: str) -> bool:
+    normalized = clean_text(title)
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"404", "not found"}:
+        return True
+    return any(pattern.search(normalized) for pattern in _DETAIL_PLACEHOLDER_TITLE_PATTERNS)
+
+
+def _detail_image_looks_like_tracking_or_shell(value: object) -> bool:
+    image_url = text_or_none(value)
+    if not image_url:
+        return False
+    lowered = image_url.lower()
+    return any(
+        token in lowered
+        for token in (
+            "facebook.com/tr?",
+            "facebook.com/tr&id=",
+            "/tr?id=",
+            "doubleclick",
+            "googletagmanager",
+            "google-analytics",
+            "pixel",
+        )
+    )
+
+
 def _title_looks_like_brand_shell(title: str, *, page_url: str) -> bool:
     normalized_title = str(title or "").strip().lower()
     if not normalized_title:
         return False
     host = str(urlparse(page_url).hostname or "").strip().lower()
     host_label = host.removeprefix("www.").split(".", 1)[0]
+    compact_title = re.sub(r"[^a-z0-9]+", "", normalized_title)
+    compact_host = re.sub(r"[^a-z0-9]+", "", host_label)
+    if compact_title and compact_host and compact_title == compact_host:
+        return True
     host_tokens = {
         token
         for token in re.split(r"[^a-z0-9]+", host_label)
@@ -989,7 +1134,10 @@ def _title_looks_like_brand_shell(title: str, *, page_url: str) -> bool:
     if not title_tokens or not (title_tokens & host_tokens):
         return False
     extra_tokens = title_tokens - host_tokens
-    return bool(extra_tokens) and extra_tokens <= set(DETAIL_BRAND_SHELL_TITLE_TOKENS)
+    return bool(extra_tokens) and (
+        extra_tokens <= set(DETAIL_BRAND_SHELL_TITLE_TOKENS)
+        or (len(extra_tokens) <= 3 and len(title_tokens) <= 5)
+    )
 
 
 def _description_looks_like_shell_copy(description: object) -> bool:
@@ -1759,6 +1907,12 @@ def _requires_dom_completion(
 ) -> bool:
     normalized_surface = str(surface or "").strip().lower()
     requested_missing_fields = _missing_requested_fields(record, requested_fields)
+    if (
+        normalized_surface == "ecommerce_detail"
+        and record.get("variant_axes") in (None, "", [], {})
+        and variant_dom_cues_present(soup)
+    ):
+        return True
     if normalized_surface == "ecommerce_detail" and variant_dom_cues_present(soup):
         if any(
             record.get(field_name) in (None, "", [], {})
@@ -1884,6 +2038,13 @@ def build_detail_record(
             soup=soup,
         )
     ):
+        _backfill_detail_price_from_html(record, html=html)
+        _backfill_variants_from_dom_if_missing(
+            record,
+            soup=soup,
+            page_url=page_url,
+            js_state_objects=js_state_objects,
+        )
         record["_extraction_tiers"]["early_exit"] = "structured_data"
         return record
 
@@ -1965,6 +2126,7 @@ def extract_detail_records(
         extraction_runtime_snapshot=extraction_runtime_snapshot,
     )
     if surface == "ecommerce_detail":
+        _normalize_variant_record(record)
         _backfill_detail_price_from_html(record, html=html)
     if surface == "ecommerce_detail" and _looks_like_site_shell_record(
         record,
@@ -2003,6 +2165,39 @@ def _backfill_detail_price_from_html(record: dict[str, Any], *, html: str) -> No
         selected_variant["price"] = price
         if currency and selected_variant.get("currency") in (None, "", [], {}):
             selected_variant["currency"] = currency
+
+
+def _backfill_variants_from_dom_if_missing(
+    record: dict[str, Any],
+    *,
+    soup: BeautifulSoup,
+    page_url: str,
+    js_state_objects: dict[str, Any] | None = None,
+) -> None:
+    if record.get("variant_axes") not in (None, "", [], {}):
+        return
+    if not variant_dom_cues_present(soup):
+        return
+    dom_variants = _extract_variants_from_dom(
+        soup,
+        page_url=page_url,
+        js_state_objects=js_state_objects,
+    )
+    for field_name in ("variant_axes", "variants", "variant_count", "selected_variant"):
+        if record.get(field_name) in (None, "", [], {}) and dom_variants.get(field_name) not in (
+            None,
+            "",
+            [],
+            {},
+        ):
+            record[field_name] = dom_variants[field_name]
+    currency = text_or_none(record.get("currency"))
+    selected_variant = record.get("selected_variant")
+    if not currency and isinstance(selected_variant, dict):
+        currency = text_or_none(selected_variant.get("currency"))
+    price = text_or_none(record.get("price"))
+    if not price and isinstance(selected_variant, dict):
+        price = text_or_none(selected_variant.get("price"))
     variants = record.get("variants")
     if not isinstance(variants, list) or not variants:
         return
@@ -2014,7 +2209,8 @@ def _backfill_detail_price_from_html(record: dict[str, Any], *, html: str) -> No
     for variant in variants:
         if not isinstance(variant, dict):
             continue
-        variant["price"] = price
+        if price:
+            variant["price"] = price
         if currency and variant.get("currency") in (None, "", [], {}):
             variant["currency"] = currency
 
