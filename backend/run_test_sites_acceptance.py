@@ -13,9 +13,13 @@ from pathlib import Path
 from harness_support import (
     HARNESS_MODE_ACQUISITION_ONLY,
     HARNESS_MODE_FULL_PIPELINE,
+    DEFAULT_SITE_SET_PATH,
+    build_explicit_sites,
     classify_failure_mode,
-    infer_surface,
+    evaluate_quality,
+    load_site_set,
     parse_test_sites_markdown,
+    review_saved_run,
     run_site_harness,
     status_for_result,
     timeout_owner_for_mode,
@@ -33,26 +37,51 @@ async def _run_one(site: dict[str, str], mode: str) -> dict[str, object]:
         "surface": site["surface"],
         "mode": mode,
         "timeout_owner": timeout_owner_for_mode(mode),
+        "bucket": site.get("bucket"),
+        "expected_failure_modes": list(site.get("expected_failure_modes") or []),
     }
     try:
-        result.update(await run_site_harness(url=site["url"], surface=site["surface"], mode=mode))
+        artifact_run_id = site.get("artifact_run_id")
+        if bool(site.get("prefer_artifact")) and artifact_run_id:
+            result.update(
+                await review_saved_run(
+                    run_id=int(artifact_run_id),
+                    requested_url=site["url"],
+                )
+            )
+        else:
+            result.update(await run_site_harness(url=site["url"], surface=site["surface"], mode=mode))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         result["error"] = f"{type(exc).__name__}: {exc}"
     result["elapsed_s"] = round(time.perf_counter() - started, 2)
     result["failure_mode"] = classify_failure_mode(result)
-    result["ok"] = result["failure_mode"] == "success"
+    result.update(evaluate_quality(site, result))
+    result["expectation_met"] = _expectation_met(site, result)
+    result["tracked_issue"] = (
+        bool(site.get("bucket"))
+        and not bool(result["expectation_met"])
+        and str(site.get("bucket")).strip().lower() not in {"must_pass", "known_blocked"}
+    )
+    result["ok"] = bool(result["expectation_met"])
     return result
 
 
 def _build_summary(results: list[dict[str, object]]) -> dict[str, object]:
     failure_counts = Counter(str(row.get("failure_mode") or "unknown") for row in results)
+    bucket_counts = Counter(str(row.get("bucket") or "unbucketed") for row in results)
+    quality_verdict_counts = Counter(str(row.get("quality_verdict") or "unknown") for row in results)
+    observed_failure_counts = Counter(str(row.get("observed_failure_mode") or "unknown") for row in results)
     return {
         "ok": sum(1 for row in results if row.get("ok")),
         "failed": sum(1 for row in results if not row.get("ok")),
+        "tracked_issues": sum(1 for row in results if row.get("tracked_issue")),
         "total": len(results),
         "mode": str(results[0].get("mode") or "") if results else "",
         "timeout_owner": str(results[0].get("timeout_owner") or "") if results else "",
         "failure_modes": dict(sorted(failure_counts.items())),
+        "quality_verdicts": dict(sorted(quality_verdict_counts.items())),
+        "observed_failure_modes": dict(sorted(observed_failure_counts.items())),
+        "buckets": dict(sorted(bucket_counts.items())),
     }
 
 
@@ -78,6 +107,34 @@ def _write_report(results: list[dict[str, object]], *, start_line: int, source_p
     return path
 
 
+def _expectation_met(site: dict[str, object], result: dict[str, object]) -> bool:
+    if site.get("quality_expectations"):
+        bucket = str(site.get("bucket") or "").strip().lower()
+        if bucket == "known_blocked":
+            return str(result.get("quality_verdict") or "").strip().lower() == "blocked"
+        return str(result.get("quality_verdict") or "").strip().lower() == "good"
+    failure_mode = str(result.get("failure_mode") or "").strip().lower()
+    bucket = str(site.get("bucket") or "").strip().lower()
+    expected_failure_modes = {
+        str(value or "").strip().lower()
+        for value in list(site.get("expected_failure_modes") or [])
+        if str(value or "").strip()
+    }
+    if expected_failure_modes:
+        return failure_mode in expected_failure_modes
+    if bucket == "must_pass":
+        return failure_mode == "success"
+    if bucket == "known_blocked":
+        return failure_mode == "blocked"
+    return failure_mode == "success"
+
+
+def _console_safe(value: object) -> str:
+    text = str(value or "")
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run TEST_SITES.md tail against production harness owners.")
     parser.add_argument("--path", default=str(DEFAULT_TEST_SITES_PATH), help="Path to TEST_SITES.md")
@@ -85,15 +142,32 @@ async def main(argv: list[str]) -> int:
     parser.add_argument("--limit", type=int, default=None, help="Optional site limit")
     parser.add_argument("--mode", choices=[HARNESS_MODE_FULL_PIPELINE, HARNESS_MODE_ACQUISITION_ONLY], default=HARNESS_MODE_FULL_PIPELINE, help="Run the full persisted pipeline or acquisition-only prefetch path.")
     parser.add_argument("--url", action="append", default=[], help="Explicit URL to smoke-test. Repeat to bypass TEST_SITES.md selection.")
+    parser.add_argument("--surface", action="append", default=[], help="Explicit surface paired by position with each --url.")
+    parser.add_argument("--site-set", default="", help="Curated site set name to load from the site-set manifest.")
+    parser.add_argument("--site-set-path", default=str(DEFAULT_SITE_SET_PATH), help="Path to curated site-set manifest JSON.")
+    parser.add_argument("--prefer-artifacts", action="store_true", help="Reuse artifact-backed run_ids from the curated site-set when present.")
     args = parser.parse_args(argv)
 
     source_path = Path(args.path)
     explicit_urls = [str(value or "").strip() for value in args.url if str(value or "").strip()]
-    sites = ([{"name": url, "url": url, "surface": infer_surface(url)} for url in explicit_urls] if explicit_urls else parse_test_sites_markdown(source_path, start_line=args.start_line))
+    explicit_surfaces = [str(value or "").strip() for value in args.surface if str(value or "").strip()]
+    if explicit_urls:
+        sites = build_explicit_sites(explicit_urls, explicit_surfaces=explicit_surfaces)
+    elif str(args.site_set or "").strip():
+        sites = load_site_set(Path(args.site_set_path), site_set_name=str(args.site_set).strip())
+    else:
+        sites = parse_test_sites_markdown(source_path, start_line=args.start_line)
+    if args.prefer_artifacts:
+        sites = [{**site, "prefer_artifact": True} for site in sites]
     if args.limit is not None:
         sites = sites[: args.limit]
 
-    lead = f"Running {len(sites)} explicit TEST_SITES URLs" if explicit_urls else f"Running {len(sites)} TEST_SITES entries from line {args.start_line}"
+    if explicit_urls:
+        lead = f"Running {len(sites)} explicit TEST_SITES URLs"
+    elif str(args.site_set or "").strip():
+        lead = f"Running {len(sites)} curated site-set entries from {args.site_set}"
+    else:
+        lead = f"Running {len(sites)} TEST_SITES entries from line {args.start_line}"
     print(f"{lead} in mode={args.mode} (timeout_owner={timeout_owner_for_mode(args.mode)})...")
     print("=" * 70)
 
@@ -103,12 +177,32 @@ async def main(argv: list[str]) -> int:
         row = await _run_one(site, args.mode)
         results.append(row)
         print(f"  Status: {status_for_result(row)}")
-        print(f"  Mode: {row.get('mode')}  Surface: {row.get('surface')}  Platform: {row.get('platform_family')}")
+        print(f"  Mode: {row.get('mode')}  Surface: {row.get('surface')}  Platform: {row.get('platform_family')}  Bucket: {row.get('bucket')}")
         print(f"  Verdict: {row.get('verdict')}  Failure mode: {row.get('failure_mode')}")
+        print(f"  Quality: {row.get('quality_verdict')}  Observed: {row.get('observed_failure_mode')}  Source: {row.get('run_source')}")
         if row.get("records") is not None:
             print(f"  Records: {row.get('records')}")
         if row.get("sample_title"):
-            print(f"  Sample: {row['sample_title']}")
+            print(f"  Sample: {_console_safe(row['sample_title'])}")
+        if row.get("sample_url"):
+            print(f"  Sample URL: {_console_safe(row['sample_url'])}")
+        if row.get("sample_utility_noise_hits"):
+            print(f"  Audit utility hits: {row['sample_utility_noise_hits']}")
+        if isinstance(row.get("challenge_summary"), dict):
+            challenge_summary = dict(row["challenge_summary"])
+            provider = str(challenge_summary.get("provider") or "").strip()
+            evidence = list(challenge_summary.get("evidence") or [])
+            provider_text = provider or "unknown"
+            print(f"  Challenge: provider={provider_text}")
+            if evidence:
+                print(f"  Challenge evidence: {', '.join(str(item) for item in evidence[:3])}")
+        failed_quality_checks = [
+            name
+            for name, value in dict(row.get("quality_checks") or {}).items()
+            if not bool(value)
+        ]
+        if failed_quality_checks:
+            print(f"  Failed quality checks: {', '.join(failed_quality_checks)}")
         if row.get("error"):
             print(f"  Error: {row['error']}")
         print(f"  Elapsed: {row.get('elapsed_s')}s")

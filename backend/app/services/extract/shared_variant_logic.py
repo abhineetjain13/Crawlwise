@@ -11,6 +11,79 @@ from app.services.config.extraction_rules import (
 )
 from app.services.field_value_core import clean_text
 
+_VARIANT_AXIS_LABEL_NOISE_TOKENS = frozenset(
+    {
+        "answer",
+        "answers",
+        "delivery",
+        "emi",
+        "faq",
+        "helpfulness",
+        "payment",
+        "question",
+        "questions",
+        "rating",
+        "ratings",
+        "review",
+        "reviews",
+        "shipping",
+        "warranty",
+    }
+)
+_VARIANT_AXIS_LABEL_NOISE_PATTERNS = (
+    re.compile(r"\bq&a\b", re.I),
+    re.compile(r"\b\d+\s+answers?\b", re.I),
+    re.compile(r"\bask\s+a\s+question\b", re.I),
+    re.compile(r"\bcontent\s+helpfulness\b", re.I),
+    re.compile(r"\breport\s+this\s+answer\b", re.I),
+)
+_VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
+    {
+        "color",
+        "colour",
+        "condition",
+        "cup",
+        "edition",
+        "finish",
+        "flavor",
+        "flavour",
+        "format",
+        "fit",
+        "material",
+        "memory",
+        "model",
+        "pack",
+        "scent",
+        "shade",
+        "size",
+        "storage",
+        "style",
+        "type",
+        "weight",
+    }
+)
+_VARIANT_AXIS_GENERIC_TOKENS = frozenset(
+    {
+        "attribute",
+        "choice",
+        "dropdown",
+        "option",
+        "options",
+        "select",
+        "selected",
+        "selector",
+        "styledselect",
+        "swatch",
+        "variant",
+        "variation",
+    }
+)
+_VARIANT_AXIS_TECHNICAL_PATTERNS = (
+    re.compile(r"^(?:option|options?|select|selector|dropdown|variant|variation|styledselect)[_\s-]*\d+$", re.I),
+    re.compile(r"^(?:variation|variant|option|attribute|selector|styledselect)(?:[_\s-]+(?:selector|select))?(?:[_\s-]*\d+)?$", re.I),
+    re.compile(r"^[a-z]*select\d+$", re.I),
+)
+
 
 def normalized_variant_axis_key(value: object) -> str:
     text = str(value or "").strip().lower().replace("&", " ")
@@ -18,7 +91,25 @@ def normalized_variant_axis_key(value: object) -> str:
         return ""
     text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
     aliases = VARIANT_AXIS_ALIASES if isinstance(VARIANT_AXIS_ALIASES, dict) else {}
-    return str(aliases.get(text) or text)
+    normalized = str(aliases.get(text) or text)
+    tokens = [token for token in normalized.split("_") if token]
+    semantic_tokens = [
+        token
+        for token in tokens
+        if token in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS
+    ]
+    if (
+        len(semantic_tokens) == 1
+        and all(
+            token == semantic_tokens[0]
+            or token in _VARIANT_AXIS_GENERIC_TOKENS
+            or token.isdigit()
+            or len(token) <= 3
+            for token in tokens
+        )
+    ):
+        return semantic_tokens[0]
+    return normalized
 
 
 def variant_dom_cues_present(soup: Any) -> bool:
@@ -54,32 +145,96 @@ def resolve_variant_group_name(node: Any) -> str:
     if not hasattr(node, "get"):
         return ""
     inferred_name = infer_variant_group_name(node)
-    raw_candidates: list[object] = [
-        node.get(attr_name)
-        for attr_name in (
-            "data-option-name",
-            "aria-label",
-            "name",
-            "id",
-            "data-testid",
-            "data-qa-action",
-        )
-        if node.get(attr_name) not in (None, "", [], {})
-    ]
+    raw_candidates: list[object] = []
+    tag_name = str(getattr(node, "name", "") or "").strip().lower()
     label = node.find_parent("label") if hasattr(node, "find_parent") else None
-    if label is not None:
+    if label is not None and tag_name not in {"input", "button", "option"}:
         raw_candidates.append(label.get_text(" ", strip=True))
     fieldset = node.find_parent("fieldset") if hasattr(node, "find_parent") else None
     if fieldset is not None:
         legend = fieldset.find("legend")
         if legend is not None:
             raw_candidates.append(legend.get_text(" ", strip=True))
+    if _node_attr_can_hold_group_label(node):
+        aria_label = node.get("aria-label")
+        if aria_label not in (None, "", [], {}):
+            raw_candidates.append(aria_label)
+    raw_candidates.extend(
+        node.get(attr_name)
+        for attr_name in (
+            "data-option-name",
+            "name",
+            "id",
+            "data-testid",
+            "data-qa-action",
+        )
+        if node.get(attr_name) not in (None, "", [], {})
+    )
     for raw_name in [*raw_candidates, inferred_name]:
         cleaned_name = clean_text(str(raw_name).replace("_", " ").replace("-", " "))
-        axis_key = normalized_variant_axis_key(cleaned_name)
-        if axis_key in {"color", "size"}:
+        if variant_axis_name_is_semantic(cleaned_name):
+            normalized_name = normalized_variant_axis_key(cleaned_name)
+            tokens = [token for token in re.split(r"[^a-z0-9]+", cleaned_name.lower()) if token]
+            if normalized_name in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS and any(
+                token.isdigit() or token in _VARIANT_AXIS_GENERIC_TOKENS
+                for token in tokens
+            ):
+                return normalized_name
             return cleaned_name
     return clean_text(inferred_name)
+
+
+def _node_attr_can_hold_group_label(node: Any) -> bool:
+    tag_name = str(getattr(node, "name", "") or "").strip().lower()
+    role = str(node.get("role") or "").strip().lower()
+    if role == "radiogroup":
+        return True
+    if tag_name in {"select", "fieldset"}:
+        return True
+    if tag_name in {"input", "button", "option", "img", "a"}:
+        return False
+    if not hasattr(node, "select"):
+        return True
+    input_count = len(node.select("input[type='radio'], input[type='checkbox']"))
+    return input_count >= 2 or tag_name in {"div", "section", "ul", "ol", "form"}
+
+
+def _looks_like_variant_axis_name(value: object) -> bool:
+    return variant_axis_name_is_semantic(value)
+
+
+def variant_axis_name_is_semantic(value: object) -> bool:
+    cleaned = clean_text(value)
+    lowered = cleaned.lower()
+    if not lowered:
+        return False
+    if any(pattern.search(lowered) for pattern in _VARIANT_AXIS_LABEL_NOISE_PATTERNS):
+        return False
+    if any(pattern.fullmatch(lowered) for pattern in _VARIANT_AXIS_TECHNICAL_PATTERNS):
+        return False
+    if re.fullmatch(r"[a-z0-9]+", lowered) and lowered in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+        return True
+    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    if not tokens or len(tokens) > 4:
+        return False
+    if any(token in _VARIANT_AXIS_LABEL_NOISE_TOKENS for token in tokens):
+        return False
+    axis_key = normalized_variant_axis_key(cleaned)
+    if not axis_key or len(axis_key) > 32:
+        return False
+    axis_tokens = [token for token in axis_key.split("_") if token]
+    if not axis_tokens:
+        return False
+    if any(pattern.fullmatch(axis_key) for pattern in _VARIANT_AXIS_TECHNICAL_PATTERNS):
+        return False
+    if any(token in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS for token in axis_tokens):
+        return True
+    non_generic_tokens = [
+        token for token in axis_tokens if token not in _VARIANT_AXIS_GENERIC_TOKENS and not token.isdigit()
+    ]
+    if not non_generic_tokens:
+        return False
+    return True
 
 
 def iter_variant_select_groups(soup: Any) -> list[Any]:

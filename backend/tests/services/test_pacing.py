@@ -37,3 +37,14 @@ async def test_apply_protected_host_backoff_extends_wait_window(
 
     assert sleeps
     assert sleeps[-1] >= 1.5
+
+
+@pytest.mark.asyncio
+async def test_mark_browser_first_host_prefers_browser_until_reset() -> None:
+    await pacing.reset_pacing_state()
+    try:
+        assert await pacing.should_prefer_browser_for_host("https://example.com/path") is False
+        await pacing.mark_browser_first_host("https://example.com/path")
+        assert await pacing.should_prefer_browser_for_host("https://example.com/other") is True
+    finally:
+        await pacing.reset_pacing_state()

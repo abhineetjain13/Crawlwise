@@ -10,7 +10,7 @@ import type { ActiveJob } from"../../lib/api/types";
 import { formatJobsTimestamp as formatTimestamp, formatNowHms } from"../../lib/format/date";
 import { humanizeStatus, jobsStatusTone as statusTone } from"../../lib/ui/status";
 import { cn } from"../../lib/utils";
-import { Badge, Button, Card } from"../../components/ui/primitives";
+import { Badge, Button } from"../../components/ui/primitives";
 import {
  DataRegionEmpty,
  DataRegionError,
@@ -18,7 +18,7 @@ import {
  InlineAlert,
  PageHeader,
  ProgressBar,
- SectionHeader,
+ SectionCard,
  TableSurface,
 } from"../../components/ui/patterns";
 
@@ -70,12 +70,7 @@ export default function JobsPage() {
  }
  />
 
- <Card className="section-card">
- <SectionHeader
- title="Active Jobs"
- description="Auto-refreshes every 5 seconds. Hard kill is the only active-run control in dev mode."
- action={<Badge tone="neutral">{jobs.length} active</Badge>}
- />
+ <SectionCard title="Active Jobs"description="Auto-refreshes every 5 seconds. Hard kill is the only active-run control in dev mode."action={<Badge tone="neutral">{jobs.length} active</Badge>}>
  {actionError ? <InlineAlert message={actionError} /> : null}
 
  {jobsQuery.isLoading ? (
@@ -130,7 +125,7 @@ export default function JobsPage() {
  ) : (
  <DataRegionEmpty title="No active jobs"description="Start a crawl to see live workers here."/>
  )}
- </Card>
+ </SectionCard>
  </div>
  );
 }

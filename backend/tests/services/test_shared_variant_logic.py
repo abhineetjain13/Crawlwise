@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.services.extract.shared_variant_logic import resolve_variants
+from app.services.extract.shared_variant_logic import (
+    resolve_variants,
+    variant_axis_name_is_semantic,
+)
 
 
 def test_resolve_variants_pairs_color_with_size_cartesian() -> None:
@@ -176,3 +179,8 @@ def test_resolve_variants_dedupes_no_option_values_against_each_other() -> None:
         "2",
         "SKU-3",
     ]
+
+
+def test_variant_axis_name_is_semantic_accepts_non_generic_axis_labels() -> None:
+    assert variant_axis_name_is_semantic("shoe width") is True
+    assert variant_axis_name_is_semantic("variant option") is False

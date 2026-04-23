@@ -5,7 +5,7 @@ import concurrent.futures
 import logging
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from app.core.config import settings
@@ -30,6 +30,10 @@ from app.services.acquisition.browser_detail import (
 from app.services.acquisition.browser_identity import (
     build_playwright_context_options,
     clear_browser_identity_cache,
+)
+from app.services.acquisition.cookie_store import (
+    load_storage_state_for_run,
+    persist_storage_state_for_run,
 )
 from app.services.acquisition.browser_page_flow import (
     BrowserFinalizeInput,
@@ -159,7 +163,7 @@ class SharedBrowserRuntime:
                     if self._browser_launched_at
                     else 0,
                 )
-                await self.close()
+                await self._close_locked()
             if self._browser is not None:
                 return
             from playwright.async_api import async_playwright
@@ -192,6 +196,9 @@ class SharedBrowserRuntime:
         await self._update_active_contexts(1)
         try:
             context_options = self._build_context_options(run_id=run_id)
+            storage_state = await load_storage_state_for_run(run_id)
+            if storage_state:
+                context_options["storage_state"] = storage_state
             if proxy:
                 context_options["proxy"] = {"server": proxy}
             context = await self._browser.new_context(**cast(Any, context_options))
@@ -204,6 +211,7 @@ class SharedBrowserRuntime:
         finally:
             await self._update_active_contexts(-1)
             if context is not None:
+                await _persist_context_storage_state(context, run_id=run_id)
                 try:
                     await context.close()
                 except Exception:
@@ -212,19 +220,22 @@ class SharedBrowserRuntime:
 
     async def close(self) -> None:
         async with self._lock:
-            if self._browser is not None:
-                try:
-                    await self._browser.close()
-                except Exception:
-                    logger.debug("Failed to close browser", exc_info=True)
-            if self._playwright is not None:
-                try:
-                    await self._playwright.stop()
-                except Exception:
-                    logger.debug("Failed to stop playwright", exc_info=True)
-            self._browser = None
-            self._playwright = None
-            self._browser_launched_at = 0.0
+            await self._close_locked()
+
+    async def _close_locked(self) -> None:
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception:
+                logger.debug("Failed to close browser", exc_info=True)
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                logger.debug("Failed to stop playwright", exc_info=True)
+        self._browser = None
+        self._playwright = None
+        self._browser_launched_at = 0.0
 
     async def _update_active_contexts(self, delta: int) -> None:
         async with self._stats_lock:
@@ -377,6 +388,31 @@ def _log_shutdown_task_result(task: asyncio.Task[None]) -> None:
         logger.exception("Browser runtime shutdown task failed")
 
 
+async def _persist_context_storage_state(
+    context: Any,
+    *,
+    run_id: int | None,
+) -> None:
+    if run_id is None:
+        return
+    storage_state_fn = getattr(context, "storage_state", None)
+    if storage_state_fn is None:
+        return
+    try:
+        storage_state = await storage_state_fn()
+    except Exception:
+        logger.debug("Failed to capture browser storage state for run_id=%s", run_id, exc_info=True)
+        return
+    try:
+        await persist_storage_state_for_run(run_id, storage_state)
+    except Exception:
+        logger.error(
+            "Failed to persist browser storage state for run_id=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
 def _build_payload_capture(*, surface: str) -> _BrowserNetworkCapture:
     return _BrowserNetworkCapture(
         surface=surface,
@@ -425,6 +461,7 @@ async def browser_fetch(
     traversal_mode: str | None = None,
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
+    capture_page_markdown: bool = False,
     max_pages: int = 1,
     max_scrolls: int = 1,
     on_event=None,
@@ -455,12 +492,18 @@ async def browser_fetch(
             traversal_mode=traversal_mode,
         )
         try:
-            response, navigation_strategy = await _navigate_browser_page(
-                page,
-                url=url,
+            response, navigation_strategy = await _run_browser_stage(
+                stage="navigation",
+                page=page,
                 timeout_seconds=_remaining(),
                 phase_timings_ms=phase_timings_ms,
-                readiness_policy=readiness_policy,
+                operation=lambda: _navigate_browser_page(
+                    page,
+                    url=url,
+                    timeout_seconds=_remaining(),
+                    phase_timings_ms=phase_timings_ms,
+                    readiness_policy=readiness_policy,
+                ),
             )
             page_title = ""
             try:
@@ -482,15 +525,21 @@ async def browser_fetch(
                 networkidle_skip_reason,
                 readiness_diagnostics,
                 expansion_diagnostics,
-            ) = await _settle_browser_page(
-                page,
-                url=url,
-                surface=normalized_surface,
-                requested_fields=requested_fields,
+            ) = await _run_browser_stage(
+                stage="settle",
+                page=page,
                 timeout_seconds=_remaining(),
-                readiness_override=readiness_override,
-                readiness_policy=readiness_policy,
                 phase_timings_ms=phase_timings_ms,
+                operation=lambda: _settle_browser_page(
+                    page,
+                    url=url,
+                    surface=normalized_surface,
+                    requested_fields=requested_fields,
+                    timeout_seconds=_remaining(),
+                    readiness_override=readiness_override,
+                    readiness_policy=readiness_policy,
+                    phase_timings_ms=phase_timings_ms,
+                ),
             )
             (
                 html,
@@ -498,49 +547,62 @@ async def browser_fetch(
                 rendered_html,
                 listing_recovery_diagnostics,
                 page_markdown,
-            ) = await _serialize_browser_page_content(
-                page,
-                surface=normalized_surface,
-                traversal_mode=traversal_mode,
-                listing_recovery_mode=listing_recovery_mode,
-                traversal_active=traversal_active,
+            ) = await _run_browser_stage(
+                stage="serialize",
+                page=page,
                 timeout_seconds=_remaining(),
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
                 phase_timings_ms=phase_timings_ms,
-                on_event=on_event,
-            )
-            finalized = await finalize_browser_fetch(
-                BrowserFinalizeInput(
-                    page=page,
-                    url=url,
+                operation=lambda: _serialize_browser_page_content(
+                    page,
                     surface=normalized_surface,
-                    browser_reason=browser_reason,
-                    on_event=on_event,
-                    response=response,
-                    navigation_strategy=navigation_strategy,
-                    readiness_probes=readiness_probes,
-                    networkidle_timed_out=networkidle_timed_out,
-                    networkidle_skip_reason=networkidle_skip_reason,
-                    readiness_policy=readiness_policy,
-                    readiness_diagnostics=readiness_diagnostics,
-                    expansion_diagnostics=expansion_diagnostics,
-                    listing_recovery_diagnostics=listing_recovery_diagnostics,
-                    payload_capture=payload_capture,
-                    html=html,
-                    traversal_result=traversal_result,
-                    rendered_html=rendered_html,
-                    page_markdown=page_markdown,
+                    traversal_mode=traversal_mode,
+                    listing_recovery_mode=listing_recovery_mode,
+                    traversal_active=traversal_active,
+                    timeout_seconds=_remaining(),
+                    max_pages=max_pages,
+                    max_scrolls=max_scrolls,
+                    capture_page_markdown=capture_page_markdown,
                     phase_timings_ms=phase_timings_ms,
-                    started_at=started_at,
+                    on_event=on_event,
                 ),
-                blocked_html_checker=blocked_html_checker,
-                classify_blocked_page_async=classify_blocked_page_async,
-                classify_low_content_reason=classify_low_content_reason,
-                classify_browser_outcome=classify_browser_outcome,
-                capture_browser_screenshot=capture_browser_screenshot,
-                emit_browser_event=_emit_browser_event,
-                elapsed_ms=_elapsed_ms,
+            )
+            finalized = await _run_browser_stage(
+                stage="finalize",
+                page=page,
+                timeout_seconds=_remaining(),
+                phase_timings_ms=phase_timings_ms,
+                operation=lambda: finalize_browser_fetch(
+                    BrowserFinalizeInput(
+                        page=page,
+                        url=url,
+                        surface=normalized_surface,
+                        browser_reason=browser_reason,
+                        on_event=on_event,
+                        response=response,
+                        navigation_strategy=navigation_strategy,
+                        readiness_probes=readiness_probes,
+                        networkidle_timed_out=networkidle_timed_out,
+                        networkidle_skip_reason=networkidle_skip_reason,
+                        readiness_policy=readiness_policy,
+                        readiness_diagnostics=readiness_diagnostics,
+                        expansion_diagnostics=expansion_diagnostics,
+                        listing_recovery_diagnostics=listing_recovery_diagnostics,
+                        payload_capture=payload_capture,
+                        html=html,
+                        traversal_result=traversal_result,
+                        rendered_html=rendered_html,
+                        page_markdown=page_markdown,
+                        phase_timings_ms=phase_timings_ms,
+                        started_at=started_at,
+                    ),
+                    blocked_html_checker=blocked_html_checker,
+                    classify_blocked_page_async=classify_blocked_page_async,
+                    classify_low_content_reason=classify_low_content_reason,
+                    classify_browser_outcome=classify_browser_outcome,
+                    capture_browser_screenshot=capture_browser_screenshot,
+                    emit_browser_event=_emit_browser_event,
+                    elapsed_ms=_elapsed_ms,
+                ),
             )
             finalized_status_code = finalized.get("status_code", 0)
             finalized_platform_family = (
@@ -625,6 +687,7 @@ async def _serialize_browser_page_content(
     timeout_seconds: float,
     max_pages: int,
     max_scrolls: int,
+    capture_page_markdown: bool,
     phase_timings_ms: dict[str, int],
     on_event=None,
 ):
@@ -637,6 +700,7 @@ async def _serialize_browser_page_content(
         timeout_seconds=timeout_seconds,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
+        capture_page_markdown=capture_page_markdown,
         phase_timings_ms=phase_timings_ms,
         execute_listing_traversal=execute_listing_traversal,
         recover_listing_page_content=recover_listing_page_content,
@@ -692,7 +756,6 @@ async def listing_card_signal_count(page: Any, *, surface: str) -> int:
     return await count_listing_cards(
         page,
         surface=surface,
-        allow_heuristic=False,
     )
 
 
@@ -949,12 +1012,14 @@ def build_failed_browser_diagnostics(
 ) -> dict[str, object]:
     outcome = "render_timeout" if _is_timeout_error(exc) else "navigation_failed"
     failure_kind = _browser_failure_kind(exc)
+    failure_stage = str(getattr(exc, "browser_failure_stage", "navigation") or "navigation")
     return {
         "browser_attempted": True,
         "browser_reason": str(browser_reason or "").strip().lower() or None,
         "browser_outcome": outcome,
         "failure_kind": failure_kind,
-        "failure_stage": "navigation",
+        "failure_stage": failure_stage,
+        "timeout_phase": failure_stage if _is_timeout_error(exc) else None,
         "error": f"{type(exc).__name__}: {exc}",
         "navigation_strategy": getattr(exc, "browser_navigation_strategy", None),
         "phase_timings_ms": dict(
@@ -965,6 +1030,18 @@ def build_failed_browser_diagnostics(
 
 def _elapsed_ms(started_at: float) -> int:
     return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+def _annotate_browser_failure(
+    exc: Exception,
+    *,
+    phase_timings_ms: dict[str, int],
+    stage: str,
+) -> None:
+    setattr(exc, "browser_failure_stage", stage)
+    merged_timings = dict(getattr(exc, "browser_phase_timings_ms", {}) or {})
+    merged_timings.update(dict(phase_timings_ms or {}))
+    setattr(exc, "browser_phase_timings_ms", merged_timings)
 
 
 async def _emit_browser_event(on_event, level: str, message: str) -> None:
@@ -980,6 +1057,140 @@ def _is_timeout_error(exc: Exception) -> bool:
     class_name = type(exc).__name__.lower()
     message = str(exc or "").lower()
     return "timeout" in class_name or "timeout" in message
+
+
+async def _run_browser_stage(
+    *,
+    stage: str,
+    page: Any,
+    timeout_seconds: float,
+    phase_timings_ms: dict[str, int],
+    operation,
+):
+    stage_task = asyncio.create_task(operation())
+    bounded_timeout_seconds = max(0.1, float(timeout_seconds))
+    try:
+        done, _pending = await asyncio.wait(
+            {stage_task},
+            timeout=bounded_timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except asyncio.CancelledError:
+        await _abort_browser_stage(
+            stage_task,
+            page=page,
+            stage=stage,
+            reason="cancelled",
+        )
+        raise
+    if stage_task not in done:
+        await _abort_browser_stage(
+            stage_task,
+            page=page,
+            stage=stage,
+            reason="timeout",
+        )
+        timeout_exc = TimeoutError(
+            f"Browser {stage} stage exceeded timeout_seconds={bounded_timeout_seconds:.2f}"
+        )
+        _annotate_browser_failure(
+            timeout_exc,
+            phase_timings_ms=phase_timings_ms,
+            stage=stage,
+        )
+        raise timeout_exc
+    try:
+        return stage_task.result()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _annotate_browser_failure(
+            exc,
+            phase_timings_ms=phase_timings_ms,
+            stage=stage,
+        )
+        raise
+
+
+async def _abort_browser_stage(
+    stage_task: asyncio.Task[Any],
+    *,
+    page: Any,
+    stage: str,
+    reason: str,
+) -> None:
+    if not stage_task.done():
+        stage_task.cancel()
+    await _force_close_browser_handles(page, stage=stage, reason=reason)
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(stage_task),
+            timeout=_browser_stage_cleanup_timeout_seconds(),
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Browser %s stage did not exit within %.1fs after %s; continuing teardown",
+            stage,
+            _browser_stage_cleanup_timeout_seconds(),
+            reason,
+        )
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.debug(
+            "Browser %s stage raised while unwinding after %s",
+            stage,
+            reason,
+            exc_info=True,
+        )
+
+
+def _browser_stage_cleanup_timeout_seconds() -> float:
+    return max(
+        0.1,
+        float(crawler_runtime_settings.browser_close_timeout_ms) / 1000,
+    )
+
+
+async def _force_close_browser_handles(
+    page: Any,
+    *,
+    stage: str,
+    reason: str,
+) -> None:
+    close_timeout_seconds = _browser_stage_cleanup_timeout_seconds()
+    page_close = getattr(page, "close", None)
+    if callable(page_close):
+        try:
+            await asyncio.wait_for(page_close(), timeout=close_timeout_seconds)
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug(
+                "Browser page close failed during %s %s teardown",
+                stage,
+                reason,
+                exc_info=True,
+            )
+    context = getattr(page, "context", None)
+    if callable(context):
+        with suppress(TypeError):
+            context = context()
+    context_close = getattr(context, "close", None)
+    if not callable(context_close):
+        return
+    try:
+        await asyncio.wait_for(context_close(), timeout=close_timeout_seconds)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug(
+            "Browser context close failed during %s %s teardown",
+            stage,
+            reason,
+            exc_info=True,
+        )
 
 
 def _browser_failure_kind(exc: Exception) -> str:

@@ -112,6 +112,9 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             max_pages=request.max_pages,
             max_scrolls=request.max_scrolls,
             browser_reason=browser_reason,
+            capture_page_markdown=bool(
+                request.acquisition_profile.get("capture_page_markdown", False)
+            ),
             on_event=request.on_event,
         )
     except (httpx.HTTPError, TimeoutError, OSError) as exc:

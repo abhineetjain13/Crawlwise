@@ -11,6 +11,7 @@ from app.services.extract.shared_variant_logic import (
     normalized_variant_axis_key,
     resolve_variants,
     split_variant_axes,
+    variant_axis_name_is_semantic,
 )
 from app.services.field_value_dom import dedupe_image_urls
 from app.services.field_value_core import extract_urls, text_or_none
@@ -379,6 +380,16 @@ def _map_product_payload(
     product_stock = stock_quantity(selected_variant)
     if product_stock is None:
         product_stock = stock_quantity(product)
+    if isinstance(selected_variant, dict):
+        selected_variant = dict(selected_variant)
+        for field_name, value in (
+            ("price", price),
+            ("original_price", original_price),
+            ("currency", currency),
+            ("availability", availability),
+        ):
+            if selected_variant.get(field_name) in (None, "", [], {}) and value not in (None, "", [], {}):
+                selected_variant[field_name] = value
     color = variant_attribute(selected_variant, "color")
     size = variant_attribute(selected_variant, "size")
     size_values = selectable_axes.get("size") if isinstance(selectable_axes, dict) else None
@@ -543,9 +554,42 @@ def _option_names(raw_options: object) -> list[str]:
 
 
 _VARIANT_FIELD_SPEC = {
-    "price": Coalesce("price", "amount", "formattedPrice", default=None, skip=_SKIP),
-    "original_price": Coalesce("compare_at_price", "compareAtPrice", "original_price", "originalPrice", "listPrice", default=None, skip=_SKIP),
-    "currency": Coalesce("currency", "currencyCode", "priceCurrency", default=None, skip=_SKIP),
+    "price": Coalesce(
+        "price.amount",
+        "price.value",
+        "priceV2.amount",
+        "priceV2.value",
+        "amount",
+        "formattedPrice",
+        "price",
+        default=None,
+        skip=_SKIP,
+    ),
+    "original_price": Coalesce(
+        "compare_at_price.amount",
+        "compare_at_price",
+        "compareAtPrice.amount",
+        "compareAtPriceV2.amount",
+        "compareAtPrice",
+        "original_price",
+        "originalPrice",
+        "listPrice.amount",
+        "listPrice",
+        default=None,
+        skip=_SKIP,
+    ),
+    "currency": Coalesce(
+        "currency",
+        "currencyCode",
+        "priceCurrency",
+        "price.currencyCode",
+        "price.currency_code",
+        "priceV2.currencyCode",
+        "compareAtPrice.currencyCode",
+        "compareAtPriceV2.currencyCode",
+        default=None,
+        skip=_SKIP,
+    ),
     "sku": Coalesce("sku", default=None, skip=_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=_SKIP),
 }
@@ -627,6 +671,24 @@ def _variant_option_values(
     option_names: list[str],
 ) -> dict[str, str]:
     option_values: dict[str, str] = {}
+    selected_options = (
+        variant.get("selectedOptions")
+        if isinstance(variant.get("selectedOptions"), list)
+        else variant.get("selected_options")
+    )
+    if isinstance(selected_options, list):
+        for item in selected_options:
+            if not isinstance(item, dict):
+                continue
+            axis_name = text_or_none(item.get("name") or item.get("label"))
+            axis_value = text_or_none(item.get("value") or item.get("title") or item.get("label"))
+            if not axis_name or not axis_value or not variant_axis_name_is_semantic(axis_name):
+                continue
+            axis_key = normalized_variant_axis_key(axis_name)
+            if axis_key:
+                option_values[axis_key] = axis_value
+    if option_values:
+        return option_values
     raw_options = variant.get("options") if isinstance(variant.get("options"), list) else []
     for index in range(1, 4):
         axis_name = (
@@ -635,6 +697,8 @@ def _variant_option_values(
             else f"option_{index}"
         )
         axis_key = normalized_variant_axis_key(axis_name) or f"option_{index}"
+        if not variant_axis_name_is_semantic(axis_name):
+            continue
         value = variant.get(f"option{index}")
         if value in (None, "", [], {}) and index - 1 < len(raw_options):
             value = raw_options[index - 1]

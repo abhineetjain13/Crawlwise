@@ -3,8 +3,8 @@
 import { AlertCircle, Check, CheckCircle2, Plus, Search, Sparkles, Trash2 } from"lucide-react";
 import { useState } from"react";
 
-import { EmptyPanel, InlineAlert, PageHeader, SectionHeader } from"../../components/ui/patterns";
-import { Badge, Button, Card, Dropdown, Input, Textarea } from"../../components/ui/primitives";
+import { EmptyPanel, InlineAlert, PageHeader, SectionCard } from"../../components/ui/patterns";
+import { Badge, Button, Dropdown, Input, Textarea } from"../../components/ui/primitives";
 import { api } from"../../lib/api";
 import { httpErrorStatus } from"../../lib/api/client";
 import type {
@@ -302,8 +302,7 @@ export default function SelectorsPage() {
  <div className="page-stack">
  <PageHeader title="CSS / XPath Selector"/>
 
- <Card className="section-card">
- <SectionHeader title="Selector Inputs"description="Enter a page URL and expected column names, then let the LLM suggest selectors for each field."/>
+ <SectionCard title="Selector Inputs"description="Enter a page URL and expected column names, then let the LLM suggest selectors for each field.">
  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)_auto] xl:items-end">
  <label className="grid gap-1.5">
  <span className="field-label">Page URL</span>
@@ -329,22 +328,10 @@ export default function SelectorsPage() {
  </Button>
  </div>
  {loadError ? <InlineAlert message={loadError} /> : null}
- </Card>
+ </SectionCard>
 
  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,0.95fr)]">
- <Card className="section-card">
- <SectionHeader
- title="Page Preview"
- description={loadedUrl ||"Load a page to preview its DOM context."}
- action={
- loadedUrl ? (
- <div className="flex items-center gap-2">
- <Badge tone="info">{resolvedSurface}</Badge>
- {iframePromoted ? <Badge tone="warning">iframe promoted</Badge> : null}
- </div>
- ) : null
- }
- />
+ <SectionCard title="Page Preview"description={loadedUrl ||"Load a page to preview its DOM context."}action={loadedUrl ? <div className="flex items-center gap-2"><Badge tone="info">{resolvedSurface}</Badge>{iframePromoted ? <Badge tone="warning">iframe promoted</Badge> : null}</div> : null}>
  <div className="bg-panel rounded-xl shadow-card backdrop-blur-md overflow-hidden p-0">
  {previewUrl ? (
  <iframe
@@ -362,19 +349,9 @@ export default function SelectorsPage() {
  </div>
  )}
  </div>
- </Card>
+ </SectionCard>
 
- <Card className="section-card">
- <SectionHeader
- title="Field Rows"
- description="Review LLM suggestions, edit selectors manually, test arbitrary XPath/CSS/regex, then accept the rows you want to save."
- action={
- <Button type="button"variant="ghost"onClick={addFieldRow}>
- <Plus className="size-3.5"/>
- Add Field
- </Button>
- }
- />
+ <SectionCard title="Field Rows"description="Review LLM suggestions, edit selectors manually, test arbitrary XPath/CSS/regex, then accept the rows you want to save."action={<Button type="button"variant="ghost"onClick={addFieldRow}><Plus className="size-3.5"/>Add Field</Button>}>
 
  {rows.length ? (
  <div className="space-y-3">
@@ -497,7 +474,7 @@ export default function SelectorsPage() {
  {savingAccepted ?"Saving...":"Save Accepted Selectors"}
  </Button>
  </div>
- </Card>
+ </SectionCard>
  </div>
  </div>
  );

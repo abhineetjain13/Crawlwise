@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.services.field_policy import (
     canonical_requested_fields,
     exact_requested_field_key,
+    field_allowed_for_surface,
     normalize_field_key,
     normalize_requested_field,
     preserve_requested_fields,
@@ -40,3 +41,8 @@ def test_canonical_requested_fields_normalizes_aliases_for_runtime_matching() ->
         "dimensions",
         "care",
     ]
+
+
+def test_field_allowed_for_surface_rejects_unknown_fields() -> None:
+    assert field_allowed_for_surface("ecommerce_detail", "title") is True
+    assert field_allowed_for_surface("ecommerce_detail", "random_garbage_key") is False

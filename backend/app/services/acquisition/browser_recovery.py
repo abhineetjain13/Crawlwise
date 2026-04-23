@@ -3,6 +3,12 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
+from app.services.config.extraction_rules import (
+    LISTING_RENDERED_CARD_SELECTORS,
+    LISTING_RENDERED_DETAIL_URL_HINTS,
+    LISTING_UTILITY_URL_TOKENS,
+)
+
 
 async def recover_browser_challenge(
     page: Any,
@@ -79,14 +85,63 @@ async def capture_rendered_listing_cards(
         return []
     try:
         snapshot = await page.evaluate(
-            """(limit) => {
-                const cardSelectors = ['article','[data-testid*="product" i]','[class*="product-card" i]','[class*="product-tile" i]','[class*="plp-card" i]','[class*="catalog-item" i]','[class*="grid-item" i]','li'];
+            """(args) => {
+                const limit = Number(args?.limit || 0);
+                const cardSelectors = Array.isArray(args?.cardSelectors) ? args.cardSelectors : [];
+                const detailUrlHints = Array.isArray(args?.detailUrlHints) ? args.detailUrlHints : [];
+                const utilityUrlTokens = Array.isArray(args?.utilityUrlTokens) ? args.utilityUrlTokens : [];
                 const priceRegex = /(?:₹|Rs\\.?|INR|\\$|€|£)\\s?[\\d,.]+/i;
                 const toAbsolute = (href) => {
                     if (!href || /^(#|javascript:)/i.test(href)) return '';
                     try { return new URL(href, location.href).href; } catch { return ''; }
                 };
                 const textOf = (node) => ((node?.innerText || node?.textContent || '').replace(/\\s+/g, ' ').trim());
+                const isDetailUrl = (url) => {
+                    const lowered = String(url || '').toLowerCase();
+                    return detailUrlHints.some((hint) => lowered.includes(hint));
+                };
+                const hasUtilityToken = (url, token) => {
+                    const escaped = String(token || '').replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+                    return new RegExp(`${escaped}(?:[/?#]|$)`, 'i').test(url);
+                };
+                const isUtilityUrl = (url) => {
+                    const lowered = String(url || '').toLowerCase();
+                    return utilityUrlTokens.some((token) => hasUtilityToken(lowered, token));
+                };
+                const bestAnchor = (anchors, titleNode, imageNode) => {
+                    let winner = null;
+                    let winnerScore = -999;
+                    let utilityWinner = null;
+                    let utilityWinnerScore = -999;
+                    for (const anchor of anchors) {
+                        if (!(anchor instanceof HTMLElement) || !anchor.isConnected) continue;
+                        const url = toAbsolute(anchor.getAttribute('href'));
+                        if (!url) continue;
+                        let score = 0;
+                        const loweredUrl = url.toLowerCase();
+                        const detailLike = isDetailUrl(loweredUrl);
+                        const utilityOnly = isUtilityUrl(loweredUrl) && !detailLike;
+                        if (detailLike) score += 10;
+                        if (utilityOnly) score -= 12;
+                        if (titleNode && anchor.contains(titleNode)) score += 5;
+                        if (imageNode && anchor.contains(imageNode)) score += 2;
+                        const text = textOf(anchor);
+                        if (text.length >= 8) score += 2;
+                        if (/source=search/i.test(loweredUrl)) score += 1;
+                        if (utilityOnly) {
+                            if (score > utilityWinnerScore) {
+                                utilityWinner = anchor;
+                                utilityWinnerScore = score;
+                            }
+                            continue;
+                        }
+                        if (score > winnerScore) {
+                            winner = anchor;
+                            winnerScore = score;
+                        }
+                    }
+                    return winner || utilityWinner;
+                };
                 const seenUrls = new Set();
                 const rows = [];
                 for (const selector of cardSelectors) {
@@ -97,16 +152,15 @@ async def capture_rendered_listing_cards(
                         const style = window.getComputedStyle(card);
                         if (style.display === 'none' || style.visibility === 'hidden') continue;
                         const anchors = Array.from(card.querySelectorAll('a[href]'));
-                        const primaryAnchor = anchors.find((anchor) => {
-                            const href = String(anchor.getAttribute('href') || '');
-                            return href && !/^(#|javascript:)/i.test(href);
-                        }) || (card.matches('a[href]') ? card : null);
-                        const url = primaryAnchor ? toAbsolute(primaryAnchor.getAttribute('href')) : '';
-                        if (!url || seenUrls.has(url)) continue;
                         const titleNode = card.querySelector('h1, h2, h3, h4, [itemprop="name"], [data-testid*="title" i], [data-testid*="name" i], [class*="title" i], [class*="name" i]');
                         const brandNode = card.querySelector('[data-testid*="brand" i], [class*="brand" i]');
                         const priceNode = card.querySelector('[itemprop="price"], [data-price], [class*="price" i], [aria-label*="price" i]');
                         const imageNode = card.querySelector('img[src], source[srcset]');
+                        const primaryAnchor = bestAnchor(anchors, titleNode, imageNode) || (card.matches('a[href]') ? card : null);
+                        const url = primaryAnchor ? toAbsolute(primaryAnchor.getAttribute('href')) : '';
+                        const detailLike = isDetailUrl(url);
+                        const utilityLike = isUtilityUrl(url) && !detailLike;
+                        if (!url || seenUrls.has(url)) continue;
                         const title = textOf(titleNode) || textOf(primaryAnchor) || String(imageNode?.getAttribute?.('alt') || '').trim();
                         if (!title || title.length < 3) continue;
                         const rawPrice = String(priceNode?.getAttribute?.('content') || priceNode?.getAttribute?.('data-price') || priceNode?.getAttribute?.('aria-label') || textOf(priceNode) || '').trim();
@@ -116,14 +170,32 @@ async def capture_rendered_listing_cards(
                             const srcset = String(imageNode?.getAttribute?.('srcset') || '');
                             return toAbsolute(srcset.split(',')[0]?.trim()?.split(' ')[0] || '');
                         })();
-                        rows.push({ title, url, price, image_url: imageUrl, brand: textOf(brandNode) });
+                        const brand = textOf(brandNode);
+                        const loweredTitle = title.toLowerCase();
+                        const hasImage = Boolean(imageUrl) && !/^data:/i.test(imageUrl);
+                        const strongMerchandiseSignal = detailLike || Boolean(price) || hasImage || Boolean(brand);
+                        if (!strongMerchandiseSignal) continue;
+                        if (utilityLike && !price && !hasImage && !brand) continue;
+                        if (!detailLike && !price && (!hasImage || ['product', 'products'].includes(loweredTitle))) {
+                            continue;
+                        }
+                        rows.push({ title, url, price, image_url: imageUrl, brand });
                         seenUrls.add(url);
                         if (rows.length >= limit) return rows;
                     }
                 }
                 return rows;
             }""",
-            int(limit),
+            {
+                "limit": int(limit),
+                "cardSelectors": list(LISTING_RENDERED_CARD_SELECTORS),
+                "detailUrlHints": [
+                    hint.lower() for hint in LISTING_RENDERED_DETAIL_URL_HINTS
+                ],
+                "utilityUrlTokens": [
+                    token.lower() for token in LISTING_UTILITY_URL_TOKENS
+                ],
+            },
         )
     except Exception:
         return []

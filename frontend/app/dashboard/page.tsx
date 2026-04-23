@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import type { Route } from "next";
 import Link from "next/link";
 import { useState } from "react";
@@ -12,10 +12,9 @@ import {
  MetricGrid,
  MetricSkeleton,
  PageHeader,
- SectionHeader,
  SkeletonRows,
  StatusDot,
- SurfacePanel,
+ SurfaceSection,
 } from "../../components/ui/patterns";
 import { api } from "../../lib/api";
 import type { CrawlRun } from "../../lib/api/types";
@@ -99,7 +98,6 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 export default function DashboardPage() {
- const queryClient = useQueryClient();
  const { data, isLoading, refetch } = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard });
  const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -203,14 +201,7 @@ export default function DashboardPage() {
  {/* ── Lower grid ── */}
  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
  {/* Recent runs */}
- <SurfacePanel>
- <div className="flex items-center justify-between border-b border-[var(--divider)] px-4 py-3">
- <SectionHeader title="Recent Runs" description="Last 10 jobs"/>
- <Link href="/runs" className="link-accent no-underline text-sm font-medium leading-[1.4] hover:underline">
- View all
- </Link>
- </div>
- <div className="p-2">
+ <SurfaceSection title="Recent Runs"description="Last 10 jobs"action={<Link href="/runs" className="link-accent no-underline text-sm font-medium leading-[1.4] hover:underline">View all</Link>}bodyClassName="p-2">
  {isLoading ? (
  <SkeletonRows count={6} className="p-2"/>
  ) : data?.recent_runs?.length ? (
@@ -222,13 +213,9 @@ export default function DashboardPage() {
  <EmptyPanel title="No runs yet"description="Submit a crawl to see activity here."/>
  </div>
  )}
- </div>
- </SurfacePanel>
+ </SurfaceSection>
  {/* Top domains */}
- <SurfacePanel>
- <div className="border-b border-[var(--divider)] px-4 py-3">
- <SectionHeader title="Top Domains" description="By run count"/> </div>
- <div className="p-4">
+ <SurfaceSection title="Top Domains"description="By run count">
  {isLoading ? (
  <SkeletonRows count={5} />
  ) : data?.top_domains?.length ? (
@@ -245,8 +232,7 @@ export default function DashboardPage() {
  ) : (
  <DataRegionEmpty title="No domain data yet"description="Run crawls to build domain distribution."className="px-0 py-2"/>
  )}
- </div>
- </SurfacePanel>
+ </SurfaceSection>
  </div>
  </div>
  );

@@ -5,13 +5,17 @@
 CrawlerAI is a Python/FastAPI web crawling and data extraction platform. It uses a
 hybrid acquisition pipeline (curl_cffi default → Playwright fallback), selectors/domain-
 memory feedback loops, provenance-aware record responses, admin-managed LLM runtime/config,
-and handles primary extraction surfaces: ecommerce PDPs/listings and job listings/detail pages.
+and supports ecommerce, jobs, automobiles, and tabular targets. Audit shared/generic paths
+against all supported surfaces. Surface-specific deep checks should focus on the surfaces
+the active plan or recent regressions currently emphasize.
 
 Pipeline stages: ACQUIRE → EXTRACT → PUBLISH.
 
-Extraction source hierarchy (deterministic, first-match-wins):
+Extraction source hierarchy is authoritative-first and quality-gated, not blind merge:
 adapter → XHR/JSON / network payload mapping → JSON-LD / microdata / Open Graph →
 hydrated state (`__NEXT_DATA__`, `__NUXT_DATA__`) → DOM → LLM fallback.
+Audit whether stronger sources retain precedence and whether lower-quality sources are only
+used when higher tiers are absent, thin, noisy, or explicitly quality-gated by the owning logic.
 
 The codebase is post-refactor. Treat `AGENTS.md` and `INVARIANTS.md` as the authoritative
 intent. Every place where code contradicts these docs is a violation.
@@ -25,7 +29,8 @@ Ownership buckets (from `ENGINEERING_STRATEGY.md`):
 6. Review + Selectors + Domain Memory
 7. LLM Admin + Runtime
 
-Known recent implementations (audit for quality, not existence):
+Recent implementation areas to verify for quality/regression only
+(cross-check with `docs/plans/ACTIVE.md` and the linked plan; do not assume this list is exhaustive):
 structured-source expansion (microdata/Open Graph/Nuxt revival), network payload specs,
 declarative JMESPath JS-state mappings, browserforge identity, URL tracking-param stripping,
 selector self-heal with improvement gating, domain memory scoped by (domain, surface),
@@ -34,15 +39,59 @@ acquisition plan normalization through `AcquisitionPlan → URLProcessingConfig 
 
 ---
 
+## REQUIRED PREFLIGHT
+
+Before auditing, explicitly read these files in this order and state that you did:
+
+1. `AGENTS.md`
+2. `docs/CODEBASE_MAP.md`
+3. `docs/BUSINESS_LOGIC.md`
+4. `docs/ENGINEERING_STRATEGY.md`
+5. `docs/INVARIANTS.md`
+6. `docs/plans/ACTIVE.md`
+7. The plan file currently pointed to by `docs/plans/ACTIVE.md` if one exists
+
+Start the audit output with a short preflight block:
+
+```
+Preflight:
+- Read: AGENTS.md, CODEBASE_MAP.md, BUSINESS_LOGIC.md, ENGINEERING_STRATEGY.md, INVARIANTS.md
+- Active plan: [path or NONE]
+- Audit scope emphasis: [surfaces / subsystem emphasis inferred from active plan or FIRST RUN]
+```
+
+If you did not read these files, do not continue.
+
+---
+
 ## LONGITUDINAL MODE — REQUIRED INPUT
 
-**Paste the previous session's "Top Findings" list below before running this audit.**
+**Paste the previous session's top findings and prior scores below before running this audit.**
 If this is the first session, write `FIRST RUN` and skip the delta step.
 
 ```
 PREVIOUS TOP FINDINGS:
 [paste previous audit's Critical Path findings here, one per line with their IDs]
+
+PREVIOUS SCORES:
+D1: X.X
+D2: X.X
+D3: X.X
+D4: X.X
+D5: X.X
+D6: X.X
+D7: X.X
+D8: X.X
+OVERALL: X.X
 ```
+
+Finding IDs must be stable across sessions.
+Use:
+- `F-###` for audit findings
+- `RC-#` for root causes
+- `LN-#` for leaf-node fixes
+
+If a previous finding has no stable ID, mark it `NOT FOUND` and exclude it from score deltas.
 
 Before auditing any dimension, evaluate each previous finding as:
 - **FIXED** — code evidence confirms the fix is in place (cite the file/function)
@@ -68,10 +117,15 @@ output structured remediation work orders that can be handed directly to Codex.
 For every violation you cite, you must provide:
 
 ```
-grep -r "exact_symbol_or_pattern" backend/app/services/[file]
+rg -n "exact_symbol_or_pattern" backend/app/services/[file]
 ```
 
 or an equivalent search that would confirm the finding in the actual codebase.
+
+When a single grep is not enough because the violation is structural
+(for example SRP, DRY, layering, or precedence/ranking behavior), provide:
+- 1–3 machine-runnable searches (`rg`, `grep`, or equivalent), and
+- a 1–2 sentence evidence trace connecting those search hits to the finding.
 
 If you cannot construct a grep that would find it, do not report the finding.
 "I believe this pattern exists" is not a citation. Line numbers that you are not
@@ -162,9 +216,10 @@ This is the most critical dimension. Be exhaustive.
   Check `config/field_mappings.py` — are alias dicts surface-partitioned or global?
 - **Schema pollution:** Does any extractor emit fields outside the canonical field
   namespace for that surface? Do unknown fields silently reach `record.data`?
-- **Source ranking integrity:** Is first-match-wins enforced with early exit, or does
-  the pipeline collect from all sources then merge (allowing lower-quality sources
-  to pollute higher-quality ones)?
+- **Source ranking integrity:** Do stronger sources retain precedence? If the pipeline
+  consults multiple sources or candidate sets, is the fallback/ranking logic explicit,
+  quality-gated, and owned by the right module rather than a silent merge that lets
+  lower-quality evidence pollute stronger records?
 - **Hydrated state extraction:** Audit `structured_sources.py` + `js_state_mapper.py`
   for `__NEXT_DATA__`, `__NUXT_DATA__`, `__PRELOADED_STATE__`, `__APOLLO_STATE__`.
   Grade completeness and fallback quality — not just existence.
@@ -231,6 +286,11 @@ This is the most critical dimension. Be exhaustive.
 ### Section 0: Delta Table (longitudinal)
 
 ```
+Preflight:
+- Read: ...
+- Active plan: ...
+- Audit scope emphasis: ...
+
 | Finding ID | Previous Status | Current Status | Evidence |
 |------------|----------------|----------------|---------|
 | F-001      | [description]  | FIXED/PERSISTS/REGRESSED | file:line |
@@ -343,6 +403,9 @@ Techniques to evaluate if gaps were found (verify existence before recommending)
 ## AUDIT CONSTRAINTS
 
 - Treat `AGENTS.md` and `INVARIANTS.md` as authoritative intent. Every contradiction is a violation.
+- The repo docs define the intended model more precisely than generic crawler intuition. If
+  `BUSINESS_LOGIC.md` or the active plan documents an intentional quality-gated fallback or
+  ranking path, do not mislabel that behavior as a violation just because it is not strict early exit.
 - Generic crawler paths must stay generic. Platform behavior must be adapter-owned or config-driven.
 - Do not audit test files for coverage. Audit them only for private-function imports (AP-7).
 - Do not suggest adding logging, monitoring, or observability infrastructure.

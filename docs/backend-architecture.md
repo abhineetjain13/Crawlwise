@@ -152,6 +152,8 @@ Current live behavior:
 
 - local startup recovery only reclaims stale active runs: fresh `pending` rows without a local task id are left alone, while stale `running` rows are forced into `failed` and stale local-dispatch `pending` rows are forced into `killed` so interrupted work does not stay orphaned forever
 - batch execution now refreshes `last_heartbeat_at` as runs advance so startup recovery can distinguish live external workers from truly stale local work
+- acceptance harness runs now support curated manifest-driven site sets with bucketed expectations, explicit acceptance surfaces remain authoritative instead of being silently re-inferred from URLs, and curated commerce rows can reuse artifact-backed run ids before falling back to live execution
+- acceptance reports now distinguish transport verdicts from output quality through `quality_verdict`, `observed_failure_mode`, and `quality_checks`, so runs that technically succeed but return shell pages, promo pages, chrome-heavy listings, or broken variant semantics no longer look healthy
 
 ### 6.3 Acquisition and browser runtime
 
@@ -188,11 +190,15 @@ Current live behavior:
 - fetch results carry headers, blocked state, browser diagnostics, transient browser artifacts, and network payload metadata
 - browser runtime is pooled and exposes runtime snapshots
 - `browserforge`-backed context identity is active
+- browser contexts now reload and persist per-run Playwright storage state via `acquisition/cookie_store.py`, so same-run follow-up requests can reuse cookies/localStorage/consent state instead of always starting from a blank context
 - traversal is explicit and separate from browser escalation
 - JSON-expected acquisition now stays in `acquisition/http_client.py`; adapters consume decoded payloads instead of compensating for transport quirks
 - browser network interception is bounded through a small response-queue worker pool with per-endpoint payload budgets instead of untracked background tasks
 - adapter-owned acquisition URL normalization now runs before runtime policy selection, so platform-specific URL cleanup stays in adapters instead of generic acquisition code
 - browser diagnostics now classify `browser_reason` and `browser_outcome`, record phase timings and HTML bytes, and preserve failed browser-attempt evidence even when the final acquisition method stays HTTP
+- browser diagnostics now also expose rendered-listing evidence counts (`rendered_listing_card_count`, `listing_visual_element_count`) plus stage-aware browser failures (`failure_stage`, `timeout_phase`) so browser-heavy listing regressions can be triaged without replaying the whole run
+- rendered-listing-card capture and visual-element capture are now bounded by a dedicated runtime timeout and recorded in `phase_timings_ms` (`rendered_listing_capture`, `listing_visual_capture`) so heavy browser pages cannot stall the whole acquisition tail indefinitely
+- browser stages (`navigation`, `settle`, `serialize`, `finalize`) now run in cancellation-aware tasks; if a stage times out or the run is killed mid-flight, the runtime force-closes the page/context before unwinding so local hard-kill does not wait forever on a stuck Playwright DOM call
 - browser rendering now probes extractability at `domcontentloaded`, skips optimistic/network-idle/readiness waits when content is already usable, and limits detail expansion with bounded DOM-first then accessibility-assisted fallback
 - listing readiness no longer fast-paths from thin shell text alone; listing surfaces now require actual listing evidence before browser acquisition is considered ready
 - detail expansion now skips plain navigation anchors with real `href`s (for example footer/about/careers/returns links) unless they behave like true in-page expanders, which prevents Souled Store-style utility-page navigations during PDP acquisition
@@ -210,6 +216,9 @@ Current live behavior:
 - browser screenshots are staged to temp files inside the artifacts area and then persisted by the pipeline, avoiding large in-memory PNG handoffs on the hot path
 - a single shared HTTP client pool in `acquisition/runtime.py` is keyed on `(proxy, address-family preference, force_ipv4)`; `acquisition/http_client.py` no longer maintains a second pool and simply delegates to `get_shared_http_client`
 - curl_cffi impersonation target is now an actionable setting (`crawler_runtime_settings.curl_impersonate_target`, default `chrome131`) rather than dead config, and httpx clients ship with a matching default Chrome `User-Agent`/`Accept` header set so direct HTTP requests present a coherent identity
+- acquisition identity now repairs malformed browser client-hint headers before Playwright contexts are created, and the shared HTTP default headers advertise the same Chrome client-hint family (`sec-ch-ua*`, `Upgrade-Insecure-Requests`) when the configured UA is Chrome-like instead of sending a partial browser header set
+- tracked detail URLs are normalized upstream before reuse: extracted and user-entered commerce/job targets now drop low-signal click/search context params (`utm_*`, `click_*`, `content_source`, `pf_from`, `sr_prefetch`, `qs`, and similar short replay flags) while preserving functional params such as `variant`, `q`, and `id`
+- hosts with a recent vendor-confirmed block now temporarily prefer browser-first acquisition within the pacing TTL, so a DataDome/Cloudflare first-hit block does not immediately get replayed as another `curl -> browser` sequence on the same host
 - browser contexts apply `playwright-stealth` when installed and accept a per-fetch `proxy` for rotated-proxy traversal; `temporary_browser_page` is a thin wrapper over `SharedBrowserRuntime.page(proxy=...)`
 - `browser_identity` is host-OS-locked via `browserforge`, with a small regeneration loop to reject fingerprints whose UA tokens disagree with the OS
 - blocked-page escalation is now two-pronged: vendor-specific response headers (DataDome, Cloudflare, Akamai, PerimeterX, Sucuri, ...) classified via `classify_block_from_headers` short-circuit into the browser and mark the host vendor-blocked so sibling fetchers skip further HTTP attempts; HTML heuristics continue to catch vendor-silent blocks
@@ -258,6 +267,7 @@ Important implemented features:
 - DOM variant recovery now recognizes radio/checkbox-based size and color groups, associates labels via `for`/parent label structure, and carries stock-derived availability (`0 Left`, `17 Left`, etc.) into `variants` and `selected_variant`
 - JS-state ecommerce-detail mapping now scores candidate product payloads so richer nested PDP nodes beat shallow landing/navigation shells, and generic direct-axis variant keys such as `condition`, `grade`, `storage`, and `memory` are normalized without adapter-specific branches
 - DOM listing extraction no longer accepts the first non-empty candidate set; it now ranks structured, DOM, and browser-captured rendered-card candidates by record quality and keeps visual elements as a last-resort fallback only
+- job-listing detail-path recognition now treats numeric terminal posting slugs as detail-like URLs, so boards such as Startup.jobs survive candidate-set ranking without reopening city/search hub noise
 - listing extraction may retry the original uncleaned DOM when noise-removal cleanup strips card detail-link evidence from the cleaned DOM, which protects header-nested product links on sites such as IndiaMART without weakening global cleanup rules
 - listing title filtering now rejects numeric-only titles before persistence, and detail DOM image fallback keeps linked gallery media instead of dropping anchored product thumbnails
 - generic ecommerce detail-path recognition now includes vendor-common routes such as `/proddetail/`, and listing anchor selection accepts same-site cross-subdomain detail links instead of requiring an exact hostname match

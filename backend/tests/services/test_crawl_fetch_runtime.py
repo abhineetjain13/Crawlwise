@@ -158,7 +158,11 @@ async def test_curl_fetch_uses_runtime_owned_default_request_headers(
 ) -> None:
     captured_headers: dict[str, str] = {}
     original_user_agent = crawler_runtime_settings.http_user_agent
-    crawler_runtime_settings.http_user_agent = "CrawlerAI-Test-Agent/1.0"
+    crawler_runtime_settings.http_user_agent = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    )
 
     def _fake_get(url: str, **kwargs):
         del url
@@ -184,9 +188,11 @@ async def test_curl_fetch_uses_runtime_owned_default_request_headers(
         crawler_runtime_settings.http_user_agent = original_user_agent
 
     assert result.method == "curl_cffi"
-    assert captured_headers["User-Agent"] == "CrawlerAI-Test-Agent/1.0"
+    assert captured_headers["User-Agent"].endswith("Chrome/131.0.0.0 Safari/537.36")
     assert "Accept" in captured_headers
     assert "Accept-Language" in captured_headers
+    assert captured_headers["Upgrade-Insecure-Requests"] == "1"
+    assert "sec-ch-ua" in captured_headers
 
 
 @pytest.mark.asyncio
@@ -892,6 +898,59 @@ async def test_fetch_page_stops_http_waterfall_after_vendor_confirmed_block(
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_prefers_browser_after_vendor_blocked_host_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+    url = "https://wellfound.com/location/united-states"
+    curl_calls: list[str] = []
+    browser_reasons: list[str | None] = []
+
+    async def _vendor_blocked_curl(
+        request_url: str,
+        timeout: float,
+        *,
+        proxy: str | None = None,
+    ):
+        del timeout, proxy
+        curl_calls.append(request_url)
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body>blocked</body></html>",
+            status_code=403,
+            method="curl_cffi",
+            blocked=True,
+            headers={"x-datadome": "blocked"},
+        )
+
+    async def _browser_ok(request_url, timeout, **kwargs):
+        del timeout
+        browser_reasons.append(kwargs.get("browser_reason"))
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body><h1>Rendered</h1></body></html>",
+            status_code=200,
+            method="browser",
+            blocked=False,
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _vendor_blocked_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _browser_ok)
+    try:
+        first = await crawl_fetch_runtime.fetch_page(url, surface="job_listing")
+        second = await crawl_fetch_runtime.fetch_page(url, surface="job_listing")
+    finally:
+        await crawl_fetch_runtime.reset_fetch_runtime_state()
+
+    assert first.method == "browser"
+    assert second.method == "browser"
+    assert curl_calls == [url]
+    assert browser_reasons == ["vendor-block:datadome", "host-preference"]
+
+
+@pytest.mark.asyncio
 async def test_http_fetch_surfaces_dns_failure_without_hidden_ipv4_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -963,10 +1022,26 @@ async def test_reset_fetch_runtime_state_closes_adapter_and_runtime_http_clients
     async def _fake_close_adapter_http_client() -> None:
         calls.append("adapter_http")
 
+    async def _fake_reset_pacing_state() -> None:
+        calls.append("pacing")
+
+    async def _fake_clear_cookie_store_cache() -> None:
+        calls.append("cookie_store")
+
     monkeypatch.setattr(
         crawl_fetch_runtime,
         "shutdown_browser_runtime",
         _fake_shutdown_browser_runtime,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "clear_cookie_store_cache",
+        _fake_clear_cookie_store_cache,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "reset_pacing_state",
+        _fake_reset_pacing_state,
     )
     monkeypatch.setattr(
         crawl_fetch_runtime,
@@ -981,7 +1056,7 @@ async def test_reset_fetch_runtime_state_closes_adapter_and_runtime_http_clients
 
     await crawl_fetch_runtime.reset_fetch_runtime_state()
 
-    assert calls == ["browser", "runtime_http", "adapter_http"]
+    assert calls == ["browser", "cookie_store", "pacing", "runtime_http", "adapter_http"]
 
 
 def test_build_playwright_context_options_reuses_identity_within_run(

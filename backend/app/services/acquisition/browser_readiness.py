@@ -187,7 +187,6 @@ async def listing_card_signal_count_impl(page: Any, *, surface: str) -> int:
     return await count_listing_cards(
         page,
         surface=surface,
-        allow_heuristic=False,
     )
 
 

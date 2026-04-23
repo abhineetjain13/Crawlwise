@@ -347,6 +347,30 @@ def test_extract_ecommerce_detail_prefers_json_ld_title_over_noisy_dom_h1() -> N
     assert record["_source"] == "json_ld"
 
 
+def test_extract_ecommerce_detail_keeps_adapter_title_over_longer_dom_h1() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Widget Prime Deluxe Mega SEO Edition With Free Shipping And Bonus Copy</h1>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=5,
+        adapter_records=[{"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Widget Prime"
+    assert "SEO Edition" not in rows[0]["title"]
+
+
 def test_extract_ecommerce_detail_resolves_top_level_json_ld_array_references() -> None:
     html = """
     <html>
@@ -706,6 +730,189 @@ def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availa
     assert record["variants"][1]["stock_quantity"] == 17
 
 
+def test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site_hardcoding() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>MuscleBlaze Biozyme Performance Whey</h1>
+        <fieldset class="weight-options">
+          <legend>Weight</legend>
+          <label><input checked type="radio" name="weight" value="4.4 Lb" />4.4 Lb</label>
+          <label><input type="radio" name="weight" value="0.4 Lb" />0.4 Lb</label>
+        </fieldset>
+        <fieldset class="flavour-options">
+          <legend>Flavour</legend>
+          <label><input checked type="radio" name="flavour" value="Rich Chocolate" />Rich Chocolate</label>
+          <label><input type="radio" name="flavour" value="Blue Tokai Coffee" />Blue Tokai Coffee</label>
+        </fieldset>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/whey",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["option1_name"] == "Weight"
+    assert record["option1_values"] == "4.4 Lb, 0.4 Lb"
+    assert record["option2_name"] == "Flavour"
+    assert record["option2_values"] == "Rich Chocolate, Blue Tokai Coffee"
+    assert record["variant_axes"] == {
+        "weight": ["4.4 Lb", "0.4 Lb"],
+        "flavor": ["Rich Chocolate", "Blue Tokai Coffee"],
+    }
+    assert record["selected_variant"]["option_values"] == {
+        "weight": "4.4 Lb",
+        "flavor": "Rich Chocolate",
+    }
+    assert record["variant_count"] == 4
+
+
+def test_extract_ecommerce_detail_recovers_variant_urls_from_dom_choice_links() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Norton Velvet Recliner</h1>
+        <div class="color-selector" role="radiogroup" aria-label="Colour">
+          <a href="/product/norton-velvet-recliner-in-grey-2207513.html">
+            <button type="button" aria-label="Grey" class="selected"></button>
+          </a>
+          <a href="/product/norton-velvet-recliner-in-beige-2207512.html">
+            <button type="button" aria-label="Beige"></button>
+          </a>
+          <a href="/product/norton-velvet-recliner-in-brown-2268528.html">
+            <button type="button" aria-label="Brown"></button>
+          </a>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.pepperfry.com/product/norton-velvet-recliner-in-grey-2207513.html",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {"color": ["Grey", "Beige", "Brown"]}
+    assert record["variant_count"] == 3
+    assert record["variants"][0]["url"] == (
+        "https://www.pepperfry.com/product/norton-velvet-recliner-in-grey-2207513.html"
+    )
+    assert record["variants"][1]["url"] == (
+        "https://www.pepperfry.com/product/norton-velvet-recliner-in-beige-2207512.html"
+    )
+    assert record["variants"][2]["url"] == (
+        "https://www.pepperfry.com/product/norton-velvet-recliner-in-brown-2268528.html"
+    )
+    assert record["selected_variant"]["option_values"] == {"color": "Grey"}
+    assert record["selected_variant"]["url"] == (
+        "https://www.pepperfry.com/product/norton-velvet-recliner-in-grey-2207513.html"
+    )
+
+
+def test_extract_ecommerce_detail_recovers_variant_urls_from_js_state_option_mapping() -> None:
+    html = """
+    <html>
+      <head>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "data": {
+                "productDetailData": {
+                  "result": [
+                    {
+                      "data": {
+                        "id": "140632",
+                        "options": [
+                          {
+                            "id": "color",
+                            "label": "Frame Color",
+                            "optionList": [
+                              {
+                                "id": "14417_27737_23249_26121_23251",
+                                "title": "Transparent Grey"
+                              },
+                              {
+                                "id": "14417_27663_23245_26121_23252",
+                                "title": "Transparent Pink"
+                              }
+                            ]
+                          }
+                        ],
+                        "clarityOptionsMapping": [
+                          {
+                            "color": "14417_27737_23249_26121_23251",
+                            "productId": "140632"
+                          },
+                          {
+                            "color": "14417_27663_23245_26121_23252",
+                            "productId": "208303"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <h1>John Jacobs JJ S13313</h1>
+        <div class="color-selector" role="radiogroup" aria-label="Frame Color">
+          <button
+            id="14417_27737_23249_26121_23251"
+            type="button"
+            aria-label="Transparent Grey"
+            class="selected"
+          ></button>
+          <button
+            id="14417_27663_23245_26121_23252"
+            type="button"
+            aria-label="Transparent Pink"
+          ></button>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.lenskart.com/john-jacobs-jj-s13313-c1-sunglasses.html?productId=140632",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {
+        "color": ["Transparent Grey", "Transparent Pink"]
+    }
+    assert record["variant_count"] == 2
+    assert record["variants"][0]["variant_id"] == "140632"
+    assert record["variants"][0]["url"] == (
+        "https://www.lenskart.com/john-jacobs-jj-s13313-c1-sunglasses.html?productId=140632"
+    )
+    assert record["variants"][1]["variant_id"] == "208303"
+    assert record["variants"][1]["url"] == (
+        "https://www.lenskart.com/john-jacobs-jj-s13313-c1-sunglasses.html?productId=208303"
+    )
+    assert record["selected_variant"]["option_values"] == {"color": "Transparent Grey"}
+    assert record["selected_variant"]["variant_id"] == "140632"
+
+
 def test_extract_ecommerce_detail_skips_unnamed_dom_variant_groups() -> None:
     html = """
     <html>
@@ -848,6 +1055,190 @@ def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fall
         "sku": "TRAIL-S",
         "option_values": {"size": "S"},
     }
+
+
+def test_extract_ecommerce_detail_backfills_selected_variant_price_from_record_when_dom_variants_are_sparse() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Trail Runner</h1>
+          <div class="price">$99.00</div>
+          <label>
+            Size
+            <select name="size">
+              <option value="s" selected>S</option>
+              <option value="m">M</option>
+            </select>
+          </label>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["price"] == "99.00"
+    assert record["selected_variant"]["option_values"] == {"size": "S"}
+    assert record["selected_variant"]["price"] == "99.00"
+
+
+def test_extract_ecommerce_detail_prunes_single_value_marketing_axes_from_final_variant_record() -> None:
+    html = """
+    <html>
+      <head>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "product": {
+                "id": "leggings-1",
+                "title": "Everyday Seamless Leggings",
+                "price": "58.00",
+                "currency": "USD",
+                "variants": [
+                  {
+                    "id": "leggings-s",
+                    "available": true,
+                    "selectedOptions": [
+                      {"name": "Size", "value": "S"},
+                      {"name": "Soft Fabric", "value": "Second-skin feel"},
+                      {"name": "High Waisted", "value": "Snatched waist"}
+                    ]
+                  },
+                  {
+                    "id": "leggings-m",
+                    "available": true,
+                    "selectedOptions": [
+                      {"name": "Size", "value": "M"},
+                      {"name": "Soft Fabric", "value": "Second-skin feel"},
+                      {"name": "High Waisted", "value": "Snatched waist"}
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+        </script>
+      </head>
+      <body><main><h1>Everyday Seamless Leggings</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/everyday-seamless-leggings?variant=leggings-s",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {"size": ["S", "M"]}
+    assert record["selected_variant"]["option_values"] == {"size": "S"}
+    assert record["selected_variant"]["price"] == "58.00"
+
+
+def test_extract_ecommerce_detail_backfills_missing_variant_price_from_ld_json_price() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Tree Runner",
+          "offers": {
+            "@type": "Offer",
+            "price": "100",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "product": {
+                "id": "tree-runner-1",
+                "title": "Tree Runner",
+                "currency": "USD",
+                "variants": [
+                  {
+                    "id": "tree-runner-8",
+                    "available": true,
+                    "selectedOptions": [
+                      {"name": "Size", "value": "8"}
+                    ]
+                  },
+                  {
+                    "id": "tree-runner-9",
+                    "available": true,
+                    "selectedOptions": [
+                      {"name": "Size", "value": "9"}
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+        </script>
+      </head>
+      <body><main><h1>Tree Runner</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/tree-runner?variant=tree-runner-8",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["price"] == "100"
+    assert record["selected_variant"]["price"] == "100"
+    assert record["variants"][0]["price"] == "100"
+
+
+def test_extract_ecommerce_detail_ignores_generic_selector_axis_names_without_semantic_labels() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Camera Lens</h1>
+          <div class="price">$399.00</div>
+          <select id="variation_selector_0">
+            <option value="">Choose</option>
+            <option value="1">Leica L</option>
+            <option value="2">Sony E</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/camera-lens",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "variant_axes" not in record
+    assert "selected_variant" not in record
 
 
 def test_extract_ecommerce_detail_allows_dom_variants_to_fill_weak_js_state_variants() -> None:

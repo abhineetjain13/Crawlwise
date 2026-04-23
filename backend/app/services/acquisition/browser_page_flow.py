@@ -11,6 +11,10 @@ from app.services.acquisition.browser_recovery import (
     capture_rendered_listing_cards,
     recover_browser_challenge,
 )
+from app.services.config.extraction_rules import (
+    LISTING_RENDERED_DETAIL_URL_HINTS,
+    LISTING_UTILITY_URL_TOKENS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.dom_runtime import get_page_html
 from app.services.field_value_dom import requested_content_extractability
@@ -157,7 +161,16 @@ class BrowserAcquisitionResultBuilder:
         )
         await self._emit_events(browser_outcome=browser_outcome, blocked=blocked)
         screenshot_path = await self._capture_screenshot(browser_outcome=browser_outcome)
+        (
+            rendered_listing_cards,
+            listing_visual_elements,
+            listing_artifact_diagnostics,
+        ) = await self._capture_listing_artifacts()
         payload.phase_timings_ms["total"] = self.elapsed_ms(payload.started_at)
+        listing_evidence_counts = {
+            "rendered_listing_cards": len(rendered_listing_cards),
+            "listing_visual_elements": len(listing_visual_elements),
+        }
         diagnostics = build_browser_diagnostics(
             browser_reason=payload.browser_reason,
             browser_outcome=browser_outcome,
@@ -176,12 +189,16 @@ class BrowserAcquisitionResultBuilder:
             readiness_diagnostics=payload.readiness_diagnostics,
             expansion_diagnostics=payload.expansion_diagnostics,
             listing_recovery_diagnostics=payload.listing_recovery_diagnostics,
+            listing_artifact_diagnostics=listing_artifact_diagnostics,
             traversal_result=payload.traversal_result,
         )
-        rendered_listing_cards = await capture_rendered_listing_cards(
-            payload.page, surface=payload.surface, limit=int(crawler_runtime_settings.rendered_listing_card_capture_limit)
-        )
-        listing_visual_elements = await _capture_listing_visual_elements(payload.page, surface=payload.surface)
+        diagnostics["rendered_listing_card_count"] = listing_evidence_counts[
+            "rendered_listing_cards"
+        ]
+        diagnostics["listing_visual_element_count"] = listing_evidence_counts[
+            "listing_visual_elements"
+        ]
+        diagnostics["extractable_listing_evidence"] = listing_evidence_counts
         artifacts = build_browser_artifacts(
             screenshot_path=screenshot_path,
             traversal_result=payload.traversal_result,
@@ -255,6 +272,92 @@ class BrowserAcquisitionResultBuilder:
         screenshot_path = await self.capture_browser_screenshot(payload.page)
         payload.phase_timings_ms["screenshot_capture"] = self.elapsed_ms(screenshot_started_at)
         return screenshot_path
+
+    async def _capture_listing_artifacts(
+        self,
+    ) -> tuple[
+        list[dict[str, object]],
+        list[dict[str, object]],
+        dict[str, object],
+    ]:
+        payload = self.payload
+        rendered_listing_cards, rendered_listing_capture = await self._capture_timed_listing_artifact(
+            capture_rendered_listing_cards(
+                payload.page,
+                surface=payload.surface,
+                limit=int(crawler_runtime_settings.rendered_listing_card_capture_limit),
+            ),
+            stage="rendered_listing_capture",
+        )
+        listing_visual_elements, listing_visual_capture = await self._capture_timed_listing_artifact(
+            _capture_listing_visual_elements(
+                payload.page,
+                surface=payload.surface,
+            ),
+            stage="listing_visual_capture",
+        )
+        return (
+            rendered_listing_cards,
+            listing_visual_elements,
+            {
+                "rendered_listing_capture": rendered_listing_capture,
+                "listing_visual_capture": listing_visual_capture,
+            },
+        )
+
+    async def _capture_timed_listing_artifact(
+        self,
+        operation,
+        *,
+        stage: str,
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        payload = self.payload
+        started_at = time.perf_counter()
+        artifacts, capture_diagnostics = await _capture_listing_artifact_with_timeout(
+            operation,
+            stage=stage,
+            url=payload.url,
+        )
+        payload.phase_timings_ms[stage] = self.elapsed_ms(started_at)
+        return artifacts, capture_diagnostics
+
+
+async def _capture_listing_artifact_with_timeout(
+    operation,
+    *,
+    stage: str,
+    url: str,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    timeout_seconds = max(
+        0.1,
+        float(crawler_runtime_settings.browser_artifact_capture_timeout_ms) / 1000,
+    )
+    try:
+        result = await asyncio.wait_for(operation, timeout=timeout_seconds)
+    except asyncio.CancelledError:
+        raise
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Timed out during %s for %s after %.1fs",
+            stage,
+            url,
+            timeout_seconds,
+        )
+        return [], {"status": "timeout"}
+    except Exception:
+        logger.debug(
+            "Listing artifact capture failed stage=%s url=%s",
+            stage,
+            url,
+            exc_info=True,
+        )
+        return [], {"status": "failed"}
+    if not isinstance(result, list):
+        return [], {"status": "invalid_result"}
+    return (
+        [dict(item) for item in result if isinstance(item, dict)],
+        {"status": "ok"},
+    )
 def remaining_timeout_factory(deadline: float):
     def _remaining() -> float:
         return max(2.0, deadline - time.perf_counter())
@@ -507,6 +610,7 @@ async def serialize_browser_page_content_impl(
     timeout_seconds: float,
     max_pages: int,
     max_scrolls: int,
+    capture_page_markdown: bool,
     phase_timings_ms: dict[str, int],
     execute_listing_traversal,
     recover_listing_page_content,
@@ -567,9 +671,17 @@ async def serialize_browser_page_content_impl(
         html = await get_page_html(page)
         rendered_html = html
     phase_timings_ms["content_serialization"] = elapsed_ms(serialization_started_at)
-    markdown_started_at = time.perf_counter()
-    page_markdown = await _generate_page_markdown(page, html=rendered_html or html, surface=surface)
-    phase_timings_ms["page_markdown"] = elapsed_ms(markdown_started_at)
+    if capture_page_markdown:
+        markdown_started_at = time.perf_counter()
+        page_markdown = await _generate_page_markdown(
+            page,
+            html=rendered_html or html,
+            surface=surface,
+        )
+        phase_timings_ms["page_markdown"] = elapsed_ms(markdown_started_at)
+    else:
+        page_markdown = ""
+        phase_timings_ms["page_markdown"] = 0
     return html, traversal_result, rendered_html, listing_recovery_diagnostics, page_markdown
 def resolve_browser_fetch_policy(
     *,
@@ -605,6 +717,7 @@ def build_browser_diagnostics(
     readiness_diagnostics: dict[str, object],
     expansion_diagnostics: dict[str, object],
     listing_recovery_diagnostics: dict[str, object],
+    listing_artifact_diagnostics: dict[str, object],
     traversal_result,
 ) -> dict[str, object]:
     diagnostics = {
@@ -634,6 +747,7 @@ def build_browser_diagnostics(
         "dropped_network_payload_events": capture_summary.dropped_payload_events,
         "listing_readiness": readiness_diagnostics,
         "listing_recovery": listing_recovery_diagnostics,
+        "listing_artifact_capture": listing_artifact_diagnostics,
         "detail_expansion": expansion_diagnostics,
     }
     if traversal_result is not None:
@@ -737,7 +851,7 @@ async def _generate_page_markdown(
         markdown, link_lines = _filter_detail_markdown_payload(markdown, link_lines)
         if not markdown:
             link_lines = []
-    if link_lines:
+    if link_lines and not detail_surface:
         markdown = (
             f"{markdown}\n\nVisible links:\n" + "\n".join(link_lines[:120])
             if markdown
@@ -983,25 +1097,60 @@ async def _capture_listing_visual_elements(
         return []
     try:
         snapshot = await page.evaluate(
-            """() => {
+            """(args) => {
+                const detailUrlHints = Array.isArray(args?.detailUrlHints) ? args.detailUrlHints : [];
+                const utilityUrlTokens = Array.isArray(args?.utilityUrlTokens) ? args.utilityUrlTokens : [];
                 const selectors = [
                     'a[href]',
                     'img[src]',
                     'h1',
                     'h2',
                     'h3',
+                    'h4',
+                    '[itemprop="name"]',
                     '[class*="price" i]',
                     '[data-testid*="price" i]',
                     '[aria-label*="price" i]',
                     '[class*="title" i]',
+                    '[data-testid*="title" i]',
+                    '[data-testid*="name" i]',
                 ];
-                const seen = new Set();
+                const structuralAncestorSelectors = [
+                    'header',
+                    'footer',
+                    'nav',
+                    '[role="navigation"]',
+                    '[role="banner"]',
+                    '[role="contentinfo"]',
+                    'dialog',
+                    '[role="dialog"]',
+                    'aside',
+                ];
+                const candidateContainerSelectors = [
+                    'article',
+                    'li',
+                    'section',
+                    '[role="listitem"]',
+                    '[data-testid*="product" i]',
+                    '[class*="product" i]',
+                    '[class*="card" i]',
+                    '[class*="tile" i]',
+                    '[class*="item" i]',
+                    '[class*="result" i]',
+                ];
+                const seenNodes = new Set();
                 const rows = [];
+                const priceRegex = /(?:₹|Rs\\.?|INR|\\$|€|£)\\s?[\\d,.]+/i;
+                const isDataImage = (value) => /^data:/i.test(String(value || ''));
                 for (const selector of selectors) {
                     for (const node of document.querySelectorAll(selector)) {
                         if (!(node instanceof HTMLElement) || !node.isConnected) {
                             continue;
                         }
+                        if (seenNodes.has(node)) {
+                            continue;
+                        }
+                        seenNodes.add(node);
                         const rect = node.getBoundingClientRect();
                         if (rect.width <= 0 || rect.height <= 0) {
                             continue;
@@ -1014,39 +1163,101 @@ async def _capture_listing_visual_elements(
                         ) {
                             continue;
                         }
-                        const key = [
-                            node.tagName,
-                            node.getAttribute('href') || '',
-                            node.getAttribute('src') || '',
-                            Math.round(rect.x),
-                            Math.round(rect.y),
-                            Math.round(rect.width),
-                            Math.round(rect.height),
-                        ].join('|');
-                        if (seen.has(key)) {
+                        if (structuralAncestorSelectors.some((selector) => node.closest(selector))) {
                             continue;
                         }
-                        seen.add(key);
+                        const toAbsolute = (value) => {
+                            if (!value || /^(#|javascript:)/i.test(value)) return '';
+                            try { return new URL(value, location.href).href; } catch { return ''; }
+                        };
+                        const normalizedText = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+                        const text = normalizedText(node.innerText || node.textContent || '').slice(0, 240);
+                        const alt = normalizedText(node.getAttribute('alt') || '').slice(0, 240);
+                        const ariaLabel = normalizedText(node.getAttribute('aria-label') || '').slice(0, 240);
+                        const title = normalizedText(node.getAttribute('title') || '').slice(0, 240);
+                        const src = toAbsolute(node.getAttribute('src') || '');
+                        const directHref = toAbsolute(node.getAttribute('href') || '');
+                        const closestAnchor = node.closest('a[href]');
+                        let href = directHref || toAbsolute(closestAnchor?.getAttribute('href') || '');
+                        if (!href) {
+                            const container = node.closest(candidateContainerSelectors.join(','));
+                            const hintedAnchor = container?.querySelector?.('a[href*="/product/"], a[href*="/products/"], a[href*="/p/"], a[href*="/dp/"], a[href*="/item/"]');
+                            href = toAbsolute(hintedAnchor?.getAttribute('href') || '');
+                        }
+                        const loweredHref = href.toLowerCase();
+                        const isDetailHref = detailUrlHints.some((hint) => loweredHref.includes(hint));
+                        const isUtilityHref = utilityUrlTokens.some((token) => loweredHref.includes(token));
+                        if (isUtilityHref && !isDetailHref) {
+                            continue;
+                        }
+                        if (
+                            href &&
+                            !isDetailHref &&
+                            /^https?:\\/\\/[^/]+\\/?$/i.test(href)
+                        ) {
+                            continue;
+                        }
+                        const combinedText = normalizedText([text, alt, ariaLabel, title].filter(Boolean).join(' '));
+                        const hasPriceSignal = priceRegex.test(combinedText);
+                        const titleLike =
+                            combinedText.length >= 6 &&
+                            combinedText.length <= 180 &&
+                            !hasPriceSignal &&
+                            !/^(skip to|sign in|shop now|learn more|view all)$/i.test(combinedText);
+                        const largeImage = node.tagName.toLowerCase() === 'img' && Boolean(src) && !isDataImage(src) && rect.width >= 120 && rect.height >= 120;
+                        const genericImageLabel = /^(?:product|products?|logo|icon|image)$/i.test(combinedText);
+                        const likelyMerchandise = isDetailHref || hasPriceSignal || titleLike || largeImage;
+                        if (!likelyMerchandise) {
+                            continue;
+                        }
+                        if (!href && !hasPriceSignal) {
+                            continue;
+                        }
+                        if (genericImageLabel && !isDetailHref && !hasPriceSignal) {
+                            continue;
+                        }
+                        let score = 0;
+                        if (isDetailHref) score += 14;
+                        if (hasPriceSignal) score += 10;
+                        if (titleLike) score += 7;
+                        if (largeImage) score += 6;
+                        if (href) score += 2;
+                        if (node.tagName.toLowerCase() === 'a') score += 1;
+                        if (combinedText.length >= 12 && combinedText.length <= 120) score += 2;
+                        score -= Math.max(0, Math.floor(Math.max(0, rect.y) / 450));
                         rows.push({
                             tag: node.tagName.toLowerCase(),
-                            text: (node.innerText || node.textContent || '').trim().slice(0, 240),
-                            href: node.getAttribute('href') || '',
-                            src: node.getAttribute('src') || '',
-                            alt: node.getAttribute('alt') || '',
-                            ariaLabel: node.getAttribute('aria-label') || '',
-                            title: node.getAttribute('title') || '',
+                            text,
+                            href,
+                            src,
+                            alt,
+                            ariaLabel,
+                            title,
                             x: Math.round(rect.x),
                             y: Math.round(rect.y),
                             width: Math.round(rect.width),
                             height: Math.round(rect.height),
+                            score,
                         });
-                        if (rows.length >= 300) {
-                            return rows;
-                        }
                     }
                 }
-                return rows;
-            }"""
+                rows.sort((left, right) => {
+                    const scoreDelta = Number(right.score || 0) - Number(left.score || 0);
+                    if (scoreDelta !== 0) return scoreDelta;
+                    const yDelta = Number(left.y || 0) - Number(right.y || 0);
+                    if (yDelta !== 0) return yDelta;
+                    return Number(left.x || 0) - Number(right.x || 0);
+                });
+                return rows.slice(0, 300);
+            }""",
+            {
+                "detailUrlHints": [
+                    hint.lower() for hint in LISTING_RENDERED_DETAIL_URL_HINTS
+                ],
+                "utilityUrlTokens": [
+                    token.lower() for token in LISTING_UTILITY_URL_TOKENS
+                ],
+            },
         )
     except Exception:
         logger.debug("Failed to capture listing visual elements", exc_info=True)

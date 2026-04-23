@@ -361,13 +361,18 @@ async def _run_robots_gate(
 
 def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionRequest:
     plan = context.config.resolved_acquisition_plan(surface=context.surface)
+    acquisition_profile = dict(build_acquisition_profile(context.run.settings_view))
+    acquisition_profile.setdefault(
+        "capture_page_markdown",
+        bool(context.run.settings_view.llm_enabled()),
+    )
     return AcquisitionRequest(
         run_id=context.run.id,
         url=context.url,
         plan=plan,
         requested_fields=list(context.requested_fields),
         requested_field_selectors={},
-        acquisition_profile=dict(build_acquisition_profile(context.run.settings_view)),
+        acquisition_profile=acquisition_profile,
         on_event=_build_live_acquisition_logger(context),
     )
 
@@ -519,6 +524,7 @@ async def _run_normalization_stage(
         normalized_record, validation_errors = validate_record_for_surface(
             dict(record),
             context.surface,
+            requested_fields=context.requested_fields,
         )
         normalized_records.append(normalized_record)
         if validation_errors:

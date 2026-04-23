@@ -715,3 +715,143 @@ def test_normalize_variant_tolerates_non_dict_glom_result(
         "variant_id": "sku-123",
         "url": "https://store.example.com/products/commuter-backpack?variant=sku-123",
     }
+
+
+def test_map_js_state_to_fields_uses_selected_options_and_skips_marketing_axis_names() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "id": "leggings-1",
+                            "title": "Everyday Seamless Leggings",
+                            "vendor": "Gym Co",
+                            "price": "58.00",
+                            "currency": "USD",
+                            "options": [
+                                {"name": "Soft Fabric"},
+                                {"name": "High Waisted"},
+                            ],
+                            "variants": [
+                                {
+                                    "id": "black-s",
+                                    "available": True,
+                                    "selectedOptions": [
+                                        {"name": "Color", "value": "Black"},
+                                        {"name": "Size", "value": "S"},
+                                    ],
+                                },
+                                {
+                                    "id": "black-m",
+                                    "available": True,
+                                    "selectedOptions": [
+                                        {"name": "Color", "value": "Black"},
+                                        {"name": "Size", "value": "M"},
+                                    ],
+                                },
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/everyday-seamless-leggings?variant=black-s",
+    )
+
+    assert mapped["variant_axes"] == {"size": ["S", "M"]}
+    assert mapped["selected_variant"]["option_values"] == {
+        "color": "Black",
+        "size": "S",
+    }
+    assert mapped["selected_variant"]["price"] == "58.00"
+    assert "soft_fabric" not in mapped["variant_axes"]
+    assert "high_waisted" not in mapped["variant_axes"]
+
+
+def test_map_js_state_to_fields_reads_nested_variant_price_objects() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "id": "runner-1",
+                            "title": "Tree Runner",
+                            "vendor": "Allbirds",
+                            "price": {"amount": "100.00", "currencyCode": "USD"},
+                            "options": [
+                                {"name": "Color"},
+                                {"name": "Size"},
+                            ],
+                            "variants": [
+                                {
+                                    "id": "jet-black-8",
+                                    "available": True,
+                                    "price": {"amount": "100.00", "currencyCode": "USD"},
+                                    "selectedOptions": [
+                                        {"name": "Color", "value": "Jet Black"},
+                                        {"name": "Size", "value": "8"},
+                                    ],
+                                },
+                                {
+                                    "id": "jet-black-9",
+                                    "available": True,
+                                    "priceV2": {"amount": "100.00", "currencyCode": "USD"},
+                                    "selectedOptions": [
+                                        {"name": "Color", "value": "Jet Black"},
+                                        {"name": "Size", "value": "9"},
+                                    ],
+                                },
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/tree-runner?variant=jet-black-8",
+    )
+
+    assert mapped["price"] == "100.00"
+    assert mapped["selected_variant"]["price"] == "100.00"
+    assert mapped["selected_variant"]["currency"] == "USD"
+    assert mapped["variants"][0]["price"] == "100.00"
+    assert mapped["variants"][1]["price"] == "100.00"
+
+
+def test_map_js_state_to_fields_reads_nested_variant_original_price_objects() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "id": "runner-1",
+                            "title": "Tree Runner",
+                            "options": [{"name": "Size"}],
+                            "variants": [
+                                {
+                                    "id": "runner-8",
+                                    "compare_at_price": {"amount": "120.00", "currencyCode": "USD"},
+                                    "selectedOptions": [{"name": "Size", "value": "8"}],
+                                },
+                                {
+                                    "id": "runner-9",
+                                    "compareAtPrice": {"amount": "130.00", "currencyCode": "USD"},
+                                    "selectedOptions": [{"name": "Size", "value": "9"}],
+                                },
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/tree-runner?variant=runner-9",
+    )
+
+    assert mapped["selected_variant"]["original_price"] == "130.00"
+    assert mapped["variants"][0]["original_price"] == "120.00"
+    assert mapped["variants"][1]["original_price"] == "130.00"

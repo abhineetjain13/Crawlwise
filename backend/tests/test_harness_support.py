@@ -7,8 +7,16 @@ import pytest
 from sqlalchemy import select
 
 import harness_support
+import run_test_sites_acceptance
 from app.services.acquisition_plan import AcquisitionPlan
-from harness_support import classify_failure_mode, infer_surface, parse_test_sites_markdown
+from harness_support import (
+    build_explicit_sites,
+    classify_failure_mode,
+    evaluate_quality,
+    infer_surface,
+    load_site_set,
+    parse_test_sites_markdown,
+)
 
 
 def test_infer_surface_prefers_explicit_surface() -> None:
@@ -63,6 +71,101 @@ def test_parse_test_sites_markdown_reads_urls_from_tail(tmp_path: Path) -> None:
     ]
 
 
+def test_parse_test_sites_markdown_reads_urls_from_markdown_tables() -> None:
+    fixture = Path("C:/Projects/pre_poc_ai_crawler/TEST_SITES.md")
+
+    rows = parse_test_sites_markdown(fixture, start_line=1)
+
+    assert any(
+        row["url"] == "https://web-scraping.dev/products"
+        and row["surface"] == "ecommerce_listing"
+        for row in rows
+    )
+    assert any(
+        row["url"] == "https://web-scraping.dev/product/1"
+        and row["surface"] == "ecommerce_detail"
+        for row in rows
+    )
+    assert any(
+        row["url"] == "https://practicesoftwaretesting.com/#/product/01HB"
+        and row["surface"] == "ecommerce_detail"
+        for row in rows
+    )
+
+
+def test_build_explicit_sites_preserves_explicit_surface_order() -> None:
+    rows = build_explicit_sites(
+        [
+            "https://example.com/search?q=widgets",
+            "https://example.com/products/widget-prime",
+        ],
+        explicit_surfaces=["ecommerce_listing", "ecommerce_detail"],
+    )
+
+    assert rows == [
+        {
+            "name": "https://example.com/search?q=widgets",
+            "url": "https://example.com/search?q=widgets",
+            "surface": "ecommerce_listing",
+        },
+        {
+            "name": "https://example.com/products/widget-prime",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+        },
+    ]
+
+
+def test_build_explicit_sites_rejects_mismatched_surface_count() -> None:
+    with pytest.raises(ValueError, match="surface counts must match"):
+        build_explicit_sites(
+            ["https://example.com/products/widget-prime"],
+            explicit_surfaces=["ecommerce_detail", "ecommerce_listing"],
+        )
+
+
+def test_load_site_set_preserves_curated_surface_and_bucket(tmp_path: Path) -> None:
+    manifest = tmp_path / "sites.json"
+    manifest.write_text(
+        """
+        {
+          "site_sets": {
+            "commerce": {
+              "sites": [
+                {
+                  "name": "Catalog",
+                  "url": "https://example.com/search?q=widgets",
+                  "surface": "ecommerce_listing",
+                  "bucket": "must_pass",
+                  "expected_failure_modes": ["success"],
+                  "artifact_run_id": 77,
+                  "seed_failure_mode": "listing_chrome_noise",
+                  "quality_expectations": {"require_price": true}
+                }
+              ]
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    rows = load_site_set(manifest, site_set_name="commerce")
+
+    assert rows == [
+        {
+            "name": "Catalog",
+            "url": "https://example.com/search?q=widgets",
+            "surface": "ecommerce_listing",
+            "bucket": "must_pass",
+            "expected_failure_modes": ["success"],
+            "artifact_run_id": 77,
+            "seed_failure_mode": "listing_chrome_noise",
+            "quality_expectations": {"require_price": True},
+        }
+    ]
+
+
 def test_classify_failure_mode_flags_missing_adapter_registration() -> None:
     result = {
         "ok": False,
@@ -96,6 +199,31 @@ def test_classify_failure_mode_treats_browser_challenge_diagnostics_as_blocked()
     assert classify_failure_mode(result) == "blocked"
 
 
+def test_challenge_summary_extracts_provider_and_evidence() -> None:
+    diagnostics = {
+        "browser_outcome": "challenge_page",
+        "challenge_provider_hits": ["DataDome"],
+        "challenge_element_hits": ["captcha-form"],
+        "challenge_evidence": [
+            "http_status:429",
+            "title:Verifying your connection...",
+            "provider:datadome",
+        ],
+    }
+
+    assert harness_support._challenge_summary_from_diagnostics(diagnostics) == {
+        "browser_outcome": "challenge_page",
+        "provider": "datadome",
+        "providers": ["datadome"],
+        "elements": ["captcha-form"],
+        "evidence": [
+            "http_status:429",
+            "title:Verifying your connection...",
+            "provider:datadome",
+        ],
+    }
+
+
 def test_classify_failure_mode_rejects_placeholder_success_titles() -> None:
     result = {
         "verdict": "success",
@@ -106,6 +234,288 @@ def test_classify_failure_mode_rejects_placeholder_success_titles() -> None:
     }
 
     assert classify_failure_mode(result) == "wrong_content_or_placeholder"
+
+
+def test_classify_failure_mode_rejects_oops_not_found_titles() -> None:
+    result = {
+        "verdict": "success",
+        "records": 1,
+        "sample_title": "Oops! The page you're looking for can't be found.",
+        "populated_fields": 4,
+        "surface": "ecommerce_detail",
+    }
+
+    assert classify_failure_mode(result) == "wrong_content_or_placeholder"
+
+
+def test_classify_failure_mode_reports_utility_chrome_as_success_reporting_only() -> None:
+    result = {
+        "verdict": "success",
+        "records": 1,
+        "sample_title": "Product Help",
+        "sample_url": "https://example.com/help/product-help",
+        "populated_fields": 3,
+        "surface": "ecommerce_listing",
+    }
+
+    assert classify_failure_mode(result) == "success"
+
+
+def test_classify_failure_mode_rejects_detail_identity_mismatches() -> None:
+    result = {
+        "verdict": "success",
+        "records": 1,
+        "surface": "ecommerce_detail",
+        "requested_url": "https://www.practicesoftwaretesting.com/product/practice-software-testing",
+        "sample_title": "Practice Software Testing - Toolshop - v5.0",
+        "sample_url": "https://www.practicesoftwaretesting.com/",
+        "populated_fields": 4,
+    }
+
+    assert classify_failure_mode(result) == "detail_identity_mismatch"
+
+
+def test_classify_failure_mode_rejects_fragment_backed_detail_identity_mismatches() -> None:
+    result = {
+        "verdict": "success",
+        "records": 1,
+        "surface": "ecommerce_detail",
+        "requested_url": "https://www.practicesoftwaretesting.com/#/product/01HB",
+        "sample_title": "Practice Software Testing",
+        "sample_url": "https://www.practicesoftwaretesting.com/",
+        "populated_fields": 4,
+    }
+
+    assert classify_failure_mode(result) == "detail_identity_mismatch"
+
+
+def test_classify_failure_mode_rejects_same_site_wrong_product_slug() -> None:
+    result = {
+        "verdict": "success",
+        "records": 1,
+        "surface": "ecommerce_detail",
+        "requested_url": "https://www.thriftbooks.com/w/the-pragmatic-programmer_david-thomas_andrew-hunt/286697/",
+        "sample_title": "The Biggest Loser Fitness Program",
+        "sample_url": "https://www.thriftbooks.com/w/the-biggest-loser-fitness-program_maggie-greenwood-robinson/286697/",
+        "populated_fields": 9,
+    }
+
+    assert classify_failure_mode(result) == "detail_identity_mismatch"
+
+
+def test_classify_failure_mode_does_not_infer_detail_identity_mismatch_without_requested_url() -> None:
+    result = {
+        "verdict": "success",
+        "records": 1,
+        "surface": "ecommerce_detail",
+        "sample_title": "Widget Prime",
+        "sample_url": "https://example.com/",
+        "populated_fields": 4,
+    }
+
+    assert classify_failure_mode(result) == "success"
+
+
+def test_acceptance_runner_requires_unbucketed_runs_to_succeed() -> None:
+    site = {
+        "name": "Catalog",
+        "url": "https://example.com/catalog",
+        "surface": "ecommerce_listing",
+    }
+    result = {
+        "failure_mode": "listing_extraction_empty",
+    }
+
+    assert run_test_sites_acceptance._expectation_met(site, result) is False
+
+
+def test_evaluate_quality_flags_shell_false_success() -> None:
+    site = {
+        "url": "https://www.uniqlo.com/in/en/products/E474244-000/01",
+        "surface": "ecommerce_detail",
+        "quality_expectations": {
+            "require_identity": True,
+            "require_price": True,
+            "expect_variants": True,
+            "require_semantic_variant_labels": True,
+            "require_selected_variant_price": True,
+        },
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://www.uniqlo.com/in/en/products/E474244-000/01",
+        "sample_title": "UNIQLO - LifeWear",
+        "sample_url": "https://www.uniqlo.com/in/en/products/E474244-000/01",
+        "populated_fields": 6,
+        "sample_semantics": {
+            "price_present": False,
+            "variant_count": 0,
+            "selected_variant_present": False,
+            "variant_axes_keys": [],
+            "variant_axes_semantic": False,
+            "selected_variant_has_price": False,
+        },
+        "failure_mode": "success",
+        "sample_records": [],
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["observed_failure_mode"] == "shell_false_success"
+    assert quality["quality_checks"]["identity_ok"] is False
+
+
+def test_evaluate_quality_flags_axis_pollution_as_gap() -> None:
+    site = {
+        "url": "https://www.gymshark.com/products/example",
+        "surface": "ecommerce_detail",
+        "quality_expectations": {
+            "require_identity": True,
+            "require_price": True,
+            "expect_variants": True,
+            "require_semantic_variant_labels": True,
+            "require_selected_variant_price": True,
+        },
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://www.gymshark.com/products/example",
+        "sample_title": "Everyday Seamless Leggings",
+        "sample_url": "https://www.gymshark.com/products/example",
+        "populated_fields": 20,
+        "sample_semantics": {
+            "price_present": True,
+            "variant_count": 7,
+            "selected_variant_present": True,
+            "variant_axes_keys": ["soft_fabric", "high_waisted"],
+            "variant_axes_semantic": False,
+            "selected_variant_has_price": True,
+        },
+        "failure_mode": "success",
+        "sample_records": [],
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "usable_with_gaps"
+    assert quality["observed_failure_mode"] == "axis_pollution"
+    assert quality["quality_checks"]["identity_ok"] is True
+    assert quality["quality_checks"]["variant_labels_ok"] is False
+
+
+def test_evaluate_quality_flags_listing_chrome_noise() -> None:
+    site = {
+        "url": "https://www.customink.com/products/sweatshirts/hoodies/71",
+        "surface": "ecommerce_listing",
+        "quality_expectations": {
+            "require_listing_noise_free": True,
+            "require_price": True,
+        },
+    }
+    result = {
+        "surface": "ecommerce_listing",
+        "sample_records": [
+            {
+                "title": "Customer Reviews",
+                "url": "https://www.customink.com/reviews",
+                "populated_fields": 3,
+                "price_present": False,
+            }
+        ],
+        "sample_title": "Customer Reviews",
+        "sample_url": "https://www.customink.com/reviews",
+        "sample_looks_like_utility_chrome": True,
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["observed_failure_mode"] == "listing_chrome_noise"
+
+
+def test_evaluate_quality_flags_listing_sample_window_without_real_product_rows() -> None:
+    site = {
+        "url": "https://www.customink.com/products/sweatshirts/hoodies/71",
+        "surface": "ecommerce_listing",
+        "quality_expectations": {
+            "require_listing_noise_free": True,
+            "require_price": True,
+        },
+    }
+    result = {
+        "surface": "ecommerce_listing",
+        "sample_title": "Diversity & Belonging",
+        "sample_url": "https://www.customink.com/equity-for-all",
+        "records": 14,
+        "populated_fields": 2,
+        "sample_records": [
+            {
+                "title": "Diversity & Belonging",
+                "url": "https://www.customink.com/equity-for-all",
+                "populated_fields": 2,
+                "price_present": False,
+            },
+            {
+                "title": "Customer Reviews",
+                "url": "https://www.customink.com/reviews",
+                "populated_fields": 2,
+                "price_present": False,
+            },
+            {
+                "title": "Customer Photos",
+                "url": "https://www.customink.com/photos",
+                "populated_fields": 2,
+                "price_present": False,
+            },
+        ],
+        "sample_semantics": {
+            "price_present": False,
+            "variant_count": 0,
+            "selected_variant_present": False,
+            "variant_axes_keys": [],
+            "variant_axes_semantic": False,
+            "selected_variant_has_price": False,
+        },
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["observed_failure_mode"] == "listing_chrome_noise"
+    assert quality["quality_checks"]["listing_noise_ok"] is False
+
+
+def test_acceptance_runner_uses_quality_verdict_for_curated_sites() -> None:
+    site = {
+        "name": "Catalog",
+        "url": "https://example.com/catalog",
+        "surface": "ecommerce_listing",
+        "bucket": "must_pass",
+        "quality_expectations": {"require_listing_noise_free": True},
+    }
+    result = {
+        "quality_verdict": "usable_with_gaps",
+    }
+
+    assert run_test_sites_acceptance._expectation_met(site, result) is False
+
+
+def test_acceptance_runner_allows_bucketed_expected_failure_modes() -> None:
+    site = {
+        "name": "Blocked catalog",
+        "url": "https://example.com/catalog",
+        "surface": "ecommerce_listing",
+        "bucket": "known_issue",
+        "expected_failure_modes": ["listing_extraction_empty"],
+    }
+    result = {
+        "failure_mode": "listing_extraction_empty",
+    }
+
+    assert run_test_sites_acceptance._expectation_met(site, result) is True
 
 
 def test_classify_failure_mode_buckets_spa_shell_failures() -> None:
@@ -187,6 +597,7 @@ async def test_run_site_harness_supports_acquisition_only_mode(
                 "status_code": 200,
                 "blocked": False,
                 "record_count": 0,
+                "browser_diagnostics": {},
             },
         )
 
@@ -212,6 +623,84 @@ async def test_run_site_harness_supports_acquisition_only_mode(
 
 
 @pytest.mark.asyncio
+async def test_run_site_harness_surfaces_challenge_summary_in_acquisition_only_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+            return False
+
+    class _FakeSettingsView:
+        def acquisition_plan(self, *, surface: str):
+            return AcquisitionPlan(surface=surface)
+
+    async def _fake_create_crawl_run(session, user_id, payload):
+        del session, user_id
+        return SimpleNamespace(
+            id=12,
+            status="queued",
+            url=payload["url"],
+            settings_view=_FakeSettingsView(),
+        )
+
+    async def _fake_ensure_harness_user_id(session):
+        del session
+        return 7
+
+    async def _fake_process_single_url(*, session, run, url, config):
+        del session, run, url, config
+        return SimpleNamespace(
+            verdict="blocked",
+            url_metrics={
+                "method": "browser",
+                "platform_family": "generic",
+                "status_code": 429,
+                "blocked": True,
+                "record_count": 0,
+                "browser_diagnostics": {
+                    "browser_outcome": "challenge_page",
+                    "challenge_provider_hits": ["DataDome"],
+                    "challenge_evidence": [
+                        "http_status:429",
+                        "title:Verifying your connection...",
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(harness_support, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(
+        harness_support,
+        "_ensure_harness_user_id",
+        _fake_ensure_harness_user_id,
+    )
+    monkeypatch.setattr(harness_support, "create_crawl_run", _fake_create_crawl_run)
+    monkeypatch.setattr(harness_support, "process_single_url", _fake_process_single_url)
+
+    result = await harness_support.run_site_harness(
+        url="https://example.com/catalog",
+        surface="ecommerce_listing",
+        mode=harness_support.HARNESS_MODE_ACQUISITION_ONLY,
+    )
+
+    assert result["verdict"] == "blocked"
+    assert result["challenge_summary"] == {
+        "browser_outcome": "challenge_page",
+        "provider": "datadome",
+        "providers": ["datadome"],
+        "elements": [],
+        "evidence": [
+            "http_status:429",
+            "title:Verifying your connection...",
+        ],
+    }
+
+
+@pytest.mark.asyncio
 async def test_ensure_harness_user_id_reuses_user_by_configured_email(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
@@ -233,6 +722,30 @@ async def test_ensure_harness_user_id_reuses_user_by_configured_email(
 
     assert first_user_id == second_user_id == user.id
     assert user.role == "harness"
+
+
+@pytest.mark.asyncio
+async def test_ensure_harness_user_id_bootstraps_local_defaults_without_env(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("HARNESS_EMAIL", raising=False)
+    monkeypatch.delenv("HARNESS_PASSWORD", raising=False)
+    monkeypatch.delenv("HARNESS_ROLE", raising=False)
+
+    user_id = await harness_support._ensure_harness_user_id(db_session)
+    user = (
+        await db_session.execute(
+            select(harness_support.User).where(
+                harness_support.User.email == "harness@local.invalid"
+            )
+        )
+    ).scalar_one()
+
+    assert user_id == user.id
+    assert user.role == "harness"
+    assert bool(user.hashed_password)
 
 
 @pytest.mark.asyncio

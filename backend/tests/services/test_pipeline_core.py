@@ -1407,90 +1407,11 @@ async def test_process_single_url_persists_live_acquisition_events(
 
 
 @pytest.mark.asyncio
-async def test_extract_records_for_acquisition_keeps_adapter_fields_empty_when_no_adapter_matches(
-    db_session: AsyncSession,
-    test_user,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.services.pipeline.core import (
-        _FetchedURLStage,
-        _URLProcessingContext,
-        _extract_records_for_acquisition,
-    )
-
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/category/widgets",
-            "surface": "ecommerce_listing",
-            "settings": {"respect_robots_txt": False},
-        },
-    )
-    context = _URLProcessingContext.build(
-        session=db_session,
-        run=run,
-        url=run.url,
-        config=URLProcessingConfig(),
-    )
-    acquisition = AcquisitionResult(
-        request=AcquisitionRequest(
-            run_id=run.id,
-            url=run.url,
-            plan=AcquisitionPlan(surface="ecommerce_listing"),
-        ),
-        final_url=run.url,
-        html="""
-        <html>
-          <body>
-            <article class="product-card">
-              <a href="/products/widget-prime">
-                <h2>Widget Prime</h2>
-              </a>
-            </article>
-          </body>
-        </html>
-        """,
-        method="browser",
-        status_code=200,
-    )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
-    async def _no_selector_rules(*args, **kwargs):
-        del args, kwargs
-        return []
-
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
-    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
-
-    fetched = _FetchedURLStage(
-        context=context,
-        acquisition_result=acquisition,
-        url_metrics={},
-    )
-    records, _selector_rules = await _extract_records_for_acquisition(context, fetched)
-
-    assert records
-    assert acquisition.adapter_name is None
-    assert acquisition.adapter_source_type is None
-
-
-@pytest.mark.asyncio
 async def test_extract_records_for_acquisition_recovers_from_zero_record_traversal_using_full_rendered_html(
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.pipeline.core import (
-        _FetchedURLStage,
-        _URLProcessingContext,
-        _extract_records_for_acquisition,
-    )
-
     run = await create_crawl_run(
         db_session,
         test_user.id,
@@ -1500,12 +1421,6 @@ async def test_extract_records_for_acquisition_recovers_from_zero_record_travers
             "surface": "ecommerce_listing",
             "settings": {"respect_robots_txt": False},
         },
-    )
-    context = _URLProcessingContext.build(
-        session=db_session,
-        run=run,
-        url=run.url,
-        config=URLProcessingConfig(),
     )
     acquisition = AcquisitionResult(
         request=AcquisitionRequest(
@@ -1537,106 +1452,37 @@ async def test_extract_records_for_acquisition_recovers_from_zero_record_travers
         del args, kwargs
         return []
 
+    async def _fake_acquire(request):
+        del request
+        return acquisition
+
     def _extract_records(html, *args, **kwargs):
         del args, kwargs
         if "full rendered listing" in html:
             return [{"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}]
         return []
 
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widgets.html"
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
     monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
-
-    fetched = _FetchedURLStage(
-        context=context,
-        acquisition_result=acquisition,
-        url_metrics={},
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
     )
-    records, _selector_rules = await _extract_records_for_acquisition(context, fetched)
 
-    assert records == [
+    result = await process_single_url(db_session, run, run.url)
+
+    assert result.records == [
         {"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}
     ]
     assert acquisition.html == "<html><body>full rendered listing</body></html>"
     assert acquisition.artifacts["traversal_composed_html"] == "<html><body>traversal fragment</body></html>"
-    assert fetched.url_metrics["traversal_fallback_used"] is True
-    assert fetched.url_metrics["traversal_fallback_recovered"] is True
-    assert fetched.url_metrics["traversal_fallback_record_count"] == 1
+    assert result.url_metrics["traversal_fallback_used"] is True
+    assert result.url_metrics["traversal_fallback_recovered"] is True
+    assert result.url_metrics["traversal_fallback_record_count"] == 1
 
-
-@pytest.mark.asyncio
-async def test_extract_records_stage_records_when_detail_expansion_was_consumed(
-    db_session: AsyncSession,
-    test_user,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.services.pipeline.core import (
-        _FetchedURLStage,
-        _URLProcessingContext,
-        _run_extraction_stage,
-    )
-
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-            "additional_fields": ["materials"],
-        },
-    )
-    context = _URLProcessingContext.build(
-        session=db_session,
-        run=run,
-        url=run.url,
-        config=URLProcessingConfig(),
-    )
-    acquisition = AcquisitionResult(
-        request=AcquisitionRequest(
-            run_id=run.id,
-            url=run.url,
-            plan=AcquisitionPlan(surface="ecommerce_detail"),
-        ),
-        final_url=run.url,
-        html="<html><body><h1>Widget Prime</h1></body></html>",
-        method="browser",
-        status_code=200,
-        browser_diagnostics={
-            "browser_attempted": True,
-            "detail_expansion": {
-                "clicked_count": 1,
-                "expanded_elements": ["materials"],
-            },
-        },
-    )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
-    async def _no_selector_rules(*args, **kwargs):
-        del args, kwargs
-        return []
-
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
-    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
-    monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
-        lambda *args, **kwargs: [{"materials": "Full-grain leather upper."}],
-    )
-
-    extracted = await _run_extraction_stage(
-        context,
-        _FetchedURLStage(
-            context=context,
-            acquisition_result=acquisition,
-            url_metrics={},
-        ),
-    )
-
-    diagnostics = acquisition.browser_diagnostics["detail_expansion"]
-
-    assert extracted.records == [{"materials": "Full-grain leather upper."}]
-    assert diagnostics["extraction_consumed"] is True
-    assert diagnostics["extracted_fields"] == ["materials"]

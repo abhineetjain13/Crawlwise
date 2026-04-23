@@ -1,12 +1,13 @@
 "use client";
 
-import { Pencil, RefreshCcw, Save, Trash2, X } from"lucide-react";
-import { useEffect, useMemo, useState } from"react";
+import { ChevronDown, ChevronUp, Pencil, RefreshCcw, Save, Search, Trash2, X } from"lucide-react";
+import { useDeferredValue, useEffect, useMemo, useState } from"react";
 
-import { EmptyPanel, InlineAlert, PageHeader, SectionHeader } from"../../../components/ui/patterns";
+import { EmptyPanel, InlineAlert, PageHeader, SectionCard } from"../../../components/ui/patterns";
 import { Badge, Button, Card, Dropdown, Input } from"../../../components/ui/primitives";
 import { api } from"../../../lib/api";
 import type { SelectorRecord, SelectorUpdatePayload } from"../../../lib/api/types";
+import { cn } from"../../../lib/utils";
 
 type LocalRecord = SelectorRecord & { _uid: string };
 
@@ -25,6 +26,10 @@ export default function DomainMemoryManagePage() {
  const [error, setError] = useState("");
  const [editingId, setEditingId] = useState<string | null>(null);
  const [draft, setDraft] = useState<EditDraft | null>(null);
+ const [searchQuery, setSearchQuery] = useState("");
+ const [surfaceFilter, setSurfaceFilter] = useState("all");
+ const [collapsedDomains, setCollapsedDomains] = useState<Record<string, boolean>>({});
+ const deferredSearchQuery = useDeferredValue(searchQuery);
 
  async function loadRecords() {
  setLoading(true);
@@ -43,14 +48,83 @@ export default function DomainMemoryManagePage() {
  void loadRecords();
  }, []);
 
+ const availableSurfaces = useMemo(() => {
+ return Array.from(new Set(records.map((record) => record.surface))).sort();
+ }, [records]);
+
+ const filteredRecords = useMemo(() => {
+ const query = deferredSearchQuery.trim().toLowerCase();
+ return records.filter((record) => {
+ if (surfaceFilter !== "all" && record.surface !== surfaceFilter) {
+ return false;
+ }
+ if (!query) {
+ return true;
+ }
+ const selectorValue = record.xpath ?? record.css_selector ?? record.regex ?? "";
+ return [
+ record.domain,
+ record.surface,
+ record.field_name,
+ record.source,
+ selectorValue,
+ ]
+ .join(" ")
+ .toLowerCase()
+ .includes(query);
+ });
+ }, [deferredSearchQuery, records, surfaceFilter]);
+
+ const summary = useMemo(() => {
+ const surfaces = new Set(filteredRecords.map((record) => record.surface));
+ const domains = new Set(filteredRecords.map((record) => record.domain));
+ const activeCount = filteredRecords.filter((record) => record.is_active).length;
+ return {
+ domains: domains.size,
+ selectors: filteredRecords.length,
+ active: activeCount,
+ surfaces: surfaces.size,
+ };
+ }, [filteredRecords]);
+
  const groupedRecords = useMemo(() => {
  const grouped = new Map<string, LocalRecord[]>();
- for (const record of records) {
+ for (const record of filteredRecords) {
  const key = record.domain;
  grouped.set(key, [...(grouped.get(key) ?? []), record]);
  }
  return Array.from(grouped.entries()).sort(([left], [right]) => left.localeCompare(right));
+ }, [filteredRecords]);
+
+ useEffect(() => {
+ setCollapsedDomains((current) => {
+ const next = { ...current };
+ for (const record of records) {
+ if (!(record.domain in next)) {
+ next[record.domain] = true;
+ }
+ }
+ return next;
+ });
  }, [records]);
+
+ function toggleDomain(domain: string) {
+ setCollapsedDomains((current) => ({ ...current, [domain]: !current[domain] }));
+ }
+
+ function expandVisibleDomains() {
+ setCollapsedDomains((current) => ({
+ ...current,
+ ...Object.fromEntries(groupedRecords.map(([domain]) => [domain, false])),
+ }));
+ }
+
+ function collapseVisibleDomains() {
+ setCollapsedDomains((current) => ({
+ ...current,
+ ...Object.fromEntries(groupedRecords.map(([domain]) => [domain, true])),
+ }));
+ }
 
  function startEdit(record: LocalRecord) {
  setEditingId(record._uid);
@@ -127,19 +201,69 @@ export default function DomainMemoryManagePage() {
  <div className="page-stack">
  <PageHeader title="Domain Memory"/>
 
- <Card className="section-card">
- <SectionHeader
+ <SectionCard
  title="Saved Selectors"
- description="Review selector memory across domains and surfaces, edit values inline, or remove stale mappings."
+ description="Search, filter, and compress selector memory by domain so large selector sets stay manageable."
  action={
  <Button type="button"variant="secondary"onClick={() => void loadRecords()} disabled={loading}>
  <RefreshCcw className="size-3.5"/>
  {loading ?"Refreshing...":"Refresh"}
  </Button>
  }
- />
+ >
  {error ? <InlineAlert message={error} /> : null}
- </Card>
+ <div className="grid gap-3 pt-4 xl:grid-cols-[minmax(0,1.2fr)_220px_auto]">
+ <label className="grid gap-1.5">
+ <span className="field-label">Search domains, fields, or selectors</span>
+ <div className="relative">
+ <Input
+ value={searchQuery}
+ onChange={(event) => setSearchQuery(event.target.value)}
+ placeholder="Search domain, field, source, or selector text"
+ className="pl-9"
+ />
+ <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted"/>
+ </div>
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Surface</span>
+ <Dropdown<string>
+ value={surfaceFilter}
+ onChange={setSurfaceFilter}
+ options={[
+ { value: "all", label: "All surfaces" },
+ ...availableSurfaces.map((surface) => ({ value: surface, label: surface })),
+ ]}
+ />
+ </label>
+ <div className="flex flex-wrap items-end justify-end gap-2">
+ <Button type="button" variant="ghost" onClick={expandVisibleDomains} disabled={!groupedRecords.length}>
+ <ChevronDown className="size-3.5"/>
+ Expand all
+ </Button>
+ <Button type="button" variant="ghost" onClick={collapseVisibleDomains} disabled={!groupedRecords.length}>
+ <ChevronUp className="size-3.5"/>
+ Collapse all
+ </Button>
+ </div>
+ </div>
+ <div className="grid gap-2 pt-4 sm:grid-cols-2 xl:grid-cols-4">
+ {[
+ { label: "Domains", value: summary.domains },
+ { label: "Selectors", value: summary.selectors },
+ { label: "Active", value: summary.active },
+ { label: "Surfaces", value: summary.surfaces },
+ ].map((item) => (
+ <div
+ key={item.label}
+ className="rounded-[var(--radius-lg)] border border-border bg-background-elevated px-3 py-2"
+ >
+ <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{item.label}</div>
+ <div className="pt-1 text-lg font-semibold text-foreground">{item.value}</div>
+ </div>
+ ))}
+ </div>
+ </SectionCard>
 
  {loading ? (
  <Card className="section-card">
@@ -148,17 +272,52 @@ export default function DomainMemoryManagePage() {
  ) : groupedRecords.length ? (
  groupedRecords.map(([domain, domainRecords]) => (
  <Card key={domain} className="section-card">
- <SectionHeader
- title={domain}
- description={`${domainRecords.length} selector${domainRecords.length === 1 ?"":"s"} across ${new Set(domainRecords.map((record) => record.surface)).size} surface${new Set(domainRecords.map((record) => record.surface)).size === 1 ?"":"s"}.`}
- action={
+ <div className="space-y-4">
+ <div className="flex flex-wrap items-start justify-between gap-3">
+ <div className="min-w-0 flex-1 space-y-3">
+ <div className="flex flex-wrap items-center gap-2">
+ <button
+ type="button"
+ onClick={() => toggleDomain(domain)}
+ className="inline-flex items-center gap-2 text-left"
+ >
+ <span className="text-base font-semibold text-foreground">{domain}</span>
+ {collapsedDomains[domain] ? (
+ <ChevronDown className="size-4 text-muted"/>
+ ) : (
+ <ChevronUp className="size-4 text-muted"/>
+ )}
+ </button>
+ <Badge tone="neutral">{domainRecords.length} selector{domainRecords.length === 1 ? "" : "s"}</Badge>
+ <Badge tone="info">
+ {new Set(domainRecords.map((record) => record.surface)).size} surface{new Set(domainRecords.map((record) => record.surface)).size === 1 ? "" : "s"}
+ </Badge>
+ <Badge tone="success">
+ {domainRecords.filter((record) => record.is_active).length} active
+ </Badge>
+ </div>
+ <div className="flex flex-wrap gap-2">
+ {Array.from(new Set(domainRecords.map((record) => record.surface)))
+ .sort()
+ .map((surface) => (
+ <Badge key={surface} tone="neutral" className="font-mono">
+ {surface}
+ </Badge>
+ ))}
+ </div>
+ </div>
+ <div className="flex flex-wrap gap-2">
+ <Button type="button" variant="ghost" onClick={() => toggleDomain(domain)}>
+ {collapsedDomains[domain] ? "Show selectors" : "Hide selectors"}
+ </Button>
  <Button type="button"variant="danger"onClick={() => void deleteDomain(domain)}>
  <Trash2 className="size-3.5"/>
  Delete Domain
  </Button>
- }
- />
- <div className="space-y-3">
+ </div>
+ </div>
+ {!collapsedDomains[domain] ? (
+ <div className="space-y-2">
  {domainRecords
  .slice()
  .sort((left, right) =>
@@ -167,10 +326,16 @@ export default function DomainMemoryManagePage() {
  .map((record) => {
  const isEditing = editingId === record._uid && draft;
  return (
- <div key={record._uid} className="rounded-[var(--radius-lg)] border border-border bg-background-elevated p-4">
+ <div
+ key={record._uid}
+ className={cn(
+ "rounded-[var(--radius-lg)] border border-border bg-background-elevated px-3 py-3",
+ isEditing && "ring-1 ring-[var(--accent)]/35",
+ )}
+ >
  {isEditing ? (
  <div className="grid gap-3">
- <div className="grid gap-3 xl:grid-cols-[minmax(0,0.7fr)_160px_140px_auto]">
+ <div className="grid gap-3 xl:grid-cols-[minmax(0,0.8fr)_160px_140px_auto]">
  <label className="grid gap-1">
  <span className="field-label">Field Name</span>
  <Input value={draft.field_name} onChange={(event) => setDraft({ ...draft, field_name: event.target.value })} />
@@ -212,36 +377,45 @@ export default function DomainMemoryManagePage() {
  </label>
  <div className="flex flex-wrap items-center gap-2">
  <Badge tone={draft.is_active ?"success":"warning"}>{draft.is_active ?"active":"inactive"}</Badge>
+ <Badge tone="neutral">{draft.source}</Badge>
  <Button type="button"variant="secondary"onClick={() => setDraft({ ...draft, is_active: !draft.is_active })}>
  {draft.is_active ?"Deactivate":"Activate"}
  </Button>
  </div>
  </div>
  ) : (
- <div className="grid gap-3">
+ <div className="grid gap-3 xl:grid-cols-[minmax(0,220px)_minmax(0,1fr)_auto] xl:items-center">
+ <div className="min-w-0 space-y-2">
+ <div className="truncate text-sm font-semibold text-foreground">{record.field_name}</div>
  <div className="flex flex-wrap items-center gap-2">
  <Badge tone="info">{record.surface}</Badge>
  <Badge tone={record.is_active ?"success":"warning"}>{record.is_active ?"active":"inactive"}</Badge>
  <Badge tone="neutral">{record.xpath ?"XPath": record.css_selector ?"CSS":"Regex"}</Badge>
- <Badge tone="neutral">{record.source}</Badge>
  </div>
- <div className="grid gap-2 xl:grid-cols-[180px_minmax(0,1fr)]">
- <div className="field-label">Field</div>
- <div className="text-sm text-foreground">{record.field_name}</div>
- <div className="field-label">Selector</div>
- <div className="truncate font-mono text-sm text-muted"title={record.xpath ?? record.css_selector ?? record.regex ??""}>
+ </div>
+ <div className="min-w-0 space-y-2">
+ <div
+ className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-[var(--bg-panel)] px-3 py-2 font-mono text-xs leading-5 text-muted"
+ title={record.xpath ?? record.css_selector ?? record.regex ??""}
+ >
+ <div className="flex items-center justify-between gap-3">
+ <span className="field-label">Selector</span>
+ <span className="truncate text-[11px] uppercase tracking-[0.08em] text-muted">{record.source}</span>
+ </div>
+ <div className="pt-1 break-all text-[13px] text-foreground">
  {record.xpath ?? record.css_selector ?? record.regex ??""}
  </div>
  </div>
- <div className="flex flex-wrap items-center gap-2">
- <Button type="button"variant="secondary"onClick={() => void toggleActive(record)}>
+ </div>
+ <div className="flex flex-wrap items-center justify-end gap-2 xl:flex-col xl:items-end">
+ <Button type="button"variant="ghost"size="sm"onClick={() => void toggleActive(record)}>
  {record.is_active ?"Deactivate":"Activate"}
  </Button>
- <Button type="button"variant="secondary"onClick={() => startEdit(record)}>
+ <Button type="button"variant="secondary"size="sm"onClick={() => startEdit(record)}>
  <Pencil className="size-3.5"/>
  Edit
  </Button>
- <Button type="button"variant="danger"onClick={() => void deleteRecord(record)}>
+ <Button type="button"variant="danger"size="sm"onClick={() => void deleteRecord(record)}>
  <Trash2 className="size-3.5"/>
  Delete
  </Button>
@@ -250,12 +424,21 @@ export default function DomainMemoryManagePage() {
  )}
  </div>
  );
- })}
+})}
+ </div>
+ ) : null}
  </div>
  </Card>
  ))
  ) : (
- <EmptyPanel title="No saved selectors"description="Domain memory is empty. Save selectors from Crawl Studio or the Selector Tool to manage them here."/>
+ <EmptyPanel
+ title={records.length ? "No matching selectors" : "No saved selectors"}
+ description={
+ records.length
+ ? "Adjust the search or surface filter to see more domain memory records."
+ : "Domain memory is empty. Save selectors from Crawl Studio or the Selector Tool to manage them here."
+ }
+ />
  )}
  </div>
  );

@@ -1,7 +1,7 @@
 # Plan: Forensic Architecture Audit Remediation (D1–D8)
 
 **Created:** 2026-04-21
-**Status:** BLOCKED
+**Status:** DONE
 **Touches buckets:** 2, 3, 4, 5, 6
 
 ## Audit Scores

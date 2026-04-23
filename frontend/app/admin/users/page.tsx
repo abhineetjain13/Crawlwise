@@ -6,13 +6,13 @@ import { useMemo, useState } from"react";
 import { api } from"../../../lib/api";
 import type { Paginated, User } from"../../../lib/api/types";
 import { formatAdminUserDate as formatDate } from"../../../lib/format/date";
-import { Badge, Button, Card, Dropdown, Input, Metric } from"../../../components/ui/primitives";
+import { Badge, Button, Dropdown, Input, Metric } from"../../../components/ui/primitives";
 import {
  DataRegionEmpty,
  DataRegionLoading,
  InlineAlert,
  PageHeader,
- SectionHeader,
+ SectionCard,
  TableSurface,
 } from"../../../components/ui/patterns";
 
@@ -65,8 +65,7 @@ export default function AdminUsersPage() {
  <Metric label="Inactive"value={counts.inactive} />
  </div>
 
- <Card className="section-card">
- <SectionHeader title="User Management"description="Filter by email and status."/>
+ <SectionCard title="User Management"description="Filter by email and status.">
  <div className="filter-toolbar">
  <div className="filter-toolbar-field">
  <Input
@@ -148,7 +147,7 @@ export default function AdminUsersPage() {
  ) : (
  <DataRegionEmpty title="No users found"description="Adjust the filters to broaden the result set."className="px-0"/>
  )}
- </Card>
+ </SectionCard>
  </div>
  );
 }

@@ -58,6 +58,7 @@ Primary files:
 - `components/layout/auth-session-query.ts`
 - `components/layout/top-bar-context.tsx`
 - `app/layout.tsx`
+- `components/ui/patterns.tsx` for shared operator-page section shells used across non-crawl app surfaces
 
 Responsibilities:
 
@@ -252,6 +253,7 @@ There is also Playwright e2e coverage under `frontend/e2e`.
 - The frontend is intentionally thin on domain logic; the backend owns crawl semantics.
 - `lib/api/index.ts` should remain the single access layer for backend calls.
 - `components/crawl/shared.tsx` is a real shared hub and should not quietly become a second application framework.
+- `components/ui/patterns.tsx` now owns the shared operator-page section framing (`SectionCard`, `SurfaceSection`, `MutedPanelMessage`) so dashboard/admin/tool pages do not hand-roll their own section chrome.
 - When backend record contracts change, update `lib/api/types.ts` and this doc together.
 
 ## 9. Companion Docs

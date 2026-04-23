@@ -15,7 +15,6 @@ from app.services.config.surface_hints import detail_path_hints
 from app.services.field_policy import (
     exact_requested_field_key,
     expand_requested_fields,
-    field_allowed_for_surface,
     get_surface_field_aliases,
     normalize_field_key,
 )
@@ -78,8 +77,17 @@ LONG_TEXT_FIELDS = {
 URL_FIELDS = {"apply_url", "company_logo", "image_url", "url"}
 IMAGE_FIELDS = {"additional_images", "company_logo", "image_url"}
 TRACKING_PARAM_EXACT_KEYS = {"fbclid", "gclid", "ref", "sid"}
-TRACKING_PARAM_PREFIXES = ("utm_",)
+TRACKING_DETAIL_CONTEXT_EXACT_KEYS = {
+    "content_source",
+    "external",
+    "pf_from",
+    "qs",
+    "sr_prefetch",
+}
+TRACKING_PARAM_PREFIXES = ("utm_", "click_")
 TRACKING_STRIP_URL_FIELDS = {"apply_url", "source_url", "url"}
+_PRESERVED_SHORT_QUERY_KEYS = {"id", "ids", "p", "page", "pid", "q", "sku", "v"}
+_SHORT_TRACKING_VALUE_RE = re.compile(r"^[a-z0-9_-]{0,8}$", re.I)
 
 
 def clean_text(value: object) -> str:
@@ -181,6 +189,8 @@ def clean_record(record: dict[str, Any]) -> dict[str, Any]:
 def validate_record_for_surface(
     record: dict[str, Any],
     surface: str,
+    *,
+    requested_fields: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     logical_fields = {
         key: value for key, value in dict(record).items() if not str(key).startswith("_")
@@ -188,14 +198,18 @@ def validate_record_for_surface(
     internal_fields = {
         key: value for key, value in dict(record).items() if str(key).startswith("_")
     }
+    allowed_fields = {
+        normalize_field_key(field_name)
+        for field_name in surface_fields(surface, requested_fields)
+    }
     validated_fields, errors = validate_and_clean(logical_fields, surface)
     for field_name, value in logical_fields.items():
         if field_name in validated_fields:
             continue
-        if field_allowed_for_surface(surface, field_name):
+        if normalize_field_key(field_name) in allowed_fields:
             validated_fields[field_name] = value
     return {
-        **clean_record({**logical_fields, **validated_fields}),
+        **clean_record(validated_fields),
         **internal_fields,
     }, errors
 
@@ -212,11 +226,17 @@ def strip_tracking_query_params(url: object) -> str | None:
     parsed = urlparse(text)
     if not parsed.query:
         return text
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    has_detail_context_tracking = any(
+        _is_tracking_detail_context_key(key)
+        for key, _ in query_pairs
+    )
     removable_keys: list[str] = []
-    for key, _ in parse_qsl(parsed.query, keep_blank_values=True):
-        lowered = key.lower()
-        if lowered in TRACKING_PARAM_EXACT_KEYS or any(
-            lowered.startswith(prefix) for prefix in TRACKING_PARAM_PREFIXES
+    for key, value in query_pairs:
+        if _is_tracking_query_key(key) or _is_short_tracking_flag(
+            key,
+            value,
+            has_detail_context_tracking=has_detail_context_tracking,
         ):
             removable_keys.append(key)
     if not removable_keys:
@@ -227,6 +247,36 @@ def strip_tracking_query_params(url: object) -> str | None:
         remove=True,
         keep_fragments=True,
     )
+
+
+def _is_tracking_query_key(key: str) -> bool:
+    lowered = key.lower()
+    return lowered in TRACKING_PARAM_EXACT_KEYS | TRACKING_DETAIL_CONTEXT_EXACT_KEYS or any(
+        lowered.startswith(prefix) for prefix in TRACKING_PARAM_PREFIXES
+    )
+
+
+def _is_tracking_detail_context_key(key: str) -> bool:
+    return key.lower() in TRACKING_DETAIL_CONTEXT_EXACT_KEYS
+
+
+def _is_short_tracking_flag(
+    key: str,
+    value: str,
+    *,
+    has_detail_context_tracking: bool,
+) -> bool:
+    lowered = key.lower()
+    if not has_detail_context_tracking or lowered in _PRESERVED_SHORT_QUERY_KEYS:
+        return False
+    if len(lowered) > 3:
+        return False
+    normalized_value = str(value or "").strip().lower()
+    if len(normalized_value) > 8:
+        return False
+    if normalized_value and _SHORT_TRACKING_VALUE_RE.fullmatch(normalized_value) is None:
+        return False
+    return True
 
 
 def strip_record_tracking_params(
@@ -247,14 +297,24 @@ def strip_record_tracking_params(
 def surface_fields(surface: str, requested_fields: list[str] | None) -> list[str]:
     normalized_surface = str(surface or "").strip().lower()
     fields = list(CANONICAL_SCHEMAS.get(normalized_surface, ALL_CANONICAL_FIELDS))
+    allowed_fields = set(fields)
     if "url" not in fields:
         fields.append("url")
+        allowed_fields.add("url")
     for field_name in list(requested_fields or []):
         exact_field = exact_requested_field_key(field_name)
-        if exact_field and exact_field not in fields:
+        if (
+            exact_field
+            and exact_field not in fields
+            and (exact_field in allowed_fields or exact_field not in ALL_CANONICAL_FIELDS)
+        ):
             fields.append(exact_field)
     for field_name in expand_requested_fields(list(requested_fields or [])):
-        if field_name and field_name not in fields:
+        if (
+            field_name
+            and field_name not in fields
+            and (field_name in allowed_fields or field_name not in ALL_CANONICAL_FIELDS)
+        ):
             fields.append(field_name)
     return fields
 
@@ -458,9 +518,56 @@ def extract_urls(value: object, page_url: str) -> list[str]:
     return deduped
 
 
+def coerce_variant_axes(value: object) -> dict[str, list[str]] | None:
+    if not isinstance(value, dict) or not value:
+        return None
+    normalized_axes: dict[str, list[str]] = {}
+    for raw_axis_name, raw_axis_values in value.items():
+        axis_name = text_or_none(raw_axis_name)
+        if not axis_name:
+            continue
+        if not isinstance(raw_axis_values, list):
+            continue
+        cleaned_values: list[str] = []
+        seen: set[str] = set()
+        for item in raw_axis_values:
+            if isinstance(item, (dict, list, tuple, set)):
+                continue
+            cleaned = text_or_none(item)
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            cleaned_values.append(cleaned)
+        if not cleaned_values:
+            continue
+        normalized_axes[axis_name] = cleaned_values
+    return normalized_axes or None
+
+
+def coerce_availability_dict(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    explicit_keys = ("availability", "availabilityStatus", "status")
+    for key in explicit_keys:
+        candidate = value.get(key)
+        if candidate not in (None, "", [], {}):
+            return coerce_text(candidate)
+    if len(value) == 1:
+        for key in ("name", "value"):
+            candidate = value.get(key)
+            if candidate not in (None, "", [], {}):
+                return coerce_text(candidate)
+    return None
+
+
 def coerce_field_value(field_name: str, value: object, page_url: str) -> object | None:
     if value in (None, "", [], {}):
         return None
+    if field_name == "variant_axes":
+        return coerce_variant_axes(value)
     if field_name in STRUCTURED_OBJECT_FIELDS and isinstance(value, dict):
         return value
     if field_name in STRUCTURED_OBJECT_LIST_FIELDS and isinstance(value, list):
@@ -537,10 +644,7 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
                 return coerce_text(value.get(key))
         return None
     if field_name == "availability" and isinstance(value, dict):
-        for key in ("availability", "availabilityStatus", "status", "name", "value"):
-            if value.get(key) not in (None, "", [], {}):
-                return coerce_text(value.get(key))
-        return None
+        return coerce_availability_dict(value)
     if field_name in URL_FIELDS:
         urls = extract_urls(value, page_url)
         return urls[0] if urls else None

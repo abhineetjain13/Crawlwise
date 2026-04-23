@@ -58,6 +58,11 @@ def normalize_target_url(value: object) -> str:
     if re.search(r"\s", text):
         logger.warning("Rejected target URL containing internal whitespace: %r", text)
         return ""
+    from app.services.field_value_core import strip_tracking_query_params
+
+    normalized = strip_tracking_query_params(text)
+    if normalized:
+        return normalized
     return text
 
 

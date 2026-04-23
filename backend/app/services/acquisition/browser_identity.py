@@ -13,6 +13,7 @@ from browserforge.fingerprints import FingerprintGenerator
 from cachetools import TTLCache
 
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.network_resolution import _accept_language_for_locale
 
 
 def _host_os_fingerprint_arg() -> str:
@@ -81,14 +82,37 @@ def create_browser_identity() -> BrowserIdentity:
         for key, value in fingerprint.headers.items()
         if str(key).lower() not in _HEADER_DROP_KEYS
     }
+    user_agent = str(navigator.userAgent or "")
+    user_agent_data = (
+        dict(navigator.userAgentData)
+        if isinstance(navigator.userAgentData, dict)
+        else {}
+    )
+    if _should_replace_client_hint_headers(headers, user_agent=user_agent, user_agent_data=user_agent_data):
+        headers.update(
+            _coherent_sec_ch_headers(
+                _coherent_client_hints_from_user_agent(
+                    user_agent,
+                    mobile=(
+                        bool(user_agent_data.get("mobile"))
+                        if isinstance(user_agent_data, dict)
+                        else None
+                    ),
+                )
+                or {}
+            )
+        )
+    locale = str(navigator.language or "en-US")
+    if not _accept_language_matches_locale(headers.get("Accept-Language"), locale=locale):
+        headers["Accept-Language"] = _accept_language_for_locale(locale)
     return BrowserIdentity(
-        user_agent=navigator.userAgent,
+        user_agent=user_agent,
         viewport={
             "width": max(1, int(screen.width or 0)),
             "height": max(1, int(screen.height or 0)),
         },
         extra_http_headers=headers,
-        locale=str(navigator.language or "en-US"),
+        locale=locale,
         device_scale_factor=max(1.0, float(screen.devicePixelRatio or 1.0)),
         has_touch=bool((navigator.maxTouchPoints or 0) > 0),
         is_mobile=bool(navigator.userAgentData.get("mobile"))
@@ -336,6 +360,66 @@ def _coherent_sec_ch_headers(user_agent_data: dict[str, object]) -> dict[str, st
         "sec-ch-ua-mobile": "?1" if bool(user_agent_data.get("mobile")) else "?0",
         "sec-ch-ua-platform": f'"{user_agent_data.get("platform") or _HOST_OS_PLATFORM_LABELS[_HOST_OS]}"',
     }
+
+
+def _should_replace_client_hint_headers(
+    headers: Mapping[str, object],
+    *,
+    user_agent: str,
+    user_agent_data: Mapping[str, object] | None,
+) -> bool:
+    normalized_headers = {
+        str(key or "").strip().lower(): str(value or "").strip()
+        for key, value in headers.items()
+    }
+    sec_ch_ua = normalized_headers.get("sec-ch-ua", "")
+    if not sec_ch_ua:
+        return True
+    if "(" in sec_ch_ua or "not(a:brand" in sec_ch_ua.lower():
+        return True
+    ua_major = _chrome_major_version(user_agent)
+    if ua_major is None:
+        return False
+    major_versions = _sec_ch_ua_major_versions(sec_ch_ua)
+    if not major_versions:
+        return True
+    if any(abs(version - ua_major) > 2 for version in major_versions):
+        return True
+    expected_mobile = (
+        bool(user_agent_data.get("mobile"))
+        if isinstance(user_agent_data, Mapping)
+        else bool(_MOBILE_UA_RE.search(user_agent))
+    )
+    if normalized_headers.get("sec-ch-ua-mobile") not in {
+        "?1" if expected_mobile else "?0",
+        "",
+    }:
+        return True
+    expected_platform = _HOST_OS_PLATFORM_LABELS[_HOST_OS].lower()
+    raw_platform = normalized_headers.get("sec-ch-ua-platform", "").strip('"').lower()
+    if raw_platform and raw_platform != expected_platform:
+        return True
+    return False
+
+
+def _sec_ch_ua_major_versions(value: str) -> list[int]:
+    matches = _re.findall(r'v="(\d+)', str(value or ""))
+    versions: list[int] = []
+    for match in matches:
+        try:
+            versions.append(int(match))
+        except ValueError:
+            continue
+    return versions
+
+
+def _accept_language_matches_locale(value: object, *, locale: str) -> bool:
+    header = str(value or "").strip().lower()
+    normalized_locale = str(locale or "").strip().lower()
+    if not header or not normalized_locale:
+        return False
+    first_language = header.split(",", 1)[0].split(";", 1)[0].strip()
+    return first_language == normalized_locale
 
 
 def _chrome_major_version(user_agent: str) -> int | None:

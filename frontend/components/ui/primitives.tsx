@@ -116,18 +116,6 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
  );
 }
 
-export function Select(props: ComponentPropsWithoutRef<"select">) {
- return (
- <select
- {...props}
- className={cn(
-"control-select focus-ring",
- props.className,
- )}
- />
- );
-}
-
 /* ─── Dropdown (Clerk-style custom select) ───────────────────────────────── */
 export function Dropdown<T extends string>({
  value,

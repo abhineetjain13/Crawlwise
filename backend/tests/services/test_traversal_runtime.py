@@ -9,6 +9,7 @@ import app.services.acquisition.traversal as traversal_module
 from app.services.acquisition.traversal import (
     TraversalResult,
     _click_with_retry,
+    _locator_still_resolves,
     count_listing_cards,
     dismiss_overlays_if_needed,
     execute_listing_traversal,
@@ -1248,6 +1249,67 @@ async def test_click_with_retry_tolerates_transient_locator_resolution_loss() ->
 
     page = _ClickPage()
     locator = _TransientLocator()
+    result = TraversalResult(requested_mode="load_more")
+
+    clicked = await _click_with_retry(page, locator, result=result)
+
+    assert clicked is True
+    assert locator.click_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_locator_still_resolves_returns_false_after_probe_errors() -> None:
+    class _ProbeErrorLocator:
+        async def count(self) -> int:
+            raise traversal_module._PlaywrightError("transient probe failure")
+
+    assert await _locator_still_resolves(_ProbeErrorLocator()) is False
+
+
+@pytest.mark.asyncio
+async def test_click_with_retry_tolerates_locator_probe_errors() -> None:
+    class _ClickPage:
+        url = "https://example.com/listing"
+
+        def locator(self, selector: str):
+            del selector
+            return _OverlayCookieLocator()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> Any:
+            del script, arg
+            return None
+
+        async def wait_for_load_state(
+            self,
+            state: str,
+            timeout: int | None = None,
+        ) -> None:
+            del state, timeout
+
+        async def wait_for_timeout(self, timeout_ms: int) -> None:
+            del timeout_ms
+
+    class _ProbeErrorLocator:
+        def __init__(self) -> None:
+            self.click_calls = 0
+
+        async def scroll_into_view_if_needed(self, timeout: int | None = None) -> None:
+            del timeout
+
+        async def evaluate(self, script: str) -> Any:
+            del script
+            return None
+
+        async def count(self) -> int:
+            raise traversal_module._PlaywrightError("transient probe failure")
+
+        async def click(self, timeout: int | None = None, force: bool = False) -> None:
+            del timeout, force
+            self.click_calls += 1
+            return None
+
+    page = _ClickPage()
+    locator = _ProbeErrorLocator()
     result = TraversalResult(requested_mode="load_more")
 
     clicked = await _click_with_retry(page, locator, result=result)

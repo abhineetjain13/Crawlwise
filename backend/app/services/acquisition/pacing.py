@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from app.services.config.runtime_settings import crawler_runtime_settings
 
 _HOST_NEXT_ALLOWED_AT: dict[str, float] = {}
+_HOST_BROWSER_FIRST_UNTIL: dict[str, float] = {}
 _HOST_PACING_LOCK = asyncio.Lock()
 
 
@@ -45,6 +46,36 @@ async def wait_for_host_slot(_url: str) -> None:
 async def reset_pacing_state() -> None:
     async with _HOST_PACING_LOCK:
         _HOST_NEXT_ALLOWED_AT.clear()
+        _HOST_BROWSER_FIRST_UNTIL.clear()
+
+
+async def mark_browser_first_host(_url: str) -> None:
+    host = _normalized_host(_url)
+    if not host:
+        return
+    ttl_seconds = max(
+        1,
+        int(crawler_runtime_settings.pacing_host_cache_ttl_seconds),
+    )
+    now = time.monotonic()
+    async with _HOST_PACING_LOCK:
+        _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
+        _HOST_BROWSER_FIRST_UNTIL[host] = now + ttl_seconds
+        _enforce_host_cache_limit()
+
+
+async def should_prefer_browser_for_host(_url: str) -> bool:
+    host = _normalized_host(_url)
+    if not host:
+        return False
+    ttl_seconds = max(
+        1,
+        int(crawler_runtime_settings.pacing_host_cache_ttl_seconds),
+    )
+    now = time.monotonic()
+    async with _HOST_PACING_LOCK:
+        _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
+        return _HOST_BROWSER_FIRST_UNTIL.get(host, 0.0) > now
 
 
 async def apply_protected_host_backoff(_url: str) -> None:
@@ -88,6 +119,13 @@ def _prune_expired_hosts(*, now: float, ttl_seconds: int) -> None:
     ]
     for host in expired_hosts:
         _HOST_NEXT_ALLOWED_AT.pop(host, None)
+    expired_browser_hosts = [
+        host
+        for host, browser_first_until in _HOST_BROWSER_FIRST_UNTIL.items()
+        if now > browser_first_until
+    ]
+    for host in expired_browser_hosts:
+        _HOST_BROWSER_FIRST_UNTIL.pop(host, None)
 
 
 def _enforce_host_cache_limit() -> None:
@@ -95,10 +133,13 @@ def _enforce_host_cache_limit() -> None:
         1,
         int(crawler_runtime_settings.pacing_host_cache_max_entries),
     )
-    overflow = len(_HOST_NEXT_ALLOWED_AT) - max_entries
+    _trim_host_cache(_HOST_NEXT_ALLOWED_AT, max_entries=max_entries)
+    _trim_host_cache(_HOST_BROWSER_FIRST_UNTIL, max_entries=max_entries)
+
+
+def _trim_host_cache(cache: dict[str, float], *, max_entries: int) -> None:
+    overflow = len(cache) - max_entries
     if overflow <= 0:
         return
-    for host, _ in sorted(_HOST_NEXT_ALLOWED_AT.items(), key=lambda item: item[1])[
-        :overflow
-    ]:
-        _HOST_NEXT_ALLOWED_AT.pop(host, None)
+    for host, _ in sorted(cache.items(), key=lambda item: item[1])[:overflow]:
+        cache.pop(host, None)

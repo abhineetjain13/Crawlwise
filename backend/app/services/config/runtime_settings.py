@@ -92,6 +92,8 @@ class CrawlerRuntimeSettings(BaseSettings):
     accordion_expand_max: int = 20
     accordion_expand_wait_ms: int = 500
     detail_expand_max_interactions: int = 6
+    detail_expand_click_timeout_ms: int = 1000
+    detail_expand_visibility_timeout_ms: int = 250
     block_min_html_length: int = 100
     block_low_content_text_max: int = 500
     block_low_content_script_min: int = 3
@@ -145,6 +147,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_capture_total_network_payload_bytes: int = 12000000
     browser_capture_read_timeout_seconds: float = 5.0
     browser_capture_queue_join_timeout_ms: int = 2000
+    browser_artifact_capture_timeout_ms: int = 4000
     platform_detection_html_search_limit: int = 500000
     fingerprint_browser: str = "chrome"
     fingerprint_os: tuple[str, ...] = ("windows", "macos", "linux")
@@ -266,6 +269,8 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("browser_capture_read_timeout_seconds must be > 0")
         if self.browser_capture_queue_join_timeout_ms <= 0:
             raise ValueError("browser_capture_queue_join_timeout_ms must be > 0")
+        if self.browser_artifact_capture_timeout_ms <= 0:
+            raise ValueError("browser_artifact_capture_timeout_ms must be > 0")
         if self.platform_detection_html_search_limit <= 0:
             raise ValueError("platform_detection_html_search_limit must be > 0")
         if (

@@ -1,122 +1,160 @@
-
-Section 0: Delta Table (longitudinal)
-Finding ID	Previous Status	Current Status	Evidence
-RC-1	platform_url_normalizers.py hardcodes ADP OCP violation	FIXED	app/services/acquirer.py lines 34-35 (delegates to normalize_adapter_acquisition_url)
-LN-1	normalize_decimal_price corrupts numeric strings	DEFERRED	Cannot verify; normalizers.py file was not available during this audit cycle.
-LN-2	extract_page_images(exclude_linked_detail_images=True)	FIXED	app/services/detail_extractor.py line 117 (exclude_linked_detail_images=False)LN-3	_listing_title_is_noise allows numeric-only titles	FIXED	app/services/listing_extractor.py line 256 (if cleaned.isdigit(): return True)
-LN-4	read_network_payload_body reads unbounded payloads to memory	PERSISTS	app/services/acquisition/browser_capture.py line 348 (body_bytes = await response.body())
+Read: AGENTS.md, CODEBASE_MAP.md, BUSINESS_LOGIC.md, ENGINEERING_STRATEGY.md, INVARIANTS.md
+Active plan: NONE
+Audit scope emphasis: FIRST RUN
+FIRST RUN
 Section 1–8: Dimension Scores
 Dimension: D1. SOLID / DRY / KISS
-Floor: 9/10 | Ceiling: 10/10 | Score: 9.5/10
-Previous score: 8.5/10 → Change: +1.0
-Reason for change: The critical OCP violation regarding platform-specific URL normalization (RC-1) has been successfully pushed down into the adapter layer.
-Verdict: Codebase exhibits rigorous separation of concerns. The extraction pipeline relies on deterministic composition over brittle inheritance, and the acquisition layer cleanly abstracts HTTP vs. browser execution.
-Dimension: D2. Configuration Hygiene
-Floor: 9/10 | Ceiling: 10/10 | Score: 9.5/10
-Previous score: 9.0/10 → Change: +0.5
-Reason for change: Platform configurations have been successfully extracted from Python dictionaries into a declarative platforms.json schema, centralizing tenant heuristics.
-Verdict: Configuration is strongly typed, environment-backed via BaseSettings, and cleanly segregated. The removal of inline domain dictionaries in favor of platforms.json eliminates a major source of merge conflicts.
-Dimension: D3. Scalability & Resource Management
-Floor: 6/10 | Ceiling: 9/10 | Score: 7.5/10
-Previous score: 8.0/10 → Change: -0.5
-Reason for change: The known OOM vulnerability (LN-4) persists on the hot path.
+Floor: 6/10 | Ceiling: 8/10 | Score: 7.0/10
+Previous score: N/A → Change: FIRST RUN
+Reason for change: FIRST RUN
 Violations:
-HIGH app/services/acquisition/browser_capture.py → read_network_payload_body (lines 348):
-The function still executes body_bytes = await response.body() directly into memory before evaluating if len(body_bytes) > payload_budget. For chunked-encoding responses without a Content-Length header, this bypasses the should_capture_network_payload limits and will hard-crash the Playwright worker with an Out of Memory error when a malicious or runaway endpoint streams gigabytes of data.
-Breaks ENGINEERING_STRATEGY.md AP-8 (Resource unboundedness).
-Production failure mode it enables: Playwright container OOM crashes leading to systemic crawl failures across the entire batch.
-Verification: grep -n "await response.body()" app/services/acquisition/browser_capture.py
-Verdict: Resource tracking mechanisms (semaphores, HTTP client pooling, connection limits) are highly mature. However, the unchecked network payload buffering is a critical denial-of-service vector that must be resolved.
+MEDIUM tests/test_pipeline_core.py → test_extract_records_for_acquisition_keeps_adapter_fields_empty_when_no_adapter_matches (approx lines 150-160):
+The test suite imports and asserts against private internal structs (_FetchedURLStage, _URLProcessingContext, _extract_records_for_acquisition) to verify pipeline behavior.
+Breaks ENGINEERING_STRATEGY.md AP-7 (Private-function test coupling).
+Production failure mode: Blocks structural refactoring of pipeline/core.py because internal implementation details are ossified by the test suite.
+Verification: rg "from app.services.pipeline.core import.*_FetchedURLStage" tests/
+Verdict: The core pipeline and extractors are generally well-layered and adhere to SRP. However, the test suite actively breaks encapsulation by coupling to private pipeline orchestration models, violating AP-7 and hindering future architectural cleanup.
+Dimension: D2. Configuration Hygiene
+Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
+Previous score: N/A → Change: FIRST RUN
+Reason for change: FIRST RUN
+Violations:
+LOW browser_detail.py → expand_all_interactive_elements_impl (approx lines 120-130):
+Hardcoded magic number timeouts (timeout=1_000, timeout=250) are scattered inline for Playwright actions instead of using crawler_runtime_settings.
+Breaks Config Hygiene (magic numbers scattered inline).
+Production failure mode it enables: Prevents operators from globally tuning interaction tolerances for slow sites without modifying source code.
+Verification: rg "timeout=(1_000|250|2000)" backend/app/services/acquisition/browser_detail.py
+Verdict: Configuration hygiene is extremely strong, with runtime settings driving nearly all timeouts, selectors, and fallback gates. A few minor magic numbers linger in Playwright interaction fallbacks.
+Dimension: D3. Scalability & Resource Management
+Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
+Previous score: N/A → Change: FIRST RUN
+Reason for change: FIRST RUN
+Violations:
+No critical or high violations found. The shared HTTP client correctly prevents connection pool leaks, and Playwright contexts are strictly closed in finally blocks. Async workers inside browser_capture.py are properly tracked, cancelled, and drained on closure.
+Verification: rg -A 5 "async def _capture_worker" backend/app/services/acquisition/browser_capture.py
+Verdict: Resource management is exceptionally robust. The system properly bounds memory, enforces concurrency limits on network capture, safely drains tasks, and cleanly separates async HTTP pools from Playwright contexts.
 Dimension: D4. Extraction & Normalisation Pipeline
-Floor: 8/10 | Ceiling: 10/10 | Score: 9.0/10
-Previous score: 6.0/10 → Change: +3.0
-Reason for change: Significant data loss issues (LN-2 gallery drops and LN-3 numeric title corruption) have been fully fixed, drastically raising the floor.
-Verdict: The extraction pipeline is state-of-the-art. The implementation of glom and JMESPath over js_state_mapper.py, combined with robust domain memory fallback cascades, creates a highly resilient deterministic extraction flow.
+Floor: 4/10 | Ceiling: 7/10 | Score: 5.5/10
+Previous score: N/A → Change: FIRST RUN
+Reason for change: FIRST RUN
+Violations:
+CRITICAL field_policy.py → field_allowed_for_surface (lines 28–34):
+The function uses an implicit blocklist (_ALL_CANONICAL_FIELDS - allowed) to filter schema properties. Any completely unknown field (e.g., garbage_tracker_id) is not in _ALL_CANONICAL_FIELDS, meaning it evades the exclusion check and returns True. In field_value_core.py, these garbage fields are actively preserved and merged into the final record.data.
+Breaks INVARIANTS.md #10 and #11 (Persisted record.data contains only populated logical fields).
+Production failure mode it enables: Silent schema pollution. Any random JSON-LD or network payload key can bleed directly into the user-facing record payload.
+Verification:
+rg "def excluded_fields_for_surface" backend/app/services/field_policy.py
+rg "field_allowed_for_surface" backend/app/services/field_value_core.py
+CRITICAL detail_extractor.py → _promote_detail_title (approx lines 360–380):
+The fallback ranking override condition allows weaker sources to overwrite strictly authoritative sources (like adapter or network_payload) simply because their string length is longer: (rank < current_rank or source in {...} or len(candidate) > len(title)).
+Breaks source ranking integrity (authoritative-first hierarchy).
+Production failure mode it enables: A concise, accurate product title from a dedicated Shopify API payload (rank 1) will be silently overwritten by a noisy, SEO-bloated dom_h1 tag (rank 10) just because the DOM tag contains more characters.
+Verification: rg "rank < current_rank or source in.*or len\(candidate\)" backend/app/services/detail_extractor.py
+Verdict: The extraction pipeline has powerful declarative mapping capabilities, but the ranking enforcement and schema validation layers contain critical logical holes. The implicit schema blocklist leaks garbage fields, and the title promotion heuristic defeats the authoritative-first source priority model.
 Dimension: D5. Traversal Mode
 Floor: 9/10 | Ceiling: 10/10 | Score: 9.5/10
-Previous score: 9.0/10 → Change: +0.5
-Reason for change: Traversal logic has been battle-hardened with strict path_tenant_boundary enforcement to prevent cross-tenant bleeding.
-Verdict: Excellent execution. traversal.py correctly implements layout progression tracking (_snapshot_progressed) rather than relying purely on DOM mutation events, avoiding infinite loops on dynamic shells.
-Dimension: D6. Resilience & Error Handling
-Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
-Previous score: 8.5/10 → Change: unchanged
-Reason for change: Error handling patterns remain stable and effective.
-Verdict: The pipeline accurately isolates adapter failures, Playwright crashes, and network timeouts, preserving exact context in browser_diagnostics without swallowing exceptions silently.
-Dimension: D7. Dead Code & Technical Debt
-Floor: 9/10 | Ceiling: 10/10 | Score: 9.5/10
-Previous score: 9.0/10 → Change: +0.5
-Reason for change: The codebase remains exceptionally clean with no lingering migration shims or TODOs found in the active source tree.
-Verdict: Structural integrity is incredibly high. Internal module dependencies strictly obey the flow of control (Acquisition → Extraction → Publish).
-Dimension: D8. Acquisition Mode
-Floor: 7/10 | Ceiling: 9/10 | Score: 8.0/10
-Previous score: 8.5/10 → Change: -0.5
-Reason for change: An event loop blocking vulnerability was identified in the previous audit but was not corrected, demanding a penalty.
+Previous score: N/A → Change: FIRST RUN
+Reason for change: FIRST RUN
 Violations:
-MEDIUM app/services/platform_policy.py → detect_platform_family (lines 191-192):
-The function iterates over config.html_regex and executes re.search(raw_pattern, normalized_html, re.IGNORECASE) sequentially against the entire raw HTML payload (often 2MB+). Regex execution is CPU-bound and blocks the async event loop.
-Breaks INVARIANTS.md constraint (Implicit): Do not block the asyncio event loop with synchronous heavy lifting.
-Production failure mode it enables: Concurrent requests on the same worker will freeze during classification, causing cascading TimeoutError spikes in crawl_fetch_runtime.py.
-Verification: grep -rn "re.search(raw_pattern, normalized_html" app/services/platform_policy.py
-Verdict: Acquisition correctly leverages curl_cffi for impersonation and browserforge for coherent fingerprinting. The synchronous regex execution on massive strings is the only notable flaw.
+No violations found. Traversal modes correctly separate pagination, scroll, and load_more. Cross-tenant boundaries are respected via _is_same_origin, cycle detection is active, and structural links (javascript:, #) are properly ignored.
+Verification: rg "def _is_same_origin" backend/app/services/acquisition/traversal.py
+Verdict: Traversal orchestration is mathematically sound. It correctly sandboxes pagination state, applies cycle detection to prevent infinite loops, and honors multi-tenant path boundaries seamlessly.
+Dimension: D6. Resilience & Error Handling
+Floor: 7/10 | Ceiling: 9/10 | Score: 8.0/10
+Previous score: N/A → Change: FIRST RUN
+Reason for change: FIRST RUN
+Violations:
+MEDIUM traversal.py → _locator_still_resolves (approx lines 500-510):
+Contains a bare except Exception: pass block while polling locator count, silently swallowing potentially critical runtime failures.
+Breaks D6 Resilience rules against bare except Exception: pass.
+Production failure mode it enables: Can mask underlying Playwright crashes, context closures, or cancellation signals (asyncio.CancelledError), causing the crawler to hang or behave unpredictably instead of propagating the error.
+Verification: rg -A 3 "except Exception:" backend/app/services/acquisition/traversal.py
+Verdict: Error handling handles HTTP bounds, 4xx/5xx bifurcation, and blocked page classification intelligently. However, a lingering bare exception swallow in the traversal recovery code risks masking critical context failures.
+Dimension: D7. Dead Code & Technical Debt
+Floor: 7/10 | Ceiling: 8/10 | Score: 7.5/10
+Previous score: N/A → Change: FIRST RUN
+Reason for change: FIRST RUN
+Violations:
+MEDIUM tests/test_browser_expansion_runtime.py → imports (approx lines 10-20):
+Imports and tests _generate_page_markdown and _FakeExpansionPage directly.
+Breaks ENGINEERING_STRATEGY.md AP-7 (Private-function test coupling).
+Production failure mode it enables: Architectural lock-in. Internal Markdown serialization and Playwright flow logic cannot be safely refactored because the test suite expects private classes and methods to remain unchanged.
+Verification: rg "from app.services.acquisition.browser_page_flow import.*_generate_page_markdown" tests/
+Verdict: Technical debt is low regarding dead code and TODOS, but the test suite creates artificial friction by testing private module implementations instead of public API contracts.
+Dimension: D8. Acquisition Mode
+Floor: 9/10 | Ceiling: 10/10 | Score: 9.5/10
+Previous score: N/A → Change: FIRST RUN
+Reason for change: FIRST RUN
+Violations:
+No violations found. The HTTP/Browser escalation strategy correctly assesses heuristics, explicit platform policy, and vendor block headers without hardcoding sites in the generic engine. Fingerprinting applies seamlessly to contexts.
+Verification: rg "def should_escalate_to_browser" backend/app/services/acquisition/runtime.py
+Verdict: The acquisition routing is exemplary. The escalation from curl_cffi to Playwright is purely evidence-driven, maintaining clean boundaries and preventing unnecessary browser usage.
 Section 9: Final Summary
-Overall Score: 8.8/10 (previous: 8.2/10, delta: +0.6)
+Overall Score: 7.9/10 (previous: N/A, delta: FIRST RUN)
 Root Cause Findings (architectural — require a plan, not a bug fix):
-RC-2: Playwright response.body() buffers entirely in memory, bypassing Python-level size limit checks on chunked responses — affects D3.
+RC-1: Schema Exclusion Logic Allows Arbitrary Output Field Pollution — affects D4
+RC-2: Title Promotion Overwrites Strong Sources With Weak Sources (Precedence Violation) — affects D4
 Leaf Node Findings (isolated bugs — Codex can fix directly):
-LN-4 (Repeated): [app/services/acquisition/browser_capture.py → read_network_payload_body → Implement execution timeout/size fallback]
-LN-5: [app/services/platform_policy.py → detect_platform_family → Offload HTML regex to thread pool]
-Genuine Strengths:
-app/services/extract/shared_variant_logic.py → resolve_variants: The Cartesian product matrix resolution for multi-axis variants flawlessly handles deeply nested or malformed e-commerce SKUs, correcting the most common failure mode in competitor extraction systems.
-app/services/js_state_mapper.py → _map_product_payload: The shift to declarative glom and JMESPath configurations over JS objects creates an incredibly fast, highly scalable alternative to brittle DOM scraping.
+LN-1: acquisition/traversal.py → _locator_still_resolves → Replace bare except Exception: pass with explicit Playwright/Exception catching that re-raises CancelledError.
+LN-2: acquisition/browser_detail.py → expand_all_interactive_elements_impl → Replace hardcoded timeout=1_000 and timeout=250 with runtime settings.
+LN-3: tests/test_pipeline_core.py → Fix test suites importing private structs _FetchedURLStage and _URLProcessingContext by testing public outputs.
+Genuine Strengths (file-level evidence only, no generic praise):
+browser_capture.py → _capture_worker: Safely and reliably bounds memory and concurrency while capturing streaming RSC and JSON payloads via Queue workers, handling cancellation cleanly.
+platform_policy.py → resolve_platform_runtime_policy: Completely extracts platform recognition from generic crawler paths, achieving perfect OCP adherence.
 Section 10: Codex-Ready Work Orders
-WORK ORDER RC-2 / LN-4: Bound Network Payload Reading
-Touches buckets: 3 (Acquisition + Browser Runtime)
-Risk: HIGH
-Do NOT touch: crawl_fetch_runtime.py, acquirer.py
+WORK ORDER RC-1: Schema Exclusion Logic Allows Arbitrary Output Field Pollution
+Touches buckets: 4 (Extraction), 5 (Publish + Persistence)
+Risk: CRITICAL
+Do NOT touch: LLM tasks, Adapter implementations
 What is wrong
-In app/services/acquisition/browser_capture.py, body_bytes = await response.body() blocks until the entire payload is loaded into memory. If the server uses chunked transfer encoding (meaning Content-Length is missing), the preliminary check in should_capture_network_payload passes, and Playwright buffers an unbounded amount of data into memory, causing an OOM crash.
+In field_policy.py, excluded_fields_for_surface returns all canonical fields not allowed for a surface. field_allowed_for_surface checks if a field is not in this excluded list. Consequently, any completely unknown field (e.g. garbage_key) evades the exclusion check and is incorrectly flagged as allowed. In field_value_core.py, validate_record_for_surface then blindly injects these allowed unknown fields back into the sanitized payload, violating strict schema enforcement.
 What to do
-Because Playwright's Python API does not natively stream response.body(), we must strictly enforce a timeout on the read operation to abort runaway chunked downloads.
-Open app/services/acquisition/browser_capture.py.
-Locate read_network_payload_body.
-Wrap await response.body() in an asyncio.wait_for.
-Calculate timeout dynamically: calculated_timeout = max(2.0, payload_budget_bytes / (1.5 * 1024 * 1024))  # assumes 1.5 MB/s minimum
+In app/services/field_policy.py, rewrite field_allowed_for_surface to use a strict allowlist. It must check if normalized_field is exactly within the list returned by canonical_fields_for_surface(surface).
+Do not rely on excluded_fields_for_surface for determining if a field is natively allowed; only use it if evaluating legacy explicit rejections.
+In app/services/field_value_core.py, ensure validate_record_for_surface drops any field not explicitly returned by the surface schema.
 Acceptance criteria
 
-body_bytes = await response.body() is wrapped in asyncio.wait_for(response.body(), timeout=calculated_timeout).asyncio.TimeoutError is caught and returns NetworkPayloadReadResult(body=None, outcome="too_large").
+field_allowed_for_surface("ecommerce_detail", "random_garbage_key") returns False.
 
-grep -n "await response.body()" app/services/acquisition/browser_capture.py no longer shows an unwrapped call.
-WORK ORDER LN-5: Unblock Event Loop during HTML Regex
-Touches buckets: 2 (Crawl Ingestion + Orchestration), 3 (Acquisition + Browser Runtime)
-Risk: MEDIUM
-Do NOT touch: app/services/platform_url_normalizers.py (deleted)
+validate_record_for_surface drops keys that do not exist in the surface's canonical schema.
+
+python -m pytest tests -q exits 0.
+What NOT to do
+Do not modify the _OUTPUT_SCHEMAS map structure.
+Do not disable type validation for fields that are canonical.
+WORK ORDER RC-2: Title Promotion Overwrites Strong Sources With Weak Sources
+Touches buckets: 4 (Extraction)
+Risk: CRITICAL
+Do NOT touch: DOM section extraction, LLM fallback
 What is wrong
-In app/services/platform_policy.py, detect_platform_family runs re.search over multi-megabyte HTML strings on the main thread. This blocks the asyncio event loop, starving other concurrent crawl tasks.
+In app/services/detail_extractor.py, _promote_detail_title evaluates replacement titles with a flawed logical condition: (rank < current_rank or source in {"network_payload", ...} or len(candidate) > len(title)). Because of the or, a lower-quality source (like dom_h1) can overwrite a high-quality authoritative source (like adapter or network_payload) purely because the candidate string is longer. This destroys the authoritative-first source ranking.
 What to do
-Open app/services/platform_policy.py.
-Locate detect_platform_family. Because this function is synchronous, you cannot await asyncio.to_thread directly inside it without refactoring all callers.
-However, detect_platform_family is heavily called. Instead of offloading, enforce a strict length limit on normalized_html before applying regex.
-Truncate normalized_html to 500_000 characters before the config.html_regex loop: searchable_html = normalized_html[:500000]. Platform markers almost universally appear in the <head> or early <body>.
+In app/services/detail_extractor.py, update the _promote_detail_title condition.
+Remove the len(candidate) > len(title) override bypass.
+Remove the source in {...} bypass.
+The condition should strictly mandate that the candidate must either be an objectively higher-ranked source (rank < current_rank), OR if the ranks are equal, it can be longer/better formatted.
 Acceptance criteria
 
-re.search in detect_platform_family executes against a truncated string (e.g., searchable_html), not the full payload.
+A title extracted from an adapter (rank 0) is never overwritten by a dom_h1 (rank 10) title, regardless of length.
 
-The event loop no longer stalls on 5MB+ DOM payloads.
-ARCHITECTURAL RECOMMENDATIONS
-1. CDP Network Data Streaming (replaces response.body())
-Projects using it: Crawlee, Apify
-Addresses Gap: RC-2 / LN-4 (Playwright buffering OOM vulnerability)
-Slot: browser_capture.py -> BrowserNetworkCapture
-Pseudocode sketch:
-code
-Python
-# Instead of relying on page.on('response'), attach a CDP session
-client = await page.context.new_cdp_session(page)
-await client.send("Network.enable")
+grep -r "or len(candidate) > len(title)" backend/app/services/detail_extractor.py returns empty.
 
-async def on_data_received(event):
-    # Track bytes streaming in via CDP without buffering them.
-    # If bytes > budget, call client.send("Network.setBypassServiceWorker") or abort.
-client.on("Network.dataReceived", on_data_received)
-Yield: Completely eliminates OOM crashes on chunked responses by measuring network flow actively at the Chromium protocol layer, rejecting files before they hit V8 memory.
-(Note: The codebase has already implemented all other major advanced state-of-the-art paradigms, including AOM tree reading, Ghost Routing via XHR interception, and Declarative JS Truth Mapping. No further macro-architectural changes are strictly required).
+python -m pytest tests -q exits 0.
+What NOT to do
+Do not change the integer ranks in DETAIL_TITLE_SOURCE_RANKS.
+Do not completely remove the promotion logic; it is still needed to replace js_state shells with valid dom_h1 content when js_state produces noise.
+WORK ORDER LN-1: Bare Exception Swallows in Traversal (single-session fix)
+File: app/services/acquisition/traversal.py
+Function: _locator_still_resolves
+Fix: Replace the bare except Exception: pass with explicit exception handling. If asyncio.CancelledError is caught, re-raise it. Log other Playwright/Exception errors securely at debug level.
+Test: rg -A 2 "except Exception:" backend/app/services/acquisition/traversal.py should show proper logging and re-raising of cancellation instead of pass.
+WORK ORDER LN-2: Magic Number Timeouts in Browser Detail (single-session fix)
+File: app/services/acquisition/browser_detail.py
+Function: expand_all_interactive_elements_impl
+Fix: Replace inline timeout=1_000 and timeout=250 calls with configurable variables fetched from crawler_runtime_settings (e.g., crawler_runtime_settings.accordion_expand_wait_ms or a related setting).
+Test: rg "timeout=(1000|1_000|250)" backend/app/services/acquisition/browser_detail.py returns empty.
+WORK ORDER LN-3: Test Layer Violations (single-session fix)
+File: tests/test_pipeline_core.py
+Function: Various test imports
+Fix: Remove direct imports of _FetchedURLStage and _URLProcessingContext. Refactor the associated tests to pass through the public process_single_url API or mock responses cleanly without instantiating private orchestration structs.
+Test: rg "_FetchedURLStage" tests/ returns empty.

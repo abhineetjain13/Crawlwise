@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import socket
 from typing import Literal
 
@@ -11,6 +12,7 @@ AddressFamilyPreference = Literal["auto", "ipv4", "ipv6"]
 
 _IPV4_LOCAL_ADDRESS = "0.0.0.0"  # nosec B104
 _IPV6_LOCAL_ADDRESS = "::"  # nosec B104
+_CHROME_MAJOR_VERSION_RE = re.compile(r"Chrome/(\d+)\.")
 
 
 def address_family_preference() -> AddressFamilyPreference:
@@ -71,14 +73,71 @@ def default_request_headers(
     *,
     headers: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    user_agent = crawler_runtime_settings.http_user_agent
     merged_headers = {
-        "User-Agent": crawler_runtime_settings.http_user_agent,
+        "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": _accept_language_for_locale("en-US"),
+        "Upgrade-Insecure-Requests": "1",
     }
+    merged_headers.update(
+        _browser_client_hint_headers(
+            user_agent,
+            platform=_platform_label_from_user_agent(user_agent),
+            mobile=False,
+        )
+    )
     if headers:
         merged_headers.update({str(k): str(v) for k, v in headers.items()})
     return merged_headers
+
+
+def _browser_client_hint_headers(
+    user_agent: str,
+    *,
+    platform: str,
+    mobile: bool,
+) -> dict[str, str]:
+    major_version = _chrome_major_version(user_agent)
+    if major_version is None:
+        return {}
+    return {
+        "sec-ch-ua": (
+            f'"Not.A/Brand";v="24", "Chromium";v="{major_version}", '
+            f'"Google Chrome";v="{major_version}"'
+        ),
+        "sec-ch-ua-mobile": "?1" if mobile else "?0",
+        "sec-ch-ua-platform": f'"{platform}"',
+    }
+
+
+def _chrome_major_version(user_agent: str) -> int | None:
+    match = _CHROME_MAJOR_VERSION_RE.search(str(user_agent or ""))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _platform_label_from_user_agent(user_agent: str) -> str:
+    lowered = str(user_agent or "").lower()
+    if "macintosh" in lowered or "mac os x" in lowered:
+        return "macOS"
+    if "linux" in lowered:
+        return "Linux"
+    return "Windows"
+
+
+def _accept_language_for_locale(locale: str) -> str:
+    normalized = str(locale or "").strip()
+    if not normalized:
+        return "en-US,en;q=0.9"
+    language = normalized.split("-", 1)[0].strip()
+    if not language or language.lower() == normalized.lower():
+        return normalized
+    return f"{normalized},{language};q=0.9"
 
 
 def should_retry_with_forced_ipv4(exc: BaseException) -> bool:

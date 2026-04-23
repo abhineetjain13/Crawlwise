@@ -220,6 +220,72 @@ def test_extract_records_keeps_visual_artifact_product_without_price_when_title_
     ]
 
 
+def test_extract_records_rejects_visual_artifact_auth_links() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.customink.com/products/sweatshirts/hoodies/71",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "href": "https://www.customink.com/profiles/users/sign_in",
+                    "x": 24,
+                    "y": 120,
+                    "width": 160,
+                    "height": 24,
+                    "text": "Sign In",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Sign In Sign In",
+                    "x": 24,
+                    "y": 148,
+                    "width": 180,
+                    "height": 28,
+                },
+                {
+                    "tag": "a",
+                    "href": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+                    "x": 24,
+                    "y": 220,
+                    "width": 220,
+                    "height": 32,
+                    "text": "",
+                },
+                {
+                    "tag": "img",
+                    "src": "https://www.customink.com/images/hoodie-1.jpg",
+                    "x": 24,
+                    "y": 220,
+                    "width": 160,
+                    "height": 160,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Independent Trading Midweight Hooded Sweatshirt",
+                    "x": 24,
+                    "y": 388,
+                    "width": 340,
+                    "height": 28,
+                },
+                {
+                    "tag": "div",
+                    "text": "$39.99",
+                    "x": 24,
+                    "y": 420,
+                    "width": 80,
+                    "height": 24,
+                },
+            ]
+        },
+    )
+
+    assert rows == []
+
+
 def test_extract_records_prefers_rendered_listing_cards_over_thin_structured_records() -> None:
     html = """
     <html>
@@ -275,6 +341,555 @@ def test_extract_records_prefers_rendered_listing_cards_over_thin_structured_rec
     assert rows[0]["_source"] == "rendered_listing"
     assert rows[0]["price"] == "19.99"
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
+
+
+def test_extract_records_drops_rendered_listing_utility_rows_when_real_products_exist() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Product Help",
+                    "url": "https://example.com/help/product-help",
+                },
+                {
+                    "title": "Widget Prime",
+                    "url": "https://example.com/products/widget-prime",
+                    "price": "$19.99",
+                    "image_url": "https://example.com/images/widget-prime.jpg",
+                },
+                {
+                    "title": "Widget Pro",
+                    "url": "https://example.com/products/widget-pro",
+                    "price": "$29.99",
+                    "image_url": "https://example.com/images/widget-pro.jpg",
+                },
+            ]
+        },
+    )
+
+    assert [row["title"] for row in rows] == ["Widget Prime", "Widget Pro"]
+    assert all("/products/" in row["url"] for row in rows)
+
+
+def test_extract_records_drops_detail_like_category_links_without_product_signals() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.customink.com/products/sweatshirts/hoodies/71",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Short Sleeve T-shirts",
+                    "url": "https://www.customink.com/products/t-shirts/short-sleeve-t-shirts/16",
+                },
+                {
+                    "title": "Women's T-shirts",
+                    "url": "https://www.customink.com/products/t-shirts/womens-t-shirts/104",
+                },
+                {
+                    "title": "Independent Trading Midweight Hooded Sweatshirt",
+                    "url": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+                    "price": "$39.99",
+                    "image_url": "https://www.customink.com/images/hoodie-1.jpg",
+                },
+                {
+                    "title": "Gildan Heavy Blend Hooded Sweatshirt",
+                    "url": "https://www.customink.com/products/hoodies/gildan-heavy-blend-hooded-sweatshirt/836000",
+                    "price": "$29.99",
+                    "image_url": "https://www.customink.com/images/hoodie-2.jpg",
+                },
+            ]
+        },
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Independent Trading Midweight Hooded Sweatshirt",
+        "Gildan Heavy Blend Hooded Sweatshirt",
+    ]
+
+
+def test_extract_records_rejects_concatenated_resource_menu_listing_titles() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.customink.com/products/sweatshirts/hoodies/71",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Tools & Resources Group Ordering Fundraising Online Stores Pro Services Tips & Advice T-shirt Maker",
+                    "url": "https://www.customink.com/fundraising",
+                },
+                {
+                    "title": "Independent Trading Midweight Hooded Sweatshirt",
+                    "url": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+                    "price": "$39.99",
+                    "image_url": "https://www.customink.com/images/hoodie-1.jpg",
+                },
+            ]
+        },
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Independent Trading Midweight Hooded Sweatshirt",
+    ]
+
+
+def test_extract_records_drops_shallow_editorial_listing_links_without_product_signals() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.customink.com/products/sweatshirts/hoodies/71",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Diversity & Belonging",
+                    "url": "https://www.customink.com/equity-for-all",
+                },
+                {
+                    "title": "Customer Reviews",
+                    "url": "https://www.customink.com/reviews",
+                },
+                {
+                    "title": "Customer Photos",
+                    "url": "https://www.customink.com/photos",
+                },
+                {
+                    "title": "T-shirt Maker",
+                    "url": "https://www.customink.com/services/t-shirt-maker-creator",
+                },
+                {
+                    "title": "Corporate Swag",
+                    "url": "https://www.customink.com/ink/business/corporate-swag-branded-merchandise",
+                },
+                {
+                    "title": "Content Guidelines",
+                    "url": "https://www.customink.com/help_center/content-guidelines",
+                },
+                {
+                    "title": "Custom Products",
+                    "url": "https://www.customink.com/ink/custom-products",
+                },
+                {
+                    "title": "Sign In Sign In",
+                    "url": "https://www.customink.com/profiles/users/sign_in",
+                },
+                {
+                    "title": "Independent Trading Midweight Hooded Sweatshirt",
+                    "url": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+                    "price": "$39.99",
+                    "image_url": "https://www.customink.com/images/hoodie-1.jpg",
+                },
+            ]
+        },
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Independent Trading Midweight Hooded Sweatshirt",
+    ]
+
+
+def test_extract_records_recovers_rendered_listing_price_misfiled_as_brand() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.uniqlo.com/in/en/men/shirts-and-polo-shirts",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Cotton Linen Shirt Jacket Long Sleeve",
+                    "url": "https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
+                    "image_url": "https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_69_482443_3x4.jpg?width=300",
+                    "brand": "Rs. 3,990.00",
+                }
+            ]
+        },
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.uniqlo.com/in/en/men/shirts-and-polo-shirts",
+            "_source": "rendered_listing",
+            "title": "Cotton Linen Shirt Jacket Long Sleeve",
+            "price": "3990.00",
+            "image_url": "https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_69_482443_3x4.jpg?width=300",
+            "url": "https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
+        }
+    ]
+
+
+def test_extract_records_backfills_listing_price_from_network_payload_candidates() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.uniqlo.com/in/en/men/shirts-and-polo-shirts",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Cotton Linen Shirt Jacket Long Sleeve",
+                    "url": "https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
+                    "image_url": "https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_38_482443_3x4.jpg",
+                }
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "E482443-000",
+                                "name": "Cotton Linen Shirt Jacket Long Sleeve",
+                                "prices": {
+                                    "base": {
+                                        "value": 3990,
+                                        "currency": {"code": "INR"},
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.uniqlo.com/in/en/men/shirts-and-polo-shirts",
+            "_source": "rendered_listing",
+            "title": "Cotton Linen Shirt Jacket Long Sleeve",
+            "url": "https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
+            "price": "3990",
+            "currency": "INR",
+            "image_url": "https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_38_482443_3x4.jpg",
+        }
+    ]
+
+
+def test_extract_records_rejects_external_rendered_listing_utility_links() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www2.hm.com/en_in/men/shoes/view-all.html",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Canvas trainers",
+                    "url": "https://www2.hm.com/en_in/productpage.1309854002.html",
+                    "price": "Rs. 2,799.00",
+                },
+                {
+                    "title": "Customer Service",
+                    "url": "https://www2.hm.com/en_in/customer-service.html",
+                },
+                {
+                    "title": "Follow us on Instagram",
+                    "url": "https://www.instagram.com/hm",
+                },
+                {
+                    "title": "Sustainability",
+                    "url": "https://hmgroup.com/sustainability/",
+                },
+            ]
+        },
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www2.hm.com/en_in/men/shoes/view-all.html",
+            "_source": "rendered_listing",
+            "title": "Canvas trainers",
+            "price": "2799.00",
+            "url": "https://www2.hm.com/en_in/productpage.1309854002.html",
+        }
+    ]
+
+
+def test_extract_records_rejects_shipping_only_rendered_listing_rows() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "+CHF16.75 shipping",
+                    "url": "https://example.com/shipping",
+                }
+            ]
+        },
+    )
+
+    assert rows == []
+
+
+def test_extract_records_rejects_rendered_listing_cta_only_titles() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.discogs.com/sell/list",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Make Offer / Details",
+                    "url": "https://www.discogs.com/sell/item/3970919917?ev=bp_det",
+                },
+                {
+                    "title": "Widget Prime",
+                    "url": "https://www.discogs.com/products/widget-prime",
+                    "price": "$19.99",
+                    "image_url": "https://www.discogs.com/images/widget-prime.jpg",
+                },
+            ]
+        },
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.discogs.com/sell/list",
+            "_source": "rendered_listing",
+            "title": "Widget Prime",
+            "price": "19.99",
+            "image_url": "https://www.discogs.com/images/widget-prime.jpg",
+            "url": "https://www.discogs.com/products/widget-prime",
+        }
+    ]
+
+
+def test_extract_records_rejects_job_listing_hub_links_when_structured_job_rows_exist() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {
+              "@type": "JobPosting",
+              "title": "Backend Engineer",
+              "url": "/job-123-backend-engineer-at-example-bangalore/"
+            },
+            {
+              "@type": "JobPosting",
+              "title": "Data Engineer",
+              "url": "/job-456-data-engineer-at-example-remote/"
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body><div id="app"></div></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://jobs.example.com/search-jobs",
+        "job_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Jobs in Bangalore",
+                    "url": "https://jobs.example.com/jobs-in-bangalore/",
+                },
+                {
+                    "title": "Product Academy",
+                    "url": "https://academy.example.com/product/",
+                },
+            ]
+        },
+    )
+
+    assert len(rows) == 2
+    assert all(row["_source"] == "structured_listing" for row in rows)
+    assert rows[0]["title"] == "Backend Engineer"
+    assert rows[0]["url"] == "https://jobs.example.com/job-123-backend-engineer-at-example-bangalore/"
+    assert rows[1]["title"] == "Data Engineer"
+    assert rows[1]["url"] == "https://jobs.example.com/job-456-data-engineer-at-example-remote/"
+
+
+def test_extract_records_keeps_job_detail_like_titles_even_when_they_start_with_hub_text() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="job-card">
+          <a href="/jobs/backend-engineer-123456">Jobs in Bangalore - Backend Engineer</a>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://jobs.example.com/search",
+        "job_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://jobs.example.com/search",
+            "_source": "dom_listing",
+            "title": "Jobs in Bangalore - Backend Engineer",
+            "url": "https://jobs.example.com/jobs/backend-engineer-123456",
+        }
+    ]
+
+
+def test_extract_records_keeps_job_listing_slug_records_with_numeric_terminal_ids() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="job-listing">
+          <a href="/lead-ai-engineer-sherlockdefi-6650681">Lead AI Engineer</a>
+        </div>
+        <div class="job-listing">
+          <a href="/founding-engineer-with-equity-miru-technology-inc-7933051">
+            Founding Engineer (with equity)
+          </a>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://startup.jobs/",
+        "job_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["title"] == "Lead AI Engineer"
+    assert rows[0]["url"] == "https://startup.jobs/lead-ai-engineer-sherlockdefi-6650681"
+    assert rows[1]["title"] == "Founding Engineer (with equity)"
+    assert rows[1]["url"] == "https://startup.jobs/founding-engineer-with-equity-miru-technology-inc-7933051"
+
+
+def test_extract_records_ignores_single_page_level_product_payload_on_listing_pages() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "MuscleBlaze",
+          "description": "Brand page summary that should not be attached to a single listing row.",
+          "brand": {"name": "MuscleBlaze"},
+          "image": "https://example.com/brand.png",
+          "aggregateRating": {"ratingValue": "4.5", "reviewCount": "132217"},
+          "offers": {"priceCurrency": "INR"},
+          "url": "/sv/muscleblaze-biozyme-gold-100-whey/SP-129175?navKey=VRNT-250297"
+        }
+        </script>
+      </head>
+      <body>
+        <article class="product-card">
+          <a href="/sv/muscleblaze-pre-workout-wrathx/SP-95398?navKey=VRNT-210726">
+            <img src="/w1.png">
+            <h2>MuscleBlaze Pre Workout WrathX - 1.12 lb Cola Frost</h2>
+          </a>
+          <div class="price">Rs. 1999</div>
+          <div>235 reviews</div>
+        </article>
+        <article class="product-card">
+          <a href="/sv/muscleblaze-biozyme-gold-100-whey/SP-129175?navKey=VRNT-250297">
+            <img src="/w2.png">
+            <h2>MuscleBlaze Biozyme Gold 100% Whey</h2>
+          </a>
+          <div class="price">Rs. 8399</div>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.healthkart.com/brand/muscleblaze?navKey=BR-539",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 2
+    assert all(row["_source"] == "dom_listing" for row in rows)
+    assert rows[0]["title"] == "MuscleBlaze Pre Workout WrathX - 1.12 lb Cola Frost"
+    assert rows[0]["price"] == "1999"
+    assert "brand" not in rows[0]
+    assert "description" not in rows[0]
+    assert rows[1]["title"] == "MuscleBlaze Biozyme Gold 100% Whey"
+    assert rows[1]["price"] == "8399"
+
+
+def test_extract_records_does_not_leak_standalone_product_payloads_when_itemlist_exists() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {
+              "@type": "ItemList",
+              "itemListElement": [
+                {
+                  "@type": "ListItem",
+                  "position": 1,
+                  "item": {
+                    "@type": "Product",
+                    "name": "Widget One",
+                    "url": "/products/widget-one"
+                  }
+                },
+                {
+                  "@type": "ListItem",
+                  "position": 2,
+                  "item": {
+                    "@type": "Product",
+                    "name": "Widget Two",
+                    "url": "/products/widget-two"
+                  }
+                }
+              ]
+            },
+            {
+              "@type": "Product",
+              "name": "Category Hero Product",
+              "url": "/products/category-hero"
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert [row["title"] for row in rows] == ["Widget One", "Widget Two"]
+    assert [row["url"] for row in rows] == [
+        "https://example.com/products/widget-one",
+        "https://example.com/products/widget-two",
+    ]
 
 
 @pytest.mark.asyncio
@@ -558,6 +1173,39 @@ def test_extract_ecommerce_detail_rejects_site_shell_with_listing_payload_pollut
     assert rows == []
 
 
+def test_extract_ecommerce_detail_rejects_brand_shell_with_app_prompt_copy() -> None:
+    html = """
+    <html>
+      <head>
+        <title>UNIQLO - LifeWear</title>
+        <meta property="og:title" content="UNIQLO - LifeWear" />
+        <meta property="og:description" content="Shop on our app for the best experience" />
+        <meta property="og:url" content="https://www.uniqlo.com/in/en/products/E474244-000/01" />
+        <meta property="og:image" content="https://image.uniqlo.com/UQ/ST3/in/imagesgoods/474244/item/ingoods_57_474244_3x4.jpg" />
+      </head>
+      <body>
+        <main>
+          <h1>UNIQLO - LifeWear</h1>
+          <div role="radiogroup" aria-label="Color">
+            <button aria-label="57 OLIVE">57 OLIVE</button>
+          </div>
+          <img src="https://image.uniqlo.com/UQ/ST3/in/imagesgoods/474244/item/ingoods_57_474244_3x4.jpg" alt="57 OLIVE" />
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.uniqlo.com/in/en/products/E474244-000/01?colorDisplayCode=57&sizeDisplayCode=005",
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url="https://www.uniqlo.com/in/en/products/E474244-000/01",
+    )
+
+    assert rows == []
+
+
 def test_extract_ecommerce_detail_prefers_requested_identity_on_same_site_utility_redirect() -> None:
     html = """
     <html>
@@ -650,6 +1298,38 @@ def test_extract_ecommerce_detail_rejects_same_site_utility_redirect_with_mismat
         "ecommerce_detail",
         max_records=5,
         requested_page_url="https://www.thesouledstore.com/product/marvel-spider-x-venom-oversized-tshirt?gte=1",
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_rejects_same_site_wrong_product_payload_without_utility_redirect() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Hanes Authentic T-shirt",
+          "url": "https://www.customink.com/products/t-shirts/4",
+          "image": "https://www.customink.com/images/hanes-shirt.jpg",
+          "description": "A basic t-shirt product."
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Medic Shirts</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.customink.com/t-shirts/medic-shirts",
+        "ecommerce_detail",
+        max_records=10,
+        requested_page_url="https://www.customink.com/t-shirts/medic-shirts",
     )
 
     assert rows == []
@@ -849,6 +1529,58 @@ def test_extract_greenhouse_job_detail_from_remix_state() -> None:
     assert record["_source"] == "js_state"
 
 
+def test_extract_job_detail_ignores_cross_surface_requested_image_fields() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "JobPosting",
+          "title": "Senior Data Engineer",
+          "description": "Build deterministic data pipelines.",
+          "hiringOrganization": {
+            "name": "Data Corp",
+            "logo": "https://example.com/images/company-logo.jpg"
+          },
+          "image": [
+            "https://example.com/images/company-logo.jpg",
+            "https://example.com/images/office.jpg"
+          ],
+          "jobLocation": {
+            "address": {
+              "addressLocality": "Bengaluru",
+              "addressRegion": "KA",
+              "addressCountry": "IN"
+            }
+          },
+          "url": "https://example.com/jobs/senior-data-engineer"
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Senior Data Engineer</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/jobs/senior-data-engineer",
+        "job_detail",
+        max_records=5,
+        requested_fields=["image_url", "additional_images", "description"],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Senior Data Engineer"
+    assert record["company"] == "Data Corp"
+    assert record["description"] == "Build deterministic data pipelines."
+    assert "image_url" not in record
+    assert "additional_images" not in record
+
+
 def test_extract_product_group_variants_without_schema_pollution() -> None:
     html = """
     <html>
@@ -984,6 +1716,66 @@ def test_extract_ecommerce_listing_preserves_functional_query_params() -> None:
     assert len(rows) == 1
     assert rows[0]["url"] == "https://example.com/products/widget-prime?variant=blue"
     assert rows[0]["source_url"] == "https://example.com/collections/widgets?sort=featured"
+
+
+def test_extract_ecommerce_listing_keeps_title_only_detail_candidates_without_detail_markers() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="/browse/widget-prime">
+            <h2 class="product-title">Widget Prime Ultra</h2>
+          </a>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/catalog",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/catalog",
+            "_source": "dom_listing",
+            "title": "Widget Prime Ultra",
+            "url": "https://example.com/browse/widget-prime",
+        }
+    ]
+
+
+def test_extract_ecommerce_listing_does_not_treat_supportive_product_paths_as_utility_urls() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="/products/supportive-chair">
+            <h2 class="product-title">Supportive Chair</h2>
+          </a>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/catalog",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/catalog",
+            "_source": "dom_listing",
+            "title": "Supportive Chair",
+            "url": "https://example.com/products/supportive-chair",
+        }
+    ]
 
 
 def test_extract_ecommerce_listing_keeps_same_site_cross_subdomain_detail_links() -> None:
@@ -1523,6 +2315,85 @@ def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record
     record = rows[0]
     assert record["_extraction_tiers"]["early_exit"] == "structured_data"
     assert record["_extraction_tiers"]["current"] == "structured_data"
+
+
+def test_extract_detail_rejects_non_variant_options_object_from_structured_payload() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/json">
+        {
+          "@type": "Product",
+          "name": "Duracell Ultra AA Alkaline Batteries (Pack of 8)",
+          "sku": "OFF.MIS.25278554",
+          "brand": "Duracell",
+          "material": "Alkaline",
+          "options": {
+            "renderableComponents": [
+              {"url": "/user/account", "title": "My Profile"},
+              {"url": "/user/orders", "title": "My Orders"},
+              {"title": "Logout", "action": {"type": "LOGOUT"}}
+            ]
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Duracell Ultra AA Alkaline Batteries (Pack of 8)</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.industrybuying.com/battery-cell-duracell-OFF.MIS.25278554",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Duracell Ultra AA Alkaline Batteries (Pack of 8)"
+    assert record["sku"] == "OFF.MIS.25278554"
+    assert "variant_axes" not in record
+    assert record["url"] == "https://www.industrybuying.com/battery-cell-duracell-OFF.MIS.25278554"
+    assert "availability" not in record
+
+
+def test_extract_detail_keeps_valid_variant_axes_from_structured_options_alias() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/json">
+        {
+          "@type": "Product",
+          "name": "MuscleBlaze Biozyme Performance Whey",
+          "options": {
+            "weight": ["4.4 Lb", "0.4 Lb"],
+            "flavour": ["Rich Chocolate", "Blue Tokai Coffee"]
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <h1>MuscleBlaze Biozyme Performance Whey</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/whey",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {
+        "weight": ["4.4 Lb", "0.4 Lb"],
+        "flavour": ["Rich Chocolate", "Blue Tokai Coffee"],
+    }
 
 
 def test_extract_ecommerce_detail_does_not_infer_price_from_shell_chrome_text() -> None:

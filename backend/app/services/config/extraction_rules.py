@@ -62,6 +62,66 @@ LISTING_STRUCTURE_NEGATIVE_HINTS = (
     "pagination",
 )
 LISTING_FALLBACK_CONTAINER_SELECTOR = "article, li, div, tr, section, [role='row']"
+LISTING_RENDERED_CARD_SELECTORS: tuple[str, ...] = (
+    "article",
+    '[data-testid*="product" i]',
+    '[class*="product-card" i]',
+    '[class*="product-tile" i]',
+    '[class*="plp-card" i]',
+    '[class*="catalog-item" i]',
+    '[class*="grid-item" i]',
+    '[class*="card" i]',
+    '[class*="result" i]',
+    "li",
+)
+LISTING_RENDERED_DETAIL_URL_HINTS: tuple[str, ...] = (
+    "/product/",
+    "/products/",
+    "/p/",
+    "/dp/",
+    "/item/",
+)
+LISTING_UTILITY_TITLE_PATTERNS: tuple[str, ...] = (
+    r"^\+?\s*(?:[$€£]|chf|usd|inr|rs\.?)?\s*[\d,.]+\s+shipping$",
+    r"^(?:make offer\s*/\s*details|details\s*/\s*make offer)$",
+    r"^(?:post a job|product help|product tips)$",
+    r"^how posting dates work$",
+    r"^(?:customer care|customer service|help|support|faq|about(?: us)?|returns?)$",
+)
+LISTING_UTILITY_TITLE_TOKENS: tuple[str, ...] = (
+    "customer care",
+    "customer service",
+    "fundraising",
+    "group ordering",
+    "how posting dates work",
+    "online stores",
+    "post a job",
+    "pro services",
+    "product help",
+    "product tips",
+    "tips & advice",
+    "tools & resources",
+)
+LISTING_UTILITY_URL_TOKENS: tuple[str, ...] = (
+    "/about",
+    "/account",
+    "/contact",
+    "/customer-care",
+    "/customer-service",
+    "/employers/posts/new",
+    "/faq",
+    "/help",
+    "://instagram.com",
+    "/login",
+    "/sign-in",
+    "/sign_in",
+    "/privacy",
+    "/returns",
+    "/savedsearches",
+    "/shipping",
+    "/support",
+    "/terms",
+)
 
 DYNAMIC_FIELD_NAME_MAX_TOKENS = crawler_runtime_settings.dynamic_field_name_max_tokens
 KNOWN_ATS_PLATFORMS = known_ats_domains
@@ -81,6 +141,17 @@ TITLE_PROMOTION_SUBSTRINGS: tuple[str, ...] = (
     "apparel for",
 )
 TITLE_PROMOTION_SEPARATOR: str = "|"
+DETAIL_BRAND_SHELL_TITLE_TOKENS: tuple[str, ...] = (
+    "lifewear",
+    "official",
+    "shop",
+    "store",
+)
+DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES: tuple[str, ...] = (
+    "best experience",
+    "download our app",
+    "shop on our app",
+)
 CROSS_LINK_CONTAINER_HINTS: tuple[str, ...] = (
     "cross-sell",
     "crosssell",
@@ -287,6 +358,8 @@ __all__ = sorted(
         "DETAIL_EXPAND_SELECTORS",
         "DETAIL_UTILITY_PATH_TOKENS",
         "DETAIL_TITLE_SOURCE_RANKS",
+        "DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES",
+        "DETAIL_BRAND_SHELL_TITLE_TOKENS",
         "DYNAMIC_FIELD_NAME_MAX_TOKENS",
         "JOB_ERROR_PAGE_HEADINGS",
         "JOB_ERROR_PAGE_TITLES",
@@ -296,8 +369,13 @@ __all__ = sorted(
         "JS_STATE_NON_PRODUCT_IMAGE_HINTS",
         "KNOWN_ATS_PLATFORMS",
         "LISTING_FALLBACK_CONTAINER_SELECTOR",
+        "LISTING_RENDERED_CARD_SELECTORS",
+        "LISTING_RENDERED_DETAIL_URL_HINTS",
         "LISTING_STRUCTURE_NEGATIVE_HINTS",
         "LISTING_STRUCTURE_POSITIVE_HINTS",
+        "LISTING_UTILITY_TITLE_PATTERNS",
+        "LISTING_UTILITY_TITLE_TOKENS",
+        "LISTING_UTILITY_URL_TOKENS",
         "MAX_CANDIDATES_PER_FIELD",
         "NON_PRODUCT_IMAGE_HINTS",
         "NON_PRODUCT_PROVIDER_HINTS",

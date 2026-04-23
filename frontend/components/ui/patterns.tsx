@@ -204,24 +204,53 @@ export function EmptyPanel({
  );
 }
 
-/* ─── JsonPanel ──────────────────────────────────────────────────────────── */
-export function JsonPanel({
+/* ─── SectionCard ────────────────────────────────────────────────────────── */
+export function SectionCard({
  title,
- subtitle,
+ description,
+ action,
  children,
  className,
 }: Readonly<{
  title: string;
- subtitle?: string;
+ description?: ReactNode;
+ action?: ReactNode;
  children: ReactNode;
  className?: string;
 }>) {
- return (
- <Card className={cn("section-card", className)}>
- <SectionHeader title={title} description={subtitle} />
- {children}
- </Card>
- );
+ return <Card className={cn("section-card", className)}><SectionHeader title={title} description={description} action={action} />{children}</Card>;
+}
+
+/* ─── SurfaceSection ─────────────────────────────────────────────────────── */
+export function SurfaceSection({
+ title,
+ description,
+ action,
+ children,
+ className,
+ bodyClassName,
+}: Readonly<{
+ title: string;
+ description?: ReactNode;
+ action?: ReactNode;
+ children: ReactNode;
+ className?: string;
+ bodyClassName?: string;
+}>) {
+ return <SurfacePanel className={className}><div className="border-b border-[var(--divider)] px-4 py-3"><SectionHeader title={title} description={description} action={action} /></div><div className={cn("p-4", bodyClassName)}>{children}</div></SurfacePanel>;
+}
+
+/* ─── MutedPanelMessage ──────────────────────────────────────────────────── */
+export function MutedPanelMessage({
+ title,
+ description,
+ className,
+}: Readonly<{
+ title: string;
+ description: string;
+ className?: string;
+}>) {
+ return <div className={cn("surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[1.55] text-muted", className)}><p className="m-0 font-medium text-[var(--text-primary)]">{title}</p><p className="m-0 mt-1.5">{description}</p></div>;
 }
 
 /* ─── SkeletonRows ───────────────────────────────────────────────────────── */
@@ -246,20 +275,6 @@ export function MetricSkeleton() {
  <Skeleton className="h-9 w-28"/>
  <Skeleton className="h-3 w-16"/>
  </div>
- );
-}
-
-/* ─── Divider ────────────────────────────────────────────────────────────── */
-export function Divider({ className }: Readonly<{ className?: string }>) {
- return <div className={cn("h-px bg-[var(--border)]", className)} />;
-}
-
-/* ─── InlineCode ─────────────────────────────────────────────────────────── */
-export function InlineCode({ children }: Readonly<{ children: ReactNode }>) {
- return (
- <code className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-sm leading-[1.45] font-mono text-secondary">
- {children}
- </code>
  );
 }
 

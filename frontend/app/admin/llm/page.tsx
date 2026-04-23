@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, PlugZap, Plus, Trash2 } from "lucide-react";
 
-import { Card, Button, Dropdown, Input } from "../../../components/ui/primitives";
-import { InlineAlert, PageHeader, SectionHeader } from "../../../components/ui/patterns";
+import { Button, Dropdown, Input } from "../../../components/ui/primitives";
+import { InlineAlert, MutedPanelMessage, PageHeader, SectionCard } from "../../../components/ui/patterns";
 import { api } from "../../../lib/api";
 import type {
   LlmConfigCreatePayload,
@@ -117,8 +117,7 @@ export default function AdminLlmPage() {
  <PageHeader title="LLM Config"description="Restore runtime provider control for selector suggestion, cleanup review, and extraction fallback tasks."/>
 
  <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
- <Card className="section-card space-y-5">
- <SectionHeader title="Create Config"description="Activate one provider/model per task. New active configs automatically replace the previous active config for the same task."/>
+ <SectionCard title="Create Config"description="Activate one provider/model per task. New active configs automatically replace the previous active config for the same task."className="space-y-5">
 
  <div className="grid gap-4 md:grid-cols-2">
  <label className="grid gap-1.5">
@@ -180,11 +179,10 @@ export default function AdminLlmPage() {
 
  {message ? <InlineAlert message={message} tone="neutral"/> : null}
  {error ? <InlineAlert message={error} tone="danger"/> : null}
- </Card>
+ </SectionCard>
 
  <div className="page-stack">
- <Card className="section-card space-y-4">
- <SectionHeader title="Active Configs"description="The active runtime snapshot available to selector discovery and cleanup tasks."/>
+ <SectionCard title="Active Configs"description="The active runtime snapshot available to selector discovery and cleanup tasks."className="space-y-4">
  {configs.length ? (
  <div className="space-y-3">
  {configs.map((config) => (
@@ -211,14 +209,11 @@ export default function AdminLlmPage() {
  ))}
  </div>
  ) : (
- <div className="surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[1.55] text-muted">
- No LLM configs saved yet.
- </div>
+ <MutedPanelMessage title="No configs saved" description="No LLM configs saved yet." />
  )}
- </Card>
+ </SectionCard>
 
- <Card className="section-card space-y-4">
- <SectionHeader title="Recent Cost Log"description="Latest LLM usage events recorded by the backend runtime."/>
+ <SectionCard title="Recent Cost Log"description="Latest LLM usage events recorded by the backend runtime."className="space-y-4">
  {costLog.length ? (
  <div className="space-y-2">
  {costLog.slice(0, 8).map((entry) => (
@@ -230,11 +225,9 @@ export default function AdminLlmPage() {
  ))}
  </div>
  ) : (
- <div className="surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[1.55] text-muted">
- No cost events recorded yet.
- </div>
+ <MutedPanelMessage title="No cost events" description="No cost events recorded yet." />
  )}
- </Card>
+ </SectionCard>
  </div>
  </div>
  </div>

@@ -2,7 +2,7 @@
 
 **Created:** 2026-04-21
 **Agent:** Codex
-**Status:** IN PROGRESS
+**Status:** DONE
 **Touches buckets:** 2. Crawl Ingestion + Orchestration, 3. Acquisition + Browser Runtime, 4. Extraction, 5. Publish + Persistence, 6. Review + Selectors + Domain Memory, 7. LLM Admin + Runtime
 
 ## Goal

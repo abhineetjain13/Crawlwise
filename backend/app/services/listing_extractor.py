@@ -21,6 +21,9 @@ from app.services.config.extraction_rules import (
     LISTING_STRUCTURE_NEGATIVE_HINTS,
     LISTING_STRUCTURE_POSITIVE_HINTS,
     LISTING_TITLE_CTA_TITLES,
+    LISTING_UTILITY_TITLE_PATTERNS,
+    LISTING_UTILITY_TITLE_TOKENS,
+    LISTING_UTILITY_URL_TOKENS,
     LISTING_WEAK_TITLES,
 )
 from app.services.config.selectors import CARD_SELECTORS
@@ -60,6 +63,9 @@ from app.services.field_value_dom import apply_selector_fallbacks
 from app.services.config.surface_hints import detail_path_hints
 
 logger = logging.getLogger(__name__)
+_UTILITY_TITLE_REGEXES = tuple(
+    re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
+)
 _PRICE_NODE_SELECTORS = (
     "[itemprop='price']",
     "[class*='price']",
@@ -173,8 +179,12 @@ def _extract_structured_listing(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    allow_standalone_typed = _allow_standalone_typed_listing_payloads(payloads)
     for payload in payloads:
-        for item in _structured_listing_items(payload):
+        for item in _structured_listing_items(
+            payload,
+            allow_standalone_typed=allow_standalone_typed,
+        ):
             record = _structured_listing_record(item, page_url, surface)
             url = str(record.get("url") or "")
             if not url or url in seen_urls or url == page_url:
@@ -189,7 +199,11 @@ def _extract_structured_listing(
     return records
 
 
-def _structured_listing_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _structured_listing_items(
+    payload: dict[str, Any],
+    *,
+    allow_standalone_typed: bool,
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for candidate in _listing_payload_candidates(payload):
         if not isinstance(candidate, dict):
@@ -205,9 +219,16 @@ def _structured_listing_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
                     items.append(entry)
                 elif isinstance(item, dict):
                     items.append(item)
-        elif any(token in normalized_type for token in ("product", "jobposting")):
+            continue
+        is_typed_listing_node = any(
+            token in normalized_type for token in ("product", "jobposting")
+        )
+        if allow_standalone_typed and is_typed_listing_node:
             items.append(candidate)
-        elif _looks_like_untyped_listing_payload(candidate):
+            continue
+        if is_typed_listing_node:
+            continue
+        if _looks_like_untyped_listing_payload(candidate):
             items.append(candidate)
     return items
 
@@ -220,6 +241,34 @@ def _listing_payload_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]
     elif isinstance(main_entity, list):
         candidates.extend(item for item in main_entity if isinstance(item, dict))
     return candidates
+
+
+def _allow_standalone_typed_listing_payloads(
+    payloads: list[dict[str, Any]],
+) -> bool:
+    typed_candidates = 0
+    threshold = max(2, int(crawler_runtime_settings.listing_min_items))
+    for payload in payloads:
+        for candidate in _listing_payload_candidates(payload):
+            if not isinstance(candidate, dict):
+                continue
+            raw_type = candidate.get("@type")
+            normalized_type = (
+                " ".join(raw_type)
+                if isinstance(raw_type, list)
+                else str(raw_type or "")
+            ).lower()
+            if not any(
+                token in normalized_type for token in ("product", "jobposting")
+            ):
+                continue
+            title = coerce_text(candidate.get("name") or candidate.get("title"))
+            url = candidate.get("url") or candidate.get("link") or candidate.get("href")
+            if title and url:
+                typed_candidates += 1
+                if typed_candidates >= threshold:
+                    return True
+    return False
 
 
 def _allow_embedded_json_listing_payloads(payloads: list[dict[str, Any]]) -> bool:
@@ -288,6 +337,8 @@ def _listing_title_is_noise(title: str) -> bool:
         return True
     if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
         return True
+    if any(pattern.search(lowered) for pattern in _UTILITY_TITLE_REGEXES):
+        return True
     if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
         return True
     if any(lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES):
@@ -330,6 +381,49 @@ def _job_listing_url_looks_like_posting(url: str) -> bool:
     return bool(re.search(r"\d{4,}", terminal))
 
 
+def _job_listing_title_is_hub(title: str) -> bool:
+    lowered = clean_text(title).lower()
+    if not lowered:
+        return False
+    if lowered in {"jobs", "careers", "openings"}:
+        return True
+    return lowered.startswith(
+        (
+            "jobs in ",
+            "jobs near ",
+            "careers in ",
+            "roles in ",
+            "openings in ",
+        )
+    )
+
+
+def _job_listing_url_is_hub(url: str) -> bool:
+    parsed = urlsplit(url.lower())
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    terminal = segments[-1] if segments else ""
+    if terminal in {
+        "careers",
+        "jobs",
+        "openings",
+        "search",
+        "search-jobs",
+        "search-results",
+    }:
+        return True
+    if terminal.startswith(
+        (
+            "jobs-in-",
+            "careers-in-",
+            "openings-in-",
+            "search-jobs",
+            "job-search",
+        )
+    ):
+        return True
+    return False
+
+
 def _job_listing_url_is_utility(url: str) -> bool:
     lowered = url.lower()
     return any(
@@ -348,15 +442,52 @@ def _record_is_supported_listing_candidate(
     url = str(record.get("url") or "").strip()
     if not title or not url or _listing_title_is_noise(title) or _url_is_structural(url, page_url):
         return False
-    if surface.startswith("job_") and _job_listing_url_is_utility(url):
+    if _listing_url_or_title_looks_like_utility(title=title, url=url):
         return False
-    if _detail_like_path(url, is_job=surface.startswith("job_")):
+    is_job_surface = surface.startswith("job_")
+    detail_like = _detail_like_path(url, is_job=is_job_surface)
+    if is_job_surface and (
+        _job_listing_url_is_utility(url)
+        or _job_listing_url_is_hub(url)
+    ):
+        return False
+    if is_job_surface and _job_listing_title_is_hub(title) and not detail_like:
+        return False
+    if detail_like:
         return True
     if _record_has_supporting_listing_signals(record, surface=surface):
         return True
-    if surface.startswith("job_") and _job_listing_url_looks_like_posting(url):
+    if is_job_surface and _job_listing_url_looks_like_posting(url):
         return True
-    return False
+    return not is_job_surface and len(title) >= 12
+
+
+def _listing_url_or_title_looks_like_utility(*, title: str, url: str) -> bool:
+    normalized_title = " ".join(str(title or "").strip().lower().split())
+    normalized_url = str(url or "").strip().lower()
+    if normalized_title:
+        if any(pattern.search(normalized_title) for pattern in _UTILITY_TITLE_REGEXES):
+            return True
+        if any(
+            _listing_title_contains_token_phrase(normalized_title, token)
+            for token in LISTING_UTILITY_TITLE_TOKENS
+        ):
+            return True
+    return bool(
+        normalized_url
+        and any(
+            re.search(rf"{re.escape(token)}(?:[/?#]|$)", normalized_url)
+            for token in LISTING_UTILITY_URL_TOKENS
+        )
+    )
+
+
+def _listing_title_contains_token_phrase(title: str, token: str) -> bool:
+    normalized_token = " ".join(str(token or "").strip().lower().split())
+    if not normalized_token:
+        return False
+    pattern = rf"(^|[^a-z0-9]){re.escape(normalized_token)}([^a-z0-9]|$)"
+    return re.search(pattern, title) is not None
 
 
 def _listing_card_html_fragments(
@@ -698,10 +829,38 @@ def _select_primary_anchor(
 
 def _detail_like_path(url: str, *, is_job: bool) -> bool:
     lowered = url.lower()
+    if is_job:
+        return _job_detail_like_path(lowered)
     if any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS):
         return True
-    hints = detail_path_hints("job_detail" if is_job else "ecommerce_detail")
+    hints = detail_path_hints("ecommerce_detail")
     return any(marker in lowered for marker in hints)
+
+
+def _job_detail_like_path(url: str) -> bool:
+    parsed = urlsplit(url)
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if not segments:
+        return False
+    terminal = segments[-1].strip().lower()
+    if not terminal or _job_listing_url_is_hub(url):
+        return False
+    query = parsed.query.lower()
+    if any(token in query for token in ("showjob=", "jobid=", "job_id=", "gh_jid=")):
+        return True
+    if _job_listing_url_looks_like_posting(url):
+        return True
+    if re.match(r"jobs?-\d", terminal):
+        return True
+    detail_roots = {"job", "jobs", "opening", "position", "posting", "career", "careers"}
+    for index, segment in enumerate(segments[:-1]):
+        normalized = segment.strip().lower()
+        if normalized not in detail_roots:
+            continue
+        next_segment = segments[index + 1].strip().lower()
+        if next_segment and not _job_listing_url_is_hub(f"https://example.com/{next_segment}/"):
+            return True
+    return False
 
 
 def _extract_page_images_from_node(root, page_url: str) -> list[str]:
@@ -924,7 +1083,9 @@ def extract_listing_records(
     max_records: int,
     artifacts: dict[str, object] | None = None,
     selector_rules: list[dict[str, object]] | None = None,
+    network_payloads: list[dict[str, object]] | None = None,
 ) -> list[dict[str, Any]]:
+    del network_payloads
     context = prepare_extraction_context(html)
     dom_parser = context.dom_parser
     is_job_surface = surface.startswith("job_")
@@ -1046,9 +1207,14 @@ def extract_listing_records(
     best_non_visual = best_listing_candidate_set(
         candidate_sets,
         page_url=page_url,
+        surface=surface,
         max_records=max_records,
         title_is_noise=_listing_title_is_noise,
         url_is_structural=_url_is_structural,
+        detail_like_url=lambda candidate_url: _detail_like_path(
+            candidate_url,
+            is_job=is_job_surface,
+        ),
     )
     if best_non_visual:
         return best_non_visual[:max_records]
@@ -1063,6 +1229,15 @@ def extract_listing_records(
         title_is_noise=_listing_title_is_noise,
         url_is_structural=_url_is_structural,
     )
+    visual_records = [
+        record
+        for record in visual_records
+        if _record_is_supported_listing_candidate(
+            record,
+            page_url=page_url,
+            surface=surface,
+        )
+    ]
     if visual_records:
         return visual_records[:max_records]
     return []

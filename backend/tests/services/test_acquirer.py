@@ -5,6 +5,7 @@ import pytest
 
 from app.services.acquisition.acquirer import AcquisitionRequest, acquire
 from app.services.acquisition_plan import AcquisitionPlan
+from app.services.crawl_utils import normalize_target_url
 
 
 @pytest.mark.asyncio
@@ -108,3 +109,12 @@ async def test_acquire_normalizes_url_via_adapter_registry(
 
     assert observed_urls == ["https://example.com/jobs/123&normalized=1"]
     assert result.final_url == "https://example.com/jobs/123&normalized=1"
+
+
+def test_normalize_target_url_strips_signed_detail_context_query_params() -> None:
+    normalized = normalize_target_url(
+        "https://www.mouser.in/ProductDetail/Phoenix-Contact/1509524"
+        "?qs=sGAEpiMZZMuGSqhhLqSWxfOEVG9XfT7wFuevx9ZKoIs05o6zFXlrHA%3D%3D"
+    )
+
+    assert normalized == "https://www.mouser.in/ProductDetail/Phoenix-Contact/1509524"

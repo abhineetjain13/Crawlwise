@@ -127,6 +127,7 @@ async def expand_all_interactive_elements_impl(
     max_elapsed_ms: int | None = None,
 ) -> dict[str, object]:
     started_at = time.perf_counter()
+    click_timeout_ms = int(crawler_runtime_settings.detail_expand_click_timeout_ms)
     diagnostics: dict[str, object] = {
         "status": "attempted",
         "buttons_found": 0,
@@ -275,7 +276,7 @@ async def expand_all_interactive_elements_impl(
                     continue
                 await handle.scroll_into_view_if_needed()
                 try:
-                    await handle.click(timeout=1_000)
+                    await handle.click(timeout=click_timeout_ms)
                 except Exception:
                     await handle.evaluate(
                         "(node) => node instanceof HTMLElement && node.click()"
@@ -311,6 +312,10 @@ async def expand_interactive_elements_via_accessibility_impl(
     max_elapsed_ms: int | None = None,
 ) -> dict[str, object]:
     started_at = time.perf_counter()
+    click_timeout_ms = int(crawler_runtime_settings.detail_expand_click_timeout_ms)
+    visibility_timeout_ms = int(
+        crawler_runtime_settings.detail_expand_visibility_timeout_ms
+    )
     diagnostics: dict[str, object] = {
         "status": "attempted",
         "attempted": False,
@@ -371,11 +376,17 @@ async def expand_interactive_elements_via_accessibility_impl(
             locator = getattr(locator, "first", locator)
             if hasattr(locator, "count") and await locator.count() == 0:
                 continue
-            if hasattr(locator, "is_visible") and not await locator.is_visible(timeout=250):
+            wait_for = getattr(locator, "wait_for", None)
+            if callable(wait_for):
+                try:
+                    await wait_for(state="visible", timeout=visibility_timeout_ms)
+                except Exception:
+                    continue
+            elif hasattr(locator, "is_visible") and not await locator.is_visible():
                 continue
             if hasattr(locator, "is_disabled") and await locator.is_disabled():
                 continue
-            await locator.click(timeout=1_000)
+            await locator.click(timeout=click_timeout_ms)
             if int(crawler_runtime_settings.accordion_expand_wait_ms) > 0:
                 await page.wait_for_timeout(
                     int(crawler_runtime_settings.accordion_expand_wait_ms)

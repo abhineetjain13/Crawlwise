@@ -82,7 +82,7 @@ Deterministic commerce test fixtures. No bot protection.
 | LJ18 | `https://jobs.80000hours.org/jobs` | Custom | Medium | Impact jobs — cause area taxonomy |
 | LJ19 | `https://cryptocurrencyjobs.co/` | Custom | Easy | Web3 domain, token comp fields |
 | LJ20 | `https://euremotejobs.com/` | Custom | Easy | EU jurisdiction flag, GDPR-explicit |
-
+https://www.instahyre.com/search-jobs
 ---
 
 ## Section DC — Detail Commerce
@@ -155,3 +155,9 @@ Deterministic commerce test fixtures. No bot protection.
 | CE09 | `https://savannahs.com/collections/all-boots` | Listing | Luxury shoes, Shopify |
 | CE10 | `https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products` | Listing | Appliances, enterprise commerce |
 | CE11 | `https://www.dyson.in/vacuum-cleaners/cord-free` | Listing | Dyson India, JS-rendered |
+| CE12 | `https://www.grailed.com/categories/womenswear/blazers` | Listing | Fashion marketplace |
+| CE13 | `https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating` | Listing | Marketplace search results |
+| CE14 | `https://www.firstcry.com/sets-and--suits/6/166?scat=166&gender=girl,unisex&ref2=menu_dd_girl-fashion_sets-and-suits_H` | Listing | Kids fashion category |
+| CE15 | `https://www.stadiumgoods.com/collections/adidas-shoes` | Listing | Sneaker retail, browser-heavy |
+https://www2.hm.com/en_in/men/shoes/view-all.html
+https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html?trksrc=navbar&trkid=l2

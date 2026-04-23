@@ -846,12 +846,26 @@ async def _locator_still_resolves(locator) -> bool:
     counter = getattr(locator, "count", None)
     if not callable(counter):
         return True
+    probe_failed = False
     for attempt in range(2):
         try:
             if bool(await counter()):
                 return True
+            probe_failed = False
+        except asyncio.CancelledError:
+            raise
+        except _PlaywrightError:
+            probe_failed = True
+            logger.debug(
+                "Traversal locator resolution probe failed",
+                exc_info=True,
+            )
         except Exception:
-            pass
+            probe_failed = True
+            logger.debug(
+                "Traversal locator resolution probe raised non-Playwright error",
+                exc_info=True,
+            )
         if attempt == 0:
             await asyncio.sleep(0)
     return False

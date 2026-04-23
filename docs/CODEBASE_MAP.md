@@ -8,6 +8,14 @@
 
 ## Backend Root: `backend/app/`
 
+### Backend support assets outside `backend/app/`
+
+| File | Purpose |
+|------|---------|
+| `run_test_sites_acceptance.py` | Acceptance runner for curated TEST_SITES / manifest-driven regression batches |
+| `harness_support.py` | Shared acceptance harness helpers, explicit-surface resolution, run audit shaping |
+| `test_site_sets/commerce_browser_heavy.json` | Curated commerce acceptance manifest; currently owns `commerce_variant_quality_v1` with artifact-backed run IDs and quality expectations |
+
 ### `api/` — Route handlers only. No business logic.
 
 | File | Purpose |
@@ -89,7 +97,7 @@ POST /api/crawls → crawl_ingestion_service → crawl_crud.create_crawl_run
 | `acquisition/browser_readiness.py` | DOM readiness probe (selectors, network-idle, load events) |
 | `acquisition/traversal.py` | Listing pagination + load-more: bounded per-step snapshots |
 | `acquisition/pacing.py` | Host-level rate limiting state |
-| `acquisition/cookie_store.py` | Cookie policy enforcement |
+| `acquisition/cookie_store.py` | Per-run browser storage-state persistence (cookies/localStorage) and cookie policy enforcement |
 | `crawl_fetch_runtime.py` | `fetch_page()` — the HTTP/browser decision, escalation, block detection |
 | `robots_policy.py` | robots.txt fetch, parse, allow/disallow checks |
 | `url_safety.py` | SSRF + public-target validation |

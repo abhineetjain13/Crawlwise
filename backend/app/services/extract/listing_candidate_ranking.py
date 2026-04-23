@@ -1,9 +1,51 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
+from app.services.config.extraction_rules import (
+    LISTING_UTILITY_TITLE_PATTERNS,
+    LISTING_UTILITY_TITLE_TOKENS,
+    LISTING_UTILITY_URL_TOKENS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.field_value_core import absolute_url, clean_text, finalize_record
+from app.services.field_value_core import (
+    PRICE_RE,
+    absolute_url,
+    clean_text,
+    finalize_record,
+    same_host,
+    same_site,
+)
+
+_UTILITY_TITLE_REGEXES = tuple(
+    re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
+)
+_EDITORIAL_TITLE_REGEXES = (
+    re.compile(r"\bcustomer\s+(?:reviews?|photos?)\b", re.I),
+    re.compile(r"\b(?:corporate|branded)\s+(?:swag|merchandise)\b", re.I),
+    re.compile(r"\b(?:community|diversity|equity|inclusion|mission|values?)\b", re.I),
+)
+_EDITORIAL_URL_TOKENS = (
+    "/community",
+    "/equity",
+    "/mission",
+    "/photos",
+    "/reviews",
+    "/service/",
+    "/services/",
+    "/values",
+)
+_EDITORIAL_PATH_SEGMENTS = {
+    "business",
+    "community",
+    "help",
+    "help_center",
+    "ink",
+    "mission",
+    "services",
+}
 
 
 def rendered_listing_records(
@@ -23,21 +65,28 @@ def rendered_listing_records(
         url = absolute_url(page_url, item.get("url") or item.get("href"))
         if not url or url in seen_urls or url_is_structural(url, page_url):
             continue
+        if surface.startswith("ecommerce_") and not (
+            same_host(page_url, url) or same_site(page_url, url)
+        ):
+            continue
         title = clean_text(item.get("title"))
         if not title or title_is_noise(title):
             continue
+        if _looks_like_utility_record(title=title, url=url):
+            continue
+        price_text, brand_text = _normalize_rendered_listing_fields(item)
         record = finalize_record(
             {
                 "source_url": page_url,
                 "_source": "rendered_listing",
                 "title": title,
                 "url": url,
-                "price": clean_text(item.get("price")),
+                "price": price_text,
                 "image_url": absolute_url(
                     page_url,
                     item.get("image_url") or item.get("image"),
                 ),
-                "brand": clean_text(item.get("brand")),
+                "brand": brand_text,
             },
             surface=surface,
         )
@@ -50,88 +99,157 @@ def rendered_listing_records(
     return rows
 
 
+def _normalize_rendered_listing_fields(
+    item: dict[str, object],
+) -> tuple[str, str]:
+    price_text = clean_text(item.get("price"))
+    brand_text = clean_text(item.get("brand"))
+    if not price_text and brand_text:
+        brand_price_match = PRICE_RE.search(brand_text) or re.search(
+            r"(?:rs\.?|inr)\s*[\d,.]+",
+            brand_text,
+            flags=re.I,
+        )
+        brand_price = brand_price_match.group(0) if brand_price_match else ""
+        if brand_price:
+            price_text = brand_price
+            if clean_text(brand_price) == brand_text:
+                brand_text = ""
+    return price_text, brand_text
+
+
 def best_listing_candidate_set(
     candidate_sets: list[tuple[str, list[dict[str, Any]]]],
     *,
     page_url: str,
+    surface: str,
     max_records: int,
     title_is_noise: Callable[[str], bool],
     url_is_structural: Callable[[str, str], bool],
+    detail_like_url: Callable[[str], bool] | None = None,
 ) -> list[dict[str, Any]]:
     best_records: list[dict[str, Any]] = []
-    best_score = (-1, -1, -1, -1, -1)
+    best_score = (-1, -1, -1, -1, -1, -1, -1)
     for _name, records in candidate_sets:
         limited = [
             record
             for record in list(records or [])[:max_records]
             if isinstance(record, dict)
         ]
-        score = _listing_record_set_score(
+        prepared = _prepare_listing_candidate_set(
             limited,
             page_url=page_url,
+            surface=surface,
             title_is_noise=title_is_noise,
             url_is_structural=url_is_structural,
+            detail_like_url=detail_like_url,
+        )
+        score = _listing_record_set_score(
+            prepared,
+            page_url=page_url,
+            surface=surface,
+            title_is_noise=title_is_noise,
+            url_is_structural=url_is_structural,
+            detail_like_url=detail_like_url,
         )
         if score > best_score:
             best_score = score
-            best_records = limited
+            best_records = prepared
     return best_records
+
+
+def _prepare_listing_candidate_set(
+    records: list[dict[str, Any]],
+    *,
+    page_url: str,
+    surface: str,
+    title_is_noise: Callable[[str], bool],
+    url_is_structural: Callable[[str, str], bool],
+    detail_like_url: Callable[[str], bool] | None,
+) -> list[dict[str, Any]]:
+    prepared: list[tuple[int, int, dict[str, Any]]] = []
+    for order, record in enumerate(records):
+        metrics = _listing_record_quality_metrics(
+            record,
+            page_url=page_url,
+            surface=surface,
+            title_is_noise=title_is_noise,
+            url_is_structural=url_is_structural,
+            detail_like_url=detail_like_url,
+        )
+        if _should_drop_record(metrics, surface=surface):
+            continue
+        prepared.append((int(metrics.get("score", 0) or 0), order, record))
+    prepared.sort(key=lambda row: (-row[0], row[1]))
+    return [record for _score, _order, record in prepared]
 
 
 def _listing_record_set_score(
     records: list[dict[str, Any]],
     *,
     page_url: str,
+    surface: str,
     title_is_noise: Callable[[str], bool],
     url_is_structural: Callable[[str, str], bool],
-) -> tuple[int, int, int, int, int]:
+    detail_like_url: Callable[[str], bool] | None,
+) -> tuple[int, int, int, int, int, int, int]:
     if not records:
-        return (-1, -1, -1, -1, -1)
-    quality_scores = [
-        _listing_record_quality_score(
+        return (-1, -1, -1, -1, -1, -1, -1)
+    quality_metrics = [
+        _listing_record_quality_metrics(
             record,
             page_url=page_url,
+            surface=surface,
             title_is_noise=title_is_noise,
             url_is_structural=url_is_structural,
+            detail_like_url=detail_like_url,
         )
         for record in records
         if isinstance(record, dict)
     ]
-    if not quality_scores:
-        return (-1, -1, -1, -1, -1)
+    if not quality_metrics:
+        return (-1, -1, -1, -1, -1, -1, -1)
+    quality_scores = [int(metrics["score"]) for metrics in quality_metrics]
     strong_records = sum(
         score >= crawler_runtime_settings.listing_candidate_strong_score_threshold
         for score in quality_scores
     )
-    priced_records = sum(
-        record.get("price") not in (None, "", [], {})
-        for record in records
-        if isinstance(record, dict)
-    )
-    imaged_records = sum(
-        record.get("image_url") not in (None, "", [], {})
-        for record in records
-        if isinstance(record, dict)
-    )
+    supported_records = sum(bool(metrics["supported"]) for metrics in quality_metrics)
+    detail_like_records = sum(bool(metrics["detail_like"]) for metrics in quality_metrics)
+    utility_records = sum(bool(metrics["utility"]) for metrics in quality_metrics)
+    clean_records = len(quality_metrics) - utility_records
     avg_quality = int(round(sum(quality_scores) / max(1, len(quality_scores)) * 100))
     return (
         strong_records,
-        priced_records + imaged_records,
+        supported_records,
+        detail_like_records,
+        clean_records,
         avg_quality,
-        len(records),
+        -utility_records,
         sum(quality_scores),
     )
 
 
-def _listing_record_quality_score(
+def _listing_record_quality_metrics(
     record: dict[str, Any],
     *,
     page_url: str,
+    surface: str,
     title_is_noise: Callable[[str], bool],
     url_is_structural: Callable[[str, str], bool],
-) -> int:
+    detail_like_url: Callable[[str], bool] | None,
+) -> dict[str, object]:
     title = clean_text(record.get("title"))
     url = str(record.get("url") or "").strip()
+    is_job_surface = str(surface or "").startswith("job_")
+    detail_like = bool(detail_like_url(url)) if url and detail_like_url is not None else False
+    utility = _looks_like_utility_record(title=title, url=url)
+    supported = _record_has_supporting_signals(
+        record,
+        detail_like=detail_like,
+        job_surface=is_job_surface,
+    )
+    fallback_merchandise = False
     score = 0
     if title:
         score += 6
@@ -145,6 +263,8 @@ def _listing_record_quality_score(
         score += 8
     else:
         score -= 12
+    if detail_like:
+        score += 5
     if record.get("price") not in (None, "", [], {}):
         score += 6
     if record.get("image_url") not in (None, "", [], {}):
@@ -162,10 +282,160 @@ def _listing_record_quality_score(
         score -= 6
     elif record.get("_source") in {"rendered_listing", "dom_listing"}:
         score += 2
-    if (
-        record.get("price") in (None, "", [], {})
-        and record.get("image_url") in (None, "", [], {})
-        and record.get("brand") in (None, "", [], {})
-    ):
-        score -= 5
-    return score
+    detail_like_merchandise = False
+    if not supported and detail_like and not is_job_surface:
+        detail_like_merchandise = _unsupported_detail_like_ecommerce_merchandise_hint(
+            title=title,
+            url=url,
+        )
+        score -= 4 if detail_like_merchandise else 14
+    elif not supported and not detail_like and not is_job_surface:
+        fallback_merchandise = _unsupported_non_detail_ecommerce_merchandise_hint(
+            title=title,
+            url=url,
+        )
+        if fallback_merchandise:
+            score += 2
+        else:
+            score -= 12
+    elif not supported and not detail_like:
+        score -= 7
+    if utility:
+        score -= 16
+    return {
+        "score": score,
+        "detail_like": detail_like,
+        "detail_like_merchandise": detail_like_merchandise,
+        "fallback_merchandise": fallback_merchandise,
+        "supported": supported,
+        "utility": utility,
+    }
+
+
+def _record_has_supporting_signals(
+    record: dict[str, Any],
+    *,
+    detail_like: bool,
+    job_surface: bool,
+) -> bool:
+    if detail_like and job_surface:
+        return True
+    return any(
+        record.get(field_name) not in (None, "", [], {})
+        for field_name in (
+            "brand",
+            "description",
+            "image_url",
+            "price",
+            "rating",
+            "review_count",
+        )
+    )
+
+
+def _should_drop_record(metrics: dict[str, object], *, surface: str) -> bool:
+    score = int(metrics.get("score", 0) or 0)
+    detail_like = bool(metrics.get("detail_like"))
+    detail_like_merchandise = bool(metrics.get("detail_like_merchandise"))
+    fallback_merchandise = bool(metrics.get("fallback_merchandise"))
+    supported = bool(metrics.get("supported"))
+    utility = bool(metrics.get("utility"))
+    is_job_surface = str(surface or "").startswith("job_")
+    if utility and not detail_like:
+        return True
+    if utility and score < 10:
+        return True
+    if not supported and detail_like and not is_job_surface and not detail_like_merchandise:
+        return True
+    if not supported and not detail_like and not is_job_surface and not fallback_merchandise:
+        return True
+    if not supported and not detail_like and score < 10:
+        return True
+    return score < 0
+
+
+def _looks_like_utility_record(*, title: str, url: str) -> bool:
+    normalized_title = " ".join(str(title or "").strip().lower().split())
+    normalized_url = str(url or "").strip().lower()
+    if normalized_title:
+        if any(pattern.search(normalized_title) for pattern in _UTILITY_TITLE_REGEXES):
+            return True
+        if any(
+            _title_has_token_phrase(normalized_title, token)
+            for token in LISTING_UTILITY_TITLE_TOKENS
+        ):
+            return True
+    return bool(
+        normalized_url
+        and any(
+            re.search(rf"{re.escape(token)}(?:[/?#]|$)", normalized_url)
+            for token in LISTING_UTILITY_URL_TOKENS
+        )
+    )
+
+
+def _unsupported_non_detail_ecommerce_merchandise_hint(*, title: str, url: str) -> bool:
+    normalized_title = " ".join(str(title or "").strip().lower().split())
+    normalized_url = str(url or "").strip().lower()
+    if not normalized_title or not normalized_url:
+        return False
+    if any(pattern.search(normalized_title) for pattern in _EDITORIAL_TITLE_REGEXES):
+        return False
+    if any(token in normalized_url for token in _EDITORIAL_URL_TOKENS):
+        return False
+    parsed = urlsplit(normalized_url)
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if len(segments) < 2:
+        return False
+    if any(segment in _EDITORIAL_PATH_SEGMENTS for segment in segments[:-1]):
+        return False
+    terminal = segments[-1]
+    terminal_tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", terminal)
+        if len(token) >= 3
+    ]
+    if len(terminal_tokens) < 2:
+        return False
+    title_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", normalized_title)
+        if len(token) >= 3
+    }
+    overlap = sum(token in title_tokens for token in terminal_tokens)
+    return overlap >= min(2, len(terminal_tokens))
+
+
+def _unsupported_detail_like_ecommerce_merchandise_hint(*, title: str, url: str) -> bool:
+    normalized_title = " ".join(str(title or "").strip().lower().split())
+    normalized_url = str(url or "").strip().lower()
+    if not normalized_title or not normalized_url:
+        return False
+    parsed = urlsplit(normalized_url)
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if len(segments) < 2:
+        return False
+    if segments[-1].isdigit() and len(segments) >= 4:
+        return False
+    terminal = segments[-1]
+    terminal_tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", terminal)
+        if len(token) >= 3
+    ]
+    if not terminal_tokens:
+        return False
+    title_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", normalized_title)
+        if len(token) >= 3
+    }
+    return bool(title_tokens & set(terminal_tokens))
+
+
+def _title_has_token_phrase(title: str, token: str) -> bool:
+    normalized_token = " ".join(str(token or "").strip().lower().split())
+    if not normalized_token:
+        return False
+    pattern = rf"(^|[^a-z0-9]){re.escape(normalized_token)}([^a-z0-9]|$)"
+    return re.search(pattern, title) is not None

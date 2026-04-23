@@ -33,10 +33,9 @@ def excluded_fields_for_surface(surface: str) -> frozenset[str]:
 
 def field_allowed_for_surface(surface: str, field_name: str) -> bool:
     normalized_field = normalize_field_key(field_name)
-    return bool(
-        normalized_field
-        and normalized_field not in excluded_fields_for_surface(surface)
-    )
+    if not normalized_field:
+        return False
+    return normalized_field in frozenset(canonical_fields_for_surface(surface))
 
 
 def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:

@@ -24,11 +24,15 @@ from app.services.acquisition.browser_runtime import (
     shutdown_browser_runtime,
     temporary_browser_page,
 )
+from app.services.acquisition.cookie_store import clear_cookie_store_cache
 from app.services.acquisition.http_client import (
     close_shared_http_client as close_adapter_shared_http_client,
 )
 from app.services.acquisition.pacing import (
     apply_protected_host_backoff,
+    mark_browser_first_host,
+    reset_pacing_state,
+    should_prefer_browser_for_host,
     wait_for_host_slot,
 )
 from app.services.acquisition.runtime import (
@@ -156,6 +160,7 @@ async def _browser_fetch(
     traversal_mode: str | None = None,
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
+    capture_page_markdown: bool = False,
     max_pages: int = 1,
     max_scrolls: int = 1,
     on_event=None,
@@ -170,6 +175,7 @@ async def _browser_fetch(
         traversal_mode=traversal_mode,
         requested_fields=requested_fields,
         listing_recovery_mode=listing_recovery_mode,
+        capture_page_markdown=capture_page_markdown,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
         on_event=on_event,
@@ -222,6 +228,8 @@ def _vendor_confirmed_block(result: PageFetchResult) -> str | None:
 
 async def reset_fetch_runtime_state() -> None:
     await shutdown_browser_runtime()
+    await clear_cookie_store_cache()
+    await reset_pacing_state()
     await close_shared_http_client()
     await close_adapter_shared_http_client()
 
@@ -238,6 +246,7 @@ async def fetch_page(
     traversal_mode: str | None = None,
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
+    capture_page_markdown: bool = False,
     max_pages: int = 1,
     max_scrolls: int = 1,
     on_event=None,
@@ -259,8 +268,10 @@ async def fetch_page(
         traversal_required=should_run_traversal(surface, traversal_mode),
         runtime_policy=resolve_platform_runtime_policy(url, surface=surface),
     )
+    host_preference_enabled = await should_prefer_browser_for_host(url)
     browser_first = (
         prefer_browser
+        or host_preference_enabled
         or bool(context.runtime_policy.get("requires_browser"))
         or context.traversal_required
     )
@@ -271,10 +282,11 @@ async def fetch_page(
                 browser_reason=browser_reason,
                 requires_browser=bool(context.runtime_policy.get("requires_browser")),
                 traversal_required=context.traversal_required,
-                host_preference_enabled=False,
+                host_preference_enabled=host_preference_enabled,
             ),
             requested_fields=context.requested_fields,
             listing_recovery_mode=context.listing_recovery_mode,
+            capture_page_markdown=capture_page_markdown,
         )
 
     http_result, vendor_block_confirmed = await _run_http_fetch_chain(context)
@@ -294,6 +306,7 @@ async def fetch_page(
                 reason=browser_reason or "http-escalation",
                 requested_fields=context.requested_fields,
                 listing_recovery_mode=context.listing_recovery_mode,
+                capture_page_markdown=capture_page_markdown,
             )
         except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
             _attach_exception_browser_diagnostics(
@@ -323,6 +336,7 @@ async def _run_browser_attempts(
     reason: str,
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
+    capture_page_markdown: bool = False,
     proxies: list[str | None] | None = None,
 ) -> PageFetchResult:
     last_browser_error: Exception | None = None
@@ -349,6 +363,7 @@ async def _run_browser_attempts(
                 traversal_mode=context.traversal_mode,
                 requested_fields=browser_requested_fields,
                 listing_recovery_mode=recovery_mode,
+                capture_page_markdown=capture_page_markdown,
                 max_pages=context.max_pages,
                 max_scrolls=context.max_scrolls,
                 on_event=context.on_event,
@@ -481,6 +496,8 @@ async def _handle_http_result(
     vendor = _vendor_confirmed_block(result)
     if vendor or bool(result.blocked):
         await apply_protected_host_backoff(result.final_url or result.url or context.url)
+    if vendor:
+        await mark_browser_first_host(result.final_url or result.url or context.url)
     result_runtime_policy = resolve_platform_runtime_policy(
         result.final_url or result.url,
         result.html,
@@ -513,6 +530,9 @@ async def _handle_http_result(
         )
         if bool(browser_result.blocked):
             await apply_protected_host_backoff(
+                browser_result.final_url or browser_result.url or context.url
+            )
+            await mark_browser_first_host(
                 browser_result.final_url or browser_result.url or context.url
             )
         return browser_result, bool(vendor)

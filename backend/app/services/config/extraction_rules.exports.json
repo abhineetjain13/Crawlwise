@@ -19,6 +19,18 @@
         "value": "color"
       },
       {
+        "key": "frame_color",
+        "value": "color"
+      },
+      {
+        "key": "frame_colour",
+        "value": "color"
+      },
+      {
+        "key": "frame_size",
+        "value": "size"
+      },
+      {
         "key": "dimension",
         "value": "size"
       },
@@ -27,8 +39,20 @@
         "value": "size"
       },
       {
+        "key": "flavour",
+        "value": "flavor"
+      },
+      {
+        "key": "flavours",
+        "value": "flavor"
+      },
+      {
         "key": "size",
         "value": "size"
+      },
+      {
+        "key": "taste",
+        "value": "flavor"
       },
       {
         "key": "sizes",

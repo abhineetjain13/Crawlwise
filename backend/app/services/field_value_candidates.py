@@ -15,6 +15,7 @@ from app.services.field_value_core import (
     STRUCTURED_OBJECT_LIST_FIELDS,
     LONG_TEXT_FIELDS,
     absolute_url,
+    coerce_variant_axes,
     coerce_field_value,
     coerce_text,
     extract_urls,
@@ -351,6 +352,22 @@ def collect_structured_candidates(
 def finalize_candidate_value(field_name: str, values: list[object]) -> object | None:
     if not values:
         return None
+    if field_name == "variant_axes":
+        merged_axes: dict[str, list[str]] = {}
+        for value in values:
+            coerced_axes = coerce_variant_axes(value)
+            if not coerced_axes:
+                continue
+            for axis_name, axis_values in coerced_axes.items():
+                merged_bucket = merged_axes.setdefault(axis_name, [])
+                seen = {item.lower() for item in merged_bucket}
+                for axis_value in axis_values:
+                    lowered = axis_value.lower()
+                    if lowered in seen:
+                        continue
+                    seen.add(lowered)
+                    merged_bucket.append(axis_value)
+        return merged_axes or None
     if field_name in STRUCTURED_OBJECT_FIELDS:
         merged: dict[str, object] = {}
         for value in values:
