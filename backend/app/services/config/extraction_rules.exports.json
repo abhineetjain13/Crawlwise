@@ -1,86 +1,52 @@
 {
-  "VARIANT_AXIS_ALIASES": {
+  "ACQUISITION_GUARDS_RULES": {
     "__type__": "dict",
     "items": [
       {
-        "key": "color",
-        "value": "color"
+        "key": "job_error_page_headings",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "sorry. the page you requested could not be found."
+          ]
+        }
       },
       {
-        "key": "colors",
-        "value": "color"
+        "key": "job_error_page_titles",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "Sorry. The page you requested could not be found."
+          ]
+        }
       },
       {
-        "key": "colour",
-        "value": "color"
+        "key": "job_redirect_shell_canonical_urls",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "https://www.schooljobs.com/"
+          ]
+        }
       },
       {
-        "key": "colours",
-        "value": "color"
+        "key": "job_redirect_shell_headings",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "log in",
+            "sign in to apply"
+          ]
+        }
       },
       {
-        "key": "frame_color",
-        "value": "color"
-      },
-      {
-        "key": "frame_colour",
-        "value": "color"
-      },
-      {
-        "key": "frame_size",
-        "value": "size"
-      },
-      {
-        "key": "dimension",
-        "value": "size"
-      },
-      {
-        "key": "dimensions",
-        "value": "size"
-      },
-      {
-        "key": "flavour",
-        "value": "flavor"
-      },
-      {
-        "key": "flavours",
-        "value": "flavor"
-      },
-      {
-        "key": "size",
-        "value": "size"
-      },
-      {
-        "key": "taste",
-        "value": "flavor"
-      },
-      {
-        "key": "sizes",
-        "value": "size"
-      },
-      {
-        "key": "ขนาด",
-        "value": "size"
-      },
-      {
-        "key": "สี",
-        "value": "color"
-      },
-      {
-        "key": "สีของสินค้า",
-        "value": "color"
-      },
-      {
-        "key": "สีสินค้า",
-        "value": "color"
-      },
-      {
-        "key": "ไซซ์",
-        "value": "size"
-      },
-      {
-        "key": "ไซส์",
-        "value": "size"
+        "key": "job_redirect_shell_titles",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "GovernmentJobs | City, State, Federal & Public Sector Jobs"
+          ]
+        }
       }
     ]
   },
@@ -169,45 +135,1131 @@
       }
     ]
   },
-  "INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS": {
+  "CANDIDATE_ALPHA_CHAR_PATTERN": "[A-Za-z]",
+  "CANDIDATE_ANALYTICS_DIMENSION_TOKEN_PATTERN": "dimension\\d+|metric\\d+|cd\\d+|ev\\d+",
+  "CANDIDATE_ASSET_FILE_EXTENSIONS": {
     "__type__": "tuple",
     "items": [
-      "handle",
-      "body_html",
-      "product_type",
-      "compare_at_price",
-      "option1",
-      "inventory_quantity"
+      ".woff",
+      ".woff2",
+      ".ttf",
+      ".otf",
+      ".eot",
+      ".css",
+      ".js",
+      ".map"
     ]
   },
-  "INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS": {
+  "CANDIDATE_AVAILABILITY_NOISE_PHRASES": {
     "__type__": "tuple",
     "items": [
-      "option1",
-      "compare_at_price",
-      "inventory_quantity"
+      "select options",
+      "choose options",
+      "add to cart",
+      "quantity",
+      "wishlist",
+      "join the waitlist",
+      "check availability in store",
+      "check availability in stores"
     ]
   },
-  "NEXT_FLIGHT_BACK_WINDOW": 1200,
-  "NEXT_FLIGHT_FORWARD_WINDOW": 2200,
-  "NEXT_FLIGHT_PAIR_PATTERNS": {
+  "CANDIDATE_AVAILABILITY_TOKENS": {
     "__type__": "tuple",
     "items": [
-      "\"displayName\":\"(?P<title>[^\"]+)\".{0,900}?\"listingUrl\":\"(?P<url>[^\"]+)\"",
-      "\"listingUrl\":\"(?P<url>[^\"]+)\".{0,900}?\"displayName\":\"(?P<title>[^\"]+)\""
+      "availability",
+      "stock"
     ]
   },
-  "NEXT_FLIGHT_BRAND_PATTERNS": {
+  "CANDIDATE_AVAILABILITY_TOKENS_IN_STOCK": {
     "__type__": "tuple",
     "items": [
-      "\"name\":\"(?P<brand>[^\"]+)\",\"__typename\":\"ManufacturerCuratedBrand\"",
-      "\"brand\":\\{\"name\":\"(?P<brand>[^\"]+)\""
+      "in stock",
+      "instock",
+      "available",
+      "ready to ship"
     ]
   },
-  "NEXT_FLIGHT_SALE_PRICE_PATTERN": "\"priceVariation\":\"(?:SALE|PRIMARY)\".{0,220}?\"amount\":\"(?P<amount>[\\d.]+)\"",
-  "NEXT_FLIGHT_ORIGINAL_PRICE_PATTERN": "\"priceVariation\":\"PREVIOUS\".{0,220}?\"amount\":\"(?P<amount>[\\d.]+)\"",
-  "NEXT_FLIGHT_RATING_PATTERN": "\"averageRating\":(?P<rating>[\\d.]+),\"totalCount\":(?P<count>\\d+)",
-  "NEXT_FLIGHT_AVAILABILITY_PATTERN": "\"(?:shortInventoryStatusMessage|stockStatus)\":\"(?P<availability>[^\"]+)\"",
+  "CANDIDATE_AVAILABILITY_TOKENS_LIMITED_STOCK": {
+    "__type__": "tuple",
+    "items": [
+      "limited stock",
+      "low stock",
+      "only",
+      "left in stock"
+    ]
+  },
+  "CANDIDATE_AVAILABILITY_TOKENS_OUT_OF_STOCK": {
+    "__type__": "tuple",
+    "items": [
+      "out of stock",
+      "oos",
+      "sold out",
+      "unavailable"
+    ]
+  },
+  "CANDIDATE_AVAILABILITY_TOKENS_PREORDER": {
+    "__type__": "tuple",
+    "items": [
+      "pre-order",
+      "preorder",
+      "backorder",
+      "back-order"
+    ]
+  },
+  "CANDIDATE_CATEGORY_NOISE_PHRASES": {
+    "__type__": "tuple",
+    "items": [
+      "breadcrumb",
+      "view all",
+      "filter by",
+      "sort by",
+      "shop all",
+      "purchased",
+      "add to cart",
+      "add to bag",
+      "quick view",
+      "quick shop",
+      "shop now",
+      "buy now",
+      "learn more",
+      "see details",
+      "view details",
+      "more info",
+      "read more",
+      "click here",
+      "free shipping",
+      "free returns",
+      "on sale",
+      "new arrival",
+      "best seller",
+      "top rated",
+      "customer favorite"
+    ]
+  },
+  "CANDIDATE_CATEGORY_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "category",
+      "department",
+      "breadcrumb"
+    ]
+  },
+  "CANDIDATE_COLOR_CSS_NOISE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "padding:",
+      "font-size",
+      "font-weight",
+      "transition:",
+      "position:",
+      "-webkit-",
+      "css-"
+    ]
+  },
+  "CANDIDATE_COLOR_VARIANT_COUNT_PATTERN": "^\\d+\\s+colors?\\b",
+  "CANDIDATE_CURRENCY_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "currency"
+    ]
+  },
+  "CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT": 40,
+  "CANDIDATE_DESCRIPTION_FALLBACK_CONTENT_SELECTORS": {
+    "__type__": "tuple",
+    "items": [
+      "article",
+      "main",
+      "body"
+    ]
+  },
+  "CANDIDATE_DESCRIPTION_META_SELECTORS": {
+    "__type__": "tuple",
+    "items": [
+      "meta[name='description']",
+      "meta[property='og:description']",
+      "meta[name='twitter:description']"
+    ]
+  },
+  "CANDIDATE_DESCRIPTION_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "description",
+      "summary",
+      "overview",
+      "details"
+    ]
+  },
+  "CANDIDATE_DYNAMIC_FIELD_NAME_HARD_REJECTS": {
+    "__type__": "frozenset",
+    "items": [
+      "from",
+      "location",
+      "recommended",
+      "reviews",
+      "votes"
+    ]
+  },
+  "CANDIDATE_DYNAMIC_FIELD_NAME_PATTERN": "[a-z][a-z0-9_]*",
+  "CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN": "\\d+(?:[_-]\\d+)*?",
+  "CANDIDATE_FIELD_GROUPS": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "availability",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "availability"
+          ]
+        }
+      },
+      {
+        "key": "category",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "category"
+          ]
+        }
+      },
+      {
+        "key": "currency",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "currency"
+          ]
+        }
+      },
+      {
+        "key": "description",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "description",
+            "summary"
+          ]
+        }
+      },
+      {
+        "key": "entity_name",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "brand",
+            "company"
+          ]
+        }
+      },
+      {
+        "key": "identifier",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "dealer_name",
+            "sku",
+            "vin"
+          ]
+        }
+      },
+      {
+        "key": "image_collection",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "additional_images"
+          ]
+        }
+      },
+      {
+        "key": "image_primary",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "image_url"
+          ]
+        }
+      },
+      {
+        "key": "job_text",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "benefits",
+            "qualifications",
+            "requirements",
+            "responsibilities",
+            "skills"
+          ]
+        }
+      },
+      {
+        "key": "numeric",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "original_price",
+            "price",
+            "rating",
+            "review_count",
+            "sale_price"
+          ]
+        }
+      },
+      {
+        "key": "salary",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "salary"
+          ]
+        }
+      },
+      {
+        "key": "title",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "title"
+          ]
+        }
+      },
+      {
+        "key": "url",
+        "value": {
+          "__type__": "set",
+          "items": [
+            "apply_url",
+            "url"
+          ]
+        }
+      }
+    ]
+  },
+  "CANDIDATE_GENERIC_CATEGORY_VALUES": {
+    "__type__": "tuple",
+    "items": [
+      "detail-page",
+      "detail_page",
+      "product",
+      "page",
+      "pdp",
+      "simple",
+      "configurable",
+      "image",
+      "imageobject",
+      "listitem",
+      "itemlist",
+      "collectionpage",
+      "productcard",
+      "contentcard",
+      "aggregateoffer",
+      "productgroup",
+      "aggregaterating",
+      "review",
+      "person",
+      "rating",
+      "merchantreturnpolicy",
+      "merchantreturnpolicyseasonaloverride",
+      "webpage",
+      "organization",
+      "speakablespecification",
+      "individualproduct",
+      "peopleaudience",
+      "brand",
+      "offer",
+      "postaladdress",
+      "country",
+      "quantitativevalue",
+      "unitpricespecification",
+      "pricespecification",
+      "deliverychargespecification",
+      "openinghoursspecification",
+      "geopoint",
+      "geocoordinates",
+      "place",
+      "contactpoint",
+      "searchaction",
+      "readaction",
+      "buyaction",
+      "sitenavigationelement",
+      "wpadblock",
+      "creativework",
+      "article",
+      "newsarticle",
+      "blogposting",
+      "howto",
+      "faqpage",
+      "videoobject",
+      "localbusiness",
+      "store",
+      "thing",
+      "guest",
+      "max_discount",
+      "website",
+      "web site",
+      "all",
+      "shop",
+      "products",
+      "items",
+      "collection",
+      "collections",
+      "catalog",
+      "new",
+      "sale",
+      "clearance",
+      "featured",
+      "trending",
+      "popular",
+      "recommended"
+    ]
+  },
+  "CANDIDATE_GENERIC_TITLE_VALUES": {
+    "__type__": "tuple",
+    "items": [
+      "chrome",
+      "firefox",
+      "safari",
+      "edge",
+      "home",
+      "cookie preferences",
+      "cookie settings",
+      "privacy preferences",
+      "privacy settings",
+      "manage cookies",
+      "consent preferences",
+      "accept cookies",
+      "sign in",
+      "log in",
+      "my account",
+      "newsletter",
+      "create account",
+      "register"
+    ]
+  },
+  "CANDIDATE_IDENTIFIER_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "sku",
+      "id",
+      "code",
+      "vin",
+      "mpn"
+    ]
+  },
+  "CANDIDATE_IMAGE_CANDIDATE_DICT_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "url",
+      "contentUrl",
+      "src",
+      "image",
+      "thumbnail",
+      "href"
+    ]
+  },
+  "CANDIDATE_IMAGE_COLLECTION_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "images",
+      "gallery",
+      "photos",
+      "media"
+    ]
+  },
+  "CANDIDATE_IMAGE_FILE_EXTENSIONS": {
+    "__type__": "tuple",
+    "items": [
+      ".jpg",
+      ".jpeg",
+      ".png",
+      ".webp",
+      ".gif",
+      ".avif",
+      ".svg"
+    ]
+  },
+  "CANDIDATE_IMAGE_NOISE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "logo",
+      "sprite",
+      "icon",
+      "badge",
+      "favicon"
+    ]
+  },
+  "CANDIDATE_IMAGE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "image",
+      "images",
+      "gallery",
+      "photo",
+      "thumbnail",
+      "hero"
+    ]
+  },
+  "CANDIDATE_IMAGE_URL_HINT_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "/image",
+      "/images/",
+      "/img",
+      "image=",
+      "im/"
+    ]
+  },
+  "CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT": 20,
+  "CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS": {
+    "__type__": "frozenset",
+    "items": [
+      "about",
+      "account",
+      "acerca",
+      "address",
+      "ayuda",
+      "compliance",
+      "contact",
+      "cookie",
+      "customer",
+      "email",
+      "faq",
+      "footer",
+      "help",
+      "importer",
+      "manufacturer",
+      "newsletter",
+      "policy",
+      "privacy",
+      "responsible",
+      "return",
+      "service",
+      "servicios",
+      "shipping",
+      "social",
+      "store",
+      "suscrib",
+      "terms",
+      "trade_name"
+    ]
+  },
+  "CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS": {
+    "__type__": "frozenset",
+    "items": [
+      "iframe",
+      "link",
+      "meta",
+      "noscript",
+      "script",
+      "style",
+      "svg",
+      "template"
+    ]
+  },
+  "CANDIDATE_PLACEHOLDER_VALUES": {
+    "__type__": "tuple",
+    "items": [
+      "-",
+      "—",
+      "--",
+      "n/a",
+      "na",
+      "none",
+      "null",
+      "undefined"
+    ]
+  },
+  "CANDIDATE_PRICE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "price",
+      "amount",
+      "cost"
+    ]
+  },
+  "CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN": "(?i)(?:^|\\s)(?:@media|@supports|\\.?[a-z0-9_-]+\\s*\\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\\s*:)",
+  "CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN": "^\\d+(?:[_-]\\d+)*$",
+  "CANDIDATE_PROMO_ONLY_TITLE_PATTERN": "^(?:[-–—]?\\s*)?(?:\\d{1,3}%\\s*(?:off)?|sale|new(?:\\s+in)?|view\\s*\\d+|best seller|top seller)\\s*$",
+  "CANDIDATE_RATING_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "rating",
+      "score"
+    ]
+  },
+  "CANDIDATE_RATING_WORD_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "one",
+      "two",
+      "three",
+      "four",
+      "five"
+    ]
+  },
+  "CANDIDATE_REVIEW_COUNT_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "review_count",
+      "reviews",
+      "rating_count"
+    ]
+  },
+  "CANDIDATE_SALARY_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "salary",
+      "pay",
+      "rate",
+      "compensation"
+    ]
+  },
+  "CANDIDATE_SCRIPT_NOISE_PATTERN": "\\b(?:imageloader|document\\.getelementbyid|fallback-image)\\b",
+  "CANDIDATE_SIZE_CSS_NOISE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "max-width",
+      "min-width",
+      "vw",
+      "vh",
+      "sizes=",
+      "srcset",
+      "padding:",
+      "font-size",
+      "font-weight",
+      "transition:",
+      "position:",
+      "-webkit-",
+      "size"
+    ]
+  },
+  "CANDIDATE_SIZE_PACKAGE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "pkg of",
+      "pack of",
+      "pack size",
+      "package"
+    ]
+  },
+  "CANDIDATE_TITLE_NOISE_PHRASES": {
+    "__type__": "tuple",
+    "items": [
+      "cookie preferences",
+      "privacy policy",
+      "terms of service",
+      "sign in",
+      "log in",
+      "my account",
+      "add to cart",
+      "shopping cart",
+      "department navigation",
+      "cookie manager banner"
+    ]
+  },
+  "CANDIDATE_TRACKING_PARAM_EXACT_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "ref",
+      "ref_src"
+    ]
+  },
+  "CANDIDATE_TRACKING_PARAM_PREFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "utm_",
+      "fbclid",
+      "gclid",
+      "mc_"
+    ]
+  },
+  "CANDIDATE_UI_ICON_TOKEN_PATTERN": "(corporate_fare|bar_chart|home_pin|location_on|travel_explore|business_center|storefront|schedule|payments|school|work)(?=[A-Z]|\\b)|place(?=[A-Z])",
+  "CANDIDATE_UI_NOISE_PHRASES": {
+    "__type__": "tuple",
+    "items": [
+      "add to wishlist",
+      "add to bag",
+      "add to cart",
+      "buy now",
+      "selling fast",
+      "best seller",
+      "top seller",
+      "limited stock",
+      "low stock",
+      "sold out",
+      "out of stock",
+      "view more",
+      "learn more",
+      "join the waitlist",
+      "check availability in store",
+      "check availability in stores"
+    ]
+  },
+  "CANDIDATE_UI_NOISE_TOKEN_PATTERN": "\\b[a-z]+_[a-z0-9_]+\\b",
+  "CANDIDATE_URL_ABSOLUTE_PREFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "http://",
+      "https://"
+    ]
+  },
+  "CANDIDATE_URL_ALLOWED_SCHEMES": {
+    "__type__": "frozenset",
+    "items": [
+      "http",
+      "https"
+    ]
+  },
+  "CANDIDATE_URL_SUFFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "_url",
+      "url",
+      "_link",
+      "link",
+      "_href",
+      "href"
+    ]
+  },
+  "COLOR_NOISE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "rgb(",
+      "rgba(",
+      "hsl(",
+      "var(",
+      "background",
+      "color:",
+      "border:",
+      "display:",
+      "margin",
+      "padding",
+      "font-family",
+      "font-size",
+      "inherit"
+    ]
+  },
+  "CSS_NOISE_PATTERN": "(?i)(?:^|\\s)(?:@media|@supports|\\.?[a-z0-9_-]+\\s*\\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\\s*:)",
+  "CSS_NOISE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "padding:",
+      "font-size",
+      "font-weight",
+      "transition:",
+      "position:",
+      "-webkit-",
+      "css-",
+      "max-width",
+      "min-width",
+      "vw",
+      "vh",
+      "sizes=",
+      "srcset",
+      "size",
+      "padding",
+      "margin",
+      "display",
+      "position",
+      "justify-content",
+      "align-items",
+      "line-height",
+      "z-index",
+      "flex",
+      "flex-direction",
+      "background",
+      "border",
+      "width",
+      "height"
+    ]
+  },
+  "CURRENCY_CODES": {
+    "__type__": "tuple",
+    "items": [
+      "AED",
+      "AFN",
+      "ALL",
+      "AMD",
+      "ANG",
+      "AOA",
+      "ARS",
+      "AUD",
+      "AWG",
+      "AZN",
+      "BAM",
+      "BBD",
+      "BDT",
+      "BGN",
+      "BHD",
+      "BIF",
+      "BMD",
+      "BND",
+      "BOB",
+      "BOV",
+      "BRL",
+      "BSD",
+      "BTN",
+      "BWP",
+      "BYN",
+      "BZD",
+      "CAD",
+      "CDF",
+      "CHE",
+      "CHF",
+      "CHW",
+      "CLF",
+      "CLP",
+      "CNY",
+      "COP",
+      "COU",
+      "CRC",
+      "CUP",
+      "CVE",
+      "CZK",
+      "DJF",
+      "DKK",
+      "DOP",
+      "DZD",
+      "EGP",
+      "ERN",
+      "ETB",
+      "EUR",
+      "FJD",
+      "FKP",
+      "GBP",
+      "GEL",
+      "GHS",
+      "GIP",
+      "GMD",
+      "GNF",
+      "GTQ",
+      "GYD",
+      "HKD",
+      "HNL",
+      "HTG",
+      "HUF",
+      "IDR",
+      "ILS",
+      "INR",
+      "IQD",
+      "IRR",
+      "ISK",
+      "JMD",
+      "JOD",
+      "JPY",
+      "KES",
+      "KGS",
+      "KHR",
+      "KMF",
+      "KPW",
+      "KRW",
+      "KWD",
+      "KYD",
+      "KZT",
+      "LAK",
+      "LBP",
+      "LKR",
+      "LRD",
+      "LSL",
+      "LYD",
+      "MAD",
+      "MDL",
+      "MGA",
+      "MKD",
+      "MMK",
+      "MNT",
+      "MOP",
+      "MRU",
+      "MUR",
+      "MVR",
+      "MWK",
+      "MXN",
+      "MXV",
+      "MYR",
+      "MZN",
+      "NAD",
+      "NGN",
+      "NIO",
+      "NOK",
+      "NPR",
+      "NZD",
+      "OMR",
+      "PAB",
+      "PEN",
+      "PGK",
+      "PHP",
+      "PKR",
+      "PLN",
+      "PYG",
+      "QAR",
+      "RON",
+      "RSD",
+      "RUB",
+      "RWF",
+      "SAR",
+      "SBD",
+      "SCR",
+      "SDG",
+      "SEK",
+      "SGD",
+      "SHP",
+      "SLE",
+      "SOS",
+      "SRD",
+      "SSP",
+      "STN",
+      "SVC",
+      "SYP",
+      "SZL",
+      "THB",
+      "TJS",
+      "TMT",
+      "TND",
+      "TOP",
+      "TRY",
+      "TTD",
+      "TWD",
+      "TZS",
+      "UAH",
+      "UGX",
+      "USD",
+      "USN",
+      "UYI",
+      "UYU",
+      "UYW",
+      "UZS",
+      "VED",
+      "VES",
+      "VND",
+      "VUV",
+      "WST",
+      "XAF",
+      "XAG",
+      "XAU",
+      "XBA",
+      "XBB",
+      "XBC",
+      "XBD",
+      "XCD",
+      "XDR",
+      "XOF",
+      "XPD",
+      "XPF",
+      "XPT",
+      "XSU",
+      "XTS",
+      "XUA",
+      "XXX",
+      "YER",
+      "ZAR",
+      "ZMW",
+      "ZWG"
+    ]
+  },
+  "CURRENCY_SYMBOL_MAP": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "$",
+        "value": "USD"
+      },
+      {
+        "key": "£",
+        "value": "GBP"
+      },
+      {
+        "key": "¥",
+        "value": "JPY"
+      },
+      {
+        "key": "€",
+        "value": "EUR"
+      },
+      {
+        "key": "₹",
+        "value": "INR"
+      }
+    ]
+  },
+  "DIMENSION_KEYWORDS": {
+    "__type__": "tuple",
+    "items": [
+      "width",
+      "height",
+      "depth",
+      "length",
+      "diameter",
+      "weight",
+      "dimensions",
+      "size",
+      "measurement",
+      "measurements"
+    ]
+  },
+  "DISCOVERED_FIELD_NOISE_TOKENS": {
+    "__type__": "set",
+    "items": [
+      "distribution",
+      "helpful",
+      "incentives",
+      "language",
+      "rating",
+      "ratings",
+      "report",
+      "review",
+      "reviewer",
+      "reviews",
+      "star",
+      "stars",
+      "submission",
+      "verified",
+      "vote",
+      "votes"
+    ]
+  },
+  "DISCOVERED_SOURCE_NOISE_TOKENS": {
+    "__type__": "frozenset",
+    "items": [
+      "bazaarvoice",
+      "rating_distribution",
+      "review",
+      "reviews"
+    ]
+  },
+  "DISCOVERED_VALUE_NOISE_PHRASES": {
+    "__type__": "tuple",
+    "items": [
+      "verified reviewer",
+      "was this helpful",
+      "recommend this product",
+      "review this product",
+      "filter reviews",
+      "rating distribution",
+      "overall rating",
+      "out of 5",
+      "too small",
+      "too big",
+      "runs very narrow",
+      "runs very wide",
+      "report this review",
+      "reviews with",
+      "select to rate"
+    ]
+  },
+  "DISCOVERIST_SCHEMA": {
+    "__type__": "list",
+    "items": [
+      "source_url",
+      "title",
+      "description"
+    ]
+  },
+  "DYNAMIC_FIELD_NAME_DROP_TOKENS": {
+    "__type__": "set",
+    "items": [
+      "arrivals",
+      "bag",
+      "best",
+      "browse",
+      "buy",
+      "cart",
+      "featured",
+      "gifts",
+      "less",
+      "location",
+      "menu",
+      "more",
+      "new",
+      "now",
+      "recommended",
+      "review",
+      "reviews",
+      "save",
+      "sell",
+      "seller",
+      "shop",
+      "shopping",
+      "similar",
+      "sort",
+      "top",
+      "trending",
+      "vote",
+      "votes"
+    ]
+  },
+  "DYNAMIC_FIELD_NAME_SCHEMA_NOISE_REGEXES": {
+    "__type__": "tuple",
+    "items": [
+      {
+        "__type__": "pattern",
+        "pattern": "^elp\\d+$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^e\\d+d_[a-z0-9_]+$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^e\\d+[a-z]_[a-z]{2}$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^el_[a-z0-9]{2,6}_\\d+$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^c\\d{3,5}$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^[a-z]{1,2}\\d{2,6}[a-z]?_[a-z0-9_]+$",
+        "flags": 34
+      }
+    ]
+  },
+  "DYNAMIC_FIELD_NAME_TICKERLIKE_BLOCKLIST": {
+    "__type__": "frozenset",
+    "items": [
+      "ada",
+      "arb",
+      "atom",
+      "avax",
+      "bnb",
+      "btc",
+      "cro",
+      "doge",
+      "dot",
+      "eth",
+      "ftm",
+      "ltc",
+      "matic",
+      "near",
+      "op",
+      "sol",
+      "trx",
+      "uni",
+      "xrp"
+    ]
+  },
+  "EMPTY_SENTINEL_VALUES": {
+    "__type__": "frozenset",
+    "items": [
+      "-",
+      "--",
+      "n/a",
+      "na",
+      "none",
+      "null",
+      "undefined",
+      "—"
+    ]
+  },
   "EXTRACTION_RULES": {
     "__type__": "dict",
     "items": [
@@ -2391,6 +3443,1283 @@
       }
     ]
   },
+  "FEATURE_SECTION_ALIASES": {
+    "__type__": "set",
+    "items": [
+      "feature",
+      "features",
+      "highlights",
+      "key features",
+      "key_features"
+    ]
+  },
+  "FIELD_POLLUTION_RULES": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "__common__",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "cookie",
+                  "privacy",
+                  "sign in",
+                  "log in",
+                  "my account",
+                  "analytics",
+                  "pageview",
+                  "gtm"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "key": "availability",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "add to cart",
+                  "choose options",
+                  "select options",
+                  "view details"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "key": "brand",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "cookie",
+                  "privacy",
+                  "sign in",
+                  "log in",
+                  ">",
+                  "/",
+                  "home >",
+                  "home /",
+                  "policy"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "key": "care",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "care instructions"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "key": "category",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "cookie",
+                  "privacy",
+                  "sign in",
+                  "log in",
+                  "page type",
+                  "page category",
+                  "detail page"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "key": "color",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "add to cart",
+                  "choose options",
+                  "select options"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "key": "features",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "livechat"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "key": "size",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "select size",
+                  "choose size"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "key": "title",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "reject_phrases",
+              "value": {
+                "__type__": "tuple",
+                "items": [
+                  "cookie preferences",
+                  "privacy policy",
+                  "sign in",
+                  "log in",
+                  "add to cart",
+                  "shop now",
+                  "view cart",
+                  "menu"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "FIELD_VALUE_NOISE_FRAGMENTS": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "brand",
+        "value": {
+          "__type__": "frozenset",
+          "items": [
+            "cookie",
+            "privacy"
+          ]
+        }
+      },
+      {
+        "key": "category",
+        "value": {
+          "__type__": "frozenset",
+          "items": [
+            "cookie",
+            "sign in"
+          ]
+        }
+      },
+      {
+        "key": "color",
+        "value": {
+          "__type__": "frozenset",
+          "items": [
+            "cookie",
+            "select"
+          ]
+        }
+      },
+      {
+        "key": "title",
+        "value": {
+          "__type__": "frozenset",
+          "items": [
+            "access denied",
+            "cart",
+            "home",
+            "loading...",
+            "search results",
+            "sign in"
+          ]
+        }
+      }
+    ]
+  },
+  "GA_DATA_LAYER_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "ecommerce",
+      "event",
+      "gtm.start",
+      "gtm.uniqueEventId",
+      "pageName",
+      "pageType",
+      "visitorType"
+    ]
+  },
+  "HTTP_URL_PREFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "http://",
+      "https://"
+    ]
+  },
+  "HYDRATED_STATE_PATTERNS": {
+    "__type__": "list",
+    "items": [
+      "__INITIAL_STATE__",
+      "__NUXT__",
+      "__APOLLO_STATE__",
+      "__PRELOADED_STATE__",
+      "__remixContext",
+      "__INITIAL_PROPS__",
+      "__DATA__",
+      "__myx",
+      "__STORE__",
+      "__APP_STATE__"
+    ]
+  },
+  "INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS": {
+    "__type__": "tuple",
+    "items": [
+      "handle",
+      "body_html",
+      "product_type",
+      "compare_at_price",
+      "option1",
+      "inventory_quantity"
+    ]
+  },
+  "INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS": {
+    "__type__": "tuple",
+    "items": [
+      "option1",
+      "compare_at_price",
+      "inventory_quantity"
+    ]
+  },
+  "JSONLD_NON_PRODUCT_BLOCK_TYPES": {
+    "__type__": "frozenset",
+    "items": [
+      "breadcrumblist",
+      "faqpage",
+      "howto",
+      "imageobject",
+      "localbusiness",
+      "organization",
+      "person",
+      "searchaction",
+      "sitenavigationelement",
+      "store",
+      "videoobject",
+      "webpage",
+      "website"
+    ]
+  },
+  "JSONLD_STRUCTURAL_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "@context",
+      "@graph",
+      "@id",
+      "@list",
+      "@set",
+      "@type",
+      "@vocab"
+    ]
+  },
+  "JSONLD_TYPE_NOISE": {
+    "__type__": "set",
+    "items": [
+      "aggregate_rating",
+      "aggregaterating",
+      "breadcrumb_list",
+      "breadcrumblist",
+      "context",
+      "creative_work",
+      "creativework",
+      "faqpage",
+      "howto",
+      "image_object",
+      "imageobject",
+      "item_list",
+      "itemlist",
+      "list_item",
+      "listitem",
+      "offer",
+      "organization",
+      "search_action",
+      "searchaction",
+      "type",
+      "video_object",
+      "videoobject",
+      "webpage",
+      "website"
+    ]
+  },
+  "LISTING_ACTION_NOISE_PATTERNS": {
+    "__type__": "tuple",
+    "items": [
+      {
+        "__type__": "pattern",
+        "pattern": "^\\d+$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^products?$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^purchases?$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bbookmark\\s+apply\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bapply\\s+bookmark\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bask\\s+.+\\s+question\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bcareer explorer\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bother search suggestions\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bplease refine your search\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bsave\\s+\\d+%\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bextra\\s+\\d+%\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bcode\\s*:",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bsort by\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bclear\\s+sort",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bclear\\s+filters?\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bfilter by\\b",
+        "flags": 34
+      }
+    ]
+  },
+  "LISTING_ALT_TEXT_TITLE_PATTERN": {
+    "__type__": "pattern",
+    "pattern": "\\b(?:worn|wearing|shown|shot|mid-shot|close-up|detail(?:ed)? view|view of|front view|back view)\\b",
+    "flags": 34
+  },
+  "LISTING_BUY_BOX_AVAILABILITY_PATTERN": "Availability\\s+(?P<value>.+?)\\s+Price(?:\\s|$)",
+  "LISTING_BUY_BOX_CURRENCY_SYMBOL_MAP": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "$",
+        "value": "USD"
+      },
+      {
+        "key": "£",
+        "value": "GBP"
+      },
+      {
+        "key": "€",
+        "value": "EUR"
+      },
+      {
+        "key": "₹",
+        "value": "INR"
+      }
+    ]
+  },
+  "LISTING_BUY_BOX_HEADING_SCAN_TAGS": {
+    "__type__": "tuple",
+    "items": [
+      "h2",
+      "h3",
+      "button",
+      "p",
+      "span"
+    ]
+  },
+  "LISTING_BUY_BOX_HEADING_TEXTS": {
+    "__type__": "frozenset",
+    "items": [
+      "pricing and availability",
+      "select a size",
+      "select an option"
+    ]
+  },
+  "LISTING_BUY_BOX_PACK_SIZE_PATTERN": "Pack Size\\s+(?P<value>.+?)\\s+SKU(?:\\s|$)",
+  "LISTING_BUY_BOX_PRICE_PATTERN": "Price\\s+(?P<value>[$€£₹]\\s*[\\d,.]+)",
+  "LISTING_BUY_BOX_REQUIRED_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "Pack Size",
+      "SKU",
+      "Availability",
+      "Price"
+    ]
+  },
+  "LISTING_BUY_BOX_SKU_PATTERN": "SKU\\s+(?P<value>[A-Za-z0-9-]{3,})",
+  "LISTING_CARD_TITLE_SELECTORS": {
+    "__type__": "tuple",
+    "items": [
+      ".item_description_title",
+      "[itemprop='name']",
+      ".product-title",
+      ".pro-title .text",
+      ".pro-title",
+      ".name [data-field='description']",
+      ".productDescription [data-field='description']",
+      ".job-title",
+      ".card-title",
+      "a.title",
+      ".title",
+      "h2 a",
+      "h3 a",
+      "h4 a",
+      "h2",
+      "h3",
+      "h4",
+      "a img[alt]",
+      "a[title]"
+    ]
+  },
+  "LISTING_CARE_SECTION_LABEL": "Care:",
+  "LISTING_CATEGORY_PATH_MARKERS": {
+    "__type__": "frozenset",
+    "items": [
+      "browse",
+      "categories",
+      "category",
+      "collections",
+      "departments",
+      "parts",
+      "products"
+    ]
+  },
+  "LISTING_COLOR_ACTION_PREFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "add to ",
+      "select ",
+      "choose ",
+      "shop ",
+      "buy ",
+      "view "
+    ]
+  },
+  "LISTING_COLOR_ACTION_VALUES": {
+    "__type__": "frozenset",
+    "items": [
+      "add to bag",
+      "add to cart",
+      "add to wishlist",
+      "buy now",
+      "checkout",
+      "choose",
+      "more options",
+      "quick shop",
+      "quick view",
+      "save",
+      "select",
+      "shop now",
+      "wishlist"
+    ]
+  },
+  "LISTING_DESCRIPTION_CANDIDATE_FIELDS": {
+    "__type__": "tuple",
+    "items": [
+      "description",
+      "summary"
+    ]
+  },
+  "LISTING_DETAIL_PATH_MARKERS": {
+    "__type__": "tuple",
+    "items": [
+      "-p-",
+      "-p.",
+      "/detail/",
+      "/dp/",
+      "/item/",
+      "/job-detail/",
+      "/job/",
+      "/jobs/",
+      "/jobs/detail/",
+      "/opening/",
+      "/p.",
+      "/p/",
+      "/pdp/",
+      "/position/",
+      "/product/",
+      "/products/",
+      "/v/",
+      "piid="
+    ]
+  },
+  "LISTING_EDITORIAL_TITLE_PATTERNS": {
+    "__type__": "tuple",
+    "items": [
+      {
+        "__type__": "pattern",
+        "pattern": "\\bsponsored\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\byou are seeing this ad\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bpromoted\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\btrending now\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^(?:(?:up to\\s+)?\\d{1,3}%\\s*(?:off\\s+)?)?(?:clearance\\s+)?sale$",
+        "flags": 34
+      }
+    ]
+  },
+  "LISTING_FACET_PATH_FRAGMENTS": {
+    "__type__": "tuple",
+    "items": [
+      "/see-all",
+      "/filter",
+      "/filters",
+      "/facet"
+    ]
+  },
+  "LISTING_FACET_QUERY_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "color",
+      "facet",
+      "filter",
+      "filters",
+      "material",
+      "size",
+      "sort",
+      "sv"
+    ]
+  },
+  "LISTING_FILTER_OPTION_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "count",
+      "description",
+      "displayname",
+      "filtertype",
+      "name",
+      "selected",
+      "showicon",
+      "sort",
+      "tooltip",
+      "value"
+    ]
+  },
+  "LISTING_HUB_PATH_SEGMENTS": {
+    "__type__": "frozenset",
+    "items": [
+      "brand",
+      "brands",
+      "browse",
+      "catalog",
+      "categories",
+      "category",
+      "clearance",
+      "collections",
+      "deals",
+      "departments",
+      "offers",
+      "parts",
+      "promo",
+      "promotions",
+      "results",
+      "sale",
+      "search",
+      "shop",
+      "store"
+    ]
+  },
+  "LISTING_IMAGE_EXCLUDE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "icon",
+      "logo",
+      "sprite",
+      "badge",
+      "favicon",
+      "placeholder",
+      "vehicle-new",
+      "fitment-warning"
+    ]
+  },
+  "LISTING_JOB_SIGNAL_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "apply_url",
+      "company",
+      "job_type",
+      "location",
+      "posted_date",
+      "salary"
+    ]
+  },
+  "LISTING_LABEL_NOISE_TOKENS": {
+    "__type__": "frozenset",
+    "items": [
+      "clear",
+      "facet",
+      "filter",
+      "page",
+      "show",
+      "sort",
+      "view"
+    ]
+  },
+  "LISTING_MATERIALS_SECTION_LABEL": "Materials:",
+  "LISTING_MERCHANDISING_TITLE_PREFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "claim ",
+      "code ",
+      "diwali ",
+      "exclusive ",
+      "exclusive offer",
+      "extra ",
+      "flash sale",
+      "free shipping",
+      "independence day",
+      "limited time",
+      "republic day",
+      "save "
+    ]
+  },
+  "LISTING_MINIMAL_VISUAL_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "image_url",
+      "title"
+    ]
+  },
+  "LISTING_NAVIGATION_TITLE_HINTS": {
+    "__type__": "frozenset",
+    "items": [
+      "account",
+      "artisan-background",
+      "back",
+      "basket",
+      "cart",
+      "checkout",
+      "claim offer",
+      "claim your offer",
+      "contact",
+      "contact us",
+      "cookie notice",
+      "cookie policy",
+      "create account",
+      "create an account",
+      "dyson dyson",
+      "dyson technology",
+      "group 2 pause animation",
+      "help",
+      "home",
+      "independence day deals extended",
+      "join now",
+      "learn more",
+      "log in",
+      "login",
+      "mail svg",
+      "newsletter",
+      "next",
+      "pause animation",
+      "play animation",
+      "prev",
+      "previous",
+      "privacy policy",
+      "privacy notice",
+      "read more",
+      "register",
+      "resume animation",
+      "shop all",
+      "sign in",
+      "sign up",
+      "skip navigation",
+      "skip the navigation",
+      "skip to main content",
+      "start animation",
+      "stop animation",
+      "subscribe",
+      "support",
+      "talking to us is easy",
+      "terms of service",
+      "terms of use"
+    ]
+  },
+  "LISTING_NON_LISTING_PATH_TOKENS": {
+    "__type__": "frozenset",
+    "items": [
+      "about",
+      "aboutus",
+      "accessibility",
+      "account",
+      "blog",
+      "brand",
+      "brands",
+      "careers",
+      "cart",
+      "catalog",
+      "checkout",
+      "contact",
+      "contactus",
+      "cookie-policy",
+      "demo",
+      "employers",
+      "faq",
+      "find-a-store",
+      "gift",
+      "gift-card",
+      "help",
+      "hiring",
+      "legal",
+      "legal-notice",
+      "login",
+      "news",
+      "newsletter",
+      "order",
+      "payment",
+      "plans",
+      "postjobs",
+      "press",
+      "pricing",
+      "privacy",
+      "privacy-notice",
+      "privacy-policy",
+      "product-registration",
+      "recruiter",
+      "recruiters",
+      "refund",
+      "register",
+      "registration",
+      "resource",
+      "resources",
+      "results",
+      "returns",
+      "search",
+      "shop",
+      "sign-up",
+      "signup",
+      "sitemap",
+      "store",
+      "store-finder",
+      "store-locator",
+      "support",
+      "terms",
+      "terms-of-service",
+      "terms-of-use",
+      "track-order",
+      "warranty",
+      "wishlist"
+    ]
+  },
+  "LISTING_PRODUCT_DETAIL_IMAGE_SOURCE_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "images",
+      "detailedImages",
+      "colourAlternateViews",
+      "variants"
+    ]
+  },
+  "LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT": 20,
+  "LISTING_PRODUCT_DETAIL_PRESENCE_ANY_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "description",
+      "detailedImages",
+      "variants"
+    ]
+  },
+  "LISTING_PRODUCT_DETAIL_PRODUCT_BLOB_PATH": {
+    "__type__": "tuple",
+    "items": [
+      "props",
+      "pageProps",
+      "product"
+    ]
+  },
+  "LISTING_PRODUCT_DETAIL_PROPS_PATH": {
+    "__type__": "tuple",
+    "items": [
+      "props",
+      "pageProps",
+      "data",
+      "getProductDetail"
+    ]
+  },
+  "LISTING_PRODUCT_DETAIL_REQUIRED_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "name",
+      "productKey",
+      "productNumber"
+    ]
+  },
+  "LISTING_PRODUCT_DETAIL_TOP_LEVEL_PAYLOAD_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "getProductDetail",
+      "product"
+    ]
+  },
+  "LISTING_PRODUCT_SIGNAL_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "availability",
+      "brand",
+      "category",
+      "company",
+      "description",
+      "location",
+      "price",
+      "rating",
+      "review_count",
+      "salary",
+      "sku"
+    ]
+  },
+  "LISTING_STRUCTURED_SPEC_GROUPS_KEY": "specificationGroups",
+  "LISTING_STRUCTURED_SPEC_GROUP_LIMIT": 8,
+  "LISTING_STRUCTURED_SPEC_ROW_LIMIT": 24,
+  "LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH": 7,
+  "LISTING_SWATCH_CONTAINER_SELECTORS": {
+    "__type__": "tuple",
+    "items": [
+      "[class*='swatch']",
+      "[class*='color-chip']",
+      "[class*='color-option']",
+      "[data-color]",
+      "[aria-label*='color' i]"
+    ]
+  },
+  "LISTING_TITLE_CTA_TITLES": {
+    "__type__": "frozenset",
+    "items": [
+      "add to bag",
+      "add to cart",
+      "apply",
+      "bookmark",
+      "buy now",
+      "choose options",
+      "learn more",
+      "quick add",
+      "quick view",
+      "read more",
+      "see details",
+      "select options",
+      "shop now",
+      "view details"
+    ]
+  },
+  "LISTING_WEAK_METADATA_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "additional_images",
+      "date",
+      "image_url",
+      "posted_date",
+      "publication_date",
+      "title",
+      "url"
+    ]
+  },
+  "LISTING_WEAK_TITLES": {
+    "__type__": "frozenset",
+    "items": [
+      "best seller",
+      "featured",
+      "great deals",
+      "items",
+      "new",
+      "recommended alternatives",
+      "products",
+      "purchases",
+      "results",
+      "sale",
+      "store",
+      "top rated",
+      "top seller"
+    ]
+  },
+  "LOW_QUALITY_MERGE_TOKENS": {
+    "__type__": "frozenset",
+    "items": [
+      "account",
+      "agree",
+      "cookie",
+      "home",
+      "log in",
+      "menu",
+      "policy",
+      "privacy",
+      "sign in"
+    ]
+  },
+  "MARKDOWN_VIEW": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "long_form_fields",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "description",
+            "summary",
+            "responsibilities",
+            "qualifications",
+            "requirements",
+            "benefits",
+            "skills",
+            "how_to_apply",
+            "next_steps",
+            "education",
+            "additional_information",
+            "conditions_of_employment",
+            "required_documents",
+            "how_you_will_be_evaluated",
+            "features",
+            "fit_and_sizing",
+            "materials_and_care"
+          ]
+        }
+      },
+      {
+        "key": "scalar_max_chars",
+        "value": 180
+      },
+      {
+        "key": "section_blacklist",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "help",
+            "close_this_window"
+          ]
+        }
+      },
+      {
+        "key": "section_min_chars",
+        "value": 12
+      }
+    ]
+  },
+  "MAX_SELECTOR_ROWS_PER_FIELD": 100,
+  "NESTED_NON_PRODUCT_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "aggregate_rating",
+      "aggregaterating",
+      "author",
+      "breadcrumb",
+      "breadcrumblist",
+      "contributor",
+      "creator",
+      "itemlistelement",
+      "mainentityofpage",
+      "potentialaction",
+      "publisher",
+      "review",
+      "reviews"
+    ]
+  },
+  "NESTED_OBJECT_KEYS_CONFIG": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "category_fields",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "name",
+            "path",
+            "pathEn",
+            "breadcrumb",
+            "categoryPath"
+          ]
+        }
+      },
+      {
+        "key": "currency_fields",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "currency",
+            "currencyCode",
+            "priceCurrency",
+            "currency_code"
+          ]
+        }
+      },
+      {
+        "key": "original_price_fields",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "compareAtPrice",
+            "compare_at_price",
+            "listPrice",
+            "regularPrice",
+            "wasPrice",
+            "originalPrice",
+            "maxPrice",
+            "currentValue",
+            "price"
+          ]
+        }
+      },
+      {
+        "key": "price_fields",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "specialValue",
+            "currentValue",
+            "special",
+            "current",
+            "price",
+            "amount",
+            "value",
+            "lowPrice",
+            "minPrice",
+            "displayPrice",
+            "formattedPrice"
+          ]
+        }
+      },
+      {
+        "key": "text_fields",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "name",
+            "label",
+            "title",
+            "text",
+            "value",
+            "content",
+            "description",
+            "alt"
+          ]
+        }
+      },
+      {
+        "key": "url_fields",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "href",
+            "url",
+            "link",
+            "canonical_url"
+          ]
+        }
+      }
+    ]
+  },
+  "NETWORK_PAYLOAD_NOISE_URL_PATTERN": "geolocation|geoip|geo/|/geo\\b|\\banalytics\\b|tracking|telemetry|klarna\\.com|affirm\\.com|afterpay\\.com|olapic-cdn\\.com|livechat|zendesk\\.com|intercom\\.io|facebook\\.com|google-analytics|googletagmanager|sentry\\.io|datadome|px\\.ads|cdn-cgi/|captcha",
+  "NEXT_FLIGHT_AVAILABILITY_PATTERN": "\"(?:shortInventoryStatusMessage|stockStatus)\":\"(?P<availability>[^\"]+)\"",
+  "NEXT_FLIGHT_BACK_WINDOW": 1200,
+  "NEXT_FLIGHT_BRAND_PATTERNS": {
+    "__type__": "tuple",
+    "items": [
+      "\"name\":\"(?P<brand>[^\"]+)\",\"__typename\":\"ManufacturerCuratedBrand\"",
+      "\"brand\":\\{\"name\":\"(?P<brand>[^\"]+)\""
+    ]
+  },
+  "NEXT_FLIGHT_FORWARD_WINDOW": 2200,
+  "NEXT_FLIGHT_ORIGINAL_PRICE_PATTERN": "\"priceVariation\":\"PREVIOUS\".{0,220}?\"amount\":\"(?P<amount>[\\d.]+)\"",
+  "NEXT_FLIGHT_PAIR_PATTERNS": {
+    "__type__": "tuple",
+    "items": [
+      "\"displayName\":\"(?P<title>[^\"]+)\".{0,900}?\"listingUrl\":\"(?P<url>[^\"]+)\"",
+      "\"listingUrl\":\"(?P<url>[^\"]+)\".{0,900}?\"displayName\":\"(?P<title>[^\"]+)\""
+    ]
+  },
+  "NEXT_FLIGHT_RATING_PATTERN": "\"averageRating\":(?P<rating>[\\d.]+),\"totalCount\":(?P<count>\\d+)",
+  "NEXT_FLIGHT_SALE_PRICE_PATTERN": "\"priceVariation\":\"(?:SALE|PRIMARY)\".{0,220}?\"amount\":\"(?P<amount>[\\d.]+)\"",
+  "NOISE_CONTAINER_REMOVAL_SELECTOR": "aside, nav, [class~='filter' i], [class~='filters' i], [class~='facet' i], [class~='facets' i], [class*='sidebar' i], [class*='breadcrumb' i], [class*='navigation' i], [class*='menu' i], footer, header",
+  "NOISE_CONTAINER_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "footer",
+      "legal",
+      "privacy",
+      "cookie",
+      "consent",
+      "iubenda",
+      "menu",
+      "navigation",
+      "navbar",
+      "contact",
+      "share",
+      "app-store",
+      "app_store",
+      "newsletter"
+    ]
+  },
+  "NOISY_PRODUCT_ATTRIBUTE_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "about",
+      "about_us",
+      "accessibility_statement",
+      "contact",
+      "contact_us",
+      "customer_service",
+      "faq",
+      "faqs",
+      "policies",
+      "privacy",
+      "privacy_policy",
+      "return_policy",
+      "returns",
+      "shipping",
+      "shipping_policy",
+      "shopping_cart",
+      "store_locations",
+      "terms",
+      "terms_policies"
+    ]
+  },
+  "NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS": {
+    "__type__": "tuple",
+    "items": [
+      "gift cards",
+      "press inquiries",
+      "the gazette",
+      "your privacy choices"
+    ]
+  },
+  "NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES": {
+    "__type__": "tuple",
+    "items": [
+      "loading... read more",
+      "privacy policy",
+      "terms of service",
+      "shipping policy",
+      "return policy",
+      "select a size",
+      "size guide",
+      "join the waitlist",
+      "check availability in store",
+      "request a catalog",
+      "join our team",
+      "account login",
+      "store locations",
+      "accessibility statement",
+      "subscribe to our newsletter",
+      "sign up for",
+      "follow us on",
+      "download our app",
+      "manage preferences",
+      "cookie settings",
+      "do not sell my personal"
+    ]
+  },
   "NORMALIZATION_RULES": {
     "__type__": "dict",
     "items": [
@@ -2944,2216 +5273,6 @@
       }
     ]
   },
-  "_CANDIDATE_CLEANUP": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "alpha_char_pattern",
-        "value": "[A-Za-z]"
-      },
-      {
-        "key": "analytics_dimension_token_pattern",
-        "value": "dimension\\d+|metric\\d+|cd\\d+|ev\\d+"
-      },
-      {
-        "key": "asset_file_extensions",
-        "value": {
-          "__type__": "list",
-          "items": [
-            ".woff",
-            ".woff2",
-            ".ttf",
-            ".otf",
-            ".eot",
-            ".css",
-            ".js",
-            ".map"
-          ]
-        }
-      },
-      {
-        "key": "availability_noise_phrases",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "select options",
-            "choose options",
-            "add to cart",
-            "quantity",
-            "wishlist",
-            "join the waitlist",
-            "check availability in store",
-            "check availability in stores"
-          ]
-        }
-      },
-      {
-        "key": "availability_status_tokens",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "in_stock",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "in stock",
-                  "instock",
-                  "available",
-                  "ready to ship"
-                ]
-              }
-            },
-            {
-              "key": "limited_stock",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "limited stock",
-                  "low stock",
-                  "only",
-                  "left in stock"
-                ]
-              }
-            },
-            {
-              "key": "out_of_stock",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "out of stock",
-                  "oos",
-                  "sold out",
-                  "unavailable"
-                ]
-              }
-            },
-            {
-              "key": "preorder",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "pre-order",
-                  "preorder",
-                  "backorder",
-                  "back-order"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "candidate_url_absolute_prefixes",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "http://",
-            "https://"
-          ]
-        }
-      },
-      {
-        "key": "candidate_url_allowed_schemes",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "http",
-            "https"
-          ]
-        }
-      },
-      {
-        "key": "category_noise_phrases",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "breadcrumb",
-            "view all",
-            "filter by",
-            "sort by",
-            "shop all",
-            "purchased",
-            "add to cart",
-            "add to bag",
-            "quick view",
-            "quick shop",
-            "shop now",
-            "buy now",
-            "learn more",
-            "see details",
-            "view details",
-            "more info",
-            "read more",
-            "click here",
-            "free shipping",
-            "free returns",
-            "on sale",
-            "new arrival",
-            "best seller",
-            "top rated",
-            "customer favorite"
-          ]
-        }
-      },
-      {
-        "key": "color_css_noise_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "padding:",
-            "font-size",
-            "font-weight",
-            "transition:",
-            "position:",
-            "-webkit-",
-            "css-"
-          ]
-        }
-      },
-      {
-        "key": "color_variant_count_pattern",
-        "value": "^\\d+\\s+colors?\\b"
-      },
-      {
-        "key": "deep_alias_list_scan_limit",
-        "value": 40
-      },
-      {
-        "key": "description_fallback_content_selectors",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "article",
-            "main",
-            "body"
-          ]
-        }
-      },
-      {
-        "key": "description_meta_selectors",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "meta[name='description']",
-            "meta[property='og:description']",
-            "meta[name='twitter:description']"
-          ]
-        }
-      },
-      {
-        "key": "dynamic_field_name_hard_rejects",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "from",
-            "location",
-            "recommended",
-            "reviews",
-            "votes"
-          ]
-        }
-      },
-      {
-        "key": "dynamic_field_name_pattern",
-        "value": "[a-z][a-z0-9_]*"
-      },
-      {
-        "key": "dynamic_field_name_schema_noise_patterns",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "^elp\\d+$",
-            "^e\\d+d_[a-z0-9_]+$",
-            "^e\\d+[a-z]_[a-z]{2}$",
-            "^el_[a-z0-9]{2,6}_\\d+$",
-            "^c\\d{3,5}$",
-            "^[a-z]{1,2}\\d{2,6}[a-z]?_[a-z0-9_]+$"
-          ]
-        }
-      },
-      {
-        "key": "dynamic_field_name_tickerlike_blocklist",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "xrp",
-            "btc",
-            "eth",
-            "bnb",
-            "sol",
-            "ada",
-            "doge",
-            "trx",
-            "ltc",
-            "dot",
-            "avax",
-            "matic",
-            "arb",
-            "op",
-            "uni",
-            "atom",
-            "near",
-            "ftm",
-            "cro"
-          ]
-        }
-      },
-      {
-        "key": "dynamic_numeric_field_pattern",
-        "value": "\\d+(?:[_-]\\d+)*?"
-      },
-      {
-        "key": "field_groups",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "availability",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "availability"
-                ]
-              }
-            },
-            {
-              "key": "category",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "category"
-                ]
-              }
-            },
-            {
-              "key": "currency",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "currency"
-                ]
-              }
-            },
-            {
-              "key": "description",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "description",
-                  "summary"
-                ]
-              }
-            },
-            {
-              "key": "entity_name",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "brand",
-                  "company"
-                ]
-              }
-            },
-            {
-              "key": "identifier",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "sku",
-                  "vin",
-                  "dealer_name"
-                ]
-              }
-            },
-            {
-              "key": "image_collection",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "additional_images"
-                ]
-              }
-            },
-            {
-              "key": "image_primary",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "image_url"
-                ]
-              }
-            },
-            {
-              "key": "job_text",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "responsibilities",
-                  "requirements",
-                  "qualifications",
-                  "benefits",
-                  "skills"
-                ]
-              }
-            },
-            {
-              "key": "numeric",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "price",
-                  "sale_price",
-                  "original_price",
-                  "rating",
-                  "review_count"
-                ]
-              }
-            },
-            {
-              "key": "salary",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "salary"
-                ]
-              }
-            },
-            {
-              "key": "title",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "title"
-                ]
-              }
-            },
-            {
-              "key": "url",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "url",
-                  "apply_url"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "field_name_patterns",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "availability_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "availability",
-                  "stock"
-                ]
-              }
-            },
-            {
-              "key": "category_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "category",
-                  "department",
-                  "breadcrumb"
-                ]
-              }
-            },
-            {
-              "key": "currency_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "currency"
-                ]
-              }
-            },
-            {
-              "key": "description_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "description",
-                  "summary",
-                  "overview",
-                  "details"
-                ]
-              }
-            },
-            {
-              "key": "identifier_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "sku",
-                  "id",
-                  "code",
-                  "vin",
-                  "mpn"
-                ]
-              }
-            },
-            {
-              "key": "image_collection_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "images",
-                  "gallery",
-                  "photos",
-                  "media"
-                ]
-              }
-            },
-            {
-              "key": "image_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "image",
-                  "images",
-                  "gallery",
-                  "photo",
-                  "thumbnail",
-                  "hero"
-                ]
-              }
-            },
-            {
-              "key": "price_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "price",
-                  "amount",
-                  "cost"
-                ]
-              }
-            },
-            {
-              "key": "rating_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "rating",
-                  "score"
-                ]
-              }
-            },
-            {
-              "key": "review_count_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "review_count",
-                  "reviews",
-                  "rating_count"
-                ]
-              }
-            },
-            {
-              "key": "salary_tokens",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "salary",
-                  "pay",
-                  "rate",
-                  "compensation"
-                ]
-              }
-            },
-            {
-              "key": "url_suffixes",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "_url",
-                  "url",
-                  "_link",
-                  "link",
-                  "_href",
-                  "href"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "ga_data_layer_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "event",
-            "ecommerce",
-            "gtm.start",
-            "gtm.uniqueEventId",
-            "pageType",
-            "pageName",
-            "visitorType"
-          ]
-        }
-      },
-      {
-        "key": "generic_category_values",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "detail-page",
-            "detail_page",
-            "product",
-            "page",
-            "pdp",
-            "simple",
-            "configurable",
-            "image",
-            "imageobject",
-            "listitem",
-            "itemlist",
-            "collectionpage",
-            "productcard",
-            "contentcard",
-            "aggregateoffer",
-            "productgroup",
-            "aggregaterating",
-            "review",
-            "person",
-            "rating",
-            "merchantreturnpolicy",
-            "merchantreturnpolicyseasonaloverride",
-            "webpage",
-            "organization",
-            "speakablespecification",
-            "individualproduct",
-            "peopleaudience",
-            "brand",
-            "offer",
-            "postaladdress",
-            "country",
-            "quantitativevalue",
-            "unitpricespecification",
-            "pricespecification",
-            "deliverychargespecification",
-            "openinghoursspecification",
-            "geopoint",
-            "geocoordinates",
-            "place",
-            "contactpoint",
-            "searchaction",
-            "readaction",
-            "buyaction",
-            "sitenavigationelement",
-            "wpadblock",
-            "creativework",
-            "article",
-            "newsarticle",
-            "blogposting",
-            "howto",
-            "faqpage",
-            "videoobject",
-            "localbusiness",
-            "store",
-            "thing",
-            "guest",
-            "max_discount",
-            "website",
-            "web site",
-            "all",
-            "shop",
-            "products",
-            "items",
-            "collection",
-            "collections",
-            "catalog",
-            "new",
-            "sale",
-            "clearance",
-            "featured",
-            "trending",
-            "popular",
-            "recommended"
-          ]
-        }
-      },
-      {
-        "key": "generic_title_values",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "chrome",
-            "firefox",
-            "safari",
-            "edge",
-            "home",
-            "cookie preferences",
-            "cookie settings",
-            "privacy preferences",
-            "privacy settings",
-            "manage cookies",
-            "consent preferences",
-            "accept cookies",
-            "sign in",
-            "log in",
-            "my account",
-            "newsletter",
-            "create account",
-            "register"
-          ]
-        }
-      },
-      {
-        "key": "image_candidate_dict_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "url",
-            "contentUrl",
-            "src",
-            "image",
-            "thumbnail",
-            "href"
-          ]
-        }
-      },
-      {
-        "key": "image_file_extensions",
-        "value": {
-          "__type__": "list",
-          "items": [
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".webp",
-            ".gif",
-            ".avif",
-            ".svg"
-          ]
-        }
-      },
-      {
-        "key": "image_noise_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "logo",
-            "sprite",
-            "icon",
-            "badge",
-            "favicon"
-          ]
-        }
-      },
-      {
-        "key": "image_url_hint_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "/image",
-            "/images/",
-            "/img",
-            "image=",
-            "im/"
-          ]
-        }
-      },
-      {
-        "key": "nested_collection_scan_limit",
-        "value": 20
-      },
-      {
-        "key": "placeholder_values",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "-",
-            "—",
-            "--",
-            "n/a",
-            "na",
-            "none",
-            "null",
-            "undefined"
-          ]
-        }
-      },
-      {
-        "key": "promo_only_title_pattern",
-        "value": "^(?:[-–—]?\\s*)?(?:\\d{1,3}%\\s*(?:off)?|sale|new(?:\\s+in)?|view\\s*\\d+|best seller|top seller)\\s*$"
-      },
-      {
-        "key": "rating_word_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "one",
-            "two",
-            "three",
-            "four",
-            "five"
-          ]
-        }
-      },
-      {
-        "key": "script_noise_pattern",
-        "value": "\\b(?:imageloader|document\\.getelementbyid|fallback-image)\\b"
-      },
-      {
-        "key": "size_css_noise_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "max-width",
-            "min-width",
-            "vw",
-            "vh",
-            "sizes=",
-            "srcset",
-            "padding:",
-            "font-size",
-            "font-weight",
-            "transition:",
-            "position:",
-            "-webkit-",
-            "size"
-          ]
-        }
-      },
-      {
-        "key": "size_package_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "pkg of",
-            "pack of",
-            "pack size",
-            "package"
-          ]
-        }
-      },
-      {
-        "key": "title_noise_phrases",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "cookie preferences",
-            "privacy policy",
-            "terms of service",
-            "sign in",
-            "log in",
-            "my account",
-            "add to cart",
-            "shopping cart",
-            "department navigation",
-            "cookie manager banner"
-          ]
-        }
-      },
-      {
-        "key": "title_noise_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "cookie",
-            "cookies",
-            "privacy",
-            "consent",
-            "preferences",
-            "sign in",
-            "log in",
-            "login",
-            "register",
-            "my account",
-            "newsletter",
-            "subscribe",
-            "terms",
-            "conditions",
-            "gdpr",
-            "ccpa"
-          ]
-        }
-      },
-      {
-        "key": "tracking_param_exact_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "ref",
-            "ref_src"
-          ]
-        }
-      },
-      {
-        "key": "tracking_param_prefixes",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "utm_",
-            "fbclid",
-            "gclid",
-            "mc_"
-          ]
-        }
-      },
-      {
-        "key": "ui_icon_token_pattern",
-        "value": "(corporate_fare|bar_chart|home_pin|location_on|travel_explore|business_center|storefront|schedule|payments|school|work)(?=[A-Z]|\\b)|place(?=[A-Z])"
-      },
-      {
-        "key": "ui_noise_phrases",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "add to wishlist",
-            "add to bag",
-            "add to cart",
-            "buy now",
-            "selling fast",
-            "best seller",
-            "top seller",
-            "limited stock",
-            "low stock",
-            "sold out",
-            "out of stock",
-            "view more",
-            "learn more",
-            "join the waitlist",
-            "check availability in store",
-            "check availability in stores"
-          ]
-        }
-      },
-      {
-        "key": "ui_noise_token_pattern",
-        "value": "\\b[a-z]+_[a-z0-9_]+\\b"
-      }
-    ]
-  },
-  "_CANDIDATE_NORMALIZATION": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "color_noise_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "rgb(",
-            "rgba(",
-            "hsl(",
-            "var(",
-            "background",
-            "color:",
-            "border:",
-            "display:",
-            "margin",
-            "padding",
-            "font-family",
-            "font-size",
-            "inherit"
-          ]
-        }
-      },
-      {
-        "key": "currency_codes",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "AED",
-            "AFN",
-            "ALL",
-            "AMD",
-            "ANG",
-            "AOA",
-            "ARS",
-            "AUD",
-            "AWG",
-            "AZN",
-            "BAM",
-            "BBD",
-            "BDT",
-            "BGN",
-            "BHD",
-            "BIF",
-            "BMD",
-            "BND",
-            "BOB",
-            "BOV",
-            "BRL",
-            "BSD",
-            "BTN",
-            "BWP",
-            "BYN",
-            "BZD",
-            "CAD",
-            "CDF",
-            "CHE",
-            "CHF",
-            "CHW",
-            "CLF",
-            "CLP",
-            "CNY",
-            "COP",
-            "COU",
-            "CRC",
-            "CUP",
-            "CVE",
-            "CZK",
-            "DJF",
-            "DKK",
-            "DOP",
-            "DZD",
-            "EGP",
-            "ERN",
-            "ETB",
-            "EUR",
-            "FJD",
-            "FKP",
-            "GBP",
-            "GEL",
-            "GHS",
-            "GIP",
-            "GMD",
-            "GNF",
-            "GTQ",
-            "GYD",
-            "HKD",
-            "HNL",
-            "HTG",
-            "HUF",
-            "IDR",
-            "ILS",
-            "INR",
-            "IQD",
-            "IRR",
-            "ISK",
-            "JMD",
-            "JOD",
-            "JPY",
-            "KES",
-            "KGS",
-            "KHR",
-            "KMF",
-            "KPW",
-            "KRW",
-            "KWD",
-            "KYD",
-            "KZT",
-            "LAK",
-            "LBP",
-            "LKR",
-            "LRD",
-            "LSL",
-            "LYD",
-            "MAD",
-            "MDL",
-            "MGA",
-            "MKD",
-            "MMK",
-            "MNT",
-            "MOP",
-            "MRU",
-            "MUR",
-            "MVR",
-            "MWK",
-            "MXN",
-            "MXV",
-            "MYR",
-            "MZN",
-            "NAD",
-            "NGN",
-            "NIO",
-            "NOK",
-            "NPR",
-            "NZD",
-            "OMR",
-            "PAB",
-            "PEN",
-            "PGK",
-            "PHP",
-            "PKR",
-            "PLN",
-            "PYG",
-            "QAR",
-            "RON",
-            "RSD",
-            "RUB",
-            "RWF",
-            "SAR",
-            "SBD",
-            "SCR",
-            "SDG",
-            "SEK",
-            "SGD",
-            "SHP",
-            "SLE",
-            "SOS",
-            "SRD",
-            "SSP",
-            "STN",
-            "SVC",
-            "SYP",
-            "SZL",
-            "THB",
-            "TJS",
-            "TMT",
-            "TND",
-            "TOP",
-            "TRY",
-            "TTD",
-            "TWD",
-            "TZS",
-            "UAH",
-            "UGX",
-            "USD",
-            "USN",
-            "UYI",
-            "UYU",
-            "UYW",
-            "UZS",
-            "VED",
-            "VES",
-            "VND",
-            "VUV",
-            "WST",
-            "XAF",
-            "XAG",
-            "XAU",
-            "XBA",
-            "XBB",
-            "XBC",
-            "XBD",
-            "XCD",
-            "XDR",
-            "XOF",
-            "XPD",
-            "XPF",
-            "XPT",
-            "XSU",
-            "XTS",
-            "XUA",
-            "XXX",
-            "YER",
-            "ZAR",
-            "ZMW",
-            "ZWG"
-          ]
-        }
-      },
-      {
-        "key": "currency_symbol_map",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "$",
-              "value": "USD"
-            },
-            {
-              "key": "£",
-              "value": "GBP"
-            },
-            {
-              "key": "¥",
-              "value": "JPY"
-            },
-            {
-              "key": "€",
-              "value": "EUR"
-            },
-            {
-              "key": "₹",
-              "value": "INR"
-            }
-          ]
-        }
-      },
-      {
-        "key": "nested_object_keys",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "category_fields",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "name",
-                  "path",
-                  "pathEn",
-                  "breadcrumb",
-                  "categoryPath"
-                ]
-              }
-            },
-            {
-              "key": "currency_fields",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "currency",
-                  "currencyCode",
-                  "priceCurrency",
-                  "currency_code"
-                ]
-              }
-            },
-            {
-              "key": "original_price_fields",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "compareAtPrice",
-                  "compare_at_price",
-                  "listPrice",
-                  "regularPrice",
-                  "wasPrice",
-                  "originalPrice",
-                  "maxPrice",
-                  "currentValue",
-                  "price"
-                ]
-              }
-            },
-            {
-              "key": "price_fields",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "specialValue",
-                  "currentValue",
-                  "special",
-                  "current",
-                  "price",
-                  "amount",
-                  "value",
-                  "lowPrice",
-                  "minPrice",
-                  "displayPrice",
-                  "formattedPrice"
-                ]
-              }
-            },
-            {
-              "key": "text_fields",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "name",
-                  "label",
-                  "title",
-                  "text",
-                  "value",
-                  "content",
-                  "description",
-                  "alt"
-                ]
-              }
-            },
-            {
-              "key": "url_fields",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "href",
-                  "url",
-                  "link",
-                  "canonical_url"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "noisy_product_attribute_key_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "about",
-            "acerca",
-            "account",
-            "address",
-            "ayuda",
-            "compliance",
-            "contact",
-            "cookie",
-            "customer",
-            "email",
-            "faq",
-            "footer",
-            "help",
-            "importer",
-            "manufacturer",
-            "newsletter",
-            "policy",
-            "privacy",
-            "responsible",
-            "return",
-            "service",
-            "servicios",
-            "shipping",
-            "social",
-            "store",
-            "suscrib",
-            "terms",
-            "trade_name"
-          ]
-        }
-      },
-      {
-        "key": "non_content_rich_text_tags",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "script",
-            "style",
-            "svg",
-            "noscript",
-            "iframe",
-            "template",
-            "meta",
-            "link"
-          ]
-        }
-      },
-      {
-        "key": "page_url_currency_hints",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "/au/",
-              "value": "AUD"
-            },
-            {
-              "key": "/ca/",
-              "value": "CAD"
-            },
-            {
-              "key": "/de/",
-              "value": "EUR"
-            },
-            {
-              "key": "/en-au/",
-              "value": "AUD"
-            },
-            {
-              "key": "/en-ca/",
-              "value": "CAD"
-            },
-            {
-              "key": "/en-gb/",
-              "value": "GBP"
-            },
-            {
-              "key": "/en-in/",
-              "value": "INR"
-            },
-            {
-              "key": "/en-us/",
-              "value": "USD"
-            },
-            {
-              "key": "/es/",
-              "value": "EUR"
-            },
-            {
-              "key": "/eu/",
-              "value": "EUR"
-            },
-            {
-              "key": "/fr/",
-              "value": "EUR"
-            },
-            {
-              "key": "/gb/",
-              "value": "GBP"
-            },
-            {
-              "key": "/in/",
-              "value": "INR"
-            },
-            {
-              "key": "/it/",
-              "value": "EUR"
-            },
-            {
-              "key": "/ja-jp/",
-              "value": "JPY"
-            },
-            {
-              "key": "/jp/",
-              "value": "JPY"
-            },
-            {
-              "key": "/nl/",
-              "value": "EUR"
-            },
-            {
-              "key": "/uk/",
-              "value": "GBP"
-            },
-            {
-              "key": "/us/",
-              "value": "USD"
-            }
-          ]
-        }
-      },
-      {
-        "key": "price_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "price",
-            "sale_price",
-            "original_price"
-          ]
-        }
-      },
-      {
-        "key": "price_regex",
-        "value": "\\d[\\d,.]*"
-      },
-      {
-        "key": "product_attribute_css_noise_pattern",
-        "value": "(?i)(?:^|\\s)(?:@media|@supports|\\.?[a-z0-9_-]+\\s*\\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\\s*:)"
-      },
-      {
-        "key": "product_attribute_digit_only_key_pattern",
-        "value": "^\\d+(?:[_-]\\d+)*$"
-      },
-      {
-        "key": "salary_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "salary",
-            "compensation",
-            "pay",
-            "salary_range",
-            "base_salary",
-            "pay_range",
-            "compensation_range"
-          ]
-        }
-      },
-      {
-        "key": "salary_range_regex",
-        "value": "(?:(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:[-–—]|to|until)\\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?(?:\\s*/\\s*[a-zA-Z]+)?|(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)\\s*\\d[\\d,.]*[kKmMbB]?(?:\\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?(?:\\s*/\\s*[a-zA-Z]+)?|\\d[\\d,.]*[kKmMbB]?(?:\\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?(?:\\s*/\\s*[a-zA-Z]+)?)"
-      },
-      {
-        "key": "size_guide_noise_values",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "uk",
-            "us",
-            "it",
-            "au",
-            "kr",
-            "eu",
-            "jeans"
-          ]
-        }
-      },
-      {
-        "key": "size_noise_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "max-width",
-            "min-width",
-            "vw",
-            "vh",
-            "sizes=",
-            "srcset",
-            "rem",
-            "em",
-            "px",
-            "padding",
-            "margin",
-            "font-size",
-            "display:",
-            "border:",
-            "auto"
-          ]
-        }
-      }
-    ]
-  },
-  "_CANDIDATE_FIELD_GROUPS": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "availability",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "availability"
-          ]
-        }
-      },
-      {
-        "key": "category",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "category"
-          ]
-        }
-      },
-      {
-        "key": "currency",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "currency"
-          ]
-        }
-      },
-      {
-        "key": "description",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "description",
-            "summary"
-          ]
-        }
-      },
-      {
-        "key": "entity_name",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "brand",
-            "company"
-          ]
-        }
-      },
-      {
-        "key": "identifier",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "sku",
-            "vin",
-            "dealer_name"
-          ]
-        }
-      },
-      {
-        "key": "image_collection",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "additional_images"
-          ]
-        }
-      },
-      {
-        "key": "image_primary",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "image_url"
-          ]
-        }
-      },
-      {
-        "key": "job_text",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "responsibilities",
-            "requirements",
-            "qualifications",
-            "benefits",
-            "skills"
-          ]
-        }
-      },
-      {
-        "key": "numeric",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "price",
-            "sale_price",
-            "original_price",
-            "rating",
-            "review_count"
-          ]
-        }
-      },
-      {
-        "key": "salary",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "salary"
-          ]
-        }
-      },
-      {
-        "key": "title",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "title"
-          ]
-        }
-      },
-      {
-        "key": "url",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "url",
-            "apply_url"
-          ]
-        }
-      }
-    ]
-  },
-  "CANDIDATE_FIELD_GROUPS": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "availability",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "availability"
-          ]
-        }
-      },
-      {
-        "key": "category",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "category"
-          ]
-        }
-      },
-      {
-        "key": "currency",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "currency"
-          ]
-        }
-      },
-      {
-        "key": "description",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "description",
-            "summary"
-          ]
-        }
-      },
-      {
-        "key": "entity_name",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "brand",
-            "company"
-          ]
-        }
-      },
-      {
-        "key": "identifier",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "dealer_name",
-            "sku",
-            "vin"
-          ]
-        }
-      },
-      {
-        "key": "image_collection",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "additional_images"
-          ]
-        }
-      },
-      {
-        "key": "image_primary",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "image_url"
-          ]
-        }
-      },
-      {
-        "key": "job_text",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "benefits",
-            "qualifications",
-            "requirements",
-            "responsibilities",
-            "skills"
-          ]
-        }
-      },
-      {
-        "key": "numeric",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "original_price",
-            "price",
-            "rating",
-            "review_count",
-            "sale_price"
-          ]
-        }
-      },
-      {
-        "key": "salary",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "salary"
-          ]
-        }
-      },
-      {
-        "key": "title",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "title"
-          ]
-        }
-      },
-      {
-        "key": "url",
-        "value": {
-          "__type__": "set",
-          "items": [
-            "apply_url",
-            "url"
-          ]
-        }
-      }
-    ]
-  },
-  "_CANDIDATE_FIELD_NAME_PATTERNS": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "availability_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "availability",
-            "stock"
-          ]
-        }
-      },
-      {
-        "key": "category_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "category",
-            "department",
-            "breadcrumb"
-          ]
-        }
-      },
-      {
-        "key": "currency_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "currency"
-          ]
-        }
-      },
-      {
-        "key": "description_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "description",
-            "summary",
-            "overview",
-            "details"
-          ]
-        }
-      },
-      {
-        "key": "identifier_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "sku",
-            "id",
-            "code",
-            "vin",
-            "mpn"
-          ]
-        }
-      },
-      {
-        "key": "image_collection_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "images",
-            "gallery",
-            "photos",
-            "media"
-          ]
-        }
-      },
-      {
-        "key": "image_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "image",
-            "images",
-            "gallery",
-            "photo",
-            "thumbnail",
-            "hero"
-          ]
-        }
-      },
-      {
-        "key": "price_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "price",
-            "amount",
-            "cost"
-          ]
-        }
-      },
-      {
-        "key": "rating_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "rating",
-            "score"
-          ]
-        }
-      },
-      {
-        "key": "review_count_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "review_count",
-            "reviews",
-            "rating_count"
-          ]
-        }
-      },
-      {
-        "key": "salary_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "salary",
-            "pay",
-            "rate",
-            "compensation"
-          ]
-        }
-      },
-      {
-        "key": "url_suffixes",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "_url",
-            "url",
-            "_link",
-            "link",
-            "_href",
-            "href"
-          ]
-        }
-      }
-    ]
-  },
-  "CANDIDATE_URL_SUFFIXES": {
-    "__type__": "tuple",
-    "items": [
-      "_url",
-      "url",
-      "_link",
-      "link",
-      "_href",
-      "href"
-    ]
-  },
-  "CANDIDATE_IMAGE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "image",
-      "images",
-      "gallery",
-      "photo",
-      "thumbnail",
-      "hero"
-    ]
-  },
-  "CANDIDATE_IMAGE_COLLECTION_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "images",
-      "gallery",
-      "photos",
-      "media"
-    ]
-  },
-  "CANDIDATE_CURRENCY_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "currency"
-    ]
-  },
-  "CANDIDATE_PRICE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "price",
-      "amount",
-      "cost"
-    ]
-  },
-  "CANDIDATE_SALARY_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "salary",
-      "pay",
-      "rate",
-      "compensation"
-    ]
-  },
-  "CANDIDATE_REVIEW_COUNT_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "review_count",
-      "reviews",
-      "rating_count"
-    ]
-  },
-  "CANDIDATE_RATING_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "rating",
-      "score"
-    ]
-  },
-  "CANDIDATE_AVAILABILITY_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "availability",
-      "stock"
-    ]
-  },
-  "CANDIDATE_CATEGORY_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "category",
-      "department",
-      "breadcrumb"
-    ]
-  },
-  "CANDIDATE_IDENTIFIER_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "sku",
-      "id",
-      "code",
-      "vin",
-      "mpn"
-    ]
-  },
-  "GA_DATA_LAYER_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "ecommerce",
-      "event",
-      "gtm.start",
-      "gtm.uniqueEventId",
-      "pageName",
-      "pageType",
-      "visitorType"
-    ]
-  },
-  "CANDIDATE_DESCRIPTION_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "description",
-      "summary",
-      "overview",
-      "details"
-    ]
-  },
-  "CANDIDATE_UI_NOISE_PHRASES": {
-    "__type__": "tuple",
-    "items": [
-      "add to wishlist",
-      "add to bag",
-      "add to cart",
-      "buy now",
-      "selling fast",
-      "best seller",
-      "top seller",
-      "limited stock",
-      "low stock",
-      "sold out",
-      "out of stock",
-      "view more",
-      "learn more",
-      "join the waitlist",
-      "check availability in store",
-      "check availability in stores"
-    ]
-  },
-  "CANDIDATE_IMAGE_NOISE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "logo",
-      "sprite",
-      "icon",
-      "badge",
-      "favicon"
-    ]
-  },
-  "CANDIDATE_IMAGE_URL_HINT_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "/image",
-      "/images/",
-      "/img",
-      "image=",
-      "im/"
-    ]
-  },
-  "CANDIDATE_IMAGE_CANDIDATE_DICT_KEYS": {
-    "__type__": "tuple",
-    "items": [
-      "url",
-      "contentUrl",
-      "src",
-      "image",
-      "thumbnail",
-      "href"
-    ]
-  },
-  "CANDIDATE_COLOR_CSS_NOISE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "padding:",
-      "font-size",
-      "font-weight",
-      "transition:",
-      "position:",
-      "-webkit-",
-      "css-"
-    ]
-  },
-  "CANDIDATE_SIZE_CSS_NOISE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "max-width",
-      "min-width",
-      "vw",
-      "vh",
-      "sizes=",
-      "srcset",
-      "padding:",
-      "font-size",
-      "font-weight",
-      "transition:",
-      "position:",
-      "-webkit-",
-      "size"
-    ]
-  },
-  "CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS": {
-    "__type__": "frozenset",
-    "items": [
-      "iframe",
-      "link",
-      "meta",
-      "noscript",
-      "script",
-      "style",
-      "svg",
-      "template"
-    ]
-  },
-  "CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS": {
-    "__type__": "frozenset",
-    "items": [
-      "about",
-      "account",
-      "acerca",
-      "address",
-      "ayuda",
-      "compliance",
-      "contact",
-      "cookie",
-      "customer",
-      "email",
-      "faq",
-      "footer",
-      "help",
-      "importer",
-      "manufacturer",
-      "newsletter",
-      "policy",
-      "privacy",
-      "responsible",
-      "return",
-      "service",
-      "servicios",
-      "shipping",
-      "social",
-      "store",
-      "suscrib",
-      "terms",
-      "trade_name"
-    ]
-  },
-  "CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN": "(?i)(?:^|\\s)(?:@media|@supports|\\.?[a-z0-9_-]+\\s*\\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\\s*:)",
-  "CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN": "^\\d+(?:[_-]\\d+)*$",
-  "CANDIDATE_SIZE_PACKAGE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "pkg of",
-      "pack of",
-      "pack size",
-      "package"
-    ]
-  },
-  "CANDIDATE_AVAILABILITY_NOISE_PHRASES": {
-    "__type__": "tuple",
-    "items": [
-      "select options",
-      "choose options",
-      "add to cart",
-      "quantity",
-      "wishlist",
-      "join the waitlist",
-      "check availability in store",
-      "check availability in stores"
-    ]
-  },
-  "CANDIDATE_CATEGORY_NOISE_PHRASES": {
-    "__type__": "tuple",
-    "items": [
-      "breadcrumb",
-      "view all",
-      "filter by",
-      "sort by",
-      "shop all",
-      "purchased",
-      "add to cart",
-      "add to bag",
-      "quick view",
-      "quick shop",
-      "shop now",
-      "buy now",
-      "learn more",
-      "see details",
-      "view details",
-      "more info",
-      "read more",
-      "click here",
-      "free shipping",
-      "free returns",
-      "on sale",
-      "new arrival",
-      "best seller",
-      "top rated",
-      "customer favorite"
-    ]
-  },
-  "CANDIDATE_DESCRIPTION_META_SELECTORS": {
-    "__type__": "tuple",
-    "items": [
-      "meta[name='description']",
-      "meta[property='og:description']",
-      "meta[name='twitter:description']"
-    ]
-  },
-  "CANDIDATE_DESCRIPTION_FALLBACK_CONTENT_SELECTORS": {
-    "__type__": "tuple",
-    "items": [
-      "article",
-      "main",
-      "body"
-    ]
-  },
-  "CANDIDATE_TRACKING_PARAM_EXACT_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "ref",
-      "ref_src"
-    ]
-  },
-  "CANDIDATE_TRACKING_PARAM_PREFIXES": {
-    "__type__": "tuple",
-    "items": [
-      "utm_",
-      "fbclid",
-      "gclid",
-      "mc_"
-    ]
-  },
-  "CANDIDATE_URL_ALLOWED_SCHEMES": {
-    "__type__": "frozenset",
-    "items": [
-      "http",
-      "https"
-    ]
-  },
-  "CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT": 40,
-  "CANDIDATE_PLACEHOLDER_VALUES": {
-    "__type__": "tuple",
-    "items": [
-      "-",
-      "—",
-      "--",
-      "n/a",
-      "na",
-      "none",
-      "null",
-      "undefined"
-    ]
-  },
   "NORMALIZATION_SENTINEL_VALUES": {
     "__type__": "frozenset",
     "items": [
@@ -5172,301 +5291,85 @@
       "—"
     ]
   },
-  "CANDIDATE_GENERIC_CATEGORY_VALUES": {
-    "__type__": "tuple",
-    "items": [
-      "detail-page",
-      "detail_page",
-      "product",
-      "page",
-      "pdp",
-      "simple",
-      "configurable",
-      "image",
-      "imageobject",
-      "listitem",
-      "itemlist",
-      "collectionpage",
-      "productcard",
-      "contentcard",
-      "aggregateoffer",
-      "productgroup",
-      "aggregaterating",
-      "review",
-      "person",
-      "rating",
-      "merchantreturnpolicy",
-      "merchantreturnpolicyseasonaloverride",
-      "webpage",
-      "organization",
-      "speakablespecification",
-      "individualproduct",
-      "peopleaudience",
-      "brand",
-      "offer",
-      "postaladdress",
-      "country",
-      "quantitativevalue",
-      "unitpricespecification",
-      "pricespecification",
-      "deliverychargespecification",
-      "openinghoursspecification",
-      "geopoint",
-      "geocoordinates",
-      "place",
-      "contactpoint",
-      "searchaction",
-      "readaction",
-      "buyaction",
-      "sitenavigationelement",
-      "wpadblock",
-      "creativework",
-      "article",
-      "newsarticle",
-      "blogposting",
-      "howto",
-      "faqpage",
-      "videoobject",
-      "localbusiness",
-      "store",
-      "thing",
-      "guest",
-      "max_discount",
-      "website",
-      "web site",
-      "all",
-      "shop",
-      "products",
-      "items",
-      "collection",
-      "collections",
-      "catalog",
-      "new",
-      "sale",
-      "clearance",
-      "featured",
-      "trending",
-      "popular",
-      "recommended"
-    ]
-  },
-  "CANDIDATE_GENERIC_TITLE_VALUES": {
-    "__type__": "tuple",
-    "items": [
-      "chrome",
-      "firefox",
-      "safari",
-      "edge",
-      "home",
-      "cookie preferences",
-      "cookie settings",
-      "privacy preferences",
-      "privacy settings",
-      "manage cookies",
-      "consent preferences",
-      "accept cookies",
-      "sign in",
-      "log in",
-      "my account",
-      "newsletter",
-      "create account",
-      "register"
-    ]
-  },
-  "CANDIDATE_TITLE_NOISE_PHRASES": {
-    "__type__": "tuple",
-    "items": [
-      "cookie preferences",
-      "privacy policy",
-      "terms of service",
-      "sign in",
-      "log in",
-      "my account",
-      "add to cart",
-      "shopping cart",
-      "department navigation",
-      "cookie manager banner"
-    ]
-  },
-  "CANDIDATE_PROMO_ONLY_TITLE_PATTERN": "^(?:[-–—]?\\s*)?(?:\\d{1,3}%\\s*(?:off)?|sale|new(?:\\s+in)?|view\\s*\\d+|best seller|top seller)\\s*$",
-  "CANDIDATE_RATING_WORD_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "one",
-      "two",
-      "three",
-      "four",
-      "five"
-    ]
-  },
-  "CANDIDATE_ANALYTICS_DIMENSION_TOKEN_PATTERN": "dimension\\d+|metric\\d+|cd\\d+|ev\\d+",
-  "CANDIDATE_ALPHA_CHAR_PATTERN": "[A-Za-z]",
-  "CANDIDATE_UI_NOISE_TOKEN_PATTERN": "\\b[a-z]+_[a-z0-9_]+\\b",
-  "CANDIDATE_UI_ICON_TOKEN_PATTERN": "(corporate_fare|bar_chart|home_pin|location_on|travel_explore|business_center|storefront|schedule|payments|school|work)(?=[A-Z]|\\b)|place(?=[A-Z])",
-  "CANDIDATE_SCRIPT_NOISE_PATTERN": "\\b(?:imageloader|document\\.getelementbyid|fallback-image)\\b",
-  "CANDIDATE_URL_ABSOLUTE_PREFIXES": {
-    "__type__": "tuple",
-    "items": [
-      "http://",
-      "https://"
-    ]
-  },
-  "CANDIDATE_ASSET_FILE_EXTENSIONS": {
-    "__type__": "tuple",
-    "items": [
-      ".woff",
-      ".woff2",
-      ".ttf",
-      ".otf",
-      ".eot",
-      ".css",
-      ".js",
-      ".map"
-    ]
-  },
-  "CANDIDATE_IMAGE_FILE_EXTENSIONS": {
-    "__type__": "tuple",
-    "items": [
-      ".jpg",
-      ".jpeg",
-      ".png",
-      ".webp",
-      ".gif",
-      ".avif",
-      ".svg"
-    ]
-  },
-  "CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT": 20,
-  "CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN": "\\d+(?:[_-]\\d+)*?",
-  "CANDIDATE_DYNAMIC_FIELD_NAME_PATTERN": "[a-z][a-z0-9_]*",
-  "CANDIDATE_COLOR_VARIANT_COUNT_PATTERN": "^\\d+\\s+colors?\\b",
-  "CANDIDATE_AVAILABILITY_TOKENS_LIMITED_STOCK": {
-    "__type__": "tuple",
-    "items": [
-      "limited stock",
-      "low stock",
-      "only",
-      "left in stock"
-    ]
-  },
-  "CANDIDATE_AVAILABILITY_TOKENS_IN_STOCK": {
-    "__type__": "tuple",
-    "items": [
-      "in stock",
-      "instock",
-      "available",
-      "ready to ship"
-    ]
-  },
-  "CANDIDATE_AVAILABILITY_TOKENS_OUT_OF_STOCK": {
-    "__type__": "tuple",
-    "items": [
-      "out of stock",
-      "oos",
-      "sold out",
-      "unavailable"
-    ]
-  },
-  "CANDIDATE_AVAILABILITY_TOKENS_PREORDER": {
-    "__type__": "tuple",
-    "items": [
-      "pre-order",
-      "preorder",
-      "backorder",
-      "back-order"
-    ]
-  },
-  "_DISCOVERED_FIELD_CLEANUP": {
+  "PAGE_URL_CURRENCY_HINTS_RAW": {
     "__type__": "dict",
     "items": [
       {
-        "key": "field_noise_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "review",
-            "reviews",
-            "reviewer",
-            "rating",
-            "ratings",
-            "votes",
-            "vote",
-            "stars",
-            "star",
-            "helpful",
-            "report",
-            "distribution",
-            "verified",
-            "language",
-            "incentives",
-            "submission"
-          ]
-        }
+        "key": "/au/",
+        "value": "AUD"
       },
       {
-        "key": "value_noise_phrases",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "verified reviewer",
-            "was this helpful",
-            "recommend this product",
-            "review this product",
-            "filter reviews",
-            "rating distribution",
-            "overall rating",
-            "out of 5",
-            "too small",
-            "too big",
-            "runs very narrow",
-            "runs very wide",
-            "report this review",
-            "reviews with",
-            "select to rate"
-          ]
-        }
+        "key": "/ca/",
+        "value": "CAD"
+      },
+      {
+        "key": "/de/",
+        "value": "EUR"
+      },
+      {
+        "key": "/en-au/",
+        "value": "AUD"
+      },
+      {
+        "key": "/en-ca/",
+        "value": "CAD"
+      },
+      {
+        "key": "/en-gb/",
+        "value": "GBP"
+      },
+      {
+        "key": "/en-in/",
+        "value": "INR"
+      },
+      {
+        "key": "/en-us/",
+        "value": "USD"
+      },
+      {
+        "key": "/es/",
+        "value": "EUR"
+      },
+      {
+        "key": "/eu/",
+        "value": "EUR"
+      },
+      {
+        "key": "/fr/",
+        "value": "EUR"
+      },
+      {
+        "key": "/gb/",
+        "value": "GBP"
+      },
+      {
+        "key": "/in/",
+        "value": "INR"
+      },
+      {
+        "key": "/it/",
+        "value": "EUR"
+      },
+      {
+        "key": "/ja-jp/",
+        "value": "JPY"
+      },
+      {
+        "key": "/jp/",
+        "value": "JPY"
+      },
+      {
+        "key": "/nl/",
+        "value": "EUR"
+      },
+      {
+        "key": "/uk/",
+        "value": "GBP"
+      },
+      {
+        "key": "/us/",
+        "value": "USD"
       }
-    ]
-  },
-  "DISCOVERED_FIELD_NOISE_TOKENS": {
-    "__type__": "set",
-    "items": [
-      "distribution",
-      "helpful",
-      "incentives",
-      "language",
-      "rating",
-      "ratings",
-      "report",
-      "review",
-      "reviewer",
-      "reviews",
-      "star",
-      "stars",
-      "submission",
-      "verified",
-      "vote",
-      "votes"
-    ]
-  },
-  "DISCOVERED_VALUE_NOISE_PHRASES": {
-    "__type__": "tuple",
-    "items": [
-      "verified reviewer",
-      "was this helpful",
-      "recommend this product",
-      "review this product",
-      "filter reviews",
-      "rating distribution",
-      "overall rating",
-      "out of 5",
-      "too small",
-      "too big",
-      "runs very narrow",
-      "runs very wide",
-      "report this review",
-      "reviews with",
-      "select to rate"
     ]
   },
   "PRICE_FIELDS": {
@@ -5478,293 +5381,20 @@
     ]
   },
   "PRICE_REGEX": "\\d[\\d,.]*",
-  "SALARY_RANGE_REGEX": "(?i)(?:(?:[\\$£¥€₹]|(?:AED|AFN|ALL|AMD|ANG|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BGN|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG))?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:[-–—]|to|until)\\s*(?:[\\$£¥€₹]|(?:AED|AFN|ALL|AMD|ANG|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BGN|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG))?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:[\\$£¥€₹]|(?:AED|AFN|ALL|AMD|ANG|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BGN|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG))?(?:\\s*/\\s*[a-zA-Z]+)?|(?:[\\$£¥€₹]|(?:AED|AFN|ALL|AMD|ANG|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BGN|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG))\\s*\\d[\\d,.]*[kKmMbB]?(?:\\s*(?:[\\$£¥€₹]|(?:AED|AFN|ALL|AMD|ANG|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BGN|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG)))?(?:\\s*/\\s*[a-zA-Z]+)?|\\d[\\d,.]*[kKmMbB]?(?:\\s*(?:[\\$£¥€₹]|(?:AED|AFN|ALL|AMD|ANG|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BGN|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG)))?(?:\\s*/\\s*[a-zA-Z]+)?)",
-  "CURRENCY_CODES": {
-    "__type__": "tuple",
-    "items": [
-      "AED",
-      "AFN",
-      "ALL",
-      "AMD",
-      "ANG",
-      "AOA",
-      "ARS",
-      "AUD",
-      "AWG",
-      "AZN",
-      "BAM",
-      "BBD",
-      "BDT",
-      "BGN",
-      "BHD",
-      "BIF",
-      "BMD",
-      "BND",
-      "BOB",
-      "BOV",
-      "BRL",
-      "BSD",
-      "BTN",
-      "BWP",
-      "BYN",
-      "BZD",
-      "CAD",
-      "CDF",
-      "CHE",
-      "CHF",
-      "CHW",
-      "CLF",
-      "CLP",
-      "CNY",
-      "COP",
-      "COU",
-      "CRC",
-      "CUP",
-      "CVE",
-      "CZK",
-      "DJF",
-      "DKK",
-      "DOP",
-      "DZD",
-      "EGP",
-      "ERN",
-      "ETB",
-      "EUR",
-      "FJD",
-      "FKP",
-      "GBP",
-      "GEL",
-      "GHS",
-      "GIP",
-      "GMD",
-      "GNF",
-      "GTQ",
-      "GYD",
-      "HKD",
-      "HNL",
-      "HTG",
-      "HUF",
-      "IDR",
-      "ILS",
-      "INR",
-      "IQD",
-      "IRR",
-      "ISK",
-      "JMD",
-      "JOD",
-      "JPY",
-      "KES",
-      "KGS",
-      "KHR",
-      "KMF",
-      "KPW",
-      "KRW",
-      "KWD",
-      "KYD",
-      "KZT",
-      "LAK",
-      "LBP",
-      "LKR",
-      "LRD",
-      "LSL",
-      "LYD",
-      "MAD",
-      "MDL",
-      "MGA",
-      "MKD",
-      "MMK",
-      "MNT",
-      "MOP",
-      "MRU",
-      "MUR",
-      "MVR",
-      "MWK",
-      "MXN",
-      "MXV",
-      "MYR",
-      "MZN",
-      "NAD",
-      "NGN",
-      "NIO",
-      "NOK",
-      "NPR",
-      "NZD",
-      "OMR",
-      "PAB",
-      "PEN",
-      "PGK",
-      "PHP",
-      "PKR",
-      "PLN",
-      "PYG",
-      "QAR",
-      "RON",
-      "RSD",
-      "RUB",
-      "RWF",
-      "SAR",
-      "SBD",
-      "SCR",
-      "SDG",
-      "SEK",
-      "SGD",
-      "SHP",
-      "SLE",
-      "SOS",
-      "SRD",
-      "SSP",
-      "STN",
-      "SVC",
-      "SYP",
-      "SZL",
-      "THB",
-      "TJS",
-      "TMT",
-      "TND",
-      "TOP",
-      "TRY",
-      "TTD",
-      "TWD",
-      "TZS",
-      "UAH",
-      "UGX",
-      "USD",
-      "USN",
-      "UYI",
-      "UYU",
-      "UYW",
-      "UZS",
-      "VED",
-      "VES",
-      "VND",
-      "VUV",
-      "WST",
-      "XAF",
-      "XAG",
-      "XAU",
-      "XBA",
-      "XBB",
-      "XBC",
-      "XBD",
-      "XCD",
-      "XDR",
-      "XOF",
-      "XPD",
-      "XPF",
-      "XPT",
-      "XSU",
-      "XTS",
-      "XUA",
-      "XXX",
-      "YER",
-      "ZAR",
-      "ZMW",
-      "ZWG"
-    ]
-  },
-  "CURRENCY_SYMBOL_MAP": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "$",
-        "value": "USD"
-      },
-      {
-        "key": "£",
-        "value": "GBP"
-      },
-      {
-        "key": "¥",
-        "value": "JPY"
-      },
-      {
-        "key": "€",
-        "value": "EUR"
-      },
-      {
-        "key": "₹",
-        "value": "INR"
-      }
-    ]
-  },
-  "COLOR_NOISE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "rgb(",
-      "rgba(",
-      "hsl(",
-      "var(",
-      "background",
-      "color:",
-      "border:",
-      "display:",
-      "margin",
-      "padding",
-      "font-family",
-      "font-size",
-      "inherit"
-    ]
-  },
-  "SIZE_NOISE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "max-width",
-      "min-width",
-      "vw",
-      "vh",
-      "sizes=",
-      "srcset",
-      "rem",
-      "em",
-      "px",
-      "padding",
-      "margin",
-      "font-size",
-      "display:",
-      "border:",
-      "auto"
-    ]
-  },
-  "SIZE_GUIDE_NOISE_VALUES": {
+  "PRODUCT_IDENTITY_FIELDS": {
     "__type__": "frozenset",
     "items": [
-      "au",
-      "eu",
-      "it",
-      "jeans",
-      "kr",
-      "uk",
-      "us"
-    ]
-  },
-  "HTTP_URL_PREFIXES": {
-    "__type__": "tuple",
-    "items": [
-      "http://",
-      "https://"
-    ]
-  },
-  "MAX_SELECTOR_ROWS_PER_FIELD": 100,
-  "EMPTY_SENTINEL_VALUES": {
-    "__type__": "frozenset",
-    "items": [
-      "-",
-      "--",
-      "n/a",
-      "na",
-      "none",
-      "null",
-      "undefined",
-      "—"
-    ]
-  },
-  "DISCOVERED_SOURCE_NOISE_TOKENS": {
-    "__type__": "frozenset",
-    "items": [
-      "bazaarvoice",
-      "rating_distribution",
-      "review",
-      "reviews"
+      "additional_images",
+      "availability",
+      "brand",
+      "category",
+      "description",
+      "image_url",
+      "original_price",
+      "price",
+      "sale_price",
+      "sku",
+      "title"
     ]
   },
   "REQUIRED_FIELDS_BY_SURFACE": {
@@ -5792,1049 +5422,132 @@
       }
     ]
   },
-  "HYDRATED_STATE_PATTERNS": {
+  "REVIEW_CONTAINER_KEYS": {
     "__type__": "list",
     "items": [
-      "__INITIAL_STATE__",
-      "__NUXT__",
-      "__APOLLO_STATE__",
-      "__PRELOADED_STATE__",
-      "__remixContext",
-      "__INITIAL_PROPS__",
-      "__DATA__",
-      "__myx",
-      "__STORE__",
-      "__APP_STATE__"
+      "adapter_data",
+      "network_payloads",
+      "next_data",
+      "_hydrated_states",
+      "json_ld",
+      "microdata",
+      "tables",
+      "content_type",
+      "source",
+      "full_json_response",
+      "json_record_keys",
+      "requested_field_coverage",
+      "sections",
+      "specifications",
+      "promoted_fields",
+      "coverage",
+      "is_blocked",
+      "reason",
+      "provider"
     ]
   },
-  "DYNAMIC_FIELD_NAME_DROP_TOKENS": {
+  "SALARY_RANGE_REGEX": "(?i)(?:(?:[$£¥€₹]|[A-Z]{3})?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:[-–—]|to|until)\\s*(?:[$£¥€₹]|[A-Z]{3})?\\s*\\d[\\d,.]*[kKmMbB]?(?:\\s*/\\s*[a-zA-Z]+)?|(?:[$£¥€₹]|[A-Z]{3})\\s*\\d[\\d,.]*[kKmMbB]?(?:\\s*/\\s*[a-zA-Z]+)?|\\d[\\d,.]*[kKmMbB]?\\s*(?:[$£¥€₹]|[A-Z]{3})(?:\\s*/\\s*[a-zA-Z]+)?)",
+  "SECTION_ANCESTOR_STOP_TAGS": {
     "__type__": "set",
     "items": [
-      "arrivals",
-      "bag",
-      "best",
-      "browse",
-      "buy",
-      "cart",
-      "featured",
-      "gifts",
-      "less",
-      "location",
-      "menu",
-      "more",
-      "new",
-      "now",
-      "recommended",
-      "review",
-      "reviews",
-      "save",
-      "sell",
-      "seller",
-      "shop",
-      "shopping",
-      "similar",
-      "sort",
-      "top",
-      "trending",
-      "vote",
-      "votes"
+      "aside",
+      "footer",
+      "form",
+      "header",
+      "nav"
     ]
   },
-  "CANDIDATE_DYNAMIC_FIELD_NAME_HARD_REJECTS": {
-    "__type__": "frozenset",
-    "items": [
-      "from",
-      "location",
-      "recommended",
-      "reviews",
-      "votes"
-    ]
-  },
-  "_CANDIDATE_SCHEMA_NOISE_PATTERNS": {
-    "__type__": "list",
-    "items": [
-      "^elp\\d+$",
-      "^e\\d+d_[a-z0-9_]+$",
-      "^e\\d+[a-z]_[a-z]{2}$",
-      "^el_[a-z0-9]{2,6}_\\d+$",
-      "^c\\d{3,5}$",
-      "^[a-z]{1,2}\\d{2,6}[a-z]?_[a-z0-9_]+$"
-    ]
-  },
-  "DYNAMIC_FIELD_NAME_SCHEMA_NOISE_REGEXES": {
-    "__type__": "tuple",
-    "items": [
-      {
-        "__type__": "pattern",
-        "pattern": "^elp\\d+$",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "^e\\d+d_[a-z0-9_]+$",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "^e\\d+[a-z]_[a-z]{2}$",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "^el_[a-z0-9]{2,6}_\\d+$",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "^c\\d{3,5}$",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "^[a-z]{1,2}\\d{2,6}[a-z]?_[a-z0-9_]+$",
-        "flags": 34
-      }
-    ]
-  },
-  "DYNAMIC_FIELD_NAME_TICKERLIKE_BLOCKLIST": {
-    "__type__": "frozenset",
-    "items": [
-      "ada",
-      "arb",
-      "atom",
-      "avax",
-      "bnb",
-      "btc",
-      "cro",
-      "doge",
-      "dot",
-      "eth",
-      "ftm",
-      "ltc",
-      "matic",
-      "near",
-      "op",
-      "sol",
-      "trx",
-      "uni",
-      "xrp"
-    ]
-  },
-  "_FIELD_POLLUTION_RULE_DEFAULTS": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "__common__",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "cookie",
-            "privacy",
-            "sign in",
-            "log in",
-            "my account",
-            "analytics",
-            "pageview",
-            "gtm"
-          ]
-        }
-      },
-      {
-        "key": "availability",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "add to cart",
-            "choose options",
-            "select options",
-            "view details"
-          ]
-        }
-      },
-      {
-        "key": "brand",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "home >",
-            "home /",
-            "policy"
-          ]
-        }
-      },
-      {
-        "key": "care",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "care instructions"
-          ]
-        }
-      },
-      {
-        "key": "category",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "page type",
-            "page category",
-            "detail page"
-          ]
-        }
-      },
-      {
-        "key": "color",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "add to cart",
-            "choose options",
-            "select options"
-          ]
-        }
-      },
-      {
-        "key": "features",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "livechat"
-          ]
-        }
-      },
-      {
-        "key": "size",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "select size",
-            "choose size"
-          ]
-        }
-      },
-      {
-        "key": "title",
-        "value": {
-          "__type__": "tuple",
-          "items": [
-            "add to cart",
-            "shop now",
-            "view cart",
-            "menu"
-          ]
-        }
-      }
-    ]
-  },
-  "_FIELD_POLLUTION_RULE_CONFIG": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "brand",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "cookie",
-                  "privacy",
-                  "sign in",
-                  "log in",
-                  ">",
-                  "/"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "category",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "cookie",
-                  "privacy",
-                  "sign in",
-                  "log in"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "description",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "cookie preferences",
-                  "privacy settings",
-                  "manage cookies"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "title",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "list",
-                "items": [
-                  "cookie preferences",
-                  "privacy policy",
-                  "sign in",
-                  "log in",
-                  "add to cart"
-                ]
-              }
-            }
-          ]
-        }
-      }
-    ]
-  },
-  "FIELD_POLLUTION_RULES": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "__common__",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "cookie",
-                  "privacy",
-                  "sign in",
-                  "log in",
-                  "my account",
-                  "analytics",
-                  "pageview",
-                  "gtm"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "availability",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "add to cart",
-                  "choose options",
-                  "select options",
-                  "view details"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "brand",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "cookie",
-                  "privacy",
-                  "sign in",
-                  "log in",
-                  ">",
-                  "/",
-                  "home >",
-                  "home /",
-                  "policy"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "care",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "care instructions"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "category",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "cookie",
-                  "privacy",
-                  "sign in",
-                  "log in",
-                  "page type",
-                  "page category",
-                  "detail page"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "color",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "add to cart",
-                  "choose options",
-                  "select options"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "features",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "livechat"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "size",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "select size",
-                  "choose size"
-                ]
-              }
-            }
-          ]
-        }
-      },
-      {
-        "key": "title",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "reject_phrases",
-              "value": {
-                "__type__": "tuple",
-                "items": [
-                  "cookie preferences",
-                  "privacy policy",
-                  "sign in",
-                  "log in",
-                  "add to cart",
-                  "shop now",
-                  "view cart",
-                  "menu"
-                ]
-              }
-            }
-          ]
-        }
-      }
-    ]
-  },
-  "TITLE_NOISE_WORDS": {
-    "__type__": "frozenset",
-    "items": [
-      "access denied",
-      "cart",
-      "home",
-      "loading...",
-      "search results",
-      "sign in"
-    ]
-  },
-  "LOW_QUALITY_MERGE_TOKENS": {
-    "__type__": "frozenset",
-    "items": [
-      "account",
-      "agree",
-      "cookie",
-      "home",
-      "log in",
-      "menu",
-      "policy",
-      "privacy",
-      "sign in"
-    ]
-  },
-  "FIELD_VALUE_NOISE_FRAGMENTS": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "brand",
-        "value": {
-          "__type__": "frozenset",
-          "items": [
-            "cookie",
-            "privacy"
-          ]
-        }
-      },
-      {
-        "key": "category",
-        "value": {
-          "__type__": "frozenset",
-          "items": [
-            "cookie",
-            "sign in"
-          ]
-        }
-      },
-      {
-        "key": "color",
-        "value": {
-          "__type__": "frozenset",
-          "items": [
-            "cookie",
-            "select"
-          ]
-        }
-      },
-      {
-        "key": "title",
-        "value": {
-          "__type__": "frozenset",
-          "items": [
-            "access denied",
-            "cart",
-            "home",
-            "loading...",
-            "search results",
-            "sign in"
-          ]
-        }
-      }
-    ]
-  },
-  "NOISY_PRODUCT_ATTRIBUTE_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "about",
-      "about_us",
-      "accessibility_statement",
-      "contact",
-      "contact_us",
-      "customer_service",
-      "faq",
-      "faqs",
-      "policies",
-      "privacy",
-      "privacy_policy",
-      "return_policy",
-      "returns",
-      "shipping",
-      "shipping_policy",
-      "shopping_cart",
-      "store_locations",
-      "terms",
-      "terms_policies"
-    ]
-  },
-  "NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES": {
-    "__type__": "tuple",
-    "items": [
-      "loading... read more",
-      "privacy policy",
-      "terms of service",
-      "shipping policy",
-      "return policy",
-      "select a size",
-      "size guide",
-      "join the waitlist",
-      "check availability in store",
-      "request a catalog",
-      "join our team",
-      "account login",
-      "store locations",
-      "accessibility statement",
-      "subscribe to our newsletter",
-      "sign up for",
-      "follow us on",
-      "download our app",
-      "manage preferences",
-      "cookie settings",
-      "do not sell my personal"
-    ]
-  },
-  "NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS": {
-    "__type__": "tuple",
-    "items": [
-      "gift cards",
-      "press inquiries",
-      "the gazette",
-      "your privacy choices"
-    ]
-  },
-  "SIZE_CHART_REGION_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "africa",
-      "asia",
-      "eu",
-      "eu_it",
-      "europe",
-      "north_america",
-      "oceania",
-      "south_america",
-      "uk",
-      "us"
-    ]
-  },
-  "NETWORK_PAYLOAD_NOISE_URL_PATTERN": "geolocation|geoip|geo/|/geo\\b|\\banalytics\\b|tracking|telemetry|klarna\\.com|affirm\\.com|afterpay\\.com|olapic-cdn\\.com|livechat|zendesk\\.com|intercom\\.io|facebook\\.com|google-analytics|googletagmanager|sentry\\.io|datadome|px\\.ads|cdn-cgi/|captcha",
-  "CSS_NOISE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "padding:",
-      "font-size",
-      "font-weight",
-      "transition:",
-      "position:",
-      "-webkit-",
-      "css-",
-      "max-width",
-      "min-width",
-      "vw",
-      "vh",
-      "sizes=",
-      "srcset",
-      "size",
-      "padding",
-      "margin",
-      "display",
-      "position",
-      "justify-content",
-      "align-items",
-      "line-height",
-      "z-index",
-      "flex",
-      "flex-direction",
-      "background",
-      "border",
-      "width",
-      "height"
-    ]
-  },
-  "CSS_NOISE_PATTERN": "(?i)(?:^|\\s)(?:@media|@supports|\\.?[a-z0-9_-]+\\s*\\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\\s*:)",
-  "JSONLD_STRUCTURAL_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "@context",
-      "@graph",
-      "@id",
-      "@list",
-      "@set",
-      "@type",
-      "@vocab"
-    ]
-  },
-  "JSONLD_NON_PRODUCT_BLOCK_TYPES": {
-    "__type__": "frozenset",
-    "items": [
-      "breadcrumblist",
-      "faqpage",
-      "howto",
-      "imageobject",
-      "localbusiness",
-      "organization",
-      "person",
-      "searchaction",
-      "sitenavigationelement",
-      "store",
-      "videoobject",
-      "webpage",
-      "website"
-    ]
-  },
-  "JSONLD_TYPE_NOISE": {
+  "SECTION_ANCESTOR_STOP_TOKENS": {
     "__type__": "set",
     "items": [
-      "aggregate_rating",
-      "aggregaterating",
-      "breadcrumb_list",
-      "breadcrumblist",
-      "context",
-      "creative_work",
-      "creativework",
-      "faqpage",
-      "howto",
-      "image_object",
-      "imageobject",
-      "item_list",
-      "itemlist",
-      "list_item",
-      "listitem",
-      "offer",
-      "organization",
-      "search_action",
-      "searchaction",
-      "type",
-      "video_object",
-      "videoobject",
-      "webpage",
-      "website"
-    ]
-  },
-  "PRODUCT_IDENTITY_FIELDS": {
-    "__type__": "frozenset",
-    "items": [
-      "additional_images",
-      "availability",
-      "brand",
-      "category",
-      "description",
-      "image_url",
-      "original_price",
-      "price",
-      "sale_price",
-      "sku",
-      "title"
-    ]
-  },
-  "NESTED_NON_PRODUCT_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "aggregate_rating",
-      "aggregaterating",
-      "author",
+      "bazaarvoice",
       "breadcrumb",
-      "breadcrumblist",
-      "contributor",
-      "creator",
-      "itemlistelement",
-      "mainentityofpage",
-      "potentialaction",
-      "publisher",
+      "breadcrumbs",
+      "bv-rnr",
+      "consent",
+      "cookie",
+      "footer",
+      "header",
+      "menu",
+      "nav",
+      "newsletter",
+      "ratings",
       "review",
       "reviews"
     ]
   },
-  "SOURCE_RANKING": {
-    "__type__": "dict",
+  "SECTION_SKIP_PATTERNS": {
+    "__type__": "tuple",
     "items": [
-      {
-        "key": "adapter",
-        "value": 9
-      },
-      {
-        "key": "contract_regex",
-        "value": 10
-      },
-      {
-        "key": "contract_xpath",
-        "value": 11
-      },
-      {
-        "key": "datalayer",
-        "value": 10
-      },
-      {
-        "key": "dom",
-        "value": 1
-      },
-      {
-        "key": "dom_buy_box",
-        "value": 8
-      },
-      {
-        "key": "embedded_json",
-        "value": 6
-      },
-      {
-        "key": "hydrated_state",
-        "value": 6
-      },
-      {
-        "key": "json_ld",
-        "value": 9
-      },
-      {
-        "key": "llm_xpath",
-        "value": 0
-      },
-      {
-        "key": "microdata",
-        "value": 5
-      },
-      {
-        "key": "network_intercept",
-        "value": 8
-      },
-      {
-        "key": "next_data",
-        "value": 6
-      },
-      {
-        "key": "open_graph",
-        "value": 6
-      },
-      {
-        "key": "product_detail",
-        "value": 9
-      },
-      {
-        "key": "selector",
-        "value": 4
-      },
-      {
-        "key": "semantic_section",
-        "value": 3
-      },
-      {
-        "key": "semantic_spec",
-        "value": 3
-      }
+      "add to cart",
+      "buy now",
+      "checkout",
+      "login",
+      "sign in",
+      "subscribe",
+      "review this product",
+      "filter reviews",
+      "rating distribution",
+      "overall rating",
+      "verified reviewer",
+      "read the story",
+      "shop women",
+      "shop men's",
+      "shop mens",
+      "shop men"
     ]
   },
-  "_SEMANTIC_DETAIL_RULES": {
-    "__type__": "dict",
+  "SELECTOR_NOISE_VALUES": {
+    "__type__": "tuple",
     "items": [
-      {
-        "key": "aggregate_separator",
-        "value": " | "
-      },
-      {
-        "key": "dimension_keywords",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "width",
-            "height",
-            "depth",
-            "length",
-            "diameter",
-            "weight",
-            "dimensions",
-            "size",
-            "measurement",
-            "measurements"
-          ]
-        }
-      },
-      {
-        "key": "feature_section_aliases",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "features",
-            "feature",
-            "highlights",
-            "key_features",
-            "key features"
-          ]
-        }
-      },
-      {
-        "key": "section_ancestor_stop_tags",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "footer",
-            "header",
-            "nav",
-            "aside",
-            "form"
-          ]
-        }
-      },
-      {
-        "key": "section_ancestor_stop_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "footer",
-            "header",
-            "nav",
-            "menu",
-            "newsletter",
-            "breadcrumbs",
-            "breadcrumb",
-            "cookie",
-            "consent",
-            "bazaarvoice",
-            "bv-rnr",
-            "review",
-            "reviews",
-            "ratings"
-          ]
-        }
-      },
-      {
-        "key": "section_skip_patterns",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "add to cart",
-            "buy now",
-            "checkout",
-            "login",
-            "sign in",
-            "subscribe",
-            "review this product",
-            "filter reviews",
-            "rating distribution",
-            "overall rating",
-            "verified reviewer",
-            "read the story",
-            "shop women",
-            "shop men's",
-            "shop mens",
-            "shop men"
-          ]
-        }
-      },
-      {
-        "key": "spec_drop_labels",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "qty",
-            "quantity",
-            "details",
-            "total",
-            "subtotal",
-            "delivery",
-            "shipping",
-            "aggregaterating",
-            "aggregate_rating",
-            "breadcrumblist",
-            "breadcrumb_list",
-            "organization",
-            "webpage",
-            "website",
-            "imageobject",
-            "image_object",
-            "listitem",
-            "list_item",
-            "searchaction",
-            "search_action",
-            "offer",
-            "itemlist",
-            "item_list",
-            "howto",
-            "faqpage",
-            "videoobject",
-            "video_object",
-            "creativework",
-            "creative_work",
-            "type",
-            "@type",
-            "@context",
-            "you_are_here",
-            "breadcrumb",
-            "age",
-            "language",
-            "incentives",
-            "verified_reviewer",
-            "rating_distribution",
-            "overall_rating",
-            "review_this_product",
-            "filter_reviews",
-            "rating_summary",
-            "select"
-          ]
-        }
-      },
-      {
-        "key": "spec_label_block_patterns",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "play video",
-            "watch video",
-            "video",
-            "learn more",
-            "add to cart",
-            "buy now",
-            "primary guide",
-            "guide",
-            "discount",
-            "verified reviewer",
-            "rating summary",
-            "filter reviews",
-            "report",
-            "helpful"
-          ]
-        }
-      },
-      {
-        "key": "spec_label_drop_country_names",
-        "value": true
-      }
+      "home",
+      "shop",
+      "menu",
+      "cart",
+      "search",
+      "login",
+      "sign in",
+      "log in",
+      "account",
+      "register",
+      "close",
+      "back",
+      "next",
+      "previous",
+      "filter",
+      "sort",
+      "apply",
+      "submit",
+      "cancel",
+      "save",
+      "add to cart",
+      "add to bag",
+      "buy now",
+      "checkout",
+      "wishlist",
+      "compare",
+      "share",
+      "follow",
+      "subscribe",
+      "newsletter",
+      "privacy",
+      "terms",
+      "cookies",
+      "accept",
+      "dismiss",
+      "skip",
+      "view all",
+      "see all",
+      "show more",
+      "load more",
+      "read more",
+      "breadcrumb",
+      "navigation",
+      "footer",
+      "header"
     ]
   },
+  "SEMANTIC_AGGREGATE_SEPARATOR": " | ",
   "SEMANTIC_SECTION_NOISE": {
     "__type__": "dict",
     "items": [
@@ -6948,73 +5661,51 @@
       }
     ]
   },
-  "SECTION_SKIP_PATTERNS": {
+  "SIZE_CHART_REGION_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "africa",
+      "asia",
+      "eu",
+      "eu_it",
+      "europe",
+      "north_america",
+      "oceania",
+      "south_america",
+      "uk",
+      "us"
+    ]
+  },
+  "SIZE_GUIDE_NOISE_VALUES": {
+    "__type__": "frozenset",
+    "items": [
+      "au",
+      "eu",
+      "it",
+      "jeans",
+      "kr",
+      "uk",
+      "us"
+    ]
+  },
+  "SIZE_NOISE_TOKENS": {
     "__type__": "tuple",
     "items": [
-      "add to cart",
-      "buy now",
-      "checkout",
-      "login",
-      "sign in",
-      "subscribe",
-      "review this product",
-      "filter reviews",
-      "rating distribution",
-      "overall rating",
-      "verified reviewer",
-      "read the story",
-      "shop women",
-      "shop men's",
-      "shop mens",
-      "shop men"
-    ]
-  },
-  "SECTION_ANCESTOR_STOP_TAGS": {
-    "__type__": "set",
-    "items": [
-      "aside",
-      "footer",
-      "form",
-      "header",
-      "nav"
-    ]
-  },
-  "SECTION_ANCESTOR_STOP_TOKENS": {
-    "__type__": "set",
-    "items": [
-      "bazaarvoice",
-      "breadcrumb",
-      "breadcrumbs",
-      "bv-rnr",
-      "consent",
-      "cookie",
-      "footer",
-      "header",
-      "menu",
-      "nav",
-      "newsletter",
-      "ratings",
-      "review",
-      "reviews"
-    ]
-  },
-  "NOISE_CONTAINER_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "footer",
-      "legal",
-      "privacy",
-      "cookie",
-      "consent",
-      "iubenda",
-      "menu",
-      "navigation",
-      "navbar",
-      "contact",
-      "share",
-      "app-store",
-      "app_store",
-      "newsletter"
+      "max-width",
+      "min-width",
+      "vw",
+      "vh",
+      "sizes=",
+      "srcset",
+      "rem",
+      "em",
+      "px",
+      "padding",
+      "margin",
+      "font-size",
+      "display:",
+      "border:",
+      "auto"
     ]
   },
   "SOCIAL_HOST_SUFFIXES": {
@@ -7030,24 +5721,81 @@
       "youtu.be"
     ]
   },
-  "NOISE_CONTAINER_REMOVAL_SELECTOR": "aside, nav, [class~='filter' i], [class~='filters' i], [class~='facet' i], [class~='facets' i], [class*='sidebar' i], [class*='breadcrumb' i], [class*='navigation' i], [class*='menu' i], footer, header",
-  "SPEC_LABEL_BLOCK_PATTERNS": {
-    "__type__": "tuple",
+  "SOURCE_RANKING": {
+    "__type__": "dict",
     "items": [
-      "play video",
-      "watch video",
-      "video",
-      "learn more",
-      "add to cart",
-      "buy now",
-      "primary guide",
-      "guide",
-      "discount",
-      "verified reviewer",
-      "rating summary",
-      "filter reviews",
-      "report",
-      "helpful"
+      {
+        "key": "adapter",
+        "value": 9
+      },
+      {
+        "key": "contract_regex",
+        "value": 10
+      },
+      {
+        "key": "contract_xpath",
+        "value": 11
+      },
+      {
+        "key": "datalayer",
+        "value": 10
+      },
+      {
+        "key": "dom",
+        "value": 1
+      },
+      {
+        "key": "dom_buy_box",
+        "value": 8
+      },
+      {
+        "key": "embedded_json",
+        "value": 6
+      },
+      {
+        "key": "hydrated_state",
+        "value": 6
+      },
+      {
+        "key": "json_ld",
+        "value": 9
+      },
+      {
+        "key": "llm_xpath",
+        "value": 0
+      },
+      {
+        "key": "microdata",
+        "value": 5
+      },
+      {
+        "key": "network_intercept",
+        "value": 8
+      },
+      {
+        "key": "next_data",
+        "value": 6
+      },
+      {
+        "key": "open_graph",
+        "value": 6
+      },
+      {
+        "key": "product_detail",
+        "value": 9
+      },
+      {
+        "key": "selector",
+        "value": 4
+      },
+      {
+        "key": "semantic_section",
+        "value": 3
+      },
+      {
+        "key": "semantic_spec",
+        "value": 3
+      }
     ]
   },
   "SPEC_DROP_LABELS": {
@@ -7099,1611 +5847,119 @@
       "you_are_here"
     ]
   },
-  "FEATURE_SECTION_ALIASES": {
-    "__type__": "set",
-    "items": [
-      "feature",
-      "features",
-      "highlights",
-      "key features",
-      "key_features"
-    ]
-  },
-  "DIMENSION_KEYWORDS": {
+  "SPEC_LABEL_BLOCK_PATTERNS": {
     "__type__": "tuple",
     "items": [
-      "width",
-      "height",
-      "depth",
-      "length",
-      "diameter",
-      "weight",
-      "dimensions",
-      "size",
-      "measurement",
-      "measurements"
-    ]
-  },
-  "SEMANTIC_AGGREGATE_SEPARATOR": " | ",
-  "_LISTING_EXTRACTION_RULES": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "buy_box_availability_pattern",
-        "value": "Availability\\s+(?P<value>.+?)\\s+Price(?:\\s|$)"
-      },
-      {
-        "key": "buy_box_currency_symbol_map",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "$",
-              "value": "USD"
-            },
-            {
-              "key": "£",
-              "value": "GBP"
-            },
-            {
-              "key": "€",
-              "value": "EUR"
-            },
-            {
-              "key": "₹",
-              "value": "INR"
-            }
-          ]
-        }
-      },
-      {
-        "key": "buy_box_heading_scan_tags",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "h2",
-            "h3",
-            "button",
-            "p",
-            "span"
-          ]
-        }
-      },
-      {
-        "key": "buy_box_heading_texts",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "select a size",
-            "select an option",
-            "pricing and availability"
-          ]
-        }
-      },
-      {
-        "key": "buy_box_pack_size_pattern",
-        "value": "Pack Size\\s+(?P<value>.+?)\\s+SKU(?:\\s|$)"
-      },
-      {
-        "key": "buy_box_price_pattern",
-        "value": "Price\\s+(?P<value>[$€£₹]\\s*[\\d,.]+)"
-      },
-      {
-        "key": "buy_box_required_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "Pack Size",
-            "SKU",
-            "Availability",
-            "Price"
-          ]
-        }
-      },
-      {
-        "key": "buy_box_sku_pattern",
-        "value": "SKU\\s+(?P<value>[A-Za-z0-9-]{3,})"
-      },
-      {
-        "key": "card_title_selectors",
-        "value": {
-          "__type__": "list",
-          "items": [
-            ".item_description_title",
-            "[itemprop='name']",
-            ".product-title",
-            ".pro-title .text",
-            ".pro-title",
-            ".name [data-field='description']",
-            ".productDescription [data-field='description']",
-            ".job-title",
-            ".card-title",
-            "a.title",
-            ".title",
-            "h2 a",
-            "h3 a",
-            "h4 a",
-            "h2",
-            "h3",
-            "h4",
-            "a img[alt]",
-            "a[title]"
-          ]
-        }
-      },
-      {
-        "key": "category_path_markers",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "products",
-            "categories",
-            "category",
-            "collections",
-            "departments",
-            "browse",
-            "parts"
-          ]
-        }
-      },
-      {
-        "key": "color_action_prefixes",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "add to ",
-            "select ",
-            "choose ",
-            "shop ",
-            "buy ",
-            "view "
-          ]
-        }
-      },
-      {
-        "key": "color_action_values",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "add to cart",
-            "add to bag",
-            "quick view",
-            "quick shop",
-            "save",
-            "wishlist",
-            "add to wishlist",
-            "more options",
-            "select",
-            "choose",
-            "buy now",
-            "checkout",
-            "shop now"
-          ]
-        }
-      },
-      {
-        "key": "description_candidate_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "description",
-            "summary"
-          ]
-        }
-      },
-      {
-        "key": "detail_path_markers",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "/product/",
-            "/products/",
-            "/pdp/",
-            "/dp/",
-            "/detail/",
-            "/p/",
-            "/item/",
-            "piid=",
-            "/job/",
-            "/jobs/detail/",
-            "/jobs/",
-            "/position/",
-            "/opening/",
-            "/job-detail/"
-          ]
-        }
-      },
-      {
-        "key": "facet_path_fragments",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "/see-all",
-            "/filter",
-            "/filters",
-            "/facet"
-          ]
-        }
-      },
-      {
-        "key": "facet_query_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "sv",
-            "facet",
-            "filter",
-            "filters",
-            "color",
-            "size",
-            "material",
-            "sort"
-          ]
-        }
-      },
-      {
-        "key": "filter_option_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "name",
-            "value",
-            "selected",
-            "tooltip",
-            "count",
-            "sort",
-            "showicon",
-            "description",
-            "displayname",
-            "filtertype"
-          ]
-        }
-      },
-      {
-        "key": "hub_path_segments",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "brand",
-            "brands",
-            "browse",
-            "catalog",
-            "categories",
-            "category",
-            "collections",
-            "clearance",
-            "deals",
-            "departments",
-            "offers",
-            "parts",
-            "promo",
-            "promotions",
-            "results",
-            "sale",
-            "search",
-            "shop",
-            "store"
-          ]
-        }
-      },
-      {
-        "key": "image_exclude_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "icon",
-            "logo",
-            "sprite",
-            "badge",
-            "favicon",
-            "placeholder",
-            "vehicle-new",
-            "fitment-warning"
-          ]
-        }
-      },
-      {
-        "key": "job_signal_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "company",
-            "location",
-            "salary",
-            "job_type",
-            "posted_date",
-            "apply_url"
-          ]
-        }
-      },
-      {
-        "key": "materials_and_care_section_labels",
-        "value": {
-          "__type__": "dict",
-          "items": [
-            {
-              "key": "care",
-              "value": "Care:"
-            },
-            {
-              "key": "materials",
-              "value": "Materials:"
-            }
-          ]
-        }
-      },
-      {
-        "key": "minimal_visual_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "title",
-            "image_url"
-          ]
-        }
-      },
-      {
-        "key": "non_listing_path_tokens",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "hiring",
-            "employers",
-            "recruiter",
-            "recruiters",
-            "postjobs",
-            "demo",
-            "pricing",
-            "brand",
-            "brands",
-            "shop",
-            "store",
-            "catalog",
-            "search",
-            "results",
-            "plans",
-            "about",
-            "aboutus",
-            "contact",
-            "contactus",
-            "privacy",
-            "terms",
-            "faq",
-            "help",
-            "support",
-            "careers",
-            "press",
-            "news",
-            "blog",
-            "legal",
-            "sitemap"
-          ]
-        }
-      },
-      {
-        "key": "product_detail_image_source_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "images",
-            "detailedImages",
-            "colourAlternateViews",
-            "variants"
-          ]
-        }
-      },
-      {
-        "key": "product_detail_list_scan_limit",
-        "value": 20
-      },
-      {
-        "key": "product_detail_presence_any_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "description",
-            "variants",
-            "detailedImages"
-          ]
-        }
-      },
-      {
-        "key": "product_detail_product_blob_path",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "props",
-            "pageProps",
-            "product"
-          ]
-        }
-      },
-      {
-        "key": "product_detail_props_path",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "props",
-            "pageProps",
-            "data",
-            "getProductDetail"
-          ]
-        }
-      },
-      {
-        "key": "product_detail_required_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "productNumber",
-            "productKey",
-            "name"
-          ]
-        }
-      },
-      {
-        "key": "product_detail_top_level_payload_keys",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "getProductDetail",
-            "product"
-          ]
-        }
-      },
-      {
-        "key": "product_signal_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "price",
-            "sku",
-            "brand",
-            "rating",
-            "description",
-            "availability",
-            "review_count",
-            "category",
-            "salary",
-            "company",
-            "location"
-          ]
-        }
-      },
-      {
-        "key": "structured_spec_group_limit",
-        "value": 8
-      },
-      {
-        "key": "structured_spec_groups_key",
-        "value": "specificationGroups"
-      },
-      {
-        "key": "structured_spec_row_limit",
-        "value": 24
-      },
-      {
-        "key": "structured_spec_search_max_depth",
-        "value": 7
-      },
-      {
-        "key": "swatch_container_selectors",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "[class*='swatch']",
-            "[class*='color-chip']",
-            "[class*='color-option']",
-            "[data-color]",
-            "[aria-label*='color' i]"
-          ]
-        }
-      },
-      {
-        "key": "weak_metadata_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "title",
-            "url",
-            "image_url",
-            "additional_images",
-            "publication_date",
-            "posted_date",
-            "date"
-          ]
-        }
-      }
-    ]
-  },
-  "LISTING_CARD_TITLE_SELECTORS": {
-    "__type__": "tuple",
-    "items": [
-      ".item_description_title",
-      "[itemprop='name']",
-      ".product-title",
-      ".pro-title .text",
-      ".pro-title",
-      ".name [data-field='description']",
-      ".productDescription [data-field='description']",
-      ".job-title",
-      ".card-title",
-      "a.title",
-      ".title",
-      "h2 a",
-      "h3 a",
-      "h4 a",
-      "h2",
-      "h3",
-      "h4",
-      "a img[alt]",
-      "a[title]"
-    ]
-  },
-  "LISTING_DETAIL_PATH_MARKERS": {
-    "__type__": "tuple",
-    "items": [
-      "-p-",
-      "-p.",
-      "/detail/",
-      "/dp/",
-      "/item/",
-      "/job-detail/",
-      "/job/",
-      "/jobs/",
-      "/jobs/detail/",
-      "/opening/",
-      "/p.",
-      "/p/",
-      "/pdp/",
-      "/position/",
-      "/product/",
-      "/products/",
-      "/v/",
-      "piid="
-    ]
-  },
-  "LISTING_SWATCH_CONTAINER_SELECTORS": {
-    "__type__": "tuple",
-    "items": [
-      "[class*='swatch']",
-      "[class*='color-chip']",
-      "[class*='color-option']",
-      "[data-color]",
-      "[aria-label*='color' i]"
-    ]
-  },
-  "LISTING_IMAGE_EXCLUDE_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "icon",
-      "logo",
-      "sprite",
-      "badge",
-      "favicon",
-      "placeholder",
-      "vehicle-new",
-      "fitment-warning"
-    ]
-  },
-  "LISTING_COLOR_ACTION_VALUES": {
-    "__type__": "frozenset",
-    "items": [
-      "add to bag",
-      "add to cart",
-      "add to wishlist",
-      "buy now",
-      "checkout",
-      "choose",
-      "more options",
-      "quick shop",
-      "quick view",
-      "save",
-      "select",
-      "shop now",
-      "wishlist"
-    ]
-  },
-  "LISTING_COLOR_ACTION_PREFIXES": {
-    "__type__": "tuple",
-    "items": [
-      "add to ",
-      "select ",
-      "choose ",
-      "shop ",
-      "buy ",
-      "view "
-    ]
-  },
-  "LISTING_FILTER_OPTION_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "count",
-      "description",
-      "displayname",
-      "filtertype",
-      "name",
-      "selected",
-      "showicon",
-      "sort",
-      "tooltip",
-      "value"
-    ]
-  },
-  "LISTING_MINIMAL_VISUAL_FIELDS": {
-    "__type__": "frozenset",
-    "items": [
-      "image_url",
-      "title"
-    ]
-  },
-  "LISTING_PRODUCT_SIGNAL_FIELDS": {
-    "__type__": "frozenset",
-    "items": [
-      "availability",
-      "brand",
-      "category",
-      "company",
-      "description",
-      "location",
-      "price",
-      "rating",
-      "review_count",
-      "salary",
-      "sku"
-    ]
-  },
-  "LISTING_JOB_SIGNAL_FIELDS": {
-    "__type__": "frozenset",
-    "items": [
-      "apply_url",
-      "company",
-      "job_type",
-      "location",
-      "posted_date",
-      "salary"
-    ]
-  },
-  "LISTING_NON_LISTING_PATH_TOKENS": {
-    "__type__": "frozenset",
-    "items": [
-      "about",
-      "aboutus",
-      "accessibility",
-      "account",
-      "blog",
-      "brand",
-      "brands",
-      "careers",
-      "cart",
-      "catalog",
-      "checkout",
-      "contact",
-      "contactus",
-      "cookie-policy",
-      "demo",
-      "employers",
-      "faq",
-      "find-a-store",
-      "gift",
-      "gift-card",
-      "help",
-      "hiring",
-      "legal",
-      "legal-notice",
-      "login",
-      "news",
-      "newsletter",
-      "order",
-      "payment",
-      "plans",
-      "postjobs",
-      "press",
-      "pricing",
-      "privacy",
-      "privacy-notice",
-      "privacy-policy",
-      "product-registration",
-      "recruiter",
-      "recruiters",
-      "refund",
-      "register",
-      "registration",
-      "resource",
-      "resources",
-      "results",
-      "returns",
-      "search",
-      "shop",
-      "sign-up",
-      "signup",
-      "sitemap",
-      "store",
-      "store-finder",
-      "store-locator",
-      "support",
-      "terms",
-      "terms-of-service",
-      "terms-of-use",
-      "track-order",
-      "warranty",
-      "wishlist"
-    ]
-  },
-  "LISTING_HUB_PATH_SEGMENTS": {
-    "__type__": "frozenset",
-    "items": [
-      "brand",
-      "brands",
-      "browse",
-      "catalog",
-      "categories",
-      "category",
-      "clearance",
-      "collections",
-      "deals",
-      "departments",
-      "offers",
-      "parts",
-      "promo",
-      "promotions",
-      "results",
-      "sale",
-      "search",
-      "shop",
-      "store"
-    ]
-  },
-  "LISTING_WEAK_METADATA_FIELDS": {
-    "__type__": "frozenset",
-    "items": [
-      "additional_images",
-      "date",
-      "image_url",
-      "posted_date",
-      "publication_date",
-      "title",
-      "url"
-    ]
-  },
-  "LISTING_FACET_QUERY_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "color",
-      "facet",
-      "filter",
-      "filters",
-      "material",
-      "size",
-      "sort",
-      "sv"
-    ]
-  },
-  "LISTING_FACET_PATH_FRAGMENTS": {
-    "__type__": "tuple",
-    "items": [
-      "/see-all",
-      "/filter",
-      "/filters",
-      "/facet"
-    ]
-  },
-  "LISTING_CATEGORY_PATH_MARKERS": {
-    "__type__": "frozenset",
-    "items": [
-      "browse",
-      "categories",
-      "category",
-      "collections",
-      "departments",
-      "parts",
-      "products"
-    ]
-  },
-  "LISTING_BUY_BOX_HEADING_TEXTS": {
-    "__type__": "frozenset",
-    "items": [
-      "pricing and availability",
-      "select a size",
-      "select an option"
-    ]
-  },
-  "LISTING_BUY_BOX_REQUIRED_TOKENS": {
-    "__type__": "tuple",
-    "items": [
-      "Pack Size",
-      "SKU",
-      "Availability",
-      "Price"
-    ]
-  },
-  "LISTING_BUY_BOX_PACK_SIZE_PATTERN": "Pack Size\\s+(?P<value>.+?)\\s+SKU(?:\\s|$)",
-  "LISTING_BUY_BOX_SKU_PATTERN": "SKU\\s+(?P<value>[A-Za-z0-9-]{3,})",
-  "LISTING_BUY_BOX_AVAILABILITY_PATTERN": "Availability\\s+(?P<value>.+?)\\s+Price(?:\\s|$)",
-  "LISTING_BUY_BOX_PRICE_PATTERN": "Price\\s+(?P<value>[$€£₹]\\s*[\\d,.]+)",
-  "LISTING_BUY_BOX_CURRENCY_SYMBOL_MAP": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "$",
-        "value": "USD"
-      },
-      {
-        "key": "£",
-        "value": "GBP"
-      },
-      {
-        "key": "€",
-        "value": "EUR"
-      },
-      {
-        "key": "₹",
-        "value": "INR"
-      }
-    ]
-  },
-  "LISTING_PRODUCT_DETAIL_REQUIRED_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "name",
-      "productKey",
-      "productNumber"
-    ]
-  },
-  "LISTING_PRODUCT_DETAIL_PRESENCE_ANY_KEYS": {
-    "__type__": "frozenset",
-    "items": [
-      "description",
-      "detailedImages",
-      "variants"
-    ]
-  },
-  "LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT": 20,
-  "LISTING_STRUCTURED_SPEC_GROUPS_KEY": "specificationGroups",
-  "LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH": 7,
-  "LISTING_STRUCTURED_SPEC_GROUP_LIMIT": 8,
-  "LISTING_STRUCTURED_SPEC_ROW_LIMIT": 24,
-  "LISTING_PRODUCT_DETAIL_IMAGE_SOURCE_KEYS": {
-    "__type__": "tuple",
-    "items": [
-      "images",
-      "detailedImages",
-      "colourAlternateViews",
-      "variants"
-    ]
-  },
-  "LISTING_PRODUCT_DETAIL_TOP_LEVEL_PAYLOAD_KEYS": {
-    "__type__": "tuple",
-    "items": [
-      "getProductDetail",
-      "product"
-    ]
-  },
-  "LISTING_PRODUCT_DETAIL_PROPS_PATH": {
-    "__type__": "tuple",
-    "items": [
-      "props",
-      "pageProps",
-      "data",
-      "getProductDetail"
-    ]
-  },
-  "LISTING_PRODUCT_DETAIL_PRODUCT_BLOB_PATH": {
-    "__type__": "tuple",
-    "items": [
-      "props",
-      "pageProps",
-      "product"
-    ]
-  },
-  "LISTING_BUY_BOX_HEADING_SCAN_TAGS": {
-    "__type__": "tuple",
-    "items": [
-      "h2",
-      "h3",
-      "button",
-      "p",
-      "span"
-    ]
-  },
-  "LISTING_DESCRIPTION_CANDIDATE_FIELDS": {
-    "__type__": "tuple",
-    "items": [
-      "description",
-      "summary"
-    ]
-  },
-  "_LISTING_MATERIALS_AND_CARE_SECTION_LABELS": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "care",
-        "value": "Care:"
-      },
-      {
-        "key": "materials",
-        "value": "Materials:"
-      }
-    ]
-  },
-  "LISTING_MATERIALS_SECTION_LABEL": "Materials:",
-  "LISTING_CARE_SECTION_LABEL": "Care:",
-  "_LISTING_NOISE": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "alt_text_title_pattern",
-        "value": "\\b(?:worn|wearing|shown|shot|mid-shot|close-up|detail(?:ed)? view|view of|front view|back view)\\b"
-      },
-      {
-        "key": "editorial_title_patterns",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "\\bsponsored\\b",
-            "\\byou are seeing this ad\\b",
-            "\\bpromoted\\b",
-            "\\btrending now\\b",
-            "^(?:(?:up to\\s+)?\\d{1,3}%\\s*(?:off\\s+)?)?(?:clearance\\s+)?sale$"
-          ]
-        }
-      },
-      {
-        "key": "merchandising_title_prefixes",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "shop ",
-            "discover ",
-            "explore ",
-            "find your ",
-            "save up ",
-            "enjoy ",
-            "get "
-          ]
-        }
-      },
-      {
-        "key": "navigation_title_hints",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "home",
-            "login",
-            "log in",
-            "sign in",
-            "sign up",
-            "register",
-            "account",
-            "contact",
-            "contact us",
-            "help",
-            "support",
-            "read more",
-            "learn more",
-            "view more",
-            "view all",
-            "shop all",
-            "next",
-            "previous",
-            "prev",
-            "back",
-            "checkout",
-            "cart",
-            "basket"
-          ]
-        }
-      },
-      {
-        "key": "weak_listing_titles",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "new",
-            "sale",
-            "featured",
-            "best seller",
-            "top seller",
-            "top rated"
-          ]
-        }
-      }
-    ]
-  },
-  "LISTING_NAVIGATION_TITLE_HINTS": {
-    "__type__": "frozenset",
-    "items": [
-      "account",
-      "artisan-background",
-      "back",
-      "basket",
-      "cart",
-      "checkout",
-      "claim offer",
-      "claim your offer",
-      "contact",
-      "contact us",
-      "cookie notice",
-      "cookie policy",
-      "create account",
-      "create an account",
-      "dyson dyson",
-      "dyson technology",
-      "group 2 pause animation",
-      "help",
-      "home",
-      "independence day deals extended",
-      "join now",
+      "play video",
+      "watch video",
+      "video",
       "learn more",
-      "log in",
-      "login",
-      "mail svg",
-      "newsletter",
-      "next",
-      "pause animation",
-      "play animation",
-      "prev",
-      "previous",
-      "privacy policy",
-      "privacy notice",
-      "read more",
-      "register",
-      "resume animation",
-      "shop all",
-      "sign in",
-      "sign up",
-      "skip navigation",
-      "skip the navigation",
-      "skip to main content",
-      "start animation",
-      "stop animation",
-      "subscribe",
-      "support",
-      "talking to us is easy",
-      "terms of service",
-      "terms of use"
-    ]
-  },
-  "LISTING_MERCHANDISING_TITLE_PREFIXES": {
-    "__type__": "tuple",
-    "items": [
-      "claim ",
-      "code ",
-      "diwali ",
-      "exclusive ",
-      "exclusive offer",
-      "extra ",
-      "flash sale",
-      "free shipping",
-      "independence day",
-      "limited time",
-      "republic day",
-      "save "
-    ]
-  },
-  "LISTING_EDITORIAL_TITLE_PATTERNS": {
-    "__type__": "tuple",
-    "items": [
-      {
-        "__type__": "pattern",
-        "pattern": "\\bsponsored\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\byou are seeing this ad\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bpromoted\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\btrending now\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "^(?:(?:up to\\s+)?\\d{1,3}%\\s*(?:off\\s+)?)?(?:clearance\\s+)?sale$",
-        "flags": 34
-      }
-    ]
-  },
-  "LISTING_TITLE_CTA_TITLES": {
-    "__type__": "frozenset",
-    "items": [
-      "add to bag",
       "add to cart",
-      "apply",
-      "bookmark",
       "buy now",
-      "choose options",
-      "learn more",
-      "quick add",
-      "quick view",
-      "read more",
-      "see details",
-      "select options",
-      "shop now",
-      "view details"
+      "primary guide",
+      "guide",
+      "discount",
+      "verified reviewer",
+      "rating summary",
+      "filter reviews",
+      "report",
+      "helpful"
     ]
   },
-  "LISTING_ACTION_NOISE_PATTERNS": {
-    "__type__": "tuple",
-    "items": [
-      {
-        "__type__": "pattern",
-        "pattern": "^\\d+$",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "^products?$",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "^purchases?$",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bbookmark\\s+apply\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bapply\\s+bookmark\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bask\\s+.+\\s+question\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bcareer explorer\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bother search suggestions\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bplease refine your search\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bsave\\s+\\d+%\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bextra\\s+\\d+%\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bcode\\s*:",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bsort by\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bclear\\s+sort",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bclear\\s+filters?\\b",
-        "flags": 34
-      },
-      {
-        "__type__": "pattern",
-        "pattern": "\\bfilter by\\b",
-        "flags": 34
-      }
-    ]
-  },
-  "LISTING_ALT_TEXT_TITLE_PATTERN": {
-    "__type__": "pattern",
-    "pattern": "\\b(?:worn|wearing|shown|shot|mid-shot|close-up|detail(?:ed)? view|view of|front view|back view)\\b",
-    "flags": 34
-  },
-  "LISTING_WEAK_TITLES": {
+  "TITLE_NOISE_WORDS": {
     "__type__": "frozenset",
     "items": [
-      "best seller",
-      "featured",
-      "great deals",
-      "items",
-      "new",
-      "recommended alternatives",
-      "products",
-      "purchases",
-      "results",
-      "sale",
-      "store",
-      "top rated",
-      "top seller"
-    ]
-  },
-  "LISTING_LABEL_NOISE_TOKENS": {
-    "__type__": "frozenset",
-    "items": [
-      "clear",
-      "facet",
-      "filter",
-      "page",
-      "show",
-      "sort",
-      "view"
-    ]
-  },
-  "ACQUISITION_GUARDS_RULES": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "job_error_page_headings",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "sorry. the page you requested could not be found."
-          ]
-        }
-      },
-      {
-        "key": "job_error_page_titles",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "Sorry. The page you requested could not be found."
-          ]
-        }
-      },
-      {
-        "key": "job_redirect_shell_canonical_urls",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "https://www.schooljobs.com/"
-          ]
-        }
-      },
-      {
-        "key": "job_redirect_shell_headings",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "log in",
-            "sign in to apply"
-          ]
-        }
-      },
-      {
-        "key": "job_redirect_shell_titles",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "GovernmentJobs | City, State, Federal & Public Sector Jobs"
-          ]
-        }
-      }
-    ]
-  },
-  "PAGE_URL_CURRENCY_HINTS_RAW": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "/au/",
-        "value": "AUD"
-      },
-      {
-        "key": "/ca/",
-        "value": "CAD"
-      },
-      {
-        "key": "/de/",
-        "value": "EUR"
-      },
-      {
-        "key": "/en-au/",
-        "value": "AUD"
-      },
-      {
-        "key": "/en-ca/",
-        "value": "CAD"
-      },
-      {
-        "key": "/en-gb/",
-        "value": "GBP"
-      },
-      {
-        "key": "/en-in/",
-        "value": "INR"
-      },
-      {
-        "key": "/en-us/",
-        "value": "USD"
-      },
-      {
-        "key": "/es/",
-        "value": "EUR"
-      },
-      {
-        "key": "/eu/",
-        "value": "EUR"
-      },
-      {
-        "key": "/fr/",
-        "value": "EUR"
-      },
-      {
-        "key": "/gb/",
-        "value": "GBP"
-      },
-      {
-        "key": "/in/",
-        "value": "INR"
-      },
-      {
-        "key": "/it/",
-        "value": "EUR"
-      },
-      {
-        "key": "/ja-jp/",
-        "value": "JPY"
-      },
-      {
-        "key": "/jp/",
-        "value": "JPY"
-      },
-      {
-        "key": "/nl/",
-        "value": "EUR"
-      },
-      {
-        "key": "/uk/",
-        "value": "GBP"
-      },
-      {
-        "key": "/us/",
-        "value": "USD"
-      }
-    ]
-  },
-  "NESTED_OBJECT_KEYS_CONFIG": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "category_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "name",
-            "path",
-            "pathEn",
-            "breadcrumb",
-            "categoryPath"
-          ]
-        }
-      },
-      {
-        "key": "currency_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "currency",
-            "currencyCode",
-            "priceCurrency",
-            "currency_code"
-          ]
-        }
-      },
-      {
-        "key": "original_price_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "compareAtPrice",
-            "compare_at_price",
-            "listPrice",
-            "regularPrice",
-            "wasPrice",
-            "originalPrice",
-            "maxPrice",
-            "currentValue",
-            "price"
-          ]
-        }
-      },
-      {
-        "key": "price_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "specialValue",
-            "currentValue",
-            "special",
-            "current",
-            "price",
-            "amount",
-            "value",
-            "lowPrice",
-            "minPrice",
-            "displayPrice",
-            "formattedPrice"
-          ]
-        }
-      },
-      {
-        "key": "text_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "name",
-            "label",
-            "title",
-            "text",
-            "value",
-            "content",
-            "description",
-            "alt"
-          ]
-        }
-      },
-      {
-        "key": "url_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "href",
-            "url",
-            "link",
-            "canonical_url"
-          ]
-        }
-      }
-    ]
-  },
-  "REVIEW_CONTAINER_KEYS": {
-    "__type__": "list",
-    "items": [
-      "adapter_data",
-      "network_payloads",
-      "next_data",
-      "_hydrated_states",
-      "json_ld",
-      "microdata",
-      "tables",
-      "content_type",
-      "source",
-      "full_json_response",
-      "json_record_keys",
-      "requested_field_coverage",
-      "sections",
-      "specifications",
-      "promoted_fields",
-      "coverage",
-      "is_blocked",
-      "reason",
-      "provider"
-    ]
-  },
-  "MARKDOWN_VIEW": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "long_form_fields",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "description",
-            "summary",
-            "responsibilities",
-            "qualifications",
-            "requirements",
-            "benefits",
-            "skills",
-            "how_to_apply",
-            "next_steps",
-            "education",
-            "additional_information",
-            "conditions_of_employment",
-            "required_documents",
-            "how_you_will_be_evaluated",
-            "features",
-            "fit_and_sizing",
-            "materials_and_care"
-          ]
-        }
-      },
-      {
-        "key": "scalar_max_chars",
-        "value": 180
-      },
-      {
-        "key": "section_blacklist",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "help",
-            "close_this_window"
-          ]
-        }
-      },
-      {
-        "key": "section_min_chars",
-        "value": 12
-      }
-    ]
-  },
-  "DISCOVERIST_SCHEMA": {
-    "__type__": "list",
-    "items": [
-      "source_url",
-      "title",
-      "description"
-    ]
-  },
-  "SELECTOR_NOISE_VALUES": {
-    "__type__": "tuple",
-    "items": [
-      "home",
-      "shop",
-      "menu",
+      "access denied",
       "cart",
-      "search",
-      "login",
-      "sign in",
-      "log in",
-      "account",
-      "register",
-      "close",
-      "back",
-      "next",
-      "previous",
-      "filter",
-      "sort",
-      "apply",
-      "submit",
-      "cancel",
-      "save",
-      "add to cart",
-      "add to bag",
-      "buy now",
-      "checkout",
-      "wishlist",
-      "compare",
-      "share",
-      "follow",
-      "subscribe",
-      "newsletter",
-      "privacy",
-      "terms",
-      "cookies",
-      "accept",
-      "dismiss",
-      "skip",
-      "view all",
-      "see all",
-      "show more",
-      "load more",
-      "read more",
-      "breadcrumb",
-      "navigation",
-      "footer",
-      "header"
+      "home",
+      "loading...",
+      "search results",
+      "sign in"
+    ]
+  },
+  "VARIANT_AXIS_ALIASES": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "color",
+        "value": "color"
+      },
+      {
+        "key": "colors",
+        "value": "color"
+      },
+      {
+        "key": "colour",
+        "value": "color"
+      },
+      {
+        "key": "colours",
+        "value": "color"
+      },
+      {
+        "key": "frame_color",
+        "value": "color"
+      },
+      {
+        "key": "frame_colour",
+        "value": "color"
+      },
+      {
+        "key": "frame_size",
+        "value": "size"
+      },
+      {
+        "key": "dimension",
+        "value": "size"
+      },
+      {
+        "key": "dimensions",
+        "value": "size"
+      },
+      {
+        "key": "flavour",
+        "value": "flavor"
+      },
+      {
+        "key": "flavours",
+        "value": "flavor"
+      },
+      {
+        "key": "size",
+        "value": "size"
+      },
+      {
+        "key": "taste",
+        "value": "flavor"
+      },
+      {
+        "key": "sizes",
+        "value": "size"
+      },
+      {
+        "key": "ขนาด",
+        "value": "size"
+      },
+      {
+        "key": "สี",
+        "value": "color"
+      },
+      {
+        "key": "สีของสินค้า",
+        "value": "color"
+      },
+      {
+        "key": "สีสินค้า",
+        "value": "color"
+      },
+      {
+        "key": "ไซซ์",
+        "value": "size"
+      },
+      {
+        "key": "ไซส์",
+        "value": "size"
+      }
     ]
   }
 }

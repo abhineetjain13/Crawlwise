@@ -29,6 +29,26 @@ def _read_optional_artifact_text(path: str) -> str:
     return artifact.read_text(encoding="utf-8", errors="ignore")
 
 
+def _rendered_listing_fragment(
+    *,
+    title: str,
+    url: str,
+    price: str = "",
+    image_url: str = "",
+    brand: str = "",
+) -> str:
+    return f"""
+    <article class="product-card">
+      <a href="{url}">
+        {f'<img src="{image_url}" alt="{title}" />' if image_url else ""}
+        <h2 class="product-title">{title}</h2>
+      </a>
+      {f'<div class="product-brand">{brand}</div>' if brand else ""}
+      {f'<div class="price">{price}</div>' if price else ""}
+    </article>
+    """
+
+
 def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts() -> None:
     html = """
     <html>
@@ -574,7 +594,7 @@ def test_extract_records_normalizes_boolean_availability_and_shared_variant_pric
     assert all("availability" not in variant for variant in record["variants"])
 
 
-def test_extract_records_prefers_rendered_listing_cards_over_thin_structured_records() -> None:
+def test_extract_records_prefers_rendered_listing_fragments_over_thin_structured_records() -> None:
     html = """
     <html>
       <head>
@@ -606,27 +626,27 @@ def test_extract_records_prefers_rendered_listing_cards_over_thin_structured_rec
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Widget Prime",
-                    "url": "https://example.com/products/widget-prime",
-                    "price": "$19.99",
-                    "image_url": "https://example.com/images/widget-prime.jpg",
-                    "brand": "Acme",
-                },
-                {
-                    "title": "Widget Pro",
-                    "url": "https://example.com/products/widget-pro",
-                    "price": "$29.99",
-                    "image_url": "https://example.com/images/widget-pro.jpg",
-                    "brand": "Acme",
-                },
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Widget Prime",
+                    url="https://example.com/products/widget-prime",
+                    price="$19.99",
+                    image_url="https://example.com/images/widget-prime.jpg",
+                    brand="Acme",
+                ),
+                _rendered_listing_fragment(
+                    title="Widget Pro",
+                    url="https://example.com/products/widget-pro",
+                    price="$29.99",
+                    image_url="https://example.com/images/widget-pro.jpg",
+                    brand="Acme",
+                ),
             ]
         },
     )
 
     assert len(rows) == 2
-    assert rows[0]["_source"] == "rendered_listing"
+    assert rows[0]["_source"] == "dom_listing"
     assert rows[0]["price"] == "19.99"
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
 
@@ -646,14 +666,14 @@ def test_extract_records_prefers_generic_listing_rows_over_thin_adapter_rows() -
             }
         ],
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Microfiber Face Towel",
-                    "url": "https://www.myntra.com/products/microfiber-face-towel",
-                    "price": "Rs. 499",
-                    "image_url": "https://assets.myntassets.com/assets/images/towel.jpg",
-                    "brand": "Personal Touch Skincare",
-                }
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Microfiber Face Towel",
+                    url="https://www.myntra.com/products/microfiber-face-towel",
+                    price="Rs. 499",
+                    image_url="https://assets.myntassets.com/assets/images/towel.jpg",
+                    brand="Personal Touch Skincare",
+                )
             ]
         },
     )
@@ -661,7 +681,7 @@ def test_extract_records_prefers_generic_listing_rows_over_thin_adapter_rows() -
     assert rows == [
         {
             "source_url": "https://www.myntra.com/hand-towels",
-            "_source": "rendered_listing",
+            "_source": "dom_listing",
             "title": "Microfiber Face Towel",
             "url": "https://www.myntra.com/products/microfiber-face-towel",
             "price": "499",
@@ -679,23 +699,23 @@ def test_extract_records_drops_rendered_listing_utility_rows_when_real_products_
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Product Help",
-                    "url": "https://example.com/help/product-help",
-                },
-                {
-                    "title": "Widget Prime",
-                    "url": "https://example.com/products/widget-prime",
-                    "price": "$19.99",
-                    "image_url": "https://example.com/images/widget-prime.jpg",
-                },
-                {
-                    "title": "Widget Pro",
-                    "url": "https://example.com/products/widget-pro",
-                    "price": "$29.99",
-                    "image_url": "https://example.com/images/widget-pro.jpg",
-                },
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Product Help",
+                    url="https://example.com/help/product-help",
+                ),
+                _rendered_listing_fragment(
+                    title="Widget Prime",
+                    url="https://example.com/products/widget-prime",
+                    price="$19.99",
+                    image_url="https://example.com/images/widget-prime.jpg",
+                ),
+                _rendered_listing_fragment(
+                    title="Widget Pro",
+                    url="https://example.com/products/widget-pro",
+                    price="$29.99",
+                    image_url="https://example.com/images/widget-pro.jpg",
+                ),
             ]
         },
     )
@@ -711,27 +731,27 @@ def test_extract_records_drops_detail_like_category_links_without_product_signal
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Short Sleeve T-shirts",
-                    "url": "https://www.customink.com/products/t-shirts/short-sleeve-t-shirts/16",
-                },
-                {
-                    "title": "Women's T-shirts",
-                    "url": "https://www.customink.com/products/t-shirts/womens-t-shirts/104",
-                },
-                {
-                    "title": "Independent Trading Midweight Hooded Sweatshirt",
-                    "url": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
-                    "price": "$39.99",
-                    "image_url": "https://www.customink.com/images/hoodie-1.jpg",
-                },
-                {
-                    "title": "Gildan Heavy Blend Hooded Sweatshirt",
-                    "url": "https://www.customink.com/products/hoodies/gildan-heavy-blend-hooded-sweatshirt/836000",
-                    "price": "$29.99",
-                    "image_url": "https://www.customink.com/images/hoodie-2.jpg",
-                },
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Short Sleeve T-shirts",
+                    url="https://www.customink.com/products/t-shirts/short-sleeve-t-shirts/16",
+                ),
+                _rendered_listing_fragment(
+                    title="Women's T-shirts",
+                    url="https://www.customink.com/products/t-shirts/womens-t-shirts/104",
+                ),
+                _rendered_listing_fragment(
+                    title="Independent Trading Midweight Hooded Sweatshirt",
+                    url="https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+                    price="$39.99",
+                    image_url="https://www.customink.com/images/hoodie-1.jpg",
+                ),
+                _rendered_listing_fragment(
+                    title="Gildan Heavy Blend Hooded Sweatshirt",
+                    url="https://www.customink.com/products/hoodies/gildan-heavy-blend-hooded-sweatshirt/836000",
+                    price="$29.99",
+                    image_url="https://www.customink.com/images/hoodie-2.jpg",
+                ),
             ]
         },
     )
@@ -749,17 +769,17 @@ def test_extract_records_rejects_concatenated_resource_menu_listing_titles() -> 
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Tools & Resources Group Ordering Fundraising Online Stores Pro Services Tips & Advice T-shirt Maker",
-                    "url": "https://www.customink.com/fundraising",
-                },
-                {
-                    "title": "Independent Trading Midweight Hooded Sweatshirt",
-                    "url": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
-                    "price": "$39.99",
-                    "image_url": "https://www.customink.com/images/hoodie-1.jpg",
-                },
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Tools & Resources Group Ordering Fundraising Online Stores Pro Services Tips & Advice T-shirt Maker",
+                    url="https://www.customink.com/fundraising",
+                ),
+                _rendered_listing_fragment(
+                    title="Independent Trading Midweight Hooded Sweatshirt",
+                    url="https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+                    price="$39.99",
+                    image_url="https://www.customink.com/images/hoodie-1.jpg",
+                ),
             ]
         },
     )
@@ -776,45 +796,45 @@ def test_extract_records_drops_shallow_editorial_listing_links_without_product_s
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Diversity & Belonging",
-                    "url": "https://www.customink.com/equity-for-all",
-                },
-                {
-                    "title": "Customer Reviews",
-                    "url": "https://www.customink.com/reviews",
-                },
-                {
-                    "title": "Customer Photos",
-                    "url": "https://www.customink.com/photos",
-                },
-                {
-                    "title": "T-shirt Maker",
-                    "url": "https://www.customink.com/services/t-shirt-maker-creator",
-                },
-                {
-                    "title": "Corporate Swag",
-                    "url": "https://www.customink.com/ink/business/corporate-swag-branded-merchandise",
-                },
-                {
-                    "title": "Content Guidelines",
-                    "url": "https://www.customink.com/help_center/content-guidelines",
-                },
-                {
-                    "title": "Custom Products",
-                    "url": "https://www.customink.com/ink/custom-products",
-                },
-                {
-                    "title": "Sign In Sign In",
-                    "url": "https://www.customink.com/profiles/users/sign_in",
-                },
-                {
-                    "title": "Independent Trading Midweight Hooded Sweatshirt",
-                    "url": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
-                    "price": "$39.99",
-                    "image_url": "https://www.customink.com/images/hoodie-1.jpg",
-                },
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Diversity & Belonging",
+                    url="https://www.customink.com/equity-for-all",
+                ),
+                _rendered_listing_fragment(
+                    title="Customer Reviews",
+                    url="https://www.customink.com/reviews",
+                ),
+                _rendered_listing_fragment(
+                    title="Customer Photos",
+                    url="https://www.customink.com/photos",
+                ),
+                _rendered_listing_fragment(
+                    title="T-shirt Maker",
+                    url="https://www.customink.com/services/t-shirt-maker-creator",
+                ),
+                _rendered_listing_fragment(
+                    title="Corporate Swag",
+                    url="https://www.customink.com/ink/business/corporate-swag-branded-merchandise",
+                ),
+                _rendered_listing_fragment(
+                    title="Content Guidelines",
+                    url="https://www.customink.com/help_center/content-guidelines",
+                ),
+                _rendered_listing_fragment(
+                    title="Custom Products",
+                    url="https://www.customink.com/ink/custom-products",
+                ),
+                _rendered_listing_fragment(
+                    title="Sign In Sign In",
+                    url="https://www.customink.com/profiles/users/sign_in",
+                ),
+                _rendered_listing_fragment(
+                    title="Independent Trading Midweight Hooded Sweatshirt",
+                    url="https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+                    price="$39.99",
+                    image_url="https://www.customink.com/images/hoodie-1.jpg",
+                ),
             ]
         },
     )
@@ -831,11 +851,11 @@ def test_extract_records_drops_rendered_listing_download_app_cta_rows() -> None:
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Download the Reverb App",
-                    "url": "https://reverb.com/featured/reverb-app",
-                }
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Download the Reverb App",
+                    url="https://reverb.com/featured/reverb-app",
+                )
             ]
         },
     )
@@ -850,11 +870,11 @@ def test_extract_records_drops_rendered_listing_category_hub_rows_without_suppor
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Womens Clothing",
-                    "url": "https://www.karenmillen.com/eu/categories/womens-clothing",
-                }
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Womens Clothing",
+                    url="https://www.karenmillen.com/eu/categories/womens-clothing",
+                )
             ]
         },
     )
@@ -862,20 +882,20 @@ def test_extract_records_drops_rendered_listing_category_hub_rows_without_suppor
     assert rows == []
 
 
-def test_extract_records_recovers_rendered_listing_price_misfiled_as_brand() -> None:
+def test_extract_records_recovers_rendered_listing_price_from_fragment_text() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.uniqlo.com/in/en/men/shirts-and-polo-shirts",
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Cotton Linen Shirt Jacket Long Sleeve",
-                    "url": "https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
-                    "image_url": "https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_69_482443_3x4.jpg?width=300",
-                    "brand": "Rs. 3,990.00",
-                }
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Cotton Linen Shirt Jacket Long Sleeve",
+                    url="https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
+                    image_url="https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_69_482443_3x4.jpg?width=300",
+                    price="Rs. 3,990.00",
+                )
             ]
         },
     )
@@ -883,7 +903,7 @@ def test_extract_records_recovers_rendered_listing_price_misfiled_as_brand() -> 
     assert rows == [
         {
             "source_url": "https://www.uniqlo.com/in/en/men/shirts-and-polo-shirts",
-            "_source": "rendered_listing",
+            "_source": "dom_listing",
             "title": "Cotton Linen Shirt Jacket Long Sleeve",
             "price": "3990.00",
             "currency": "INR",
@@ -900,12 +920,12 @@ def test_extract_records_backfills_listing_price_from_network_payload_candidates
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Cotton Linen Shirt Jacket Long Sleeve",
-                    "url": "https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
-                    "image_url": "https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_38_482443_3x4.jpg",
-                }
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Cotton Linen Shirt Jacket Long Sleeve",
+                    url="https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
+                    image_url="https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_38_482443_3x4.jpg",
+                )
             ]
         },
         network_payloads=[
@@ -933,7 +953,7 @@ def test_extract_records_backfills_listing_price_from_network_payload_candidates
     assert rows == [
         {
             "source_url": "https://www.uniqlo.com/in/en/men/shirts-and-polo-shirts",
-            "_source": "rendered_listing",
+            "_source": "dom_listing",
             "title": "Cotton Linen Shirt Jacket Long Sleeve",
             "url": "https://www.uniqlo.com/in/en/products/E482443-000/00?colorDisplayCode=38",
             "price": "3990",
@@ -950,24 +970,24 @@ def test_extract_records_rejects_external_rendered_listing_utility_links() -> No
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Canvas trainers",
-                    "url": "https://www2.hm.com/en_in/productpage.1309854002.html",
-                    "price": "Rs. 2,799.00",
-                },
-                {
-                    "title": "Customer Service",
-                    "url": "https://www2.hm.com/en_in/customer-service.html",
-                },
-                {
-                    "title": "Follow us on Instagram",
-                    "url": "https://www.instagram.com/hm",
-                },
-                {
-                    "title": "Sustainability",
-                    "url": "https://hmgroup.com/sustainability/",
-                },
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Canvas trainers",
+                    url="https://www2.hm.com/en_in/productpage.1309854002.html",
+                    price="Rs. 2,799.00",
+                ),
+                _rendered_listing_fragment(
+                    title="Customer Service",
+                    url="https://www2.hm.com/en_in/customer-service.html",
+                ),
+                _rendered_listing_fragment(
+                    title="Follow us on Instagram",
+                    url="https://www.instagram.com/hm",
+                ),
+                _rendered_listing_fragment(
+                    title="Sustainability",
+                    url="https://hmgroup.com/sustainability/",
+                ),
             ]
         },
     )
@@ -975,7 +995,7 @@ def test_extract_records_rejects_external_rendered_listing_utility_links() -> No
     assert rows == [
         {
             "source_url": "https://www2.hm.com/en_in/men/shoes/view-all.html",
-            "_source": "rendered_listing",
+            "_source": "dom_listing",
             "title": "Canvas trainers",
             "price": "2799.00",
             "currency": "INR",
@@ -1402,11 +1422,11 @@ def test_extract_records_rejects_shipping_only_rendered_listing_rows() -> None:
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "+CHF16.75 shipping",
-                    "url": "https://example.com/shipping",
-                }
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="+CHF16.75 shipping",
+                    url="https://example.com/shipping",
+                )
             ]
         },
     )
@@ -1421,17 +1441,17 @@ def test_extract_records_rejects_rendered_listing_cta_only_titles() -> None:
         "ecommerce_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Make Offer / Details",
-                    "url": "https://www.discogs.com/sell/item/3970919917?ev=bp_det",
-                },
-                {
-                    "title": "Widget Prime",
-                    "url": "https://www.discogs.com/products/widget-prime",
-                    "price": "$19.99",
-                    "image_url": "https://www.discogs.com/images/widget-prime.jpg",
-                },
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Make Offer / Details",
+                    url="https://www.discogs.com/sell/item/3970919917?ev=bp_det",
+                ),
+                _rendered_listing_fragment(
+                    title="Widget Prime",
+                    url="https://www.discogs.com/products/widget-prime",
+                    price="$19.99",
+                    image_url="https://www.discogs.com/images/widget-prime.jpg",
+                ),
             ]
         },
     )
@@ -1439,7 +1459,7 @@ def test_extract_records_rejects_rendered_listing_cta_only_titles() -> None:
     assert rows == [
         {
             "source_url": "https://www.discogs.com/sell/list",
-            "_source": "rendered_listing",
+            "_source": "dom_listing",
             "title": "Widget Prime",
             "price": "19.99",
             "currency": "USD",
@@ -1481,15 +1501,15 @@ def test_extract_records_rejects_job_listing_hub_links_when_structured_job_rows_
         "job_listing",
         max_records=10,
         artifacts={
-            "rendered_listing_cards": [
-                {
-                    "title": "Jobs in Bangalore",
-                    "url": "https://jobs.example.com/jobs-in-bangalore/",
-                },
-                {
-                    "title": "Product Academy",
-                    "url": "https://academy.example.com/product/",
-                },
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Jobs in Bangalore",
+                    url="https://jobs.example.com/jobs-in-bangalore/",
+                ),
+                _rendered_listing_fragment(
+                    title="Product Academy",
+                    url="https://academy.example.com/product/",
+                ),
             ]
         },
     )
@@ -3363,6 +3383,38 @@ def test_normalize_variant_record_tolerates_scalar_variant_axis_values() -> None
 
     assert record["size"] == "M"
     assert record["stock"] == "5"
+
+
+def test_normalize_variant_record_repairs_technical_option_labels_without_touching_friendly_ones() -> None:
+    record = {
+        "option1_name": "Flavour",
+        "option1_values": "Rich Chocolate, Blue Tokai Coffee",
+        "option2_name": "pr type",
+        "option2_values": "OptOut, RemoveMe, MyInfo",
+        "variant_axes": {
+            "flavor": ["Rich Chocolate", "Blue Tokai Coffee"],
+            "type": ["OptOut", "RemoveMe", "MyInfo"],
+        },
+        "variants": [
+            {
+                "option_values": {
+                    "flavor": "Rich Chocolate",
+                    "type": "OptOut",
+                }
+            }
+        ],
+        "selected_variant": {
+            "option_values": {
+                "flavor": "Rich Chocolate",
+                "type": "OptOut",
+            }
+        },
+    }
+
+    _normalize_variant_record(record)
+
+    assert record["option1_name"] == "Flavour"
+    assert record["option2_name"] == "type"
 
 
 def test_extract_ecommerce_detail_does_not_infer_price_from_shell_chrome_text() -> None:

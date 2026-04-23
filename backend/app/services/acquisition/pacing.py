@@ -8,6 +8,7 @@ from app.services.config.runtime_settings import crawler_runtime_settings
 
 _HOST_NEXT_ALLOWED_AT: dict[str, float] = {}
 _HOST_BROWSER_FIRST_UNTIL: dict[str, float] = {}
+_HOST_BROWSER_FIRST_STRIKES: dict[str, tuple[int, float]] = {}
 _HOST_PACING_LOCK = asyncio.Lock()
 
 
@@ -47,6 +48,7 @@ async def reset_pacing_state() -> None:
     async with _HOST_PACING_LOCK:
         _HOST_NEXT_ALLOWED_AT.clear()
         _HOST_BROWSER_FIRST_UNTIL.clear()
+        _HOST_BROWSER_FIRST_STRIKES.clear()
 
 
 async def mark_browser_first_host(_url: str) -> None:
@@ -62,6 +64,47 @@ async def mark_browser_first_host(_url: str) -> None:
         _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
         _HOST_BROWSER_FIRST_UNTIL[host] = now + ttl_seconds
         _enforce_host_cache_limit()
+
+
+async def note_browser_block_for_host(_url: str) -> bool:
+    host = _normalized_host(_url)
+    if not host:
+        return False
+    ttl_seconds = max(
+        1,
+        int(crawler_runtime_settings.pacing_host_cache_ttl_seconds),
+    )
+    threshold = max(
+        1,
+        int(getattr(crawler_runtime_settings, "browser_first_host_block_threshold", 2)),
+    )
+    now = time.monotonic()
+    async with _HOST_PACING_LOCK:
+        _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
+        prior_count, _prior_seen_at = _HOST_BROWSER_FIRST_STRIKES.get(host, (0, now))
+        block_count = prior_count + 1
+        _HOST_BROWSER_FIRST_STRIKES[host] = (block_count, now)
+        if block_count >= threshold:
+            _HOST_BROWSER_FIRST_UNTIL[host] = now + ttl_seconds
+        _enforce_host_cache_limit()
+        return block_count >= threshold
+
+
+async def note_usable_fetch_for_host(_url: str) -> None:
+    host = _normalized_host(_url)
+    if not host:
+        return
+    ttl_seconds = max(
+        1,
+        int(crawler_runtime_settings.pacing_host_cache_ttl_seconds),
+    )
+    now = time.monotonic()
+    async with _HOST_PACING_LOCK:
+        _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
+        if _HOST_BROWSER_FIRST_UNTIL.get(host, 0.0) > now and host in _HOST_BROWSER_FIRST_STRIKES:
+            return
+        _HOST_BROWSER_FIRST_UNTIL.pop(host, None)
+        _HOST_BROWSER_FIRST_STRIKES.pop(host, None)
 
 
 async def should_prefer_browser_for_host(_url: str) -> bool:
@@ -126,6 +169,13 @@ def _prune_expired_hosts(*, now: float, ttl_seconds: int) -> None:
     ]
     for host in expired_browser_hosts:
         _HOST_BROWSER_FIRST_UNTIL.pop(host, None)
+    expired_strike_hosts = [
+        host
+        for host, (_count, seen_at) in _HOST_BROWSER_FIRST_STRIKES.items()
+        if now > seen_at + ttl_seconds
+    ]
+    for host in expired_strike_hosts:
+        _HOST_BROWSER_FIRST_STRIKES.pop(host, None)
 
 
 def _enforce_host_cache_limit() -> None:
@@ -135,6 +185,7 @@ def _enforce_host_cache_limit() -> None:
     )
     _trim_host_cache(_HOST_NEXT_ALLOWED_AT, max_entries=max_entries)
     _trim_host_cache(_HOST_BROWSER_FIRST_UNTIL, max_entries=max_entries)
+    _trim_host_strike_cache(_HOST_BROWSER_FIRST_STRIKES, max_entries=max_entries)
 
 
 def _trim_host_cache(cache: dict[str, float], *, max_entries: int) -> None:
@@ -142,4 +193,16 @@ def _trim_host_cache(cache: dict[str, float], *, max_entries: int) -> None:
     if overflow <= 0:
         return
     for host, _ in sorted(cache.items(), key=lambda item: item[1])[:overflow]:
+        cache.pop(host, None)
+
+
+def _trim_host_strike_cache(
+    cache: dict[str, tuple[int, float]],
+    *,
+    max_entries: int,
+) -> None:
+    overflow = len(cache) - max_entries
+    if overflow <= 0:
+        return
+    for host, _ in sorted(cache.items(), key=lambda item: item[1][1])[:overflow]:
         cache.pop(host, None)

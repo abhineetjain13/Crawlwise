@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import crawl_fetch_runtime
+from app.models.crawl import DomainCookieMemory
 from app.services.acquisition import browser_identity
 from app.services.acquisition import cookie_store
 from app.services.acquisition import browser_runtime as acquisition_browser_runtime
@@ -785,6 +786,86 @@ async def test_persist_context_storage_state_normalizes_domain_before_persist(
 
 
 @pytest.mark.asyncio
+async def test_persist_context_storage_state_skips_domain_persist_when_disallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeContext:
+        async def storage_state(self) -> dict[str, object]:
+            return {
+                "cookies": [
+                    {
+                        "name": "session",
+                        "value": "abc",
+                        "domain": ".example.com",
+                        "path": "/",
+                    }
+                ],
+                "origins": [],
+            }
+
+    persisted_domains: list[str] = []
+
+    async def _persist_domain(domain: str, storage_state: dict[str, object]) -> None:
+        del storage_state
+        persisted_domains.append(domain)
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "persist_storage_state_for_domain",
+        _persist_domain,
+    )
+
+    await acquisition_browser_runtime._persist_context_storage_state(
+        FakeContext(),
+        run_id=None,
+        domain="example.com",
+        persist_domain_storage_state=False,
+    )
+
+    assert persisted_domains == []
+
+
+@pytest.mark.asyncio
+async def test_persist_context_storage_state_skips_run_persist_when_disallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeContext:
+        async def storage_state(self) -> dict[str, object]:
+            return {
+                "cookies": [
+                    {
+                        "name": "session",
+                        "value": "abc",
+                        "domain": ".example.com",
+                        "path": "/",
+                    }
+                ],
+                "origins": [],
+            }
+
+    persisted_run_ids: list[int] = []
+
+    async def _persist_run(run_id: int | None, storage_state: dict[str, object]) -> None:
+        del storage_state
+        persisted_run_ids.append(int(run_id or 0))
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "persist_storage_state_for_run",
+        _persist_run,
+    )
+
+    await acquisition_browser_runtime._persist_context_storage_state(
+        FakeContext(),
+        run_id=77,
+        domain=None,
+        persist_run_storage_state=False,
+    )
+
+    assert persisted_run_ids == []
+
+
+@pytest.mark.asyncio
 async def test_shared_browser_runtime_snapshot_tracks_queue_without_private_semaphore_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1005,3 +1086,157 @@ async def test_persist_storage_state_for_domain_persists_localhost_with_port(db_
     assert rows[0]["domain"] == "localhost:3000"
     assert any(row["domain"] == "localhost:3000" for row in all_rows)
     assert loaded is not None
+
+
+@pytest.mark.asyncio
+async def test_load_storage_state_for_domain_filters_existing_challenge_state(
+    db_session,
+) -> None:
+    domain = f"poisoned-{uuid4().hex}.example.com"
+    db_session.add(
+        DomainCookieMemory(
+            domain=domain,
+            storage_state={
+                "cookies": [
+                    {
+                        "name": "_pxvid",
+                        "value": "challenge",
+                        "domain": f".{domain}",
+                        "path": "/",
+                    },
+                    {
+                        "name": "session",
+                        "value": "safe",
+                        "domain": f".{domain}",
+                        "path": "/",
+                    },
+                ],
+                "origins": [
+                    {
+                        "origin": f"https://{domain}",
+                        "localStorage": [
+                            {"name": "PXapp_px_hvd", "value": "challenge"},
+                            {"name": "consent", "value": "accepted"},
+                        ],
+                    }
+                ],
+            },
+            state_fingerprint="poisoned",
+        )
+    )
+    await db_session.commit()
+
+    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+
+    assert loaded == {
+        "cookies": [
+            {
+                "name": "session",
+                "value": "safe",
+                "domain": f".{domain}",
+                "path": "/",
+            }
+        ],
+        "origins": [
+            {
+                "origin": f"https://{domain}",
+                "localStorage": [
+                    {"name": "consent", "value": "accepted"},
+                ],
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_persist_storage_state_for_domain_rejects_challenge_only_state(
+    db_session,
+) -> None:
+    domain = f"challenge-only-{uuid4().hex}.example.com"
+
+    saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "_px2",
+                    "value": "challenge",
+                    "domain": f".{domain}",
+                    "path": "/",
+                },
+                {
+                    "name": "pxcts",
+                    "value": "challenge",
+                    "domain": f".{domain}",
+                    "path": "/",
+                },
+            ],
+            "origins": [
+                {
+                    "origin": f"https://{domain}",
+                    "localStorage": [
+                        {"name": "PXapp_px_fp", "value": "challenge"},
+                    ],
+                }
+            ],
+        },
+        session=db_session,
+    )
+
+    rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+
+    assert saved is False
+    assert rows == []
+    assert loaded is None
+
+
+@pytest.mark.asyncio
+async def test_load_storage_state_for_domain_keeps_origin_when_local_storage_filters_empty(
+    db_session,
+) -> None:
+    domain = f"origin-shell-{uuid4().hex}.example.com"
+    db_session.add(
+        DomainCookieMemory(
+            domain=domain,
+            storage_state={
+                "cookies": [
+                    {
+                        "name": "session",
+                        "value": "safe",
+                        "domain": f".{domain}",
+                        "path": "/",
+                    }
+                ],
+                "origins": [
+                    {
+                        "origin": f"https://{domain}",
+                        "localStorage": [
+                            {"name": "PXapp_px_fp", "value": "challenge"},
+                        ],
+                    }
+                ],
+            },
+            state_fingerprint="origin-shell",
+        )
+    )
+    await db_session.commit()
+
+    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+
+    assert loaded == {
+        "cookies": [
+            {
+                "name": "session",
+                "value": "safe",
+                "domain": f".{domain}",
+                "path": "/",
+            }
+        ],
+        "origins": [
+            {
+                "origin": f"https://{domain}",
+                "localStorage": [],
+            }
+        ],
+    }

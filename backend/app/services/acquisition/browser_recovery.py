@@ -3,11 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-from app.services.config.extraction_rules import (
-    LISTING_RENDERED_CARD_SELECTORS,
-    LISTING_RENDERED_DETAIL_URL_HINTS,
-    LISTING_UTILITY_URL_TOKENS,
-)
+from app.services.extract.listing_card_fragments import listing_capture_selectors
 
 
 async def recover_browser_challenge(
@@ -75,193 +71,72 @@ async def recover_browser_challenge(
     return response
 
 
-async def capture_rendered_listing_cards(
+async def capture_rendered_listing_fragments(
     page: Any,
     *,
     surface: str | None,
     limit: int,
-) -> list[dict[str, object]]:
+) -> list[str]:
     if "listing" not in str(surface or "").strip().lower():
         return []
     try:
         snapshot = await page.evaluate(
             """(args) => {
                 const limit = Number(args?.limit || 0);
-                const cardSelectors = Array.isArray(args?.cardSelectors) ? args.cardSelectors : [];
-                const detailUrlHints = Array.isArray(args?.detailUrlHints) ? args.detailUrlHints : [];
-                const utilityUrlTokens = Array.isArray(args?.utilityUrlTokens) ? args.utilityUrlTokens : [];
-                const priceRegex = /(?:₹|Rs\\.?|INR|\\$|€|£)\\s?[\\d,.]+/i;
-                const toAbsolute = (href) => {
-                    if (!href || /^(#|javascript:)/i.test(href)) return '';
-                    try { return new URL(href, location.href).href; } catch { return ''; }
-                };
-                const textOf = (node) => ((node?.innerText || node?.textContent || '').replace(/\\s+/g, ' ').trim());
-                const srcsetUrls = (value) => String(value || '')
-                    .split(',')
-                    .map((part) => part.trim().split(' ')[0]?.trim() || '')
-                    .filter(Boolean);
-                const isWeakImageUrl = (url) => {
-                    const lowered = String(url || '').toLowerCase();
-                    if (!lowered) return true;
-                    try {
-                        const parsed = new URL(lowered);
-                        const path = String(parsed.pathname || '');
-                        return /^\\/f_(?:auto|avif|jpeg|jpg|png|webp)$/i.test(path);
-                    } catch {
-                        return false;
-                    }
-                };
-                const imageCandidates = (card, imageNode) => {
-                    const candidates = [];
-                    const pushValue = (value) => {
-                        const resolved = toAbsolute(value);
-                        if (!resolved || /^data:/i.test(resolved)) return;
-                        candidates.push(resolved);
-                    };
-                    const pushNodeValues = (node) => {
-                        if (!(node instanceof Element)) return;
-                        if (node instanceof HTMLImageElement) {
-                            pushValue(node.currentSrc || '');
-                            pushValue(node.src || '');
-                        }
-                        for (const attr of ['src', 'data-src', 'data-original', 'data-image', 'data-lazy-src']) {
-                            pushValue(node.getAttribute?.(attr) || '');
-                        }
-                        for (const attr of ['srcset', 'data-srcset']) {
-                            for (const entry of srcsetUrls(node.getAttribute?.(attr) || '')) {
-                                pushValue(entry);
-                            }
-                        }
-                    };
-                    pushNodeValues(imageNode);
-                    const imageScope = imageNode instanceof Element
-                        ? (imageNode.closest('picture') || imageNode.parentElement || imageNode)
-                        : null;
-                    if (imageScope instanceof Element) {
-                        for (const node of imageScope.querySelectorAll('img, source')) {
-                            pushNodeValues(node);
-                        }
-                    }
-                    const unique = [];
-                    const seen = new Set();
-                    for (const candidate of candidates) {
-                        if (seen.has(candidate)) continue;
-                        seen.add(candidate);
-                        unique.push(candidate);
-                    }
-                    return unique;
-                };
-                const isDetailUrl = (url) => {
-                    const lowered = String(url || '').toLowerCase();
-                    return detailUrlHints.some((hint) => lowered.includes(hint));
-                };
-                const hasUtilityToken = (url, token) => {
-                    const escaped = String(token || '').replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
-                    return new RegExp(`${escaped}(?:[/?#]|$)`, 'i').test(url);
-                };
-                const isUtilityUrl = (url) => {
-                    const lowered = String(url || '').toLowerCase();
-                    return utilityUrlTokens.some((token) => hasUtilityToken(lowered, token));
-                };
-                const bestAnchor = (anchors, titleNode, imageNode) => {
-                    let winner = null;
-                    let winnerScore = -999;
-                    let utilityWinner = null;
-                    let utilityWinnerScore = -999;
-                    for (const anchor of anchors) {
-                        if (!(anchor instanceof HTMLElement) || !anchor.isConnected) continue;
-                        const url = toAbsolute(anchor.getAttribute('href'));
-                        if (!url) continue;
-                        let score = 0;
-                        const loweredUrl = url.toLowerCase();
-                        const detailLike = isDetailUrl(loweredUrl);
-                        const utilityOnly = isUtilityUrl(loweredUrl) && !detailLike;
-                        if (detailLike) score += 10;
-                        if (utilityOnly) score -= 12;
-                        if (titleNode && anchor.contains(titleNode)) score += 5;
-                        if (imageNode && anchor.contains(imageNode)) score += 2;
-                        const text = textOf(anchor);
-                        if (text.length >= 8) score += 2;
-                        if (/source=search/i.test(loweredUrl)) score += 1;
-                        if (utilityOnly) {
-                            if (score > utilityWinnerScore) {
-                                utilityWinner = anchor;
-                                utilityWinnerScore = score;
-                            }
-                            continue;
-                        }
-                        if (score > winnerScore) {
-                            winner = anchor;
-                            winnerScore = score;
-                        }
-                    }
-                    return winner || utilityWinner;
-                };
-                const seenUrls = new Set();
-                const rows = [];
-                for (const selector of cardSelectors) {
+                const selectors = Array.isArray(args?.selectors) ? args.selectors : [];
+                const seenFragments = new Set();
+                const fragments = [];
+                const structuralAncestorSelectors = [
+                    'header',
+                    'footer',
+                    'nav',
+                    '[role="navigation"]',
+                    '[role="banner"]',
+                    '[role="contentinfo"]',
+                    'dialog',
+                    '[role="dialog"]',
+                ];
+                const textOf = (node) =>
+                    String(node?.innerText || node?.textContent || '')
+                        .replace(/\\s+/g, ' ')
+                        .trim();
+                for (const selector of selectors) {
                     for (const card of document.querySelectorAll(selector)) {
                         if (!(card instanceof HTMLElement) || !card.isConnected) continue;
                         const rect = card.getBoundingClientRect();
                         if (rect.width <= 0 || rect.height <= 0) continue;
                         const style = window.getComputedStyle(card);
                         if (style.display === 'none' || style.visibility === 'hidden') continue;
-                        const anchors = Array.from(card.querySelectorAll('a[href]'));
-                        const titleNode = card.querySelector('h1, h2, h3, h4, [itemprop="name"], [data-testid*="title" i], [data-testid*="name" i], [class*="title" i], [class*="name" i]');
-                        const brandNode = card.querySelector('[data-testid*="brand" i], [class*="brand" i]');
-                        const priceNode = card.querySelector('[itemprop="price"], [data-price], [class*="price" i], [aria-label*="price" i]');
-                        const imageNode = card.querySelector('img[src], source[srcset]');
-                        const primaryAnchor = bestAnchor(anchors, titleNode, imageNode) || (card.matches('a[href]') ? card : null);
-                        const url = primaryAnchor ? toAbsolute(primaryAnchor.getAttribute('href')) : '';
-                        const detailLike = isDetailUrl(url);
-                        const utilityLike = isUtilityUrl(url) && !detailLike;
-                        if (!url || seenUrls.has(url)) continue;
-                        const title = textOf(titleNode) || textOf(primaryAnchor) || String(imageNode?.getAttribute?.('alt') || '').trim();
-                        if (!title || title.length < 3) continue;
-                        const rawPrice = String(priceNode?.getAttribute?.('content') || priceNode?.getAttribute?.('data-price') || priceNode?.getAttribute?.('aria-label') || textOf(priceNode) || '').trim();
-                        const price = (rawPrice.match(priceRegex)?.[0] || rawPrice).trim();
-                        const imageUrl = (() => {
-                            const candidates = imageCandidates(card, imageNode);
-                            return candidates.find((candidate) => !isWeakImageUrl(candidate)) || candidates[0] || '';
-                        })();
-                        const brand = textOf(brandNode);
-                        const loweredTitle = title.toLowerCase();
-                        const hasImage = Boolean(imageUrl) && !/^data:/i.test(imageUrl);
-                        const strongMerchandiseSignal = detailLike || Boolean(price) || hasImage || Boolean(brand);
-                        if (!strongMerchandiseSignal) continue;
-                        if (utilityLike && !price && !hasImage && !brand) continue;
-                        if (!detailLike && !price && (!hasImage || ['product', 'products'].includes(loweredTitle))) {
-                            continue;
-                        }
-                        rows.push({ title, url, price, image_url: imageUrl, brand });
-                        seenUrls.add(url);
-                        if (rows.length >= limit) return rows;
+                        if (structuralAncestorSelectors.some((ancestor) => card.closest(ancestor))) continue;
+                        const anchors = card.matches('a[href]') ? [card] : Array.from(card.querySelectorAll('a[href]'));
+                        if (!anchors.length) continue;
+                        const anchorCount = anchors.length;
+                        if (anchorCount > 12) continue;
+                        const text = textOf(card);
+                        if (text.length < 12 || text.length > 4000) continue;
+                        const fragment = String(card.outerHTML || '').trim();
+                        if (!fragment || seenFragments.has(fragment)) continue;
+                        seenFragments.add(fragment);
+                        fragments.push(fragment);
+                        if (fragments.length >= limit) return fragments;
                     }
                 }
-                return rows;
+                return fragments;
             }""",
             {
                 "limit": int(limit),
-                "cardSelectors": list(LISTING_RENDERED_CARD_SELECTORS),
-                "detailUrlHints": [
-                    hint.lower() for hint in LISTING_RENDERED_DETAIL_URL_HINTS
-                ],
-                "utilityUrlTokens": [
-                    token.lower() for token in LISTING_UTILITY_URL_TOKENS
-                ],
+                "selectors": listing_capture_selectors(str(surface or "")),
             },
         )
     except Exception:
         return []
     if not isinstance(snapshot, list):
         return []
-    rows: list[dict[str, object]] = []
-    for item in snapshot[: int(limit)]:
-        if isinstance(item, dict):
-            rows.append(dict(item))
-    return rows
-
-
+    return [
+        str(item).strip()
+        for item in snapshot[: int(limit)]
+        if str(item or "").strip()
+    ]
 async def _page_has_cookie(page: Any, *, url: str, name: str) -> bool:
     context = getattr(page, "context", None)
     cookies_fn = getattr(context, "cookies", None)

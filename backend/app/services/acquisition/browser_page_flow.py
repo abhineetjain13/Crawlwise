@@ -4,22 +4,21 @@ from dataclasses import dataclass
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, cast
+from urllib.parse import urlsplit
 import httpx
 from bs4 import BeautifulSoup, Tag
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from app.services.acquisition.browser_capture import is_response_closed_error
 from app.services.acquisition.browser_recovery import (
-    capture_rendered_listing_cards,
+    capture_rendered_listing_fragments,
     recover_browser_challenge,
 )
-from app.services.config.extraction_rules import (
-    LISTING_RENDERED_DETAIL_URL_HINTS,
-    LISTING_UTILITY_URL_TOKENS,
-)
+from app.services.config.extraction_rules import LISTING_UTILITY_URL_TOKENS
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.dom_runtime import get_page_html
+from app.services.config.surface_hints import detail_path_hints
 from app.services.field_value_dom import requested_content_extractability
 from app.services.acquisition.runtime import classify_blocked_page_async, copy_headers
 from app.services.platform_policy import resolve_browser_readiness_policy, resolve_platform_runtime_policy
@@ -165,13 +164,13 @@ class BrowserAcquisitionResultBuilder:
         await self._emit_events(browser_outcome=browser_outcome, blocked=blocked)
         screenshot_path = await self._capture_screenshot(browser_outcome=browser_outcome)
         (
-            rendered_listing_cards,
+            rendered_listing_fragments,
             listing_visual_elements,
             listing_artifact_diagnostics,
         ) = await self._capture_listing_artifacts()
         payload.phase_timings_ms["total"] = self.elapsed_ms(payload.started_at)
         listing_evidence_counts = {
-            "rendered_listing_cards": len(rendered_listing_cards),
+            "rendered_listing_fragments": len(rendered_listing_fragments),
             "listing_visual_elements": len(listing_visual_elements),
         }
         diagnostics = build_browser_diagnostics(
@@ -195,8 +194,8 @@ class BrowserAcquisitionResultBuilder:
             listing_artifact_diagnostics=listing_artifact_diagnostics,
             traversal_result=payload.traversal_result,
         )
-        diagnostics["rendered_listing_card_count"] = listing_evidence_counts[
-            "rendered_listing_cards"
+        diagnostics["rendered_listing_fragment_count"] = listing_evidence_counts[
+            "rendered_listing_fragments"
         ]
         diagnostics["listing_visual_element_count"] = listing_evidence_counts[
             "listing_visual_elements"
@@ -207,8 +206,22 @@ class BrowserAcquisitionResultBuilder:
             traversal_result=payload.traversal_result,
             html=payload.html,
             rendered_html=payload.rendered_html,
-            rendered_listing_cards=rendered_listing_cards,
-            listing_visual_elements=listing_visual_elements,
+            rendered_listing_fragments=(
+                rendered_listing_fragments
+                if _capture_status_ok(
+                    listing_artifact_diagnostics,
+                    "rendered_listing_fragment_capture",
+                )
+                else None
+            ),
+            listing_visual_elements=(
+                listing_visual_elements
+                if _capture_status_ok(
+                    listing_artifact_diagnostics,
+                    "listing_visual_capture",
+                )
+                else None
+            ),
         )
         return {
             "response_missing": response_missing,
@@ -279,18 +292,19 @@ class BrowserAcquisitionResultBuilder:
     async def _capture_listing_artifacts(
         self,
     ) -> tuple[
-        list[dict[str, object]],
+        list[str],
         list[dict[str, object]],
         dict[str, object],
     ]:
         payload = self.payload
-        rendered_listing_cards, rendered_listing_capture = await self._capture_timed_listing_artifact(
-            capture_rendered_listing_cards(
+        rendered_listing_fragments, rendered_listing_fragment_capture = await self._capture_timed_listing_artifact(
+            capture_rendered_listing_fragments(
                 payload.page,
                 surface=payload.surface,
                 limit=int(crawler_runtime_settings.rendered_listing_card_capture_limit),
             ),
-            stage="rendered_listing_capture",
+            stage="rendered_listing_fragment_capture",
+            item_kind="text",
         )
         listing_visual_elements, listing_visual_capture = await self._capture_timed_listing_artifact(
             _capture_listing_visual_elements(
@@ -298,12 +312,13 @@ class BrowserAcquisitionResultBuilder:
                 surface=payload.surface,
             ),
             stage="listing_visual_capture",
+            item_kind="mapping",
         )
         return (
-            rendered_listing_cards,
-            listing_visual_elements,
+            cast(list[str], rendered_listing_fragments),
+            cast(list[dict[str, object]], listing_visual_elements),
             {
-                "rendered_listing_capture": rendered_listing_capture,
+                "rendered_listing_fragment_capture": rendered_listing_fragment_capture,
                 "listing_visual_capture": listing_visual_capture,
             },
         )
@@ -313,13 +328,15 @@ class BrowserAcquisitionResultBuilder:
         operation,
         *,
         stage: str,
-    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        item_kind: str,
+    ) -> tuple[list[object], dict[str, object]]:
         payload = self.payload
         started_at = time.perf_counter()
         artifacts, capture_diagnostics = await _capture_listing_artifact_with_timeout(
             operation,
             stage=stage,
             url=payload.url,
+            item_kind=item_kind,
         )
         payload.phase_timings_ms[stage] = self.elapsed_ms(started_at)
         return artifacts, capture_diagnostics
@@ -330,7 +347,8 @@ async def _capture_listing_artifact_with_timeout(
     *,
     stage: str,
     url: str,
-) -> tuple[list[dict[str, object]], dict[str, object]]:
+    item_kind: str = "mapping",
+) -> tuple[list[object], dict[str, object]]:
     timeout_seconds = max(
         0.1,
         float(crawler_runtime_settings.browser_artifact_capture_timeout_ms) / 1000,
@@ -369,14 +387,109 @@ async def _capture_listing_artifact_with_timeout(
         return [], {"status": "unexpected_error"}
     if not isinstance(result, list):
         return [], {"status": "invalid_result"}
-    return (
-        [dict(item) for item in result if isinstance(item, dict)],
-        {"status": "ok"},
-    )
+    rows: list[object] = []
+    for item in result:
+        if item_kind == "mapping" and isinstance(item, dict):
+            rows.append(dict(item))
+            continue
+        if item_kind == "text" and isinstance(item, str):
+            text = item.strip()
+            if text:
+                rows.append(text)
+    return (rows, {"status": "ok"})
 def remaining_timeout_factory(deadline: float):
     def _remaining() -> float:
         return max(2.0, deadline - time.perf_counter())
     return _remaining
+
+
+def _capture_status_ok(
+    diagnostics: dict[str, object],
+    key: str,
+) -> bool:
+    capture = diagnostics.get(key)
+    if not isinstance(capture, dict):
+        return False
+    return str(capture.get("status") or "").strip().lower() == "ok"
+
+
+def _is_navigation_interrupted_error(exc: Exception) -> bool:
+    return "interrupted by another navigation" in str(exc or "").strip().lower()
+
+
+def _urls_match_for_navigation(expected_url: str, current_url: str) -> bool:
+    expected = urlsplit(str(expected_url or "").strip())
+    current = urlsplit(str(current_url or "").strip())
+    if not expected.scheme or not expected.netloc:
+        return False
+    return (
+        expected.scheme.lower(),
+        expected.netloc.lower(),
+        expected.path.rstrip("/") or "/",
+        expected.query,
+    ) == (
+        current.scheme.lower(),
+        current.netloc.lower(),
+        current.path.rstrip("/") or "/",
+        current.query,
+    )
+
+
+async def _recover_interrupted_navigation(
+    page: Any,
+    *,
+    url: str,
+    wait_until: str,
+    timeout_ms: int,
+) -> bool:
+    if timeout_ms <= 0:
+        return False
+    recovery_state = "domcontentloaded" if wait_until == "commit" else wait_until
+    if recovery_state not in {"load", "domcontentloaded", "networkidle"}:
+        recovery_state = "domcontentloaded"
+    try:
+        await page.wait_for_load_state(recovery_state, timeout=timeout_ms)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return False
+    return _urls_match_for_navigation(url, str(getattr(page, "url", "") or ""))
+
+
+async def _goto_with_interrupted_navigation_recovery(
+    page: Any,
+    *,
+    url: str,
+    wait_until: str,
+    timeout_ms: int,
+):
+    try:
+        return await page.goto(
+            url,
+            wait_until=wait_until,
+            timeout=timeout_ms,
+        )
+    except asyncio.CancelledError:
+        raise
+    except PlaywrightError as exc:
+        if not _is_navigation_interrupted_error(exc):
+            raise
+        if not await _recover_interrupted_navigation(
+            page,
+            url=url,
+            wait_until=wait_until,
+            timeout_ms=timeout_ms,
+        ):
+            raise
+        logger.debug(
+            "Recovered interrupted navigation url=%s wait_until=%s current_url=%s",
+            url,
+            wait_until,
+            getattr(page, "url", ""),
+        )
+        return None
+
+
 async def navigate_browser_page_impl(
     page: Any,
     *,
@@ -403,10 +516,11 @@ async def navigate_browser_page_impl(
     navigation_strategy = navigation_wait_until
     navigation_started_at = time.perf_counter()
     try:
-        response = await page.goto(
-            url,
+        response = await _goto_with_interrupted_navigation_recovery(
+            page,
+            url=url,
             wait_until=navigation_wait_until,
-            timeout=goto_timeout_ms,
+            timeout_ms=goto_timeout_ms,
         )
     except asyncio.CancelledError:
         raise
@@ -416,17 +530,19 @@ async def navigate_browser_page_impl(
         )
         navigation_strategy = fallback_strategy
         try:
-            response = await page.goto(
-                url,
+            fallback_timeout = (
+                min(
+                    int(timeout_seconds * 1000),
+                    int(crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms),
+                )
+                if fallback_strategy == "domcontentloaded"
+                else fallback_timeout_ms
+            )
+            response = await _goto_with_interrupted_navigation_recovery(
+                page,
+                url=url,
                 wait_until=fallback_strategy,
-                timeout=(
-                    min(
-                        int(timeout_seconds * 1000),
-                        int(crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms),
-                    )
-                    if fallback_strategy == "domcontentloaded"
-                    else fallback_timeout_ms
-                ),
+                timeout_ms=fallback_timeout,
             )
         except asyncio.CancelledError:
             raise
@@ -434,10 +550,11 @@ async def navigate_browser_page_impl(
             if fallback_strategy != "commit":
                 navigation_strategy = "commit"
                 try:
-                    response = await page.goto(
-                        url,
+                    response = await _goto_with_interrupted_navigation_recovery(
+                        page,
+                        url=url,
                         wait_until="commit",
-                        timeout=fallback_timeout_ms,
+                        timeout_ms=fallback_timeout_ms,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -810,15 +927,15 @@ def build_browser_artifacts(
     traversal_result,
     html: str,
     rendered_html: str,
-    rendered_listing_cards: list[dict[str, object]] | None = None,
+    rendered_listing_fragments: list[str] | None = None,
     listing_visual_elements: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     artifacts: dict[str, object] = {}
     if screenshot_path:
         artifacts["browser_screenshot_path"] = screenshot_path
-    if rendered_listing_cards:
-        artifacts["rendered_listing_cards"] = rendered_listing_cards
-    if listing_visual_elements:
+    if rendered_listing_fragments is not None:
+        artifacts["rendered_listing_fragments"] = rendered_listing_fragments
+    if listing_visual_elements is not None:
         artifacts["listing_visual_elements"] = listing_visual_elements
     if traversal_result is not None and traversal_result.activated:
         artifacts["traversal_composed_html"] = traversal_result.compose_html()
@@ -1308,7 +1425,7 @@ async def _capture_listing_visual_elements(
             }""",
             {
                 "detailUrlHints": [
-                    hint.lower() for hint in LISTING_RENDERED_DETAIL_URL_HINTS
+                    hint.lower() for hint in detail_path_hints("ecommerce_detail")
                 ],
                 "utilityUrlTokens": [
                     token.lower() for token in LISTING_UTILITY_URL_TOKENS

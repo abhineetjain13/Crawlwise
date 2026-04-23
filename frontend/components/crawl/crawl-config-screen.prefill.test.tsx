@@ -8,12 +8,14 @@ import { CrawlConfigScreen } from"./crawl-config-screen";
 
 const {
  replaceMock,
+ refreshMock,
  createCsvCrawlMock,
  createCrawlMock,
  getDomainRunProfileMock,
  listSelectorsMock,
 } = vi.hoisted(() => ({
  replaceMock: vi.fn(),
+ refreshMock: vi.fn(),
  createCsvCrawlMock: vi.fn(),
  createCrawlMock: vi.fn(),
  getDomainRunProfileMock: vi.fn(),
@@ -22,7 +24,8 @@ const {
 
 vi.mock("next/navigation", () => ({
  useRouter: () => ({
- replace: replaceMock,
+  replace: replaceMock,
+  refresh: refreshMock,
  }),
 }));
 
@@ -53,6 +56,7 @@ describe("CrawlConfigScreen bulk prefill", () => {
  saved_run_profile: null,
  });
  listSelectorsMock.mockResolvedValue([]);
+ createCrawlMock.mockResolvedValue({ run_id: 321 });
  });
 
  afterEach(() => {
@@ -117,5 +121,21 @@ describe("CrawlConfigScreen bulk prefill", () => {
 
  expect(await screen.findByDisplayValue("price")).toBeInTheDocument();
  expect(screen.queryByText("Loaded 1 saved selector from domain memory.")).not.toBeInTheDocument();
+ });
+
+ it("refreshes the route after launching a crawl so the new run screen loads immediately", async () => {
+ renderConfigScreen();
+
+ fireEvent.change(screen.getByLabelText("Target URL input"), {
+ target: { value: "https://example.com/collections/chairs" },
+ });
+
+ fireEvent.click(screen.getByRole("button", { name: "Start Crawl" }));
+
+ await waitFor(() => {
+ expect(createCrawlMock).toHaveBeenCalled();
+ expect(replaceMock).toHaveBeenCalledWith("/crawl?run_id=321");
+ expect(refreshMock).toHaveBeenCalledTimes(1);
+ });
  });
 });

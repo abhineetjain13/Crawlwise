@@ -95,7 +95,7 @@ https://www.instahyre.com/search-jobs
 | DC04 | `https://www.discogs.com/release/249504` | HTTP | Medium | Label / barcode / matrix / pressing data, multi-format |
 | DC10 | `https://www.ifixit.com/products/iphone-14-battery` | HTTP | Easy | Repair part — compatibility list, schema.org Product |
 | DC11 | `https://www.ifixit.com/products/macbook-pro-15-inch-retina-display-mid-2015-battery` | HTTP | Easy | Version compatibility matrix in DOM, conditional specs |
-| DC12 | `https://www.vitacost.com/now-foods-ultra-omega-3-fish-oil-500-epa-250-dha-180-softgels` | HTTP | Medium | Supplement Facts panel, size variant selector |
+| DC12 | `https://www.vitacost.com/vitacost-vitamin-d3-mini-gels` | HTTP | Medium | Supplement Facts panel, size variant selector |
 | DC14 | `https://www.thriftbooks.com/w/the-pragmatic-programmer_david-thomas_andrew-hunt/286697/` | HTTP | Easy | Multi-edition price compare, ISBN-13, condition grading |
 | DC15 | `https://www.abebooks.com/9780132350884/Clean-Code-Handbook-Agile-Software-0132350882/plp` | HTTP | Medium | Multi-seller table, shipping region data, condition descriptions |
 | DC17 | `https://www.rockler.com/jessem-mast-r-lift-ii-excel-router-lift` | HTTP | Medium | Compatibility chart, spec table, router size matrix |

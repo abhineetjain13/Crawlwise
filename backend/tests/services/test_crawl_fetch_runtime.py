@@ -1124,7 +1124,7 @@ async def test_fetch_page_requires_a_timeout_source(
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_prefers_browser_after_vendor_blocked_host_memory(
+async def test_fetch_page_does_not_stick_host_preference_after_usable_browser_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await crawl_fetch_runtime.reset_fetch_runtime_state()
@@ -1172,6 +1172,61 @@ async def test_fetch_page_prefers_browser_after_vendor_blocked_host_memory(
 
     assert first.method == "browser"
     assert second.method == "browser"
+    assert curl_calls == [url, url]
+    assert browser_reasons == ["vendor-block:datadome", "vendor-block:datadome"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_prefers_browser_after_hard_blocked_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+    url = "https://wellfound.com/location/united-states"
+    curl_calls: list[str] = []
+    browser_reasons: list[str | None] = []
+
+    async def _vendor_blocked_curl(
+        request_url: str,
+        timeout: float,
+        *,
+        proxy: str | None = None,
+    ):
+        del timeout, proxy
+        curl_calls.append(request_url)
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body>blocked</body></html>",
+            status_code=403,
+            method="curl_cffi",
+            blocked=True,
+            headers={"x-datadome": "blocked"},
+        )
+
+    async def _browser_blocked(request_url, timeout, **kwargs):
+        del timeout
+        browser_reasons.append(kwargs.get("browser_reason"))
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body>still blocked</body></html>",
+            status_code=403,
+            method="browser",
+            blocked=True,
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _vendor_blocked_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _browser_blocked)
+    try:
+        first = await crawl_fetch_runtime.fetch_page(url, surface="job_listing")
+        second = await crawl_fetch_runtime.fetch_page(url, surface="job_listing")
+    finally:
+        await crawl_fetch_runtime.reset_fetch_runtime_state()
+
+    assert first.method == "browser"
+    assert second.method == "browser"
+    assert first.blocked is True
+    assert second.blocked is True
     assert curl_calls == [url]
     assert browser_reasons == ["vendor-block:datadome", "host-preference"]
 

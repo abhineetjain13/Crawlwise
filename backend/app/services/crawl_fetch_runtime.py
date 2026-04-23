@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.core.config import settings
 from app.services.acquisition.browser_identity import build_playwright_context_options
 from app.services.acquisition.browser_runtime import (
     SharedBrowserRuntime as _SharedBrowserRuntime,
@@ -30,7 +29,8 @@ from app.services.acquisition.http_client import (
 )
 from app.services.acquisition.pacing import (
     apply_protected_host_backoff,
-    mark_browser_first_host,
+    note_browser_block_for_host,
+    note_usable_fetch_for_host,
     reset_pacing_state,
     should_prefer_browser_for_host,
     wait_for_host_slot,
@@ -301,10 +301,15 @@ async def fetch_page(
         }
         if capture_page_markdown:
             browser_attempt_kwargs["capture_page_markdown"] = True
-        return await _run_browser_attempts(
+        browser_result = await _run_browser_attempts(
             context,
             **browser_attempt_kwargs,
         )
+        await _update_host_result_memory(
+            context,
+            result=browser_result,
+        )
+        return browser_result
 
     http_result, vendor_block_confirmed = await _run_http_fetch_chain(context)
     if http_result is not None:
@@ -597,7 +602,7 @@ async def _handle_http_result(
     if vendor or bool(result.blocked):
         await apply_protected_host_backoff(result.final_url or result.url or context.url)
     if vendor:
-        await mark_browser_first_host(result.final_url or result.url or context.url)
+        await note_browser_block_for_host(result.final_url or result.url or context.url)
     result_runtime_policy = resolve_platform_runtime_policy(
         result.final_url or result.url,
         result.html,
@@ -631,13 +636,10 @@ async def _handle_http_result(
             listing_recovery_mode=context.listing_recovery_mode,
             proxies=[proxy],
         )
-        if bool(browser_result.blocked):
-            await apply_protected_host_backoff(
-                browser_result.final_url or browser_result.url or context.url
-            )
-            await mark_browser_first_host(
-                browser_result.final_url or browser_result.url or context.url
-            )
+        await _update_host_result_memory(
+            context,
+            result=browser_result,
+        )
         return browser_result, bool(vendor)
     if is_non_retryable_http_status(result.status_code):
         logger.info(
@@ -645,10 +647,18 @@ async def _handle_http_result(
             result.status_code,
             context.url,
         )
+        await _update_host_result_memory(
+            context,
+            result=result,
+        )
         return result, bool(vendor)
     _attach_browser_attempt_diagnostics(
         result,
         diagnostics=context.last_browser_attempt_diagnostics,
+    )
+    await _update_host_result_memory(
+        context,
+        result=result,
     )
     return result, bool(vendor)
 
@@ -681,6 +691,19 @@ def _resolve_browser_reason(
     if host_preference_enabled:
         return "host-preference"
     return "http-escalation"
+
+
+async def _update_host_result_memory(
+    context: _FetchRuntimeContext,
+    *,
+    result: PageFetchResult,
+) -> None:
+    target_url = result.final_url or result.url or context.url
+    if bool(result.blocked):
+        await apply_protected_host_backoff(target_url)
+        await note_browser_block_for_host(target_url)
+        return
+    await note_usable_fetch_for_host(target_url)
 
 
 def _retryable_status_for_http_fetch(status_code: int) -> bool:

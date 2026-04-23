@@ -121,17 +121,22 @@ export function inferDomainFromSurface(surface: string | null | undefined): Craw
  return null;
 }
 
-const SCHEMA_TYPE_FIELD_NAMES = new Set([
-"aggregaterating",
-"breadcrumblist",
-"individualproduct",
-"organization",
-"peopleaudience",
-"postaladdress",
-"quantitativevalue",
-"webpage",
-"website",
-]);
+const SCHEMA_TYPE_FIELD_NAMES = new Set(
+ [
+ "AggregateRating",
+ "BreadcrumbList",
+ "IndividualProduct",
+ "Organization",
+ "PeopleAudience",
+ "PostalAddress",
+ "QuantitativeValue",
+ "WebPage",
+ "WebSite",
+ ].flatMap((value) => {
+ const normalized = normalizeField(value);
+ return [normalized, normalized.replace(/_/g,"")];
+ }),
+);
 
 const DAY_OF_WEEK_FIELD_NAMES = new Set([
 "monday",
@@ -146,6 +151,7 @@ const DAY_OF_WEEK_FIELD_NAMES = new Set([
 export function validateAdditionalFieldName(value: string) {
  const cleaned = cleanRequestedField(value);
  const normalized = normalizeField(cleaned);
+ const collapsed = normalized.replace(/_/g,"");
  if (!cleaned) {
  return"Field name cannot be empty.";
  }
@@ -161,7 +167,7 @@ export function validateAdditionalFieldName(value: string) {
  if ((cleaned.match(/\s+/g) ?? []).length >= 7 || (normalized.match(/_/g) ?? []).length >= 7) {
  return"Field name is too sentence-like. Keep it concise.";
  }
- if (SCHEMA_TYPE_FIELD_NAMES.has(normalized)) {
+ if (SCHEMA_TYPE_FIELD_NAMES.has(normalized) || SCHEMA_TYPE_FIELD_NAMES.has(collapsed)) {
  return"Field name looks like a schema type. Use a business field.";
  }
  if (DAY_OF_WEEK_FIELD_NAMES.has(normalized)) {

@@ -118,6 +118,9 @@ def classify_block_from_headers(headers: Any) -> str | None:
 
 def classify_blocked_page(html: str, status_code: int) -> BlockPageClassification:
     code = int(status_code or 0)
+    forced_blocked = False
+    forced_outcome = ""
+    base_evidence: list[str] = []
     if code == 401:
         return BlockPageClassification(
             blocked=False,
@@ -125,19 +128,21 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
             evidence=[f"http_status:{code}"],
         )
     if code == 429:
-        return BlockPageClassification(
-            blocked=True,
-            outcome="rate_limited",
-            evidence=[f"http_status:{code}"],
-        )
+        forced_blocked = True
+        forced_outcome = "rate_limited"
+        base_evidence.append(f"http_status:{code}")
     if code == 403:
-        return BlockPageClassification(
-            blocked=True,
-            outcome="challenge_page",
-            evidence=[f"http_status:{code}"],
-        )
+        forced_blocked = True
+        forced_outcome = "challenge_page"
+        base_evidence.append(f"http_status:{code}")
     lowered = str(html or "").lower()
     if not lowered.strip():
+        if forced_blocked:
+            return BlockPageClassification(
+                blocked=True,
+                outcome=forced_outcome,
+                evidence=base_evidence,
+            )
         return BlockPageClassification(blocked=False, outcome="empty")
 
     analysis = analyze_html(html)
@@ -182,6 +187,11 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
         ).keys()
         if str(marker or "").strip()
     ]
+    content_tolerant_strong_markers = {
+        str(marker or "").strip().lower()
+        for marker in _string_sequence(BLOCK_SIGNATURES.get("content_tolerant_strong_markers"))
+        if str(marker or "").strip()
+    }
     provider_markers = [
         str(marker or "").strip().lower()
         for marker in _string_sequence(BLOCK_SIGNATURES.get("provider_markers"))
@@ -202,7 +212,9 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
         and str(item.get("marker") or "").strip().lower() in lowered
     }
     challenge_element_hits = set(_challenge_element_hits(soup, lowered))
+    hard_strong_hits = strong_hits - content_tolerant_strong_markers
     evidence = [
+        *base_evidence,
         *sorted(f"title:{pattern}" for pattern in title_matches),
         *sorted(f"strong:{marker}" for marker in strong_hits),
         *sorted(f"weak:{marker}" for marker in weak_hits),
@@ -211,10 +223,12 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
         *sorted(f"challenge_element:{marker}" for marker in challenge_element_hits),
     ]
 
-    blocked = False
-    if len(strong_hits) >= 2:
+    blocked = forced_blocked
+    if forced_blocked:
         blocked = True
-    elif strong_hits and (
+    elif len(hard_strong_hits) >= 2:
+        blocked = True
+    elif hard_strong_hits and (
         provider_hits or active_provider_hits or challenge_element_hits or title_matches
     ):
         blocked = True
@@ -230,13 +244,23 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
         blocked = True
     elif title_matches and challenge_element_hits:
         blocked = True
-    elif strong_hits and weak_hits and provider_hits:
+    elif hard_strong_hits and weak_hits and provider_hits:
         blocked = True
-    if blocked and has_extractable_content and not strong_hits and not title_matches:
+    elif (
+        "captcha" in strong_hits
+        and provider_hits
+        and not has_extractable_content
+    ):
+        blocked = True
+    if blocked and has_extractable_content and not hard_strong_hits and not title_matches:
         blocked = False
     return BlockPageClassification(
         blocked=blocked,
-        outcome="challenge_page" if blocked else "ok",
+        outcome=(
+            forced_outcome
+            if blocked and forced_blocked
+            else "challenge_page" if blocked else "ok"
+        ),
         evidence=evidence,
         provider_hits=sorted(provider_hits),
         active_provider_hits=sorted(active_provider_hits),

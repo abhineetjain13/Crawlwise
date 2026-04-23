@@ -75,6 +75,7 @@ from app.services.normalizers import normalize_decimal_price
 from app.services.extract.shared_variant_logic import (
     iter_variant_choice_groups,
     iter_variant_select_groups,
+    normalized_variant_axis_display_name,
     normalized_variant_axis_key,
     resolve_variants,
     resolve_variant_group_name,
@@ -897,9 +898,30 @@ def _normalize_variant_record(record: dict[str, Any]) -> None:
     _backfill_selected_variant_from_record(record)
     _dedupe_variant_rows(record)
     _prune_non_selectable_variant_axes(record)
+    _normalize_variant_option_summaries(record)
     _prune_duplicate_variant_axis_fields(record)
     _prune_redundant_size_option_summary(record)
     _backfill_variant_prices_from_record(record)
+
+
+def _normalize_variant_option_summaries(record: dict[str, Any]) -> None:
+    variant_axes = record.get("variant_axes")
+    if not isinstance(variant_axes, dict) or not variant_axes:
+        return
+    axis_keys = {str(axis_name).strip() for axis_name in variant_axes if str(axis_name).strip()}
+    if not axis_keys:
+        return
+    for index in range(1, 5):
+        name_key = f"option{index}_name"
+        option_name = text_or_none(record.get(name_key))
+        if not option_name:
+            continue
+        axis_key = normalized_variant_axis_key(option_name)
+        if axis_key not in axis_keys:
+            continue
+        display_name = normalized_variant_axis_display_name(option_name)
+        if display_name and display_name != option_name:
+            record[name_key] = display_name
 
 def _backfill_selected_variant_from_record(record: dict[str, Any]) -> None:
     selected_variant = record.get("selected_variant")

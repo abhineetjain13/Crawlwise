@@ -571,6 +571,15 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  [recordsForAnalysis, visibleColumns],
  );
  const completedQualityLevel = terminal ? (persistedQualityLevel ?? quality.level) : quality.level;
+ const emptyRecordsState = verdict ==="blocked"
+ ? {
+ title:"Access blocked",
+ description:"The target site blocked acquisition for this run. Check Logs or browser diagnostics for challenge details.",
+ }
+ : {
+ title:"No records captured yet",
+ description:"Records will appear here once extraction returns rows.",
+ };
  const batchFromResultsUrls = selectedResultUrls.length ? selectedResultUrls : resultUrls;
  const batchFromResultsLabel = selectedResultUrls.length
  ? `Batch Crawl Selected (${selectedResultUrls.length})`
@@ -988,8 +997,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </div>
  ) : (
  <DataRegionEmpty
- title="No records captured yet"
- description="Records will appear here once extraction returns rows."
+ title={emptyRecordsState.title}
+ description={emptyRecordsState.description}
  className="px-0"
  />
  )}

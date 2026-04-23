@@ -118,7 +118,9 @@ Import rule: import `fetch_page` from `crawl_fetch_runtime.py` directly.
 | `field_policy.py` | Field eligibility by surface |
 | `adapters/registry.py` | Adapter resolution |
 | `adapters/[platform].py` | Platform-specific extraction |
-| `extract/*` | Extraction helpers |
+| `extract/listing_card_fragments.py` | Canonical listing-fragment discovery shared by traversal, browser artifact capture, and listing extraction |
+| `extract/listing_candidate_ranking.py` | Shared candidate-set ranking and utility filtering for listing rows |
+| `extract/*` | Other extraction helpers |
 
 Canonical config owners:
 

@@ -83,6 +83,30 @@ def test_classify_blocked_page_detects_datadome_captcha_delivery_challenge() -> 
     assert "captcha_delivery_iframe" in classification.challenge_element_hits
 
 
+def test_classify_blocked_page_keeps_perimeterx_evidence_on_403() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Access to this page has been denied</title>
+        <meta name="description" content="px-captcha" />
+        <script src="https://captcha.perimeterx.net/app/captcha.js"></script>
+      </head>
+      <body>
+        <main>Please verify you are a human</main>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 403)
+
+    assert classification.blocked is True
+    assert classification.outcome == "challenge_page"
+    assert "http_status:403" in classification.evidence
+    assert "perimeterx" in classification.provider_hits
+    assert "px-captcha" in classification.provider_hits
+    assert "px-captcha" in classification.active_provider_hits
+
+
 def test_classify_blocked_page_uses_configured_challenge_element_markers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,3 +171,77 @@ def test_classify_blocked_page_preserves_usable_listing_content_despite_vendor_m
     assert classification.blocked is False
     assert "akamai" in classification.provider_hits
     assert "captcha_titled_iframe" in classification.challenge_element_hits
+
+
+def test_classify_blocked_page_preserves_extractable_content_on_403_without_strong_hits() -> None:
+    html = """
+    <html>
+      <head>
+        <title>KitchenAid Food Processors</title>
+      </head>
+      <body>
+        <main>
+          <article>
+            <a href="/products/food-processor-1">Food Processor One</a>
+            <span>$129.99</span>
+          </article>
+          <article>
+            <a href="/products/food-processor-2">Food Processor Two</a>
+            <span>$149.99</span>
+          </article>
+          <article>
+            <a href="/products/food-processor-3">Food Processor Three</a>
+            <span>$179.99</span>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 403)
+
+    assert classification.blocked is False
+    assert classification.outcome == "ok"
+    assert "http_status:403" in classification.evidence
+
+
+def test_classify_blocked_page_preserves_extractable_listing_with_captcha_provider_markers_only() -> None:
+    html = """
+    <html>
+      <head><title>adidas Sneakers | Shop Stadium Goods</title></head>
+      <body>
+        <p>This page is protected by captcha services.</p>
+        <script src="https://www.google.com/recaptcha/api.js"></script>
+        <script src="https://js.hcaptcha.com/1/api.js"></script>
+        <main>
+          <article><a href="/products/a">A</a><span>$100</span></article>
+          <article><a href="/products/b">B</a><span>$110</span></article>
+          <article><a href="/products/c">C</a><span>$120</span></article>
+        </main>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is False
+    assert classification.strong_hits == ["captcha"]
+    assert "recaptcha" in classification.provider_hits
+
+
+def test_classify_blocked_page_blocks_captcha_provider_page_without_extractable_content() -> None:
+    html = """
+    <html>
+      <head><title>Security Check</title></head>
+      <body>
+        <p>Please complete the captcha to continue.</p>
+        <script src="https://www.google.com/recaptcha/api.js"></script>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is True
+    assert classification.strong_hits == ["captcha"]
+    assert "recaptcha" in classification.provider_hits

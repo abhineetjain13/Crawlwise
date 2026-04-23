@@ -1,37 +1,4 @@
 {
-  "DATALAYER_ECOMMERCE_FIELD_MAP": {
-    "__type__": "dict",
-    "items": [
-      {
-        "key": "currencyCode",
-        "value": "currency"
-      },
-      {
-        "key": "detail.products[0].category",
-        "value": "category"
-      },
-      {
-        "key": "detail.products[0].price",
-        "value": "price"
-      },
-      {
-        "key": "items[0].currency",
-        "value": "currency"
-      },
-      {
-        "key": "items[0].discount",
-        "value": "discount_amount"
-      },
-      {
-        "key": "items[0].item_category",
-        "value": "category"
-      },
-      {
-        "key": "items[0].price",
-        "value": "price"
-      }
-    ]
-  },
   "CANONICAL_SCHEMAS": {
     "__type__": "dict",
     "items": [
@@ -207,6 +174,89 @@
           "items": []
         }
       }
+    ]
+  },
+  "COLLECTION_KEYS": {
+    "__type__": "list",
+    "items": [
+      "products",
+      "items",
+      "results",
+      "records",
+      "listings",
+      "jobs",
+      "job-list",
+      "job_list",
+      "postings",
+      "positions",
+      "openings",
+      "hits",
+      "nodes",
+      "categories",
+      "collections",
+      "offers",
+      "deals",
+      "events",
+      "properties",
+      "rows"
+    ]
+  },
+  "DATALAYER_ECOMMERCE_FIELD_MAP": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "currencyCode",
+        "value": "currency"
+      },
+      {
+        "key": "detail.products[0].category",
+        "value": "category"
+      },
+      {
+        "key": "detail.products[0].price",
+        "value": "price"
+      },
+      {
+        "key": "items[0].currency",
+        "value": "currency"
+      },
+      {
+        "key": "items[0].discount",
+        "value": "discount_amount"
+      },
+      {
+        "key": "items[0].item_category",
+        "value": "category"
+      },
+      {
+        "key": "items[0].price",
+        "value": "price"
+      }
+    ]
+  },
+  "ECOMMERCE_ONLY_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "additional_images",
+      "availability",
+      "brand",
+      "color",
+      "color_variants",
+      "condition",
+      "currency",
+      "exterior_color",
+      "image_url",
+      "interior_color",
+      "original_price",
+      "part_number",
+      "price",
+      "price_original",
+      "product_attributes",
+      "rating",
+      "review_count",
+      "sale_price",
+      "sku",
+      "stock_quantity"
     ]
   },
   "FIELD_ALIASES": {
@@ -1081,29 +1131,13 @@
       }
     ]
   },
-  "ECOMMERCE_ONLY_FIELDS": {
+  "INTERNAL_ONLY_FIELDS": {
     "__type__": "frozenset",
     "items": [
-      "additional_images",
-      "availability",
-      "brand",
-      "color",
-      "color_variants",
-      "condition",
-      "currency",
-      "exterior_color",
-      "image_url",
-      "interior_color",
-      "original_price",
-      "part_number",
-      "price",
-      "price_original",
-      "product_attributes",
-      "rating",
-      "review_count",
-      "sale_price",
-      "sku",
-      "stock_quantity"
+      "_raw_item",
+      "_score",
+      "_source",
+      "slug"
     ]
   },
   "JOB_ONLY_FIELDS": {
@@ -1125,40 +1159,6 @@
       "salary_min",
       "seniority_level",
       "work_model"
-    ]
-  },
-  "INTERNAL_ONLY_FIELDS": {
-    "__type__": "frozenset",
-    "items": [
-      "_raw_item",
-      "_score",
-      "_source",
-      "slug"
-    ]
-  },
-  "COLLECTION_KEYS": {
-    "__type__": "list",
-    "items": [
-      "products",
-      "items",
-      "results",
-      "records",
-      "listings",
-      "jobs",
-      "job-list",
-      "job_list",
-      "postings",
-      "positions",
-      "openings",
-      "hits",
-      "nodes",
-      "categories",
-      "collections",
-      "offers",
-      "deals",
-      "events",
-      "properties",
-      "rows"
     ]
   },
   "PROMPT_REGISTRY": {

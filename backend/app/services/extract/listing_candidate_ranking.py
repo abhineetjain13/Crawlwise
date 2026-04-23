@@ -12,13 +12,7 @@ from app.services.config.extraction_rules import (
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import (
-    PRICE_RE,
-    absolute_url,
     clean_text,
-    extract_currency_code,
-    finalize_record,
-    same_host,
-    same_site,
 )
 
 _UTILITY_TITLE_REGEXES = tuple(
@@ -50,77 +44,9 @@ _EDITORIAL_PATH_SEGMENTS = {
 }
 
 
-def rendered_listing_records(
-    rendered_cards: list[dict[str, object]] | None,
-    *,
-    page_url: str,
-    surface: str,
-    max_records: int,
-    title_is_noise: Callable[[str], bool],
-    url_is_structural: Callable[[str, str], bool],
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-    for item in list(rendered_cards or [])[: max(1, int(max_records)) * 4]:
-        if not isinstance(item, dict):
-            continue
-        url = absolute_url(page_url, item.get("url") or item.get("href"))
-        if not url or url in seen_urls or url_is_structural(url, page_url):
-            continue
-        if surface.startswith("ecommerce_") and not (
-            same_host(page_url, url) or same_site(page_url, url)
-        ):
-            continue
-        title = clean_text(item.get("title"))
-        if not title or title_is_noise(title):
-            continue
-        if _looks_like_utility_record(title=title, url=url):
-            continue
-        price_text, brand_text = _normalize_rendered_listing_fields(item)
-        currency_code = extract_currency_code(price_text)
-        record = finalize_record(
-            {
-                "source_url": page_url,
-                "_source": "rendered_listing",
-                "title": title,
-                "url": url,
-                "price": price_text,
-                "currency": currency_code,
-                "image_url": absolute_url(
-                    page_url,
-                    item.get("image_url") or item.get("image"),
-                ),
-                "brand": brand_text,
-            },
-            surface=surface,
-        )
-        if not record.get("title") or not record.get("url"):
-            continue
-        seen_urls.add(url)
-        rows.append(record)
-        if len(rows) >= max_records:
-            break
-    return rows
-
-
-def _normalize_rendered_listing_fields(
-    item: dict[str, object],
-) -> tuple[str, str]:
-    price_text = clean_text(item.get("price"))
-    brand_text = clean_text(item.get("brand"))
-    if not price_text and brand_text:
-        brand_price_match = PRICE_RE.search(brand_text) or re.search(
-            r"(?:rs\.?|inr)\s*[\d,.]+",
-            brand_text,
-            flags=re.I,
-        )
-        brand_price = brand_price_match.group(0) if brand_price_match else ""
-        if brand_price:
-            price_text = brand_price
-            if clean_text(brand_price) == brand_text:
-                brand_text = ""
-    return price_text, brand_text
-
+def _metric_int(metrics: dict[str, object], key: str) -> int:
+    value = metrics.get(key)
+    return int(value) if isinstance(value, int | bool) else 0
 
 def best_listing_candidate_set(
     candidate_sets: list[tuple[str, list[dict[str, Any]]]],
@@ -184,7 +110,7 @@ def _prepare_listing_candidate_set(
         )
         if _should_drop_record(metrics, surface=surface):
             continue
-        score = int(metrics.get("score", 0) or 0)
+        score = _metric_int(metrics, "score")
         url = str(record.get("url") or "").strip()
         if url:
             existing = best_by_url.get(url)
@@ -223,7 +149,7 @@ def _listing_record_set_score(
     ]
     if not quality_metrics:
         return (-1, -1, -1, -1, -1, -1, -1)
-    quality_scores = [int(metrics["score"]) for metrics in quality_metrics]
+    quality_scores = [_metric_int(metrics, "score") for metrics in quality_metrics]
     strong_records = sum(
         score >= crawler_runtime_settings.listing_candidate_strong_score_threshold
         for score in quality_scores
@@ -348,7 +274,7 @@ def _record_has_supporting_signals(
 
 
 def _should_drop_record(metrics: dict[str, object], *, surface: str) -> bool:
-    score = int(metrics.get("score", 0) or 0)
+    score = _metric_int(metrics, "score")
     detail_like = bool(metrics.get("detail_like"))
     detail_like_merchandise = bool(metrics.get("detail_like_merchandise"))
     fallback_merchandise = bool(metrics.get("fallback_merchandise"))

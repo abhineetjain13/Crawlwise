@@ -73,6 +73,9 @@ BLOCK_SIGNATURES = {
         "powered and protected by akamai": "akamai_banner",
         "datadome": "datadome_marker",
     },
+    "content_tolerant_strong_markers": [
+        "captcha",
+    ],
     "browser_challenge_weak_markers": {
         "one more step": "generic_interstitial",
         "oops!! something went wrong": "generic_error_text",
@@ -103,6 +106,17 @@ BLOCK_SIGNATURES = {
             "geo.captcha-delivery.com": "captcha_delivery_host",
             "ct.captcha-delivery.com": "captcha_delivery_bootstrap",
             'title="datadome captcha"': "datadome_captcha_title",
+        },
+        "storage_state": {
+            "cookie_name_prefixes": [
+                "_px",
+            ],
+            "cookie_name_exact": [
+                "pxcts",
+            ],
+            "local_storage_name_tokens": [
+                "_px",
+            ],
         },
     },
 }

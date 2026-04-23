@@ -62,25 +62,6 @@ LISTING_STRUCTURE_NEGATIVE_HINTS = (
     "pagination",
 )
 LISTING_FALLBACK_CONTAINER_SELECTOR = "article, li, div, tr, section, [role='row']"
-LISTING_RENDERED_CARD_SELECTORS: tuple[str, ...] = (
-    "article",
-    '[data-testid*="product" i]',
-    '[class*="product-card" i]',
-    '[class*="product-tile" i]',
-    '[class*="plp-card" i]',
-    '[class*="catalog-item" i]',
-    '[class*="grid-item" i]',
-    '[class*="card" i]',
-    '[class*="result" i]',
-    "li",
-)
-LISTING_RENDERED_DETAIL_URL_HINTS: tuple[str, ...] = (
-    "/product/",
-    "/products/",
-    "/p/",
-    "/dp/",
-    "/item/",
-)
 CURRENCY_ALIAS_PATTERNS: dict[str, str] = {
     r"\brs\.?\s*\d": "INR",
 }
@@ -381,8 +362,6 @@ __all__ = sorted(
         "JS_STATE_NON_PRODUCT_IMAGE_HINTS",
         "KNOWN_ATS_PLATFORMS",
         "LISTING_FALLBACK_CONTAINER_SELECTOR",
-        "LISTING_RENDERED_CARD_SELECTORS",
-        "LISTING_RENDERED_DETAIL_URL_HINTS",
         "LISTING_STRUCTURE_NEGATIVE_HINTS",
         "LISTING_STRUCTURE_POSITIVE_HINTS",
         "LISTING_UTILITY_TITLE_PATTERNS",

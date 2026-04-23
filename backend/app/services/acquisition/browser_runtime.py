@@ -7,6 +7,7 @@ import threading
 import time
 from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.services.acquisition.browser_capture import (
@@ -85,19 +86,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _BLOCKED_RESOURCE_TYPES = {"font", "media"}
-_BLOCKED_TRACKER_TOKENS = (
-    "doubleclick",
-    "facebook",
-    "google-analytics",
-    "googletagmanager",
-)
+_BLOCKED_TRACKER_TOKENS = ("doubleclick", "facebook", "google-analytics", "googletagmanager")
+_RUN_STORAGE_PERSIST_ATTR = "_crawler_persist_run_storage_state"
+_DOMAIN_STORAGE_PERSIST_ATTR = "_crawler_persist_domain_storage_state"
 
 try:
     from playwright_stealth import Stealth as _PlaywrightStealth  # type: ignore[import-untyped]
     _STEALTH_APPLIER = _PlaywrightStealth().apply_stealth_async
 except Exception:  # pragma: no cover - optional dep missing
     _STEALTH_APPLIER = None
-
 
 async def _apply_stealth(page: Any) -> None:
     if _STEALTH_APPLIER is None:
@@ -113,14 +110,8 @@ _BROWSER_PREFERRED_HOSTS: dict[str, float] = {}
 _BROWSER_PREFERRED_HOST_SUCCESSES: dict[str, tuple[int, float]] = {}
 _BROWSER_RUNTIME: SharedBrowserRuntime | None = None
 _BROWSER_RUNTIME_LOCK = asyncio.Lock()
-_DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
-    str(key): tuple(str(item) for item in list(value or []))
-    for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
-}
-_DETAIL_READINESS_HINTS: dict[str, tuple[str, ...]] = {
-    str(key): tuple(str(item) for item in list(value or []))
-    for key, value in dict(BROWSER_DETAIL_READINESS_HINTS or {}).items()
-}
+_DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {str(key): tuple(str(item) for item in list(value or [])) for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()}
+_DETAIL_READINESS_HINTS: dict[str, tuple[str, ...]] = {str(key): tuple(str(item) for item in list(value or [])) for key, value in dict(BROWSER_DETAIL_READINESS_HINTS or {}).items()}
 _AOM_EXPAND_ROLES = {"button", "tab"}
 
 
@@ -226,6 +217,12 @@ class SharedBrowserRuntime:
                     context,
                     run_id=run_id,
                     domain=domain,
+                    persist_run_storage_state=bool(
+                        getattr(context, _RUN_STORAGE_PERSIST_ATTR, True)
+                    ),
+                    persist_domain_storage_state=bool(
+                        getattr(context, _DOMAIN_STORAGE_PERSIST_ATTR, True)
+                    ),
                 )
                 try:
                     await context.close()
@@ -413,6 +410,8 @@ async def _persist_context_storage_state(
     *,
     run_id: int | None,
     domain: str | None,
+    persist_run_storage_state: bool = True,
+    persist_domain_storage_state: bool = True,
 ) -> None:
     normalized_domain = str(domain or "").strip()
     if run_id is None and not normalized_domain:
@@ -425,7 +424,7 @@ async def _persist_context_storage_state(
     except Exception:
         logger.debug("Failed to capture browser storage state for run_id=%s", run_id, exc_info=True)
         return
-    if run_id is not None:
+    if run_id is not None and persist_run_storage_state:
         try:
             await persist_storage_state_for_run(run_id, storage_state)
         except Exception:
@@ -434,7 +433,7 @@ async def _persist_context_storage_state(
                 run_id,
                 exc_info=True,
             )
-    if normalized_domain:
+    if normalized_domain and persist_domain_storage_state:
         try:
             await persist_storage_state_for_domain(normalized_domain, storage_state)
         except Exception:
@@ -443,6 +442,26 @@ async def _persist_context_storage_state(
                 normalized_domain,
                 exc_info=True,
             )
+
+
+def _mark_storage_state_persist_policy(
+    page: Any,
+    *,
+    persist_run_storage_state: bool,
+    persist_domain_storage_state: bool,
+) -> None:
+    context = getattr(page, "context", None)
+    if callable(context):
+        try:
+            context = context()
+        except Exception:
+            return
+    if context is None:
+        return
+    with suppress(Exception):
+        setattr(context, _RUN_STORAGE_PERSIST_ATTR, persist_run_storage_state)
+    with suppress(Exception):
+        setattr(context, _DOMAIN_STORAGE_PERSIST_ATTR, persist_domain_storage_state)
 
 
 def _build_payload_capture(*, surface: str) -> _BrowserNetworkCapture:
@@ -529,6 +548,14 @@ async def browser_fetch(
             traversal_mode=traversal_mode,
         )
         try:
+            await _maybe_warm_origin_before_navigation(
+                page,
+                url=url,
+                surface=normalized_surface,
+                browser_reason=browser_reason,
+                timeout_seconds=_remaining(),
+                phase_timings_ms=phase_timings_ms,
+            )
             response, navigation_strategy = await _run_browser_stage(
                 stage="navigation",
                 page=page,
@@ -651,6 +678,11 @@ async def browser_fetch(
             finalized_platform_family = (
                 str(finalized.get("platform_family") or "").strip() or None
             )
+            _mark_storage_state_persist_policy(
+                page,
+                persist_run_storage_state=not bool(finalized["blocked"]),
+                persist_domain_storage_state=not bool(finalized["blocked"]),
+            )
             return PageFetchResult(
                 url=url,
                 final_url=page.url,
@@ -670,6 +702,69 @@ async def browser_fetch(
             )
         finally:
             await payload_capture.close(page)
+
+
+async def _maybe_warm_origin_before_navigation(
+    page: Any,
+    *,
+    url: str,
+    surface: str,
+    browser_reason: str | None,
+    timeout_seconds: float,
+    phase_timings_ms: dict[str, int],
+) -> None:
+    if "detail" not in str(surface or "").strip().lower():
+        return
+    reason = str(browser_reason or "").strip().lower()
+    if not (
+        reason == "host-preference"
+        or reason == "http-escalation"
+        or reason.startswith("vendor-block:")
+    ):
+        return
+    warm_pause_ms = max(0, int(crawler_runtime_settings.origin_warm_pause_ms or 0))
+    if warm_pause_ms <= 0:
+        return
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return
+    warm_url = f"{parsed.scheme}://{parsed.netloc}/"
+    if warm_url.rstrip("/") == str(url or "").strip().rstrip("/"):
+        return
+    warm_budget_ms = min(
+        int(max(0.1, float(timeout_seconds)) * 1000),
+        int(crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms),
+    )
+    if warm_budget_ms < 750:
+        return
+    started_at = time.perf_counter()
+    context = getattr(page, "context", None)
+    if callable(context):
+        with suppress(Exception):
+            context = context()
+    new_page = getattr(context, "new_page", None)
+    if not callable(new_page):
+        logger.debug("Skipping origin warmup for %s because page context cannot spawn a sibling page", url)
+        return
+    warm_page = None
+    try:
+        warm_page = await new_page()
+        await _apply_stealth(warm_page)
+        await warm_page.goto(
+            warm_url,
+            wait_until="domcontentloaded",
+            timeout=warm_budget_ms,
+        )
+        await warm_page.wait_for_timeout(min(warm_pause_ms, warm_budget_ms))
+    except Exception:
+        logger.debug("Origin warmup failed for %s", url, exc_info=True)
+    finally:
+        if warm_page is not None:
+            close_page = getattr(warm_page, "close", None)
+            if callable(close_page):
+                with suppress(Exception):
+                    await close_page()
+        phase_timings_ms["origin_warmup"] = _elapsed_ms(started_at)
 
 
 async def _navigate_browser_page(

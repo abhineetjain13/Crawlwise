@@ -237,6 +237,7 @@ This is the user-visible closure of the architecture. Do not hide learning decis
   - Hardened artifact-first Belk extraction without site hardcoding:
     - blocked PerimeterX challenge HTML is rejected before detail extraction materializes fake records
     - listing cards now prefer trustworthy image title hints over brand-only or review-count title pollution
+  - Regression note: the first domain-cookie-memory implementation was too permissive. It replayed and rewrote challenge-state browser storage from blocked pages, including PerimeterX `_px*`, `pxcts`, and PX localStorage. This surfaced as a cross-site acquisition regression, not a Belk-only issue. Future agents must not "simplify" cookie memory into a raw storage-state cache, even if static review tooling suggests it.
   - Focused verification for the follow-up slice:
     - `cd backend; $env:PYTHONPATH='.'; .\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_engine.py tests/services/test_crawls_api_domain_recipe.py tests/services/test_detail_extractor_structured_sources.py -q` → pass
     - `cd frontend; npm test -- crawl-run-screen.test.tsx domain-memory-manage-page.test.tsx` → pass

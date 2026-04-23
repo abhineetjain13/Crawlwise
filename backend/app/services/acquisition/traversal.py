@@ -19,7 +19,6 @@ except ImportError:  # pragma: no cover
 
 from app.services.config.extraction_rules import (
     LISTING_FALLBACK_CONTAINER_SELECTOR,
-    LISTING_STRUCTURE_NEGATIVE_HINTS,
     LISTING_STRUCTURE_POSITIVE_HINTS,
 )
 from app.services.platform_policy import (
@@ -29,6 +28,10 @@ from app.services.platform_policy import (
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
+from app.services.extract.listing_card_fragments import (
+    base_listing_fragment_score,
+    collect_listing_fragment_html,
+)
 from selectolax.lexbor import LexborHTMLParser
 
 logger = logging.getLogger(__name__)
@@ -615,6 +618,12 @@ async def _find_generic_next_page_locator(page):
         ".pagination-container a[rel='next']",
         ".pagination-container a[href*='?p=']",
         ".pagination-container a[href*='&p=']",
+        "[aria-label*='pagination' i] a",
+        "[aria-label*='pagination' i] button",
+        "[class*='pagination' i] a",
+        "[class*='pagination' i] button",
+        "[aria-current='page'] + a",
+        "[aria-current='page'] + button",
     ):
         locator = page.locator(selector).first
         try:
@@ -625,6 +634,11 @@ async def _find_generic_next_page_locator(page):
             if not await locator.is_visible(timeout=250):
                 continue
             if await locator.is_disabled():
+                continue
+            if not (
+                await _looks_like_paginate_control(locator)
+                or await _looks_like_next_page_control(locator)
+            ):
                 continue
             logger.info("Traversal generic next-page selector=%s url=%s", selector, page.url)
             return locator
@@ -859,22 +873,18 @@ async def _locator_still_resolves(locator) -> bool:
     counter = getattr(locator, "count", None)
     if not callable(counter):
         return True
-    probe_failed = False
     for attempt in range(2):
         try:
             if bool(await counter()):
                 return True
-            probe_failed = False
         except asyncio.CancelledError:
             raise
         except _PlaywrightError:
-            probe_failed = True
             logger.debug(
                 "Traversal locator resolution probe failed",
                 exc_info=True,
             )
         except Exception:
-            probe_failed = True
             logger.debug(
                 "Traversal locator resolution probe raised non-Playwright error",
                 exc_info=True,
@@ -1056,13 +1066,6 @@ async def _append_html_fragment(
 
 
 async def _looks_like_paginate_control(locator) -> bool:
-    href = ""
-    try:
-        href = str(await locator.get_attribute("href") or "").strip().lower()
-    except Exception:
-        logger.debug("Traversal next_page href inspection failed", exc_info=True)
-    if href and not href.startswith(("#", "javascript:")):
-        return True
     try:
         inspection = await locator.evaluate(
             """
@@ -1089,6 +1092,18 @@ async def _looks_like_paginate_control(locator) -> bool:
                 .trim()
                 .toLowerCase();
               const datasetKeys = Object.keys(node.dataset || {});
+              const currentPage = container?.querySelector?.(
+                "[aria-current='page'], [aria-current='true'], [class*='current' i], [class*='active' i]"
+              );
+              const pageNodes = container
+                ? Array.from(container.querySelectorAll('a, button, [role=\"button\"]'))
+                : [];
+              const currentIndex = currentPage
+                ? pageNodes.findIndex(
+                    (candidate) => candidate === currentPage || candidate.contains(currentPage)
+                  )
+                : -1;
+              const nodeIndex = pageNodes.findIndex((candidate) => candidate === node);
               return {
                 raw_href: rawHref,
                 has_click_handler:
@@ -1100,6 +1115,9 @@ async def _looks_like_paginate_control(locator) -> bool:
                   /\\b(next|previous|prev|page|older|newer)\\b/.test(label) ||
                   /\\b(next|previous|prev|page|older|newer)\\b/.test(containerText),
                 sibling_page_numbers: /(?:^|\\s)\\d+(?:\\s|$)/.test(containerText),
+                follows_current_page:
+                  currentIndex >= 0 && nodeIndex === currentIndex + 1,
+                arrow_only: /^(>|›|»)$/.test(label),
                 is_button_like:
                   String(node.tagName || '').toLowerCase() === 'button' ||
                   String(node.getAttribute('role') || '').trim().toLowerCase() === 'button',
@@ -1116,6 +1134,19 @@ async def _looks_like_paginate_control(locator) -> bool:
         bool(inspection.get("has_click_handler"))
         or bool(inspection.get("is_button_like"))
     ):
+        return True
+    if bool(inspection.get("pagination_container")) and bool(
+        inspection.get("follows_current_page")
+    ) and (
+        bool(inspection.get("arrow_only"))
+        or bool(inspection.get("raw_href"))
+        or bool(inspection.get("is_button_like"))
+        or bool(inspection.get("has_click_handler"))
+    ):
+        return True
+    if bool(inspection.get("pagination_container")) and bool(
+        inspection.get("sibling_page_numbers")
+    ) and bool(inspection.get("arrow_only")):
         return True
     if bool(inspection.get("pagination_text")) and (
         bool(inspection.get("has_click_handler"))
@@ -1163,7 +1194,7 @@ async def _looks_like_next_page_control(locator) -> bool:
     text = str(inspection.get("text") or "").strip().lower()
     if not text:
         return False
-    return any(token in text for token in ("next", "older", "more", "›", "»"))
+    return any(token in text for token in ("next", "older", "more", ">", "›", "»"))
 
 
 async def _page_matches_block_challenge(page) -> bool:
@@ -1252,126 +1283,14 @@ def _collect_listing_card_fragments(
     seen: set[str],
     byte_budget: int,
 ) -> list[str]:
-    if byte_budget <= 0:
-        return []
-    selector_group = (
-        "jobs" if str(surface or "").strip().lower().startswith("job_") else "ecommerce"
-    )
-    fragments = _collect_unique_node_html(
+    return collect_listing_fragment_html(
         parser,
-        selectors=list(CARD_SELECTORS.get(selector_group) or []),
+        surface=surface,
         seen=seen,
         byte_budget=byte_budget,
+        score_node=base_listing_fragment_score,
+        limit=max(1, int(crawler_runtime_settings.listing_fallback_fragment_limit)),
     )
-    if fragments:
-        return fragments
-    return _collect_anchor_container_fragments(
-        parser,
-        seen=seen,
-        byte_budget=byte_budget,
-    )
-
-
-def _collect_unique_node_html(
-    parser: LexborHTMLParser,
-    *,
-    selectors: list[str],
-    seen: set[str],
-    byte_budget: int,
-) -> list[str]:
-    fragments: list[str] = []
-    used_bytes = 0
-    for selector in selectors:
-        try:
-            matches = parser.css(selector)
-        except Exception:
-            matches = []
-        for node in matches:
-            fragment = str(node.html or "").strip()
-            if not fragment or fragment in seen:
-                continue
-            fragment_bytes = len(fragment.encode("utf-8"))
-            if used_bytes + fragment_bytes > byte_budget:
-                continue
-            seen.add(fragment)
-            fragments.append(fragment)
-            used_bytes += fragment_bytes
-    return fragments
-
-
-def _collect_anchor_container_fragments(
-    parser: LexborHTMLParser,
-    *,
-    seen: set[str],
-    byte_budget: int,
-) -> list[str]:
-    scored_fragments: list[tuple[int, str]] = []
-    used_bytes = 0
-    for node in parser.css(LISTING_FALLBACK_CONTAINER_SELECTOR):
-        score = _listing_fragment_score(node)
-        if score <= 0:
-            continue
-        fragment = str(node.html or "").strip()
-        if not fragment or fragment in seen:
-            continue
-        scored_fragments.append((score, fragment))
-    scored_fragments.sort(key=lambda row: (-row[0], len(row[1])))
-    fragments: list[str] = []
-    for _score, fragment in scored_fragments:
-        fragment_bytes = len(fragment.encode("utf-8"))
-        if used_bytes + fragment_bytes > byte_budget:
-            continue
-        seen.add(fragment)
-        fragments.append(fragment)
-        used_bytes += fragment_bytes
-    return fragments
-
-
-def _listing_fragment_score(node) -> int:
-    tag_name = str(getattr(node, "tag", "") or "").strip().lower()
-    if tag_name in {"header", "nav", "footer"}:
-        return -100
-    attrs = getattr(node, "attributes", {}) or {}
-    signature = " ".join(
-        [
-            str(attrs.get("class") or ""),
-            str(attrs.get("id") or ""),
-            str(attrs.get("role") or ""),
-            str(attrs.get("aria-label") or ""),
-        ]
-    ).lower()
-    if any(token in signature for token in LISTING_STRUCTURE_NEGATIVE_HINTS):
-        return -10
-    score = 0
-    if any(token in signature for token in LISTING_STRUCTURE_POSITIVE_HINTS):
-        score += 6
-    try:
-        link_count = len(node.css("a[href]"))
-    except Exception:
-        return -100
-    if link_count == 0:
-        return -100
-    if link_count == 1:
-        score += 4
-    elif link_count <= 6:
-        score += 2
-    elif link_count <= 12:
-        score -= 1
-    else:
-        score -= 6
-    text = str(node.text(strip=True) or "").strip()
-    text_len = len(text)
-    if text_len < 12:
-        score -= 3
-    elif text_len <= 2000:
-        score += 3
-    else:
-        score -= 3
-    if _PRICE_HINT_RE.search(text):
-        score += 3
-    if tag_name in {"article", "li", "tr", "section"}:
-        score += 2
-    return score
 
 
 def _fragments_bytes(fragments: list[str]) -> int:
@@ -1426,7 +1345,7 @@ async def count_listing_cards(page, *, surface: str, allow_heuristic: bool = Tru
         str(selector).strip() for selector in list(selectors or []) if str(selector).strip()
     ]
     if not normalized_selectors:
-        return await _heuristic_card_count(page) if allow_heuristic else 0
+        return await _heuristic_card_count(page, surface=surface) if allow_heuristic else 0
     try:
         count = await page.evaluate(
             """
@@ -1498,7 +1417,7 @@ async def _heuristic_card_count(page, *, surface: str) -> int:
         if not fragment or fragment in seen:
             continue
         seen.add(fragment)
-        if _listing_fragment_score(node) <= 0:
+        if base_listing_fragment_score(node) <= 0:
             continue
         if _node_supports_listing_heuristic(node, surface=surface):
             if _node_contains_nested_listing_candidates(node, surface=surface):
@@ -1531,7 +1450,7 @@ def _node_contains_nested_listing_candidates(node, *, surface: str) -> bool:
     for descendant in descendants:
         if str(descendant.html or "").strip() == node_fragment:
             continue
-        if _listing_fragment_score(descendant) <= 0:
+        if base_listing_fragment_score(descendant) <= 0:
             continue
         if _node_supports_listing_heuristic(descendant, surface=surface):
             return True

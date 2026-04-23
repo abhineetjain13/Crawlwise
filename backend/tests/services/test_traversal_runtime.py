@@ -542,6 +542,98 @@ async def test_auto_traversal_prefers_paginate_for_spa_next_button() -> None:
 
 
 @pytest.mark.asyncio
+async def test_auto_traversal_prefers_paginate_for_numeric_arrow_button() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1800,
+            client_height=600,
+            controls={"next_page"},
+            next_href="https://example.com/listing?page=2",
+            next_control_state={
+                "raw_href": "https://example.com/listing?page=2",
+                "has_click_handler": False,
+                "pagination_container": True,
+                "pagination_text": False,
+                "sibling_page_numbers": True,
+                "follows_current_page": True,
+                "arrow_only": True,
+                "is_button_like": True,
+            },
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=1800,
+                client_height=600,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=2",
+                next_control_state={
+                    "raw_href": "https://example.com/listing?page=2",
+                    "has_click_handler": False,
+                    "pagination_container": True,
+                    "pagination_text": False,
+                    "sibling_page_numbers": True,
+                    "follows_current_page": True,
+                    "arrow_only": True,
+                    "is_button_like": True,
+                },
+            ),
+            _State(
+                html="<div>page-2</div>",
+                card_count=5,
+                scroll_height=2100,
+                client_height=600,
+                controls=set(),
+            ),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="auto",
+        max_pages=2,
+        max_scrolls=2,
+    )
+
+    assert result.selected_mode == "paginate"
+    assert result.pages_advanced == 1
+    assert result.progress_events == 1
+
+
+@pytest.mark.asyncio
+async def test_looks_like_paginate_control_rejects_plain_href_without_pagination_signals() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1800,
+            controls={"next_page"},
+            next_href="https://example.com/products/widget",
+            next_control_state={
+                "raw_href": "https://example.com/products/widget",
+                "has_click_handler": False,
+                "pagination_container": False,
+                "pagination_text": False,
+                "sibling_page_numbers": False,
+                "follows_current_page": False,
+                "arrow_only": False,
+                "is_button_like": False,
+            },
+        ),
+    )
+
+    locator = page.locator(PAGINATION_SELECTORS["next_page"][0]).first
+
+    assert await traversal_module._looks_like_paginate_control(locator) is False
+
+
+@pytest.mark.asyncio
 async def test_paginate_traversal_stops_before_recording_block_challenge() -> None:
     challenge_html = """
     <html>

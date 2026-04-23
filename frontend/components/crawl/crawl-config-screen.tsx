@@ -3,7 +3,7 @@
 import { Globe, Info, Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, startTransition, useEffect, useMemo, useRef, useState } from "react";
 
 import { InlineAlert, PageHeader, SectionHeader, TabBar } from "../ui/patterns";
 import { Button, Dropdown, Card, Input, Textarea, Toggle, Tooltip } from "../ui/primitives";
@@ -543,7 +543,10 @@ export function CrawlConfigScreen({
  additional_fields: dispatch.additionalFields,
  });
  }
+ startTransition(() => {
  router.replace((`/crawl?run_id=${response.run_id}`) as Route);
+ router.refresh();
+ });
  } catch (error) {
  const message = error instanceof Error ? error.message : "Unable to launch crawl.";
  trackEvent(

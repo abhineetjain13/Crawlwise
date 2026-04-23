@@ -10,6 +10,7 @@ from pathlib import Path
 from app.core.database import SessionLocal
 from app.core.config import settings
 from app.models.crawl import DomainCookieMemory
+from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.domain_utils import normalize_domain
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,27 @@ _COOKIE_FIELDS = (
     "secure",
     "sameSite",
     "url",
+)
+_CHALLENGE_ELEMENT_CONFIG = BLOCK_SIGNATURES.get("challenge_elements")
+if not isinstance(_CHALLENGE_ELEMENT_CONFIG, Mapping):
+    _CHALLENGE_ELEMENT_CONFIG = {}
+_STORAGE_STATE_SIGNATURES = _CHALLENGE_ELEMENT_CONFIG.get("storage_state")
+if not isinstance(_STORAGE_STATE_SIGNATURES, Mapping):
+    _STORAGE_STATE_SIGNATURES = {}
+_CHALLENGE_COOKIE_NAME_PREFIXES = tuple(
+    str(value or "").strip().lower()
+    for value in _STORAGE_STATE_SIGNATURES.get("cookie_name_prefixes", [])
+    if str(value or "").strip()
+)
+_CHALLENGE_COOKIE_NAME_EXACT = {
+    str(value or "").strip().lower()
+    for value in _STORAGE_STATE_SIGNATURES.get("cookie_name_exact", [])
+    if str(value or "").strip()
+}
+_CHALLENGE_LOCAL_STORAGE_NAME_TOKENS = tuple(
+    str(value or "").strip().lower()
+    for value in _STORAGE_STATE_SIGNATURES.get("local_storage_name_tokens", [])
+    if str(value or "").strip()
 )
 
 
@@ -87,9 +109,9 @@ async def load_storage_state_for_domain(
     if row is None or not isinstance(row.storage_state, Mapping):
         return None
     normalized_state = _normalize_storage_state(row.storage_state)
-    if not normalized_state["cookies"] and not normalized_state["origins"]:
+    if not _has_reusable_storage_state(normalized_state):
         return None
-    return normalized_state
+    return _clone_storage_state(normalized_state)
 
 
 async def persist_storage_state_for_run(
@@ -101,7 +123,7 @@ async def persist_storage_state_for_run(
         return
     validate_cookie_policy_config()
     normalized_state = _normalize_storage_state(storage_state)
-    if not normalized_state["cookies"] and not normalized_state["origins"]:
+    if not _has_reusable_storage_state(normalized_state):
         return
     async with _RUN_STORAGE_STATE_LOCK:
         _RUN_STORAGE_STATE_CACHE[normalized_run_id] = normalized_state
@@ -122,7 +144,7 @@ async def persist_storage_state_for_domain(
     if not normalized_domain or not isinstance(storage_state, Mapping):
         return False
     normalized_state = _normalize_storage_state(storage_state)
-    if not normalized_state["cookies"] and not normalized_state["origins"]:
+    if not _has_reusable_storage_state(normalized_state):
         return False
     fingerprint = _storage_state_fingerprint(normalized_state)
     if session is None:
@@ -252,6 +274,16 @@ def _normalize_storage_state(storage_state: Mapping[str, object]) -> dict[str, o
     }
 
 
+def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
+    if list(storage_state.get("cookies") or []):
+        return True
+    return any(
+        list(origin.get("localStorage") or [])
+        for origin in list(storage_state.get("origins") or [])
+        if isinstance(origin, Mapping)
+    )
+
+
 def _normalize_cookies(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
@@ -267,6 +299,9 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
                 continue
             cookie[field_name] = raw_value
         if not cookie.get("name") or not cookie.get("value"):
+            continue
+        # Do not learn challenge-state cookies as reusable domain memory.
+        if _cookie_name_is_challenge_state(cookie.get("name")):
             continue
         expires = cookie.get("expires")
         if isinstance(expires, (int, float)) and float(expires) > 0 and float(expires) <= now:
@@ -292,6 +327,9 @@ def _normalize_origins(value: object) -> list[dict[str, object]]:
             name = str(entry.get("name") or "").strip()
             if not name:
                 continue
+            # Do not replay anti-bot localStorage across future runs.
+            if _local_storage_name_is_challenge_state(name):
+                continue
             local_storage_rows.append(
                 {
                     "name": name,
@@ -300,6 +338,22 @@ def _normalize_origins(value: object) -> list[dict[str, object]]:
             )
         origins.append({"origin": origin, "localStorage": local_storage_rows})
     return origins
+
+
+def _cookie_name_is_challenge_state(value: object) -> bool:
+    lowered = str(value or "").strip().lower()
+    if not lowered:
+        return False
+    if lowered in _CHALLENGE_COOKIE_NAME_EXACT:
+        return True
+    return any(lowered.startswith(prefix) for prefix in _CHALLENGE_COOKIE_NAME_PREFIXES)
+
+
+def _local_storage_name_is_challenge_state(value: object) -> bool:
+    lowered = str(value or "").strip().lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in _CHALLENGE_LOCAL_STORAGE_NAME_TOKENS)
 
 
 def _clone_storage_state(

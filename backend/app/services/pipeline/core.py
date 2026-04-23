@@ -421,7 +421,11 @@ async def _run_acquisition_stage(
             f"Acquired payload via {method} (status={status})",
         )
 
-    if getattr(acquisition_result, "blocked", False):
+    browser_attempted = bool(
+        getattr(acquisition_result, "browser_diagnostics", {}) and
+        getattr(acquisition_result, "browser_diagnostics", {}).get("browser_attempted")
+    )
+    if getattr(acquisition_result, "blocked", False) and not browser_attempted:
         await _log_pipeline_event(
             context,
             "warning",

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from app.services.config._export_data import load_export_data
 
 _EXPORTS_PATH = Path(__file__).with_name("field_mappings.exports.json")
-_STATIC_EXPORTS = load_export_data(str(_EXPORTS_PATH))
+_STATIC_EXPORTS = {
+    name: value
+    for name, value in load_export_data(str(_EXPORTS_PATH)).items()
+    if not name.startswith("_")
+}
 
 for _name, _value in _STATIC_EXPORTS.items():
     globals()[_name] = _value
 
+FIELD_ALIASES = cast(dict[str, list[str]] | None, globals().get("FIELD_ALIASES"))
 if isinstance(FIELD_ALIASES, dict):
     description_aliases = list(FIELD_ALIASES.get("description") or [])
     for alias in ("description", "product description", "product_description"):

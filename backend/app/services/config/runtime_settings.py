@@ -88,6 +88,8 @@ class CrawlerRuntimeSettings(BaseSettings):
     long_run_threshold_seconds: int = 30 * 60
     max_duration_sample_size: int = 1000
     stalled_run_threshold_seconds: int = 2 * 60
+    records_read_retry_attempts: int = 1
+    records_read_retry_delay_ms: int = 150
     max_candidates_per_field: int = 5
     dynamic_field_name_max_tokens: int = 7
     accordion_expand_max: int = 20
@@ -128,6 +130,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     protected_host_additional_interval_ms: int = 2000
     pacing_host_cache_max_entries: int = 1024
     pacing_host_cache_ttl_seconds: int = 3600
+    browser_first_host_block_threshold: int = 2
     stealth_prefer_ttl_hours: int = 24
     challenge_wait_max_seconds: int | None = 7
     challenge_poll_interval_ms: int = 1000

@@ -178,6 +178,22 @@ class _WaitingRoleLocator(_FakeRoleLocator):
             raise TimeoutError("not visible")
 
 
+class _FakePageContext:
+    def __init__(self, page: "_FakeExpansionPage") -> None:
+        self._page = page
+
+    async def cookies(self, *_args, **_kwargs) -> list[dict[str, object]]:
+        return await self._page._cookies(*_args, **_kwargs)
+
+    async def close(self) -> None:
+        await self._page._close_context()
+
+    async def new_page(self) -> "_FakeExpansionPage":
+        warm_page = _FakeExpansionPage(base_html=self._page.base_html)
+        self._page.spawned_pages.append(warm_page)
+        return warm_page
+
+
 class _FakeExpansionPage:
     def __init__(
         self,
@@ -193,7 +209,7 @@ class _FakeExpansionPage:
         response_events: list[Any] | None = None,
         wait_for_selector_error: Exception | None = None,
         shadow_html: str | None = None,
-        rendered_listing_cards: list[dict[str, object]] | None = None,
+        rendered_listing_fragments: list[str] | None = None,
         wait_html_sequence: list[str] | None = None,
         cookie_snapshots: list[list[dict[str, object]]] | None = None,
         content_blocker: asyncio.Event | None = None,
@@ -219,7 +235,7 @@ class _FakeExpansionPage:
         self.wait_for_selector_error = wait_for_selector_error
         self.wait_for_selector_calls: list[tuple[str, str | None, int | None]] = []
         self.listeners: dict[str, list[Any]] = {}
-        self.rendered_listing_cards = list(rendered_listing_cards or [])
+        self.rendered_listing_fragments = list(rendered_listing_fragments or [])
         self.wait_html_sequence = list(wait_html_sequence or [])
         self.cookie_snapshots = list(cookie_snapshots or [[]])
         self.content_blocker = content_blocker
@@ -229,12 +245,13 @@ class _FakeExpansionPage:
         self.content_calls = 0
         self.context_close_calls = 0
         self.page_close_calls = 0
+        self.spawned_pages: list[_FakeExpansionPage] = []
         self.accessibility = SimpleNamespace(
             snapshot=self._snapshot if accessibility_snapshot is not None else None
         )
         self._accessibility_snapshot = accessibility_snapshot
         self.shadow_flattened = False
-        self.context = SimpleNamespace(cookies=self._cookies, close=self._close_context)
+        self.context = _FakePageContext(self)
 
     async def _snapshot(self) -> dict[str, object] | None:
         return self._accessibility_snapshot
@@ -284,8 +301,8 @@ class _FakeExpansionPage:
         if "document.querySelectorAll('*')" in script and self.shadow_html is not None:
             self.shadow_flattened = True
             return 1
-        if "const cardSelectors" in script:
-            return list(self.rendered_listing_cards)
+        if "const selectors = Array.isArray(args?.selectors)" in script:
+            return list(self.rendered_listing_fragments)
         if "querySelectorAll(selector).length" in script:
             selectors = list(arg or [])
             return max(
@@ -988,7 +1005,7 @@ async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view(
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_captures_rendered_listing_cards_artifact() -> None:
+async def test_browser_fetch_captures_rendered_listing_fragments_artifact() -> None:
     page = _FakeExpansionPage(
         base_html="""
         <html>
@@ -1001,14 +1018,14 @@ async def test_browser_fetch_captures_rendered_listing_cards_artifact() -> None:
           </body>
         </html>
         """,
-        rendered_listing_cards=[
-            {
-                "title": "Widget Prime",
-                "url": "https://example.com/products/widget-prime",
-                "price": "$19.99",
-                "image_url": "https://example.com/images/widget-prime.jpg",
-                "brand": "",
-            }
+        rendered_listing_fragments=[
+            """
+            <article class="product-card">
+              <a href="/products/widget-prime"><h2>Widget Prime</h2></a>
+              <div class="price">$19.99</div>
+              <img src="/images/widget-prime.jpg" alt="Widget Prime" />
+            </article>
+            """
         ],
     )
 
@@ -1022,15 +1039,81 @@ async def test_browser_fetch_captures_rendered_listing_cards_artifact() -> None:
         runtime_provider=_fake_runtime,
     )
 
-    assert result.artifacts["rendered_listing_cards"] == [
-        {
-            "title": "Widget Prime",
-            "url": "https://example.com/products/widget-prime",
-            "price": "$19.99",
-            "image_url": "https://example.com/images/widget-prime.jpg",
-            "brand": "",
-        }
+    assert result.artifacts["rendered_listing_fragments"] == [
+        """
+            <article class="product-card">
+              <a href="/products/widget-prime"><h2>Widget Prime</h2></a>
+              <div class="price">$19.99</div>
+              <img src="/images/widget-prime.jpg" alt="Widget Prime" />
+            </article>
+            """.strip()
     ]
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_ignores_non_string_rendered_listing_fragments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><article><a href='/products/widget'>Widget</a></article></body></html>",
+        selector_counts={".product-card": 1},
+        card_count=1,
+    )
+    page.url = "https://example.com/collections/widgets"
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    async def _bad_fragments(*args, **kwargs):
+        del args, kwargs
+        return [123, {"html": "<article>bad</article>"}, " <article>good</article> "]
+
+    monkeypatch.setattr(browser_page_flow, "capture_rendered_listing_fragments", _bad_fragments)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/collections/widgets",
+        5,
+        surface="ecommerce_listing",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert result.artifacts["rendered_listing_fragments"] == ["<article>good</article>"]
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_keeps_empty_successful_listing_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><article><a href='/products/widget'>Widget</a></article></body></html>",
+        selector_counts={".product-card": 1},
+        card_count=1,
+    )
+    page.url = "https://example.com/collections/widgets"
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    async def _empty_fragments(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    async def _empty_visuals(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr(browser_page_flow, "capture_rendered_listing_fragments", _empty_fragments)
+    monkeypatch.setattr(browser_page_flow, "_capture_listing_visual_elements", _empty_visuals)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/collections/widgets",
+        5,
+        surface="ecommerce_listing",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert result.artifacts["rendered_listing_fragments"] == []
+    assert result.artifacts["listing_visual_elements"] == []
 
 
 @pytest.mark.asyncio
@@ -2302,12 +2385,8 @@ async def test_browser_fetch_surfaces_rendered_listing_evidence_counts() -> None
         ),
         selector_counts={".product-card": 1},
         card_count=1,
-        rendered_listing_cards=[
-            {
-                "title": "Widget One",
-                "url": "https://example.com/products/widget-1",
-                "price": "$10",
-            }
+        rendered_listing_fragments=[
+            "<article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article>"
         ],
     )
     page.url = "https://example.com/collections/widgets"
@@ -2322,9 +2401,9 @@ async def test_browser_fetch_surfaces_rendered_listing_evidence_counts() -> None
         runtime_provider=_fake_runtime,
     )
 
-    assert result.browser_diagnostics["rendered_listing_card_count"] == 1
+    assert result.browser_diagnostics["rendered_listing_fragment_count"] == 1
     assert result.browser_diagnostics["listing_visual_element_count"] >= 0
-    assert result.browser_diagnostics["extractable_listing_evidence"]["rendered_listing_cards"] == 1
+    assert result.browser_diagnostics["extractable_listing_evidence"]["rendered_listing_fragments"] == 1
 
 
 @pytest.mark.asyncio
@@ -2350,10 +2429,10 @@ async def test_browser_fetch_bounds_listing_artifact_capture_time(
     async def _fake_runtime():
         return _FakeRuntime(page)
 
-    async def _slow_rendered_listing_cards(*args, **kwargs):
+    async def _slow_rendered_listing_fragments(*args, **kwargs):
         del args, kwargs
         await asyncio.sleep(0.2)
-        return [{"title": "Widget One"}]
+        return ["<article><a href='/products/widget-1'>Widget One</a></article>"]
 
     async def _slow_listing_visual_elements(*args, **kwargs):
         del args, kwargs
@@ -2362,8 +2441,8 @@ async def test_browser_fetch_bounds_listing_artifact_capture_time(
 
     monkeypatch.setattr(
         browser_page_flow,
-        "capture_rendered_listing_cards",
-        _slow_rendered_listing_cards,
+        "capture_rendered_listing_fragments",
+        _slow_rendered_listing_fragments,
     )
     monkeypatch.setattr(
         browser_page_flow,
@@ -2383,21 +2462,21 @@ async def test_browser_fetch_bounds_listing_artifact_capture_time(
             original_timeout_ms
         )
 
-    assert result.browser_diagnostics["rendered_listing_card_count"] == 0
+    assert result.browser_diagnostics["rendered_listing_fragment_count"] == 0
     assert result.browser_diagnostics["listing_visual_element_count"] == 0
     assert (
-        result.browser_diagnostics["phase_timings_ms"]["rendered_listing_capture"]
+        result.browser_diagnostics["phase_timings_ms"]["rendered_listing_fragment_capture"]
         >= 0
     )
     assert (
         result.browser_diagnostics["phase_timings_ms"]["listing_visual_capture"] >= 0
     )
     assert result.browser_diagnostics["listing_artifact_capture"] == {
-        "rendered_listing_capture": {"status": "timeout"},
+        "rendered_listing_fragment_capture": {"status": "timeout"},
         "listing_visual_capture": {"status": "timeout"},
     }
     assert any(
-        "Timed out during rendered_listing_capture" in record.message
+        "Timed out during rendered_listing_fragment_capture" in record.message
         for record in caplog.records
     )
 
@@ -2425,89 +2504,37 @@ async def test_capture_listing_artifact_with_timeout_reports_playwright_error(
 
 
 @pytest.mark.asyncio
-async def test_capture_rendered_listing_cards_keeps_merchandise_signal_for_utility_like_anchor() -> None:
+async def test_capture_rendered_listing_fragments_returns_fragment_html() -> None:
     class _RegressionPage:
-        async def evaluate(self, script: str, arg: Any | None = None) -> list[dict[str, object]]:
+        async def evaluate(self, script: str, arg: Any | None = None) -> list[str]:
             del arg
-            assert "const detailLike = isDetailUrl(url);" in script
-            assert "const utilityLike = isUtilityUrl(url) && !detailLike;" in script
-            assert "if (utilityLike && !price && !hasImage && !brand) continue;" in script
+            assert "const selectors = Array.isArray(args?.selectors)" in script
+            assert "const seenFragments = new Set();" in script
+            assert "fragments.push(fragment);" in script
             return [
-                {
-                    "title": "Widget One",
-                    "url": "https://example.com/collections/widgets?source=search",
-                    "price": "$19.99",
-                    "image_url": "https://example.com/widget.jpg",
-                    "brand": "",
-                }
+                "<article><a href='https://example.com/products/widget-one'>Widget One</a><span>$19.99</span></article>"
             ]
 
-    rows = await browser_recovery.capture_rendered_listing_cards(
+    rows = await browser_recovery.capture_rendered_listing_fragments(
         _RegressionPage(),
         surface="ecommerce_listing",
         limit=5,
     )
 
     assert rows == [
-        {
-            "title": "Widget One",
-            "url": "https://example.com/collections/widgets?source=search",
-            "price": "$19.99",
-            "image_url": "https://example.com/widget.jpg",
-            "brand": "",
-        }
+        "<article><a href='https://example.com/products/widget-one'>Widget One</a><span>$19.99</span></article>"
     ]
 
 
 @pytest.mark.asyncio
-async def test_capture_rendered_listing_cards_script_collects_lazy_image_candidates() -> None:
+async def test_capture_rendered_listing_fragments_ignores_non_listing_surfaces() -> None:
     class _RegressionPage:
-        async def evaluate(self, script: str, arg: Any | None = None) -> list[dict[str, object]]:
-            del arg
-            assert "const srcsetUrls = (value)" in script
-            assert "for (const attr of ['src', 'data-src', 'data-original', 'data-image', 'data-lazy-src'])" in script
-            assert "for (const attr of ['srcset', 'data-srcset'])" in script
-            assert "return candidates.find((candidate) => !isWeakImageUrl(candidate)) || candidates[0] || '';" in script
-            return [
-                {
-                    "title": "Widget One",
-                    "url": "https://example.com/products/widget-one",
-                    "price": "$19.99",
-                    "image_url": "https://cdn.example.com/products/widget-one.jpg",
-                    "brand": "",
-                }
-            ]
+        async def evaluate(self, script: str, arg: Any | None = None) -> list[str]:
+            raise AssertionError("evaluate should not be called")
 
-    rows = await browser_recovery.capture_rendered_listing_cards(
+    rows = await browser_recovery.capture_rendered_listing_fragments(
         _RegressionPage(),
-        surface="ecommerce_listing",
-        limit=5,
-    )
-
-    assert rows == [
-        {
-            "title": "Widget One",
-            "url": "https://example.com/products/widget-one",
-            "price": "$19.99",
-            "image_url": "https://cdn.example.com/products/widget-one.jpg",
-            "brand": "",
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_capture_rendered_listing_cards_script_scopes_image_candidates_to_image_container() -> None:
-    class _RegressionPage:
-        async def evaluate(self, script: str, arg: Any | None = None) -> list[dict[str, object]]:
-            del arg
-            assert "const imageScope = imageNode instanceof Element" in script
-            assert "imageNode.closest('picture') || imageNode.parentElement || imageNode" in script
-            assert "for (const node of imageScope.querySelectorAll('img, source'))" in script
-            return []
-
-    rows = await browser_recovery.capture_rendered_listing_cards(
-        _RegressionPage(),
-        surface="ecommerce_listing",
+        surface="ecommerce_detail",
         limit=5,
     )
 
@@ -2585,6 +2612,54 @@ async def test_browser_fetch_records_navigation_timing_when_fallback_navigation_
     assert page.goto_calls == ["domcontentloaded", "commit"]
     assert diagnostics["navigation_strategy"] == "commit"
     assert diagnostics["phase_timings_ms"]["navigation"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_uses_sibling_page_not_active_page() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_reason="http-escalation",
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.goto_calls == []
+    assert len(page.spawned_pages) == 1
+    assert page.spawned_pages[0].goto_calls == ["domcontentloaded"]
+    assert page.spawned_pages[0].page_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_recovers_when_commit_navigation_is_interrupted_by_same_url_reload() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget</h1></body></html>",
+        goto_failures={
+            "domcontentloaded": PlaywrightTimeoutError("primary timeout"),
+            "commit": PlaywrightError(
+                'Navigation to "https://example.com/products/widget" is interrupted '
+                'by another navigation to "https://example.com/products/widget"'
+            ),
+        },
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert page.goto_calls == ["domcontentloaded", "commit"]
+    assert "domcontentloaded" in page.load_state_calls
+    assert result.final_url == "https://example.com/products/widget"
+    assert result.status_code == 0
 
 
 @pytest.mark.asyncio

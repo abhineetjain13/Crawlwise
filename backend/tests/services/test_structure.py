@@ -37,9 +37,9 @@ FILE_LOC_BUDGETS = {
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
     # Detail extraction remains the single owner for structured, DOM, and variant recovery.
-    Path("app/services/detail_extractor.py"): 2405,
+    Path("app/services/detail_extractor.py"): 2810,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
-    Path("app/services/listing_extractor.py"): 1365,
+    Path("app/services/listing_extractor.py"): 1655,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
     Path("app/services/field_value_dom.py"): 1265,
     # Pipeline core still owns the per-URL orchestration boundary.

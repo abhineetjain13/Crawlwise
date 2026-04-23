@@ -726,7 +726,8 @@ describe("CrawlRunScreen", () => {
 
  fireEvent.click(await screen.findByRole("button", { name:"Run Config"}));
  expect(await screen.findByRole("heading", { name:"Run Config" })).toBeInTheDocument();
- fireEvent.change(screen.getByRole("combobox", { name:"Fetch Mode" }), { target: { value:"browser_only" } });
+ fireEvent.click(screen.getByRole("combobox", { name:"Fetch Mode" }));
+ fireEvent.click(await screen.findByRole("option", { name:"Browser Only" }));
  fireEvent.change(screen.getByRole("textbox", { name:"Geo Country" }), { target: { value:"US" } });
  fireEvent.click(screen.getByRole("button", { name:"Save Run Profile"}));
 

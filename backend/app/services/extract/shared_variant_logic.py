@@ -112,6 +112,32 @@ def normalized_variant_axis_key(value: object) -> str:
     return normalized
 
 
+def normalized_variant_axis_display_name(value: object) -> str:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    axis_key = normalized_variant_axis_key(cleaned)
+    if not axis_key:
+        return cleaned
+    lowered = cleaned.lower().replace("&", " ")
+    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    if not tokens:
+        return cleaned
+    if len(tokens) == 1 and tokens[0] == axis_key:
+        return cleaned
+    if axis_key not in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+        return cleaned
+    extra_tokens = [token for token in tokens if token != axis_key]
+    if extra_tokens and all(
+        token in _VARIANT_AXIS_GENERIC_TOKENS
+        or token.isdigit()
+        or len(token) <= 3
+        for token in extra_tokens
+    ):
+        return axis_key
+    return cleaned
+
+
 def variant_dom_cues_present(soup: Any) -> bool:
     return bool(iter_variant_select_groups(soup) or iter_variant_choice_groups(soup))
 
