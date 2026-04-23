@@ -4,6 +4,7 @@ import pytest
 
 from app.services.domain_memory_service import load_domain_memory, save_domain_memory
 from app.services.selectors_runtime import (
+    _coerce_int,
     create_selector_record,
     fetch_selector_document,
     update_selector_record,
@@ -115,3 +116,8 @@ async def test_update_selector_record_returns_committed_memory_timestamps(db_ses
     assert updated is not None
     assert memory is not None
     assert updated["updated_at"] == memory.updated_at
+
+
+def test_coerce_int_preserves_zero() -> None:
+    assert _coerce_int(0, default=9) == 0
+    assert _coerce_int(" 0 ", default=9) == 0

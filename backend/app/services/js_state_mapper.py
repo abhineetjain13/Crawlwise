@@ -28,7 +28,7 @@ from app.services.js_state_helpers import (
 from app.services.platform_policy import JSStateExtractorConfig, platform_js_state_extractors
 
 
-_SKIP = ("", [], {})
+_SKIP: tuple[object, ...] = ("", [], {})
 
 PRODUCT_FIELD_SPEC = {
     "title": Coalesce("title", "name", default=None, skip=_SKIP),

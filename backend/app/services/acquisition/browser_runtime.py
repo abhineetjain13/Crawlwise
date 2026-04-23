@@ -92,15 +92,22 @@ _DOMAIN_STORAGE_PERSIST_ATTR = "_crawler_persist_domain_storage_state"
 
 try:
     from playwright_stealth import Stealth as _PlaywrightStealth  # type: ignore[import-untyped]
-    _STEALTH_APPLIER = _PlaywrightStealth().apply_stealth_async
+
+    # browserforge already owns UA/client-hint/platform identity. Keep stealth for
+    # webdriver/plugins/runtime evasions only so both layers do not emit conflicting
+    # fingerprints in the same session.
+    _STEALTH_APPLIER = _PlaywrightStealth(
+        navigator_user_agent=False,
+        sec_ch_ua=False,
+    ).apply_stealth_async
 except Exception:  # pragma: no cover - optional dep missing
     _STEALTH_APPLIER = None
 
-async def _apply_stealth(page: Any) -> None:
+async def _apply_stealth(page_or_context: Any) -> None:
     if _STEALTH_APPLIER is None:
         return
     try:
-        await _STEALTH_APPLIER(page)
+        await _STEALTH_APPLIER(page_or_context)
     except Exception:
         logger.debug("Failed to apply playwright-stealth", exc_info=True)
 
@@ -171,7 +178,17 @@ class SharedBrowserRuntime:
                 self._total_contexts_created = 0
 
     def _build_context_options(self, *, run_id: int | None = None) -> dict[str, Any]:
-        return build_playwright_context_options(run_id=run_id)
+        browser_major_version = None
+        if self._browser is not None:
+            raw_version = str(getattr(self._browser, "version", "") or "")
+            try:
+                browser_major_version = int(raw_version.split(".", 1)[0])
+            except ValueError:
+                browser_major_version = None
+        return build_playwright_context_options(
+            run_id=run_id,
+            browser_major_version=browser_major_version,
+        )
 
     @asynccontextmanager
     async def page(
@@ -205,10 +222,10 @@ class SharedBrowserRuntime:
                 context_options["proxy"] = {"server": proxy}
             context = await self._browser.new_context(**cast(Any, context_options))
             await _configure_context_routes(context)
+            await _apply_stealth(context)
             async with self._counter_lock:
                 self._total_contexts_created += 1
             page = await context.new_page()
-            await _apply_stealth(page)
             yield page
         finally:
             await self._update_active_contexts(-1)

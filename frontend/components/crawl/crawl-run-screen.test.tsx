@@ -187,6 +187,10 @@ function makeDomainRecipe(): DomainRecipe {
  capture_response_headers: true,
  capture_browser_diagnostics: true,
  },
+ proxy_profile: {
+ enabled: true,
+ proxy_list: ["http://proxy-a", "http://proxy-b"],
+ },
  source_run_id: 101,
  saved_at:"2026-04-08T10:05:00Z",
  },
@@ -729,6 +733,10 @@ describe("CrawlRunScreen", () => {
  fireEvent.click(screen.getByRole("combobox", { name:"Fetch Mode" }));
  fireEvent.click(await screen.findByRole("option", { name:"Browser Only" }));
  fireEvent.change(screen.getByRole("textbox", { name:"Geo Country" }), { target: { value:"US" } });
+ fireEvent.click(screen.getByRole("switch", { name: /Proxy Enabled/i }));
+ fireEvent.change(screen.getByRole("textbox", { name:"Proxy Pool" }), {
+ target: { value:"http://proxy-one\nhttp://proxy-two" },
+ });
  fireEvent.click(screen.getByRole("button", { name:"Save Run Profile"}));
 
  await waitFor(() => {
@@ -740,6 +748,10 @@ describe("CrawlRunScreen", () => {
  locality_profile: expect.objectContaining({
  geo_country:"US",
  }),
+ proxy_profile: {
+ enabled: false,
+ proxy_list: ["http://proxy-one", "http://proxy-two"],
+ },
  }),
  });
  });

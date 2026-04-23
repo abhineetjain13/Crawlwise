@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.models.crawl import (
     CrawlLog,
@@ -10,9 +11,11 @@ from app.models.crawl import (
     DomainFieldFeedback,
     DomainMemory,
     DomainRunProfile,
+    HostProtectionMemory,
     ReviewPromotion,
 )
 from app.models.llm import LLMCostLog
+from app.services.acquisition.host_protection_memory import reset_host_protection_memory
 from app.services.crawl_crud import create_crawl_run
 from app.services.dashboard_service import (
     reset_application_data,
@@ -118,6 +121,13 @@ async def test_split_reset_crawl_data_and_domain_memory_preserve_the_other_scope
             payload={},
         )
     )
+    db_session.add(
+        HostProtectionMemory(
+            host="example.com",
+            hard_block_count=2,
+            last_block_vendor="datadome",
+        )
+    )
     await db_session.commit()
 
     result = await reset_crawl_data(db_session)
@@ -158,7 +168,14 @@ async def test_split_reset_crawl_data_and_domain_memory_preserve_the_other_scope
     assert memory_reset["domain_run_profiles_deleted"] == 1
     assert memory_reset["domain_cookie_memory_deleted"] == 1
     assert memory_reset["domain_field_feedback_deleted"] == 1
-    for model in (DomainMemory, DomainRunProfile, DomainCookieMemory, DomainFieldFeedback):
+    assert memory_reset["host_protection_memory_deleted"] == 1
+    for model in (
+        DomainMemory,
+        DomainRunProfile,
+        DomainCookieMemory,
+        DomainFieldFeedback,
+        HostProtectionMemory,
+    ):
         remaining = (await db_session.execute(select(model))).scalars().all()
         assert remaining == []
 
@@ -274,3 +291,25 @@ async def test_resets_commit_when_session_already_has_an_open_transaction(
         assert surviving_run is None
         assert surviving_record is None
         assert surviving_memory is None
+
+
+@pytest.mark.asyncio
+async def test_reset_host_protection_memory_ignores_missing_table(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _missing_table(statement):
+        del statement
+        raise OperationalError(
+            "DELETE FROM host_protection_memory",
+            {},
+            Exception('relation "host_protection_memory" does not exist'),
+        )
+
+    async def _rollback() -> None:
+        return None
+
+    monkeypatch.setattr(db_session, "execute", _missing_table)
+    monkeypatch.setattr(db_session, "rollback", _rollback)
+
+    await reset_host_protection_memory(session=db_session)

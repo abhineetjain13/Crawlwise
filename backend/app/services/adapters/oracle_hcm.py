@@ -156,9 +156,9 @@ class OracleHCMAdapter(BaseAdapter):
             return None
 
         description_parts = [
-            html_to_text(requisition.get("ShortDescriptionStr")),
-            html_to_text(requisition.get("ExternalResponsibilitiesStr")),
-            html_to_text(requisition.get("ExternalQualificationsStr")),
+            html_to_text(str(requisition.get("ShortDescriptionStr") or "")),
+            html_to_text(str(requisition.get("ExternalResponsibilitiesStr") or "")),
+            html_to_text(str(requisition.get("ExternalQualificationsStr") or "")),
         ]
         description = "\n\n".join(part for part in description_parts if part)
         location = self._join_locations(requisition)
@@ -199,7 +199,8 @@ class OracleHCMAdapter(BaseAdapter):
         if path_match:
             return clean_text(path_match.group(1))
         config = self._extract_cx_config(html)
-        app = config.get("app") if isinstance(config.get("app"), dict) else {}
+        app_payload = config.get("app")
+        app = app_payload if isinstance(app_payload, dict) else {}
         return clean_text(app.get("siteNumber"))
 
     def _extract_site_lang(self, url: str, html: str) -> str:
@@ -207,12 +208,14 @@ class OracleHCMAdapter(BaseAdapter):
         if path_match:
             return clean_text(path_match.group(1))
         config = self._extract_cx_config(html)
-        app = config.get("app") if isinstance(config.get("app"), dict) else {}
+        app_payload = config.get("app")
+        app = app_payload if isinstance(app_payload, dict) else {}
         return clean_text(app.get("siteLang"))
 
     def _extract_site_name(self, html: str) -> str:
         config = self._extract_cx_config(html)
-        app = config.get("app") if isinstance(config.get("app"), dict) else {}
+        app_payload = config.get("app")
+        app = app_payload if isinstance(app_payload, dict) else {}
         site_name = clean_text(app.get("siteName"))
         if site_name:
             return site_name

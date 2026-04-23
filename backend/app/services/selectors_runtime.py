@@ -59,6 +59,13 @@ _LISTING_URL_HINTS = (
 )
 
 
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(str(value if value is not None else "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def infer_surface(*, url: str, expected_fields: Iterable[str] | None = None) -> str:
     normalized_fields = {
         normalize_field_key(value) for value in list(expected_fields or []) if value
@@ -140,7 +147,7 @@ async def list_selector_records(
                 records.append(
                     {
                         **dict(row),
-                        "id": int(row.get("id") or 0),
+                        "id": _coerce_int(row.get("id"), 0),
                         "domain": memory.domain,
                         "surface": memory.surface,
                         "source_run_id": row.get("source_run_id"),
@@ -150,15 +157,15 @@ async def list_selector_records(
                 )
         return records
     if not normalized_surface:
-        records: list[dict[str, object]] = []
+        domain_records: list[dict[str, object]] = []
         for memory in await _all_domain_memories(session):
             if memory.domain != normalized_domain:
                 continue
             for row in selector_rules_from_memory(memory):
-                records.append(
+                domain_records.append(
                     {
                         **dict(row),
-                        "id": int(row.get("id") or 0),
+                        "id": _coerce_int(row.get("id"), 0),
                         "domain": memory.domain,
                         "surface": memory.surface,
                         "source_run_id": row.get("source_run_id"),
@@ -166,7 +173,7 @@ async def list_selector_records(
                         "updated_at": memory.updated_at,
                     }
                 )
-        return records
+        return domain_records
     memory = await load_domain_memory(
         session,
         domain=normalized_domain,
@@ -175,7 +182,7 @@ async def list_selector_records(
     return [
         {
             **dict(row),
-            "id": int(row.get("id") or 0),
+            "id": _coerce_int(row.get("id"), 0),
             "domain": normalized_domain,
             "surface": normalized_surface,
             "source_run_id": row.get("source_run_id"),
@@ -216,7 +223,7 @@ async def create_selector_record(
         "source_run_id": payload.get("source_run_id"),
         "is_active": bool(payload.get("is_active", True)),
     }
-    rules = [row for row in rules if int(row.get("id") or 0) != next_id]
+    rules = [row for row in rules if _coerce_int(row.get("id"), 0) != next_id]
     rules.append(record)
     await save_domain_memory(
         session,
@@ -254,7 +261,7 @@ async def update_selector_record(
         rules = selector_rules_from_memory(memory)
         updated = False
         for row in rules:
-            if int(row.get("id") or 0) != int(selector_id):
+            if _coerce_int(row.get("id"), 0) != int(selector_id):
                 continue
             for key in (
                 "field_name",
@@ -299,7 +306,7 @@ async def update_selector_record(
             surface=memory.surface,
         )
         refreshed = next(
-            row for row in rules if int(row.get("id") or 0) == int(selector_id)
+            row for row in rules if _coerce_int(row.get("id"), 0) == int(selector_id)
         )
         return {
             "domain": memory.domain,
@@ -324,7 +331,7 @@ async def delete_selector_record(
     for memory in await _all_domain_memories(session):
         rules = selector_rules_from_memory(memory)
         next_rules = [
-            row for row in rules if int(row.get("id") or 0) != int(selector_id)
+            row for row in rules if _coerce_int(row.get("id"), 0) != int(selector_id)
         ]
         if len(next_rules) == len(rules):
             continue
@@ -447,7 +454,7 @@ async def suggest_selectors(
                     if _is_noise_value(sample_value, field_name):
                         xpath = None
                     elif sample_value or selector_used:
-                        candidate = {
+                        candidate: dict[str, object] = {
                             "field_name": field_name,
                             "xpath": selector_used or validated_xpath,
                             "sample_value": sample_value,
@@ -463,14 +470,14 @@ async def suggest_selectors(
                 if _is_noise_value(sample_value, field_name):
                     css_selector = None
                 elif sample_value or selector_used:
-                    candidate = {
+                    css_candidate: dict[str, object] = {
                         "field_name": field_name,
                         "css_selector": selector_used or css_selector,
                         "sample_value": sample_value,
                         "source": "llm_css",
                     }
-                    if not _suggestion_exists(suggestions[field_name], candidate):
-                        suggestions[field_name].append(candidate)
+                    if not _suggestion_exists(suggestions[field_name], css_candidate):
+                        suggestions[field_name].append(css_candidate)
 
     return {
         "surface": resolved_surface,
@@ -517,7 +524,7 @@ async def _next_selector_id(session: AsyncSession) -> int:
     max_id = 0
     for memory in await _all_domain_memories(session):
         for row in selector_rules_from_memory(memory):
-            max_id = max(max_id, int(row.get("id") or 0))
+            max_id = max(max_id, _coerce_int(row.get("id"), 0))
     return max_id + 1
 
 
@@ -530,7 +537,7 @@ async def _ensure_unique_selector_ids(session: AsyncSession) -> None:
         rules = selector_rules_from_memory(memory)
         memory_changed = False
         for row in rules:
-            current_id = int(row.get("id") or 0)
+            current_id = _coerce_int(row.get("id"), 0)
             if current_id > 0 and current_id not in seen_ids:
                 seen_ids.add(current_id)
                 next_id = max(next_id, current_id + 1)
@@ -681,7 +688,7 @@ def _listing_card_suggestions(
         sample_value, count, selector_used = extract_selector_value(html, xpath=xpath)
         if count <= 0:
             continue
-        suggestion = {
+        suggestion: dict[str, object] = {
             "field_name": field_name,
             "xpath": selector_used or xpath,
             "sample_value": sample_value,

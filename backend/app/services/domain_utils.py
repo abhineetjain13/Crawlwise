@@ -4,7 +4,7 @@
 # www-normalised.  All modules MUST use this instead of local _domain() helpers.
 from __future__ import annotations
 
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 _SPECIAL_USE_HOSTNAMES = {
     "localhost",
@@ -57,6 +57,21 @@ def normalize_domain(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def normalize_host(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if "://" in text:
+        split = urlsplit(text)
+        hostname_value = str(split.hostname or "").strip().lower()
+        if not hostname_value:
+            return str(split.netloc or "").strip().lower()
+        if split.port is not None:
+            return f"{hostname_value}:{split.port}"
+        return hostname_value
+    return text
 
 
 def is_special_use_domain(value: str) -> bool:

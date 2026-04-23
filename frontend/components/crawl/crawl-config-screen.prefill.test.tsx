@@ -123,6 +123,63 @@ describe("CrawlConfigScreen bulk prefill", () => {
  expect(screen.queryByText("Loaded 1 saved selector from domain memory.")).not.toBeInTheDocument();
  });
 
+ it("applies saved proxy defaults from the domain run profile", async () => {
+ getDomainRunProfileMock.mockResolvedValue({
+ domain: "example.com",
+ surface: "ecommerce_listing",
+ saved_run_profile: {
+ version: 1,
+ fetch_profile: {
+ fetch_mode: "browser_only",
+ extraction_source: "raw_html",
+ js_mode: "auto",
+ include_iframes: false,
+ traversal_mode: null,
+ request_delay_ms: 500,
+ max_pages: 10,
+ max_scrolls: 10,
+ },
+ locality_profile: {
+ geo_country: "auto",
+ language_hint: null,
+ currency_hint: null,
+ },
+ diagnostics_profile: {
+ capture_html: true,
+ capture_screenshot: false,
+ capture_network: "matched_only",
+ capture_response_headers: true,
+ capture_browser_diagnostics: true,
+ },
+ proxy_profile: {
+ enabled: true,
+ proxy_list: ["http://proxy-a", "http://proxy-b"],
+ },
+ source_run_id: 11,
+ saved_at: "2026-04-23T00:00:00Z",
+ },
+ });
+
+ renderConfigScreen();
+
+ fireEvent.change(screen.getByLabelText("Target URL input"), {
+ target: { value: "https://example.com/collections/chairs" },
+ });
+
+ await waitFor(() => {
+ expect(getDomainRunProfileMock).toHaveBeenCalledWith({
+ url: "https://example.com/collections/chairs",
+ surface: "ecommerce_listing",
+ });
+ }, { timeout: UI_DELAYS.DEBOUNCE_MS * 6 });
+
+ fireEvent.click(screen.getByRole("button", { name:"Advanced" }));
+
+ await waitFor(() => {
+ expect(screen.getByLabelText("Proxy pool input")).toHaveValue("http://proxy-a\nhttp://proxy-b");
+ });
+ });
+
  it("refreshes the route after launching a crawl so the new run screen loads immediately", async () => {
  renderConfigScreen();
 

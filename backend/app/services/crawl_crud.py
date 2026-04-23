@@ -156,6 +156,37 @@ def _merge_saved_run_profile(
         },
         legacy_aliases={},
     )
+    saved_proxy_profile = (
+        dict(saved.get("proxy_profile") or {})
+        if isinstance(saved.get("proxy_profile"), dict)
+        else {}
+    )
+    merged["proxy_profile"] = {
+        "enabled": bool(
+            merged.get(
+                "proxy_enabled",
+                saved_proxy_profile.get(
+                    "enabled",
+                    saved.get("proxy_enabled", False),
+                ),
+            )
+        ),
+        "proxy_list": (
+            list(merged.get("proxy_list") or [])
+            if isinstance(merged.get("proxy_list"), list)
+            else list(
+                saved_proxy_profile.get(
+                    "proxy_list",
+                    saved.get("proxy_list") or [],
+                )
+                or []
+            )
+        ),
+    }
+    if "proxy_enabled" not in merged:
+        merged["proxy_enabled"] = bool(merged["proxy_profile"]["enabled"])
+    if "proxy_list" not in merged:
+        merged["proxy_list"] = list(merged["proxy_profile"]["proxy_list"])
     return merged
 
 
@@ -167,9 +198,10 @@ def _merge_profile_section(
     legacy_keys: set[str],
     legacy_aliases: dict[str, str],
 ) -> dict[str, object]:
+    explicit_section_raw = explicit_settings.get(key)
     explicit_section = (
-        dict(explicit_settings.get(key) or {})
-        if isinstance(explicit_settings.get(key), dict)
+        dict(explicit_section_raw)
+        if isinstance(explicit_section_raw, dict)
         else {}
     )
     merged = dict(saved_section)

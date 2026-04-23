@@ -71,6 +71,7 @@ class ShopifyAdapter(BaseAdapter):
         Detail pages use `/products/<handle>.js` to avoid returning unrelated products.
         """
         parsed = urlparse(url)
+        products: list[dict] = []
         if surface == "ecommerce_detail":
             handle = self._extract_product_handle(parsed.path)
             if not handle:
@@ -94,7 +95,6 @@ class ShopifyAdapter(BaseAdapter):
                 if collection_handle
                 else "/products.json"
             )
-            products: list[dict] = []
             max_pages = max(
                 1,
                 math.ceil(
@@ -278,8 +278,9 @@ class ShopifyAdapter(BaseAdapter):
         if featured:
             row["image_url"] = featured
         option_values: dict[str, str] = {}
-        raw_options = (
-            variant.get("options") if isinstance(variant.get("options"), list) else []
+        raw_options_payload = variant.get("options")
+        raw_options: list[object] = (
+            raw_options_payload if isinstance(raw_options_payload, list) else []
         )
         for index in range(
             1,

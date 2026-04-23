@@ -14,7 +14,10 @@ from app.services.adapters.ultipro import UltiProAdapter
 from app.services.adapters.workday import WorkdayAdapter
 from app.services.adapters.registry import normalize_adapter_acquisition_url
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
-from app.services.listing_extractor import extract_listing_records
+from app.services.listing_extractor import (
+    _job_listing_url_looks_like_posting,
+    extract_listing_records,
+)
 
 
 class _DummyAdapter(BaseAdapter):
@@ -936,3 +939,9 @@ def test_shopify_adapter_treats_blank_tag_string_as_empty_list() -> None:
     )
 
     assert record["tags"] == []
+
+
+def test_job_listing_url_looks_like_posting_uses_segment_tokenization_for_non_listing_hubs() -> None:
+    assert not _job_listing_url_looks_like_posting(
+        "https://jobs.example.com/jobs/search-results/role-12345-senior-engineer"
+    )

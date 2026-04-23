@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from selectolax.lexbor import LexborHTMLParser
@@ -10,16 +11,22 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.field_value_core import clean_text
 
 
-def _text(node: object, *, separator: str = "") -> str:
+def _text(node: Any, *, separator: str = "") -> str:
     if node is None:
         return ""
-    return node.text(separator=separator, strip=True)
+    text_fn = getattr(node, "text", None)
+    if not callable(text_fn):
+        return ""
+    return text_fn(separator=separator, strip=True)
 
 
-def _attr(node: object, name: str) -> str | None:
+def _attr(node: Any, name: str) -> str | None:
     if node is None:
         return None
-    value = node.attributes.get(name)
+    attrs = getattr(node, "attributes", None)
+    if not isinstance(attrs, dict):
+        return None
+    value = attrs.get(name)
     if value is None:
         return None
     return str(value).strip() or None
@@ -59,12 +66,15 @@ class ADPAdapter(BaseAdapter):
         )
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        records: list[dict] = []
         if self._looks_like_detail(url, html, surface):
-            records = [self._extract_detail(url, html)] if html else []
+            detail = self._extract_detail(url, html) if html else None
+            if detail:
+                records.append(detail)
         else:
             records = self._extract_listing(url, html)
         return AdapterResult(
-            records=[record for record in records if record],
+            records=records,
             source_type="adp_adapter",
             adapter_name=self.name,
         )
@@ -216,7 +226,7 @@ class ADPAdapter(BaseAdapter):
         # handoff stays valid for browser navigation and follow-up detail fetches.
         return urlunparse(parsed._replace(query=next_query, fragment=job_id))
 
-    def _extract_job_dom_id(self, card: object) -> str | None:
+    def _extract_job_dom_id(self, card: Any) -> str | None:
         candidates = [
             _attr(card, "id") or "",
         ]

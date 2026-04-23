@@ -9,6 +9,7 @@ type DomainRunProfileOverrides = {
  fetch_profile?: Partial<DomainRunProfile["fetch_profile"]>;
  locality_profile?: Partial<DomainRunProfile["locality_profile"]>;
  diagnostics_profile?: Partial<DomainRunProfile["diagnostics_profile"]>;
+ proxy_profile?: Partial<DomainRunProfile["proxy_profile"]>;
  source_run_id?: DomainRunProfile["source_run_id"];
  saved_at?: DomainRunProfile["saved_at"];
 };
@@ -58,6 +59,11 @@ function baseProfile(overrides: DomainRunProfileOverrides = {}): DomainRunProfil
  capture_response_headers: true,
  capture_browser_diagnostics: true,
  ...overrides.diagnostics_profile,
+ },
+ proxy_profile: {
+ enabled: false,
+ proxy_list: [],
+ ...overrides.proxy_profile,
  },
  source_run_id: overrides.source_run_id ?? null,
  saved_at: overrides.saved_at ?? null,
@@ -155,6 +161,10 @@ describe("buildDispatch", () => {
  capture_response_headers: true,
  capture_browser_diagnostics: true,
  });
+ expect(dispatch.settings.proxy_profile).toEqual({
+ enabled: false,
+ proxy_list: [],
+ });
  });
 
  it("keeps quick mode lean and disables advanced legacy flags", () => {
@@ -191,6 +201,24 @@ describe("buildDispatch", () => {
  capture_network: "off",
  capture_response_headers: true,
  capture_browser_diagnostics: true,
+ });
+ });
+
+ it("carries proxy config into the nested proxy profile", () => {
+ const dispatch = buildDispatch(
+ baseConfig({
+ proxy_enabled: true,
+ proxy_lines: ["http://proxy-a", "http://proxy-b"],
+ }),
+ [],
+ { runProfile: baseProfile() },
+ );
+
+ expect(dispatch.settings.proxy_enabled).toBe(true);
+ expect(dispatch.settings.proxy_list).toEqual(["http://proxy-a", "http://proxy-b"]);
+ expect(dispatch.settings.proxy_profile).toEqual({
+ enabled: true,
+ proxy_list: ["http://proxy-a", "http://proxy-b"],
  });
  });
 

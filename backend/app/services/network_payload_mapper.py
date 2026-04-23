@@ -125,15 +125,19 @@ def _configured_endpoint_path_tokens(surface: str) -> list[tuple[str, ...]]:
     token_groups: list[tuple[str, ...]] = []
     for spec in NETWORK_PAYLOAD_SPECS.get(surface, ()):
         raw_tokens = spec.get("endpoint_path_tokens")
-        if isinstance(raw_tokens, tuple) and raw_tokens:
-            token_groups.append(raw_tokens)
+        if (
+            isinstance(raw_tokens, tuple)
+            and raw_tokens
+            and all(isinstance(token, str) for token in raw_tokens)
+        ):
+            token_groups.append(tuple(str(token) for token in raw_tokens))
     return token_groups
 
 
 def _map_payload_body(
     body: object,
     *,
-    surface_specs: tuple[dict[str, object], ...],
+    surface_specs: tuple[dict[str, Any], ...],
 ) -> dict[str, Any]:
     for spec in surface_specs:
         mapped = _map_body_with_spec(body, spec=spec)
@@ -145,7 +149,7 @@ def _map_payload_body(
 def _map_body_with_spec(
     body: object,
     *,
-    spec: dict[str, object],
+    spec: dict[str, Any],
 ) -> dict[str, Any]:
     required_path_groups = spec.get("required_path_groups", ())
     if not _matches_required_path_groups(body, required_path_groups):

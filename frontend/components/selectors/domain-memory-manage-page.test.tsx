@@ -88,6 +88,13 @@ describe("DomainMemoryManagePage", () => {
  origin_count: 1,
  updated_at: new Date("2026-04-08T10:05:00Z").toISOString(),
  },
+ {
+ id: 5,
+ domain: "owned-session-test.example.com",
+ cookie_count: 1,
+ origin_count: 0,
+ updated_at: new Date("2026-04-08T10:05:00Z").toISOString(),
+ },
  ]);
  apiMock.listDomainFieldFeedback.mockResolvedValue([
  {
@@ -158,6 +165,7 @@ describe("DomainMemoryManagePage", () => {
  expect(screen.getAllByText("example.com").length).toBeGreaterThan(0);
  expect(screen.getAllByText("price").length).toBeGreaterThan(0);
  expect(screen.getAllByText("3 cookies").length).toBeGreaterThan(0);
+ expect(screen.queryByText("owned-session-test.example.com")).not.toBeInTheDocument();
  });
 
  it("edits a saved selector from the domain memory workspace", async () => {

@@ -158,6 +158,11 @@ def test_export_image_dedupe_handles_legacy_string_values() -> None:
     assert sanitized["additional_images"] == "https://cdn.example.com/images/widget-2.jpg"
 
 
+def test_export_image_dedupe_preserves_falsy_non_null_values() -> None:
+    assert record_export_service._dedupe_image_values(0) == ["0"]
+    assert record_export_service._dedupe_image_values(False) == ["False"]
+
+
 def test_record_to_markdown_includes_page_context_from_raw_data() -> None:
     row = CrawlRecord(
         id=1,

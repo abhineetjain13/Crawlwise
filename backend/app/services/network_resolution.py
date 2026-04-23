@@ -103,8 +103,8 @@ def _browser_client_hint_headers(
         return {}
     return {
         "sec-ch-ua": (
-            f'"Not.A/Brand";v="24", "Chromium";v="{major_version}", '
-            f'"Google Chrome";v="{major_version}"'
+            f'"Not:A-Brand";v="99", "Google Chrome";v="{major_version}", '
+            f'"Chromium";v="{major_version}"'
         ),
         "sec-ch-ua-mobile": "?1" if mobile else "?0",
         "sec-ch-ua-platform": f'"{platform}"',

@@ -25,7 +25,7 @@ import type {
  SelectorRecord,
  SelectorUpdatePayload,
 } from "../../../lib/api/types";
-import { getNormalizedDomain } from "../../../lib/format/domain";
+import { getNormalizedDomain, isSpecialUseDomain } from "../../../lib/format/domain";
 import { cn } from "../../../lib/utils";
 
 type LocalRecord = SelectorRecord & { _uid: string };
@@ -124,6 +124,14 @@ function runProfileSummary(profile: DomainRunProfileRecord) {
  { label: "Traversal", value: titleCaseToken(profile.profile.fetch_profile.traversal_mode ?? "off") },
  { label: "Network", value: titleCaseToken(profile.profile.diagnostics_profile.capture_network) },
  ];
+}
+
+function isInternalDomainMemoryArtifact(domain: string, surfaceCount: number, hasCookieMemory: boolean, learningCount: number, completedRunCount: number) {
+ const normalized = String(domain || "").trim().toLowerCase();
+ if (!normalized.startsWith("owned-session-")) {
+ return false;
+ }
+ return hasCookieMemory && surfaceCount === 0 && learningCount === 0 && completedRunCount === 0;
 }
 
 export default function DomainMemoryManagePage() {
@@ -260,7 +268,7 @@ export default function DomainMemoryManagePage() {
 
  for (const run of completedRuns) {
  const domain = String(run.result_summary?.domain || "").trim() || getNormalizedDomain(run.url);
- if (!domain) {
+ if (!domain || isSpecialUseDomain(domain)) {
  continue;
  }
  if (surfaceFilter !== "all" && run.surface !== surfaceFilter) {
@@ -296,6 +304,10 @@ export default function DomainMemoryManagePage() {
 
  return Array.from(visibleDomains)
  .map((domain) => {
+ const normalizedDomain = String(domain || "").trim();
+ if (!normalizedDomain || isSpecialUseDomain(normalizedDomain)) {
+ return null;
+ }
  const surfaces = Array.from((byDomain.get(domain) ?? new Map<string, SurfaceWorkspace>()).values())
  .sort((left, right) => left.surface.localeCompare(right.surface));
  const completedRunCount = surfaces.reduce((count, surface) => count + surface.completedRuns.length, 0);
@@ -305,16 +317,29 @@ export default function DomainMemoryManagePage() {
  .map((run) => run.completed_at ?? run.updated_at ?? run.created_at)
  .filter(Boolean)
  .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] ?? null;
+ const cookieMemory = cookiesByDomain.get(domain) ?? null;
+ const learning = surfaces.flatMap((surface) => surface.learning);
+ if (
+ isInternalDomainMemoryArtifact(
+ normalizedDomain,
+ surfaces.length,
+ Boolean(cookieMemory),
+ learning.length,
+ completedRunCount,
+ )
+ ) {
+ return null;
+ }
  return {
  domain,
  surfaces,
- cookieMemory: cookiesByDomain.get(domain) ?? null,
- learning: surfaces.flatMap((surface) => surface.learning),
+ cookieMemory,
+ learning,
  completedRunCount,
  latestCompletedAt,
  };
  })
- .filter((entry) => entry.surfaces.length || entry.cookieMemory)
+ .filter((entry): entry is DomainWorkspace => Boolean(entry && (entry.surfaces.length || entry.cookieMemory)))
  .sort((left, right) => {
  const completedDelta = right.completedRunCount - left.completedRunCount;
  if (completedDelta !== 0) {

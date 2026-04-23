@@ -401,7 +401,7 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
         return merged_rows or None
     if field_name in STRUCTURED_MULTI_FIELDS:
         rows: list[str] = []
-        seen: set[str] = set()
+        seen_values: set[str] = set()
         for value in values:
             items = value if isinstance(value, list) else [value]
             for item in items:
@@ -409,9 +409,9 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                 if not text:
                     continue
                 lowered = text.lower()
-                if lowered in seen:
+                if lowered in seen_values:
                     continue
-                seen.add(lowered)
+                seen_values.add(lowered)
                 rows.append(text)
         if field_name == "additional_images":
             return rows or None

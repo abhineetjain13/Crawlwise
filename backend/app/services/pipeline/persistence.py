@@ -21,6 +21,10 @@ def _string_list(value: object) -> list[str]:
     return [str(item) for item in value]
 
 
+def _object_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
 def _merge_browser_diagnostics(
     acquisition_result,
     diagnostics: dict[str, object],
@@ -38,13 +42,13 @@ def _record_identity_key(source_url: str) -> str | None:
 
 
 def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[str, object]:
-    field_discovery = {}
+    field_discovery: dict[str, object] = {}
     field_sources = mapping_or_empty(record.get("_field_sources"))
     selector_traces = mapping_or_empty(record.get("_selector_traces"))
     for key, value in record.items():
         if str(key).startswith("_"):
             continue
-        discovery = {
+        discovery: dict[str, object] = {
             "status": "found",
             "value": str(value),
             "sources": _string_list(
@@ -74,9 +78,7 @@ def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[s
             "confidence": mapping_or_empty(record.get("_confidence")),
             "self_heal": mapping_or_empty(record.get("_self_heal")),
             "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
-            "review_bucket": list(record.get("_review_bucket") or [])
-            if isinstance(record.get("_review_bucket"), list)
-            else [],
+            "review_bucket": _object_list(record.get("_review_bucket")),
             "semantic": mapping_or_empty(record.get("_semantic")),
         },
         "field_discovery": field_discovery,
@@ -223,9 +225,7 @@ async def persist_extracted_records(
                     "confidence": mapping_or_empty(record.get("_confidence")),
                     "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
                     "semantic": mapping_or_empty(record.get("_semantic")),
-                    "review_bucket": list(record.get("_review_bucket") or [])
-                    if isinstance(record.get("_review_bucket"), list)
-                    else [],
+                    "review_bucket": _object_list(record.get("_review_bucket")),
                 }.items()
                 if value not in (None, "", [], {})
             },

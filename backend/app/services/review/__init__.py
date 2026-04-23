@@ -677,6 +677,7 @@ async def save_domain_recipe_run_profile(
         surface=run.surface,
         profile=profile,
         source_run_id=run.id,
+        commit=True,
     )
 
 

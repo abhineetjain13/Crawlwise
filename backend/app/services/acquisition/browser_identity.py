@@ -105,6 +105,14 @@ def create_browser_identity() -> BrowserIdentity:
     locale = str(navigator.language or "en-US")
     if not _accept_language_matches_locale(headers.get("Accept-Language"), locale=locale):
         headers["Accept-Language"] = _accept_language_for_locale(locale)
+    is_mobile = (
+        bool(navigator.userAgentData.get("mobile"))
+        if isinstance(navigator.userAgentData, dict)
+        else False
+    )
+    has_touch = bool((navigator.maxTouchPoints or 0) > 0)
+    if not is_mobile:
+        has_touch = False
     return BrowserIdentity(
         user_agent=user_agent,
         viewport={
@@ -114,10 +122,8 @@ def create_browser_identity() -> BrowserIdentity:
         extra_http_headers=headers,
         locale=locale,
         device_scale_factor=max(1.0, float(screen.devicePixelRatio or 1.0)),
-        has_touch=bool((navigator.maxTouchPoints or 0) > 0),
-        is_mobile=bool(navigator.userAgentData.get("mobile"))
-        if isinstance(navigator.userAgentData, dict)
-        else False,
+        has_touch=has_touch,
+        is_mobile=is_mobile,
     )
 
 
@@ -325,14 +331,14 @@ def _coherent_client_hints_from_user_agent(
     full_version = f"{major_version}.0.0.0"
     return {
         "brands": [
-            {"brand": "Not.A/Brand", "version": "24"},
-            {"brand": "Chromium", "version": str(major_version)},
+            {"brand": "Not:A-Brand", "version": "99"},
             {"brand": "Google Chrome", "version": str(major_version)},
+            {"brand": "Chromium", "version": str(major_version)},
         ],
         "fullVersionList": [
-            {"brand": "Not.A/Brand", "version": "24.0.0.0"},
-            {"brand": "Chromium", "version": full_version},
+            {"brand": "Not:A-Brand", "version": "99.0.0.0"},
             {"brand": "Google Chrome", "version": full_version},
+            {"brand": "Chromium", "version": full_version},
         ],
         "mobile": resolved_mobile,
         "platform": _HOST_OS_PLATFORM_LABELS[_HOST_OS],
@@ -432,12 +438,51 @@ def _chrome_major_version(user_agent: str) -> int | None:
         return None
 
 
+def _replace_chrome_major_version(user_agent: str, major_version: int) -> str:
+    return _UA_VERSION_RE.sub(f"Chrome/{int(major_version)}.", str(user_agent or ""), count=1)
+
+
+def _align_identity_to_browser_major(
+    identity: BrowserIdentity,
+    *,
+    browser_major_version: int | None,
+) -> BrowserIdentity:
+    resolved_major = int(browser_major_version or 0)
+    if resolved_major <= 0:
+        return identity
+    current_major = _chrome_major_version(identity.user_agent)
+    if current_major == resolved_major:
+        return identity
+    aligned_user_agent = _replace_chrome_major_version(identity.user_agent, resolved_major)
+    aligned_headers = dict(identity.extra_http_headers)
+    coherent_hints = _coherent_client_hints_from_user_agent(
+        aligned_user_agent,
+        mobile=identity.is_mobile,
+    )
+    if coherent_hints:
+        aligned_headers.update(_coherent_sec_ch_headers(coherent_hints))
+    return BrowserIdentity(
+        user_agent=aligned_user_agent,
+        viewport=dict(identity.viewport),
+        extra_http_headers=aligned_headers,
+        locale=identity.locale,
+        device_scale_factor=identity.device_scale_factor,
+        has_touch=identity.has_touch,
+        is_mobile=identity.is_mobile,
+    )
+
+
 def build_playwright_context_options(
     identity: BrowserIdentity | None = None,
     *,
     run_id: int | None = None,
+    browser_major_version: int | None = None,
 ) -> dict[str, Any]:
     identity = identity or browser_identity_for_run(run_id)
+    identity = _align_identity_to_browser_major(
+        identity,
+        browser_major_version=browser_major_version,
+    )
     return {
         "user_agent": identity.user_agent,
         "viewport": dict(identity.viewport),

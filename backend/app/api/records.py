@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated
+from typing import Annotated, Any
 
 from app.core.database import SessionLocal
 from app.core.dependencies import get_current_user, get_db
@@ -36,6 +36,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["records"])
+
+
+def _route_responses(
+    responses: dict[int | str, dict[str, Any]],
+) -> dict[int | str, dict[str, Any]]:
+    return {key: dict(value) for key, value in responses.items()}
 
 
 def _summary_expects_records(summary: object) -> bool:
@@ -77,7 +83,7 @@ async def _load_records_with_reconciliation(
     return rows, total
 
 
-@router.get("/api/crawls/{run_id}/records", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get("/api/crawls/{run_id}/records", responses=_route_responses(RUN_NOT_FOUND_RESPONSE))
 async def records_list(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -106,7 +112,7 @@ async def records_list(
 
 @router.get(
     "/api/records/{record_id}/provenance",
-    responses=RECORD_PROVENANCE_NOT_FOUND_RESPONSE,
+    responses=_route_responses(RECORD_PROVENANCE_NOT_FOUND_RESPONSE),
 )
 async def record_provenance(
     record_id: int,
@@ -125,7 +131,7 @@ async def record_provenance(
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
 
 
-@router.get("/api/crawls/{run_id}/export/json", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get("/api/crawls/{run_id}/export/json", responses=_route_responses(RUN_NOT_FOUND_RESPONSE))
 async def export_json(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -138,7 +144,7 @@ async def export_json(
     return await build_json_export_response(session, run_id=run_id)
 
 
-@router.get("/api/crawls/{run_id}/export/csv", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get("/api/crawls/{run_id}/export/csv", responses=_route_responses(RUN_NOT_FOUND_RESPONSE))
 async def export_csv(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -151,7 +157,10 @@ async def export_csv(
     return await build_csv_export_response(session, run_id=run_id)
 
 
-@router.get("/api/crawls/{run_id}/export/tables.csv", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get(
+    "/api/crawls/{run_id}/export/tables.csv",
+    responses=_route_responses(RUN_NOT_FOUND_RESPONSE),
+)
 async def export_tables_csv(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -164,7 +173,10 @@ async def export_tables_csv(
     return await build_tables_csv_export_response(session, run_id=run_id)
 
 
-@router.get("/api/crawls/{run_id}/export/markdown", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get(
+    "/api/crawls/{run_id}/export/markdown",
+    responses=_route_responses(RUN_NOT_FOUND_RESPONSE),
+)
 async def export_markdown(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -178,7 +190,8 @@ async def export_markdown(
 
 
 @router.get(
-    "/api/crawls/{run_id}/export/artifacts.json", responses=RUN_NOT_FOUND_RESPONSE
+    "/api/crawls/{run_id}/export/artifacts.json",
+    responses=_route_responses(RUN_NOT_FOUND_RESPONSE),
 )
 async def export_artifacts_json(
     run_id: int,
@@ -192,7 +205,10 @@ async def export_artifacts_json(
     return await build_artifacts_json_export_response(session, run_id=run_id)
 
 
-@router.get("/api/crawls/{run_id}/export/discoverist", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get(
+    "/api/crawls/{run_id}/export/discoverist",
+    responses=_route_responses(RUN_NOT_FOUND_RESPONSE),
+)
 async def export_discoverist(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],

@@ -127,6 +127,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert {row["field_name"] for row in recipe["selector_candidates"]} == {"title", "price"}
     assert recipe["acquisition_evidence"]["actual_fetch_method"] == "browser"
     assert recipe["acquisition_evidence"]["browser_reason"] == "http-escalation"
+    assert recipe["saved_run_profile"] is None
 
     save_profile_response = await crawls_api_client.post(
         f"/api/crawls/{run.id}/domain-recipe/save-run-profile",
@@ -154,6 +155,13 @@ async def test_crawls_domain_recipe_routes_round_trip(
                     "capture_response_headers": True,
                     "capture_browser_diagnostics": True,
                 },
+                "proxy_profile": {
+                    "enabled": True,
+                    "proxy_list": [
+                        "http://user:secret@example-proxy.local:8080",
+                        "https://clean-proxy.example:8443",
+                    ],
+                },
             }
         },
     )
@@ -162,6 +170,10 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert saved_profile["fetch_profile"]["fetch_mode"] == "http_then_browser"
     assert saved_profile["locality_profile"]["geo_country"] == "IN"
     assert saved_profile["source_run_id"] == run.id
+    assert saved_profile["proxy_profile"]["proxy_list"] == [
+        "http://***:***@example-proxy.local:8080",
+        "https://clean-proxy.example:8443",
+    ]
 
     lookup_after_save = await crawls_api_client.get(
         "/api/crawls/domain-run-profile",
@@ -172,6 +184,10 @@ async def test_crawls_domain_recipe_routes_round_trip(
     )
     assert lookup_after_save.status_code == 200
     assert lookup_after_save.json()["saved_run_profile"]["fetch_profile"]["fetch_mode"] == "http_then_browser"
+    assert lookup_after_save.json()["saved_run_profile"]["proxy_profile"]["proxy_list"] == [
+        "http://***:***@example-proxy.local:8080",
+        "https://clean-proxy.example:8443",
+    ]
 
     list_profiles_response = await crawls_api_client.get(
         "/api/crawls/domain-memory/run-profiles",
@@ -217,6 +233,10 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert recipe_after_save.status_code == 200
     saved_recipe = recipe_after_save.json()
     assert saved_recipe["saved_run_profile"]["fetch_profile"]["fetch_mode"] == "http_then_browser"
+    assert saved_recipe["saved_run_profile"]["proxy_profile"]["proxy_list"] == [
+        "http://***:***@example-proxy.local:8080",
+        "https://clean-proxy.example:8443",
+    ]
     assert any(row["field_name"] == "price" for row in saved_recipe["saved_selectors"])
     promoted_candidate = next(
         row for row in saved_recipe["selector_candidates"] if row["field_name"] == "price"

@@ -65,7 +65,7 @@ def test_build_playwright_context_options_uses_generated_identity(
         "Accept": "text/html",
         "Accept-Language": "en-US;q=1.0",
         "sec-ch-ua": (
-            '"Not.A/Brand";v="24", "Chromium";v="145", "Google Chrome";v="145"'
+            '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"'
         ),
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
@@ -103,6 +103,36 @@ def test_build_playwright_context_options_keeps_security_invariants(
     assert options["bypass_csp"] is False
     assert options["has_touch"] is True
     assert options["is_mobile"] is True
+
+
+def test_build_playwright_context_options_disables_touch_for_desktop_identities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = SimpleNamespace(
+        screen=SimpleNamespace(width=1536, height=864, devicePixelRatio=1),
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            language="en-US",
+            maxTouchPoints=5,
+            userAgentData={"mobile": False},
+        ),
+        headers={"Accept": "text/html"},
+    )
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=lambda: fingerprint),
+    )
+
+    options = browser_identity.build_playwright_context_options()
+
+    assert options["is_mobile"] is False
+    assert options["has_touch"] is False
 
 
 def test_build_playwright_context_options_repairs_incoherent_client_hints_after_retry_budget(
@@ -154,7 +184,7 @@ def test_build_playwright_context_options_repairs_incoherent_client_hints_after_
     assert attempts["count"] == 3
     assert options["user_agent"].endswith("Chrome/145.0.0.0 Safari/537.36")
     assert options["extra_http_headers"]["sec-ch-ua"] == (
-        '"Not.A/Brand";v="24", "Chromium";v="145", "Google Chrome";v="145"'
+        '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"'
     )
     assert options["extra_http_headers"]["sec-ch-ua-mobile"] == "?0"
     assert options["extra_http_headers"]["sec-ch-ua-platform"] == '"Windows"'
@@ -199,7 +229,7 @@ def test_build_playwright_context_options_replaces_malformed_client_hints_withou
 
     assert options["extra_http_headers"]["Accept-Language"] == "en-US;q=1.0"
     assert options["extra_http_headers"]["sec-ch-ua"] == (
-        '"Not.A/Brand";v="24", "Chromium";v="145", "Google Chrome";v="145"'
+        '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"'
     )
     assert options["extra_http_headers"]["sec-ch-ua-mobile"] == "?0"
     assert options["extra_http_headers"]["sec-ch-ua-platform"] == '"Windows"'
@@ -249,7 +279,39 @@ def test_build_playwright_context_options_uses_configured_min_chrome_version(
     assert attempts["count"] == 3
     assert options["user_agent"].endswith("Chrome/129.0.0.0 Safari/537.36")
     assert options["extra_http_headers"]["sec-ch-ua"] == (
-        '"Not.A/Brand";v="24", "Chromium";v="129", "Google Chrome";v="129"'
+        '"Not:A-Brand";v="99", "Google Chrome";v="129", "Chromium";v="129"'
+    )
+
+
+def test_build_playwright_context_options_aligns_user_agent_to_browser_major() -> None:
+    identity = browser_identity.BrowserIdentity(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1366, "height": 768},
+        extra_http_headers={
+            "Accept": "text/html",
+            "Accept-Language": "en-US;q=1.0",
+            "sec-ch-ua": '"Not:A-Brand";v="99", "Google Chrome";v="125", "Chromium";v="125"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+        },
+        locale="en-US",
+        device_scale_factor=1.0,
+        has_touch=False,
+        is_mobile=False,
+    )
+
+    options = browser_identity.build_playwright_context_options(
+        identity=identity,
+        browser_major_version=145,
+    )
+
+    assert options["user_agent"].endswith("Chrome/145.0.0.0 Safari/537.36")
+    assert options["extra_http_headers"]["sec-ch-ua"] == (
+        '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"'
     )
 
 
@@ -1086,6 +1148,62 @@ async def test_persist_storage_state_for_domain_persists_localhost_with_port(db_
     assert rows[0]["domain"] == "localhost:3000"
     assert any(row["domain"] == "localhost:3000" for row in all_rows)
     assert loaded is not None
+
+
+@pytest.mark.asyncio
+async def test_persist_storage_state_for_domain_accepts_iterable_storage_rows(
+    db_session,
+) -> None:
+    domain = f"iterable-state-{uuid4().hex}.example.com"
+
+    saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": (
+                {
+                    "name": "session",
+                    "value": "abc",
+                    "domain": f".{domain}",
+                    "path": "/",
+                },
+            ),
+            "origins": (
+                {
+                    "origin": f"https://{domain}",
+                    "localStorage": (
+                        {"name": "consent", "value": "accepted"},
+                    ),
+                },
+            ),
+        },
+        session=db_session,
+    )
+
+    rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+
+    assert saved is True
+    assert len(rows) == 1
+    assert rows[0]["cookie_count"] == 1
+    assert rows[0]["origin_count"] == 1
+    assert loaded == {
+        "cookies": [
+            {
+                "name": "session",
+                "value": "abc",
+                "domain": f".{domain}",
+                "path": "/",
+            }
+        ],
+        "origins": [
+            {
+                "origin": f"https://{domain}",
+                "localStorage": [
+                    {"name": "consent", "value": "accepted"},
+                ],
+            }
+        ],
+    }
 
 
 @pytest.mark.asyncio

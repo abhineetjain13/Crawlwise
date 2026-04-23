@@ -162,8 +162,9 @@ class SaaSHRAdapter(BaseAdapter):
         job_id = clean_text(row.get("id"))
         if not title or not job_id:
             return None
+        location_payload_raw = row.get("location")
         location_payload = (
-            row.get("location") if isinstance(row.get("location"), dict) else {}
+            location_payload_raw if isinstance(location_payload_raw, dict) else {}
         )
         location = ", ".join(
             part

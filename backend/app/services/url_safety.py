@@ -5,6 +5,7 @@ import ipaddress
 import socket
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import cast
 from urllib.parse import urlparse
 
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -178,12 +179,24 @@ async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
     for attempt in range(1, attempts + 1):
         for family in families:
             try:
-                records = await asyncio.to_thread(
+                raw_records = await asyncio.to_thread(
                     socket.getaddrinfo,
                     hostname,
                     port,
                     family,
                     socket.SOCK_STREAM,
+                )
+                records = cast(
+                    list[
+                        tuple[
+                            socket.AddressFamily,
+                            socket.SocketKind,
+                            int,
+                            str,
+                            tuple[str, int] | tuple[str, int, int, int],
+                        ]
+                    ],
+                    raw_records,
                 )
                 break
             except socket.gaierror as exc:
@@ -200,6 +213,8 @@ async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
 
     resolved: list[str] = []
     seen: set[str] = set()
+    if records is None:
+        return resolved
     for record in records:
         sockaddr = record[4]
         ip_text = str(sockaddr[0] or "").strip()

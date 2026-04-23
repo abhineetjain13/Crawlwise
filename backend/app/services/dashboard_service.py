@@ -15,6 +15,7 @@ from app.models.crawl import (
     DomainFieldFeedback,
     DomainMemory,
     DomainRunProfile,
+    HostProtectionMemory,
     ReviewPromotion,
 )
 from app.models.llm import LLMCostLog
@@ -148,6 +149,10 @@ async def _reset_domain_memory_db(session: AsyncSession) -> dict:
         "domain_run_profiles_deleted": await _count_rows(session, DomainRunProfile),
         "domain_cookie_memory_deleted": await _count_rows(session, DomainCookieMemory),
         "domain_field_feedback_deleted": await _count_rows(session, DomainFieldFeedback),
+        "host_protection_memory_deleted": await _count_rows(
+            session,
+            HostProtectionMemory,
+        ),
     }
     await _reset_domain_memory_tables(session)
     return counts
@@ -232,6 +237,7 @@ async def _reset_domain_memory_tables(session: AsyncSession) -> None:
     await session.execute(delete(DomainFieldFeedback))
     await session.execute(delete(DomainCookieMemory))
     await session.execute(delete(DomainRunProfile))
+    await session.execute(delete(HostProtectionMemory))
     await session.execute(delete(DomainMemory))
     if dialect_name == "postgresql":
         await _reset_postgres_identities(
@@ -239,6 +245,7 @@ async def _reset_domain_memory_tables(session: AsyncSession) -> None:
             "domain_field_feedback",
             "domain_cookie_memory",
             "domain_run_profiles",
+            "host_protection_memory",
             "domain_memory",
         )
     elif dialect_name == "sqlite":
@@ -256,7 +263,7 @@ async def _reset_domain_memory_tables(session: AsyncSession) -> None:
                     "DELETE FROM sqlite_sequence "
                     "WHERE name IN ("
                     "'domain_field_feedback', 'domain_cookie_memory', "
-                    "'domain_run_profiles', 'domain_memory'"
+                    "'domain_run_profiles', 'host_protection_memory', 'domain_memory'"
                     ")"
                 )
             )

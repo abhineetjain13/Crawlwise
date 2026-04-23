@@ -64,6 +64,14 @@ _MARKDOWN_HIDDEN_FIELDS = frozenset(
 ExportStreamer = Callable[[AsyncSession, int], AsyncIterator[str]]
 
 
+def _object_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _object_dict(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 async def collect_export_rows(
     session: AsyncSession, run_id: int
 ) -> tuple[list[CrawlRecord], dict[str, int | bool]]:
@@ -369,20 +377,19 @@ def artifact_table_rows(row: CrawlRecord) -> list[dict]:
     for table in table_list:
         if not isinstance(table, dict):
             continue
-        headers = table.get("headers") if isinstance(table.get("headers"), list) else []
+        header_cells = table.get("headers")
+        headers = header_cells if isinstance(header_cells, list) else []
         header_labels = [
             str((cell.get("text") if isinstance(cell, dict) else "") or "").strip()
             or f"column_{index + 1}"
             for index, cell in enumerate(headers)
         ]
-        for row_index, table_row in enumerate(table.get("rows") or [], start=1):
+        table_rows = _object_list(table.get("rows"))
+        for row_index, table_row in enumerate(table_rows, start=1):
             if not isinstance(table_row, dict):
                 continue
-            cells = (
-                table_row.get("cells")
-                if isinstance(table_row.get("cells"), list)
-                else []
-            )
+            table_cells = table_row.get("cells")
+            cells = table_cells if isinstance(table_cells, list) else []
             payload: dict[str, object] = {
                 "record_id": row.id,
                 "source_url": row.source_url,
@@ -409,12 +416,10 @@ def artifact_table_rows(row: CrawlRecord) -> list[dict]:
 def record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
     raw_data = _record_markdown_source(row)
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
-    manifest_trace = (
-        source_trace.get("manifest_trace")
-        if isinstance(source_trace.get("manifest_trace"), dict)
-        else {}
-    )
+    manifest_trace = _object_dict(source_trace.get("manifest_trace"))
     cleaned = clean_export_data(raw_data)
+    json_ld_rows = _object_list(manifest_trace.get("json_ld"))
+    table_rows = _object_list(manifest_trace.get("tables"))
     page_summary = {
         "record_id": row.id,
         "source_url": row.source_url,
@@ -426,12 +431,8 @@ def record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
         or None,
     }
     evidence_refs = {
-        "json_ld_count": len(manifest_trace.get("json_ld") or [])
-        if isinstance(manifest_trace.get("json_ld"), list)
-        else 0,
-        "table_count": len(manifest_trace.get("tables") or [])
-        if isinstance(manifest_trace.get("tables"), list)
-        else 0,
+        "json_ld_count": len(json_ld_rows),
+        "table_count": len(table_rows),
     }
     return {
         "record_id": row.id,
@@ -465,19 +466,9 @@ def record_to_markdown(row: CrawlRecord) -> str:
     structured_data = row.data if isinstance(row.data, dict) else {}
     data = _sanitize_markdown_export_data(clean_export_data(structured_data))
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
-    semantic = (
-        source_trace.get("semantic")
-        if isinstance(source_trace.get("semantic"), dict)
-        else {}
-    )
-    semantic_sections = (
-        semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
-    )
-    semantic_specs = (
-        semantic.get("specifications")
-        if isinstance(semantic.get("specifications"), dict)
-        else {}
-    )
+    semantic = _object_dict(source_trace.get("semantic"))
+    semantic_sections = _object_dict(semantic.get("sections"))
+    semantic_specs = _object_dict(semantic.get("specifications"))
 
     if str(source_trace.get("type") or "") == "listing_fallback":
         title = (
@@ -602,12 +593,14 @@ def _dedupe_image_values(
     if primary:
         seen.add(primary.lower())
     if isinstance(value, str):
-        candidates = [part for part in value.split(", ") if part.strip()]
+        candidates: list[object] = [
+            part for part in value.split(", ") if part.strip()
+        ]
     else:
         candidates = (
             list(value)
             if isinstance(value, (list, tuple, set))
-            else [value]
+            else [("" if value is None else str(value)).strip()]
         )
     for part in candidates:
         candidate = str(part or "").strip()

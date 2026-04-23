@@ -434,7 +434,12 @@ def _curl_fetch_sync(
 ) -> PageFetchResult:
     from curl_cffi import requests as curl_requests
 
-    impersonate_target = cast(object, crawler_runtime_settings.curl_impersonate_target)
+    raw_impersonate_target = str(
+        ""
+        if crawler_runtime_settings.curl_impersonate_target is None
+        else crawler_runtime_settings.curl_impersonate_target
+    ).strip()
+    impersonate_target = cast(Any, raw_impersonate_target or None)
     response = curl_requests.get(
         url,
         impersonate=impersonate_target,

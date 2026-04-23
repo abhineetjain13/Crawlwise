@@ -612,3 +612,45 @@ class DomainFieldFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class HostProtectionMemory(Base):
+    __tablename__ = "host_protection_memory"
+    __table_args__ = (
+        Index(
+            "uq_host_protection_memory_host",
+            "host",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host: Mapped[str] = mapped_column(String(255), index=True)
+    hard_block_count: Mapped[int] = mapped_column(Integer, default=0)
+    browser_first_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    proxy_required_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_block_vendor: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_block_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_block_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_blocked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_success_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )

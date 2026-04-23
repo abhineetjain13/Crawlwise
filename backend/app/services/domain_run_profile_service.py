@@ -47,6 +47,21 @@ def _coerce_nullable_text(value: object) -> str | None:
     return text or None
 
 
+def _coerce_proxy_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    raw_values = value if isinstance(value, list) else [value]
+    seen: set[str] = set()
+    proxies: list[str] = []
+    for item in raw_values:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        proxies.append(text)
+    return proxies
+
+
 def _coerce_country(value: object) -> str:
     text = str(value or "").strip()
     return text or "auto"
@@ -78,6 +93,7 @@ def normalize_domain_run_profile(
     fetch_profile = dict(payload.get("fetch_profile") or {})
     locality_profile = dict(payload.get("locality_profile") or {})
     diagnostics_profile = dict(payload.get("diagnostics_profile") or {})
+    proxy_profile = dict(payload.get("proxy_profile") or {})
     normalized_saved_at = saved_at or datetime.now(UTC).isoformat()
     normalized_source_run_id = _coerce_int(
         source_run_id,
@@ -148,6 +164,20 @@ def normalize_domain_run_profile(
                 diagnostics_profile.get("capture_browser_diagnostics", True)
             ),
         },
+        "proxy_profile": {
+            "enabled": bool(
+                proxy_profile.get(
+                    "enabled",
+                    payload.get("proxy_enabled", False),
+                )
+            ),
+            "proxy_list": _coerce_proxy_list(
+                proxy_profile.get(
+                    "proxy_list",
+                    payload.get("proxy_list"),
+                )
+            ),
+        },
         "source_run_id": normalized_source_run_id,
         "saved_at": normalized_saved_at,
     }
@@ -216,6 +246,7 @@ async def save_domain_run_profile(
     surface: str,
     profile: object,
     source_run_id: int,
+    commit: bool = False,
 ) -> dict[str, object]:
     normalized_domain = normalize_domain(domain or "")
     normalized_surface = str(surface or "").strip().lower()
@@ -239,5 +270,9 @@ async def save_domain_run_profile(
         session.add(existing)
     else:
         existing.profile = normalized_profile
-    await session.flush()
+    if commit:
+        await session.commit()
+        await session.refresh(existing)
+    else:
+        await session.flush()
     return dict(existing.profile or {})

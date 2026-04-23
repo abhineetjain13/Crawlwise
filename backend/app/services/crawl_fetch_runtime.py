@@ -23,12 +23,18 @@ from app.services.acquisition.browser_runtime import (
     shutdown_browser_runtime,
     temporary_browser_page,
 )
+from app.services.acquisition.host_protection_memory import (
+    load_host_protection_policy,
+    note_host_hard_block,
+    note_host_usable_fetch,
+)
 from app.services.acquisition.cookie_store import clear_cookie_store_cache
 from app.services.acquisition.http_client import (
     close_shared_http_client as close_adapter_shared_http_client,
 )
 from app.services.acquisition.pacing import (
     apply_protected_host_backoff,
+    mark_browser_first_host,
     note_browser_block_for_host,
     note_usable_fetch_for_host,
     reset_pacing_state,
@@ -281,29 +287,29 @@ async def fetch_page(
         fetch_mode=_normalize_fetch_mode(fetch_mode),
         runtime_policy=resolve_platform_runtime_policy(url, surface=surface),
     )
-    host_preference_enabled = await should_prefer_browser_for_host(url)
+    learned_host_policy = await load_host_protection_policy(url)
+    host_preference_enabled = bool(
+        await should_prefer_browser_for_host(url) or learned_host_policy.prefer_browser
+    )
     browser_first = _browser_first_decision(
         context=context,
         prefer_browser=prefer_browser,
         host_preference_enabled=host_preference_enabled,
     )
     if browser_first:
-        browser_attempt_kwargs = {
-            "reason": _resolve_browser_reason(
-                browser_reason=browser_reason,
-                requires_browser=bool(context.runtime_policy.get("requires_browser")),
-                traversal_required=context.traversal_required,
-                host_preference_enabled=host_preference_enabled,
-            ),
-            "requested_fields": context.requested_fields,
-            "listing_recovery_mode": context.listing_recovery_mode,
-            "proxies": context.proxies,
-        }
-        if capture_page_markdown:
-            browser_attempt_kwargs["capture_page_markdown"] = True
+        resolved_browser_reason = _resolve_browser_reason(
+            browser_reason=browser_reason,
+            requires_browser=bool(context.runtime_policy.get("requires_browser")),
+            traversal_required=context.traversal_required,
+            host_preference_enabled=host_preference_enabled,
+        )
         browser_result = await _run_browser_attempts(
             context,
-            **browser_attempt_kwargs,
+            reason=resolved_browser_reason,
+            requested_fields=context.requested_fields,
+            listing_recovery_mode=context.listing_recovery_mode,
+            capture_page_markdown=bool(capture_page_markdown),
+            proxies=context.proxies,
         )
         await _update_host_result_memory(
             context,
@@ -323,17 +329,13 @@ async def fetch_page(
             type(context.last_error).__name__,
         )
         try:
-            browser_attempt_kwargs = {
-                "reason": browser_reason or "http-escalation",
-                "requested_fields": context.requested_fields,
-                "listing_recovery_mode": context.listing_recovery_mode,
-                "proxies": context.proxies,
-            }
-            if capture_page_markdown:
-                browser_attempt_kwargs["capture_page_markdown"] = True
             return await _run_browser_attempts(
                 context,
-                **browser_attempt_kwargs,
+                reason=browser_reason or "http-escalation",
+                requested_fields=context.requested_fields,
+                listing_recovery_mode=context.listing_recovery_mode,
+                capture_page_markdown=bool(capture_page_markdown),
+                proxies=context.proxies,
             )
         except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
             _attach_exception_browser_diagnostics(
@@ -354,7 +356,7 @@ def _resolve_proxy_attempts(proxy_list: list[str] | None) -> list[str | None]:
         }
         if value
     ]
-    return proxies or [None]
+    return [*proxies] if proxies else [None]
 
 
 def _normalize_fetch_mode(value: object) -> str:
@@ -530,7 +532,7 @@ async def _run_http_fetcher_attempts(
     max_attempts = max(1, int(crawler_runtime_settings.http_max_retries) + 1)
     for attempt in range(1, max_attempts + 1):
         result = await _attempt_http_fetch(context, fetcher=fetcher, proxy=proxy, attempt=attempt, max_attempts=max_attempts)
-        if result is _HTTP_ATTEMPT_FAILED:
+        if not isinstance(result, PageFetchResult):
             if attempt < max_attempts:
                 continue
             break
@@ -543,7 +545,9 @@ async def _run_http_fetcher_attempts(
         )
         if handled_result is _RETRY_SENTINEL:
             continue
-        return handled_result, vendor_block_confirmed
+        if isinstance(handled_result, PageFetchResult):
+            return handled_result, vendor_block_confirmed
+        return None, vendor_block_confirmed
     return None, False
 
 
@@ -603,6 +607,7 @@ async def _handle_http_result(
         await apply_protected_host_backoff(result.final_url or result.url or context.url)
     if vendor:
         await note_browser_block_for_host(result.final_url or result.url or context.url)
+        await mark_browser_first_host(result.final_url or result.url or context.url)
     result_runtime_policy = resolve_platform_runtime_policy(
         result.final_url or result.url,
         result.html,
@@ -613,6 +618,13 @@ async def _handle_http_result(
         surface=context.surface,
         runtime_policy=result_runtime_policy,
     )
+    if should_browser_escalate and (vendor or bool(result.blocked)):
+        await note_host_hard_block(
+            result.final_url or result.url or context.url,
+            method=result.method,
+            vendor=vendor,
+            status_code=result.status_code,
+        )
     if (
         _retryable_status_for_http_fetch(result.status_code)
         and not vendor
@@ -702,8 +714,15 @@ async def _update_host_result_memory(
     if bool(result.blocked):
         await apply_protected_host_backoff(target_url)
         await note_browser_block_for_host(target_url)
+        await note_host_hard_block(
+            target_url,
+            method=result.method,
+            vendor=_vendor_confirmed_block(result),
+            status_code=result.status_code,
+        )
         return
     await note_usable_fetch_for_host(target_url)
+    await note_host_usable_fetch(target_url)
 
 
 def _retryable_status_for_http_fetch(status_code: int) -> bool:

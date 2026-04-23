@@ -26,6 +26,7 @@ from app.services.normalizers import normalize_record_fields
 
 PRODUCT_URL_HINTS = detail_path_hints("ecommerce_detail")
 JOB_URL_HINTS = detail_path_hints("job_detail")
+_FIELD_ALIASES = FIELD_ALIASES if isinstance(FIELD_ALIASES, dict) else {}
 _CURRENCY_SYMBOL_PATTERN = "|".join(
     re.escape(str(symbol))
     for symbol in sorted(
@@ -360,7 +361,7 @@ def surface_alias_lookup(
             lookup[normalized_canonical] = canonical
         canonical_aliases = list(aliases.get(canonical, []))
         if not canonical_aliases:
-            canonical_aliases = list(FIELD_ALIASES.get(canonical, []))
+            canonical_aliases = list(_FIELD_ALIASES.get(canonical, []))
         for alias in canonical_aliases:
             normalized_alias = normalize_field_key(alias)
             if normalized_alias:

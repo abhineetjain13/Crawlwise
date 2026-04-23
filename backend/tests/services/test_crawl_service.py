@@ -17,6 +17,7 @@ from app.services.crawl_crud import (
     delete_run,
 )
 from app.services.domain_run_profile_service import (
+    load_domain_run_profile,
     normalize_domain_run_profile,
     save_domain_run_profile,
 )
@@ -162,6 +163,10 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
                 "capture_response_headers": True,
                 "capture_browser_diagnostics": True,
             },
+            "proxy_profile": {
+                "enabled": True,
+                "proxy_list": ["http://proxy-a", "http://proxy-b"],
+            },
         },
         source_run_id=91,
     )
@@ -187,6 +192,12 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
     assert run.settings["fetch_profile"]["request_delay_ms"] == 900
     assert run.settings["locality_profile"]["geo_country"] == "IN"
     assert run.settings["diagnostics_profile"]["capture_network"] == "matched_only"
+    assert run.settings["proxy_enabled"] is True
+    assert run.settings["proxy_list"] == ["http://proxy-a", "http://proxy-b"]
+    assert run.settings["proxy_profile"] == {
+        "enabled": True,
+        "proxy_list": ["http://proxy-a", "http://proxy-b"],
+    }
 
 
 @pytest.mark.asyncio
@@ -242,6 +253,56 @@ async def test_save_domain_run_profile_propagates_programming_error_from_profile
             profile={},
             source_run_id=91,
         )
+
+
+@pytest.mark.asyncio
+async def test_save_domain_run_profile_commit_persists_changes(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit_calls = 0
+    refresh_calls = 0
+
+    original_commit = db_session.commit
+    original_refresh = db_session.refresh
+
+    async def _tracked_commit() -> None:
+        nonlocal commit_calls
+        commit_calls += 1
+        await original_commit()
+
+    async def _tracked_refresh(instance, *args, **kwargs) -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        await original_refresh(instance, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "commit", _tracked_commit)
+    monkeypatch.setattr(db_session, "refresh", _tracked_refresh)
+
+    saved = await save_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        profile={
+            "fetch_profile": {
+                "fetch_mode": "browser_only",
+            }
+        },
+        source_run_id=91,
+        commit=True,
+    )
+
+    assert saved["fetch_profile"]["fetch_mode"] == "browser_only"
+    assert commit_calls == 1
+    assert refresh_calls == 1
+
+    loaded = await load_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+    )
+    assert loaded is not None
+    assert dict(loaded.profile or {})["fetch_profile"]["fetch_mode"] == "browser_only"
 
 
 @pytest.mark.asyncio

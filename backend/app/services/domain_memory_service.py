@@ -132,7 +132,7 @@ def selector_payload_from_rules(rules: list[dict[str, object]]) -> dict[str, obj
         if not isinstance(row, dict):
             continue
         normalized_row = _normalized_selector_rule(row)
-        row_id = int(normalized_row.get("id") or 0)
+        row_id = _safe_int(normalized_row.get("id"), default=0) or 0
         max_id = max(max_id, row_id)
         normalized_rules.append(normalized_row)
     return {

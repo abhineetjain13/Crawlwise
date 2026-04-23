@@ -19,6 +19,7 @@ _ALL_CANONICAL_FIELDS = frozenset(
 HTML_SECTION_FIELDS = frozenset(
     {"responsibilities", "qualifications", "benefits", "skills"}
 )
+_FIELD_ALIASES = FIELD_ALIASES if isinstance(FIELD_ALIASES, dict) else {}
 
 
 def canonical_fields_for_surface(surface: str) -> list[str]:
@@ -43,7 +44,7 @@ def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
     allowed = frozenset(canonical_fields_for_surface(normalized))
     aliases = {
         canonical: list(values)
-        for canonical, values in FIELD_ALIASES.items()
+        for canonical, values in _FIELD_ALIASES.items()
         if canonical in allowed
     }
     if normalized in {"automobile_listing", "automobile_detail"}:
@@ -126,20 +127,20 @@ def _dedupe_aliases(*groups: object) -> list[str]:
 
 
 _REQUESTED_FIELD_ALIAS_BASES = {
-    "responsibilities": FIELD_ALIASES["responsibilities"],
-    "qualifications": FIELD_ALIASES["qualifications"],
-    "benefits": FIELD_ALIASES["benefits"],
-    "skills": FIELD_ALIASES["skills"],
-    "summary": FIELD_ALIASES["summary"],
-    "specifications": FIELD_ALIASES["specifications"],
-    "product_details": FIELD_ALIASES["product_details"],
-    "features": FIELD_ALIASES["features"],
-    "materials": FIELD_ALIASES["materials"],
-    "material": FIELD_ALIASES["materials"],
-    "care": FIELD_ALIASES["care"],
-    "dimensions": FIELD_ALIASES["dimensions"],
-    "remote": FIELD_ALIASES["remote"],
-    "requirements": FIELD_ALIASES["requirements"],
+    "responsibilities": _FIELD_ALIASES.get("responsibilities", []),
+    "qualifications": _FIELD_ALIASES.get("qualifications", []),
+    "benefits": _FIELD_ALIASES.get("benefits", []),
+    "skills": _FIELD_ALIASES.get("skills", []),
+    "summary": _FIELD_ALIASES.get("summary", []),
+    "specifications": _FIELD_ALIASES.get("specifications", []),
+    "product_details": _FIELD_ALIASES.get("product_details", []),
+    "features": _FIELD_ALIASES.get("features", []),
+    "materials": _FIELD_ALIASES.get("materials", []),
+    "material": _FIELD_ALIASES.get("materials", []),
+    "care": _FIELD_ALIASES.get("care", []),
+    "dimensions": _FIELD_ALIASES.get("dimensions", []),
+    "remote": _FIELD_ALIASES.get("remote", []),
+    "requirements": _FIELD_ALIASES.get("requirements", []),
     "country_of_origin": [
         "country of origin",
         "country_of_origin",
@@ -150,7 +151,7 @@ _REQUESTED_FIELD_ALIAS_BASES = {
         "importer_info",
         "importer name and address",
     ],
-    "color_variants": FIELD_ALIASES["color_variants"],
+    "color_variants": _FIELD_ALIASES.get("color_variants", []),
 }
 _REQUESTED_FIELD_ALIAS_EXTRAS = {
     "responsibilities": (

@@ -185,7 +185,8 @@ async def _call_anthropic(
         for part in content
         if isinstance(part, dict)
     ).strip()
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    usage_payload = data.get("usage")
+    usage: dict[str, Any] = usage_payload if isinstance(usage_payload, dict) else {}
     return (
         text,
         int(usage.get("input_tokens", 0) or 0),
@@ -247,13 +248,13 @@ def _extract_chat_completion_payload(data: dict[str, Any]) -> tuple[str, int, in
     if not isinstance(choices, list) or not choices:
         return f"{ERROR_PREFIX} Unexpected chat completion response", 0, 0
     first_choice = choices[0] if isinstance(choices[0], dict) else {}
-    message = (
-        first_choice.get("message")
-        if isinstance(first_choice.get("message"), dict)
-        else {}
+    message_payload = first_choice.get("message")
+    message: dict[str, Any] = (
+        message_payload if isinstance(message_payload, dict) else {}
     )
     text = str(message.get("content") or "").strip()
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    usage_payload = data.get("usage")
+    usage: dict[str, Any] = usage_payload if isinstance(usage_payload, dict) else {}
     return (
         text,
         int(usage.get("prompt_tokens", 0) or 0),

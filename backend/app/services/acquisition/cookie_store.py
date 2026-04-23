@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from app.core.database import SessionLocal
@@ -213,16 +213,21 @@ async def list_domain_cookie_memory(
     if normalized_domain:
         statement = statement.where(DomainCookieMemory.domain == normalized_domain)
     rows = list((await session.execute(statement)).scalars().all())
-    return [
-        {
-            "id": row.id,
-            "domain": row.domain,
-            "cookie_count": len(_normalize_storage_state(row.storage_state).get("cookies") or []),
-            "origin_count": len(_normalize_storage_state(row.storage_state).get("origins") or []),
-            "updated_at": row.updated_at,
-        }
-        for row in rows
-    ]
+    payload: list[dict[str, object]] = []
+    for row in rows:
+        normalized_state = _normalize_storage_state(row.storage_state)
+        cookie_rows = _object_list(normalized_state.get("cookies"))
+        origin_rows = _object_list(normalized_state.get("origins"))
+        payload.append(
+            {
+                "id": row.id,
+                "domain": row.domain,
+                "cookie_count": len(cookie_rows),
+                "origin_count": len(origin_rows),
+                "updated_at": row.updated_at,
+            }
+        )
+    return payload
 
 
 def _normalized_run_id(run_id: int | None) -> int | None:
@@ -274,22 +279,29 @@ def _normalize_storage_state(storage_state: Mapping[str, object]) -> dict[str, o
     }
 
 
+def _object_list(value: object) -> list[object]:
+    if value is None or isinstance(value, (str, bytes, bytearray, Mapping)):
+        return []
+    if not isinstance(value, Iterable):
+        return []
+    return list(value)
+
+
 def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
-    if list(storage_state.get("cookies") or []):
+    if _object_list(storage_state.get("cookies")):
         return True
-    return any(
-        list(origin.get("localStorage") or [])
-        for origin in list(storage_state.get("origins") or [])
-        if isinstance(origin, Mapping)
-    )
+    for origin in _object_list(storage_state.get("origins")):
+        if not isinstance(origin, Mapping):
+            continue
+        if _object_list(origin.get("localStorage")):
+            return True
+    return False
 
 
 def _normalize_cookies(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        return []
     now = time.time()
     cookies: list[dict[str, object]] = []
-    for item in value:
+    for item in _object_list(value):
         if not isinstance(item, Mapping):
             continue
         cookie: dict[str, object] = {}
@@ -311,17 +323,15 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
 
 
 def _normalize_origins(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        return []
     origins: list[dict[str, object]] = []
-    for item in value:
+    for item in _object_list(value):
         if not isinstance(item, Mapping):
             continue
         origin = str(item.get("origin") or "").strip()
         if not origin:
             continue
         local_storage_rows: list[dict[str, str]] = []
-        for entry in item.get("localStorage") or []:
+        for entry in _object_list(item.get("localStorage")):
             if not isinstance(entry, Mapping):
                 continue
             name = str(entry.get("name") or "").strip()
@@ -361,8 +371,10 @@ def _clone_storage_state(
 ) -> dict[str, object] | None:
     if storage_state is None:
         return None
+    cookies = _object_list(storage_state.get("cookies"))
+    origins = _object_list(storage_state.get("origins"))
     return {
-        "cookies": [dict(cookie) for cookie in list(storage_state.get("cookies") or [])],
+        "cookies": [dict(cookie) for cookie in cookies if isinstance(cookie, Mapping)],
         "origins": [
             {
                 "origin": str(origin.get("origin") or ""),
@@ -371,11 +383,11 @@ def _clone_storage_state(
                         "name": str(entry.get("name") or ""),
                         "value": str(entry.get("value") or ""),
                     }
-                    for entry in list(origin.get("localStorage") or [])
+                    for entry in _object_list(origin.get("localStorage"))
                     if isinstance(entry, Mapping)
                 ],
             }
-            for origin in list(storage_state.get("origins") or [])
+            for origin in origins
             if isinstance(origin, Mapping)
         ],
     }

@@ -61,38 +61,36 @@ def _snapshot_to_resolved(
     saved_at = str(payload.get("saved_at") or "").strip() or None
     saved_at_dt = _parse_saved_at(saved_at)
     stale = bool(saved_at_dt and datetime.now(UTC) - saved_at_dt > _SCHEMA_MAX_AGE)
+    stored_fields_raw = payload.get("fields")
+    stored_fields_list = stored_fields_raw if isinstance(stored_fields_raw, list) else []
     stored_fields = _dedupe_fields(
         field
-        for field in (
-            payload.get("fields") if isinstance(payload.get("fields"), list) else []
-        )
+        for field in stored_fields_list
         if field_allowed_for_surface(surface, field)
+    )
+    baseline_fields_raw = payload.get("baseline_fields")
+    baseline_fields_list = (
+        baseline_fields_raw if isinstance(baseline_fields_raw, list) else baseline_fields
     )
     baseline = _dedupe_fields(
         field
-        for field in (
-            payload.get("baseline_fields")
-            if isinstance(payload.get("baseline_fields"), list)
-            else baseline_fields
-        )
+        for field in baseline_fields_list
         if field_allowed_for_surface(surface, field)
     )
+    new_fields_raw = payload.get("new_fields")
+    new_fields_list = new_fields_raw if isinstance(new_fields_raw, list) else []
     new_fields = _dedupe_fields(
         field
-        for field in (
-            payload.get("new_fields")
-            if isinstance(payload.get("new_fields"), list)
-            else []
-        )
+        for field in new_fields_list
         if field_allowed_for_surface(surface, field)
+    )
+    deprecated_fields_raw = payload.get("deprecated_fields")
+    deprecated_fields_list = (
+        deprecated_fields_raw if isinstance(deprecated_fields_raw, list) else []
     )
     deprecated_fields = _dedupe_fields(
         field
-        for field in (
-            payload.get("deprecated_fields")
-            if isinstance(payload.get("deprecated_fields"), list)
-            else []
-        )
+        for field in deprecated_fields_list
         if field_allowed_for_surface(surface, field)
     )
     fields = _dedupe_fields(

@@ -1580,6 +1580,34 @@ def test_extract_records_keeps_job_listing_slug_records_with_numeric_terminal_id
     assert rows[1]["url"] == "https://startup.jobs/founding-engineer-with-equity-miru-technology-inc-7933051"
 
 
+def test_extract_records_rejects_numeric_non_job_links_on_careers_hosts() -> None:
+    html = """
+    <html>
+      <body>
+        <article>
+          <a href="https://www.clarkassociatesinc.biz/public-relations/2025-ceo-letter/">
+            2025 CEO Letter
+          </a>
+        </article>
+        <article>
+          <a href="https://www.clarkassociatesinc.biz/companies/11400/">
+            WebstaurantStore
+          </a>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://careers.clarkassociatesinc.biz/",
+        "job_listing",
+        max_records=10,
+    )
+
+    assert rows == []
+
+
 def test_extract_records_ignores_single_page_level_product_payload_on_listing_pages() -> None:
     html = """
     <html>

@@ -193,7 +193,7 @@ def image_candidate_score(url: str) -> tuple[int, int, int, int]:
 
 
 def dedupe_image_urls(urls: list[str]) -> list[str]:
-    best_by_key: dict[str, tuple[tuple[int, int, int], int, str]] = {}
+    best_by_key: dict[str, tuple[tuple[int, int, int, int], int, str]] = {}
     order: list[str] = []
     for index, url in enumerate(urls):
         lowered = str(url or "").strip().lower()
@@ -476,16 +476,21 @@ def extract_xpath_values(
         logger.warning("Failed to evaluate xpath selector for %s: %s", field_name, xpath)
         return []
     values: list[object] = []
+    limited_matches: list[object]
     if isinstance(matches, list):
-        limited_matches = matches[:12]
+        limited_matches = [*matches[:12]]
+    elif isinstance(matches, (str, bytes, bool, float)):
+        limited_matches = [matches]
     else:
         try:
             limited_matches = list(matches)[:12]
         except TypeError:
             limited_matches = [matches]
     for match in limited_matches:
-        if hasattr(match, "text_content"):
+        if isinstance(match, lxml_html.HtmlElement):
             raw_value = match.text_content()
+        elif isinstance(match, etree._Element):
+            raw_value = " ".join(str(part) for part in match.itertext())
         else:
             raw_value = str(match)
         value = coerce_field_value(field_name, raw_value, page_url)

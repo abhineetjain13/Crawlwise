@@ -80,6 +80,14 @@ _PROMINENT_TITLE_TAGS = {"strong", "b", "h1", "h2", "h3", "h4", "h5", "h6"}
 _REVIEW_TITLE_RE = re.compile(r"^\s*\d[\d,\s]*\s+reviews?\s*$", re.I)
 
 
+def _path_segment_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[\-\.]+", str(value or "").strip().lower())
+        if token
+    }
+
+
 def _structured_listing_record(
     payload: dict[str, Any],
     page_url: str,
@@ -158,14 +166,7 @@ def _url_is_structural(url: str, page_url: str) -> bool:
             for segment in parsed.path.split("/")
             if segment.strip()
         ]
-        tokenized_segments = [
-            {
-                token
-                for token in re.split(r"[\-\.]+", segment)
-                if token
-            }
-            for segment in raw_segments
-        ]
+        tokenized_segments = [_path_segment_tokens(segment) for segment in raw_segments]
         terminal_tokens = tokenized_segments[-1] if tokenized_segments else set()
         if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
             return True
@@ -400,8 +401,49 @@ def _record_has_supporting_listing_signals(record: dict[str, Any], *, surface: s
 
 
 def _job_listing_url_looks_like_posting(url: str) -> bool:
-    terminal = (urlsplit(url).path or "").rstrip("/").rsplit("/", 1)[-1]
-    return bool(re.search(r"\d{4,}", terminal))
+    parsed = urlsplit(url.lower())
+    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
+    if not segments:
+        return False
+    terminal = segments[-1]
+    leading_tokens = [_path_segment_tokens(segment) for segment in segments[:-1]]
+    if any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens):
+        return False
+    terminal_tokens = _path_segment_tokens(terminal)
+    if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
+        return False
+    if re.fullmatch(r"(?:19|20)\d{2}", terminal):
+        return False
+    if not re.search(r"\d{4,}", terminal):
+        return False
+    if any(
+        marker in parsed.path
+        for marker in (
+            "/job/",
+            "/jobs/",
+            "/opening/",
+            "/openings/",
+            "/position/",
+            "/positions/",
+            "/posting/",
+            "/postings/",
+            "/career/",
+            "/careers/",
+            "/requisition/",
+            "/requisitions/",
+            "/role/",
+            "/roles/",
+            "/vacancy/",
+            "/vacancies/",
+        )
+    ):
+        return True
+    terminal_words = [
+        token
+        for token in re.split(r"[^a-z0-9]+", terminal)
+        if len(token) >= 3 and not token.isdigit()
+    ]
+    return len(terminal_words) >= 2
 
 
 def _job_listing_title_is_hub(title: str) -> bool:

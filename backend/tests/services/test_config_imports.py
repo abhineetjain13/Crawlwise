@@ -106,6 +106,28 @@ def test_crawl_run_settings_preserves_advanced_mode_storage_contract() -> None:
     assert normalized["fetch_profile"]["traversal_mode"] == "load_more"
 
 
+def test_crawl_run_settings_preserves_extra_proxy_profile_fields() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "proxy_profile": {
+                "enabled": True,
+                "proxy_list": ["http://proxy-1"],
+                "rotation": "sticky",
+                "region": "in",
+            }
+        }
+    )
+
+    normalized = settings.normalized_for_storage()
+
+    assert normalized["proxy_profile"] == {
+        "enabled": True,
+        "proxy_list": ["http://proxy-1"],
+        "rotation": "sticky",
+        "region": "in",
+    }
+
+
 def test_platform_runtime_policy_does_not_force_browser_for_vendor_specific_domains() -> None:
     policy = resolve_platform_runtime_policy("https://www.autozone.com/")
 

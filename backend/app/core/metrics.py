@@ -1,21 +1,17 @@
 from __future__ import annotations
 
+import importlib
+from types import ModuleType
+
 try:
-    from prometheus_client import (
-        CONTENT_TYPE_LATEST,
-        CollectorRegistry,
-        Counter,
-        Gauge,
-        Histogram,
-        generate_latest,
-    )
+    _prometheus_client: ModuleType | None = importlib.import_module("prometheus_client")
 except ImportError:  # pragma: no cover - optional dependency fallback
+    _prometheus_client = None
+
+if _prometheus_client is not None:
+    CONTENT_TYPE_LATEST = _prometheus_client.CONTENT_TYPE_LATEST
+else:
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
-    CollectorRegistry = None
-    Counter = None
-    Gauge = None
-    Histogram = None
-    generate_latest = None
 from sqlalchemy import func, select, text
 
 from app.core.database import SessionLocal, engine
@@ -41,72 +37,72 @@ class _NoopMetric:
         return None
 
 
-_registry = CollectorRegistry() if CollectorRegistry is not None else None
+_registry = _prometheus_client.CollectorRegistry() if _prometheus_client is not None else None
 
 crawl_runs_total = (
-    Gauge(
+    _prometheus_client.Gauge(
         "crawl_runs_total",
         "Crawl runs grouped by status.",
         labelnames=("status",),
         registry=_registry,
     )
-    if Gauge is not None
+    if _prometheus_client is not None
     else _NoopMetric()
 )
 browser_pool_size = (
-    Gauge(
+    _prometheus_client.Gauge(
         "browser_pool_size",
         "Current pooled browser count.",
         registry=_registry,
     )
-    if Gauge is not None
+    if _prometheus_client is not None
     else _NoopMetric()
 )
 database_connections_active = (
-    Gauge(
+    _prometheus_client.Gauge(
         "database_connections_active",
         "Currently checked-out database connections.",
         registry=_registry,
     )
-    if Gauge is not None
+    if _prometheus_client is not None
     else _NoopMetric()
 )
 redis_failures_total_metric = (
-    Gauge(
+    _prometheus_client.Gauge(
         "redis_failures_total",
         "Redis fail-open incidents.",
         registry=_registry,
     )
-    if Gauge is not None
+    if _prometheus_client is not None
     else _NoopMetric()
 )
 acquisition_duration_seconds = (
-    Histogram(
+    _prometheus_client.Histogram(
         "acquisition_duration_seconds",
         "Acquisition duration in seconds.",
         registry=_registry,
     )
-    if Histogram is not None
+    if _prometheus_client is not None
     else _NoopMetric()
 )
 llm_task_duration_seconds = (
-    Histogram(
+    _prometheus_client.Histogram(
         "llm_task_duration_seconds",
         "LLM task duration in seconds.",
         labelnames=("task_type", "provider", "outcome"),
         registry=_registry,
     )
-    if Histogram is not None
+    if _prometheus_client is not None
     else _NoopMetric()
 )
 llm_task_outcomes_total = (
-    Counter(
+    _prometheus_client.Counter(
         "llm_task_outcomes_total",
         "LLM task outcomes grouped by task, provider, and error category.",
         labelnames=("task_type", "provider", "outcome", "error_category"),
         registry=_registry,
     )
-    if Counter is not None
+    if _prometheus_client is not None
     else _NoopMetric()
 )
 
@@ -178,7 +174,7 @@ def check_browser_pool() -> bool:
 
 
 async def render_prometheus_metrics() -> tuple[bytes, str]:
-    if _registry is None or generate_latest is None:
+    if _registry is None or _prometheus_client is None:
         lines = [
             f"browser_pool_size {int(browser_runtime_snapshot()['size'])}",
             f"database_connections_active {_database_connections_checked_out()}",
@@ -199,4 +195,4 @@ async def render_prometheus_metrics() -> tuple[bytes, str]:
     browser_pool_size.set(int(browser_runtime_snapshot()["size"]))
     database_connections_active.set(_database_connections_checked_out())
     redis_failures_total_metric.set(redis_failure_total())
-    return generate_latest(_registry), CONTENT_TYPE_LATEST
+    return _prometheus_client.generate_latest(_registry), CONTENT_TYPE_LATEST

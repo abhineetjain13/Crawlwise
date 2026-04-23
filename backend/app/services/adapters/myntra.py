@@ -26,6 +26,10 @@ from app.services.js_state_helpers import (
 from app.services.structured_sources import harvest_js_state_objects
 
 
+def _dict_or_empty(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 class MyntraAdapter(BaseAdapter):
     name = "myntra"
     platform_family = "myntra"
@@ -56,6 +60,8 @@ def _extract_detail_record(page_url: str, html: str) -> dict[str, Any] | None:
     if not isinstance(myx, dict):
         return None
     product = myx.get("pdpData")
+    if not isinstance(product, dict):
+        return None
     if not looks_like_myx_product_payload(product):
         return None
     mapped = map_myx_product_payload(product, page_url=page_url)
@@ -280,8 +286,8 @@ def _myx_price(product: dict[str, Any], *, price_key: str) -> str | None:
             value = selected_seller.get("discountedPrice")
             if value not in (None, "", [], {}):
                 return normalize_price(value, interpret_integral_as_cents=False)
-    price_payload = product.get("price") if isinstance(product.get("price"), dict) else {}
-    common_price = product.get("commonPrice") if isinstance(product.get("commonPrice"), dict) else {}
+    price_payload = _dict_or_empty(product.get("price"))
+    common_price = _dict_or_empty(product.get("commonPrice"))
     value = (
         price_payload.get("discounted")
         if price_key == "discountedPrice"
@@ -333,8 +339,8 @@ def _myx_variants(
     for item in list(product.get("sizes") or []):
         if not isinstance(item, dict):
             continue
-        seller = item.get("selectedSeller") if isinstance(item.get("selectedSeller"), dict) else {}
-        discount = seller.get("discount") if isinstance(seller.get("discount"), dict) else {}
+        seller = _dict_or_empty(item.get("selectedSeller"))
+        discount = _dict_or_empty(seller.get("discount"))
         row = compact_dict(
             {
                 "variant_id": text_or_none(item.get("skuId")),

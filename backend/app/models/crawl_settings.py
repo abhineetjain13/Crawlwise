@@ -61,12 +61,27 @@ class CrawlRunSettings:
         ]
 
     def proxy_list(self) -> list[str]:
+        stored_profile = _mapping(self.data.get("proxy_profile"))
+        raw_value = (
+            stored_profile.get("proxy_list")
+            if "proxy_list" in stored_profile
+            else self.data.get("proxy_list")
+        )
         values = []
-        for value in _coerce_sequence(self.data.get("proxy_list")):
+        for value in _coerce_sequence(raw_value):
             text = str(value or "").strip()
             if text:
                 values.append(text)
         return values
+
+    def proxy_profile(self) -> dict[str, object]:
+        stored = _mapping(self.data.get("proxy_profile"))
+        profile: dict[str, object] = dict(stored)
+        profile["enabled"] = bool(
+            stored.get("enabled", self.data.get("proxy_enabled", False))
+        )
+        profile["proxy_list"] = self.proxy_list()
+        return profile
 
     def traversal_mode(self) -> str | None:
         return resolve_traversal_mode(self.data)
@@ -273,6 +288,9 @@ class CrawlRunSettings:
         normalized["sleep_ms"] = self.sleep_ms()
         normalized["request_delay_ms"] = self.sleep_ms()
         normalized["traversal_mode"] = self.traversal_mode()
+        normalized["proxy_enabled"] = bool(self.proxy_profile()["enabled"])
+        normalized["proxy_list"] = self.proxy_list()
+        normalized["proxy_profile"] = self.proxy_profile()
         if self.advanced_enabled():
             normalized["advanced_mode"] = self.get("advanced_mode")
         elif "advanced_mode" in normalized:

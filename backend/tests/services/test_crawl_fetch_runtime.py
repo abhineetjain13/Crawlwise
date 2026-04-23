@@ -15,6 +15,7 @@ from app.services.acquisition import (
     browser_identity,
     runtime as acquisition_runtime,
 )
+from app.services.acquisition.host_protection_memory import HostProtectionPolicy
 from app.services.acquisition.browser_runtime import (
     classify_network_endpoint,
     read_network_payload_body,
@@ -204,6 +205,40 @@ async def test_curl_fetch_uses_runtime_owned_default_request_headers(
     assert "Accept-Language" in captured_headers
     assert captured_headers["Upgrade-Insecure-Requests"] == "1"
     assert "sec-ch-ua" in captured_headers
+
+
+@pytest.mark.asyncio
+async def test_curl_fetch_coerces_blank_impersonate_target_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_impersonate: list[object] = []
+    original_impersonate_target = crawler_runtime_settings.curl_impersonate_target
+
+    def _fake_get(url: str, **kwargs):
+        del url
+        captured_impersonate.append(kwargs.get("impersonate"))
+        return SimpleNamespace(
+            text="<html><body>ok</body></html>",
+            headers={"content-type": "text/html"},
+            status_code=200,
+            url="https://example.com/products/widget",
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "curl_cffi",
+        SimpleNamespace(requests=SimpleNamespace(get=_fake_get)),
+    )
+    crawler_runtime_settings.curl_impersonate_target = "   "
+    try:
+        await acquisition_runtime.curl_fetch(
+            "https://example.com/products/widget",
+            5.0,
+        )
+    finally:
+        crawler_runtime_settings.curl_impersonate_target = original_impersonate_target
+
+    assert captured_impersonate == [None]
 
 
 @pytest.mark.asyncio
@@ -445,6 +480,52 @@ async def test_fetch_page_http_then_browser_escalates_after_http_result(
         "https://example.com/products/widget",
         surface="ecommerce_detail",
         fetch_mode="http_then_browser",
+    )
+
+    assert result.method == "browser"
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_prefers_browser_from_learned_host_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unexpected_curl(url: str, timeout_seconds: float, *, proxy: str | None = None):
+        raise AssertionError(f"http should be skipped for learned browser-first host: {url} {timeout_seconds} {proxy}")
+
+    async def _fake_load_policy(url: str, *, session=None):
+        del session
+        return HostProtectionPolicy(host="example.com", prefer_browser=True)
+
+    async def _fake_should_prefer_browser_for_host(url: str) -> bool:
+        del url
+        return False
+
+    async def _fake_browser(url, timeout, **kwargs):
+        del timeout, kwargs
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body>browser</body></html>",
+            status_code=200,
+            method="browser",
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _unexpected_curl)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        _fake_load_policy,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "should_prefer_browser_for_host",
+        _fake_should_prefer_browser_for_host,
+    )
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
 
     assert result.method == "browser"
@@ -1124,7 +1205,7 @@ async def test_fetch_page_requires_a_timeout_source(
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_does_not_stick_host_preference_after_usable_browser_recovery(
+async def test_fetch_page_learns_browser_first_after_vendor_blocked_http_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await crawl_fetch_runtime.reset_fetch_runtime_state()
@@ -1172,8 +1253,8 @@ async def test_fetch_page_does_not_stick_host_preference_after_usable_browser_re
 
     assert first.method == "browser"
     assert second.method == "browser"
-    assert curl_calls == [url, url]
-    assert browser_reasons == ["vendor-block:datadome", "vendor-block:datadome"]
+    assert curl_calls == [url]
+    assert browser_reasons == ["vendor-block:datadome", "host-preference"]
 
 
 @pytest.mark.asyncio

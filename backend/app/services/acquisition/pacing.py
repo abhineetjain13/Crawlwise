@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from urllib.parse import urlsplit
 
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.domain_utils import normalize_host
 
 _HOST_NEXT_ALLOWED_AT: dict[str, float] = {}
 _HOST_BROWSER_FIRST_UNTIL: dict[str, float] = {}
@@ -13,13 +13,7 @@ _HOST_PACING_LOCK = asyncio.Lock()
 
 
 def _normalized_host(value: str) -> str:
-    text = str(value or "").strip().lower()
-    if not text:
-        return ""
-    if "://" in text:
-        split = urlsplit(text)
-        return str(split.netloc or split.hostname or "").strip().lower()
-    return text
+    return normalize_host(value)
 
 
 async def wait_for_host_slot(_url: str) -> None:
@@ -101,7 +95,7 @@ async def note_usable_fetch_for_host(_url: str) -> None:
     now = time.monotonic()
     async with _HOST_PACING_LOCK:
         _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
-        if _HOST_BROWSER_FIRST_UNTIL.get(host, 0.0) > now and host in _HOST_BROWSER_FIRST_STRIKES:
+        if _HOST_BROWSER_FIRST_UNTIL.get(host, 0.0) > now:
             return
         _HOST_BROWSER_FIRST_UNTIL.pop(host, None)
         _HOST_BROWSER_FIRST_STRIKES.pop(host, None)

@@ -112,7 +112,7 @@ def stock_quantity(value: dict[str, Any] | None) -> int | None:
         if raw in (None, "", [], {}):
             continue
         try:
-            return int(raw)
+            return int(str(raw).strip())
         except (TypeError, ValueError):
             continue
     return None

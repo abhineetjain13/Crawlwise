@@ -133,6 +133,10 @@ function defaultRunProfile(): DomainRunProfile {
  currency_hint: null,
  },
  diagnostics_profile: { ...DIAGNOSTICS_PRESETS.standard },
+ proxy_profile: {
+ enabled: false,
+ proxy_list: [],
+ },
  source_run_id: null,
  saved_at: null,
  };
@@ -156,6 +160,13 @@ function cloneRunProfile(profile: DomainRunProfile | null | undefined): DomainRu
  diagnostics_profile: {
  ...base.diagnostics_profile,
  ...(profile.diagnostics_profile ?? {}),
+ },
+ proxy_profile: {
+ ...base.proxy_profile,
+ ...(profile.proxy_profile ?? {}),
+ proxy_list: Array.isArray(profile.proxy_profile?.proxy_list)
+ ? [...profile.proxy_profile.proxy_list]
+ : [],
  },
  source_run_id: profile.source_run_id ?? null,
  saved_at: profile.saved_at ?? null,
@@ -194,6 +205,22 @@ function isSingleUrlMode(crawlTab: CrawlTab, mode: CategoryMode | PdpMode) {
  (crawlTab === "category" && mode === "single") ||
  (crawlTab === "pdp" && mode === "single")
  );
+}
+
+function normalizeHttpLookupDomain(rawUrl: string) {
+ const candidate = rawUrl.trim();
+ if (!candidate) {
+ return "";
+ }
+ try {
+ const parsed = new URL(candidate);
+ if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+ return "";
+ }
+ return parsed.hostname.replace(/^www\./, "").toLowerCase();
+ } catch {
+ return "";
+ }
 }
 
 function surfaceLabel(surface: string) {
@@ -239,7 +266,6 @@ export function CrawlConfigScreen({
  const [savedProfileDomain, setSavedProfileDomain] = useState("");
  const [savedProfileLoaded, setSavedProfileLoaded] = useState(false);
  const [savedProfileMessage, setSavedProfileMessage] = useState("");
- const [loadingSavedProfile, setLoadingSavedProfile] = useState(false);
  const [additionalDraft, setAdditionalDraft] = useState("");
  const [additionalFields, setAdditionalFields] = useState<string[]>([]);
  const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
@@ -254,6 +280,7 @@ export function CrawlConfigScreen({
  const bulkPrefillRouteSyncGuardRef = useRef(false);
  const profileLookupRequestRef = useRef(0);
  const domainMemoryLookupRequestRef = useRef(0);
+ const profileLookupTargetUrlRef = useRef("");
  const profileDirtyRef = useRef(false);
  const lastProfileKeyRef = useRef("");
  const lastDomainMemoryKeyRef = useRef("");
@@ -261,7 +288,7 @@ export function CrawlConfigScreen({
  const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
  const surface = deriveSurface(crawlDomain, crawlTab);
  const singleUrlMode = isSingleUrlMode(crawlTab, activeMode);
- const normalizedTargetDomain = getNormalizedDomain(targetUrl.trim());
+ const normalizedTargetDomain = normalizeHttpLookupDomain(targetUrl);
  const profileLookupKey =
  singleUrlMode && normalizedTargetDomain && surface
  ? `${normalizedTargetDomain}|${surface}`
@@ -271,6 +298,10 @@ export function CrawlConfigScreen({
  ? `${normalizedTargetDomain}|${surface}`
  : "";
  const diagnosticsPreset = diagnosticsPresetForProfile(runProfile);
+
+ useEffect(() => {
+ profileLookupTargetUrlRef.current = profileLookupKey ? targetUrl.trim() : "";
+ }, [profileLookupKey, targetUrl]);
 
  useEffect(() => {
  if (bulkPrefillRouteSyncGuardRef.current) {
@@ -337,11 +368,12 @@ export function CrawlConfigScreen({
  profileDirtyRef.current = false;
  lastProfileKeyRef.current = profileLookupKey;
  if (!profileLookupKey) {
- setLoadingSavedProfile(false);
  setSavedProfileLoaded(false);
  setSavedProfileDomain("");
  setSavedProfileMessage("");
  setRunProfile(defaultRunProfile());
+ setProxyEnabled(false);
+ setProxyInput("");
  return;
  }
  }
@@ -351,10 +383,9 @@ export function CrawlConfigScreen({
  const requestId = profileLookupRequestRef.current + 1;
  profileLookupRequestRef.current = requestId;
  const timer = window.setTimeout(async () => {
- setLoadingSavedProfile(true);
  try {
  const response = await api.getDomainRunProfile({
- url: targetUrl.trim(),
+ url: profileLookupTargetUrlRef.current,
  surface,
  });
  if (profileLookupRequestRef.current !== requestId) {
@@ -364,6 +395,8 @@ export function CrawlConfigScreen({
  setSavedProfileDomain(response.domain);
  if (savedProfile && !profileDirtyRef.current) {
  setRunProfile(cloneRunProfile(savedProfile));
+ setProxyEnabled(Boolean(savedProfile.proxy_profile?.enabled));
+ setProxyInput((savedProfile.proxy_profile?.proxy_list ?? []).join("\n"));
  setSavedProfileLoaded(true);
  setSavedProfileMessage(
  `Saved domain profile applied for ${response.domain} on ${surfaceLabel(response.surface)}. Explicit edits below override it for this run.`,
@@ -377,6 +410,8 @@ export function CrawlConfigScreen({
  );
  if (!savedProfile && !profileDirtyRef.current) {
  setRunProfile(defaultRunProfile());
+ setProxyEnabled(false);
+ setProxyInput("");
  }
  }
  } catch {
@@ -385,14 +420,10 @@ export function CrawlConfigScreen({
  setSavedProfileDomain("");
  setSavedProfileMessage("");
  }
- } finally {
- if (profileLookupRequestRef.current === requestId) {
- setLoadingSavedProfile(false);
- }
  }
  }, UI_DELAYS.DEBOUNCE_MS);
  return () => window.clearTimeout(timer);
- }, [profileLookupKey, surface, targetUrl]);
+ }, [profileLookupKey, surface]);
 
  useEffect(() => {
  if (lastDomainMemoryKeyRef.current !== domainMemoryLookupKey) {
@@ -854,14 +885,13 @@ export function CrawlConfigScreen({
  </label>
  )}
 
- {loadingSavedProfile ? (
- <p className="text-sm leading-[1.5] text-secondary">Checking for a saved domain profile…</p>
- ) : null}
+ <div className="min-h-[1.5rem]">
  {savedProfileMessage ? (
  <div className="rounded-[var(--radius-md)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-2 text-sm leading-[1.5] text-secondary">
  {savedProfileMessage}
  </div>
  ) : null}
+ </div>
 
  <AdditionalFieldInput
  value={additionalDraft}
@@ -1197,13 +1227,19 @@ export function CrawlConfigScreen({
  description="Use a proxy pool for this run."
  icon={<Globe className="size-4" />}
  checked={proxyEnabled}
- onChange={setProxyEnabled}
+ onChange={(next) => {
+ profileDirtyRef.current = true;
+ setProxyEnabled(next);
+ }}
  >
  <div className="space-y-2">
  <div className="field-label">Proxy Pool</div>
  <Textarea
  value={proxyInput}
- onChange={(event) => setProxyInput(event.target.value)}
+ onChange={(event) => {
+ profileDirtyRef.current = true;
+ setProxyInput(event.target.value);
+ }}
  placeholder={"host:port\nhost:port:user:pass"}
  className="min-h-[104px] text-mono-body leading-[1.55]"
  aria-label="Proxy pool input"
@@ -1566,6 +1602,10 @@ export function buildDispatch(
  respect_robots_txt: config.respect_robots_txt,
  proxy_enabled: config.proxy_enabled,
  proxy_list: config.proxy_enabled ? config.proxy_lines : [],
+ proxy_profile: {
+ enabled: config.proxy_enabled,
+ proxy_list: config.proxy_enabled ? config.proxy_lines : [],
+ },
  additional_fields: additionalFields,
  crawl_module: config.module,
  crawl_mode: config.mode,

@@ -19,7 +19,7 @@ import {
  StatusDot,
  TabBar,
 } from"../ui/patterns";
-import { Badge, Button, Card, Dropdown, Field, Input, Toggle, Tooltip } from"../ui/primitives";
+import { Badge, Button, Card, Dropdown, Field, Input, Textarea, Toggle, Tooltip } from"../ui/primitives";
 import { api } from"../../lib/api";
 import { getApiWebSocketBaseUrl } from"../../lib/api/client";
 import type { CrawlLog, CrawlRecord, CrawlRun, DomainRunProfile, ResultSummaryQualityLevel } from"../../lib/api/types";
@@ -88,6 +88,10 @@ function defaultDomainRunProfile(): DomainRunProfile {
  capture_response_headers: true,
  capture_browser_diagnostics: true,
  },
+ proxy_profile: {
+ enabled: false,
+ proxy_list: [],
+ },
  source_run_id: null,
  saved_at: null,
  };
@@ -111,6 +115,13 @@ function cloneDomainRunProfile(profile: DomainRunProfile | null | undefined): Do
  diagnostics_profile: {
  ...base.diagnostics_profile,
  ...(profile.diagnostics_profile ?? {}),
+ },
+ proxy_profile: {
+ ...base.proxy_profile,
+ ...(profile.proxy_profile ?? {}),
+ proxy_list: Array.isArray(profile.proxy_profile?.proxy_list)
+ ? [...profile.proxy_profile.proxy_list]
+ : [],
  },
  source_run_id: profile.source_run_id ?? null,
  saved_at: profile.saved_at ?? null,
@@ -1350,6 +1361,42 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  { value: "matched_only", label: "Matched Only" },
  { value: "all_small_json", label: "All Small JSON" },
  ]}
+ />
+ </Field>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Proxy Enabled</span>
+ <Toggle
+ checked={recipeProfile.proxy_profile.enabled}
+ ariaLabel="Proxy Enabled"
+ onChange={(checked) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ proxy_profile: {
+ ...current.proxy_profile,
+ enabled: checked,
+ },
+ }))
+ }
+ />
+ </div>
+ <Field label="Proxy Pool">
+ <Textarea
+ aria-label="Proxy Pool"
+ value={recipeProfile.proxy_profile.proxy_list.join("\n")}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ proxy_profile: {
+ ...current.proxy_profile,
+ proxy_list: event.target.value
+ .split(/\r?\n/)
+ .map((value) => value.trim())
+ .filter(Boolean),
+ },
+ }))
+ }
+ placeholder={"host:port\nhost:port:user:pass"}
+ className="min-h-[104px] text-mono-body leading-[1.55]"
  />
  </Field>
  <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
