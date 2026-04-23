@@ -20,7 +20,7 @@
 
 | File | Purpose |
 |------|---------|
-| `crawls.py` | Create runs, CSV ingestion, pause/resume/kill, commit fields/LLM, logs, websocket |
+| `crawls.py` | Create runs, CSV ingestion, pause/resume/kill, commit fields/LLM, logs, websocket, domain-recipe/profile routes |
 | `records.py` | List records, JSON/CSV/MD/artifact/discoverist exports, provenance |
 | `review.py` | Review payload, artifact HTML, save approved mapping |
 | `selectors.py` | Selector CRUD, suggest, test, preview-html |
@@ -48,6 +48,7 @@
 | `CrawlRecord` | `crawl.py` | id, run_id, source_url, data JSONB, raw_data JSONB, source_trace JSONB |
 | `CrawlLog` | `crawl.py` | id, run_id, level, message |
 | `DomainMemory` | `crawl.py` | domain, surface, selectors JSONB — scoped by `(domain, surface)` |
+| `DomainRunProfile` | `crawl.py` | domain, surface, profile JSONB — reusable execution profile scoped by `(domain, surface)` |
 | `ReviewPromotion` | `crawl.py` | run_id, domain, surface, approved_schema JSONB |
 | `LLMConfig` | `llm.py` | provider, model, task_type, api_key_encrypted, budgets |
 | `LLMCostLog` | `llm.py` | provider, run_id, input_tokens, cost_usd |
@@ -65,6 +66,7 @@
 | `crawl_ingestion_service.py` | Validates + normalizes `CrawlCreate` payload, stamps run snapshots |
 | `crawl_service.py` | `dispatch_run()` — Celery vs local asyncio decision point |
 | `crawl_crud.py` | DB operations: `create_crawl_run()`, status transitions |
+| `domain_run_profile_service.py` | Domain run-profile load/save + profile normalization for reusable execution defaults |
 | `crawl_events.py` | WebSocket log emission |
 | `_batch_runtime.py` | URL processing loop, progress state, pause/kill signal checks |
 | `tasks.py` | Celery task entry: `process_run_async()` → `_run_task_in_worker_loop()` |
@@ -195,14 +197,12 @@ POST /api/crawls → crawl_ingestion_service → crawl_crud.create_crawl_run
 |------|---------|
 | `app/` | Next.js App Router pages: `/login`, `/dashboard`, `/crawl`, `/runs/[run_id]`, `/selectors`, `/selectors/manage`, `/admin/*` |
 | `components/layout/` | App shell, auth session, nav, theme |
-| `components/crawl/crawl-config-screen.tsx` | Crawl configuration + dispatch |
-| `components/crawl/crawl-run-screen.tsx` | Run workspace, record display, pause/kill/export |
+| `components/crawl/crawl-config-screen.tsx` | Crawl Studio form, including Quick/Advanced mode, saved domain-profile auto-load, manual selector editing, and dispatch |
+| `components/crawl/crawl-run-screen.tsx` | Run workspace, record display, pause/kill/export, and completed-run Domain Recipe promotion/profile workflow |
 | `components/crawl/use-run-polling.ts` | Run state polling |
 | `lib/api/client.ts` | Auth-aware fetch wrapper |
 | `lib/api/index.ts` | **ALL** backend HTTP calls live here — the only API access layer |
 | `lib/api/types.ts` | All frontend-facing types — update here when backend contracts change |
-
-**Known drift:** `previewSelectors()` in `index.ts` calls `/api/review/{id}/selector-preview` which does not exist in the backend.
 
 ---
 

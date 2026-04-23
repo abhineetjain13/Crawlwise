@@ -184,8 +184,74 @@ export type SelectorRecord = {
  updated_at: string;
 };
 
-export type ReviewSelectorPreview = {
- records: CrawlRecord[];
+export type DomainRunProfile = {
+ version: number;
+ fetch_profile: {
+ fetch_mode: "auto"|"http_only"|"browser_only"|"http_then_browser";
+ extraction_source: "raw_html"|"rendered_dom"|"rendered_dom_visual"|"network_payload_first";
+ js_mode: "auto"|"enabled"|"disabled";
+ include_iframes: boolean;
+ traversal_mode: "auto"|"scroll"|"load_more"|"view_all"|"paginate";
+ request_delay_ms: number;
+ max_pages: number;
+ max_scrolls: number;
+ };
+ locality_profile: {
+ geo_country: string;
+ language_hint: string | null;
+ currency_hint: string | null;
+ };
+ diagnostics_profile: {
+ capture_html: boolean;
+ capture_screenshot: boolean;
+ capture_network: "off"|"matched_only"|"all_small_json";
+ capture_response_headers: boolean;
+ capture_browser_diagnostics: boolean;
+ };
+ source_run_id?: number | null;
+ saved_at?: string | null;
+};
+
+export type DomainRecipeSelectorCandidate = {
+ candidate_key: string;
+ field_name: string;
+ selector_kind: string;
+ selector_value: string;
+ selector_source: string;
+ sample_value?: string | null;
+ source_record_ids: number[];
+ source_run_id?: number | null;
+ saved_selector_id?: number | null;
+ already_saved: boolean;
+ final_field_source?: string | null;
+};
+
+export type DomainRecipe = {
+ run_id: number;
+ domain: string;
+ surface: string;
+ requested_field_coverage: {
+ requested: string[];
+ found: string[];
+ missing: string[];
+ };
+ selector_candidates: DomainRecipeSelectorCandidate[];
+ affordance_candidates: {
+ accordions: string[];
+ tabs: string[];
+ carousels: string[];
+ shadow_hosts: string[];
+ iframe_promotion: string | null;
+ browser_required: boolean;
+ };
+ saved_selectors: SelectorRecord[];
+ saved_run_profile: DomainRunProfile | null;
+};
+
+export type DomainRunProfileLookup = {
+ domain: string;
+ surface: string;
+ saved_run_profile: DomainRunProfile | null;
 };
 
 export type FieldCommitPayload = {
@@ -309,12 +375,7 @@ export type CrawlConfig = {
  bulk_urls: string;
  csv_file: File | null;
  smart_extraction: boolean;
- advanced_enabled: boolean;
- advanced_mode: AdvancedCrawlMode;
- request_delay_ms: number;
  max_records: number;
- max_pages: number;
- max_scrolls: number;
  respect_robots_txt: boolean;
  proxy_enabled: boolean;
  proxy_lines: string[];

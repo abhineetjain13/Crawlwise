@@ -82,6 +82,140 @@ async def test_process_run_uses_domain_memory_selector_rules(
 
 
 @pytest.mark.asyncio
+async def test_process_run_applies_exact_and_generic_saved_rules_and_run_local_override(
+    db_session,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await save_domain_memory(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        selectors={
+            "rules": [
+                {
+                    "id": 1,
+                    "field_name": "title",
+                    "css_selector": ".saved-title",
+                    "sample_value": "Saved Selector Widget",
+                    "source": "domain_memory",
+                    "status": "validated",
+                    "is_active": True,
+                    "source_run_id": 77,
+                },
+                {
+                    "id": 2,
+                    "field_name": "price",
+                    "css_selector": ".saved-price",
+                    "sample_value": "$99.99",
+                    "source": "domain_memory",
+                    "status": "validated",
+                    "is_active": True,
+                    "source_run_id": 77,
+                },
+            ]
+        },
+    )
+    await save_domain_memory(
+        db_session,
+        domain="example.com",
+        surface="generic",
+        selectors={
+            "rules": [
+                {
+                    "id": 3,
+                    "field_name": "brand",
+                    "css_selector": ".generic-brand",
+                    "sample_value": "Generic Brand Co.",
+                    "source": "domain_memory",
+                    "status": "validated",
+                    "is_active": True,
+                    "source_run_id": 88,
+                }
+            ]
+        },
+    )
+    await db_session.commit()
+
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/runtime-selector-widget",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "extraction_contract": [
+                    {
+                        "field_name": "price",
+                        "css_selector": ".run-price",
+                    }
+                ]
+            },
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="""
+            <html>
+              <body>
+                <div class="saved-title">Saved Selector Widget</div>
+                <div class="saved-price">$99.99</div>
+                <div class="run-price">$19.99</div>
+                <div class="generic-brand">Generic Brand Co.</div>
+              </body>
+            </html>
+            """,
+            method="test",
+            status_code=200,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+
+    await process_run(db_session, run.id)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert total == 1
+    record = rows[0]
+    assert record.data["title"] == "Saved Selector Widget"
+    assert record.data["price"] == "19.99"
+    assert record.data["brand"] == "Generic Brand Co."
+    assert record.source_trace["field_discovery"]["title"]["selector_trace"] == {
+        "selector_kind": "css_selector",
+        "selector_value": ".saved-title",
+        "selector_source": "domain_memory",
+        "selector_record_id": 1,
+        "source_run_id": 77,
+        "sample_value": "Saved Selector Widget",
+        "page_url": "https://example.com/products/runtime-selector-widget",
+        "survived_to_final_record": True,
+    }
+    assert record.source_trace["field_discovery"]["price"]["selector_trace"] == {
+        "selector_kind": "css_selector",
+        "selector_value": ".run-price",
+        "selector_source": "run_config",
+        "selector_record_id": 0,
+        "source_run_id": None,
+        "sample_value": "$19.99",
+        "page_url": "https://example.com/products/runtime-selector-widget",
+        "survived_to_final_record": True,
+    }
+    assert record.source_trace["field_discovery"]["brand"]["selector_trace"] == {
+        "selector_kind": "css_selector",
+        "selector_value": ".generic-brand",
+        "selector_source": "domain_memory",
+        "selector_record_id": 3,
+        "source_run_id": 88,
+        "sample_value": "Generic Brand Co.",
+        "page_url": "https://example.com/products/runtime-selector-widget",
+        "survived_to_final_record": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_process_run_self_heals_selectors_and_reuses_domain_memory_without_second_llm_call(
     db_session,
     test_user,

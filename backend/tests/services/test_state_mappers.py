@@ -416,6 +416,76 @@ def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_varian
     }
 
 
+def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_payload() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__PRELOADED_STATE__": {
+                "appBanner": {
+                    "name": "UNIQLO - LifeWear",
+                    "title": "UNIQLO - LifeWear",
+                    "description": "Shop on our app for the best experience",
+                    "buttonText": "Open app",
+                    "buttonLink": "/app",
+                    "appIcon": "https://cdn.example.com/assets/app-icon.png",
+                },
+                "entity": {
+                    "pdpEntity": {
+                        "E474244-000-01": {
+                            "product": {
+                                "name": "AIRism Cotton Crew Neck T-Shirt",
+                                "productId": "E474244-000",
+                                "productType": "innerwear",
+                                "prices": {
+                                    "base": {"currency": {"code": "INR"}, "value": 990},
+                                    "promo": {"currency": {"code": "INR"}, "value": 390},
+                                },
+                                "colors": [
+                                    {"name": "OLIVE"},
+                                    {"name": "BLACK"},
+                                ],
+                                "sizes": [
+                                    {"name": "S"},
+                                    {"name": "M"},
+                                    {"name": "L"},
+                                ],
+                                "images": {
+                                    "main": {
+                                        "57": {
+                                            "image": "https://cdn.example.com/products/airism-olive-main.jpg"
+                                        }
+                                    },
+                                    "sub": [
+                                        {
+                                            "image": "https://cdn.example.com/products/airism-detail-1.jpg"
+                                        },
+                                        {
+                                            "image": "https://cdn.example.com/products/airism-detail-2.jpg"
+                                        },
+                                    ],
+                                },
+                            }
+                        }
+                    }
+                },
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.uniqlo.com/in/en/products/E474244-000/01",
+    )
+
+    assert mapped["title"] == "AIRism Cotton Crew Neck T-Shirt"
+    assert mapped["product_id"] == "E474244-000"
+    assert mapped["product_type"] == "innerwear"
+    assert mapped["price"] == "390"
+    assert mapped["original_price"] == "990"
+    assert mapped["currency"] == "INR"
+    assert mapped["image_url"] == "https://cdn.example.com/products/airism-olive-main.jpg"
+    assert mapped["additional_images"] == [
+        "https://cdn.example.com/products/airism-detail-1.jpg",
+        "https://cdn.example.com/products/airism-detail-2.jpg",
+    ]
+
+
 def test_map_js_state_to_fields_recovers_direct_grade_and_storage_axes_from_variants() -> None:
     mapped = map_js_state_to_fields(
         {

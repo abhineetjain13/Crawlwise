@@ -16,6 +16,7 @@ from app.services.crawl_crud import (
     create_crawl_run,
     delete_run,
 )
+from app.services.domain_run_profile_service import save_domain_run_profile
 from app.services.crawl_state import get_control_request, update_run_status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,6 +124,65 @@ async def test_create_crawl_run_preserves_exact_custom_additional_field_labels(
 
     assert run.requested_fields == ["Features & Benefits", "Product Story"]
     assert run.settings["requested_fields"] == ["Features & Benefits", "Product Story"]
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    await save_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        profile={
+            "fetch_profile": {
+                "fetch_mode": "http_then_browser",
+                "extraction_source": "rendered_dom",
+                "js_mode": "enabled",
+                "include_iframes": False,
+                "traversal_mode": "paginate",
+                "request_delay_ms": 1200,
+                "max_pages": 8,
+                "max_scrolls": 12,
+            },
+            "locality_profile": {
+                "geo_country": "IN",
+                "language_hint": "en-IN",
+                "currency_hint": "INR",
+            },
+            "diagnostics_profile": {
+                "capture_html": True,
+                "capture_screenshot": False,
+                "capture_network": "matched_only",
+                "capture_response_headers": True,
+                "capture_browser_diagnostics": True,
+            },
+        },
+        source_run_id=91,
+    )
+    await db_session.commit()
+
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/product/widget",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "fetch_profile": {
+                    "request_delay_ms": 900,
+                }
+            },
+        },
+    )
+
+    assert run.settings["fetch_profile"]["fetch_mode"] == "http_then_browser"
+    assert run.settings["fetch_profile"]["traversal_mode"] == "paginate"
+    assert run.settings["fetch_profile"]["request_delay_ms"] == 900
+    assert run.settings["locality_profile"]["geo_country"] == "IN"
+    assert run.settings["diagnostics_profile"]["capture_network"] == "matched_only"
 
 
 @pytest.mark.asyncio

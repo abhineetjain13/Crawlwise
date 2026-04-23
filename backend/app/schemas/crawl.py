@@ -114,6 +114,102 @@ class FieldCommitResponse(BaseModel):
     updated_fields: int
 
 
+class DomainRecipeRequestedCoverage(BaseModel):
+    requested: list[str] = Field(default_factory=list)
+    found: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+
+
+class DomainRecipeSelectorCandidate(BaseModel):
+    candidate_key: str
+    field_name: str
+    selector_kind: str
+    selector_value: str
+    selector_source: str
+    sample_value: str | None = None
+    source_record_ids: list[int] = Field(default_factory=list)
+    source_run_id: int | None = None
+    saved_selector_id: int | None = None
+    already_saved: bool = False
+    final_field_source: str | None = None
+
+
+class DomainRecipeAffordanceCandidates(BaseModel):
+    accordions: list[str] = Field(default_factory=list)
+    tabs: list[str] = Field(default_factory=list)
+    carousels: list[str] = Field(default_factory=list)
+    shadow_hosts: list[str] = Field(default_factory=list)
+    iframe_promotion: str | None = None
+    browser_required: bool = False
+
+
+class DomainRunFetchProfile(BaseModel):
+    fetch_mode: str = "auto"
+    extraction_source: str = "raw_html"
+    js_mode: str = "auto"
+    include_iframes: bool = False
+    traversal_mode: str = "auto"
+    request_delay_ms: int = 100
+    max_pages: int = 5
+    max_scrolls: int = 8
+
+
+class DomainRunLocalityProfile(BaseModel):
+    geo_country: str = "auto"
+    language_hint: str | None = None
+    currency_hint: str | None = None
+
+
+class DomainRunDiagnosticsProfile(BaseModel):
+    capture_html: bool = True
+    capture_screenshot: bool = False
+    capture_network: str = "off"
+    capture_response_headers: bool = True
+    capture_browser_diagnostics: bool = True
+
+
+class DomainRunProfilePayload(BaseModel):
+    version: int = 1
+    fetch_profile: DomainRunFetchProfile = Field(default_factory=DomainRunFetchProfile)
+    locality_profile: DomainRunLocalityProfile = Field(default_factory=DomainRunLocalityProfile)
+    diagnostics_profile: DomainRunDiagnosticsProfile = Field(default_factory=DomainRunDiagnosticsProfile)
+    source_run_id: int | None = None
+    saved_at: str | None = None
+
+
+class DomainRecipeResponse(BaseModel):
+    run_id: int
+    domain: str
+    surface: str
+    requested_field_coverage: DomainRecipeRequestedCoverage
+    selector_candidates: list[DomainRecipeSelectorCandidate] = Field(default_factory=list)
+    affordance_candidates: DomainRecipeAffordanceCandidates = Field(default_factory=DomainRecipeAffordanceCandidates)
+    saved_selectors: list[dict[str, object]] = Field(default_factory=list)
+    saved_run_profile: DomainRunProfilePayload | None = None
+
+
+class DomainRunProfileLookupResponse(BaseModel):
+    domain: str
+    surface: str
+    saved_run_profile: DomainRunProfilePayload | None = None
+
+
+class DomainRecipeSelectorPromotionItem(BaseModel):
+    candidate_key: str
+    field_name: str
+    selector_kind: str
+    selector_value: str
+    sample_value: str | None = None
+
+
+class DomainRecipePromoteSelectorsRequest(BaseModel):
+    selectors: list[DomainRecipeSelectorPromotionItem] = Field(default_factory=list)
+
+
+class DomainRecipeSaveRunProfileRequest(BaseModel):
+    profile: DomainRunProfilePayload
+
+
 class LLMCommitItem(FieldCommitItem):
     pass
 

@@ -66,8 +66,9 @@ _MUTATION_SETTLE_SCRIPT = """
 """
 
 
-async def get_page_html(page) -> str:
-    await flatten_shadow_dom(page)
+async def get_page_html(page, *, flatten_shadow: bool = True) -> str:
+    if flatten_shadow:
+        await flatten_shadow_dom(page)
     return await page.content()
 
 

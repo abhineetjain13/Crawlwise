@@ -14,7 +14,10 @@ from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
 from app.services.acquisition.browser_runtime import build_failed_browser_diagnostics
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
-from app.services.domain_memory_service import load_domain_selector_rules
+from app.services.domain_memory_service import (
+    compose_runtime_selector_rules,
+    load_domain_selector_rules,
+)
 from app.services.db_utils import mapping_or_empty
 from app.services.domain_utils import normalize_domain
 from app.services.confidence import score_record_confidence
@@ -373,7 +376,7 @@ def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionReq
         requested_fields=list(context.requested_fields),
         requested_field_selectors={},
         acquisition_profile=acquisition_profile,
-        on_event=_build_live_acquisition_logger(context),
+        on_event=None,
     )
 
 async def _run_acquisition_stage(
@@ -834,26 +837,15 @@ async def _load_selector_rules(
     context: _URLProcessingContext,
     page_url: str,
 ) -> list[dict[str, object]]:
-    return [
-        *await load_domain_selector_rules(
+    saved_rules = await load_domain_selector_rules(
             context.session,
             domain=normalize_domain(page_url),
             surface=context.surface,
-        ),
-        *[
-            {
-                "field_name": row.get("field_name"),
-                "css_selector": row.get("css_selector"),
-                "xpath": row.get("xpath"),
-                "regex": row.get("regex"),
-                "source": "run_config",
-                "status": "validated",
-                "is_active": True,
-            }
-            for row in context.run.settings_view.extraction_contract()
-            if isinstance(row, dict)
-        ],
-    ]
+        )
+    return compose_runtime_selector_rules(
+        saved_rules,
+        context.run.settings_view.extraction_contract(),
+    )
 
 async def _run_persistence_stage(
     context: _URLProcessingContext,
@@ -1061,12 +1053,3 @@ async def _persist_failure_state(
         update_run_status(run, CrawlStatus.FAILED)
     await session.commit()
 
-def _build_live_acquisition_logger(context: _URLProcessingContext):
-    if not context.config.persist_logs:
-        return None
-
-    async def _on_event(level: str, message: str) -> None:
-        await log_event(context.session, context.run.id, level, message)
-        await context.session.commit()
-
-    return _on_event

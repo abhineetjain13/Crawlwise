@@ -167,7 +167,9 @@ async def execute_listing_traversal(
     result = TraversalResult(requested_mode=normalized_mode)
     if not should_run_traversal(surface, normalized_mode):
         _set_stop_reason(result, "not_listing_or_disabled", surface=surface, traversal_mode=normalized_mode)
-        result.html_fragments = [(await get_page_html(page), True)]
+        result.html_fragments = [
+            (await get_page_html(page, flatten_shadow=False), True)
+        ]
         return result
 
     selected_mode: str | None = normalized_mode
@@ -184,7 +186,9 @@ async def execute_listing_traversal(
                 result.selected_mode = selected_mode
                 _set_stop_reason(result, "no_mode_detected", surface=surface, traversal_mode=normalized_mode)
                 result.card_count = (await _page_snapshot(page, surface=surface))["card_count"]
-                result.html_fragments = [(await get_page_html(page), True)]
+                result.html_fragments = [
+                    (await get_page_html(page, flatten_shadow=False), True)
+                ]
                 return result
         result.selected_mode = selected_mode
     else:
@@ -227,7 +231,9 @@ async def execute_listing_traversal(
         _set_stop_reason(result, "unsupported_mode", surface=surface, traversal_mode=normalized_mode)
 
     if not result.html_fragments:
-        result.html_fragments = [(await get_page_html(page), True)]
+        result.html_fragments = [
+            (await get_page_html(page, flatten_shadow=False), True)
+        ]
     return result
 
 
@@ -544,6 +550,13 @@ async def _run_paginate_traversal(
             else:
                 marginal_gain_streak = 0
             previous = current
+            if _paginate_fragment_budget_reached(result):
+                _set_stop_reason(
+                    result,
+                    "paginate_fragment_budget_reached",
+                    surface=surface,
+                )
+                break
             if marginal_gain_streak > int(crawler_runtime_settings.traversal_weak_progress_streak_max):
                 _set_stop_reason(result, "marginal_paginate_gain", surface=surface)
                 break
@@ -1022,7 +1035,7 @@ async def _append_html_fragment(
     *,
     surface: str,
 ) -> None:
-    html = await get_page_html(page)
+    html = await get_page_html(page, flatten_shadow=False)
     if not html:
         return
     fragment = _bounded_traversal_fragment_html(
@@ -1154,7 +1167,7 @@ async def _looks_like_next_page_control(locator) -> bool:
 
 
 async def _page_matches_block_challenge(page) -> bool:
-    html = await get_page_html(page)
+    html = await get_page_html(page, flatten_shadow=False)
     if not html:
         return False
     classification = await classify_blocked_page_async(html, 200)
@@ -1470,7 +1483,7 @@ async def _card_count(page, *, surface: str) -> int:
 
 
 async def _heuristic_card_count(page, *, surface: str) -> int:
-    html = await get_page_html(page)
+    html = await get_page_html(page, flatten_shadow=False)
     if not html:
         return 0
     parser = LexborHTMLParser(html)
@@ -1600,6 +1613,16 @@ def _is_marginal_card_gain(*, card_gain: int, best_gain: int, current_count: int
     if best_gain < max(2, int(crawler_runtime_settings.listing_min_items) * 2):
         return False
     return card_gain <= max(1, best_gain // 5)
+
+
+def _paginate_fragment_budget_reached(result: TraversalResult) -> bool:
+    if int(result.pages_advanced or 0) < 1:
+        return False
+    fragment_budget = max(
+        8_192,
+        int(crawler_runtime_settings.traversal_fragment_max_bytes),
+    )
+    return result.html_bytes() >= fragment_budget
 
 
 def _content_signature(html: str) -> str:

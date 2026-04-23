@@ -617,6 +617,7 @@ async def serialize_browser_page_content_impl(
     elapsed_ms,
     on_event=None,
 ):
+    should_flatten_shadow = "listing" not in str(surface or "").strip().lower()
     traversal_result = None
     traversal_html = ""
     rendered_html = ""
@@ -654,8 +655,18 @@ async def serialize_browser_page_content_impl(
             timeout_seconds=timeout_seconds,
             on_event=on_event,
         )
-        rendered_html = await get_page_html(page)
         traversal_html = traversal_result.compose_html()
+        should_capture_rendered_html = not (
+            "listing" in str(surface or "").strip().lower()
+            and str(traversal_html or "").strip()
+            and int(getattr(traversal_result, "card_count", 0) or 0)
+            >= max(2, int(crawler_runtime_settings.listing_min_items))
+        )
+        if should_capture_rendered_html:
+            rendered_html = await get_page_html(
+                page,
+                flatten_shadow=should_flatten_shadow,
+            )
         html = _select_primary_browser_html(
             surface=surface,
             traversal_result=traversal_result,
@@ -668,7 +679,10 @@ async def serialize_browser_page_content_impl(
     phase_timings_ms["traversal"] = elapsed_ms(traversal_started_at)
     serialization_started_at = time.perf_counter()
     if traversal_result is None:
-        html = await get_page_html(page)
+        html = await get_page_html(
+            page,
+            flatten_shadow=should_flatten_shadow,
+        )
         rendered_html = html
     phase_timings_ms["content_serialization"] = elapsed_ms(serialization_started_at)
     if capture_page_markdown:
@@ -803,6 +817,11 @@ def _select_primary_browser_html(
         return rendered_html
     if card_count >= max(1, int(listing_min_items)):
         return rendered_html
+    if stop_reason.endswith("_blocked") and traversal_signal_count >= max(
+        2,
+        int(listing_min_items),
+    ):
+        return traversal_html
     if stop_reason.endswith(("_not_found", "_no_progress", "_click_failed", "_blocked")):
         return rendered_html
     return traversal_html

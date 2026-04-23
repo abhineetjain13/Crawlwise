@@ -58,11 +58,14 @@ def refresh_record_commit_metadata(
         sources = list(existing["sources"])
     else:
         sources = [source_label]
-    field_discovery[normalized_field] = {
+    next_payload = {
         "status": "found",
         "value": _stringify_value(value),
         "sources": sources,
     }
+    if isinstance(existing, dict) and isinstance(existing.get("selector_trace"), dict):
+        next_payload["selector_trace"] = dict(existing["selector_trace"])
+    field_discovery[normalized_field] = next_payload
     source_trace["field_discovery"] = field_discovery
 
     requested_fields = canonical_requested_fields(run.requested_fields or [])

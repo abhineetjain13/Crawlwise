@@ -7,11 +7,20 @@ from pathlib import Path
 from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
 from app.services.config.extraction_rules import REVIEW_CONTAINER_KEYS
 from app.services.db_utils import mapping_or_empty
+from app.services.domain_run_profile_service import (
+    load_domain_run_profile,
+    save_domain_run_profile,
+)
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import normalize_field_key, normalize_review_target
 from app.services.normalizers import normalize_value
 from app.services.publish import refresh_record_commit_metadata
 from app.services.schema_service import load_resolved_schema
+from app.services.selectors_runtime import (
+    create_selector_record,
+    list_selector_records,
+    update_selector_record,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -323,3 +332,223 @@ async def _promote_review_bucket_fields(
                 value=data[output_field],
                 source_label="review_promotion",
             )
+
+
+async def build_domain_recipe_payload(
+    session: AsyncSession,
+    *,
+    run: CrawlRun,
+) -> dict[str, object]:
+    records_result = await session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+    )
+    records = list(records_result.scalars().all())
+    domain = normalize_domain(run.url)
+    saved_selectors = await list_selector_records(
+        session,
+        domain=domain,
+        surface=run.surface,
+    )
+    def _selector_signature(
+        *,
+        field_name: object,
+        selector_kind: object,
+        selector_value: object,
+    ) -> tuple[str, str, str]:
+        return (
+            str(field_name or "").strip().lower(),
+            str(selector_kind or "").strip().lower(),
+            str(selector_value or "").strip(),
+        )
+
+    def _saved_selector_signature(row: dict[str, object]) -> tuple[str, str, str]:
+        if row.get("css_selector"):
+            selector_kind = "css_selector"
+            selector_value = row.get("css_selector")
+        elif row.get("xpath"):
+            selector_kind = "xpath"
+            selector_value = row.get("xpath")
+        else:
+            selector_kind = "regex"
+            selector_value = row.get("regex")
+        return _selector_signature(
+            field_name=row.get("field_name"),
+            selector_kind=selector_kind,
+            selector_value=selector_value,
+        )
+
+    saved_selector_index = {
+        _saved_selector_signature(row): row
+        for row in saved_selectors
+    }
+    found_fields = sorted(
+        {
+            str(field_name)
+            for record in records
+            for field_name, value in mapping_or_empty(record.data).items()
+            if value not in (None, "", [], {})
+        }
+    )
+    requested_fields = [str(value) for value in list(run.requested_fields or []) if str(value or "").strip()]
+    selector_candidates: dict[str, dict[str, object]] = {}
+    browser_required = False
+    for record in records:
+        source_trace = mapping_or_empty(record.source_trace)
+        acquisition = mapping_or_empty(source_trace.get("acquisition"))
+        browser_diagnostics = mapping_or_empty(acquisition.get("browser_diagnostics"))
+        if (
+            str(acquisition.get("method") or "").strip().lower() == "browser"
+            and str(browser_diagnostics.get("browser_reason") or "").strip().lower()
+            in {"http-escalation", "vendor-block", "traversal-required", "host-preference"}
+        ):
+            browser_required = True
+        field_discovery = mapping_or_empty(source_trace.get("field_discovery"))
+        for field_name, payload in field_discovery.items():
+            payload_map = payload if isinstance(payload, dict) else {}
+            selector_trace = mapping_or_empty(payload_map.get("selector_trace"))
+            selector_kind = str(selector_trace.get("selector_kind") or "").strip()
+            selector_value = str(selector_trace.get("selector_value") or "").strip()
+            if not selector_kind or not selector_value:
+                continue
+            candidate_key = f"{field_name}|{selector_kind}|{selector_value}"
+            saved_selector = saved_selector_index.get(
+                _selector_signature(
+                    field_name=field_name,
+                    selector_kind=selector_kind,
+                    selector_value=selector_value,
+                )
+            )
+            entry = selector_candidates.setdefault(
+                candidate_key,
+                {
+                    "candidate_key": candidate_key,
+                    "field_name": str(field_name or "").strip().lower(),
+                    "selector_kind": selector_kind,
+                    "selector_value": selector_value,
+                    "selector_source": str(selector_trace.get("selector_source") or ""),
+                    "sample_value": selector_trace.get("sample_value") or payload_map.get("value"),
+                    "source_record_ids": [],
+                    "source_run_id": selector_trace.get("source_run_id") or run.id,
+                    "saved_selector_id": saved_selector.get("id") if isinstance(saved_selector, dict) else None,
+                    "already_saved": isinstance(saved_selector, dict),
+                    "final_field_source": (
+                        list(payload_map.get("sources"))[-1]
+                        if isinstance(payload_map.get("sources"), list) and payload_map.get("sources")
+                        else None
+                    ),
+                },
+            )
+            entry["source_record_ids"] = sorted(
+                {int(value) for value in [*list(entry.get("source_record_ids") or []), record.id]}
+            )
+    saved_profile_record = await load_domain_run_profile(
+        session,
+        domain=domain,
+        surface=run.surface,
+    )
+    return {
+        "run_id": run.id,
+        "domain": domain,
+        "surface": run.surface,
+        "requested_field_coverage": {
+            "requested": requested_fields,
+            "found": [field for field in requested_fields if field in found_fields],
+            "missing": [field for field in requested_fields if field not in found_fields],
+        },
+        "selector_candidates": sorted(
+            selector_candidates.values(),
+            key=lambda row: (
+                str(row.get("field_name") or ""),
+                str(row.get("selector_kind") or ""),
+                str(row.get("selector_value") or ""),
+            ),
+        ),
+        "affordance_candidates": {
+            "accordions": [],
+            "tabs": [],
+            "carousels": [],
+            "shadow_hosts": [],
+            "iframe_promotion": None,
+            "browser_required": browser_required,
+        },
+        "saved_selectors": saved_selectors,
+        "saved_run_profile": (
+            dict(saved_profile_record.profile or {})
+            if saved_profile_record is not None
+            else None
+        ),
+    }
+
+
+async def promote_domain_recipe_selectors(
+    session: AsyncSession,
+    *,
+    run: CrawlRun,
+    selectors: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    domain = normalize_domain(run.url)
+    existing = await list_selector_records(
+        session,
+        domain=domain,
+        surface=run.surface,
+    )
+    by_signature = {
+        (
+            str(row.get("field_name") or "").strip().lower(),
+            str(row.get("css_selector") or row.get("xpath") or row.get("regex") or "").strip(),
+        ): row
+        for row in existing
+    }
+    saved_rows: list[dict[str, object]] = []
+    for row in selectors:
+        selector_kind = str(row.get("selector_kind") or "").strip()
+        selector_value = str(row.get("selector_value") or "").strip()
+        field_name = normalize_field_key(row.get("field_name"))
+        if not field_name or not selector_kind or not selector_value:
+            continue
+        payload = {
+            "field_name": field_name,
+            "css_selector": selector_value if selector_kind == "css_selector" else None,
+            "xpath": selector_value if selector_kind == "xpath" else None,
+            "regex": selector_value if selector_kind == "regex" else None,
+            "sample_value": row.get("sample_value"),
+            "source": "domain_recipe",
+            "source_run_id": run.id,
+            "status": "validated",
+            "is_active": True,
+        }
+        signature = (field_name, selector_value)
+        existing_row = by_signature.get(signature)
+        if isinstance(existing_row, dict):
+            saved_rows.append(
+                await update_selector_record(
+                    session,
+                    selector_id=int(existing_row["id"]),
+                    payload=payload,
+                )
+            )
+            continue
+        saved_rows.append(
+            await create_selector_record(
+                session,
+                domain=domain,
+                surface=run.surface,
+                payload=payload,
+            )
+        )
+    return [row for row in saved_rows if isinstance(row, dict)]
+
+
+async def save_domain_recipe_run_profile(
+    session: AsyncSession,
+    *,
+    run: CrawlRun,
+    profile: dict[str, object],
+) -> dict[str, object]:
+    return await save_domain_run_profile(
+        session,
+        domain=normalize_domain(run.url),
+        surface=run.surface,
+        profile=profile,
+        source_run_id=run.id,
+    )

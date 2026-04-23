@@ -91,6 +91,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         effective_url,
         surface=request.surface,
     )
+    fetch_mode = _resolve_fetch_mode(request)
     prefer_browser = bool(request.acquisition_profile.get("prefer_browser")) or bool(
         runtime_policy.get("requires_browser")
     )
@@ -104,6 +105,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             effective_url,
             run_id=request.run_id,
             proxy_list=request.proxy_list,
+            fetch_mode=fetch_mode,
             prefer_browser=prefer_browser,
             surface=request.surface,
             traversal_mode=request.traversal_mode,
@@ -136,6 +138,15 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         artifacts=dict(getattr(result, "artifacts", {}) or {}),
         page_markdown=str(getattr(result, "page_markdown", "") or ""),
     )
+
+
+def _resolve_fetch_mode(request: AcquisitionRequest) -> str:
+    normalized = str(request.acquisition_profile.get("fetch_mode") or "").strip().lower()
+    if normalized in {"auto", "http_only", "browser_only", "http_then_browser"}:
+        return normalized
+    if bool(request.acquisition_profile.get("prefer_browser")):
+        return "browser_only"
+    return "auto"
 
 
 def _headers_to_dict(headers: Mapping[str, object] | Any) -> dict[str, str]:

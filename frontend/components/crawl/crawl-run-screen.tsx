@@ -22,7 +22,7 @@ import {
 import { Badge, Button, Card, Input, Tooltip } from"../ui/primitives";
 import { api } from"../../lib/api";
 import { getApiWebSocketBaseUrl } from"../../lib/api/client";
-import type { CrawlLog, CrawlRecord, CrawlRun, ResultSummaryQualityLevel } from"../../lib/api/types";
+import type { CrawlLog, CrawlRecord, CrawlRun, DomainRecipe, DomainRecipeSelectorCandidate, DomainRunProfile, ResultSummaryQualityLevel } from"../../lib/api/types";
 import { CRAWL_DEFAULTS } from"../../lib/constants/crawl-defaults";
 import { ACTIVE_STATUSES } from"../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from"../../lib/constants/storage-keys";
@@ -63,6 +63,86 @@ type CrawlRunScreenProps = {
  runId: number;
 };
 
+function defaultDomainRunProfile(): DomainRunProfile {
+ return {
+ version: 1,
+ fetch_profile: {
+ fetch_mode:"auto",
+ extraction_source:"raw_html",
+ js_mode:"auto",
+ include_iframes: false,
+ traversal_mode:"auto",
+ request_delay_ms: 500,
+ max_pages: 10,
+ max_scrolls: 10,
+ },
+ locality_profile: {
+ geo_country:"auto",
+ language_hint: null,
+ currency_hint: null,
+ },
+ diagnostics_profile: {
+ capture_html: true,
+ capture_screenshot: false,
+ capture_network:"matched_only",
+ capture_response_headers: true,
+ capture_browser_diagnostics: true,
+ },
+ source_run_id: null,
+ saved_at: null,
+ };
+}
+
+function cloneDomainRunProfile(profile: DomainRunProfile | null | undefined): DomainRunProfile {
+ const base = defaultDomainRunProfile();
+ if (!profile) {
+ return base;
+ }
+ return {
+ version: 1,
+ fetch_profile: {
+ ...base.fetch_profile,
+ ...(profile.fetch_profile ?? {}),
+ },
+ locality_profile: {
+ ...base.locality_profile,
+ ...(profile.locality_profile ?? {}),
+ },
+ diagnostics_profile: {
+ ...base.diagnostics_profile,
+ ...(profile.diagnostics_profile ?? {}),
+ },
+ source_run_id: profile.source_run_id ?? null,
+ saved_at: profile.saved_at ?? null,
+ };
+}
+
+function affordanceValues(recipe: DomainRecipe | undefined) {
+ if (!recipe) {
+ return [];
+ }
+ const values: string[] = [];
+ if (recipe.affordance_candidates.browser_required) {
+ values.push("Browser required");
+ }
+ if (recipe.affordance_candidates.iframe_promotion) {
+ values.push(`Iframe promotion: ${recipe.affordance_candidates.iframe_promotion}`);
+ }
+ for (const value of recipe.affordance_candidates.accordions) {
+ values.push(`Accordion: ${value}`);
+ }
+ for (const value of recipe.affordance_candidates.tabs) {
+ values.push(`Tab: ${value}`);
+ }
+ for (const value of recipe.affordance_candidates.carousels) {
+ values.push(`Carousel: ${value}`);
+ }
+ for (const value of recipe.affordance_candidates.shadow_hosts) {
+ values.push(`Shadow host: ${value}`);
+ }
+ return values;
+}
+
 function isSafeHref(href: string) {
  try {
  const base = typeof window ==="undefined"?"http://localhost": window.location.origin;
@@ -77,6 +157,10 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  const router = useRouter();
  const [selectedIds, setSelectedIds] = useState<number[]>([]);
  const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
+ const [selectedRecipeCandidates, setSelectedRecipeCandidates] = useState<string[]>([]);
+ const [recipeProfile, setRecipeProfile] = useState<DomainRunProfile>(() => defaultDomainRunProfile());
+ const [recipeActionPending, setRecipeActionPending] = useState<"selectors"|"profile"|`delete:${number}`| null>(null);
+ const [recipeActionError, setRecipeActionError] = useState("");
  const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
  const [runActionPending, setRunActionPending] = useState<"kill"| null>(null);
  const [runActionError, setRunActionError] = useState("");
@@ -149,6 +233,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  enabled: shouldFetchMarkdown,
  refetchInterval: false,
  });
+ const domainRecipeQuery = useQuery({
+ queryKey: ["crawl-domain-recipe", runId],
+ queryFn: () => api.getDomainRecipe(runId),
+ enabled: Boolean(run) && terminal,
+ refetchInterval: false,
+ refetchOnMount:"always",
+ });
+ const { refetch: refetchDomainRecipeQuery } = domainRecipeQuery;
 
  const records = useMemo(() => jsonRecordsQuery.data?.items ?? [], [jsonRecordsQuery.data?.items]);
  const recordsFetchCapReached = useMemo(
@@ -166,6 +258,16 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  jsonRecords.length < records.length || (records.length < recordsTotal && !recordsFetchCapReached);
  const logs = useMemo(() => logItems.slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS), [logItems]);
  const markdown = markdownQuery.data ??"";
+ const domainRecipe = domainRecipeQuery.data;
+ const selectorCandidatesByField = useMemo(() => {
+ const grouped = new Map<string, DomainRecipeSelectorCandidate[]>();
+ for (const candidate of domainRecipe?.selector_candidates ?? []) {
+ const field = String(candidate.field_name || "").trim() || "unknown";
+ grouped.set(field, [...(grouped.get(field) ?? []), candidate]);
+ }
+ return Array.from(grouped.entries()).sort((left, right) => left[0].localeCompare(right[0]));
+ }, [domainRecipe?.selector_candidates]);
+ const affordanceItems = useMemo(() => affordanceValues(domainRecipe), [domainRecipe]);
  const recordsJson = useMemo(
  () =>
  outputTab ==="json"
@@ -212,6 +314,19 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  refetch: markdownQuery.refetch,
  },
  ].filter((panel) => panel.error);
+
+ useEffect(() => {
+ if (!domainRecipe) {
+ return;
+ }
+ setRecipeProfile(cloneDomainRunProfile(domainRecipe.saved_run_profile));
+ setSelectedRecipeCandidates((current) =>
+ current.filter((candidateKey) =>
+ domainRecipe.selector_candidates.some((candidate) => candidate.candidate_key === candidateKey),
+ ),
+ );
+ setRecipeActionError("");
+ }, [domainRecipe]);
 
  useTerminalSync(run, terminal, [runQuery, tableRecordsQuery, jsonRecordsQuery, logsQuery, markdownQuery]);
 
@@ -387,6 +502,10 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  setLogItems([]);
  setLogCursorAfterId(undefined);
  setLogSocketConnected(false);
+ setSelectedRecipeCandidates([]);
+ setRecipeProfile(defaultDomainRunProfile());
+ setRecipeActionPending(null);
+ setRecipeActionError("");
  }, [runId]);
 
  useEffect(() => {
@@ -578,6 +697,61 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  router.replace("/crawl?module=pdp&mode=batch");
  }
 
+ async function saveSelectedRecipeSelectors() {
+ if (!selectedRecipeCandidates.length) {
+ return;
+ }
+ setRecipeActionPending("selectors");
+ setRecipeActionError("");
+ try {
+ await api.promoteDomainRecipeSelectors(runId, {
+ selectors: (domainRecipe?.selector_candidates ?? [])
+ .filter((candidate) => selectedRecipeCandidates.includes(candidate.candidate_key))
+ .map((candidate) => ({
+ candidate_key: candidate.candidate_key,
+ field_name: candidate.field_name,
+ selector_kind: candidate.selector_kind,
+ selector_value: candidate.selector_value,
+ sample_value: candidate.sample_value ?? null,
+ })),
+ });
+ setSelectedRecipeCandidates([]);
+ await refetchDomainRecipeQuery();
+ } catch (error) {
+ setRecipeActionError(error instanceof Error ? error.message :"Unable to save selected selectors.");
+ } finally {
+ setRecipeActionPending(null);
+ }
+ }
+
+ async function saveRecipeRunProfile() {
+ setRecipeActionPending("profile");
+ setRecipeActionError("");
+ try {
+ await api.saveDomainRunProfile(runId, {
+ profile: recipeProfile,
+ });
+ await refetchDomainRecipeQuery();
+ } catch (error) {
+ setRecipeActionError(error instanceof Error ? error.message :"Unable to save the domain run profile.");
+ } finally {
+ setRecipeActionPending(null);
+ }
+ }
+
+ async function deleteSavedRecipeSelector(selectorId: number) {
+ setRecipeActionPending(`delete:${selectorId}`);
+ setRecipeActionError("");
+ try {
+ await api.deleteSelector(selectorId);
+ await refetchDomainRecipeQuery();
+ } catch (error) {
+ setRecipeActionError(error instanceof Error ? error.message :"Unable to delete the saved selector.");
+ } finally {
+ setRecipeActionPending(null);
+ }
+ }
+
  if (runQuery.error) {
  return (
  <div className="page-stack">
@@ -732,6 +906,374 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  ) : null}
 
  {!showRunLoadingState && terminal ? (
+ <div className="space-y-4">
+ {domainRecipeQuery.isLoading ? (
+ <Card className="section-card">
+ <SectionHeader title="Domain Recipe" description="Loading selector promotion and saved-profile data for this run." />
+ </Card>
+ ) : domainRecipe ? (
+ <Card className="section-card space-y-4">
+ <SectionHeader
+ title="Domain Recipe"
+ description={`Promotion and saved defaults for ${domainRecipe.domain} on ${domainRecipe.surface}.`}
+ />
+ {recipeActionError ? <InlineAlert tone="danger" message={recipeActionError} /> : null}
+ <div className="grid gap-4 xl:grid-cols-2">
+ <div className="space-y-2">
+ <div className="field-label">Requested Field Coverage</div>
+ <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[1.5] text-secondary">
+ Requested: {domainRecipe.requested_field_coverage.requested.join(", ") || "None"}
+ <br />
+ Found: {domainRecipe.requested_field_coverage.found.join(", ") || "None"}
+ <br />
+ Missing: {domainRecipe.requested_field_coverage.missing.join(", ") || "None"}
+ </div>
+ </div>
+ <div className="space-y-2">
+ <div className="field-label">Affordance Hints</div>
+ {affordanceItems.length ? (
+ <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[1.5] text-secondary">
+ {affordanceItems.map((item) => (
+ <div key={item}>{item}</div>
+ ))}
+ </div>
+ ) : (
+ <div className="surface-muted rounded-lg border-dashed px-3 py-3 text-sm leading-[1.5] text-secondary">
+ No affordance hints were captured for this run.
+ </div>
+ )}
+ </div>
+ </div>
+
+ <div className="space-y-3">
+ <div className="flex items-center justify-between gap-3">
+ <div>
+ <div className="field-label mb-0">Selector Candidates</div>
+ <p className="mt-1 text-sm leading-[1.45] text-secondary">Promote only the winning selectors that proved out on this completed run.</p>
+ </div>
+ <Button
+ variant="accent"
+ type="button"
+ onClick={() => void saveSelectedRecipeSelectors()}
+ disabled={!selectedRecipeCandidates.length || recipeActionPending === "selectors"}
+ >
+ {recipeActionPending === "selectors" ? "Saving..." : "Save Selected Selectors"}
+ </Button>
+ </div>
+ {selectorCandidatesByField.length ? (
+ <div className="space-y-3">
+ {selectorCandidatesByField.map(([fieldName, candidates]) => (
+ <div key={fieldName} className="rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-3">
+ <div className="mb-2 flex items-center justify-between gap-3">
+ <div className="text-sm font-medium text-foreground">{fieldName}</div>
+ <div className="text-xs text-muted">{candidates.length} candidate{candidates.length === 1 ? "" : "s"}</div>
+ </div>
+ <div className="space-y-2">
+ {candidates.map((candidate) => (
+ <label key={candidate.candidate_key} className="flex items-start gap-3 rounded-lg border border-[var(--divider)] bg-background px-3 py-2 text-sm leading-[1.45]">
+ <input
+ type="checkbox"
+ checked={selectedRecipeCandidates.includes(candidate.candidate_key)}
+ disabled={candidate.already_saved}
+ onChange={(event) =>
+ setSelectedRecipeCandidates((current) =>
+ event.target.checked
+ ? Array.from(new Set([...current, candidate.candidate_key]))
+ : current.filter((value) => value !== candidate.candidate_key),
+ )
+ }
+ />
+ <div className="min-w-0 flex-1">
+ <div className="flex flex-wrap items-center gap-2">
+ <span className="font-medium text-foreground">{candidate.selector_kind}</span>
+ <code className="truncate text-xs">{candidate.selector_value}</code>
+ {candidate.already_saved ? <Badge tone="success">Saved</Badge> : <Badge tone="neutral">New</Badge>}
+ </div>
+ <div className="mt-1 text-xs text-muted">
+ Sample: {candidate.sample_value || "—"} · Final source: {candidate.final_field_source || "—"}
+ </div>
+ </div>
+ {candidate.saved_selector_id ? (
+ <Button
+ variant="ghost"
+ type="button"
+ onClick={() => void deleteSavedRecipeSelector(candidate.saved_selector_id!)}
+ disabled={recipeActionPending === `delete:${candidate.saved_selector_id}`}
+ >
+ {recipeActionPending === `delete:${candidate.saved_selector_id}` ? "Deleting..." : "Delete Saved Selector"}
+ </Button>
+ ) : null}
+ </label>
+ ))}
+ </div>
+ </div>
+ ))}
+ </div>
+ ) : (
+ <div className="surface-muted rounded-lg border-dashed px-3 py-3 text-sm leading-[1.5] text-secondary">
+ No selector candidates are available for promotion on this run.
+ </div>
+ )}
+ </div>
+
+ <div className="space-y-3">
+ <div className="flex items-center justify-between gap-3">
+ <div>
+ <div className="field-label mb-0">Saved Run Profile</div>
+ <p className="mt-1 text-sm leading-[1.45] text-secondary">Edit the reusable fetch, locality, and diagnostics defaults for future single-URL crawls on this domain.</p>
+ </div>
+ <Button
+ variant="accent"
+ type="button"
+ onClick={() => void saveRecipeRunProfile()}
+ disabled={recipeActionPending === "profile"}
+ >
+ {recipeActionPending === "profile" ? "Saving..." : "Save Run Profile"}
+ </Button>
+ </div>
+ <div className="grid gap-3 md:grid-cols-2">
+ <label className="grid gap-1.5">
+ <span className="field-label">Fetch Mode</span>
+ <select
+ aria-label="Fetch Mode"
+ value={recipeProfile.fetch_profile.fetch_mode}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ fetch_mode: event.target.value as DomainRunProfile["fetch_profile"]["fetch_mode"],
+ },
+ }))
+ }
+ className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
+ >
+ <option value="auto">Auto</option>
+ <option value="http_only">HTTP Only</option>
+ <option value="browser_only">Browser Only</option>
+ <option value="http_then_browser">HTTP Then Browser</option>
+ </select>
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Extraction Source</span>
+ <select
+ aria-label="Extraction Source"
+ value={recipeProfile.fetch_profile.extraction_source}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ extraction_source: event.target.value as DomainRunProfile["fetch_profile"]["extraction_source"],
+ },
+ }))
+ }
+ className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
+ >
+ <option value="raw_html">Raw HTML</option>
+ <option value="rendered_dom">Rendered DOM</option>
+ <option value="rendered_dom_visual">Rendered DOM + Visual</option>
+ <option value="network_payload_first">Network Payload First</option>
+ </select>
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">JS Mode</span>
+ <select
+ aria-label="JS Mode"
+ value={recipeProfile.fetch_profile.js_mode}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ js_mode: event.target.value as DomainRunProfile["fetch_profile"]["js_mode"],
+ },
+ }))
+ }
+ className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
+ >
+ <option value="auto">Auto</option>
+ <option value="enabled">Enabled</option>
+ <option value="disabled">Disabled</option>
+ </select>
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Traversal Mode</span>
+ <select
+ aria-label="Traversal Mode"
+ value={recipeProfile.fetch_profile.traversal_mode}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ traversal_mode: event.target.value as DomainRunProfile["fetch_profile"]["traversal_mode"],
+ },
+ }))
+ }
+ className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
+ >
+ <option value="auto">Auto</option>
+ <option value="scroll">Scroll</option>
+ <option value="load_more">Load More</option>
+ <option value="view_all">View All</option>
+ <option value="paginate">Paginate</option>
+ </select>
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Geo Country</span>
+ <Input
+ aria-label="Geo Country"
+ value={recipeProfile.locality_profile.geo_country}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ geo_country: event.target.value || "auto",
+ },
+ }))
+ }
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Language Hint</span>
+ <Input
+ aria-label="Language Hint"
+ value={recipeProfile.locality_profile.language_hint ?? ""}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ language_hint: event.target.value || null,
+ },
+ }))
+ }
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Currency Hint</span>
+ <Input
+ aria-label="Currency Hint"
+ value={recipeProfile.locality_profile.currency_hint ?? ""}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ currency_hint: event.target.value || null,
+ },
+ }))
+ }
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Network Capture</span>
+ <select
+ aria-label="Network Capture"
+ value={recipeProfile.diagnostics_profile.capture_network}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_network: event.target.value as DomainRunProfile["diagnostics_profile"]["capture_network"],
+ },
+ }))
+ }
+ className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
+ >
+ <option value="off">Off</option>
+ <option value="matched_only">Matched Only</option>
+ <option value="all_small_json">All Small JSON</option>
+ </select>
+ </label>
+ <label className="flex items-center gap-2 text-sm">
+ <input
+ type="checkbox"
+ checked={recipeProfile.fetch_profile.include_iframes}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ include_iframes: event.target.checked,
+ },
+ }))
+ }
+ />
+ Include iframes
+ </label>
+ <label className="flex items-center gap-2 text-sm">
+ <input
+ type="checkbox"
+ checked={recipeProfile.diagnostics_profile.capture_html}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_html: event.target.checked,
+ },
+ }))
+ }
+ />
+ Capture HTML
+ </label>
+ <label className="flex items-center gap-2 text-sm">
+ <input
+ type="checkbox"
+ checked={recipeProfile.diagnostics_profile.capture_screenshot}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_screenshot: event.target.checked,
+ },
+ }))
+ }
+ />
+ Capture Screenshot
+ </label>
+ <label className="flex items-center gap-2 text-sm">
+ <input
+ type="checkbox"
+ checked={recipeProfile.diagnostics_profile.capture_response_headers}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_response_headers: event.target.checked,
+ },
+ }))
+ }
+ />
+ Capture Response Headers
+ </label>
+ <label className="flex items-center gap-2 text-sm">
+ <input
+ type="checkbox"
+ checked={recipeProfile.diagnostics_profile.capture_browser_diagnostics}
+ onChange={(event) =>
+ setRecipeProfile((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_browser_diagnostics: event.target.checked,
+ },
+ }))
+ }
+ />
+ Capture Browser Diagnostics
+ </label>
+ </div>
+ </div>
+ </Card>
+ ) : null}
+
  <Card className="section-card">
  {runErrorMessage ? <InlineAlert tone="danger"message={runErrorMessage} /> : null}
  {runActionError ? <InlineAlert tone="danger"message={runActionError} /> : null}
@@ -931,6 +1473,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
  />
  </Card>
+ </div>
  ) : null}
  </div>
  );

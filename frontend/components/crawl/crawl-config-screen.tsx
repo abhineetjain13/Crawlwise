@@ -6,9 +6,14 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { InlineAlert, PageHeader, SectionHeader, TabBar } from "../ui/patterns";
-import { Button, Card, Dropdown, Input, Textarea } from "../ui/primitives";
+import { Button, Dropdown, Card, Input, Textarea } from "../ui/primitives";
 import { api } from "../../lib/api";
-import type { AdvancedCrawlMode, CrawlConfig, CrawlDomain } from "../../lib/api/types";
+import type {
+ AdvancedCrawlMode,
+ CrawlConfig,
+ CrawlDomain,
+ DomainRunProfile,
+} from "../../lib/api/types";
 import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
 import { getNormalizedDomain } from "../../lib/format/domain";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
@@ -37,13 +42,171 @@ import {
  uniqueFields,
  uniqueRequestedFields,
 } from "./shared";
+
 type CrawlConfigScreenProps = {
  requestedTab: CrawlTab | null;
  requestedCategoryMode: CategoryMode | null;
  requestedPdpMode: PdpMode | null;
 };
 
-const ADVANCED_MODE_OPTIONS = new Set<AdvancedCrawlMode>(["auto","scroll","load_more","view_all","paginate"]);
+type StudioMode = "quick" | "advanced";
+type FetchMode = DomainRunProfile["fetch_profile"]["fetch_mode"];
+type ExtractionSource = DomainRunProfile["fetch_profile"]["extraction_source"];
+type JsMode = DomainRunProfile["fetch_profile"]["js_mode"];
+type TraversalMode = DomainRunProfile["fetch_profile"]["traversal_mode"];
+type CaptureNetworkMode = DomainRunProfile["diagnostics_profile"]["capture_network"];
+type DiagnosticsPreset = "lean" | "standard" | "deep_debug";
+
+const FETCH_MODE_OPTIONS = new Set<FetchMode>([
+ "auto",
+ "http_only",
+ "browser_only",
+ "http_then_browser",
+]);
+const EXTRACTION_SOURCE_OPTIONS = new Set<ExtractionSource>([
+ "raw_html",
+ "rendered_dom",
+ "rendered_dom_visual",
+ "network_payload_first",
+]);
+const JS_MODE_OPTIONS = new Set<JsMode>(["auto", "enabled", "disabled"]);
+const TRAVERSAL_MODE_OPTIONS = new Set<TraversalMode>([
+ "auto",
+ "scroll",
+ "load_more",
+ "view_all",
+ "paginate",
+]);
+const CAPTURE_NETWORK_OPTIONS = new Set<CaptureNetworkMode>([
+ "off",
+ "matched_only",
+ "all_small_json",
+]);
+
+const DIAGNOSTICS_PRESETS: Record<
+ DiagnosticsPreset,
+ DomainRunProfile["diagnostics_profile"]
+> = {
+ lean: {
+ capture_html: true,
+ capture_screenshot: false,
+ capture_network: "off",
+ capture_response_headers: true,
+ capture_browser_diagnostics: true,
+ },
+ standard: {
+ capture_html: true,
+ capture_screenshot: false,
+ capture_network: "matched_only",
+ capture_response_headers: true,
+ capture_browser_diagnostics: true,
+ },
+ deep_debug: {
+ capture_html: true,
+ capture_screenshot: true,
+ capture_network: "all_small_json",
+ capture_response_headers: true,
+ capture_browser_diagnostics: true,
+ },
+};
+
+function defaultRunProfile(): DomainRunProfile {
+ return {
+ version: 1,
+ fetch_profile: {
+ fetch_mode: "auto",
+ extraction_source: "raw_html",
+ js_mode: "auto",
+ include_iframes: false,
+ traversal_mode: "auto",
+ request_delay_ms: CRAWL_DEFAULTS.REQUEST_DELAY_MS,
+ max_pages: CRAWL_DEFAULTS.MAX_PAGES,
+ max_scrolls: CRAWL_DEFAULTS.MAX_SCROLLS,
+ },
+ locality_profile: {
+ geo_country: "auto",
+ language_hint: null,
+ currency_hint: null,
+ },
+ diagnostics_profile: { ...DIAGNOSTICS_PRESETS.standard },
+ source_run_id: null,
+ saved_at: null,
+ };
+}
+
+function cloneRunProfile(profile: DomainRunProfile | null | undefined): DomainRunProfile {
+ const base = defaultRunProfile();
+ if (!profile) {
+ return base;
+ }
+ return {
+ version: 1,
+ fetch_profile: {
+ ...base.fetch_profile,
+ ...(profile.fetch_profile ?? {}),
+ },
+ locality_profile: {
+ ...base.locality_profile,
+ ...(profile.locality_profile ?? {}),
+ },
+ diagnostics_profile: {
+ ...base.diagnostics_profile,
+ ...(profile.diagnostics_profile ?? {}),
+ },
+ source_run_id: profile.source_run_id ?? null,
+ saved_at: profile.saved_at ?? null,
+ };
+}
+
+function diagnosticsPresetForProfile(profile: DomainRunProfile): DiagnosticsPreset {
+ const current = profile.diagnostics_profile;
+ for (const preset of ["lean", "standard", "deep_debug"] as const) {
+ const candidate = DIAGNOSTICS_PRESETS[preset];
+ if (
+ current.capture_html === candidate.capture_html &&
+ current.capture_screenshot === candidate.capture_screenshot &&
+ current.capture_network === candidate.capture_network &&
+ current.capture_response_headers === candidate.capture_response_headers &&
+ current.capture_browser_diagnostics === candidate.capture_browser_diagnostics
+ ) {
+ return preset;
+ }
+ }
+ return "standard";
+}
+
+function applyDiagnosticsPreset(
+ profile: DomainRunProfile,
+ preset: DiagnosticsPreset,
+): DomainRunProfile {
+ return {
+ ...profile,
+ diagnostics_profile: { ...DIAGNOSTICS_PRESETS[preset] },
+ };
+}
+
+function isSingleUrlMode(crawlTab: CrawlTab, mode: CategoryMode | PdpMode) {
+ return (
+ (crawlTab === "category" && mode === "single") ||
+ (crawlTab === "pdp" && mode === "single")
+ );
+}
+
+function surfaceLabel(surface: string) {
+ if (surface === "ecommerce_listing") {
+ return "Commerce Listing";
+ }
+ if (surface === "ecommerce_detail") {
+ return "Commerce Detail";
+ }
+ if (surface === "job_listing") {
+ return "Job Listing";
+ }
+ if (surface === "job_detail") {
+ return "Job Detail";
+ }
+ return surface;
+}
 
 export function CrawlConfigScreen({
  requestedTab,
@@ -51,23 +214,24 @@ export function CrawlConfigScreen({
  requestedPdpMode,
 }: Readonly<CrawlConfigScreenProps>) {
  const router = useRouter();
- const [crawlTab, setCrawlTab] = useState<CrawlTab>(() => requestedTab ??"category");
+ const [crawlTab, setCrawlTab] = useState<CrawlTab>(() => requestedTab ?? "category");
  const [crawlDomain, setCrawlDomain] = useState<CrawlDomain>("commerce");
- const [categoryMode, setCategoryMode] = useState<CategoryMode>(() => requestedCategoryMode ??"single");
- const [pdpMode, setPdpMode] = useState<PdpMode>(() => requestedPdpMode ??"single");
+ const [categoryMode, setCategoryMode] = useState<CategoryMode>(() => requestedCategoryMode ?? "single");
+ const [pdpMode, setPdpMode] = useState<PdpMode>(() => requestedPdpMode ?? "single");
  const [targetUrl, setTargetUrl] = useState("");
  const [bulkUrls, setBulkUrls] = useState("");
  const [csvFile, setCsvFile] = useState<File | null>(null);
- const [smartExtraction, setSmartExtraction] = useState<boolean>(false);
- const [advancedEnabled, setAdvancedEnabled] = useState<boolean>(false);
- const [advancedMode, setAdvancedMode] = useState<AdvancedCrawlMode>("auto");
- const [requestDelay, setRequestDelay] = useState(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS));
+ const [smartExtraction, setSmartExtraction] = useState(false);
+ const [studioMode, setStudioMode] = useState<StudioMode>("quick");
+ const [runProfile, setRunProfile] = useState<DomainRunProfile>(() => defaultRunProfile());
  const [maxRecords, setMaxRecords] = useState(String(CRAWL_DEFAULTS.MAX_RECORDS));
- const [maxPages, setMaxPages] = useState(String(CRAWL_DEFAULTS.MAX_PAGES));
- const [maxScrolls, setMaxScrolls] = useState(String(CRAWL_DEFAULTS.MAX_SCROLLS));
  const [respectRobotsTxt, setRespectRobotsTxt] = useState<boolean>(CRAWL_DEFAULTS.RESPECT_ROBOTS_TXT);
- const [proxyEnabled, setProxyEnabled] = useState<boolean>(false);
+ const [proxyEnabled, setProxyEnabled] = useState(false);
  const [proxyInput, setProxyInput] = useState("");
+ const [savedProfileDomain, setSavedProfileDomain] = useState("");
+ const [savedProfileLoaded, setSavedProfileLoaded] = useState(false);
+ const [savedProfileMessage, setSavedProfileMessage] = useState("");
+ const [loadingSavedProfile, setLoadingSavedProfile] = useState(false);
  const [additionalDraft, setAdditionalDraft] = useState("");
  const [additionalFields, setAdditionalFields] = useState<string[]>([]);
  const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
@@ -80,38 +244,47 @@ export function CrawlConfigScreen({
  const [activeFieldTestId, setActiveFieldTestId] = useState<string | null>(null);
  const [configError, setConfigError] = useState("");
  const [isSubmitting, setIsSubmitting] = useState(false);
- /** While set, ignore route→state sync until the URL shows PDP (bulk prefill). */
  const bulkPrefillRouteSyncGuardRef = useRef(false);
+ const profileLookupRequestRef = useRef(0);
+ const profileDirtyRef = useRef(false);
+ const lastProfileKeyRef = useRef("");
 
- const activeMode = crawlTab ==="category"? categoryMode : pdpMode;
+ const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
  const surface = deriveSurface(crawlDomain, crawlTab);
-
-useEffect(() => {
-  if (bulkPrefillRouteSyncGuardRef.current) {
-    if (requestedTab === "pdp") {
-      bulkPrefillRouteSyncGuardRef.current = false;
-    } else {
-      return;
-    }
-  }
-  const nextTab = requestedTab ?? "category";
-  const nextCategoryMode = requestedCategoryMode ?? "single";
-  const nextPdpMode = requestedPdpMode ?? "single";
-  setCrawlTab((current) => (current === nextTab ? current : nextTab));
-  setCategoryMode((current) => (current === nextCategoryMode ? current : nextCategoryMode));
-  setPdpMode((current) => (current === nextPdpMode ? current : nextPdpMode));
-}, [requestedCategoryMode, requestedPdpMode, requestedTab]);
+ const singleUrlMode = isSingleUrlMode(crawlTab, activeMode);
+ const normalizedTargetDomain = getNormalizedDomain(targetUrl.trim());
+ const profileLookupKey =
+ singleUrlMode && normalizedTargetDomain && surface
+ ? `${normalizedTargetDomain}|${surface}`
+ : "";
+ const diagnosticsPreset = diagnosticsPresetForProfile(runProfile);
 
  useEffect(() => {
- const routeMode = crawlTab ==="category"? requestedCategoryMode : requestedPdpMode;
+ if (bulkPrefillRouteSyncGuardRef.current) {
+ if (requestedTab === "pdp") {
+ bulkPrefillRouteSyncGuardRef.current = false;
+ } else {
+ return;
+ }
+ }
+ const nextTab = requestedTab ?? "category";
+ const nextCategoryMode = requestedCategoryMode ?? "single";
+ const nextPdpMode = requestedPdpMode ?? "single";
+ setCrawlTab((current) => (current === nextTab ? current : nextTab));
+ setCategoryMode((current) => (current === nextCategoryMode ? current : nextCategoryMode));
+ setPdpMode((current) => (current === nextPdpMode ? current : nextPdpMode));
+ }, [requestedCategoryMode, requestedPdpMode, requestedTab]);
+
+ useEffect(() => {
+ const routeMode = crawlTab === "category" ? requestedCategoryMode : requestedPdpMode;
  if (requestedTab === crawlTab && routeMode === activeMode) {
  return;
  }
  const nextUrl = `/crawl?module=${crawlTab}&mode=${activeMode}`;
- if (typeof window !=="undefined") {
+ if (typeof window !== "undefined") {
  const currentUrl = `${window.location.pathname}${window.location.search}`;
  if (currentUrl !== nextUrl) {
- window.history.replaceState(null,"", nextUrl);
+ window.history.replaceState(null, "", nextUrl);
  }
  }
  }, [activeMode, crawlTab, requestedCategoryMode, requestedPdpMode, requestedTab]);
@@ -131,44 +304,93 @@ useEffect(() => {
  bulkPrefillRouteSyncGuardRef.current = true;
  setCrawlTab("pdp");
  setPdpMode("batch");
- if (parsed.domain ==="commerce"|| parsed.domain ==="jobs") {
+ if (parsed.domain === "commerce" || parsed.domain === "jobs") {
  setCrawlDomain(parsed.domain);
  }
  setBulkUrls(parsed.urls.join("\n"));
  if (Array.isArray(parsed.additional_fields)) {
  setAdditionalFields(uniqueRequestedFields(parsed.additional_fields));
  }
- router.replace("/crawl?module=pdp&mode=batch"as Route);
+ router.replace("/crawl?module=pdp&mode=batch" as Route);
  }
  } catch {
- // Ignore malformed prefill data.
  } finally {
  window.sessionStorage.removeItem(STORAGE_KEYS.BULK_PREFILL);
  }
  }, [router]);
 
-
+ useEffect(() => {
+ if (lastProfileKeyRef.current !== profileLookupKey) {
+ profileDirtyRef.current = false;
+ lastProfileKeyRef.current = profileLookupKey;
+ if (!profileLookupKey) {
+ setLoadingSavedProfile(false);
+ setSavedProfileLoaded(false);
+ setSavedProfileDomain("");
+ setSavedProfileMessage("");
+ setRunProfile(defaultRunProfile());
+ return;
+ }
+ }
+ if (!profileLookupKey) {
+ return;
+ }
+ const requestId = profileLookupRequestRef.current + 1;
+ profileLookupRequestRef.current = requestId;
+ const timer = window.setTimeout(async () => {
+ setLoadingSavedProfile(true);
+ try {
+ const response = await api.getDomainRunProfile({
+ url: targetUrl.trim(),
+ surface,
+ });
+ if (profileLookupRequestRef.current !== requestId) {
+ return;
+ }
+ const savedProfile = response.saved_run_profile;
+ setSavedProfileDomain(response.domain);
+ if (savedProfile && !profileDirtyRef.current) {
+ setRunProfile(cloneRunProfile(savedProfile));
+ setSavedProfileLoaded(true);
+ setSavedProfileMessage(
+ `Saved domain profile applied for ${response.domain} on ${surfaceLabel(response.surface)}. Explicit edits below override it for this run.`,
+ );
+ } else {
+ setSavedProfileLoaded(Boolean(savedProfile));
+ setSavedProfileMessage(
+ savedProfile
+ ? `Saved domain profile found for ${response.domain}. Your current edits are preserved for this run.`
+ : "",
+ );
+ if (!savedProfile && !profileDirtyRef.current) {
+ setRunProfile(defaultRunProfile());
+ }
+ }
+ } catch {
+ if (profileLookupRequestRef.current === requestId) {
+ setSavedProfileLoaded(false);
+ setSavedProfileDomain("");
+ setSavedProfileMessage("");
+ }
+ } finally {
+ if (profileLookupRequestRef.current === requestId) {
+ setLoadingSavedProfile(false);
+ }
+ }
+ }, UI_DELAYS.DEBOUNCE_MS);
+ return () => window.clearTimeout(timer);
+ }, [profileLookupKey, surface, targetUrl]);
 
  const config = useMemo<CrawlConfig>(
  () => ({
  module: crawlTab,
  domain: crawlDomain,
- mode: crawlTab ==="category"? categoryMode : pdpMode,
+ mode: crawlTab === "category" ? categoryMode : pdpMode,
  target_url: targetUrl,
  bulk_urls: bulkUrls,
  csv_file: csvFile,
  smart_extraction: smartExtraction,
- advanced_enabled: advancedEnabled,
- advanced_mode: advancedMode,
- request_delay_ms: clampNumber(
- requestDelay,
- CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
- CRAWL_LIMITS.MAX_REQUEST_DELAY_MS,
- CRAWL_DEFAULTS.REQUEST_DELAY_MS,
- ),
  max_records: clampNumber(maxRecords, CRAWL_LIMITS.MIN_RECORDS, CRAWL_LIMITS.MAX_RECORDS, CRAWL_DEFAULTS.MAX_RECORDS),
- max_pages: clampNumber(maxPages, CRAWL_LIMITS.MIN_PAGES, CRAWL_LIMITS.MAX_PAGES, CRAWL_DEFAULTS.MAX_PAGES),
- max_scrolls: clampNumber(maxScrolls, CRAWL_LIMITS.MIN_SCROLLS, CRAWL_LIMITS.MAX_SCROLLS, CRAWL_DEFAULTS.MAX_SCROLLS),
  respect_robots_txt: respectRobotsTxt,
  proxy_enabled: proxyEnabled,
  proxy_lines: proxyEnabled ? parseLines(proxyInput) : [],
@@ -176,25 +398,25 @@ useEffect(() => {
  }),
  [
  additionalFields,
- advancedEnabled,
- advancedMode,
  bulkUrls,
  categoryMode,
  crawlDomain,
  crawlTab,
  csvFile,
- maxPages,
  maxRecords,
- maxScrolls,
  pdpMode,
  proxyEnabled,
  proxyInput,
  respectRobotsTxt,
- requestDelay,
  smartExtraction,
  targetUrl,
  ],
  );
+
+ function markProfileDirty(updater: (current: DomainRunProfile) => DomainRunProfile) {
+ profileDirtyRef.current = true;
+ setRunProfile((current) => cloneRunProfile(updater(current)));
+ }
 
  async function startCrawl(event: FormEvent) {
  event.preventDefault();
@@ -204,16 +426,19 @@ useEffect(() => {
  setConfigError("");
  setIsSubmitting(true);
  try {
- const dispatch = buildDispatch(config, fieldRows);
- if (config.advanced_enabled) {
+ const dispatch = buildDispatch(config, fieldRows, {
+ runProfile,
+ studioMode,
+ });
+ if (studioMode === "advanced") {
  trackEvent("advanced_mode_selected_vs_effective", {
  module: config.module,
- selected_advanced_mode: config.advanced_mode,
+ selected_advanced_mode: runProfile.fetch_profile.traversal_mode,
  effective_advanced_mode: dispatch.settings.advanced_mode ?? null,
  });
  }
  let response: { run_id: number };
- if (dispatch.runType ==="csv") {
+ if (dispatch.runType === "csv") {
  if (!dispatch.csvFile) {
  throw new Error("CSV file is missing.");
  }
@@ -235,15 +460,14 @@ useEffect(() => {
  }
  router.replace((`/crawl?run_id=${response.run_id}`) as Route);
  } catch (error) {
- const message = error instanceof Error ? error.message :"Unable to launch crawl.";
+ const message = error instanceof Error ? error.message : "Unable to launch crawl.";
  trackEvent(
-"crawl_submit_error_rate",
+ "crawl_submit_error_rate",
  telemetryErrorPayload(error, {
  module: config.module,
  mode: config.mode,
  surface,
- advanced_enabled: config.advanced_enabled,
- advanced_mode: config.advanced_mode,
+ studio_mode: studioMode,
  smart_extraction: config.smart_extraction,
  run_type_hint: inferRunTypeHint(config),
  }),
@@ -259,13 +483,13 @@ useEffect(() => {
  ...current,
  {
  id: `${Date.now()}-${current.length}`,
- fieldName:"",
- cssSelector:"",
- xpath:"",
- regex:"",
- cssState:"idle",
- xpathState:"idle",
- regexState:"idle",
+ fieldName: "",
+ cssSelector: "",
+ xpath: "",
+ regex: "",
+ cssState: "idle",
+ xpathState: "idle",
+ regexState: "idle",
  },
  ]);
  }
@@ -288,9 +512,9 @@ useEffect(() => {
  const incomingRows = matchingRecords.map(buildFieldRowFromSelectorRecord);
  setFieldRows((current) => mergeFieldRows(current, incomingRows));
  setFieldRowMessages({});
- setFieldConfigMessage(`Loaded ${matchingRecords.length} saved selector${matchingRecords.length === 1 ?"":"s"} from domain memory.`);
+ setFieldConfigMessage(`Loaded ${matchingRecords.length} saved selector${matchingRecords.length === 1 ? "" : "s"} from domain memory.`);
  } catch (error) {
- setFieldConfigError(error instanceof Error ? error.message :"Unable to load domain memory.");
+ setFieldConfigError(error instanceof Error ? error.message : "Unable to load domain memory.");
  } finally {
  setLoadingDomainMemory(false);
  }
@@ -320,9 +544,9 @@ useEffect(() => {
  );
  setFieldRows((current) => mergeFieldRows(current, incomingRows));
  setFieldRowMessages({});
- setFieldConfigMessage(`Generated selector suggestions for ${expectedColumns.length} field${expectedColumns.length === 1 ?"":"s"}.`);
+ setFieldConfigMessage(`Generated selector suggestions for ${expectedColumns.length} field${expectedColumns.length === 1 ? "" : "s"}.`);
  } catch (error) {
- setFieldConfigError(error instanceof Error ? error.message :"Unable to generate selectors.");
+ setFieldConfigError(error instanceof Error ? error.message : "Unable to generate selectors.");
  } finally {
  setGeneratingSelectors(false);
  }
@@ -333,14 +557,14 @@ useEffect(() => {
  if (!target) {
  setFieldRowMessages((current) => ({
  ...current,
- [row.id]: { tone:"warning", message:"Enter a target URL before testing selectors."},
+ [row.id]: { tone: "warning", message: "Enter a target URL before testing selectors." },
  }));
  return;
  }
  if (!row.cssSelector.trim() && !row.xpath.trim() && !row.regex.trim()) {
  setFieldRowMessages((current) => ({
  ...current,
- [row.id]: { tone:"warning", message:"Add a CSS selector, XPath, or regex before testing."},
+ [row.id]: { tone: "warning", message: "Add a CSS selector, XPath, or regex before testing." },
  }));
  return;
  }
@@ -355,16 +579,17 @@ useEffect(() => {
  setFieldRowMessages((current) => ({
  ...current,
  [row.id]: {
- tone: response.count > 0 ?"success":"warning",
- message: response.count > 0
- ? `Matched ${response.count} result${response.count === 1 ?"":"s"}${response.matched_value ? `: ${response.matched_value}` :"."}`
- :"No matches.",
+ tone: response.count > 0 ? "success" : "warning",
+ message:
+ response.count > 0
+ ? `Matched ${response.count} result${response.count === 1 ? "" : "s"}${response.matched_value ? `: ${response.matched_value}` : "."}`
+ : "No matches.",
  },
  }));
  } catch (error) {
  setFieldRowMessages((current) => ({
  ...current,
- [row.id]: { tone:"danger", message: error instanceof Error ? error.message :"Selector test failed."},
+ [row.id]: { tone: "danger", message: error instanceof Error ? error.message : "Selector test failed." },
  }));
  } finally {
  setActiveFieldTestId(null);
@@ -402,8 +627,8 @@ useEffect(() => {
  css_selector: row.cssSelector.trim() || undefined,
  xpath: row.xpath.trim() || undefined,
  regex: row.regex.trim() || undefined,
- source:"crawl_config",
- status:"validated"as const,
+ source: "crawl_config",
+ status: "validated" as const,
  is_active: true,
  };
  const existing = existingByField.get(fieldName);
@@ -418,18 +643,18 @@ useEffect(() => {
  });
  }),
  );
- const failedCount = settled.filter((result) => result.status ==="rejected").length;
+ const failedCount = settled.filter((result) => result.status === "rejected").length;
  const savedCount = settled.length - failedCount;
  if (failedCount) {
- setFieldConfigError(`Saved ${savedCount} selector${savedCount === 1 ?"":"s"}, ${failedCount} failed.`);
+ setFieldConfigError(`Saved ${savedCount} selector${savedCount === 1 ? "" : "s"}, ${failedCount} failed.`);
  } else {
- setFieldConfigMessage(`Saved ${savedCount} selector${savedCount === 1 ?"":"s"} to domain memory.`);
+ setFieldConfigMessage(`Saved ${savedCount} selector${savedCount === 1 ? "" : "s"} to domain memory.`);
  }
  if (savedCount) {
  await loadDomainMemoryForUrl(target);
  }
  } catch (error) {
- setFieldConfigError(error instanceof Error ? error.message :"Unable to save domain memory.");
+ setFieldConfigError(error instanceof Error ? error.message : "Unable to save domain memory.");
  } finally {
  setSavingDomainMemory(false);
  }
@@ -437,9 +662,9 @@ useEffect(() => {
 
  return (
  <div className="page-stack">
- <PageHeader title="Crawl Studio"/>
+ <PageHeader title="Crawl Studio" />
 
-        <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
+ <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
  <div className="page-stack">
  <Card className="section-card">
  <SectionHeader
@@ -457,11 +682,11 @@ useEffect(() => {
  }
  }}
  options={[
- { value:"category", label:"Category Crawl"},
- { value:"pdp", label:"PDP Crawl"},
+ { value: "category", label: "Category Crawl" },
+ { value: "pdp", label: "PDP Crawl" },
  ]}
  />
- {crawlTab ==="category"? (
+ {crawlTab === "category" ? (
  <TabBar
  value={categoryMode}
  compact
@@ -472,9 +697,9 @@ useEffect(() => {
  }
  }}
  options={[
- { value:"single", label:"Single"},
- { value:"sitemap", label:"Sitemap"},
- { value:"bulk", label:"Bulk"},
+ { value: "single", label: "Single" },
+ { value: "sitemap", label: "Sitemap" },
+ { value: "bulk", label: "Bulk" },
  ]}
  />
  ) : (
@@ -488,9 +713,9 @@ useEffect(() => {
  }
  }}
  options={[
- { value:"single", label:"Single"},
- { value:"batch", label:"Batch"},
- { value:"csv", label:"CSV Upload"},
+ { value: "single", label: "Single" },
+ { value: "batch", label: "Batch" },
+ { value: "csv", label: "CSV Upload" },
  ]}
  />
  )}
@@ -499,14 +724,14 @@ useEffect(() => {
  variant="accent"
  size="lg"
  type="submit"
- disabled={!canPreview(config, fieldRows) || isSubmitting}
+ disabled={!canPreview(config, fieldRows, { runProfile, studioMode }) || isSubmitting}
  className="min-w-[124px] justify-self-start lg:justify-self-end"
  >
- {isSubmitting ?"Starting...":"Start Crawl"}
+ {isSubmitting ? "Starting..." : "Start Crawl"}
  </Button>
  </div>
 
- {(crawlTab ==="category"&& categoryMode ==="bulk") || (crawlTab ==="pdp"&& pdpMode ==="batch") ? (
+ {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
  <label className="grid gap-1.5">
  <span className="field-label">URLs (one per line)</span>
  <div className="relative">
@@ -518,14 +743,14 @@ useEffect(() => {
  className="min-h-[420px] text-mono-body"
  aria-label="Bulk URLs input"
  />
- {bulkUrls.trim() && (
+ {bulkUrls.trim() ? (
  <div className="absolute bottom-2 right-2 rounded bg-background/80 px-2 py-1 text-sm text-muted backdrop-blur-sm">
  {parseLines(bulkUrls).length} URLs
  </div>
- )}
+ ) : null}
  </div>
  </label>
- ) : crawlTab ==="pdp"&& pdpMode ==="csv"? (
+ ) : crawlTab === "pdp" && pdpMode === "csv" ? (
  <label className="grid gap-1.5">
  <span className="field-label">CSV File</span>
  <div className="flex items-center gap-3">
@@ -540,12 +765,12 @@ useEffect(() => {
  />
  <label
  htmlFor="csv-file-input"
- className="cursor-pointer rounded-[var(--radius-md)] bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:bg-[var(--accent-hover)] transition-colors"
+ className="cursor-pointer rounded-[var(--radius-md)] bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-[var(--accent-hover)]"
  >
  Choose file
  </label>
  <span className="text-sm text-muted">
- {csvFile ? csvFile.name :"No file chosen"}
+ {csvFile ? csvFile.name : "No file chosen"}
  </span>
  </div>
  </label>
@@ -556,17 +781,30 @@ useEffect(() => {
  key="target-url-input"
  value={targetUrl}
  onChange={(event) => setTargetUrl(event.target.value)}
- onBlur={() => void loadDomainMemoryForUrl(targetUrl)}
+ onBlur={() => {
+ if (studioMode === "advanced") {
+ void loadDomainMemoryForUrl(targetUrl);
+ }
+ }}
  placeholder={
- crawlTab ==="category"
- ?"https://example.com/collections/chairs"
- :"https://example.com/products/oak-chair"
+ crawlTab === "category"
+ ? "https://example.com/collections/chairs"
+ : "https://example.com/products/oak-chair"
  }
  className="text-mono-body"
  aria-label="Target URL input"
  />
  </label>
  )}
+
+ {loadingSavedProfile ? (
+ <p className="text-sm leading-[1.5] text-secondary">Checking for a saved domain profile…</p>
+ ) : null}
+ {savedProfileMessage ? (
+ <div className="rounded-[var(--radius-md)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-2 text-sm leading-[1.5] text-secondary">
+ {savedProfileMessage}
+ </div>
+ ) : null}
 
  <AdditionalFieldInput
  value={additionalDraft}
@@ -577,6 +815,7 @@ useEffect(() => {
  />
  </Card>
 
+ {studioMode === "advanced" ? (
  <Card className="section-card">
  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
  <SectionHeader
@@ -592,11 +831,11 @@ useEffect(() => {
  disabled={generatingSelectors}
  className="rounded-xl px-3.5"
  >
- <Sparkles className="size-3.5"/>
- {generatingSelectors ?"Generating...":"Generate"}
+ <Sparkles className="size-3.5" />
+ {generatingSelectors ? "Generating..." : "Generate"}
  </Button>
- <Button variant="ghost"type="button"onClick={addManualField} className="rounded-xl px-3.5">
- <Plus className="size-3.5"/>
+ <Button variant="ghost" type="button" onClick={addManualField} className="rounded-xl px-3.5">
+ <Plus className="size-3.5" />
  New Field
  </Button>
  <Button
@@ -606,7 +845,7 @@ useEffect(() => {
  disabled={savingDomainMemory || !fieldRows.some((row) => normalizeField(row.fieldName) && (row.cssSelector.trim() || row.xpath.trim() || row.regex.trim()))}
  className="rounded-xl px-4 shadow-[0_10px_24px_color-mix(in_srgb,var(--accent)_24%,transparent)]"
  >
- {savingDomainMemory ?"Saving...":"Save to Domain Memory"}
+ {savingDomainMemory ? "Saving..." : "Save to Domain Memory"}
  </Button>
  </div>
  </div>
@@ -662,16 +901,15 @@ useEffect(() => {
  )}
  </div>
  </Card>
-
- {configError ? (
- <InlineAlert message={configError} />
  ) : null}
+
+ {configError ? <InlineAlert message={configError} /> : null}
  </div>
 
  <div className="h-full xl:self-stretch">
  <div className="h-full xl:sticky xl:top-[68px]">
  <Card className="section-card flex h-full flex-col overflow-hidden">
- <SectionHeader title="Crawl Settings"description="Set crawl behaviour and network controls."/>
+ <SectionHeader title="Crawl Settings" description="Choose repeat-run defaults or exploratory controls for this crawl." />
  <div className="page-stack flex-1">
  <div className="flex items-center justify-between rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-3">
  <div className="field-label mb-0">DOMAIN</div>
@@ -679,63 +917,274 @@ useEffect(() => {
  value={crawlDomain}
  compact
  onChange={(value) => {
- if (value ==="commerce"|| value ==="jobs") {
+ if (value === "commerce" || value === "jobs") {
  setCrawlDomain(value);
  }
  }}
  options={[
- { value:"commerce", label:"Commerce"},
- { value:"jobs", label:"Jobs"},
+ { value: "commerce", label: "Commerce" },
+ { value: "jobs", label: "Jobs" },
  ]}
  />
  </div>
- <div className="divide-y divide-[var(--divider)]">
- <SettingSection
- label="Smart Extraction"
- description="AI-assisted enrichment"
- icon={<Sparkles className="size-4"/>}
- checked={smartExtraction}
- onChange={setSmartExtraction}
- />
- <SettingSection
- label="Advanced Crawl"
- description="Pagination, scrolling, and limits."
- icon={<SlidersHorizontal className="size-4"/>}
- checked={advancedEnabled}
- onChange={setAdvancedEnabled}
- >
- <div className="space-y-3">
- <div className="grid grid-cols-[100px_1fr] items-center gap-3">
- <div className="field-label">Mode</div>
- <Dropdown<AdvancedCrawlMode>
- ariaLabel="Advanced crawl mode"
- value={advancedMode}
- onChange={(next) => {
- if (ADVANCED_MODE_OPTIONS.has(next)) {
- setAdvancedMode(next);
+
+ <div className="flex items-center justify-between rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-3">
+ <div>
+ <div className="field-label mb-0">STUDIO MODE</div>
+ <p className="mt-1 text-sm leading-[1.45] text-secondary">
+ {studioMode === "quick"
+ ? "Quick Mode uses saved domain defaults when present."
+ : "Advanced Mode exposes the full fetch, locality, diagnostics, and selector controls."}
+ </p>
+ </div>
+ <TabBar
+ value={studioMode}
+ compact
+ onChange={(value) => {
+ if (value === "quick" || value === "advanced") {
+ setStudioMode(value);
  }
  }}
  options={[
- { value:"auto", label:"Auto"},
- { value:"scroll", label:"Scroll"},
- { value:"load_more", label:"Load More"},
- { value:"view_all", label:"View All"},
- { value:"paginate", label:"Paginate"},
+ { value: "quick", label: "Quick" },
+ { value: "advanced", label: "Advanced" },
  ]}
- className=""
+ />
+ </div>
+
+ {singleUrlMode && savedProfileLoaded ? (
+ <div className="rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-2 text-sm leading-[1.5] text-secondary">
+ Saved domain profile active: <span className="font-medium text-foreground">{savedProfileDomain}</span> · {surfaceLabel(surface)}
+ </div>
+ ) : null}
+
+ <div className="divide-y divide-[var(--divider)]">
+ <SettingSection
+ label="LLM Gap Fill"
+ description="Per-run enrichment only. Not saved to the domain profile."
+ icon={<Sparkles className="size-4" />}
+ checked={smartExtraction}
+ onChange={setSmartExtraction}
+ />
+
+ <div className="space-y-3 px-3 py-4">
+ <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className="field-label">Fetch Mode</div>
+ <Dropdown<FetchMode>
+ ariaLabel="Fetch mode"
+ value={runProfile.fetch_profile.fetch_mode}
+ onChange={(next) => {
+ if (FETCH_MODE_OPTIONS.has(next)) {
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ fetch_mode: next,
+ },
+ }));
+ }
+ }}
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "http_only", label: "HTTP Only" },
+ { value: "browser_only", label: "Browser Only" },
+ { value: "http_then_browser", label: "HTTP Then Browser" },
+ ]}
+ />
+ </div>
+
+ {studioMode === "quick" ? (
+ <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className="field-label">Diagnostics</div>
+ <Dropdown<DiagnosticsPreset>
+ ariaLabel="Diagnostics preset"
+ value={diagnosticsPreset}
+ onChange={(next) => {
+ if (next === "lean" || next === "standard" || next === "deep_debug") {
+ markProfileDirty((current) => applyDiagnosticsPreset(current, next));
+ }
+ }}
+ options={[
+ { value: "lean", label: "Lean" },
+ { value: "standard", label: "Standard" },
+ { value: "deep_debug", label: "Deep Debug" },
+ ]}
+ />
+ </div>
+ ) : (
+ <>
+ <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className="field-label">Extraction</div>
+ <Dropdown<ExtractionSource>
+ ariaLabel="Extraction source"
+ value={runProfile.fetch_profile.extraction_source}
+ onChange={(next) => {
+ if (EXTRACTION_SOURCE_OPTIONS.has(next)) {
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ extraction_source: next,
+ },
+ }));
+ }
+ }}
+ options={[
+ { value: "raw_html", label: "Raw HTML" },
+ { value: "rendered_dom", label: "Rendered DOM" },
+ { value: "rendered_dom_visual", label: "Rendered + Visual" },
+ { value: "network_payload_first", label: "Network Payload First" },
+ ]}
+ />
+ </div>
+
+ <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className="field-label">JS Mode</div>
+ <Dropdown<JsMode>
+ ariaLabel="JavaScript mode"
+ value={runProfile.fetch_profile.js_mode}
+ onChange={(next) => {
+ if (JS_MODE_OPTIONS.has(next)) {
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ js_mode: next,
+ },
+ }));
+ }
+ }}
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "enabled", label: "Enabled" },
+ { value: "disabled", label: "Disabled" },
+ ]}
+ />
+ </div>
+
+ <SettingSection
+ label="Include iframes"
+ description="Allow iframe content to participate in extraction and selector recovery."
+ icon={<Globe className="size-4" />}
+ checked={runProfile.fetch_profile.include_iframes}
+ onChange={(next) =>
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ include_iframes: next,
+ },
+ }))
+ }
+ />
+
+ <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className="field-label">Traversal</div>
+ <Dropdown<TraversalMode>
+ ariaLabel="Traversal mode"
+ value={runProfile.fetch_profile.traversal_mode}
+ onChange={(next) => {
+ if (TRAVERSAL_MODE_OPTIONS.has(next)) {
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ traversal_mode: next,
+ },
+ }));
+ }
+ }}
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "scroll", label: "Scroll" },
+ { value: "load_more", label: "Load More" },
+ { value: "view_all", label: "View All" },
+ { value: "paginate", label: "Paginate" },
+ ]}
  />
  </div>
 
  <div className="space-y-2">
  <SliderRow
  label="Request Delay"
- value={requestDelay}
+ value={String(runProfile.fetch_profile.request_delay_ms)}
  min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS}
  max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
  step={100}
  suffix="ms"
- onChange={setRequestDelay}
- onReset={() => setRequestDelay(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS))}
+ onChange={(next) =>
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ request_delay_ms: clampNumber(
+ next,
+ CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
+ CRAWL_LIMITS.MAX_REQUEST_DELAY_MS,
+ CRAWL_DEFAULTS.REQUEST_DELAY_MS,
+ ),
+ },
+ }))
+ }
+ onReset={() =>
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ request_delay_ms: CRAWL_DEFAULTS.REQUEST_DELAY_MS,
+ },
+ }))
+ }
+ />
+ <SliderRow
+ label="Max Pages"
+ value={String(runProfile.fetch_profile.max_pages)}
+ min={CRAWL_LIMITS.MIN_PAGES}
+ max={CRAWL_LIMITS.MAX_PAGES}
+ step={1}
+ onChange={(next) =>
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ max_pages: clampNumber(next, CRAWL_LIMITS.MIN_PAGES, CRAWL_LIMITS.MAX_PAGES, CRAWL_DEFAULTS.MAX_PAGES),
+ },
+ }))
+ }
+ onReset={() =>
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ max_pages: CRAWL_DEFAULTS.MAX_PAGES,
+ },
+ }))
+ }
+ />
+ <SliderRow
+ label="Max Scrolls"
+ value={String(runProfile.fetch_profile.max_scrolls)}
+ min={CRAWL_LIMITS.MIN_SCROLLS}
+ max={CRAWL_LIMITS.MAX_SCROLLS}
+ step={1}
+ onChange={(next) =>
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ max_scrolls: clampNumber(next, CRAWL_LIMITS.MIN_SCROLLS, CRAWL_LIMITS.MAX_SCROLLS, CRAWL_DEFAULTS.MAX_SCROLLS),
+ },
+ }))
+ }
+ onReset={() =>
+ markProfileDirty((current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ max_scrolls: CRAWL_DEFAULTS.MAX_SCROLLS,
+ },
+ }))
+ }
  />
  <SliderRow
  label="Max Records"
@@ -746,29 +1195,154 @@ useEffect(() => {
  onChange={setMaxRecords}
  onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
  />
- <SliderRow
- label="Max Pages"
- value={maxPages}
- min={CRAWL_LIMITS.MIN_PAGES}
- max={CRAWL_LIMITS.MAX_PAGES}
- step={10}
- onChange={setMaxPages}
- onReset={() => setMaxPages(String(CRAWL_DEFAULTS.MAX_PAGES))}
+ </div>
+
+ <div className="grid gap-3">
+ <label className="grid gap-1.5">
+ <span className="field-label">Geo Country</span>
+ <Input
+ value={runProfile.locality_profile.geo_country}
+ onChange={(event) =>
+ markProfileDirty((current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ geo_country: event.target.value.trim() || "auto",
+ },
+ }))
+ }
+ aria-label="Geo country"
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Language Hint</span>
+ <Input
+ value={runProfile.locality_profile.language_hint ?? ""}
+ onChange={(event) =>
+ markProfileDirty((current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ language_hint: event.target.value.trim() || null,
+ },
+ }))
+ }
+ aria-label="Language hint"
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Currency Hint</span>
+ <Input
+ value={runProfile.locality_profile.currency_hint ?? ""}
+ onChange={(event) =>
+ markProfileDirty((current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ currency_hint: event.target.value.trim() || null,
+ },
+ }))
+ }
+ aria-label="Currency hint"
+ />
+ </label>
+ </div>
+
+ <SettingSection
+ label="Capture HTML"
+ description="Persist the page HTML artifact for this run."
+ icon={<SlidersHorizontal className="size-4" />}
+ checked={runProfile.diagnostics_profile.capture_html}
+ onChange={(next) =>
+ markProfileDirty((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_html: next,
+ },
+ }))
+ }
+ />
+ <SettingSection
+ label="Capture Screenshot"
+ description="Store browser screenshots when available."
+ icon={<SlidersHorizontal className="size-4" />}
+ checked={runProfile.diagnostics_profile.capture_screenshot}
+ onChange={(next) =>
+ markProfileDirty((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_screenshot: next,
+ },
+ }))
+ }
+ />
+ <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+ <div className="field-label">Network Capture</div>
+ <Dropdown<CaptureNetworkMode>
+ ariaLabel="Network capture"
+ value={runProfile.diagnostics_profile.capture_network}
+ onChange={(next) => {
+ if (CAPTURE_NETWORK_OPTIONS.has(next)) {
+ markProfileDirty((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_network: next,
+ },
+ }));
+ }
+ }}
+ options={[
+ { value: "off", label: "Off" },
+ { value: "matched_only", label: "Matched Only" },
+ { value: "all_small_json", label: "All Small JSON" },
+ ]}
  />
  </div>
- </div>
- </SettingSection>
+ <SettingSection
+ label="Capture Response Headers"
+ description="Preserve response-header diagnostics."
+ icon={<Shield className="size-4" />}
+ checked={runProfile.diagnostics_profile.capture_response_headers}
+ onChange={(next) =>
+ markProfileDirty((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_response_headers: next,
+ },
+ }))
+ }
+ />
+ <SettingSection
+ label="Capture Browser Diagnostics"
+ description="Keep detailed browser-attempt diagnostics for debugging."
+ icon={<Shield className="size-4" />}
+ checked={runProfile.diagnostics_profile.capture_browser_diagnostics}
+ onChange={(next) =>
+ markProfileDirty((current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_browser_diagnostics: next,
+ },
+ }))
+ }
+ />
+
  <SettingSection
  label="Respect robots.txt"
  description="Skip disallowed paths and honor crawl-delay."
- icon={<Shield className="size-4"/>}
+ icon={<Shield className="size-4" />}
  checked={respectRobotsTxt}
  onChange={setRespectRobotsTxt}
  />
  <SettingSection
  label="Proxy"
  description="Use a proxy pool."
- icon={<Globe className="size-4"/>}
+ icon={<Globe className="size-4" />}
  checked={proxyEnabled}
  onChange={setProxyEnabled}
  >
@@ -783,28 +1357,30 @@ useEffect(() => {
  />
  </div>
  </SettingSection>
+ </>
+ )}
+ </div>
  </div>
  </div>
  </Card>
  </div>
  </div>
  </form>
-
  </div>
  );
 }
 
 function inferRunTypeHint(config: CrawlConfig) {
- if (config.module ==="category") {
- return config.mode ==="bulk"?"batch":"crawl";
+ if (config.module === "category") {
+ return config.mode === "bulk" ? "batch" : "crawl";
  }
- if (config.mode ==="csv") {
- return"csv";
+ if (config.mode === "csv") {
+ return "csv";
  }
- if (config.mode ==="batch") {
- return"batch";
+ if (config.mode === "batch") {
+ return "batch";
  }
- return"crawl";
+ return "crawl";
 }
 
 function buildExtractionContract(fieldRows: FieldRow[]) {
@@ -819,7 +1395,8 @@ function buildExtractionContract(fieldRows: FieldRow[]) {
  }
  const reason = validateAdditionalFieldName(fieldName);
  if (reason) {
- throw new Error(`Invalid manual field "${row.fieldName || fieldName}": ${reason}`); }
+ throw new Error(`Invalid manual field "${row.fieldName || fieldName}": ${reason}`);
+ }
  return {
  field_name: fieldName,
  css_selector: cssSelector || undefined,
@@ -831,38 +1408,66 @@ function buildExtractionContract(fieldRows: FieldRow[]) {
  return extractionContract;
 }
 
-export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): PendingDispatch {
+export function buildDispatch(
+ config: CrawlConfig,
+ fieldRows: FieldRow[] = [],
+ options?: {
+ runProfile?: DomainRunProfile;
+ studioMode?: StudioMode;
+ },
+): PendingDispatch {
  const additionalFields = uniqueRequestedFields(config.additional_fields);
  const invalidAdditionalField = additionalFields.find((field) => validateAdditionalFieldName(field));
  if (invalidAdditionalField) {
  const reason = validateAdditionalFieldName(invalidAdditionalField);
-      throw new Error(`Invalid additional field "${invalidAdditionalField}": ${reason}`);
+ throw new Error(`Invalid additional field "${invalidAdditionalField}": ${reason}`);
  }
- const resolvedAdvancedMode = config.advanced_enabled ? config.advanced_mode : null;
  const surface = deriveSurface(config.domain, config.module);
+ const runProfile = cloneRunProfile(options?.runProfile);
+ const studioMode = options?.studioMode ?? "quick";
  const commonSettings = {
  llm_enabled: config.smart_extraction,
- advanced_enabled: config.advanced_enabled,
- advanced_mode: resolvedAdvancedMode,
- sleep_ms: config.request_delay_ms,
+ advanced_enabled: studioMode === "advanced",
+ advanced_mode: studioMode === "advanced" ? runProfile.fetch_profile.traversal_mode : null,
  max_records: config.max_records,
- max_pages: config.max_pages,
- max_scrolls: config.max_scrolls,
  respect_robots_txt: config.respect_robots_txt,
  proxy_enabled: config.proxy_enabled,
  proxy_list: config.proxy_enabled ? config.proxy_lines : [],
  additional_fields: additionalFields,
  crawl_module: config.module,
  crawl_mode: config.mode,
+ fetch_profile: {
+ ...runProfile.fetch_profile,
+ request_delay_ms: clampNumber(
+ runProfile.fetch_profile.request_delay_ms,
+ CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
+ CRAWL_LIMITS.MAX_REQUEST_DELAY_MS,
+ CRAWL_DEFAULTS.REQUEST_DELAY_MS,
+ ),
+ max_pages: clampNumber(
+ runProfile.fetch_profile.max_pages,
+ CRAWL_LIMITS.MIN_PAGES,
+ CRAWL_LIMITS.MAX_PAGES,
+ CRAWL_DEFAULTS.MAX_PAGES,
+ ),
+ max_scrolls: clampNumber(
+ runProfile.fetch_profile.max_scrolls,
+ CRAWL_LIMITS.MIN_SCROLLS,
+ CRAWL_LIMITS.MAX_SCROLLS,
+ CRAWL_DEFAULTS.MAX_SCROLLS,
+ ),
+ },
+ locality_profile: { ...runProfile.locality_profile },
+ diagnostics_profile: { ...runProfile.diagnostics_profile },
  extraction_contract: buildExtractionContract(fieldRows),
  };
 
- if (config.module ==="category") {
- if (config.mode ==="bulk") {
+ if (config.module === "category") {
+ if (config.mode === "bulk") {
  const urls = parseLines(config.bulk_urls);
  if (!urls.length) throw new Error("Bulk crawl needs at least one URL.");
  return {
- runType:"batch",
+ runType: "batch",
  surface,
  url: urls[0],
  urls,
@@ -873,7 +1478,7 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
  }
  if (!config.target_url.trim()) throw new Error("Enter a target URL.");
  return {
- runType:"crawl",
+ runType: "crawl",
  surface,
  url: config.target_url.trim(),
  settings: commonSettings,
@@ -882,10 +1487,10 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
  };
  }
 
- if (config.mode ==="csv") {
+ if (config.mode === "csv") {
  if (!config.csv_file) throw new Error("Select a CSV file.");
  return {
- runType:"csv",
+ runType: "csv",
  surface,
  url: config.target_url.trim() || undefined,
  settings: commonSettings,
@@ -894,11 +1499,11 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
  };
  }
 
- if (config.mode ==="batch") {
+ if (config.mode === "batch") {
  const urls = parseLines(config.bulk_urls);
  if (!urls.length) throw new Error("Batch crawl needs at least one URL.");
  return {
- runType:"batch",
+ runType: "batch",
  surface,
  url: urls[0],
  urls,
@@ -910,7 +1515,7 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
 
  if (!config.target_url.trim()) throw new Error("Enter a target URL.");
  return {
- runType:"crawl",
+ runType: "crawl",
  surface,
  url: config.target_url.trim(),
  settings: commonSettings,
@@ -919,9 +1524,16 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
  };
 }
 
-function canPreview(config: CrawlConfig, fieldRows: FieldRow[]) {
+function canPreview(
+ config: CrawlConfig,
+ fieldRows: FieldRow[],
+ options?: {
+ runProfile?: DomainRunProfile;
+ studioMode?: StudioMode;
+ },
+) {
  try {
- buildDispatch(config, fieldRows);
+ buildDispatch(config, fieldRows, options);
  return true;
  } catch {
  return false;
@@ -937,16 +1549,16 @@ function selectorGenerationFields(surface: string, fieldRows: FieldRow[], additi
 }
 
 function defaultFieldsForSurface(surface: string) {
- if (surface ==="job_detail") {
- return ["title","company","location","salary","apply_url"];
+ if (surface === "job_detail") {
+ return ["title", "company", "location", "salary", "apply_url"];
  }
- if (surface ==="job_listing") {
- return ["title","company","location","url"];
+ if (surface === "job_listing") {
+ return ["title", "company", "location", "url"];
  }
- if (surface ==="ecommerce_listing") {
- return ["title","price","image_url","url"];
+ if (surface === "ecommerce_listing") {
+ return ["title", "price", "image_url", "url"];
  }
- return ["title","price","brand","sku","availability","image_url"];
+ return ["title", "price", "brand", "sku", "availability", "image_url"];
 }
 
 function selectRelevantSelectorRecords(
@@ -962,7 +1574,7 @@ function selectRelevantSelectorRecords(
  surface: string,
 ) {
  return records
- .filter((record) => record.is_active && (record.surface === surface || record.surface ==="generic"))
+ .filter((record) => record.is_active && (record.surface === surface || record.surface === "generic"))
  .sort((left, right) => {
  const leftPriority = left.surface === surface ? 0 : 1;
  const rightPriority = right.surface === surface ? 0 : 1;
@@ -983,12 +1595,12 @@ function buildFieldRowFromSelectorRecord(record: {
  return {
  id: `domain-memory-${record.id}`,
  fieldName: record.field_name,
- cssSelector: record.css_selector ??"",
- xpath: record.xpath ??"",
- regex: record.regex ??"",
- cssState: record.css_selector ?"valid":"idle",
- xpathState: record.xpath ?"valid":"idle",
- regexState: record.regex ?"valid":"idle",
+ cssSelector: record.css_selector ?? "",
+ xpath: record.xpath ?? "",
+ regex: record.regex ?? "",
+ cssState: record.css_selector ? "valid" : "idle",
+ xpathState: record.xpath ? "valid" : "idle",
+ regexState: record.regex ? "valid" : "idle",
  } satisfies FieldRow;
 }
 
@@ -1003,12 +1615,12 @@ function buildFieldRowFromSuggestion(
  return {
  id: `generated-${fieldName}`,
  fieldName,
- cssSelector: suggestion?.css_selector ??"",
- xpath: suggestion?.xpath ??"",
- regex: suggestion?.regex ??"",
- cssState: suggestion?.css_selector ?"valid":"idle",
- xpathState: suggestion?.xpath ?"valid":"idle",
- regexState: suggestion?.regex ?"valid":"idle",
+ cssSelector: suggestion?.css_selector ?? "",
+ xpath: suggestion?.xpath ?? "",
+ regex: suggestion?.regex ?? "",
+ cssState: suggestion?.css_selector ? "valid" : "idle",
+ xpathState: suggestion?.xpath ? "valid" : "idle",
+ regexState: suggestion?.regex ? "valid" : "idle",
  } satisfies FieldRow;
 }
 

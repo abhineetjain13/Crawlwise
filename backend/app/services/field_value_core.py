@@ -518,7 +518,17 @@ def salary_from_json(value: object) -> str | None:
 def extract_urls(value: object, page_url: str) -> list[str]:
     results: list[str] = []
     if isinstance(value, str):
-        absolute = absolute_url(page_url, value)
+        text = str(value or "").strip()
+        if not text:
+            return results
+        embedded_urls = re.findall(r"https?://[^\s,]+", text)
+        if len(embedded_urls) >= 2:
+            for candidate in embedded_urls:
+                absolute = absolute_url(page_url, candidate)
+                if absolute:
+                    results.append(absolute)
+            return results
+        absolute = absolute_url(page_url, text)
         if absolute:
             results.append(absolute)
         return results

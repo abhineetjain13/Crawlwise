@@ -550,7 +550,10 @@ async def browser_fetch(
             ) = await _run_browser_stage(
                 stage="serialize",
                 page=page,
-                timeout_seconds=_remaining(),
+                timeout_seconds=max(
+                    _remaining(),
+                    float(crawler_runtime_settings.browser_capture_read_timeout_seconds),
+                ),
                 phase_timings_ms=phase_timings_ms,
                 operation=lambda: _serialize_browser_page_content(
                     page,
@@ -569,7 +572,10 @@ async def browser_fetch(
             finalized = await _run_browser_stage(
                 stage="finalize",
                 page=page,
-                timeout_seconds=_remaining(),
+                timeout_seconds=max(
+                    _remaining(),
+                    float(crawler_runtime_settings.browser_capture_read_timeout_seconds),
+                ),
                 phase_timings_ms=phase_timings_ms,
                 operation=lambda: finalize_browser_fetch(
                     BrowserFinalizeInput(

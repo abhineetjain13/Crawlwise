@@ -79,6 +79,7 @@ class _FetchRuntimeContext:
     listing_recovery_mode: str | None
     proxies: list[str | None]
     traversal_required: bool
+    fetch_mode: str
     runtime_policy: dict[str, object]
     last_browser_attempt_diagnostics: dict[str, object] = field(default_factory=dict)
     last_error: Exception | None = None
@@ -240,6 +241,7 @@ async def fetch_page(
     run_id: int | None = None,
     timeout_seconds: float | None = None,
     proxy_list: list[str] | None = None,
+    fetch_mode: str = "auto",
     prefer_browser: bool = False,
     browser_reason: str | None = None,
     surface: str | None = None,
@@ -254,7 +256,10 @@ async def fetch_page(
     url = _ensure_scheme(url)
     context = _FetchRuntimeContext(
         url=url,
-        resolved_timeout=float(timeout_seconds or settings.http_timeout_seconds),
+        resolved_timeout=float(
+            timeout_seconds
+            or crawler_runtime_settings.acquisition_attempt_timeout_seconds
+        ),
         run_id=run_id,
         surface=surface,
         traversal_mode=traversal_mode,
@@ -266,14 +271,14 @@ async def fetch_page(
         listing_recovery_mode=str(listing_recovery_mode or "").strip() or None,
         proxies=_resolve_proxy_attempts(proxy_list),
         traversal_required=should_run_traversal(surface, traversal_mode),
+        fetch_mode=_normalize_fetch_mode(fetch_mode),
         runtime_policy=resolve_platform_runtime_policy(url, surface=surface),
     )
     host_preference_enabled = await should_prefer_browser_for_host(url)
-    browser_first = (
-        prefer_browser
-        or host_preference_enabled
-        or bool(context.runtime_policy.get("requires_browser"))
-        or context.traversal_required
+    browser_first = _browser_first_decision(
+        context=context,
+        prefer_browser=prefer_browser,
+        host_preference_enabled=host_preference_enabled,
     )
     if browser_first:
         browser_attempt_kwargs = {
@@ -338,6 +343,53 @@ def _resolve_proxy_attempts(proxy_list: list[str] | None) -> list[str | None]:
         if value
     ]
     return proxies or [None]
+
+
+def _normalize_fetch_mode(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"auto", "http_only", "browser_only", "http_then_browser"}:
+        return normalized
+    return "auto"
+
+
+def _hard_browser_requirement(
+    *,
+    context: _FetchRuntimeContext,
+    runtime_policy: dict[str, object] | None = None,
+) -> bool:
+    active_policy = runtime_policy or context.runtime_policy
+    return bool(active_policy.get("requires_browser")) or context.traversal_required
+
+
+def _browser_first_decision(
+    *,
+    context: _FetchRuntimeContext,
+    prefer_browser: bool,
+    host_preference_enabled: bool,
+) -> bool:
+    if context.fetch_mode == "browser_only":
+        return True
+    if context.fetch_mode == "http_then_browser":
+        return False
+    if context.fetch_mode == "http_only":
+        return _hard_browser_requirement(context=context)
+    return (
+        prefer_browser
+        or host_preference_enabled
+        or _hard_browser_requirement(context=context)
+    )
+
+
+def _browser_escalation_allowed(
+    *,
+    context: _FetchRuntimeContext,
+    runtime_policy: dict[str, object] | None = None,
+) -> bool:
+    if context.fetch_mode in {"browser_only", "http_then_browser"}:
+        return True
+    if context.fetch_mode == "http_only":
+        return _hard_browser_requirement(context=context, runtime_policy=runtime_policy)
+    return True
 
 
 async def _run_browser_attempts(
@@ -526,7 +578,10 @@ async def _handle_http_result(
     ):
         await _sleep_before_retry(attempt)
         return _RETRY_SENTINEL, False
-    if should_browser_escalate:
+    if should_browser_escalate and _browser_escalation_allowed(
+        context=context,
+        runtime_policy=result_runtime_policy,
+    ):
         browser_reason = (
             context.browser_reason
             or (f"vendor-block:{vendor}" if vendor else "http-escalation")

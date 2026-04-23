@@ -961,6 +961,29 @@ def _listing_record_from_card(
     *,
     selector_rules: list[dict[str, object]] | None = None,
 ) -> dict[str, Any] | None:
+    def _selected_selector_trace(
+        field_name: str,
+        finalized_value: object,
+    ) -> dict[str, object] | None:
+        traces = list(selector_trace_candidates.get(field_name) or [])
+        for trace in traces:
+            if not isinstance(trace, dict):
+                continue
+            if trace.get("_candidate_value") == finalized_value:
+                return {
+                    key: value
+                    for key, value in trace.items()
+                    if not str(key).startswith("_")
+                }
+        trace = next((row for row in traces if isinstance(row, dict)), None)
+        if not isinstance(trace, dict):
+            return None
+        return {
+            key: value
+            for key, value in trace.items()
+            if not str(key).startswith("_")
+        }
+
     is_job = surface.startswith("job_")
     title_node = _card_title_node(card)
     primary_anchor = _select_primary_anchor(
@@ -1000,6 +1023,7 @@ def _listing_record_from_card(
             return None
     alias_lookup = surface_alias_lookup(surface, None)
     candidates: dict[str, list[object]] = {"title": [title], "url": [url]}
+    selector_trace_candidates: dict[str, list[dict[str, object]]] = {}
     card_soup = BeautifulSoup(str(getattr(card, "html", "") or ""), "html.parser")
     apply_selector_fallbacks(
         card_soup,
@@ -1008,6 +1032,7 @@ def _listing_record_from_card(
         None,
         candidates,
         selector_rules=selector_rules,
+        selector_trace_candidates=selector_trace_candidates,
     )
     if image_urls and not candidates.get("image_url"):
         add_candidate(candidates, "image_url", image_urls[0])
@@ -1048,10 +1073,16 @@ def _listing_record_from_card(
         "source_url": page_url,
         "_source": "dom_listing",
     }
+    selected_selector_traces: dict[str, dict[str, object]] = {}
     for field_name in surface_fields(surface, None):
         finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
         if finalized not in (None, "", [], {}):
             record[field_name] = finalized
+            selector_trace = _selected_selector_trace(field_name, finalized)
+            if selector_trace:
+                selected_selector_traces[field_name] = selector_trace
+    if selected_selector_traces:
+        record["_selector_traces"] = selected_selector_traces
     cleaned = finalize_record(record, surface=surface)
     if not cleaned.get("url") or not cleaned.get("title"):
         return None

@@ -6,6 +6,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.crawl import DomainMemory
 
 
+def _normalized_selector_rule(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": _safe_int(row.get("id"), default=0),
+        "field_name": str(row.get("field_name") or "").strip().lower(),
+        "css_selector": str(row.get("css_selector") or "").strip() or None,
+        "xpath": str(row.get("xpath") or "").strip() or None,
+        "regex": str(row.get("regex") or "").strip() or None,
+        "sample_value": str(row.get("sample_value") or "").strip() or None,
+        "source": str(row.get("source") or "domain_memory").strip(),
+        "status": str(row.get("status") or "validated").strip(),
+        "is_active": bool(row.get("is_active", True)),
+        "source_run_id": _safe_int(row.get("source_run_id"), default=None),
+    }
+
+
+def _selector_rule_signature(row: dict[str, object]) -> tuple[str, str, str, str]:
+    normalized = _normalized_selector_rule(row)
+    return (
+        str(normalized.get("field_name") or "").strip().lower(),
+        str(normalized.get("css_selector") or "").strip(),
+        str(normalized.get("xpath") or "").strip(),
+        str(normalized.get("regex") or "").strip(),
+    )
+
+
+def _safe_int(value: object, *, default: int | None) -> int | None:
+    try:
+        if value in (None, ""):
+            return default
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
 async def load_domain_memory(
     session: AsyncSession,
     *,
@@ -64,7 +98,7 @@ def selector_rules_from_memory(memory: DomainMemory | None) -> list[dict[str, ob
         for row in rules:
             if not isinstance(row, dict):
                 continue
-            normalized.append(dict(row))
+            normalized.append(_normalized_selector_rule(row))
         return normalized
 
     fallback_rules: list[dict[str, object]] = []
@@ -73,7 +107,8 @@ def selector_rules_from_memory(memory: DomainMemory | None) -> list[dict[str, ob
         if str(field_name).startswith("_") or not isinstance(payload, dict):
             continue
         fallback_rules.append(
-            {
+            _normalized_selector_rule(
+                {
                 "id": next_id,
                 "field_name": str(field_name or "").strip().lower(),
                 "css_selector": payload.get("css_selector") or payload.get("css"),
@@ -83,7 +118,8 @@ def selector_rules_from_memory(memory: DomainMemory | None) -> list[dict[str, ob
                 "source": payload.get("source") or "domain_memory",
                 "status": payload.get("status") or "validated",
                 "is_active": bool(payload.get("is_active", True)),
-            }
+                }
+            )
         )
         next_id += 1
     return fallback_rules
@@ -95,24 +131,10 @@ def selector_payload_from_rules(rules: list[dict[str, object]]) -> dict[str, obj
     for row in rules:
         if not isinstance(row, dict):
             continue
-        try:
-            row_id = int(str(row.get("id") or 0))
-        except (TypeError, ValueError):
-            row_id = 0
+        normalized_row = _normalized_selector_rule(row)
+        row_id = int(normalized_row.get("id") or 0)
         max_id = max(max_id, row_id)
-        normalized_rules.append(
-            {
-                "id": row_id,
-                "field_name": str(row.get("field_name") or "").strip().lower(),
-                "css_selector": str(row.get("css_selector") or "").strip() or None,
-                "xpath": str(row.get("xpath") or "").strip() or None,
-                "regex": str(row.get("regex") or "").strip() or None,
-                "sample_value": str(row.get("sample_value") or "").strip() or None,
-                "source": str(row.get("source") or "domain_memory").strip(),
-                "status": str(row.get("status") or "validated").strip(),
-                "is_active": bool(row.get("is_active", True)),
-            }
-        )
+        normalized_rules.append(normalized_row)
     return {
         "_meta": {"next_id": max_id + 1},
         "rules": normalized_rules,
@@ -126,7 +148,7 @@ async def load_domain_selector_rules(
     surface: str,
 ) -> list[dict[str, object]]:
     rules: list[dict[str, object]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     for candidate_surface in [str(surface or "").strip().lower(), "generic"]:
         if not candidate_surface:
             continue
@@ -136,13 +158,54 @@ async def load_domain_selector_rules(
             surface=candidate_surface,
         )
         for row in selector_rules_from_memory(memory):
-            key = (
-                str(row.get("field_name") or "").strip().lower(),
-                str(row.get("css_selector") or "").strip(),
-                str(row.get("xpath") or "").strip(),
-            )
+            key = _selector_rule_signature(row)
             if key in seen:
                 continue
             seen.add(key)
             rules.append(row)
     return rules
+
+
+def compose_runtime_selector_rules(
+    saved_rules: list[dict[str, object]] | None,
+    run_contract_rules: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    normalized_saved = [
+        _normalized_selector_rule(row)
+        for row in list(saved_rules or [])
+        if isinstance(row, dict)
+    ]
+    normalized_run_contract = [
+        _normalized_selector_rule(
+            {
+                **dict(row),
+                "source": "run_config",
+                "status": str(row.get("status") or "validated").strip(),
+                "is_active": bool(row.get("is_active", True)),
+            }
+        )
+        for row in list(run_contract_rules or [])
+        if isinstance(row, dict)
+    ]
+    run_override_fields = {
+        str(row.get("field_name") or "").strip().lower()
+        for row in normalized_run_contract
+        if str(row.get("field_name") or "").strip()
+    }
+    combined: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for row in normalized_saved:
+        if str(row.get("field_name") or "").strip().lower() in run_override_fields:
+            continue
+        signature = _selector_rule_signature(row)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        combined.append(row)
+    for row in normalized_run_contract:
+        signature = _selector_rule_signature(row)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        combined.append(row)
+    return combined

@@ -1091,6 +1091,7 @@ def apply_selector_fallbacks(
     *,
     candidate_sources: dict[str, list[str]] | None = None,
     field_sources: dict[str, list[str]] | None = None,
+    selector_trace_candidates: dict[str, list[dict[str, object]]] | None = None,
 ) -> None:
     def _add(field_name: str, value: object, source: str) -> None:
         growth = add_candidate(candidates, field_name, value)
@@ -1103,6 +1104,29 @@ def apply_selector_fallbacks(
             public_source = "dom_selector" if source == "selector_rule" else source
             if public_source not in bucket:
                 bucket.append(public_source)
+
+    def _record_selector_trace(
+        field_name: str,
+        value: object,
+        row: dict[str, object],
+        *,
+        selector_kind: str,
+        selector_value: str,
+    ) -> None:
+        if selector_trace_candidates is None:
+            return
+        selector_trace_candidates.setdefault(field_name, []).append(
+            {
+                "selector_kind": selector_kind,
+                "selector_value": selector_value,
+                "selector_source": str(row.get("source") or "domain_memory").strip(),
+                "selector_record_id": row.get("id"),
+                "source_run_id": row.get("source_run_id"),
+                "sample_value": str(value),
+                "page_url": page_url,
+                "_candidate_value": value,
+            }
+        )
 
     fields = surface_fields(surface, requested_fields)
     alias_lookup = surface_alias_lookup(surface, requested_fields)
@@ -1117,16 +1141,32 @@ def apply_selector_fallbacks(
         css_selector = str(row.get("css_selector") or "").strip()
         regex = str(row.get("regex") or "").strip()
         values: list[object] = []
+        selector_kind = ""
+        selector_value = ""
         if xpath:
             values = extract_xpath_values(root, xpath, field_name, page_url)
+            selector_kind = "xpath"
+            selector_value = xpath
         if not values and css_selector:
             values = extract_selector_values(root, css_selector, field_name, page_url)
+            selector_kind = "css_selector"
+            selector_value = css_selector
         if values and regex:
             values = filter_values_by_regex(values, regex, field_name, page_url)
         elif not values and regex and not xpath and not css_selector:
             values = extract_regex_values(root, regex, field_name, page_url)
+            selector_kind = "regex"
+            selector_value = regex
         for value in values:
             _add(field_name, value, "selector_rule")
+            if selector_kind and selector_value:
+                _record_selector_trace(
+                    field_name,
+                    value,
+                    row,
+                    selector_kind=selector_kind,
+                    selector_value=selector_value,
+                )
         if values:
             selector_hit_fields.add(field_name)
     dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})

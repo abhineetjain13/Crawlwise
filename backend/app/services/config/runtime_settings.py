@@ -55,7 +55,7 @@ class CrawlerRuntimeSettings(BaseSettings):
 
     performance_profile: Literal["ULTRA_FAST", "BALANCED", "STEALTH"] = "BALANCED"
     http_timeout_seconds: int = 20
-    acquisition_attempt_timeout_seconds: int = 60
+    acquisition_attempt_timeout_seconds: int = 90
     curl_impersonate_target: str = "chrome131"
     http_user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

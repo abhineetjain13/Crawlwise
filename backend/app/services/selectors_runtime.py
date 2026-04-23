@@ -137,12 +137,17 @@ async def list_selector_records(
         records: list[dict[str, object]] = []
         for memory in await _all_domain_memories(session):
             for row in selector_rules_from_memory(memory):
-                records.append({
-                    **dict(row),
-                    "id": int(row.get("id") or 0),
-                    "domain": memory.domain,
-                    "surface": memory.surface,
-                })
+                records.append(
+                    {
+                        **dict(row),
+                        "id": int(row.get("id") or 0),
+                        "domain": memory.domain,
+                        "surface": memory.surface,
+                        "source_run_id": row.get("source_run_id"),
+                        "created_at": memory.created_at,
+                        "updated_at": memory.updated_at,
+                    }
+                )
         return records
     if not normalized_surface:
         records: list[dict[str, object]] = []
@@ -150,12 +155,17 @@ async def list_selector_records(
             if memory.domain != normalized_domain:
                 continue
             for row in selector_rules_from_memory(memory):
-                records.append({
-                    **dict(row),
-                    "id": int(row.get("id") or 0),
-                    "domain": memory.domain,
-                    "surface": memory.surface,
-                })
+                records.append(
+                    {
+                        **dict(row),
+                        "id": int(row.get("id") or 0),
+                        "domain": memory.domain,
+                        "surface": memory.surface,
+                        "source_run_id": row.get("source_run_id"),
+                        "created_at": memory.created_at,
+                        "updated_at": memory.updated_at,
+                    }
+                )
         return records
     memory = await load_domain_memory(
         session,
@@ -168,6 +178,9 @@ async def list_selector_records(
             "id": int(row.get("id") or 0),
             "domain": normalized_domain,
             "surface": normalized_surface,
+            "source_run_id": row.get("source_run_id"),
+            "created_at": memory.created_at if memory is not None else None,
+            "updated_at": memory.updated_at if memory is not None else None,
         }
         for row in selector_rules_from_memory(memory)
     ]
@@ -199,6 +212,7 @@ async def create_selector_record(
         "status": str(payload.get("status") or "validated").strip(),
         "sample_value": str(payload.get("sample_value") or "").strip() or None,
         "source": str(payload.get("source") or "domain_memory").strip(),
+        "source_run_id": payload.get("source_run_id"),
         "is_active": bool(payload.get("is_active", True)),
     }
     rules = [row for row in rules if int(row.get("id") or 0) != next_id]
@@ -210,7 +224,18 @@ async def create_selector_record(
         selectors=selector_payload_from_rules(rules),
     )
     await session.commit()
-    return {"domain": normalized_domain, "surface": normalized_surface, **record}
+    memory = await load_domain_memory(
+        session,
+        domain=normalized_domain,
+        surface=normalized_surface,
+    )
+    return {
+        "domain": normalized_domain,
+        "surface": normalized_surface,
+        **record,
+        "created_at": memory.created_at if memory is not None else None,
+        "updated_at": memory.updated_at if memory is not None else None,
+    }
 
 
 async def update_selector_record(
@@ -234,6 +259,7 @@ async def update_selector_record(
                 "status",
                 "sample_value",
                 "source",
+                "source_run_id",
                 "is_active",
             ):
                 if key not in payload:
@@ -243,6 +269,8 @@ async def update_selector_record(
                     row[key] = str(value or "").strip().lower()
                 elif key == "is_active":
                     row[key] = bool(value)
+                elif key == "source_run_id":
+                    row[key] = value
                 else:
                     row[key] = str(value or "").strip() or None
             updated = True
@@ -260,7 +288,13 @@ async def update_selector_record(
         refreshed = next(
             row for row in rules if int(row.get("id") or 0) == int(selector_id)
         )
-        return {"domain": memory.domain, "surface": memory.surface, **refreshed}
+        return {
+            "domain": memory.domain,
+            "surface": memory.surface,
+            **refreshed,
+            "created_at": memory.created_at,
+            "updated_at": memory.updated_at,
+        }
     return None
 
 

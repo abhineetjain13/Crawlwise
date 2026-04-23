@@ -2574,6 +2574,101 @@ def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record
     assert record["_extraction_tiers"]["current"] == "structured_data"
 
 
+def test_extract_detail_records_preserves_selector_trace_for_selected_rule() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="selector-title">Selector Widget</div>
+        <div class="selector-price">$19.99</div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/selector-widget",
+        "ecommerce_detail",
+        max_records=1,
+        selector_rules=[
+            {
+                "id": 11,
+                "field_name": "title",
+                "css_selector": ".selector-title",
+                "source": "domain_memory",
+                "source_run_id": 55,
+            },
+            {
+                "id": 12,
+                "field_name": "price",
+                "css_selector": ".selector-price",
+                "source": "domain_memory",
+                "source_run_id": 55,
+            },
+        ],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["_selector_traces"]["title"] == {
+        "selector_kind": "css_selector",
+        "selector_value": ".selector-title",
+        "selector_source": "domain_memory",
+        "selector_record_id": 11,
+        "source_run_id": 55,
+        "sample_value": "Selector Widget",
+        "page_url": "https://example.com/products/selector-widget",
+    }
+    assert record["_selector_traces"]["price"] == {
+        "selector_kind": "css_selector",
+        "selector_value": ".selector-price",
+        "selector_source": "domain_memory",
+        "selector_record_id": 12,
+        "source_run_id": 55,
+        "sample_value": "$19.99",
+        "page_url": "https://example.com/products/selector-widget",
+    }
+
+
+def test_extract_listing_records_preserves_selector_trace_for_selected_rule() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="card">
+          <a href="/products/selector-widget">Selector Widget</a>
+          <div class="selector-price">$19.99</div>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=5,
+        selector_rules=[
+            {
+                "id": 21,
+                "field_name": "price",
+                "css_selector": ".selector-price",
+                "source": "domain_memory",
+                "source_run_id": 66,
+            }
+        ],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["_selector_traces"]["price"] == {
+        "selector_kind": "css_selector",
+        "selector_value": ".selector-price",
+        "selector_source": "domain_memory",
+        "selector_record_id": 21,
+        "source_run_id": 66,
+        "sample_value": "$19.99",
+        "page_url": "https://example.com/collections/widgets",
+    }
+
+
 def test_extract_detail_rejects_non_variant_options_object_from_structured_payload() -> None:
     html = """
     <html>

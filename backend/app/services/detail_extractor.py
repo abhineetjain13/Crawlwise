@@ -227,6 +227,7 @@ def _apply_dom_fallbacks(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
+    selector_trace_candidates: dict[str, list[dict[str, object]]],
     selector_rules: list[dict[str, object]] | None = None,
 ) -> None:
     fields = surface_fields(surface, requested_fields)
@@ -247,6 +248,7 @@ def _apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
+            selector_trace_candidates,
             "title",
             title,
             source="dom_h1",
@@ -260,6 +262,7 @@ def _apply_dom_fallbacks(
         selector_rules=selector_rules,
         candidate_sources=candidate_sources,
         field_sources=field_sources,
+        selector_trace_candidates=selector_trace_candidates,
     )
     canonical = soup.find("link", attrs={"rel": re.compile("canonical", re.I)})
     if canonical is not None:
@@ -269,6 +272,7 @@ def _apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
+            selector_trace_candidates,
             "url",
             absolute_url(page_url, canonical.get("href")),
             source="dom_canonical",
@@ -284,6 +288,7 @@ def _apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
+            selector_trace_candidates,
             "image_url",
             images[0],
             source="dom_images",
@@ -292,6 +297,7 @@ def _apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
+            selector_trace_candidates,
             "additional_images",
             images[1:],
             source="dom_images",
@@ -306,6 +312,7 @@ def _apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
+                selector_trace_candidates,
                 normalized,
                 coerce_field_value(normalized, value, page_url),
                 source="dom_sections",
@@ -323,6 +330,7 @@ def _apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
+                selector_trace_candidates,
                 "currency",
                 currency_code,
                 source="dom_text",
@@ -335,6 +343,7 @@ def _apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
+                selector_trace_candidates,
                 "review_count",
                 review_match.group(1),
                 source="dom_text",
@@ -346,6 +355,7 @@ def _apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
+                selector_trace_candidates,
                 "rating",
                 rating_match.group(1),
                 source="dom_text",
@@ -359,6 +369,7 @@ def _apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
+                selector_trace_candidates,
                 "remote",
                 "remote",
                 source="dom_text",
@@ -368,6 +379,7 @@ def _add_sourced_candidate(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
+    selector_trace_candidates: dict[str, list[dict[str, object]]],
     field_name: str,
     value: object,
     *,
@@ -421,6 +433,7 @@ def _collect_record_candidates(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
+    selector_trace_candidates: dict[str, list[dict[str, object]]],
     source: str,
 ) -> None:
     allowed_fields = set(fields)
@@ -436,6 +449,7 @@ def _collect_record_candidates(
             candidates,
             candidate_sources,
             field_sources,
+            selector_trace_candidates,
             normalized_field,
             coerce_field_value(normalized_field, value, page_url),
             source=source,
@@ -449,6 +463,7 @@ def _collect_structured_payload_candidates(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
+    selector_trace_candidates: dict[str, list[dict[str, object]]],
     source: str,
 ) -> None:
     structured_candidates: dict[str, list[object]] = {}
@@ -464,6 +479,7 @@ def _collect_structured_payload_candidates(
                 candidates,
                 candidate_sources,
                 field_sources,
+                selector_trace_candidates,
                 field_name,
                 value,
                 source=source,
@@ -710,6 +726,34 @@ def _selector_self_heal_config(
         ),
     }
 
+
+def _selected_selector_trace(
+    *,
+    field_name: str,
+    finalized_value: object,
+    selector_trace_candidates: dict[str, list[dict[str, object]]],
+) -> dict[str, object] | None:
+    traces = list(selector_trace_candidates.get(field_name) or [])
+    if not traces:
+        return None
+    for trace in traces:
+        if not isinstance(trace, dict):
+            continue
+        if trace.get("_candidate_value") == finalized_value:
+            return {
+                key: value
+                for key, value in trace.items()
+                if not str(key).startswith("_")
+            }
+    trace = next((row for row in traces if isinstance(row, dict)), None)
+    if not isinstance(trace, dict):
+        return None
+    return {
+        key: value
+        for key, value in trace.items()
+        if not str(key).startswith("_")
+    }
+
 def _materialize_record(
     *,
     page_url: str,
@@ -720,6 +764,7 @@ def _materialize_record(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
+    selector_trace_candidates: dict[str, list[dict[str, object]]],
     extraction_runtime_snapshot: dict[str, object] | None,
     tier_name: str,
     completed_tiers: list[str],
@@ -731,6 +776,7 @@ def _materialize_record(
     )
     record: dict[str, Any] = {"source_url": identity_url, "url": identity_url}
     selected_field_sources: dict[str, str] = {}
+    selected_selector_traces: dict[str, dict[str, object]] = {}
     merged_images, merged_image_source = _materialize_image_fields(
         surface=surface,
         candidates=candidates,
@@ -761,6 +807,14 @@ def _materialize_record(
             record[field_name] = finalized
             if selected_source:
                 selected_field_sources[field_name] = selected_source
+                if selected_source == "selector_rule":
+                    selector_trace = _selected_selector_trace(
+                        field_name=field_name,
+                        finalized_value=finalized,
+                        selector_trace_candidates=selector_trace_candidates,
+                    )
+                    if selector_trace:
+                        selected_selector_traces[field_name] = selector_trace
     if merged_images:
         record["image_url"] = merged_images[0]
         if len(merged_images) > 1:
@@ -775,11 +829,14 @@ def _materialize_record(
     )
     if promoted:
         selected_field_sources["title"] = promoted[1]
+        selected_selector_traces.pop("title", None)
     record["_field_sources"] = {
         field_name: list(source_list)
         for field_name, source_list in field_sources.items()
         if field_name in record
     }
+    if selected_selector_traces:
+        record["_selector_traces"] = selected_selector_traces
     record["_source"] = _primary_source_for_record(record, selected_field_sources)
     _normalize_variant_record(record)
     _dedupe_primary_and_additional_images(record)
@@ -801,6 +858,7 @@ def _materialize_record(
 
 def _normalize_variant_record(record: dict[str, Any]) -> None:
     _backfill_selected_variant_from_record(record)
+    _dedupe_variant_rows(record)
     _prune_non_selectable_variant_axes(record)
     _backfill_variant_prices_from_record(record)
 
@@ -841,6 +899,79 @@ def _backfill_selected_variant_from_record(record: dict[str, Any]) -> None:
         break
 
 
+def _dedupe_variant_rows(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or not variants:
+        return
+    best_by_identity: dict[tuple[tuple[str, str], ...] | str, dict[str, Any]] = {}
+    ordered_keys: list[tuple[tuple[str, str], ...] | str] = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        option_values = variant.get("option_values")
+        identity_key: tuple[tuple[str, str], ...] | str | None = None
+        if isinstance(option_values, dict) and option_values:
+            normalized_pairs = tuple(
+                sorted(
+                    (
+                        str(axis_name).strip(),
+                        clean_text(axis_value),
+                    )
+                    for axis_name, axis_value in option_values.items()
+                    if str(axis_name).strip() and clean_text(axis_value)
+                )
+            )
+            if normalized_pairs:
+                identity_key = normalized_pairs
+        if identity_key is None:
+            identity_key = (
+                text_or_none(variant.get("variant_id"))
+                or text_or_none(variant.get("sku"))
+                or text_or_none(variant.get("url"))
+            )
+        if not identity_key:
+            continue
+        existing = best_by_identity.get(identity_key)
+        candidate = dict(variant)
+        if existing is None:
+            best_by_identity[identity_key] = candidate
+            ordered_keys.append(identity_key)
+            continue
+        if len(candidate) > len(existing):
+            best_by_identity[identity_key] = candidate
+            existing = candidate
+        for field_name, field_value in candidate.items():
+            if existing.get(field_name) in (None, "", [], {}) and field_value not in (
+                None,
+                "",
+                [],
+                {},
+            ):
+                existing[field_name] = field_value
+    deduped_variants = [best_by_identity[key] for key in ordered_keys]
+    if not deduped_variants:
+        return
+    record["variants"] = deduped_variants
+    record["variant_count"] = len(deduped_variants)
+    selected_variant = record.get("selected_variant")
+    if not isinstance(selected_variant, dict):
+        return
+    selected_option_values = selected_variant.get("option_values")
+    if isinstance(selected_option_values, dict) and selected_option_values:
+        selected_key = tuple(
+            sorted(
+                (
+                    str(axis_name).strip(),
+                    clean_text(axis_value),
+                )
+                for axis_name, axis_value in selected_option_values.items()
+                if str(axis_name).strip() and clean_text(axis_value)
+            )
+        )
+        if selected_key in best_by_identity:
+            record["selected_variant"] = best_by_identity[selected_key]
+
+
 def _prune_non_selectable_variant_axes(record: dict[str, Any]) -> None:
     variant_axes = record.get("variant_axes")
     if not isinstance(variant_axes, dict) or not variant_axes:
@@ -849,15 +980,8 @@ def _prune_non_selectable_variant_axes(record: dict[str, Any]) -> None:
         variant_axes,
         always_selectable_axes=frozenset({"size"}),
     )
-    variant_option_axes = _variant_option_axis_names(record)
-    preserved_single_value_axes = {
-        axis_name: [axis_value]
-        for axis_name, axis_value in _single_value_attributes.items()
-        if axis_name in variant_option_axes
-    }
-    normalized_variant_axes = {**selectable_axes, **preserved_single_value_axes}
-    if normalized_variant_axes:
-        record["variant_axes"] = normalized_variant_axes
+    if selectable_axes:
+        record["variant_axes"] = selectable_axes
     else:
         record.pop("variant_axes", None)
     for field_name, field_value in _single_value_attributes.items():
@@ -865,7 +989,7 @@ def _prune_non_selectable_variant_axes(record: dict[str, Any]) -> None:
             normalized_value = clean_text(field_value)
             if normalized_value:
                 record[field_name] = normalized_value
-    for field_name, axis_values in normalized_variant_axes.items():
+    for field_name, axis_values in selectable_axes.items():
         if record.get(field_name) not in (None, "", [], {}):
             continue
         if not isinstance(axis_values, list) or len(axis_values) != 1:
@@ -873,7 +997,7 @@ def _prune_non_selectable_variant_axes(record: dict[str, Any]) -> None:
         normalized_value = clean_text(axis_values[0])
         if normalized_value:
             record[field_name] = normalized_value
-    allowed_axes = set(normalized_variant_axes)
+    allowed_axes = set(selectable_axes)
     if not allowed_axes:
         return
     _prune_variant_option_values(record.get("selected_variant"), allowed_axes=allowed_axes)
@@ -882,34 +1006,6 @@ def _prune_non_selectable_variant_axes(record: dict[str, Any]) -> None:
         return
     for variant in variants:
         _prune_variant_option_values(variant, allowed_axes=allowed_axes)
-
-
-def _variant_option_axis_names(record: dict[str, Any]) -> set[str]:
-    axis_names: set[str] = set()
-    selected_variant = record.get("selected_variant")
-    if isinstance(selected_variant, dict):
-        option_values = selected_variant.get("option_values")
-        if isinstance(option_values, dict):
-            axis_names.update(
-                str(axis_name).strip()
-                for axis_name in option_values
-                if str(axis_name).strip()
-            )
-    variants = record.get("variants")
-    if not isinstance(variants, list):
-        return axis_names
-    for variant in variants:
-        if not isinstance(variant, dict):
-            continue
-        option_values = variant.get("option_values")
-        if not isinstance(option_values, dict):
-            continue
-        axis_names.update(
-            str(axis_name).strip()
-            for axis_name in option_values
-            if str(axis_name).strip()
-        )
-    return axis_names
 
 
 def _prune_variant_option_values(
@@ -1997,9 +2093,10 @@ def build_detail_record(
     candidates: dict[str, list[object]] = {}
     candidate_sources: dict[str, list[str]] = {}
     field_sources: dict[str, list[str]] = {}
+    selector_trace_candidates: dict[str, list[dict[str, object]]] = {}
     fields = surface_fields(surface, requested_fields)
     selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
-    state = DetailTierState(page_url=page_url, requested_page_url=requested_page_url, surface=surface, requested_fields=requested_fields, fields=fields, candidates=candidates, candidate_sources=candidate_sources, field_sources=field_sources, extraction_runtime_snapshot=extraction_runtime_snapshot, completed_tiers=[])
+    state = DetailTierState(page_url=page_url, requested_page_url=requested_page_url, surface=surface, requested_fields=requested_fields, fields=fields, candidates=candidates, candidate_sources=candidate_sources, field_sources=field_sources, selector_trace_candidates=selector_trace_candidates, extraction_runtime_snapshot=extraction_runtime_snapshot, completed_tiers=[])
     js_state_objects = harvest_js_state_objects(None, context.cleaned_html)
     js_state_record = map_js_state_to_fields(
         js_state_objects,

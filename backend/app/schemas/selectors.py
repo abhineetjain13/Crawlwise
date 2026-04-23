@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 
@@ -14,7 +16,10 @@ class SelectorRecordResponse(BaseModel):
     status: str = "validated"
     sample_value: str | None = None
     source: str = "domain_memory"
+    source_run_id: int | None = None
     is_active: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class SelectorCreateRequest(BaseModel):
@@ -27,6 +32,7 @@ class SelectorCreateRequest(BaseModel):
     status: str | None = None
     sample_value: str | None = None
     source: str | None = None
+    source_run_id: int | None = None
     is_active: bool = True
 
     @model_validator(mode="after")
@@ -47,6 +53,7 @@ class SelectorUpdateRequest(BaseModel):
     status: str | None = None
     sample_value: str | None = None
     source: str | None = None
+    source_run_id: int | None = None
     is_active: bool | None = None
 
 

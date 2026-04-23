@@ -1,6 +1,6 @@
 # Backend Architecture
 
-> Last updated: 2026-04-22
+> Last updated: 2026-04-23
 >
 > Canonical detailed backend reference. This is the merged replacement for the older split architecture docs.
 
@@ -52,6 +52,13 @@ Important route groups:
 - `api/selectors.py`: selector CRUD, cross-surface listing by domain, suggestion, test, preview HTML
 - `api/llm.py`: provider catalog, config CRUD, connection test, cost log
 
+Domain-recipe routes now live under `api/crawls.py`:
+
+- `GET /api/crawls/domain-run-profile` — lookup saved run-profile defaults by normalized `(domain, surface)` for single-URL Crawl Studio auto-load
+- `GET /api/crawls/{run_id}/domain-recipe` — completed-run payload containing requested-field coverage, grouped winning selector candidates, affordance hints, saved selectors, and the saved domain run profile
+- `POST /api/crawls/{run_id}/domain-recipe/promote-selectors` — promote selected winning selector candidates into exact-surface domain memory
+- `POST /api/crawls/{run_id}/domain-recipe/save-run-profile` — save the reusable fetch/locality/diagnostics profile for the run's normalized `(domain, surface)`
+
 ## 4. Crawl Request and Settings Contract
 
 `CrawlCreate` currently accepts:
@@ -71,8 +78,11 @@ Current live behavior:
 `CrawlRunSettings` normalizes settings for storage/runtime. Important fields include:
 
 - `proxy_list`
-- `advanced_enabled`
-- resolved traversal mode
+- `fetch_profile`
+- `locality_profile`
+- `diagnostics_profile`
+- `advanced_enabled` / `advanced_mode` as UI-mode compatibility fields
+- resolved traversal mode derived from `fetch_profile.traversal_mode`
 - `max_pages`
 - `max_scrolls`
 - `max_records`
@@ -84,6 +94,13 @@ Current live behavior:
 - `extraction_contract`
 - `llm_config_snapshot`
 - `extraction_runtime_snapshot`
+
+Current live behavior:
+
+- nested run-profile settings are the canonical execution-shaping contract: `fetch_profile`, `locality_profile`, and `diagnostics_profile`
+- `create_crawl_run()` resolves single-URL settings in this order: generic UI defaults, saved `DomainRunProfile`, explicit user edits from Crawl Studio, then backend normalization/snapshotting
+- saved run profiles are limited to execution defaults only and intentionally exclude selector rows, proxies, LLM config/budgets, requested fields, cookies, auth/session state, and user identifiers
+- Crawl Studio now exposes `Quick Mode` and `Advanced Mode` as UI presentation modes only; both dispatch the same nested settings contract to the backend
 
 ## 5. High-Level Flow
 
@@ -154,6 +171,7 @@ Current live behavior:
 - batch execution now refreshes `last_heartbeat_at` as runs advance so startup recovery can distinguish live external workers from truly stale local work
 - acceptance harness runs now support curated manifest-driven site sets with bucketed expectations, explicit acceptance surfaces remain authoritative instead of being silently re-inferred from URLs, and curated commerce rows can reuse artifact-backed run ids before falling back to live execution
 - acceptance reports now distinguish transport verdicts from output quality through `quality_verdict`, `observed_failure_mode`, and `quality_checks`, so runs that technically succeed but return shell pages, promo pages, chrome-heavy listings, or broken variant semantics no longer look healthy
+- reusable domain execution defaults are persisted separately from selector memory in `DomainRunProfile`, then merged into single-URL run creation before `CrawlRun.settings` is snapshotted
 
 ### 6.3 Acquisition and browser runtime
 
@@ -280,6 +298,7 @@ Important implemented features:
 - surface alias lookup now keeps normalized requested labels addressable as identity mappings as well as exact requested-field keys, so custom dynamic fields continue to flow through candidate collection even when they do not collapse to a built-in alias
 - requested custom ecommerce-detail fields now keep DOM completion active when matching section headings are present, so structured-data early exit does not hide fields such as `product_story` after detail expansion
 - DOM variant fallback now materializes concrete variant rows, keeps `variant_count` aligned with those rows, and avoids widening an already authoritative `selected_variant` choice with later DOM-only axis noise
+- selector-backed fields that survive into `record.data` now persist exact selector provenance under `record.source_trace.field_discovery[field_name].selector_trace`, including selector kind/value, selector source, source run id, sample value, page URL, and `survived_to_final_record`
 - ecommerce-detail long-text ranking now prefers explicit DOM sections over thinner structured blurbs when the page exposes a real description/spec-style accordion body, and `product_details` remains a separate field instead of being collapsed into `specifications`
 - long-text candidate intake now rejects low-signal placeholders such as single-word review/schema values or accordion index labels before they can win `description` / `specifications`, and selector-backed long-text fields must expose non-interactive prose rather than button/tab indexes
 - ecommerce-detail output no longer exposes platform slug fields such as `handle` by default; those values remain requestable explicitly, but the default user-facing detail schema stays limited to higher-signal commerce fields
@@ -339,11 +358,13 @@ Current storage/runtime model:
 
 - selector/domain memory is stored by normalized `(domain, surface)`
 - selectors are persisted inside `DomainMemory`
+- reusable run defaults are persisted separately in `DomainRunProfile`, keyed by the same normalized `(domain, surface)` scope but never mixed into selector rows or `DomainMemory.selectors`
 - runtime can layer surface-specific and generic rules
 - `GET /api/selectors` can now list all selector records for a domain across surfaces when `surface` is omitted, which is what the frontend uses for domain-memory management and crawl-config prefill
 - selector self-heal reuses stamped extraction runtime snapshot data
 - selector self-heal persists only validated improvements and reuses domain memory on later runs before attempting another synthesis pass
 - once reused domain-memory rules satisfy the requested fields for a record, the pipeline does not launch a second generic selector-synthesis round just because confidence remains low
+- completed runs now expose a first-pass Domain Recipe workflow: only winning selector candidates that contributed to final fields are eligible for promotion, affordance hints stay non-executable, and the same screen lets the user edit/save the shared domain run profile for future runs
 
 ### 6.7 LLM admin and runtime
 
@@ -380,6 +401,7 @@ Primary models:
 - `CrawlRun`
 - `CrawlRecord`
 - `CrawlLog`
+- `DomainRunProfile`
 - `ReviewPromotion`
 - `LLMConfig`
 - `LLMCostLog`

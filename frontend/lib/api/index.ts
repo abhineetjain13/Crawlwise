@@ -8,13 +8,15 @@ import type {
  CrawlRun,
  CrawlSurface,
  Dashboard,
+ DomainRecipe,
+ DomainRunProfileLookup,
+ DomainRunProfile,
  FieldCommitPayload,
  FieldCommitResponse,
  LlmConfigCreatePayload,
  LoginResponse,
  Paginated,
  ReviewPayload,
- ReviewSelectorPreview,
  ReviewSelection,
  SelectorCreatePayload,
  SelectorRecord,
@@ -100,8 +102,29 @@ export const api = {
  reviewHtml: (runId: number) => `${getApiBaseUrl()}/api/review/${runId}/artifact-html`,
  saveReview: (runId: number, payload: { selections: ReviewSelection[]; extra_fields: string[] }) =>
  apiClient.post(`/api/review/${runId}/save`, payload),
- previewSelectors: (runId: number, payload: { selectors: SelectorCreatePayload[] }) =>
- apiClient.post<ReviewSelectorPreview>(`/api/review/${runId}/selector-preview`, payload),
+ getDomainRunProfile: (params: { url: string; surface: CrawlSurface }) => {
+ const query = new URLSearchParams();
+ query.set("url", params.url);
+ query.set("surface", params.surface);
+ return apiClient.get<DomainRunProfileLookup>(withQuery("/api/crawls/domain-run-profile", query));
+ },
+ getDomainRecipe: (runId: number) => apiClient.get<DomainRecipe>(`/api/crawls/${runId}/domain-recipe`),
+ promoteDomainRecipeSelectors: (
+ runId: number,
+ payload: {
+ selectors: Array<{
+ candidate_key: string;
+ field_name: string;
+ selector_kind: string;
+ selector_value: string;
+ sample_value?: string | null;
+ }>;
+ },
+ ) => apiClient.post<SelectorRecord[]>(`/api/crawls/${runId}/domain-recipe/promote-selectors`, payload),
+ saveDomainRunProfile: (
+ runId: number,
+ payload: { profile: DomainRunProfile },
+ ) => apiClient.post<DomainRunProfile>(`/api/crawls/${runId}/domain-recipe/save-run-profile`, payload),
  listUsers: (params?: { search?: string; is_active?: boolean }) => {
  const query = new URLSearchParams();
  if (params?.search) query.set("search", params.search);

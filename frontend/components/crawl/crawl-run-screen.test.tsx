@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from"@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from"@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from"vitest";
 
-import type { CrawlRecord, CrawlRun } from"../../lib/api/types";
+import type { CrawlRecord, CrawlRun, DomainRecipe } from"../../lib/api/types";
 import { POLLING_INTERVALS } from"../../lib/constants/timing";
 import { TopBarProvider } from"../layout/top-bar-context";
 import { CrawlRunScreen } from"./crawl-run-screen";
@@ -21,6 +21,10 @@ const apiMock = vi.hoisted(() => ({
  getCrawlLogs: vi.fn(),
  getMarkdown: vi.fn(),
  killCrawl: vi.fn(),
+ getDomainRecipe: vi.fn(),
+ promoteDomainRecipeSelectors: vi.fn(),
+ saveDomainRunProfile: vi.fn(),
+ deleteSelector: vi.fn(),
  exportCsv: vi.fn(() =>"/export.csv"),
  exportJson: vi.fn(() =>"/export.json"),
  exportMarkdown: vi.fn(() =>"/export.md"),
@@ -61,6 +65,100 @@ function makeRecord(id: number): CrawlRecord {
  source_trace: {},
  raw_html_path: null,
  created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+ };
+}
+
+function makeDomainRecipe(): DomainRecipe {
+ return {
+ run_id: 101,
+ domain:"example.com",
+ surface:"ecommerce_detail",
+ requested_field_coverage: {
+ requested: ["title","price","brand"],
+ found: ["title","price"],
+ missing: ["brand"],
+ },
+ selector_candidates: [
+ {
+ candidate_key:"price|css_selector|.price",
+ field_name:"price",
+ selector_kind:"css_selector",
+ selector_value:".price",
+ selector_source:"domain_memory",
+ sample_value:"Rs. 999",
+ source_record_ids: [1],
+ source_run_id: 101,
+ saved_selector_id: null,
+ already_saved: false,
+ final_field_source:"dom_selector",
+ },
+ {
+ candidate_key:"title|css_selector|.title",
+ field_name:"title",
+ selector_kind:"css_selector",
+ selector_value:".title",
+ selector_source:"domain_memory",
+ sample_value:"Chair Prime",
+ source_record_ids: [1],
+ source_run_id: 101,
+ saved_selector_id: 22,
+ already_saved: true,
+ final_field_source:"dom_selector",
+ },
+ ],
+ affordance_candidates: {
+ accordions: [".details-accordion"],
+ tabs: [],
+ carousels: [],
+ shadow_hosts: [],
+ iframe_promotion: null,
+ browser_required: true,
+ },
+ saved_selectors: [
+ {
+ id: 22,
+ domain:"example.com",
+ surface:"ecommerce_detail",
+ field_name:"title",
+ css_selector:".title",
+ xpath: null,
+ regex: null,
+ status:"validated",
+ sample_value:"Chair Prime",
+ source:"domain_recipe",
+ source_run_id: 88,
+ is_active: true,
+ created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+ updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+ },
+ ],
+ saved_run_profile: {
+ version: 1,
+ fetch_profile: {
+ fetch_mode:"http_then_browser",
+ extraction_source:"rendered_dom",
+ js_mode:"enabled",
+ include_iframes: false,
+ traversal_mode:"paginate",
+ request_delay_ms: 1200,
+ max_pages: 8,
+ max_scrolls: 12,
+ },
+ locality_profile: {
+ geo_country:"IN",
+ language_hint:"en-IN",
+ currency_hint:"INR",
+ },
+ diagnostics_profile: {
+ capture_html: true,
+ capture_screenshot: false,
+ capture_network:"matched_only",
+ capture_response_headers: true,
+ capture_browser_diagnostics: true,
+ },
+ source_run_id: 101,
+ saved_at:"2026-04-08T10:05:00Z",
+ },
  };
 }
 
@@ -112,6 +210,10 @@ describe("CrawlRunScreen", () => {
  apiMock.getCrawlLogs.mockResolvedValue([]);
  apiMock.getMarkdown.mockResolvedValue("# markdown");
  apiMock.killCrawl.mockResolvedValue({ run_id: 101, status:"killed"});
+ apiMock.getDomainRecipe.mockResolvedValue(makeDomainRecipe());
+ apiMock.promoteDomainRecipeSelectors.mockResolvedValue([]);
+ apiMock.saveDomainRunProfile.mockResolvedValue(makeDomainRecipe().saved_run_profile);
+ apiMock.deleteSelector.mockResolvedValue(undefined);
  });
 
  it("prefetches markdown before the Markdown tab is opened", async () => {
@@ -206,7 +308,9 @@ describe("CrawlRunScreen", () => {
  renderRunScreen();
 
  expect(await screen.findByText("Some live panels failed to refresh")).toBeInTheDocument();
- expect(await screen.findByText(/Unable to refresh records: records fetch failed/i)).toBeInTheDocument();
+ expect(
+ await screen.findByText((content) => content.includes("Unable to refresh") && content.includes("records fetch failed")),
+ ).toBeInTheDocument();
  expect(screen.getByRole("button", { name:"Retry failed panels"})).toBeInTheDocument();
  });
 
@@ -404,8 +508,75 @@ describe("CrawlRunScreen", () => {
  fireEvent.click(button);
 
  expect(apiMock.exportCsv).toHaveBeenCalledWith(101);
- expect(clickSpy).toHaveBeenCalledTimes(1);
- } finally {
- clickSpy.mockRestore();
- }
- });});
+  expect(clickSpy).toHaveBeenCalledTimes(1);
+  } finally {
+  clickSpy.mockRestore();
+  }
+ });
+
+ it("renders the completed-run domain recipe panel", async () => {
+ renderRunScreen();
+
+ expect(await screen.findByText("Requested Field Coverage")).toBeInTheDocument();
+ expect(screen.getByText((content) => content.includes("Requested:") && content.includes("title, price, brand"))).toBeInTheDocument();
+ expect(screen.getByText(/Browser required/i)).toBeInTheDocument();
+ expect(screen.getByText(/Accordion: \.details-accordion/i)).toBeInTheDocument();
+ expect(screen.getByRole("button", { name:"Save Selected Selectors"})).toBeInTheDocument();
+ expect(screen.getByRole("button", { name:"Save Run Profile"})).toBeInTheDocument();
+ });
+
+ it("promotes selected recipe selectors from the completed-run panel", async () => {
+ renderRunScreen();
+
+ expect(await screen.findByText("Requested Field Coverage")).toBeInTheDocument();
+ fireEvent.click(screen.getAllByRole("checkbox")[0]);
+ fireEvent.click(screen.getByRole("button", { name:"Save Selected Selectors"}));
+
+ await waitFor(() => {
+ expect(apiMock.promoteDomainRecipeSelectors).toHaveBeenCalledWith(101, {
+ selectors: [
+ {
+ candidate_key:"price|css_selector|.price",
+ field_name:"price",
+ selector_kind:"css_selector",
+ selector_value:".price",
+ sample_value:"Rs. 999",
+ },
+ ],
+ });
+ });
+ });
+
+ it("saves the edited domain run profile from the completed-run panel", async () => {
+ renderRunScreen();
+
+ expect(await screen.findByText("Requested Field Coverage")).toBeInTheDocument();
+ fireEvent.change(screen.getByRole("combobox", { name:"Fetch Mode" }), { target: { value:"browser_only" } });
+ fireEvent.change(screen.getByRole("textbox", { name:"Geo Country" }), { target: { value:"US" } });
+ fireEvent.click(screen.getByRole("button", { name:"Save Run Profile"}));
+
+ await waitFor(() => {
+ expect(apiMock.saveDomainRunProfile).toHaveBeenCalledWith(101, {
+ profile: expect.objectContaining({
+ fetch_profile: expect.objectContaining({
+ fetch_mode:"browser_only",
+ }),
+ locality_profile: expect.objectContaining({
+ geo_country:"US",
+ }),
+ }),
+ });
+ });
+ });
+
+ it("deletes an existing saved selector from the completed-run panel", async () => {
+ renderRunScreen();
+
+ const deleteButton = await screen.findByRole("button", { name:"Delete Saved Selector" });
+ fireEvent.click(deleteButton);
+
+ await waitFor(() => {
+ expect(apiMock.deleteSelector).toHaveBeenCalledWith(22);
+ });
+ });
+});

@@ -32,11 +32,13 @@ def test_crawl_run_settings_exposes_normalized_acquisition_plan() -> None:
     settings = CrawlRunSettings.from_value(
         {
             "proxy_list": ["http://proxy-1", "http://proxy-2"],
-            "max_pages": "4",
-            "max_scrolls": "2",
-            "sleep_ms": "500",
             "advanced_enabled": True,
-            "traversal_mode": "paginate",
+            "fetch_profile": {
+                "traversal_mode": "paginate",
+                "max_pages": "4",
+                "max_scrolls": "2",
+                "request_delay_ms": "500",
+            },
         }
     )
 
@@ -87,6 +89,7 @@ def test_crawl_run_settings_preserves_advanced_mode_storage_contract() -> None:
 
     assert normalized["advanced_mode"] == "view_all"
     assert normalized["traversal_mode"] == "load_more"
+    assert normalized["fetch_profile"]["traversal_mode"] == "load_more"
 
 
 def test_platform_runtime_policy_does_not_force_browser_for_vendor_specific_domains() -> None:

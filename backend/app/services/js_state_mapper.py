@@ -36,14 +36,52 @@ PRODUCT_FIELD_SPEC = {
     "vendor": Coalesce("vendor.name", "vendor", default=None, skip=_SKIP),
     "handle": Coalesce("handle", "slug", default=None, skip=_SKIP),
     "description": Coalesce("description", "body_html", "descriptionHtml", default=None, skip=_SKIP),
-    "product_id": Coalesce("id", "product_id", "legacyResourceId", default=None, skip=_SKIP),
+    "product_id": Coalesce("id", "product_id", "productId", "legacyResourceId", default=None, skip=_SKIP),
     "category": Coalesce("category", default=None, skip=_SKIP),
-    "product_type": Coalesce("product_type", "type", default=None, skip=_SKIP),
+    "product_type": Coalesce("product_type", "productType", "type", default=None, skip=_SKIP),
     "sku": Coalesce("sku", default=None, skip=_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=_SKIP),
-    "currency": Coalesce("currency", "currencyCode", "priceCurrency", "priceRange.minVariantPrice.currencyCode", "priceRange.maxVariantPrice.currencyCode", default=None, skip=_SKIP),
-    "price": Coalesce("price", "amount", "minPrice", "maxPrice", "formattedPrice", "priceRange.minVariantPrice.amount", "priceRange.maxVariantPrice.amount", default=None, skip=_SKIP),
-    "original_price": Coalesce("compare_at_price", "compareAtPrice", "original_price", "originalPrice", "listPrice", "compareAtPriceRange.minVariantPrice.amount", "compareAtPriceRange.maxVariantPrice.amount", default=None, skip=_SKIP),
+    "currency": Coalesce(
+        "currency",
+        "currencyCode",
+        "priceCurrency",
+        "prices.promo.currency.code",
+        "prices.base.currency.code",
+        "prices.promo.currencyCode",
+        "prices.base.currencyCode",
+        "priceRange.minVariantPrice.currencyCode",
+        "priceRange.maxVariantPrice.currencyCode",
+        default=None,
+        skip=_SKIP,
+    ),
+    "price": Coalesce(
+        "price",
+        "amount",
+        "minPrice",
+        "maxPrice",
+        "formattedPrice",
+        "prices.promo.value",
+        "prices.base.value",
+        "prices.promo.amount",
+        "prices.base.amount",
+        "priceRange.minVariantPrice.amount",
+        "priceRange.maxVariantPrice.amount",
+        default=None,
+        skip=_SKIP,
+    ),
+    "original_price": Coalesce(
+        "compare_at_price",
+        "compareAtPrice",
+        "original_price",
+        "originalPrice",
+        "listPrice",
+        "prices.base.value",
+        "prices.base.amount",
+        "compareAtPriceRange.minVariantPrice.amount",
+        "compareAtPriceRange.maxVariantPrice.amount",
+        default=None,
+        skip=_SKIP,
+    ),
     "availability": Coalesce("availability", "inventory.status", "availableForSale", default=None, skip=_SKIP),
     "tags": Coalesce("tags", default=None, skip=_SKIP),
     "created_at": Coalesce("created_at", default=None, skip=_SKIP),
@@ -256,7 +294,12 @@ def _looks_like_product_payload(value: Any) -> bool:
         for key in (
             "variants",
             "options",
+            "colors",
+            "sizes",
+            "prices",
+            "representative",
             "product_type",
+            "productType",
             "vendor",
             "brand",
             "handle",
@@ -267,8 +310,8 @@ def _looks_like_product_payload(value: Any) -> bool:
             "type",
             "id",
             "product_id",
+            "productId",
             "offers",
-            "description",
             "images",
             "image",
         )
@@ -307,11 +350,18 @@ def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict
 def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
     raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
     raw_options = product.get("options") if isinstance(product.get("options"), list) else []
+    raw_colors = product.get("colors") if isinstance(product.get("colors"), list) else []
+    raw_sizes = product.get("sizes") if isinstance(product.get("sizes"), list) else []
     product_keys = set(product)
     strong_product_keys = {
         "variants",
         "options",
+        "colors",
+        "sizes",
+        "prices",
+        "representative",
         "product_type",
+        "productType",
         "vendor",
         "brand",
         "handle",
@@ -320,8 +370,10 @@ def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
         "availability",
         "category",
         "type",
+        "productId",
+        "product_id",
+        "id",
         "offers",
-        "description",
         "images",
         "image",
     }
@@ -348,15 +400,25 @@ def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
         if isinstance(variant, dict)
         and any(key in variant for key in variant_axis_keys)
     )
+    product_identifier_count = sum(
+        1
+        for key in ("productId", "product_id", "id", "sku", "handle")
+        if product.get(key) not in (None, "", [], {})
+    )
+    price_signal_count = sum(
+        1
+        for key in ("price", "prices", "offers")
+        if product.get(key) not in (None, "", [], {})
+    )
     return (
         len(raw_variants),
         len(raw_options),
+        len(raw_colors) + len(raw_sizes),
         axis_signal_count,
-        len(product_keys & strong_product_keys),
-        1 if product.get("description") not in (None, "", [], {}) else 0,
-        1 if product.get("price") not in (None, "", [], {}) else 0,
-        1 if product.get("offers") not in (None, "", [], {}) else 0,
+        product_identifier_count,
+        price_signal_count,
         1 if product.get("images") not in (None, "", [], {}) or product.get("image") not in (None, "", [], {}) else 0,
+        len(product_keys & strong_product_keys),
         len(product_keys),
     )
 
@@ -548,11 +610,32 @@ def _first_non_empty_jmespath(
 def _extract_product_images(product: dict[str, Any], *, page_url: str) -> list[str]:
     values = extract_urls(product.get("images"), page_url)
     values.extend(extract_urls(_connection_nodes(product.get("images")), page_url))
+    values.extend(_extract_nested_image_urls(product.get("images"), page_url=page_url))
     values.extend(extract_urls(product.get("image"), page_url))
     values.extend(extract_urls(product.get("featuredImage"), page_url))
     values.extend(extract_urls(product.get("featured_image"), page_url))
     values.extend(extract_urls(_connection_nodes(product.get("media")), page_url))
     return dedupe_image_urls(values)
+
+
+def _extract_nested_image_urls(value: Any, *, page_url: str, depth: int = 0) -> list[str]:
+    if depth > 6:
+        return []
+    urls = extract_urls(value, page_url)
+    if urls:
+        return urls
+    nested: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            nested.extend(
+                _extract_nested_image_urls(item, page_url=page_url, depth=depth + 1)
+            )
+    elif isinstance(value, list):
+        for item in value[:25]:
+            nested.extend(
+                _extract_nested_image_urls(item, page_url=page_url, depth=depth + 1)
+            )
+    return dedupe_image_urls(nested)
 
 
 def _looks_like_shopify_product(product: dict[str, Any]) -> bool:

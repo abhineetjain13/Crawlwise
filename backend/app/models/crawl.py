@@ -535,3 +535,28 @@ class DomainMemory(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class DomainRunProfile(Base):
+    __tablename__ = "domain_run_profiles"
+    __table_args__ = (
+        Index(
+            "uq_domain_run_profiles_domain_surface",
+            "domain",
+            "surface",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), index=True)
+    surface: Mapped[str] = mapped_column(String(40), index=True)
+    profile: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )

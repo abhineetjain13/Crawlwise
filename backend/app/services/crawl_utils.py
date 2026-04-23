@@ -124,6 +124,25 @@ _TRAVERSAL_MODES = {"paginate", "scroll", "load_more", "single", "sitemap", "cra
 def resolve_traversal_mode(settings: object) -> str | None:
     """Resolve and validate the traversal mode from settings."""
     settings_view = _settings_view(settings)
+    fetch_profile = settings_view.get("fetch_profile")
+    if isinstance(fetch_profile, dict) and fetch_profile:
+        fetch_profile_mode = str(fetch_profile.get("traversal_mode") or "").strip().lower()
+        if fetch_profile_mode in {"", "none"}:
+            return None
+        if fetch_profile_mode == "auto":
+            return "auto"
+        if fetch_profile_mode == "pagination":
+            fetch_profile_mode = "paginate"
+        if fetch_profile_mode == "infinite_scroll":
+            fetch_profile_mode = "scroll"
+        if fetch_profile_mode == "view_all":
+            fetch_profile_mode = "load_more"
+        if fetch_profile_mode in _TRAVERSAL_MODES:
+            return fetch_profile_mode
+        logger.error("Unrecognized traversal_mode=%r", fetch_profile_mode)
+        raise CrawlerConfigurationError(
+            f"Unsupported traversal_mode: {fetch_profile_mode}"
+        )
     advanced_enabled_value = settings_view.get("advanced_enabled")
     advanced_enabled = (
         settings_view.advanced_enabled()

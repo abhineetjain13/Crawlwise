@@ -40,16 +40,24 @@ def _record_identity_key(source_url: str) -> str | None:
 def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[str, object]:
     field_discovery = {}
     field_sources = mapping_or_empty(record.get("_field_sources"))
+    selector_traces = mapping_or_empty(record.get("_selector_traces"))
     for key, value in record.items():
         if str(key).startswith("_"):
             continue
-        field_discovery[str(key)] = {
+        discovery = {
             "status": "found",
             "value": str(value),
             "sources": _string_list(
                 field_sources.get(str(key), [str(record.get("_source") or "extraction")])
             ),
         }
+        selector_trace = selector_traces.get(str(key))
+        if isinstance(selector_trace, dict):
+            discovery["selector_trace"] = {
+                **dict(selector_trace),
+                "survived_to_final_record": True,
+            }
+        field_discovery[str(key)] = discovery
     return {
         "acquisition": {
             "method": acquisition_result.method,

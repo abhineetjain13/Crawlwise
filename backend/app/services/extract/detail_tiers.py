@@ -14,6 +14,7 @@ class DetailTierState:
     candidates: dict[str, list[object]]
     candidate_sources: dict[str, list[str]]
     field_sources: dict[str, list[str]]
+    selector_trace_candidates: dict[str, list[dict[str, object]]]
     extraction_runtime_snapshot: dict[str, object] | None
     completed_tiers: list[str]
 
@@ -34,6 +35,7 @@ def materialize_detail_tier(
         candidates=state.candidates,
         candidate_sources=state.candidate_sources,
         field_sources=state.field_sources,
+        selector_trace_candidates=state.selector_trace_candidates,
         extraction_runtime_snapshot=state.extraction_runtime_snapshot,
         tier_name=tier_name,
         completed_tiers=state.completed_tiers,
@@ -57,6 +59,7 @@ def collect_authoritative_tier(
                 candidates=state.candidates,
                 candidate_sources=state.candidate_sources,
                 field_sources=state.field_sources,
+                selector_trace_candidates=state.selector_trace_candidates,
                 source="adapter",
             )
     for mapped_payload in map_network_payloads_to_fields(
@@ -72,6 +75,7 @@ def collect_authoritative_tier(
             candidates=state.candidates,
             candidate_sources=state.candidate_sources,
             field_sources=state.field_sources,
+            selector_trace_candidates=state.selector_trace_candidates,
             source="network_payload",
         )
 
@@ -98,6 +102,7 @@ def collect_structured_data_tier(
                 candidates=state.candidates,
                 candidate_sources=state.candidate_sources,
                 field_sources=state.field_sources,
+                selector_trace_candidates=state.selector_trace_candidates,
                 source=source_name,
             )
 
@@ -115,6 +120,7 @@ def collect_js_state_tier(
         candidates=state.candidates,
         candidate_sources=state.candidate_sources,
         field_sources=state.field_sources,
+        selector_trace_candidates=state.selector_trace_candidates,
         source="js_state",
     )
 
@@ -139,6 +145,7 @@ def collect_dom_tier(
         state.candidates,
         state.candidate_sources,
         state.field_sources,
+        state.selector_trace_candidates,
         selector_rules=selector_rules,
     )
     if state.surface == "ecommerce_detail":
@@ -154,6 +161,7 @@ def collect_dom_tier(
                 state.candidates,
                 state.candidate_sources,
                 state.field_sources,
+                state.selector_trace_candidates,
                 field_name,
                 value,
                 source="dom_selector",

@@ -197,6 +197,10 @@ def normalize_value(field_name: str, value: object) -> object:
     if normalized_field == "availability":
         return _normalize_availability(value)
     if normalized_field in _DECIMAL_FIELDS:
+        if isinstance(value, str):
+            candidate = _canonicalize_decimal_candidate(value)
+            if candidate is not None and re.fullmatch(r"[-+]?\d+(?:\.\d+)?", candidate):
+                return candidate
         result = normalize_decimal_price(value)
         return result if result is not None else ""
     if normalized_field.endswith("_count") or normalized_field in _INTEGER_FIELDS:

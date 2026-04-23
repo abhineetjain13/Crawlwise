@@ -5,6 +5,8 @@ from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
 from app.models.crawl_settings import CrawlRunSettings
 from app.services.crawl_events import append_log_event
 from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE
+from app.services.domain_run_profile_service import load_domain_run_profile
+from app.services.domain_utils import normalize_domain
 from app.services.publish import (
     load_domain_requested_fields,
     refresh_record_commit_metadata,
@@ -29,20 +31,35 @@ async def create_crawl_run(
     session: AsyncSession, user_id: int, payload: dict
 ) -> CrawlRun:
     payload = dict(payload or {})
-    settings = normalize_crawl_settings(payload.get("settings"))
-    settings_view = CrawlRunSettings.from_value(settings)
     payload["url"] = normalize_target_url(payload.get("url"))
     payload["urls"] = [
         normalize_target_url(value) for value in (payload.get("urls") or [])
     ]
     urls = [value for value in (payload.get("urls") or []) if value]
-    if payload.get("run_type") == "batch" and urls:
-        settings = settings_view.with_updates(urls=urls).as_dict()
-        settings_view = CrawlRunSettings.from_value(settings)
     primary_url = payload.get("url") or (urls[0] if urls else "")
     normalized_surface = str(payload.get("surface") or "").strip().lower()
     if not normalized_surface:
         raise ValueError("surface is required")
+    settings_payload = dict(payload.get("settings") or {})
+    run_type = payload.get("run_type")
+    if not run_type:
+        raise ValueError("run_type is required")
+    if run_type == "crawl" and primary_url:
+        saved_profile_record = await load_domain_run_profile(
+            session,
+            domain=normalize_domain(primary_url),
+            surface=normalized_surface,
+        )
+        if saved_profile_record is not None:
+            settings_payload = _merge_saved_run_profile(
+                settings_payload,
+                saved_profile_record.profile,
+            )
+    settings = normalize_crawl_settings(settings_payload)
+    settings_view = CrawlRunSettings.from_value(settings)
+    if run_type == "batch" and urls:
+        settings = settings_view.with_updates(urls=urls).as_dict()
+        settings_view = CrawlRunSettings.from_value(settings)
     await ensure_public_crawl_targets(collect_target_urls(payload, settings_view))
     validate_extraction_contract(settings_view.extraction_contract())
     domain_requested_fields = await load_domain_requested_fields(
@@ -65,9 +82,6 @@ async def create_crawl_run(
         llm_config_snapshot=await snapshot_active_configs(session),
         extraction_runtime_snapshot=snapshot_extraction_runtime_settings(),
     ).as_dict()
-    run_type = payload.get("run_type")
-    if not run_type:
-        raise ValueError("run_type is required")
     run = CrawlRun(
         user_id=user_id,
         run_type=run_type,
@@ -88,6 +102,84 @@ async def create_crawl_run(
     await session.commit()
     await session.refresh(run)
     return run
+
+
+def _merge_saved_run_profile(
+    explicit_settings: object,
+    saved_profile: object,
+) -> dict[str, object]:
+    merged = dict(explicit_settings or {}) if isinstance(explicit_settings, dict) else {}
+    saved = dict(saved_profile or {}) if isinstance(saved_profile, dict) else {}
+    if not saved:
+        return merged
+    merged["fetch_profile"] = _merge_profile_section(
+        merged,
+        "fetch_profile",
+        dict(saved.get("fetch_profile") or {}),
+        legacy_keys={
+            "fetch_mode",
+            "extraction_source",
+            "js_mode",
+            "include_iframes",
+            "traversal_mode",
+            "advanced_mode",
+            "request_delay_ms",
+            "sleep_ms",
+            "max_pages",
+            "max_scrolls",
+        },
+        legacy_aliases={
+            "advanced_mode": "traversal_mode",
+            "sleep_ms": "request_delay_ms",
+            "request_delay_ms": "request_delay_ms",
+            "max_pages": "max_pages",
+            "max_scrolls": "max_scrolls",
+        },
+    )
+    merged["locality_profile"] = _merge_profile_section(
+        merged,
+        "locality_profile",
+        dict(saved.get("locality_profile") or {}),
+        legacy_keys={"geo_country", "language_hint", "currency_hint"},
+        legacy_aliases={},
+    )
+    merged["diagnostics_profile"] = _merge_profile_section(
+        merged,
+        "diagnostics_profile",
+        dict(saved.get("diagnostics_profile") or {}),
+        legacy_keys={
+            "capture_html",
+            "capture_screenshot",
+            "capture_network",
+            "capture_response_headers",
+            "capture_browser_diagnostics",
+        },
+        legacy_aliases={},
+    )
+    return merged
+
+
+def _merge_profile_section(
+    explicit_settings: dict[str, object],
+    key: str,
+    saved_section: dict[str, object],
+    *,
+    legacy_keys: set[str],
+    legacy_aliases: dict[str, str],
+) -> dict[str, object]:
+    explicit_section = (
+        dict(explicit_settings.get(key) or {})
+        if isinstance(explicit_settings.get(key), dict)
+        else {}
+    )
+    merged = dict(saved_section)
+    merged.update(explicit_section)
+    for legacy_key in legacy_keys:
+        if legacy_key not in explicit_settings:
+            continue
+        target_key = legacy_aliases.get(legacy_key, legacy_key)
+        merged[target_key] = explicit_settings[legacy_key]
+    return merged
 
 
 async def list_runs(

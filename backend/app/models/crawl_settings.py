@@ -31,6 +31,10 @@ def _coerce_sequence(value: object) -> list[object]:
     return [value]
 
 
+def _mapping(value: object) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 @dataclass(slots=True)
 class CrawlRunSettings:
     data: dict[str, Any] = field(default_factory=dict)
@@ -67,12 +71,64 @@ class CrawlRunSettings:
     def traversal_mode(self) -> str | None:
         return resolve_traversal_mode(self.data)
 
+    def fetch_profile(self) -> dict[str, object]:
+        stored = _mapping(self.data.get("fetch_profile"))
+        if stored:
+            return {
+                "fetch_mode": str(stored.get("fetch_mode") or "auto").strip().lower() or "auto",
+                "extraction_source": str(stored.get("extraction_source") or "raw_html").strip().lower() or "raw_html",
+                "js_mode": str(stored.get("js_mode") or "auto").strip().lower() or "auto",
+                "include_iframes": bool(stored.get("include_iframes", False)),
+                "traversal_mode": str(stored.get("traversal_mode") or "auto").strip().lower() or "auto",
+                "request_delay_ms": self.sleep_ms(),
+                "max_pages": self.max_pages(),
+                "max_scrolls": self.max_scrolls(),
+            }
+        traversal_mode = self.traversal_mode()
+        return {
+            "fetch_mode": "auto",
+            "extraction_source": "raw_html",
+            "js_mode": "auto",
+            "include_iframes": False,
+            "traversal_mode": traversal_mode or "auto",
+            "request_delay_ms": self.sleep_ms(),
+            "max_pages": self.max_pages(),
+            "max_scrolls": self.max_scrolls(),
+        }
+
+    def locality_profile(self) -> dict[str, object]:
+        stored = _mapping(self.data.get("locality_profile"))
+        return {
+            "geo_country": str(stored.get("geo_country") or "auto").strip() or "auto",
+            "language_hint": str(stored.get("language_hint") or "").strip() or None,
+            "currency_hint": str(stored.get("currency_hint") or "").strip() or None,
+        }
+
+    def diagnostics_profile(self) -> dict[str, object]:
+        stored = _mapping(self.data.get("diagnostics_profile"))
+        capture_network = str(stored.get("capture_network") or "off").strip().lower() or "off"
+        return {
+            "capture_html": bool(stored.get("capture_html", True)),
+            "capture_screenshot": bool(stored.get("capture_screenshot", False)),
+            "capture_network": capture_network,
+            "capture_response_headers": bool(
+                stored.get("capture_response_headers", True)
+            ),
+            "capture_browser_diagnostics": bool(
+                stored.get("capture_browser_diagnostics", True)
+            ),
+        }
+
     def advanced_enabled(self) -> bool:
         return bool(self.data.get("advanced_enabled"))
 
     def max_pages(self) -> int:
+        fetch_profile = _mapping(self.data.get("fetch_profile"))
         return _coerce_int(
-            self.data.get("max_pages", crawler_runtime_settings.default_max_pages),
+            fetch_profile.get(
+                "max_pages",
+                self.data.get("max_pages", crawler_runtime_settings.default_max_pages),
+            ),
             crawler_runtime_settings.default_max_pages,
             crawler_runtime_settings.min_max_pages,
             crawler_runtime_settings.max_max_pages,
@@ -86,10 +142,14 @@ class CrawlRunSettings:
         )
 
     def max_scrolls(self) -> int:
+        fetch_profile = _mapping(self.data.get("fetch_profile"))
         return _coerce_int(
-            self.data.get(
+            fetch_profile.get(
                 "max_scrolls",
-                crawler_runtime_settings.default_max_scrolls,
+                self.data.get(
+                    "max_scrolls",
+                    crawler_runtime_settings.default_max_scrolls,
+                ),
             ),
             crawler_runtime_settings.default_max_scrolls,
             1,
@@ -101,8 +161,18 @@ class CrawlRunSettings:
         return bool(self.data.get("respect_robots_txt"))
 
     def sleep_ms(self) -> int:
+        fetch_profile = _mapping(self.data.get("fetch_profile"))
         return _coerce_int(
-            self.data.get("sleep_ms", crawler_runtime_settings.min_request_delay_ms),
+            fetch_profile.get(
+                "request_delay_ms",
+                self.data.get(
+                    "request_delay_ms",
+                    self.data.get(
+                        "sleep_ms",
+                        crawler_runtime_settings.min_request_delay_ms,
+                    ),
+                ),
+            ),
             crawler_runtime_settings.min_request_delay_ms,
             crawler_runtime_settings.min_request_delay_ms,
         )
@@ -150,6 +220,21 @@ class CrawlRunSettings:
         for key in ("ignore_https_errors", "bypass_csp"):
             if key in self.data:
                 profile[key] = bool(self.data.get(key))
+        fetch_profile = self.fetch_profile()
+        diagnostics_profile = self.diagnostics_profile()
+        profile.update(
+            {
+                "fetch_mode": fetch_profile["fetch_mode"],
+                "extraction_source": fetch_profile["extraction_source"],
+                "js_mode": fetch_profile["js_mode"],
+                "include_iframes": fetch_profile["include_iframes"],
+                "capture_html": diagnostics_profile["capture_html"],
+                "capture_screenshot": diagnostics_profile["capture_screenshot"],
+                "capture_network": diagnostics_profile["capture_network"],
+                "capture_response_headers": diagnostics_profile["capture_response_headers"],
+                "capture_browser_diagnostics": diagnostics_profile["capture_browser_diagnostics"],
+            }
+        )
         return profile
 
     def acquisition_plan(
@@ -178,11 +263,15 @@ class CrawlRunSettings:
     def normalized_for_storage(self) -> dict[str, Any]:
         normalized = dict(self.data)
         normalized["urls"] = self.urls()
-        normalized["max_pages"] = self.max_pages()
         normalized["max_records"] = self.max_records()
+        normalized["respect_robots_txt"] = self.respect_robots_txt()
+        normalized["fetch_profile"] = self.fetch_profile()
+        normalized["locality_profile"] = self.locality_profile()
+        normalized["diagnostics_profile"] = self.diagnostics_profile()
+        normalized["max_pages"] = self.max_pages()
         normalized["max_scrolls"] = self.max_scrolls()
         normalized["sleep_ms"] = self.sleep_ms()
-        normalized["respect_robots_txt"] = self.respect_robots_txt()
+        normalized["request_delay_ms"] = self.sleep_ms()
         normalized["traversal_mode"] = self.traversal_mode()
         if self.advanced_enabled():
             normalized["advanced_mode"] = self.get("advanced_mode")

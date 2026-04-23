@@ -14,6 +14,10 @@ from app.models.user import User
 from app.schemas.common import LogEntryResponse, PaginatedResponse, PaginationMeta
 from app.schemas.crawl import (
     CrawlCreate,
+    DomainRecipePromoteSelectorsRequest,
+    DomainRecipeResponse,
+    DomainRunProfileLookupResponse,
+    DomainRecipeSaveRunProfileRequest,
     CrawlRunResponse,
     FieldCommitRequest,
     FieldCommitResponse,
@@ -39,6 +43,13 @@ from app.services.crawl_ingestion_service import (
 )
 from app.services.crawl_service import kill_run, pause_run, resume_run
 from app.services.crawl_state import TERMINAL_STATUSES
+from app.services.domain_run_profile_service import load_domain_run_profile
+from app.services.domain_utils import normalize_domain
+from app.services.review import (
+    build_domain_recipe_payload,
+    promote_domain_recipe_selectors,
+    save_domain_recipe_run_profile,
+)
 from fastapi import (
     APIRouter,
     Depends,
@@ -247,6 +258,35 @@ async def crawls_create_csv(
     return {"run_id": run.id, "url_count": url_count}
 
 
+@router.get("/domain-run-profile")
+async def crawls_domain_run_profile_lookup(
+    url: str,
+    surface: str,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _user: Annotated[User, Depends(get_current_user)],
+) -> DomainRunProfileLookupResponse:
+    normalized_domain = normalize_domain(url)
+    normalized_surface = str(surface or "").strip().lower()
+    if not normalized_domain or not normalized_surface:
+        return DomainRunProfileLookupResponse(
+            domain=normalized_domain,
+            surface=normalized_surface,
+            saved_run_profile=None,
+        )
+    saved_profile = await load_domain_run_profile(
+        session,
+        domain=normalized_domain,
+        surface=normalized_surface,
+    )
+    return DomainRunProfileLookupResponse(
+        domain=normalized_domain,
+        surface=normalized_surface,
+        saved_run_profile=(
+            dict(saved_profile.profile or {}) if saved_profile is not None else None
+        ),
+    )
+
+
 @router.get("")
 async def crawls_list(
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -354,6 +394,47 @@ async def crawls_commit_fields(
     )
     return FieldCommitResponse(
         run_id=run.id, updated_records=updated_records, updated_fields=updated_fields
+    )
+
+
+@router.get("/{run_id}/domain-recipe", responses=RUN_NOT_FOUND_RESPONSE)
+async def crawls_domain_recipe(
+    run_id: int,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> DomainRecipeResponse:
+    run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
+    payload = await build_domain_recipe_payload(session, run=run)
+    return DomainRecipeResponse.model_validate(payload)
+
+
+@router.post("/{run_id}/domain-recipe/promote-selectors", responses=RUN_NOT_FOUND_RESPONSE)
+async def crawls_promote_domain_recipe_selectors(
+    run_id: int,
+    payload: DomainRecipePromoteSelectorsRequest,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> list[dict[str, object]]:
+    run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
+    return await promote_domain_recipe_selectors(
+        session,
+        run=run,
+        selectors=[item.model_dump() for item in payload.selectors],
+    )
+
+
+@router.post("/{run_id}/domain-recipe/save-run-profile", responses=RUN_NOT_FOUND_RESPONSE)
+async def crawls_save_domain_run_profile(
+    run_id: int,
+    payload: DomainRecipeSaveRunProfileRequest,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, object]:
+    run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
+    return await save_domain_recipe_run_profile(
+        session,
+        run=run,
+        profile=payload.profile.model_dump(),
     )
 
 
