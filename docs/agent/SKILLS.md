@@ -1,176 +1,169 @@
 # Agent Skills — CrawlerAI
 
-Look up the relevant skill before starting a task. Follow it exactly.
-Skills use real file paths. If something has moved, check `docs/CODEBASE_MAP.md` and update this file.
+Use the matching recipe for the task. Keep fixes in the owning subsystem.
+If paths moved, update this file after confirming ownership in `docs/CODEBASE_MAP.md`.
 
 ---
 
-## SKILL: Run Tests
+## Run Tests
 
 ```powershell
 cd backend
 $env:PYTHONPATH='.'
 
-# Full suite
 .\.venv\Scripts\python.exe -m pytest tests -q
-
-# By subsystem
-.\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_engine.py -q          # extraction
-.\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_fetch_runtime.py -q   # fetch/runtime
+.\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_engine.py -q
+.\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_fetch_runtime.py -q
 .\.venv\Scripts\python.exe -m pytest tests/services/test_selector_pipeline_integration.py -q
 .\.venv\Scripts\python.exe -m pytest tests/services/test_selectors_api.py -q
 .\.venv\Scripts\python.exe -m pytest tests/test_harness_support.py -q
 
-# Smoke runners (against real URLs, use sparingly)
 .\.venv\Scripts\python.exe run_acquire_smoke.py commerce
 .\.venv\Scripts\python.exe run_extraction_smoke.py
 .\.venv\Scripts\python.exe run_test_sites_acceptance.py
 ```
 
+Use the smallest relevant verify step first, then broaden if shared behavior changed.
+
 ---
 
-## SKILL: Fix an Extraction Bug
+## Fix an Extraction Bug
 
-1. Write a failing test first if possible (in `tests/services/test_crawl_engine.py` or surface-specific file).
-2. Trace the field's source — which of these produces the bad value?
-   - Structured source: `structured_sources.py`
-   - Platform adapter: `adapters/[platform].py`
+1. Add a failing test first when practical.
+2. Trace the earliest bad source:
+   - structured: `structured_sources.py`
+   - adapter: `adapters/[platform].py`
    - JS state: `js_state_mapper.py`
-   - Network payload: `network_payload_mapper.py` + `config/network_payload_specs.py`
-   - DOM selector: `detail_extractor.py` or `listing_extractor.py`
-   - Field alias: `config/field_mappings.py`
-   - Normalization: `field_value_core.py` or `field_value_*.py`
-3. Fix it at the **earliest** point in that chain. Do not add a fallback downstream.
-4. Run: `pytest tests/services/test_crawl_engine.py -q`
-5. Run: `pytest tests -q` to check for regressions.
-6. Update the plan slice.
+   - network payload: `network_payload_mapper.py` + `config/network_payload_specs.py`
+   - DOM: `detail_extractor.py` or `listing_extractor.py`
+   - alias or eligibility: `config/field_mappings.py`, `field_policy.py`
+   - normalization: `field_value_core.py` or `field_value_*.py`
+3. Fix it there. Do not patch downstream.
+4. Run `pytest tests/services/test_crawl_engine.py -q`
+5. Run `pytest tests -q`
+6. Update the active plan slice if one exists.
 
-**Never fix extraction bugs in:** `pipeline/core.py`, `publish/verdict.py`, `publish/metrics.py`.
-These are downstream of extraction and must not compensate for upstream failures.
-
----
-
-## SKILL: Add a New Extraction Field
-
-1. Identify the surface: `ecommerce_detail | ecommerce_listing | job_detail | job_listing | automobile_listing | automobile_detail | tabular`
-2. Add the field alias to `services/config/field_mappings.py` — in the surface-specific section. **One place, always.**
-3. Add field eligibility to `services/field_policy.py:canonical_fields_for_surface()` if it should appear in user-facing output.
-4. Add extraction logic in the right file:
-   - Structured source field → `structured_sources.py`
-   - DOM field on detail page → `detail_extractor.py`
-   - DOM field on listing page → `listing_extractor.py`
-   - Platform-specific → `adapters/[platform].py`
-5. Add normalization to `field_value_core.py` if coercion is needed (price, URL, date, image).
-6. Add a focused test in `tests/services/test_crawl_engine.py` that asserts the field value from a fixture.
-7. Update `docs/backend-architecture.md` Section 4 if the field is user-facing and significant.
+Never fix extraction bugs in `pipeline/core.py`, `publish/verdict.py`, or `publish/metrics.py`.
 
 ---
 
-## SKILL: Add a New Platform Adapter
+## Add a New Extraction Field
 
-1. Add the platform entry to `services/config/platforms.json`:
-   - adapter name, URL/domain signatures for detection, JS-state mappings if applicable, listing-readiness selectors
-2. Create `services/adapters/[platform].py`:
-   - `class [Platform]Adapter` with `can_handle(url, html) -> bool` and `extract(html, url) -> list[AdapterRecord]`
-3. Register in `services/adapters/registry.py:_ADAPTER_MAP` (or `registered_adapters()` — check how existing adapters register).
-4. Add network payload spec to `services/config/network_payload_specs.py` if the platform has a known JSON API endpoint.
-5. Test: `python run_acquire_smoke.py [platform_keyword]`
-6. **Do NOT** put the platform name anywhere in: `crawl_fetch_runtime.py`, `crawl_engine.py`, `_batch_runtime.py`, or any generic path.
-
----
-
-## SKILL: Add a New API Route
-
-1. Identify the correct router file in `app/api/` by resource ownership.
-2. Create a Pydantic schema in `app/schemas/[resource].py` for request/response if needed.
-3. Implement business logic in the owning service file (NOT in the route handler — handlers call services).
-4. Add the route function to the router with the correct auth dependency (`get_current_user` or admin check).
-5. Add the route to the registered surface table in `docs/backend-architecture.md` Section 3.
-6. Add a focused test in `tests/api/`.
+1. Identify the surface.
+2. Add aliases in `services/config/field_mappings.py`.
+3. Add eligibility in `services/field_policy.py`.
+4. Add extraction at the right owner:
+   - structured: `structured_sources.py`
+   - detail DOM: `detail_extractor.py`
+   - listing DOM: `listing_extractor.py`
+   - platform-specific: `adapters/[platform].py`
+5. Add normalization in `field_value_core.py` if needed.
+6. Add a focused extraction test.
+7. Update `docs/backend-architecture.md` only if the field is significant and user-facing.
 
 ---
 
-## SKILL: Delete Dead Code
+## Add a New Platform Adapter
 
-1. Search all callers: `grep -r "symbol_name" backend/app` — confirm zero live callers.
-2. Test files that import private internals are not "callers" — they are also candidates for deletion.
-3. Delete the symbol (function, class, constant, file).
-4. Delete any test that only existed to test that symbol's internals.
-5. Run `pytest tests -q` to confirm nothing breaks.
-6. If the symbol was documented in any canonical doc, remove the reference.
-7. Do NOT leave a re-export stub at the old location. Delete the old location entirely.
+1. Add metadata to `services/config/platforms.json`.
+2. Create `services/adapters/[platform].py`.
+3. Register it in `services/adapters/registry.py`.
+4. Add payload specs in `services/config/network_payload_specs.py` if needed.
+5. Run `python run_acquire_smoke.py [platform_keyword]`
 
----
-
-## SKILL: Modify Selector Self-Heal Behavior
-
-Self-heal lives in `services/selector_self_heal.py`. Key invariants:
-- Self-heal only runs when domain-memory selectors fail to satisfy the requested fields.
-- Synthesized selectors are only persisted after a rerun confirms they **improve** targeted fields.
-- Do not trigger a new synthesis pass if domain-memory rules already cover the requested fields.
-
-Trace: `pipeline/core.py` → `apply_selector_self_heal()` → `selector_self_heal.py:612` → `domain_memory_service.py`
-
-Tests: `tests/services/test_selector_pipeline_integration.py`
+Do not hardcode platform names in generic runtime paths.
 
 ---
 
-## SKILL: Modify Review / Domain Memory
+## Add a New API Route
 
-Review persistence: `review/__init__.py` — `ReviewPromotion` is the single DB-backed owner of approved schema.
-Domain memory: `domain_memory_service.py` — `load_domain_memory()` (SELECT) and `create_domain_memory()` (INSERT/UPDATE).
-Scoping: always by normalized `(domain, surface)`. Never global.
-
-If you change the review save flow, verify that `schema_service` loads from `ReviewPromotion.approved_schema`
-(not from in-memory state) and that later schema loads read the same stored snapshot.
-
----
-
-## SKILL: Update Docs After Implementation
-
-Only update canonical docs. Never write to CHANGELOG.
-
-| What changed | Doc to update |
-|-------------|---------------|
-| A subsystem's behavior, new feature, or contract | `docs/backend-architecture.md` relevant section |
-| A file was added or moved to a different bucket | `docs/CODEBASE_MAP.md` |
-| A must-preserve runtime rule changed | `docs/INVARIANTS.md` |
-| A new anti-pattern was discovered | `docs/ENGINEERING_STRATEGY.md` Anti-Patterns section |
-| Ownership buckets changed | `AGENTS.md` ownership table + `docs/CODEBASE_MAP.md` |
-| A plan slice is done | `docs/plans/[active-plan].md` — mark slice DONE |
-| A plan is fully done | `docs/plans/ACTIVE.md` — mark complete or point to next |
-
-Do NOT add new sections to `backend-architecture.md` for every small change.
-Do NOT update `ENGINEERING_STRATEGY.md` with implementation details.
+1. Put the route in the correct `app/api/` router.
+2. Add request or response schemas in `app/schemas/[resource].py` if needed.
+3. Keep business logic in the owning service, not the route handler.
+4. Add auth dependencies.
+5. Add a focused API test.
+6. Update `docs/backend-architecture.md` if the route changes the public surface.
 
 ---
 
-## SKILL: Add a New Surface Type
+## Delete Dead Code
 
-1. Add to `services/field_policy.py:canonical_fields_for_surface()`.
-2. Add normalization mapping in `services/field_value_core.py:direct_record_to_surface_fields()`.
-3. Update `CrawlCreate` surface validation in `app/schemas/crawl.py`.
-4. Add surface-specific field aliases to `services/config/field_mappings.py`.
-5. Add surface to the frontend surface selector in `components/crawl/crawl-config-screen.tsx`.
-6. Update `docs/backend-architecture.md` Section 4 with the new surface.
-
----
-
-## SKILL: Modify Run Status / State Machine
-
-Status transitions are enforced in `app/models/crawl_domain.py`:
-- `CrawlStatus` enum — add new status here first
-- `_ALLOWED_TRANSITIONS` map — add allowed transitions
-- `TERMINAL_STATUSES` / `ACTIVE_STATUSES` sets — update membership
-
-Do not add status-transition logic anywhere else.
+1. Grep all callers.
+2. Delete the dead symbol or file.
+3. Delete tests that only verify that dead private implementation.
+4. Run `pytest tests -q`
+5. Remove stale doc references.
+6. Do not leave re-export stubs.
 
 ---
 
-## SKILL: Add a New Export Format
+## Modify Selector Self-Heal
 
-1. Add the export method in `services/record_export_service.py`.
-2. Add the route in `app/api/records.py`.
-3. Add content-type handling in the export response builder.
-4. Add the method to `frontend/lib/api/index.ts` and type it in `lib/api/types.ts`.
-5. Update `docs/backend-architecture.md` Section 7 (Export Formats table).
+- Owner: `services/selector_self_heal.py`
+- Run only when requested fields are still missing.
+- Persist only validated improvements.
+- Do not synthesize if existing domain memory already satisfies the request.
+
+Trace: `pipeline/core.py` -> `apply_selector_self_heal()` -> `selector_self_heal.py` -> `domain_memory_service.py`
+
+Test: `tests/services/test_selector_pipeline_integration.py`
+
+---
+
+## Modify Review or Domain Memory
+
+- Review persistence owner: `review/__init__.py`
+- Approved schema source of truth: `ReviewPromotion`
+- Domain memory owner: `domain_memory_service.py`
+- Scope: normalized `(domain, surface)` only
+
+If review-save behavior changes, verify later loads still read the persisted snapshot.
+
+---
+
+## Update Docs After Implementation
+
+| Change | Doc |
+|---|---|
+| File ownership or moves | `docs/CODEBASE_MAP.md` |
+| Runtime contract | `docs/INVARIANTS.md` |
+| User-visible behavior | `docs/BUSINESS_LOGIC.md` or `docs/backend-architecture.md` |
+| Engineering rule or anti-pattern | `docs/ENGINEERING_STRATEGY.md` |
+| Plan progress | active plan file + `docs/plans/ACTIVE.md` |
+
+Do not use docs as changelogs.
+
+---
+
+## Add a New Surface Type
+
+1. Update `services/field_policy.py`
+2. Update `services/field_value_core.py`
+3. Update `app/schemas/crawl.py`
+4. Update `services/config/field_mappings.py`
+5. Update frontend surface selection
+6. Update `docs/backend-architecture.md`
+
+---
+
+## Modify Run Status or State Machine
+
+Owner: `app/models/crawl_domain.py`
+
+Update:
+- `CrawlStatus`
+- `_ALLOWED_TRANSITIONS`
+- `TERMINAL_STATUSES`
+- `ACTIVE_STATUSES`
+
+Do not split status logic across files.
+
+---
+
+## Add a New Export Format
+
+1. Add export method in `services/record_export_service.py`
+2. Add route in `app/api/records.py`
+3. Add response content-type handling
+4. Add frontend API method and types
+5. Update `docs/backend-architecture.md`

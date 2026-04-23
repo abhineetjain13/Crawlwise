@@ -19,14 +19,14 @@ import {
  StatusDot,
  TabBar,
 } from"../ui/patterns";
-import { Badge, Button, Card, Input, Tooltip } from"../ui/primitives";
+import { Badge, Button, Card, Dropdown, Field, Input, Toggle, Tooltip } from"../ui/primitives";
 import { api } from"../../lib/api";
 import { getApiWebSocketBaseUrl } from"../../lib/api/client";
 import type { CrawlLog, CrawlRecord, CrawlRun, DomainRunProfile, ResultSummaryQualityLevel } from"../../lib/api/types";
 import { CRAWL_DEFAULTS } from"../../lib/constants/crawl-defaults";
 import { ACTIVE_STATUSES } from"../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from"../../lib/constants/storage-keys";
-import { POLLING_INTERVALS } from"../../lib/constants/timing";
+import { POLLING_INTERVALS, RETRY_LIMITS } from"../../lib/constants/timing";
 import { getDomain } from"../../lib/format/domain";
 import { telemetryErrorPayload, trackEvent } from"../../lib/telemetry/events";
 import { parseApiDate } from"../../lib/format/date";
@@ -168,6 +168,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  const logViewportRef = useRef<HTMLDivElement | null>(null);
  const sessionStartMsRef = useRef<number>(Date.now());
  const pollErrorEventKeysRef = useRef<Set<string>>(new Set());
+ const terminalRecordsRetryAttemptsRef = useRef(0);
  
  const runQuery = useQuery({
  queryKey: ["crawl-run", runId],
@@ -593,25 +594,36 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  ),
  };
 
- const missingRecentTerminalRecords =
- terminal &&
- summaryRecordsFromRun > 0 &&
- !tableRecords.length &&
- !tableTotal &&
- !!run?.completed_at &&
- Date.now() - parseApiDate(run.completed_at).getTime() <= POLLING_INTERVALS.STUCK_RUN_WARNING_MS;
+ const knownTableRecordsTotal = Math.max(
+ tableTotal,
+ tableRecordsQuery.data?.meta?.total ?? 0,
+ );
+ const terminalRecordsExpected =
+ terminal && (summaryRecordsFromRun > 0 || verdict ==="success"|| verdict ==="partial");
+ const terminalRecordsNeedSync =
+ terminalRecordsExpected &&
+ knownTableRecordsTotal < Math.max(1, summaryRecordsFromRun);
 
  useEffect(() => {
- if (!missingRecentTerminalRecords) {
+ if (!terminalRecordsNeedSync) {
+ terminalRecordsRetryAttemptsRef.current = 0;
  return;
  }
 
- const timeoutId = window.setTimeout(() => {
+ const intervalId = window.setInterval(() => {
+ if (
+ terminalRecordsRetryAttemptsRef.current >=
+ RETRY_LIMITS.TERMINAL_RECORDS_RETRY_LIMIT
+ ) {
+ window.clearInterval(intervalId);
+ return;
+ }
+ terminalRecordsRetryAttemptsRef.current += 1;
  void Promise.allSettled([tableRecordsQuery.refetch(), jsonRecordsQuery.refetch()]);
  }, POLLING_INTERVALS.RECORDS_MS);
 
- return () => window.clearTimeout(timeoutId);
- }, [jsonRecordsQuery, missingRecentTerminalRecords, tableRecordsQuery]);
+ return () => window.clearInterval(intervalId);
+ }, [jsonRecordsQuery, tableRecordsQuery, terminalRecordsNeedSync]);
 
  function downloadExport(kind:"csv"|"json"|"markdown") {
  setRunActionError("");
@@ -1186,97 +1198,88 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </Button>
  </div>
  <div className="grid gap-3 md:grid-cols-2">
- <label className="grid gap-1.5">
- <span className="field-label">Fetch Mode</span>
- <select
- aria-label="Fetch Mode"
+ <Field label="Fetch Mode">
+ <Dropdown
  value={recipeProfile.fetch_profile.fetch_mode}
- onChange={(event) =>
+ onChange={(value) =>
  setRecipeProfile((current) => ({
  ...current,
  fetch_profile: {
  ...current.fetch_profile,
- fetch_mode: event.target.value as DomainRunProfile["fetch_profile"]["fetch_mode"],
+ fetch_mode: value,
  },
  }))
  }
- className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
- >
- <option value="auto">Auto</option>
- <option value="http_only">HTTP Only</option>
- <option value="browser_only">Browser Only</option>
- <option value="http_then_browser">HTTP Then Browser</option>
- </select>
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Extraction Source</span>
- <select
- aria-label="Extraction Source"
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "http_only", label: "HTTP Only" },
+ { value: "browser_only", label: "Browser Only" },
+ { value: "http_then_browser", label: "HTTP Then Browser" },
+ ]}
+ />
+ </Field>
+ <Field label="Extraction Source">
+ <Dropdown
  value={recipeProfile.fetch_profile.extraction_source}
- onChange={(event) =>
+ onChange={(value) =>
  setRecipeProfile((current) => ({
  ...current,
  fetch_profile: {
  ...current.fetch_profile,
- extraction_source: event.target.value as DomainRunProfile["fetch_profile"]["extraction_source"],
+ extraction_source: value,
  },
  }))
  }
- className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
- >
- <option value="raw_html">Raw HTML</option>
- <option value="rendered_dom">Rendered DOM</option>
- <option value="rendered_dom_visual">Rendered DOM + Visual</option>
- <option value="network_payload_first">Network Payload First</option>
- </select>
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">JS Mode</span>
- <select
- aria-label="JS Mode"
+ options={[
+ { value: "raw_html", label: "Raw HTML" },
+ { value: "rendered_dom", label: "Rendered DOM" },
+ { value: "rendered_dom_visual", label: "Rendered DOM + Visual" },
+ { value: "network_payload_first", label: "Network Payload First" },
+ ]}
+ />
+ </Field>
+ <Field label="JS Mode">
+ <Dropdown
  value={recipeProfile.fetch_profile.js_mode}
- onChange={(event) =>
+ onChange={(value) =>
  setRecipeProfile((current) => ({
  ...current,
  fetch_profile: {
  ...current.fetch_profile,
- js_mode: event.target.value as DomainRunProfile["fetch_profile"]["js_mode"],
+ js_mode: value,
  },
  }))
  }
- className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
- >
- <option value="auto">Auto</option>
- <option value="enabled">Enabled</option>
- <option value="disabled">Disabled</option>
- </select>
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Traversal Mode</span>
- <select
- aria-label="Traversal Mode"
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "enabled", label: "Enabled" },
+ { value: "disabled", label: "Disabled" },
+ ]}
+ />
+ </Field>
+ <Field label="Traversal Mode">
+ <Dropdown
  value={recipeProfile.fetch_profile.traversal_mode ?? ""}
- onChange={(event) =>
+ onChange={(value) =>
  setRecipeProfile((current) => ({
  ...current,
  fetch_profile: {
  ...current.fetch_profile,
- traversal_mode: (event.target.value || null) as DomainRunProfile["fetch_profile"]["traversal_mode"],
+ traversal_mode: value ? value : null,
  },
  }))
  }
- className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
- >
- <option value="">Off</option>
- <option value="auto">Auto</option>
- <option value="scroll">Scroll</option>
- <option value="load_more">Load More</option>
- <option value="view_all">View All</option>
- <option value="paginate">Paginate</option>
- </select>
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Geo Country</span>
+ options={[
+ { value: "", label: "Off" },
+ { value: "auto", label: "Auto" },
+ { value: "scroll", label: "Scroll" },
+ { value: "load_more", label: "Load More" },
+ { value: "view_all", label: "View All" },
+ { value: "paginate", label: "Paginate" },
+ ]}
+ />
+ </Field>
+ <Field label="Geo Country">
  <Input
  aria-label="Geo Country"
  value={recipeProfile.locality_profile.geo_country}
@@ -1290,9 +1293,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }))
  }
  />
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Language Hint</span>
+ </Field>
+ <Field label="Language Hint">
  <Input
  aria-label="Language Hint"
  value={recipeProfile.locality_profile.language_hint ?? ""}
@@ -1306,9 +1308,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }))
  }
  />
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Currency Hint</span>
+ </Field>
+ <Field label="Currency Hint">
  <Input
  aria-label="Currency Hint"
  value={recipeProfile.locality_profile.currency_hint ?? ""}
@@ -1322,108 +1323,101 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }))
  }
  />
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Network Capture</span>
- <select
- aria-label="Network Capture"
+ </Field>
+ <Field label="Network Capture">
+ <Dropdown
  value={recipeProfile.diagnostics_profile.capture_network}
- onChange={(event) =>
+ onChange={(value) =>
  setRecipeProfile((current) => ({
  ...current,
  diagnostics_profile: {
  ...current.diagnostics_profile,
- capture_network: event.target.value as DomainRunProfile["diagnostics_profile"]["capture_network"],
+ capture_network: value,
  },
  }))
  }
- className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
- >
- <option value="off">Off</option>
- <option value="matched_only">Matched Only</option>
- <option value="all_small_json">All Small JSON</option>
- </select>
- </label>
- <label className="flex items-center gap-2 text-sm">
- <input
- type="checkbox"
+ options={[
+ { value: "off", label: "Off" },
+ { value: "matched_only", label: "Matched Only" },
+ { value: "all_small_json", label: "All Small JSON" },
+ ]}
+ />
+ </Field>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Include iframes</span>
+ <Toggle
  checked={recipeProfile.fetch_profile.include_iframes}
- onChange={(event) =>
+ onChange={(checked) =>
  setRecipeProfile((current) => ({
  ...current,
  fetch_profile: {
  ...current.fetch_profile,
- include_iframes: event.target.checked,
+ include_iframes: checked,
  },
  }))
  }
  />
- Include iframes
- </label>
- <label className="flex items-center gap-2 text-sm">
- <input
- type="checkbox"
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Capture HTML</span>
+ <Toggle
  checked={recipeProfile.diagnostics_profile.capture_html}
- onChange={(event) =>
+ onChange={(checked) =>
  setRecipeProfile((current) => ({
  ...current,
  diagnostics_profile: {
  ...current.diagnostics_profile,
- capture_html: event.target.checked,
+ capture_html: checked,
  },
  }))
  }
  />
- Capture HTML
- </label>
- <label className="flex items-center gap-2 text-sm">
- <input
- type="checkbox"
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Capture Screenshot</span>
+ <Toggle
  checked={recipeProfile.diagnostics_profile.capture_screenshot}
- onChange={(event) =>
+ onChange={(checked) =>
  setRecipeProfile((current) => ({
  ...current,
  diagnostics_profile: {
  ...current.diagnostics_profile,
- capture_screenshot: event.target.checked,
+ capture_screenshot: checked,
  },
  }))
  }
  />
- Capture Screenshot
- </label>
- <label className="flex items-center gap-2 text-sm">
- <input
- type="checkbox"
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Capture Response Headers</span>
+ <Toggle
  checked={recipeProfile.diagnostics_profile.capture_response_headers}
- onChange={(event) =>
+ onChange={(checked) =>
  setRecipeProfile((current) => ({
  ...current,
  diagnostics_profile: {
  ...current.diagnostics_profile,
- capture_response_headers: event.target.checked,
+ capture_response_headers: checked,
  },
  }))
  }
  />
- Capture Response Headers
- </label>
- <label className="flex items-center gap-2 text-sm">
- <input
- type="checkbox"
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Capture Browser Diagnostics</span>
+ <Toggle
  checked={recipeProfile.diagnostics_profile.capture_browser_diagnostics}
- onChange={(event) =>
+ onChange={(checked) =>
  setRecipeProfile((current) => ({
  ...current,
  diagnostics_profile: {
  ...current.diagnostics_profile,
- capture_browser_diagnostics: event.target.checked,
+ capture_browser_diagnostics: checked,
  },
  }))
  }
  />
- Capture Browser Diagnostics
- </label>
+ </div>
  </div>
  </Card>
  ) : (

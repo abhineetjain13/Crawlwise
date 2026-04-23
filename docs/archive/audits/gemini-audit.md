@@ -1,160 +1,201 @@
-Read: AGENTS.md, CODEBASE_MAP.md, BUSINESS_LOGIC.md, ENGINEERING_STRATEGY.md, INVARIANTS.md
-Active plan: NONE
-Audit scope emphasis: FIRST RUN
-FIRST RUN
 Section 1–8: Dimension Scores
 Dimension: D1. SOLID / DRY / KISS
-Floor: 6/10 | Ceiling: 8/10 | Score: 7.0/10
-Previous score: N/A → Change: FIRST RUN
+Floor: 6/10 | Ceiling: 9/10 | Score: 7.5/10
+Previous score: N/A → Change: N/A
 Reason for change: FIRST RUN
 Violations:
-MEDIUM tests/test_pipeline_core.py → test_extract_records_for_acquisition_keeps_adapter_fields_empty_when_no_adapter_matches (approx lines 150-160):
-The test suite imports and asserts against private internal structs (_FetchedURLStage, _URLProcessingContext, _extract_records_for_acquisition) to verify pipeline behavior.
-Breaks ENGINEERING_STRATEGY.md AP-7 (Private-function test coupling).
-Production failure mode: Blocks structural refactoring of pipeline/core.py because internal implementation details are ossified by the test suite.
-Verification: rg "from app.services.pipeline.core import.*_FetchedURLStage" tests/
-Verdict: The core pipeline and extractors are generally well-layered and adhere to SRP. However, the test suite actively breaks encapsulation by coupling to private pipeline orchestration models, violating AP-7 and hindering future architectural cleanup.
+MEDIUM app/services/acquisition/browser_page_flow.py → BrowserAcquisitionResultBuilder.build (approx lines 62-126):
+This method acts as a massive God Function orchestrating network capture closure, block classification, HTML sizing, screenshot capture, listing artifact extraction, and dict mapping. It violates SRP.
+Breaks SRP/KISS by mixing domain logic (what to capture) with pipeline orchestration (how to capture it).
+Production failure mode: Modifying any single artifact capture flow risks breaking the entire browser finalization pipeline.
+Verification: rg -n "async def build\(self\)" app/services/acquisition/browser_page_flow.py
+Verdict: The codebase generally adheres well to single-responsibility bounds, especially post-refactor in the extraction pipelines (detail_tiers.py). However, the browser acquisition finalization path remains a structural choke point that needs decoupling.
 Dimension: D2. Configuration Hygiene
-Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
-Previous score: N/A → Change: FIRST RUN
-Reason for change: FIRST RUN
-Violations:
-LOW browser_detail.py → expand_all_interactive_elements_impl (approx lines 120-130):
-Hardcoded magic number timeouts (timeout=1_000, timeout=250) are scattered inline for Playwright actions instead of using crawler_runtime_settings.
-Breaks Config Hygiene (magic numbers scattered inline).
-Production failure mode it enables: Prevents operators from globally tuning interaction tolerances for slow sites without modifying source code.
-Verification: rg "timeout=(1_000|250|2000)" backend/app/services/acquisition/browser_detail.py
-Verdict: Configuration hygiene is extremely strong, with runtime settings driving nearly all timeouts, selectors, and fallback gates. A few minor magic numbers linger in Playwright interaction fallbacks.
-Dimension: D3. Scalability & Resource Management
-Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
-Previous score: N/A → Change: FIRST RUN
-Reason for change: FIRST RUN
-Violations:
-No critical or high violations found. The shared HTTP client correctly prevents connection pool leaks, and Playwright contexts are strictly closed in finally blocks. Async workers inside browser_capture.py are properly tracked, cancelled, and drained on closure.
-Verification: rg -A 5 "async def _capture_worker" backend/app/services/acquisition/browser_capture.py
-Verdict: Resource management is exceptionally robust. The system properly bounds memory, enforces concurrency limits on network capture, safely drains tasks, and cleanly separates async HTTP pools from Playwright contexts.
-Dimension: D4. Extraction & Normalisation Pipeline
-Floor: 4/10 | Ceiling: 7/10 | Score: 5.5/10
-Previous score: N/A → Change: FIRST RUN
-Reason for change: FIRST RUN
-Violations:
-CRITICAL field_policy.py → field_allowed_for_surface (lines 28–34):
-The function uses an implicit blocklist (_ALL_CANONICAL_FIELDS - allowed) to filter schema properties. Any completely unknown field (e.g., garbage_tracker_id) is not in _ALL_CANONICAL_FIELDS, meaning it evades the exclusion check and returns True. In field_value_core.py, these garbage fields are actively preserved and merged into the final record.data.
-Breaks INVARIANTS.md #10 and #11 (Persisted record.data contains only populated logical fields).
-Production failure mode it enables: Silent schema pollution. Any random JSON-LD or network payload key can bleed directly into the user-facing record payload.
-Verification:
-rg "def excluded_fields_for_surface" backend/app/services/field_policy.py
-rg "field_allowed_for_surface" backend/app/services/field_value_core.py
-CRITICAL detail_extractor.py → _promote_detail_title (approx lines 360–380):
-The fallback ranking override condition allows weaker sources to overwrite strictly authoritative sources (like adapter or network_payload) simply because their string length is longer: (rank < current_rank or source in {...} or len(candidate) > len(title)).
-Breaks source ranking integrity (authoritative-first hierarchy).
-Production failure mode it enables: A concise, accurate product title from a dedicated Shopify API payload (rank 1) will be silently overwritten by a noisy, SEO-bloated dom_h1 tag (rank 10) just because the DOM tag contains more characters.
-Verification: rg "rank < current_rank or source in.*or len\(candidate\)" backend/app/services/detail_extractor.py
-Verdict: The extraction pipeline has powerful declarative mapping capabilities, but the ranking enforcement and schema validation layers contain critical logical holes. The implicit schema blocklist leaks garbage fields, and the title promotion heuristic defeats the authoritative-first source priority model.
-Dimension: D5. Traversal Mode
-Floor: 9/10 | Ceiling: 10/10 | Score: 9.5/10
-Previous score: N/A → Change: FIRST RUN
-Reason for change: FIRST RUN
-Violations:
-No violations found. Traversal modes correctly separate pagination, scroll, and load_more. Cross-tenant boundaries are respected via _is_same_origin, cycle detection is active, and structural links (javascript:, #) are properly ignored.
-Verification: rg "def _is_same_origin" backend/app/services/acquisition/traversal.py
-Verdict: Traversal orchestration is mathematically sound. It correctly sandboxes pagination state, applies cycle detection to prevent infinite loops, and honors multi-tenant path boundaries seamlessly.
-Dimension: D6. Resilience & Error Handling
 Floor: 7/10 | Ceiling: 9/10 | Score: 8.0/10
-Previous score: N/A → Change: FIRST RUN
+Previous score: N/A → Change: N/A
 Reason for change: FIRST RUN
 Violations:
-MEDIUM traversal.py → _locator_still_resolves (approx lines 500-510):
-Contains a bare except Exception: pass block while polling locator count, silently swallowing potentially critical runtime failures.
-Breaks D6 Resilience rules against bare except Exception: pass.
-Production failure mode it enables: Can mask underlying Playwright crashes, context closures, or cancellation signals (asyncio.CancelledError), causing the crawler to hang or behave unpredictably instead of propagating the error.
-Verification: rg -A 3 "except Exception:" backend/app/services/acquisition/traversal.py
-Verdict: Error handling handles HTTP bounds, 4xx/5xx bifurcation, and blocked page classification intelligently. However, a lingering bare exception swallow in the traversal recovery code risks masking critical context failures.
-Dimension: D7. Dead Code & Technical Debt
-Floor: 7/10 | Ceiling: 8/10 | Score: 7.5/10
-Previous score: N/A → Change: FIRST RUN
+MEDIUM app/services/acquisition/browser_identity.py → _is_version_coherent (approx lines 105-120):
+Hardcoded Chrome major version thresholds (if ua_major < 120: return False) and specific browser brand strings ("chromium", "google chrome", "chrome") embedded directly in the identity generation logic.
+Breaks INVARIANTS.md clause regarding configuration separation; magic numbers and strings for browser fingerprinting should live in runtime_settings.py or a dedicated config file.
+Production failure mode: As browsers age, this code requires manual patching rather than a dynamic env-var update, risking sudden stealth degradation.
+Verification: rg -n "ua_major < 120:" app/services/acquisition/browser_identity.py
+Verdict: Excellent use of pydantic_settings and platforms.json overall. The extraction rule configs are wonderfully isolated. Only minor fingerprinting magic strings bleed into business logic.
+Dimension: D3. Scalability & Resource Management
+Floor: 6/10 | Ceiling: 9/10 | Score: 7.5/10
+Previous score: N/A → Change: N/A
 Reason for change: FIRST RUN
 Violations:
-MEDIUM tests/test_browser_expansion_runtime.py → imports (approx lines 10-20):
-Imports and tests _generate_page_markdown and _FakeExpansionPage directly.
-Breaks ENGINEERING_STRATEGY.md AP-7 (Private-function test coupling).
-Production failure mode it enables: Architectural lock-in. Internal Markdown serialization and Playwright flow logic cannot be safely refactored because the test suite expects private classes and methods to remain unchanged.
-Verification: rg "from app.services.acquisition.browser_page_flow import.*_generate_page_markdown" tests/
-Verdict: Technical debt is low regarding dead code and TODOS, but the test suite creates artificial friction by testing private module implementations instead of public API contracts.
-Dimension: D8. Acquisition Mode
+HIGH app/core/redis.py → schedule_fail_open (approx lines 62-75):
+Fires background tasks using loop.create_task(_runner()) without keeping a strong reference or tracking them in a TaskGroup or registry.
+Breaks fundamental Python asyncio safety invariants (tasks can be garbage collected mid-flight, or orphaned during shutdown).
+Production failure mode: Under high load, event loop garbage collection can destroy these telemetry/logging tasks before they complete, leading to silent metric drops and memory leaks.
+Verification: rg -n "loop.create_task\(_runner\(\)\)" app/core/redis.py
+Verdict: Playwright concurrency via SharedBrowserRuntime and its semaphores is highly robust. However, the untracked async task spawning for Redis metrics introduces immediate runtime instability risks.
+Dimension: D4. Extraction & Normalisation Pipeline
 Floor: 9/10 | Ceiling: 10/10 | Score: 9.5/10
-Previous score: N/A → Change: FIRST RUN
+Previous score: N/A → Change: N/A
 Reason for change: FIRST RUN
 Violations:
-No violations found. The HTTP/Browser escalation strategy correctly assesses heuristics, explicit platform policy, and vendor block headers without hardcoding sites in the generic engine. Fingerprinting applies seamlessly to contexts.
-Verification: rg "def should_escalate_to_browser" backend/app/services/acquisition/runtime.py
-Verdict: The acquisition routing is exemplary. The escalation from curl_cffi to Playwright is purely evidence-driven, maintaining clean boundaries and preventing unnecessary browser usage.
+No critical or high violations found.
+Verification: rg -n "def validate_record_for_surface" app/services/field_value_core.py (Shows strong schema enforcement).
+Verdict: This is a masterclass in extraction tiering. The explicit fallback hierarchy (authoritative -> structured_data -> js_state -> dom) combined with the validate_and_clean surface enforcement guarantees high-fidelity data without schema bleed.
+Dimension: D5. Traversal Mode
+Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
+Previous score: N/A → Change: N/A
+Reason for change: FIRST RUN
+Violations:
+LOW app/services/acquisition/traversal.py → _click_with_retry (approx lines 550-610):
+The fallback node.click() JS evaluation executes blindly on the locator without asserting the execution context hasn't been destroyed.
+While it catches Exception, it heavily relies on the Playwright bridge not hanging during rapid DOM mutations.
+Production failure mode: Intermittent Playwright target closed exceptions during aggressive load-more cycles.
+Verification: rg -n "node instanceof HTMLElement && node.click\(\)" app/services/acquisition/traversal.py
+Verdict: Traversal handles pagination cycles, domain-escape prevention, and tenant boundary isolation exceptionally well. The only minor risk is the brute-force JS click fallback.
+Dimension: D6. Resilience & Error Handling
+Floor: 5/10 | Ceiling: 8/10 | Score: 6.5/10
+Previous score: N/A → Change: N/A
+Reason for change: FIRST RUN
+Violations:
+HIGH app/services/acquisition/browser_page_flow.py → Multiple functions (e.g., _capture_listing_visual_elements):
+Uses broad except Exception: blocks that execute logger.debug(..., exc_info=True) and return empty structures.
+Breaks ENGINEERING_STRATEGY.md regarding explicit failure handling; Playwright timeouts, target closures, and execution context destruction are collapsed into generic "failed" states.
+Production failure mode: Extremely difficult to debug whether an artifact capture failed due to a timeout (expected) or a browser crash (critical system failure).
+Verification: rg -n "except Exception:" app/services/acquisition/browser_page_flow.py
+Verdict: While the pipeline gracefully recovers from empty records using LLM fallbacks, the browser tier suppresses too many underlying Playwright exceptions, masking infrastructure health.
+Dimension: D7. Dead Code & Technical Debt
+Floor: 6/10 | Ceiling: 8/10 | Score: 7.0/10
+Previous score: N/A → Change: N/A
+Reason for change: FIRST RUN
+Violations:
+HIGH tests/test_pipeline_core.py → test_sanitize_llm_existing_values_uses_runtime_max_chars... (approx lines 34-45):
+The test suite directly imports and tests private/internal functions (_sanitize_llm_existing_values, _apply_direct_record_llm_fallback) rather than testing the public process_single_url API contract.
+Breaks AP-7 (Testing Private Methods).
+Production failure mode: Refactoring internal pipeline structures will break tests, actively discouraging future tech debt cleanup.
+Verification: rg -n "def test_sanitize_llm_existing_values" tests/test_pipeline_core.py
+Verdict: The business code is clean and free of TODOs, but the test suite is tightly coupled to implementation details, violating AP-7 constraints.
+Dimension: D8. Acquisition Mode
+Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
+Previous score: N/A → Change: N/A
+Reason for change: FIRST RUN
+Violations:
+MEDIUM app/services/crawl_fetch_runtime.py → _select_http_fetcher (approx lines 320-322):
+Hardcodes the return value to _curl_fetch. The _http_fetch (standard HTTPX) path is completely bypassed for standard requests.
+Breaks expected escalation patterns if curl_cffi faces TLS fingerprinting issues that plain HTTPX might bypass, or limits testing environments that lack curl_cffi binaries.
+Production failure mode: Wasted code path for HTTPX, and inability to dynamically swap to plain HTTPX if curl_cffi fails locally.
+Verification: rg -n "def _select_http_fetcher" app/services/crawl_fetch_runtime.py
+Verdict: Acquisition logic is strongly separated from extraction. Proxy threading is correct. The hardcoded fetcher selection is the only structural misstep here.
 Section 9: Final Summary
-Overall Score: 7.9/10 (previous: N/A, delta: FIRST RUN)
+Overall Score: 7.8/10 (previous: N/A, delta: N/A)
 Root Cause Findings (architectural — require a plan, not a bug fix):
-RC-1: Schema Exclusion Logic Allows Arbitrary Output Field Pollution — affects D4
-RC-2: Title Promotion Overwrites Strong Sources With Weak Sources (Precedence Violation) — affects D4
+RC-1: Untracked background task creation in Redis metrics (schedule_fail_open) leading to task orphaning and potential event loop memory leaks. — affects D3.
+RC-2: Broad exception swallowing (except Exception) across Playwright boundaries masks critical infrastructure failures. — affects D6.
 Leaf Node Findings (isolated bugs — Codex can fix directly):
-LN-1: acquisition/traversal.py → _locator_still_resolves → Replace bare except Exception: pass with explicit Playwright/Exception catching that re-raises CancelledError.
-LN-2: acquisition/browser_detail.py → expand_all_interactive_elements_impl → Replace hardcoded timeout=1_000 and timeout=250 with runtime settings.
-LN-3: tests/test_pipeline_core.py → Fix test suites importing private structs _FetchedURLStage and _URLProcessingContext by testing public outputs.
+LN-1: tests/test_pipeline_core.py → Remove direct tests of private functions (_sanitize_llm_existing_values), test via process_single_url.
+LN-2: app/services/crawl_fetch_runtime.py → _select_http_fetcher → Implement actual fallback/selection logic between _curl_fetch and _http_fetch.
+LN-3: app/services/acquisition/browser_identity.py → Move Chrome version hardcodes (< 120) to crawler_runtime_settings.py.
 Genuine Strengths (file-level evidence only, no generic praise):
-browser_capture.py → _capture_worker: Safely and reliably bounds memory and concurrency while capturing streaming RSC and JSON payloads via Queue workers, handling cancellation cleanly.
-platform_policy.py → resolve_platform_runtime_policy: Completely extracts platform recognition from generic crawler paths, achieving perfect OCP adherence.
+app/services/extract/detail_tiers.py: Exceptional application of the Strategy/State pattern to separate Extraction Tiers (collect_authoritative_tier, collect_dom_tier). It keeps the build_detail_record flow clean, testable, and strictly enforces precedence.
+app/services/network_payload_mapper.py: Outstanding use of JMESPath arrays via _first_non_empty_path to declaratively map XHR/Graphql endpoints to canonical fields without brittle, nested if/else logic.
 Section 10: Codex-Ready Work Orders
-WORK ORDER RC-1: Schema Exclusion Logic Allows Arbitrary Output Field Pollution
-Touches buckets: 4 (Extraction), 5 (Publish + Persistence)
-Risk: CRITICAL
-Do NOT touch: LLM tasks, Adapter implementations
+WORK ORDER RC-1: Track Async Background Tasks Safely
+Touches buckets: API + Bootstrap, Crawl Ingestion + Orchestration
+Risk: HIGH
+Do NOT touch: Core extraction logic or browser contexts.
 What is wrong
-In field_policy.py, excluded_fields_for_surface returns all canonical fields not allowed for a surface. field_allowed_for_surface checks if a field is not in this excluded list. Consequently, any completely unknown field (e.g. garbage_key) evades the exclusion check and is incorrectly flagged as allowed. In field_value_core.py, validate_record_for_surface then blindly injects these allowed unknown fields back into the sanitized payload, violating strict schema enforcement.
+app/core/redis.py uses loop.create_task(_runner()) inside schedule_fail_open but never retains a strong reference to the task. Python's asyncio garbage collects unreferenced tasks mid-execution, causing silent telemetry drops.
 What to do
-In app/services/field_policy.py, rewrite field_allowed_for_surface to use a strict allowlist. It must check if normalized_field is exactly within the list returned by canonical_fields_for_surface(surface).
-Do not rely on excluded_fields_for_surface for determining if a field is natively allowed; only use it if evaluating legacy explicit rejections.
-In app/services/field_value_core.py, ensure validate_record_for_surface drops any field not explicitly returned by the surface schema.
+In app/core/redis.py, create a global module-level set to track background tasks: _BACKGROUND_TASKS = set().
+Update schedule_fail_open to add the spawned task to this set:
+task = loop.create_task(_runner())
+_BACKGROUND_TASKS.add(task)
+task.add_done_callback(_BACKGROUND_TASKS.discard)
+Ensure thread-safety if this is invoked across loop boundaries (though typical FastAPI usage is single-loop, standard discard on callback is safe).
 Acceptance criteria
 
-field_allowed_for_surface("ecommerce_detail", "random_garbage_key") returns False.
+schedule_fail_open retains a strong reference to background tasks.
 
-validate_record_for_surface drops keys that do not exist in the surface's canonical schema.
+Tasks automatically remove themselves from the set upon completion.
 
-python -m pytest tests -q exits 0.
+grep -r "loop.create_task" app/core/redis.py shows assignment to a variable and tracking.
+
+python -m pytest tests -q exits 0
 What NOT to do
-Do not modify the _OUTPUT_SCHEMAS map structure.
-Do not disable type validation for fields that are canonical.
-WORK ORDER RC-2: Title Promotion Overwrites Strong Sources With Weak Sources
-Touches buckets: 4 (Extraction)
-Risk: CRITICAL
-Do NOT touch: DOM section extraction, LLM fallback
+Do not use asyncio.TaskGroup here, as schedule_fail_open is a synchronous wrapper meant to fire-and-forget from synchronous code paths where context managers aren't feasible.
+WORK ORDER RC-2: Refine Playwright Exception Handling
+Touches buckets: Acquisition + Browser Runtime
+Risk: HIGH
+Do NOT touch: DOM extractors or LLM paths.
 What is wrong
-In app/services/detail_extractor.py, _promote_detail_title evaluates replacement titles with a flawed logical condition: (rank < current_rank or source in {"network_payload", ...} or len(candidate) > len(title)). Because of the or, a lower-quality source (like dom_h1) can overwrite a high-quality authoritative source (like adapter or network_payload) purely because the candidate string is longer. This destroys the authoritative-first source ranking.
+app/services/acquisition/browser_page_flow.py relies on except Exception: to catch Playwright errors during artifact capture (e.g., _capture_listing_visual_elements). This swallows asyncio.CancelledError (if unhandled properly at the boundary) and masks TargetClosedError vs TimeoutError.
 What to do
-In app/services/detail_extractor.py, update the _promote_detail_title condition.
-Remove the len(candidate) > len(title) override bypass.
-Remove the source in {...} bypass.
-The condition should strictly mandate that the candidate must either be an objectively higher-ranked source (rank < current_rank), OR if the ranks are equal, it can be longer/better formatted.
+In app/services/acquisition/browser_page_flow.py, import Error and TimeoutError from playwright.async_api.
+Locate the except Exception: block in _capture_listing_visual_elements and _capture_listing_artifact_with_timeout.
+Change to catch specific exceptions:
+except TimeoutError: -> Log as timeout.
+except Error as exc: -> Log as Playwright error, checking is_response_closed_error if necessary.
+except Exception: -> Keep as absolute fallback, but log explicitly as Unexpected execution error.
+Ensure asyncio.CancelledError is always explicitly re-raised if caught.
 Acceptance criteria
 
-A title extracted from an adapter (rank 0) is never overwritten by a dom_h1 (rank 10) title, regardless of length.
+Playwright TimeoutError and Error are explicitly caught and differentiated.
 
-grep -r "or len(candidate) > len(title)" backend/app/services/detail_extractor.py returns empty.
+asyncio.CancelledError is not swallowed.
 
-python -m pytest tests -q exits 0.
+grep -r "except Exception:" app/services/acquisition/browser_page_flow.py is reduced to only catastrophic fallback paths.
+
+python -m pytest tests -q exits 0
 What NOT to do
-Do not change the integer ranks in DETAIL_TITLE_SOURCE_RANKS.
-Do not completely remove the promotion logic; it is still needed to replace js_state shells with valid dom_h1 content when js_state produces noise.
-WORK ORDER LN-1: Bare Exception Swallows in Traversal (single-session fix)
-File: app/services/acquisition/traversal.py
-Function: _locator_still_resolves
-Fix: Replace the bare except Exception: pass with explicit exception handling. If asyncio.CancelledError is caught, re-raise it. Log other Playwright/Exception errors securely at debug level.
-Test: rg -A 2 "except Exception:" backend/app/services/acquisition/traversal.py should show proper logging and re-raising of cancellation instead of pass.
-WORK ORDER LN-2: Magic Number Timeouts in Browser Detail (single-session fix)
-File: app/services/acquisition/browser_detail.py
-Function: expand_all_interactive_elements_impl
-Fix: Replace inline timeout=1_000 and timeout=250 calls with configurable variables fetched from crawler_runtime_settings (e.g., crawler_runtime_settings.accordion_expand_wait_ms or a related setting).
-Test: rg "timeout=(1000|1_000|250)" backend/app/services/acquisition/browser_detail.py returns empty.
-WORK ORDER LN-3: Test Layer Violations (single-session fix)
+Do not bubble Playwright errors up to the orchestrator; artifact capture failures should still return empty structures [], but the logging must be precise.
+WORK ORDER LN-1: Remove Private Function Tests (AP-7) (single-session fix)
 File: tests/test_pipeline_core.py
-Function: Various test imports
-Fix: Remove direct imports of _FetchedURLStage and _URLProcessingContext. Refactor the associated tests to pass through the public process_single_url API or mock responses cleanly without instantiating private orchestration structs.
-Test: rg "_FetchedURLStage" tests/ returns empty.
+Function: test_sanitize_llm_existing_values_uses_runtime_max_chars_and_strips_html
+Fix: Delete the test entirely. The validation of LLM existing value sanitization is already implicitly covered by test_process_single_url_persists_detail_records_after_self_heal_and_llm_fallback which exercises the full pipeline. Testing _sanitize_llm_existing_values directly violates AP-7.
+Test: pytest tests/test_pipeline_core.py passes.
+WORK ORDER LN-2: Fix Hardcoded HTTP Fetcher Selection (single-session fix)
+File: app/services/crawl_fetch_runtime.py
+Function: _select_http_fetcher
+Fix: Change return _curl_fetch to a configurable/dynamic approach. Since _curl_fetch is the primary workhorse, at least check if an environment variable or setting forces HTTPX, e.g., return _http_fetch if crawler_runtime_settings.force_httpx else _curl_fetch. (Ensure force_httpx is added to CrawlerRuntimeSettings if applied).
+Test: grep -r "def _select_http_fetcher" app/services/crawl_fetch_runtime.py confirms logic evaluates settings.
+WORK ORDER LN-3: Extract Chrome Version Magic Numbers (single-session fix)
+File: app/services/acquisition/browser_identity.py
+Function: _is_version_coherent
+Fix: Extract the hardcoded < 120 check to use crawler_runtime_settings.browser_identity_min_chrome_version (default 120). Add this field to CrawlerRuntimeSettings in app/services/config/runtime_settings.py.
+Test: grep -r "ua_major <" app/services/acquisition/browser_identity.py returns empty.
+ARCHITECTURAL RECOMMENDATIONS
+Note: As noted in the audit, CrawlerAI already successfully implements advanced Ghost-Routing (via network_payload_mapper.py), Hydrated State Interception (js_state_mapper.py), and LLM Selector Synthesis (selector_self_heal.py). The following recommendations address the remaining structural gaps found during this specific audit.
+Task Registry Pattern for Fire-and-Forget Metrics
+Gap: schedule_fail_open fires async tasks into the void, risking garbage collection (RC-1).
+Slot: API / Orchestration Boundary.
+Pseudocode:
+code
+Python
+_BACKGROUND_TASKS = set()
+def fire_background_task(coro):
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+Yield: Prevents silent metric/log loss under heavy load, ensuring accurate operational observability without introducing blocking I/O overhead to the crawler.
+Typed Exception Taxonomy for Playwright Bounds
+Gap: Broad except Exception usage in browser_page_flow.py masks target closures vs JS execution timeouts (RC-2).
+Slot: Browser Runtime / Acquisition.
+Pseudocode:
+code
+Python
+except asyncio.TimeoutError:
+    return [], {"status": "timeout"}
+except PlaywrightError as exc:
+    if "Target closed" in str(exc):
+        return [], {"status": "page_closed"}
+    return [], {"status": "playwright_error"}
+Yield: Prevents the crawler from retrying indefinitely on pages that intentionally crash the context (bot-traps), yielding higher throughput and better diagnostic accuracy.
+Dynamic Fetcher Escalation based on TLS Fingerprint Feedback
+Gap: _select_http_fetcher hardcodes curl_cffi, ignoring httpx (LN-2).
+Slot: Acquisition / HTTP Client.
+Pseudocode:
+code
+Python
+def _select_http_fetcher(context: _FetchRuntimeContext):
+    if context.last_error and isinstance(context.last_error, curl_cffi.requests.errors.RequestsError):
+        return _http_fetch # Fallback if C-bindings crash
+    return _curl_fetch
+Yield: Increased resilience. If the upstream server aggressively blocks the specific chrome131 JA3 fingerprint provided by curl_cffi, falling back to standard httpx HTTP/2 profiles might surprisingly bypass simplistic blocks.

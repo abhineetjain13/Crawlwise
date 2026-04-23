@@ -440,6 +440,96 @@ describe("CrawlRunScreen", () => {
  });
  });
 
+ it("retries both table and JSON record queries during terminal reconciliation", async () => {
+  apiMock.getCrawl.mockResolvedValue({
+  ...terminalRun(101),
+  updated_at:"2026-04-08T10:05:00Z",
+  completed_at:"2026-04-08T10:05:00Z",
+  result_summary: {
+  extraction_verdict:"success",
+  record_count: 2,
+  },
+  });
+
+  let tableCalls = 0;
+  let jsonCalls = 0;
+  apiMock.getRecords.mockImplementation(async (_runId: number, params?: { page?: number; limit?: number }) => {
+  const limit = params?.limit ?? 100;
+  if (params?.page === 1) {
+  tableCalls += 1;
+  return tableCalls === 1
+  ? { items: [], meta: { page: 1, limit, total: 0 } }
+  : { items: [makeRecord(1), makeRecord(2)], meta: { page: 1, limit, total: 2 } };
+  }
+  jsonCalls += 1;
+  return jsonCalls === 1
+  ? { items: [], meta: { page: 1, limit, total: 0 } }
+  : { items: [makeRecord(1), makeRecord(2)], meta: { page: 1, limit, total: 2 } };
+  });
+
+  renderRunScreen();
+
+  await waitFor(() => {
+  expect(apiMock.getRecords.mock.calls).toEqual(
+  expect.arrayContaining([
+  [101, { page: 1, limit: 100 }],
+  [101, { limit: 100 }],
+  ]),
+  );
+  });
+
+  await new Promise((resolve) => window.setTimeout(resolve, POLLING_INTERVALS.RECORDS_MS + 100));
+
+  await waitFor(() => {
+  expect(tableCalls).toBeGreaterThanOrEqual(2);
+  expect(jsonCalls).toBeGreaterThanOrEqual(2);
+  });
+ });
+
+ it("reconciles older completed runs when the first table fetch is empty but records are expected", async () => {
+ apiMock.getCrawl.mockResolvedValue({
+ ...terminalRun(101),
+ updated_at:"2026-04-08T10:05:00Z",
+ completed_at:"2026-04-08T10:05:00Z",
+ result_summary: {
+ extraction_verdict:"success",
+ record_count: 2,
+ },
+ });
+
+ let callCount = 0;
+ apiMock.getRecords.mockImplementation(async (_runId: number, params?: { page?: number; limit?: number }) => {
+ callCount += 1;
+ const limit = params?.limit ?? 100;
+ if (callCount === 1) {
+ return {
+ items: [],
+ meta: { page: 1, limit, total: 0 },
+ };
+ }
+ return {
+ items: [makeRecord(1), makeRecord(2)],
+ meta: { page: 1, limit, total: 2 },
+ };
+ });
+
+ renderRunScreen();
+
+ await waitFor(() => {
+ expect(apiMock.getRecords).toHaveBeenCalledWith(101, { page: 1, limit: 100 });
+ });
+
+ await new Promise((resolve) => window.setTimeout(resolve, POLLING_INTERVALS.RECORDS_MS + 100));
+
+ await waitFor(() => {
+ expect(apiMock.getRecords.mock.calls.length).toBeGreaterThanOrEqual(2);
+ });
+
+ await waitFor(() => {
+ expect(screen.getByText("Item 1")).toBeInTheDocument();
+ });
+ });
+
  it("renders decoded Thai URLs in the JSON preview without changing the underlying records payload", async () => {
  apiMock.getRecords.mockResolvedValue({
  items: [

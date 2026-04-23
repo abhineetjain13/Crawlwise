@@ -1042,6 +1042,131 @@ def test_extract_records_prefers_rich_dom_listing_rows_when_structured_rows_fill
     assert all(row["price"] for row in rows)
 
 
+def test_extract_records_prefers_firstcry_style_dom_cards_over_menu_chrome() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <ul class="optionav lft">
+            <li class="categry inactive">
+              <a href="https://www.firstcry.com/club?ref2=menu_dd_catlanding" class="M13_75">
+                <img src="https://cdn.fcglcdn.com/brainbees/images/n/club_logo_small.png" alt="FirstCry Club" title="FirstCry Club" />
+              </a>
+            </li>
+            <li class="categry inactive">
+              <a href="https://www.firstcry.com/featuredoffer?cpid=7639&ref2=menu_dd_catlanding" class="M13_75">
+                <img src="https://cdn.fcglcdn.com/brainbees/images/n/DM-2.gif" alt="Disney Marvel" title="Disney Marvel" />
+              </a>
+            </li>
+          </ul>
+          <div class="list_sec fw lft">
+            <div class="list_block lft fasnlist">
+              <div class="li_inner_block" role="button" tabindex="0" aria-label="Mark &amp; Mia Half Raglan Sleeves Legged Swimsuit - Pink">
+                <div class="lblock lft">
+                  <div class="list_img wifi">
+                    <a href="//www.firstcry.com/mark-and-mia/mark-and-mia-half-raglan-sleeves-legged-swimsuit-pink/21807023/product-detail" target="_blank">
+                      <img src="//cdn.fcglcdn.com/brainbees/images/products/300x364/21807023a.webp" alt="Mark &amp; Mia Half Raglan Sleeves Legged Swimsuit - Pink" />
+                    </a>
+                  </div>
+                  <div class="li_txt1 wifi lft">
+                    <a href="//www.firstcry.com/mark-and-mia/mark-and-mia-half-raglan-sleeves-legged-swimsuit-pink/21807023/product-detail" target="_blank">
+                      Mark &amp; Mia Half Raglan Sleeves Legged Swimsuit - Pink
+                    </a>
+                  </div>
+                  <div class="rupee fw lft" aria-label="Sale price RS 959.2 and Regular price RS 1199">
+                    <span class="r1 B14_42">
+                      <a aria-label="Sale price RS 959.2" href="//www.firstcry.com/mark-and-mia/mark-and-mia-half-raglan-sleeves-legged-swimsuit-pink/21807023/product-detail" target="_blank">959.2</a>
+                    </span>
+                    <span class="r2 R12_42">
+                      <a aria-label="Regular price RS 1199" href="//www.firstcry.com/mark-and-mia/mark-and-mia-half-raglan-sleeves-legged-swimsuit-pink/21807023/product-detail" target="_blank">
+                        <del class="regular-price">1199</del>
+                      </a>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.firstcry.com/topoffers?moid=50920&gender=girl,unisex&ref2=menu_dd_girl-fashion_swimming-essentials_H",
+        "ecommerce_listing",
+        max_records=5,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.firstcry.com/topoffers?moid=50920&gender=girl,unisex&ref2=menu_dd_girl-fashion_swimming-essentials_H",
+            "_source": "dom_listing",
+            "title": "Mark & Mia Half Raglan Sleeves Legged Swimsuit - Pink",
+            "url": "https://www.firstcry.com/mark-and-mia/mark-and-mia-half-raglan-sleeves-legged-swimsuit-pink/21807023/product-detail",
+            "price": "959.2",
+            "image_url": "https://cdn.fcglcdn.com/brainbees/images/products/300x364/21807023a.webp",
+        }
+    ]
+
+
+def test_extract_records_prefers_sigma_style_product_rows_over_editorial_links() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <section class="resource-list">
+            <article>
+              <a class="css-by2t45-title" href="/IN/en/technical-documents/technical-article/cell-culture-and-cell-culture-analysis/mammalian-cell-culture/antibiotics-in-cell-culture">
+                Article: Why Use Antibiotics in Cell Culture?
+              </a>
+            </article>
+            <article>
+              <a class="css-by2t45-title" href="/deepweb/assets/sigmaaldrich/marketing/global/documents/749/633/68966-anti-cancer-antibiotics-flyer-030926-ms.pdf">
+                Flyer: Anti-Cancer Antibiotics and Inhibitors in Cancer Research
+              </a>
+            </article>
+          </section>
+          <div class="css-a4qnmt-resultsWrapper">
+            <div class="css-1vkrqo7-tBodyRow">
+              <div class="css-1nu0m23-productNumber">
+                <a href="/IN/en/product/sigma/a5955">A5955</a>
+              </div>
+              <div class="css-13uu5bz-productName">
+                <a href="/IN/en/product/sigma/a5955"><b><span>Antibiotic Antimycotic Solution (100×), Stabilized</span></b></a>
+              </div>
+              <div class="css-18jhhth-description">
+                <a href="/IN/en/product/sigma/a5955"><span>suspension, suitable for cell culture, BioReagent</span></a>
+              </div>
+              <div class="css-26xuj3-pricingColumn">
+                <button type="button">View Pricing</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.sigmaaldrich.com/IN/en/products/chemistry-and-biochemicals/biochemicals/antibiotics",
+        "ecommerce_listing",
+        max_records=5,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.sigmaaldrich.com/IN/en/products/chemistry-and-biochemicals/biochemicals/antibiotics",
+            "_source": "dom_listing",
+            "title": "Antibiotic Antimycotic Solution (100×), Stabilized",
+            "description": "suspension, suitable for cell culture, BioReagent",
+            "url": "https://www.sigmaaldrich.com/IN/en/product/sigma/a5955",
+        }
+    ]
+
+
 def test_extract_records_recovers_listing_price_when_card_uses_currency_code_text() -> None:
     html = """
     <html>
@@ -1077,6 +1202,197 @@ def test_extract_records_recovers_listing_price_when_card_uses_currency_code_tex
             "image_url": "https://cdn.example.com/teddy.jpg",
         }
     ]
+
+
+def test_extract_records_ignores_discount_badge_images_inside_listing_cards() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <div class="category-product">
+            <div class="image-wrapper grow">
+              <img class="offer-tag" src="/media/catalog/category/flat50_tag.png" alt="discount info" />
+              <a href="/zivame-satin-pyjama-set-samba.html?productId=874218">
+                <img
+                  class="prd-grid-image"
+                  src="https://cdn.example.com/media/mimages/rb/solid-loader.gif"
+                  data-original="https://cdn.example.com/zivame-satin-pyjama-set-samba.jpg"
+                  alt="Buy Zivame Satin Pyjama Set - Samba"
+                  title="Zivame Satin Pyjama Set - Samba"
+                />
+              </a>
+            </div>
+            <div class="product-name">Buy Zivame Satin Pyjama Set - Samba</div>
+            <div class="price">₹1148</div>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html",
+        "ecommerce_listing",
+        max_records=5,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html",
+            "_source": "dom_listing",
+            "title": "Zivame Satin Pyjama Set - Samba",
+            "url": "https://www.zivame.com/zivame-satin-pyjama-set-samba.html?productId=874218",
+            "price": "1148",
+            "currency": "INR",
+            "image_url": "https://cdn.example.com/zivame-satin-pyjama-set-samba.jpg",
+        }
+    ]
+
+
+def test_extract_records_replaces_review_only_listing_titles_with_product_image_title() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <div class="category-product">
+            <div class="image-wrapper grow">
+              <a href="/zivame-cup-cake-knit-poly-pyjama-set-1.html?productId=858985">
+                <img
+                  class="prd-grid-image"
+                  src="https://cdn.example.com/zivame-cup-cake-knit-poly-pyjama-set.jpg"
+                  alt="Buy Zivame Cup Cake Knit Poly Pyjama Set - Orchid Tint"
+                  title="Zivame Cup Cake Knit Poly Pyjama Set - Orchid Tint"
+                />
+              </a>
+            </div>
+            <h3 class="product-name">1 reviews given by verified buyers</h3>
+            <div class="price">₹775</div>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html",
+        "ecommerce_listing",
+        max_records=5,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html",
+            "_source": "dom_listing",
+            "title": "Zivame Cup Cake Knit Poly Pyjama Set - Orchid Tint",
+            "url": "https://www.zivame.com/zivame-cup-cake-knit-poly-pyjama-set-1.html?productId=858985",
+            "price": "775",
+            "currency": "INR",
+            "image_url": "https://cdn.example.com/zivame-cup-cake-knit-poly-pyjama-set.jpg",
+            "review_count": 1,
+        }
+    ]
+
+
+def test_extract_records_replaces_review_only_titles_from_lazy_loaded_product_images() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <div class="category-product">
+            <div class="image-wrapper grow">
+              <a href="/zivame-cup-cake-knit-poly-pyjama-set-1.html?productId=858985">
+                <img
+                  class="prd-grid-image"
+                  src="https://cdn.example.com/media/mimages/rb/solid-loader.gif"
+                  data-original="https://cdn.example.com/zivame-cup-cake-knit-poly-pyjama-set.jpg"
+                  alt="Buy Zivame Cup Cake Knit Poly Pyjama Set - Orchid Tint"
+                  title="Zivame Cup Cake Knit Poly Pyjama Set - Orchid Tint"
+                />
+              </a>
+            </div>
+            <h3 class="product-name">1 reviews given by verified buyers</h3>
+            <div class="price">₹775</div>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html",
+        "ecommerce_listing",
+        max_records=5,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html",
+            "_source": "dom_listing",
+            "title": "Zivame Cup Cake Knit Poly Pyjama Set - Orchid Tint",
+            "url": "https://www.zivame.com/zivame-cup-cake-knit-poly-pyjama-set-1.html?productId=858985",
+            "price": "775",
+            "currency": "INR",
+            "image_url": "https://cdn.example.com/zivame-cup-cake-knit-poly-pyjama-set.jpg",
+            "review_count": 1,
+        }
+    ]
+
+
+def test_extract_records_rejects_dom_listing_rows_that_only_have_doc_titles_and_urls() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <article class="category-product">
+            <a href="/IN/en/technical-documents/technical-article/cell-culture-and-cell-culture-analysis/mammalian-cell-culture/antibiotics-in-cell-culture">
+              Article: Why Use Antibiotics in Cell Culture?
+            </a>
+          </article>
+          <article class="category-product">
+            <a href="/deepweb/assets/sigmaaldrich/marketing/global/documents/749/633/68966-anti-cancer-antibiotics-flyer-030926-ms.pdf">
+              Flyer: Anti-Cancer Antibiotics and Inhibitors in Cancer Research
+            </a>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.sigmaaldrich.com/IN/en/products/chemistry-and-biochemicals/biochemicals/antibiotics",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == []
+
+
+def test_extract_records_rejects_product_name_placeholder_listing_rows() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <article class="product-card">
+            <a href="/termsofuse">Product Name</a>
+            <span class="price">₹0</span>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.firstcry.com/sets-and--suits/6/166?scat=166&gender=girl,unisex&ref2=menu_dd_girl-fashion_sets-and-suits_H",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == []
 
 
 def test_extract_records_rejects_shipping_only_rendered_listing_rows() -> None:

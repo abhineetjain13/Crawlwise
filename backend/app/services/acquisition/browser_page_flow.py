@@ -7,6 +7,9 @@ import time
 from typing import Any
 import httpx
 from bs4 import BeautifulSoup, Tag
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from app.services.acquisition.browser_capture import is_response_closed_error
 from app.services.acquisition.browser_recovery import (
     capture_rendered_listing_cards,
     recover_browser_challenge,
@@ -344,14 +347,26 @@ async def _capture_listing_artifact_with_timeout(
             timeout_seconds,
         )
         return [], {"status": "timeout"}
-    except Exception:
+    except PlaywrightTimeoutError:
+        logger.warning("Playwright timed out during %s for %s", stage, url)
+        return [], {"status": "playwright_timeout"}
+    except PlaywrightError as exc:
+        status = "closed" if is_response_closed_error(exc) else "playwright_error"
         logger.debug(
-            "Listing artifact capture failed stage=%s url=%s",
+            "Listing artifact capture Playwright error stage=%s url=%s status=%s",
             stage,
             url,
+            status,
             exc_info=True,
         )
-        return [], {"status": "failed"}
+        return [], {"status": status}
+    except Exception:
+        logger.exception(
+            "Listing artifact capture unexpected error stage=%s url=%s",
+            stage,
+            url,
+        )
+        return [], {"status": "unexpected_error"}
     if not isinstance(result, list):
         return [], {"status": "invalid_result"}
     return (
@@ -385,8 +400,6 @@ async def navigate_browser_page_impl(
         int(timeout_seconds * 1000),
         int(crawler_runtime_settings.browser_navigation_min_final_commit_timeout_ms),
     )
-    from playwright.async_api import Error as PlaywrightError
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
     navigation_strategy = navigation_wait_until
     navigation_started_at = time.perf_counter()
     try:
@@ -566,32 +579,56 @@ async def settle_browser_page_impl(
                 "fast_path_ready" if current_probe["is_ready"] else "no_platform_override"
             ),
         }
-    initial_extractability = _detail_expansion_extractability(html=cached_html or "", surface=surface or "", requested_fields=requested_fields)
-    if initial_extractability.get("verified"):
+    if "detail" not in str(surface or "").lower():
         expansion_diagnostics = {
             "status": "skipped",
-            "reason": "requested_content_already_extractable",
+            "reason": "non_detail_surface",
             "clicked_count": 0,
             "expanded_elements": [],
             "interaction_failures": [],
             "dom": {},
             "aom": {},
-            "extractability": initial_extractability,
         }
         phase_timings_ms["expansion"] = 0
     else:
-        expansion_started_at = time.perf_counter()
-        expansion_diagnostics = await expand_detail_content_if_needed(
-            page,
-            surface=surface,
-            readiness_probe=current_probe,
+        initial_extractability = _detail_expansion_extractability(
+            html=cached_html or "",
+            surface=surface or "",
             requested_fields=requested_fields,
         )
-        phase_timings_ms["expansion"] = elapsed_ms(expansion_started_at)
-    if expansion_diagnostics.get("clicked_count", 0):
-        current_probe = await _cached_probe(refresh_html=True)
-        append_readiness_probe(readiness_probes, stage="after_detail_expansion", probe=current_probe)
-        expansion_diagnostics["extractability"] = _detail_expansion_extractability(html=cached_html or "", surface=surface or "", requested_fields=requested_fields)
+        if initial_extractability.get("verified"):
+            expansion_diagnostics = {
+                "status": "skipped",
+                "reason": "requested_content_already_extractable",
+                "clicked_count": 0,
+                "expanded_elements": [],
+                "interaction_failures": [],
+                "dom": {},
+                "aom": {},
+                "extractability": initial_extractability,
+            }
+            phase_timings_ms["expansion"] = 0
+        else:
+            expansion_started_at = time.perf_counter()
+            expansion_diagnostics = await expand_detail_content_if_needed(
+                page,
+                surface=surface,
+                readiness_probe=current_probe,
+                requested_fields=requested_fields,
+            )
+            phase_timings_ms["expansion"] = elapsed_ms(expansion_started_at)
+        if expansion_diagnostics.get("clicked_count", 0):
+            current_probe = await _cached_probe(refresh_html=True)
+            append_readiness_probe(
+                readiness_probes,
+                stage="after_detail_expansion",
+                probe=current_probe,
+            )
+            expansion_diagnostics["extractability"] = _detail_expansion_extractability(
+                html=cached_html or "",
+                surface=surface or "",
+                requested_fields=requested_fields,
+            )
     return (
         current_probe,
         readiness_probes,
@@ -1278,8 +1315,20 @@ async def _capture_listing_visual_elements(
                 ],
             },
         )
+    except asyncio.CancelledError:
+        raise
+    except PlaywrightTimeoutError:
+        logger.warning("Timed out while capturing listing visual elements")
+        return []
+    except PlaywrightError as exc:
+        logger.debug(
+            "Failed to capture listing visual elements status=%s",
+            "closed" if is_response_closed_error(exc) else "playwright_error",
+            exc_info=True,
+        )
+        return []
     except Exception:
-        logger.debug("Failed to capture listing visual elements", exc_info=True)
+        logger.exception("Failed to capture listing visual elements unexpectedly")
         return []
     if not isinstance(snapshot, list):
         return []

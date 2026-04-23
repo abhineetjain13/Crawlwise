@@ -500,6 +500,40 @@ async def test_browser_fetch_listing_does_not_treat_product_titles_as_extractabl
 
 
 @pytest.mark.asyncio
+async def test_browser_fetch_listing_skips_detail_extractability_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selectors = list(CARD_SELECTORS.get("ecommerce") or [])
+    page = _FakeExpansionPage(
+        base_html="<html><body><article class='product-card'>A</article></body></html>",
+        selector_counts={selector: 3 for selector in selectors[:1]},
+        card_count=3,
+    )
+    page.card_selectors = set(selectors)
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    def _unexpected_extractability(*args, **kwargs):
+        raise AssertionError("listing settle should not probe detail extractability")
+
+    monkeypatch.setattr(
+        browser_page_flow,
+        "requested_content_extractability",
+        _unexpected_extractability,
+    )
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/collections/widgets",
+        5,
+        surface="ecommerce_listing",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
+
+
+@pytest.mark.asyncio
 async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_listing() -> None:
     original_optimistic_wait_ms = (
         crawler_runtime_settings.browser_navigation_optimistic_wait_ms
@@ -2364,6 +2398,28 @@ async def test_browser_fetch_bounds_listing_artifact_capture_time(
     }
     assert any(
         "Timed out during rendered_listing_capture" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_capture_listing_artifact_with_timeout_reports_playwright_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _boom():
+        raise PlaywrightError("Target page, context or browser has been closed")
+
+    with caplog.at_level("DEBUG", logger=browser_page_flow.logger.name):
+        artifacts, diagnostics = await browser_page_flow._capture_listing_artifact_with_timeout(
+            _boom(),
+            stage="listing_visual_capture",
+            url="https://example.com/collections/widgets",
+        )
+
+    assert artifacts == []
+    assert diagnostics == {"status": "closed"}
+    assert any(
+        "Listing artifact capture Playwright error" in record.message
         for record in caplog.records
     )
 

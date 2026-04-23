@@ -31,7 +31,6 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         )
-        op.create_index("ix_domain_cookie_memory_domain", "domain_cookie_memory", ["domain"])
         op.create_index(
             "uq_domain_cookie_memory_domain",
             "domain_cookie_memory",
@@ -83,5 +82,4 @@ def downgrade() -> None:
 
     if "domain_cookie_memory" in table_names:
         op.drop_index("uq_domain_cookie_memory_domain", table_name="domain_cookie_memory")
-        op.drop_index("ix_domain_cookie_memory_domain", table_name="domain_cookie_memory")
         op.drop_table("domain_cookie_memory")

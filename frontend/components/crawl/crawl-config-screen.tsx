@@ -212,6 +212,10 @@ function surfaceLabel(surface: string) {
  return surface;
 }
 
+function stripDomainMemoryFieldRows(rows: FieldRow[]) {
+ return rows.filter((row) => !row.id.startsWith("domain-memory-"));
+}
+
 export function CrawlConfigScreen({
  requestedTab,
  requestedCategoryMode,
@@ -239,7 +243,6 @@ export function CrawlConfigScreen({
  const [additionalDraft, setAdditionalDraft] = useState("");
  const [additionalFields, setAdditionalFields] = useState<string[]>([]);
  const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
- const [loadingDomainMemory, setLoadingDomainMemory] = useState(false);
  const [generatingSelectors, setGeneratingSelectors] = useState(false);
  const [savingDomainMemory, setSavingDomainMemory] = useState(false);
  const [fieldConfigMessage, setFieldConfigMessage] = useState("");
@@ -250,14 +253,20 @@ export function CrawlConfigScreen({
  const [isSubmitting, setIsSubmitting] = useState(false);
  const bulkPrefillRouteSyncGuardRef = useRef(false);
  const profileLookupRequestRef = useRef(0);
+ const domainMemoryLookupRequestRef = useRef(0);
  const profileDirtyRef = useRef(false);
  const lastProfileKeyRef = useRef("");
+ const lastDomainMemoryKeyRef = useRef("");
 
  const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
  const surface = deriveSurface(crawlDomain, crawlTab);
  const singleUrlMode = isSingleUrlMode(crawlTab, activeMode);
  const normalizedTargetDomain = getNormalizedDomain(targetUrl.trim());
  const profileLookupKey =
+ singleUrlMode && normalizedTargetDomain && surface
+ ? `${normalizedTargetDomain}|${surface}`
+ : "";
+ const domainMemoryLookupKey =
  singleUrlMode && normalizedTargetDomain && surface
  ? `${normalizedTargetDomain}|${surface}`
  : "";
@@ -385,6 +394,47 @@ export function CrawlConfigScreen({
  return () => window.clearTimeout(timer);
  }, [profileLookupKey, surface, targetUrl]);
 
+ useEffect(() => {
+ if (lastDomainMemoryKeyRef.current !== domainMemoryLookupKey) {
+ lastDomainMemoryKeyRef.current = domainMemoryLookupKey;
+ setFieldConfigError("");
+ setFieldConfigMessage("");
+ setFieldRowMessages({});
+ setFieldRows((current) => stripDomainMemoryFieldRows(current));
+ if (!domainMemoryLookupKey) {
+ return;
+ }
+ }
+ if (!domainMemoryLookupKey) {
+ return;
+ }
+ const requestId = domainMemoryLookupRequestRef.current + 1;
+ domainMemoryLookupRequestRef.current = requestId;
+ const lookupDomain = normalizedTargetDomain;
+ const timer = window.setTimeout(async () => {
+ setFieldConfigError("");
+ try {
+ const records = await api.listSelectors({ domain: lookupDomain });
+ if (domainMemoryLookupRequestRef.current !== requestId) {
+ return;
+ }
+ const matchingRecords = selectRelevantSelectorRecords(records, surface);
+ if (!matchingRecords.length) {
+ setFieldRows((current) => stripDomainMemoryFieldRows(current));
+ return;
+ }
+ const incomingRows = matchingRecords.map(buildFieldRowFromSelectorRecord);
+ setFieldRows((current) => mergeFieldRows(stripDomainMemoryFieldRows(current), incomingRows));
+ setFieldRowMessages({});
+ } catch (error) {
+ if (domainMemoryLookupRequestRef.current === requestId) {
+ setFieldConfigError(error instanceof Error ? error.message : "Unable to load domain memory.");
+ }
+ }
+ }, UI_DELAYS.DEBOUNCE_MS);
+ return () => window.clearTimeout(timer);
+ }, [domainMemoryLookupKey, normalizedTargetDomain, surface]);
+
  const config = useMemo<CrawlConfig>(
  () => ({
  module: crawlTab,
@@ -414,8 +464,39 @@ export function CrawlConfigScreen({
  respectRobotsTxt,
  smartExtraction,
  targetUrl,
- ],
+  ],
  );
+
+ async function loadDomainMemoryForUrl(rawUrl: string) {
+ const target = rawUrl.trim();
+ const domain = getNormalizedDomain(target);
+ if (!target || !domain) {
+ return;
+ }
+ const requestId = domainMemoryLookupRequestRef.current + 1;
+ domainMemoryLookupRequestRef.current = requestId;
+ setFieldConfigError("");
+ try {
+ const records = await api.listSelectors({ domain });
+ if (domainMemoryLookupRequestRef.current !== requestId) {
+ return;
+ }
+ const matchingRecords = selectRelevantSelectorRecords(records, surface);
+ if (!matchingRecords.length) {
+ setFieldConfigMessage("No saved domain memory found for this URL.");
+ setFieldRows((current) => stripDomainMemoryFieldRows(current));
+ return;
+ }
+ const incomingRows = matchingRecords.map(buildFieldRowFromSelectorRecord);
+ setFieldRows((current) => mergeFieldRows(stripDomainMemoryFieldRows(current), incomingRows));
+ setFieldRowMessages({});
+ setFieldConfigMessage(`Loaded ${matchingRecords.length} saved selector${matchingRecords.length === 1 ? "" : "s"} from domain memory.`);
+ } catch (error) {
+ if (domainMemoryLookupRequestRef.current === requestId) {
+ setFieldConfigError(error instanceof Error ? error.message : "Unable to load domain memory.");
+ }
+ }
+ }
 
  function markProfileDirty(updater: (current: DomainRunProfile) => DomainRunProfile) {
  profileDirtyRef.current = true;
@@ -496,32 +577,6 @@ export function CrawlConfigScreen({
  regexState: "idle",
  },
  ]);
- }
-
- async function loadDomainMemoryForUrl(rawUrl: string) {
- const target = rawUrl.trim();
- const domain = getNormalizedDomain(target);
- if (!target || !domain) {
- return;
- }
- setLoadingDomainMemory(true);
- setFieldConfigError("");
- try {
- const records = await api.listSelectors({ domain });
- const matchingRecords = selectRelevantSelectorRecords(records, surface);
- if (!matchingRecords.length) {
- setFieldConfigMessage("No saved domain memory found for this URL.");
- return;
- }
- const incomingRows = matchingRecords.map(buildFieldRowFromSelectorRecord);
- setFieldRows((current) => mergeFieldRows(current, incomingRows));
- setFieldRowMessages({});
- setFieldConfigMessage(`Loaded ${matchingRecords.length} saved selector${matchingRecords.length === 1 ? "" : "s"} from domain memory.`);
- } catch (error) {
- setFieldConfigError(error instanceof Error ? error.message : "Unable to load domain memory.");
- } finally {
- setLoadingDomainMemory(false);
- }
  }
 
  async function generateFieldSelectors() {
@@ -785,11 +840,6 @@ export function CrawlConfigScreen({
  key="target-url-input"
  value={targetUrl}
  onChange={(event) => setTargetUrl(event.target.value)}
- onBlur={() => {
- if (studioMode === "advanced") {
- void loadDomainMemoryForUrl(targetUrl);
- }
- }}
  placeholder={
  crawlTab === "category"
  ? "https://example.com/collections/chairs"
@@ -854,7 +904,6 @@ export function CrawlConfigScreen({
  </div>
  </div>
  </div>
- {loadingDomainMemory ? <p className="text-sm leading-[1.5] text-secondary">Loading saved domain memory…</p> : null}
  {fieldConfigMessage ? <p className="text-sm leading-[1.5] text-success">{fieldConfigMessage}</p> : null}
  {fieldConfigError ? <InlineAlert message={fieldConfigError} /> : null}
  <div className="space-y-3">
@@ -915,7 +964,6 @@ export function CrawlConfigScreen({
  <Card className="section-card">
  <SectionHeader
  title="Run Setup"
- description="Keep the run identity controls in view while you shape the crawl."
  />
  <div className="page-stack">
  <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">

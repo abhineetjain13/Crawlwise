@@ -57,6 +57,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     http_timeout_seconds: int = 20
     acquisition_attempt_timeout_seconds: int = 90
     curl_impersonate_target: str = "chrome131"
+    force_httpx: bool = False
     http_user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -153,6 +154,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     fingerprint_os: tuple[str, ...] = ("windows", "macos", "linux")
     fingerprint_device: str = "desktop"
     fingerprint_locale: str = "en-US"
+    browser_identity_min_chrome_version: int = 120
     browser_readiness_visible_text_min: int = 120
     interruptible_wait_poll_ms: int = 250
     cooperative_sleep_poll_ms: int = 250
@@ -273,6 +275,8 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("browser_artifact_capture_timeout_ms must be > 0")
         if self.platform_detection_html_search_limit <= 0:
             raise ValueError("platform_detection_html_search_limit must be > 0")
+        if self.browser_identity_min_chrome_version <= 0:
+            raise ValueError("browser_identity_min_chrome_version must be > 0")
         if (
             self.browser_capture_total_network_payload_bytes
             < self.browser_capture_max_network_payload_bytes

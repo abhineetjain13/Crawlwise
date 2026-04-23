@@ -1,61 +1,59 @@
 # CrawlerAI Codebase Map
 
-> **For agents:** Read this instead of exploring the filesystem.
-> Every significant file is listed here with its bucket and one-line purpose.
-> If a file is not listed, it is a utility/helper inside an already-listed module.
+Use this doc for ownership and file location. Do not filesystem-wander first.
+If a file is not listed, assume it is a helper under a listed owner.
 
 ---
 
 ## Backend Root: `backend/app/`
 
-### Backend support assets outside `backend/app/`
+### Support files outside `backend/app/`
 
 | File | Purpose |
-|------|---------|
-| `run_test_sites_acceptance.py` | Acceptance runner for curated TEST_SITES / manifest-driven regression batches |
-| `harness_support.py` | Shared acceptance harness helpers, explicit-surface resolution, run audit shaping |
-| `test_site_sets/commerce_browser_heavy.json` | Curated commerce acceptance manifest; currently owns `commerce_variant_quality_v1` with artifact-backed run IDs and quality expectations |
+|---|---|
+| `run_test_sites_acceptance.py` | Acceptance runner for curated test-site batches |
+| `harness_support.py` | Acceptance helpers, explicit-surface handling, audit shaping |
+| `test_site_sets/commerce_browser_heavy.json` | Commerce acceptance manifest and quality expectations |
 
-### `api/` — Route handlers only. No business logic.
-
-| File | Purpose |
-|------|---------|
-| `crawls.py` | Create runs, CSV ingestion, pause/resume/kill, commit fields/LLM, logs, websocket, domain-recipe/profile/field-action/cookie-memory routes |
-| `records.py` | List records, JSON/CSV/MD/artifact/discoverist exports, provenance |
-| `review.py` | Review payload, artifact HTML, save approved mapping |
-| `selectors.py` | Selector CRUD, suggest, test, preview-html |
-| `llm.py` | Provider catalog, config CRUD, connection test, cost log |
-| `auth.py` | Login (JWT + httpOnly cookie), register, `/me` |
-| `users.py`, `dashboard.py`, `jobs.py`, `health.py`, `metrics.py` | As named |
-
-### `core/` — App infrastructure only. No business logic.
+### `api/` — route handlers only
 
 | File | Purpose |
-|------|---------|
+|---|---|
+| `crawls.py` | Run creation, CSV ingestion, run control, logs, domain recipe/profile/feedback/cookie-memory routes |
+| `records.py` | Record listing, exports, provenance |
+| `review.py` | Review payloads and approved mapping save |
+| `selectors.py` | Selector CRUD, suggest, test, preview |
+| `llm.py` | LLM provider catalog, config, connection test, cost log |
+| `auth.py` | Login, register, `/me` |
+| `users.py`, `dashboard.py`, `jobs.py`, `health.py`, `metrics.py` | Named route modules |
+
+### `core/` — infrastructure only
+
+| File | Purpose |
+|---|---|
 | `config.py` | Pydantic settings from `.env` |
-| `database.py` | Async SQLAlchemy engine + session factory |
+| `database.py` | Async SQLAlchemy engine and session factory |
 | `redis.py` | Shared Redis connection |
-| `security.py` | JWT create/decode, PBKDF2 password hashing, Fernet encryption |
-| `dependencies.py` | `get_current_user()` FastAPI dependency |
+| `security.py` | JWT, password hashing, encryption |
+| `dependencies.py` | FastAPI auth dependency helpers |
 | `telemetry.py`, `metrics.py` | Observability |
 
-### `models/` — SQLAlchemy ORM entities
+### `models/` — ORM entities
 
-| Model | File | Key Fields |
-|-------|------|-----------|
-| `User` | `user.py` | id, email, role, token_version |
-| `CrawlRun` | `crawl.py` | id, user_id, run_type, status, surface, settings JSONB, result_summary JSONB |
-| `CrawlRecord` | `crawl.py` | id, run_id, source_url, data JSONB, raw_data JSONB, source_trace JSONB |
-| `CrawlLog` | `crawl.py` | id, run_id, level, message |
-| `DomainMemory` | `crawl.py` | domain, surface, selectors JSONB — scoped by `(domain, surface)` |
-| `DomainRunProfile` | `crawl.py` | domain, surface, profile JSONB — reusable execution profile scoped by `(domain, surface)` |
-| `DomainCookieMemory` | `crawl.py` | domain, storage_state JSONB, state_fingerprint — reusable browser cookie/local-storage memory scoped by domain |
-| `DomainFieldFeedback` | `crawl.py` | domain, surface, field_name, action, source_kind/value — completed-run keep/reject learning history |
-| `ReviewPromotion` | `crawl.py` | run_id, domain, surface, approved_schema JSONB |
-| `LLMConfig` | `llm.py` | provider, model, task_type, api_key_encrypted, budgets |
-| `LLMCostLog` | `llm.py` | provider, run_id, input_tokens, cost_usd |
+| Model | File | Purpose |
+|---|---|---|
+| `User` | `user.py` | account, role, token version |
+| `CrawlRun` | `crawl.py` | run state, surface, settings, summary |
+| `CrawlRecord` | `crawl.py` | extracted record payload and provenance |
+| `CrawlLog` | `crawl.py` | run logs |
+| `DomainMemory` | `crawl.py` | selector memory scoped by `(domain, surface)` |
+| `DomainRunProfile` | `crawl.py` | reusable execution defaults scoped by `(domain, surface)` |
+| `DomainCookieMemory` | `crawl.py` | reusable browser state scoped by domain |
+| `DomainFieldFeedback` | `crawl.py` | per-field keep/reject learning history |
+| `ReviewPromotion` | `crawl.py` | approved review schema snapshot |
+| `LLMConfig`, `LLMCostLog` | `llm.py` | LLM config and cost tracking |
 
-### `schemas/` — Pydantic DTOs (request/response shapes, not ORM models)
+### `schemas/` — request and response DTOs
 
 `crawl.py`, `user.py`, `llm.py`, `selectors.py`, `common.py`
 
@@ -64,131 +62,113 @@
 ## Bucket 2: Crawl Ingestion + Orchestration
 
 | File | Purpose |
-|------|---------|
-| `crawl_ingestion_service.py` | Validates + normalizes `CrawlCreate` payload, stamps run snapshots |
-| `crawl_service.py` | `dispatch_run()` — Celery vs local asyncio decision point |
-| `crawl_crud.py` | DB operations: `create_crawl_run()`, status transitions |
-| `domain_run_profile_service.py` | Domain run-profile load/save + profile normalization for reusable execution defaults |
+|---|---|
+| `crawl_ingestion_service.py` | Validate and normalize `CrawlCreate`, stamp run snapshots |
+| `crawl_service.py` | `dispatch_run()` entry |
+| `crawl_crud.py` | DB create and state transitions |
+| `domain_run_profile_service.py` | Load/save reusable execution defaults |
 | `crawl_events.py` | WebSocket log emission |
-| `_batch_runtime.py` | URL processing loop, progress state, pause/kill signal checks |
-| `tasks.py` | Celery task entry: `process_run_async()` → `_run_task_in_worker_loop()` |
-| `pipeline/core.py` | `_process_single_url()` — orchestrates acquire → extract → normalize → persist |
-| `pipeline/persistence.py` | `CrawlRecord` writes, deduplication via identity key, run summary updates |
-| `pipeline/runtime_helpers.py` | Typed helpers called from `core.py` — robots, fetch, extract, persist stages |
-| `pipeline/types.py` | Pipeline-internal typed objects |
+| `_batch_runtime.py` | URL loop, progress, pause, kill checks |
+| `tasks.py` | Celery task entry |
+| `pipeline/core.py` | Per-URL orchestration: acquire -> extract -> normalize -> persist |
+| `pipeline/persistence.py` | `CrawlRecord` writes, dedupe, summaries |
+| `pipeline/runtime_helpers.py` | Typed stage helpers |
+| `pipeline/types.py` | Pipeline typed objects |
 
-**Crawl flow:**
-```
-POST /api/crawls → crawl_ingestion_service → crawl_crud.create_crawl_run
-→ crawl_service.dispatch_run → tasks.process_run_async
-→ _batch_runtime.process_run (URL loop) → pipeline/core._process_single_url
-→ [acquire] → [extract] → [normalize] → [persist]
-```
+Flow:
+`POST /api/crawls -> crawl_ingestion_service -> crawl_crud -> crawl_service -> tasks/_batch_runtime -> pipeline/core`
 
 ---
 
 ## Bucket 3: Acquisition + Browser Runtime
 
 | File | Purpose |
-|------|---------|
-| `acquisition/acquirer.py` | Main acquisition entry: `acquire(request)` — platform URL normalization + policy |
-| `acquisition/runtime.py` | Shared HTTP client pool keyed on `(proxy, address-family, force_ipv4)` |
-| `acquisition/http_client.py` | Thin adapter over `runtime.get_shared_http_client()` |
-| `acquisition/browser_runtime.py` | `SharedBrowserRuntime` pool, semaphore-limited Playwright contexts |
-| `acquisition/browser_capture.py` | Screenshot temp-file staging, network payload interception |
-| `acquisition/browser_identity.py` | `browserforge`-backed fingerprint generation (host-OS-locked) |
-| `acquisition/browser_page_flow.py` | `navigate_browser_page_impl()` + readiness probing |
-| `acquisition/browser_readiness.py` | DOM readiness probe (selectors, network-idle, load events) |
-| `acquisition/traversal.py` | Listing pagination + load-more: bounded per-step snapshots |
-| `acquisition/pacing.py` | Host-level rate limiting state |
-| `acquisition/cookie_store.py` | Per-run temp browser storage-state persistence plus domain-scoped cookie-memory load/save/list helpers |
-| `crawl_fetch_runtime.py` | `fetch_page()` — the HTTP/browser decision, escalation, block detection |
-| `robots_policy.py` | robots.txt fetch, parse, allow/disallow checks |
-| `url_safety.py` | SSRF + public-target validation |
+|---|---|
+| `acquisition/acquirer.py` | Main acquisition entry and policy |
+| `acquisition/runtime.py` | Shared HTTP client pool |
+| `acquisition/http_client.py` | Thin shared-client wrapper |
+| `acquisition/browser_runtime.py` | Shared Playwright runtime and limits |
+| `acquisition/browser_capture.py` | Screenshots and network payload capture |
+| `acquisition/browser_identity.py` | Browser fingerprint generation |
+| `acquisition/browser_page_flow.py` | Page navigation and readiness probing |
+| `acquisition/browser_readiness.py` | DOM readiness checks |
+| `acquisition/traversal.py` | Listing pagination and load-more |
+| `acquisition/pacing.py` | Host-level rate limiting |
+| `acquisition/cookie_store.py` | Temp storage state plus domain cookie memory helpers |
+| `crawl_fetch_runtime.py` | `fetch_page()` owner: HTTP/browser decision, escalation, block detection |
+| `robots_policy.py` | robots.txt policy |
+| `url_safety.py` | SSRF and public-target validation |
 
-**Import rule:** `fetch_page` is imported from `crawl_fetch_runtime` directly. The legacy trampoline in `acquisition/runtime.py` is removed.
-
-**Block detection:** Vendor response headers (`DataDome`, `Cloudflare`, `Akamai`, `PerimeterX`, `Sucuri`) short-circuit to browser. HTML heuristics catch vendor-silent blocks. `401` → auth wall (no escalation). `403`/`429` → escalate.
+Import rule: import `fetch_page` from `crawl_fetch_runtime.py` directly.
 
 ---
 
 ## Bucket 4: Extraction
 
 | File | Purpose |
-|------|---------|
-| `crawl_engine.py` | Extraction facade — routes listing vs detail, runs adapters |
-| `detail_extractor.py` | Detail page extraction (product/job/auto detail) |
-| `listing_extractor.py` | Listing page extraction |
-| `structured_sources.py` | JSON-LD, microdata (extruct), Open Graph, Nuxt `__NUXT_DATA__`, harvested JS state |
-| `js_state_mapper.py` | JMESPath-backed JS state → field mapping |
-| `network_payload_mapper.py` | Declarative network payload → field mapping (specs in `config/network_payload_specs.py`) |
-| `field_value_core.py` | Type coercion per field (price, date, URL, image, text), canonical field mapping |
+|---|---|
+| `crawl_engine.py` | Extraction facade and routing |
+| `detail_extractor.py` | Detail-page extraction |
+| `listing_extractor.py` | Listing-page extraction |
+| `structured_sources.py` | JSON-LD, microdata, OG, Nuxt, harvested JS state |
+| `js_state_mapper.py` | JS state to field mapping |
+| `network_payload_mapper.py` | Network payload to field mapping |
+| `field_value_core.py` | Canonical field coercion |
 | `field_value_*.py` | Per-field normalization helpers |
-| `field_policy.py` | `canonical_fields_for_surface()` — field eligibility rules per surface |
-| `adapters/registry.py` | `registered_adapters()` — adapter resolution + `can_handle()` dispatch |
-| `adapters/[platform].py` | Per-platform extractors: amazon, ebay, shopify, greenhouse, workday, linkedin, etc. |
-| `extract/*` | Extraction utilities (called from extractor files) |
+| `field_policy.py` | Field eligibility by surface |
+| `adapters/registry.py` | Adapter resolution |
+| `adapters/[platform].py` | Platform-specific extraction |
+| `extract/*` | Extraction helpers |
 
-**Extraction priority order:**
-1. Adapter match (platform-specific)
-2. JSON-LD / Microdata (extruct)
-3. Schema.org parsing
-4. Selector rules (domain memory)
-5. LLM extraction fallback (if enabled + budget)
-6. Generic DOM heuristics
+Canonical config owners:
 
-**Config lives here:**
-| File | Contains |
-|------|---------|
-| `config/field_mappings.py` | All field aliases — one place, all surfaces |
-| `config/selectors.py` | DOM selector config |
-| `config/platforms.json` | Adapter registry metadata, network signatures, JS-state mappings, listing-readiness selectors |
-| `config/network_payload_specs.py` | Declarative network payload specs and canonical endpoint path tokens for payload mapping/capture |
+| File | Purpose |
+|---|---|
+| `config/field_mappings.py` | field aliases |
+| `config/selectors.py` | DOM selectors |
+| `config/platforms.json` | adapter metadata, signatures, JS mappings, readiness selectors |
+| `config/network_payload_specs.py` | payload specs and endpoint tokens |
 
 ---
 
 ## Bucket 5: Publish + Persistence
 
 | File | Purpose |
-|------|---------|
-| `publish/verdict.py` | Per-URL verdict: `success / partial / blocked / listing_detection_failed / empty` |
-| `publish/metrics.py` | Acquisition + URL metrics |
-| `publish/metadata.py` | Field-discovery metadata builder |
-| `artifact_store.py` | HTML artifact I/O — reads/writes off the async hot path |
-| `pipeline/persistence.py` | (also in Bucket 2) — `CrawlRecord` persistence, deduplication |
+|---|---|
+| `publish/verdict.py` | URL verdicts |
+| `publish/metrics.py` | acquisition and URL metrics |
+| `publish/metadata.py` | field-discovery metadata |
+| `artifact_store.py` | HTML artifact I/O |
+| `pipeline/persistence.py` | persistence owner shared with Bucket 2 |
 
-**Verdict rules:**
-- records + not blocked → `success`
-- records + blocked → `partial`
-- blocked + no records → `blocked`
-- listing + no records → `listing_detection_failed`
-- detail + no records → `empty`
+Verdict set:
+`success`, `partial`, `blocked`, `listing_detection_failed`, `empty`
 
 ---
 
 ## Bucket 6: Review + Selectors + Domain Memory
 
 | File | Purpose |
-|------|---------|
-| `review/__init__.py` | Build review payloads, save approved field mappings via `ReviewPromotion` |
-| `selectors_runtime.py` | Selector CRUD + runtime lookup — loads `DomainMemory` by `(domain, surface)` |
-| `selector_self_heal.py` | Synthesis + validation loop — only persists selectors that improve targeted fields |
-| `domain_memory_service.py` | `load_domain_memory()`, `create_domain_memory()` — DB operations for `DomainMemory` |
+|---|---|
+| `review/__init__.py` | Review payloads and approved field mapping persistence |
+| `selectors_runtime.py` | Selector CRUD and runtime lookup |
+| `selector_self_heal.py` | Selector synthesis and validation |
+| `domain_memory_service.py` | Domain memory load/save |
 
-**Selector lifecycle:** load domain memory → apply to extraction → if fields missing: self-heal → validate improvement → persist only if better → reuse on next run before re-synthesizing.
+All selector memory is scoped by normalized `(domain, surface)`.
 
 ---
 
 ## Bucket 7: LLM Admin + Runtime
 
 | File | Purpose |
-|------|---------|
-| `llm_runtime.py` | `extract_missing_fields()` — pipeline LLM entry point |
-| `llm_provider_client.py` | Anthropic / Groq / NVIDIA HTTP clients |
-| `llm_config_service.py` | Config CRUD, API key encryption/decryption |
-| `llm_cache.py` | Redis-backed response deduplication (`build_llm_cache_key`) |
-| `llm_circuit_breaker.py` | Error classification — prevents cascade cost failures |
-| `llm_tasks.py` | `call_provider_with_retry()` — provider retry logic |
+|---|---|
+| `llm_runtime.py` | Pipeline LLM entry |
+| `llm_provider_client.py` | Provider HTTP clients |
+| `llm_config_service.py` | Config CRUD and key encryption |
+| `llm_cache.py` | Redis-backed response dedupe |
+| `llm_circuit_breaker.py` | Error classification and cost protection |
+| `llm_tasks.py` | Provider retry logic |
 | `llm_types.py` | LLM-internal types |
 
 ---
@@ -196,25 +176,24 @@ POST /api/crawls → crawl_ingestion_service → crawl_crud.create_crawl_run
 ## Frontend Root: `frontend/`
 
 | Path | Purpose |
-|------|---------|
-| `app/` | Next.js App Router pages: `/login`, `/dashboard`, `/crawl`, `/runs/[run_id]`, `/selectors`, `/selectors/manage`, `/admin/*` |
-| `components/layout/` | App shell, auth session, nav, theme |
-| `components/crawl/crawl-config-screen.tsx` | Crawl Studio form, including Quick/Advanced mode, saved domain-profile auto-load, manual selector editing, and dispatch |
-| `components/crawl/crawl-run-screen.tsx` | Run workspace, record display, pause/kill/export, and completed-run Domain Recipe promotion/profile workflow |
-| `components/crawl/use-run-polling.ts` | Run state polling |
-| `lib/api/client.ts` | Auth-aware fetch wrapper |
-| `lib/api/index.ts` | **ALL** backend HTTP calls live here — the only API access layer |
-| `lib/api/types.ts` | All frontend-facing types — update here when backend contracts change |
+|---|---|
+| `app/` | Next.js App Router pages |
+| `components/layout/` | shell, auth, nav, theme |
+| `components/crawl/crawl-config-screen.tsx` | Crawl Studio form and dispatch |
+| `components/crawl/crawl-run-screen.tsx` | Run workspace and Domain Recipe workflow |
+| `components/crawl/use-run-polling.ts` | run polling |
+| `lib/api/client.ts` | auth-aware fetch wrapper |
+| `lib/api/index.ts` | only frontend backend-access layer |
+| `lib/api/types.ts` | frontend API types |
 
 ---
 
-## What To Never Do (Quick Reference)
+## Quick Guardrails
 
-- Put config in service code → use `services/config/*`
-- Fix extraction downstream → fix upstream in the extractor or config
-- Create a `_helpers.py`, `_utils.py`, `_misc.py` → find the owning bucket file
-- Hardcode a platform name in a generic path → use `adapters/` or `config/platforms.json`
-- Import private functions from service internals in tests → test public APIs only
-- Leave re-export stubs after a migration → delete the old location entirely
+- Config belongs in `services/config/*`
+- Fix extraction upstream, not in publish or persistence
+- Do not create `_helpers.py`, `_utils.py`, or compat stubs
+- Do not hardcode platforms in generic paths
+- Test public behavior, not private internals
 
-Full anti-pattern list: `docs/ENGINEERING_STRATEGY.md` → Anti-Patterns section.
+See `docs/ENGINEERING_STRATEGY.md` for the full anti-pattern list.

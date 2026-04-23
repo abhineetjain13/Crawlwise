@@ -445,8 +445,13 @@ export default function DomainMemoryManagePage() {
  async function deleteDomainSelectors(domain: string) {
  try {
  await api.deleteSelectorsByDomain(domain);
- setRecords((current) => current.filter((entry) => entry.domain !== domain));
- if (records.find((record) => record._uid === editingId)?.domain === domain) {
+ let removedEditingRecord = false;
+ setRecords((current) => {
+ const editingRecord = editingId === null ? null : current.find((record) => record._uid === editingId);
+ removedEditingRecord = editingRecord?.domain === domain;
+ return current.filter((entry) => entry.domain !== domain);
+ });
+ if (removedEditingRecord) {
  cancelEdit();
  }
  } catch (nextError) {
@@ -475,14 +480,14 @@ export default function DomainMemoryManagePage() {
  <div className="grid gap-3 pt-4 xl:grid-cols-[minmax(0,1.2fr)_220px]">
  <label className="grid gap-1.5">
  <span className="field-label">Search domains, selectors, run defaults, or learning</span>
- <div className="relative">
+ <div className="domain-memory-search relative">
  <Input
  value={searchQuery}
  onChange={(event) => setSearchQuery(event.target.value)}
  placeholder="Search domain, field, selector text, fetch mode, or feedback"
- className="h-[var(--control-height)] pl-10 leading-normal"
+ className="pl-12 pr-3"
  />
- <Search className="pointer-events-none absolute left-3 top-1/2 z-10 size-4 -translate-y-1/2 text-muted" />
+ <Search aria-hidden className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted" />
  </div>
  </label>
  <label className="grid gap-1.5">
@@ -509,7 +514,7 @@ export default function DomainMemoryManagePage() {
  ].map((item) => (
  <div
  key={item.label}
- className="rounded-[var(--radius-lg)] border border-border bg-background-elevated px-3 py-2"
+ className="domain-memory-stat rounded-[var(--radius-lg)] border border-border bg-background-elevated px-3 py-2"
  >
  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{item.label}</div>
  <div className="pt-1 text-lg font-semibold text-foreground">{item.value}</div>

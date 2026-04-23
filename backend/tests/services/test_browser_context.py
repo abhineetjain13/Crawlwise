@@ -10,6 +10,8 @@ from app.services import crawl_fetch_runtime
 from app.services.acquisition import browser_identity
 from app.services.acquisition import cookie_store
 from app.services.acquisition import browser_runtime as acquisition_browser_runtime
+from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.domain_utils import is_special_use_domain
 
 
 def test_build_playwright_context_options_uses_generated_identity(
@@ -67,6 +69,11 @@ def test_build_playwright_context_options_uses_generated_identity(
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
     }
+
+
+def test_is_special_use_domain_ignores_ports() -> None:
+    assert is_special_use_domain("localhost:3000") is True
+    assert is_special_use_domain("http://localhost:3000/products/widget") is True
 
 
 def test_build_playwright_context_options_keeps_security_invariants(
@@ -195,6 +202,54 @@ def test_build_playwright_context_options_replaces_malformed_client_hints_withou
     )
     assert options["extra_http_headers"]["sec-ch-ua-mobile"] == "?0"
     assert options["extra_http_headers"]["sec-ch-ua-platform"] == '"Windows"'
+
+
+def test_build_playwright_context_options_uses_configured_min_chrome_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_min_version = crawler_runtime_settings.browser_identity_min_chrome_version
+    crawler_runtime_settings.browser_identity_min_chrome_version = 130
+    try:
+        fingerprint = SimpleNamespace(
+            screen=SimpleNamespace(width=1366, height=768, devicePixelRatio=1),
+            navigator=SimpleNamespace(
+                userAgent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/129.0.0.0 Safari/537.36"
+                ),
+                language="en-US",
+                maxTouchPoints=0,
+                userAgentData={
+                    "brands": [{"brand": "Google Chrome", "version": "129"}],
+                    "mobile": False,
+                    "platform": "Windows",
+                    "uaFullVersion": "129.0.0.0",
+                },
+            ),
+            headers={"Accept": "text/html"},
+        )
+        attempts = {"count": 0}
+
+        def _generate():
+            attempts["count"] += 1
+            return fingerprint
+
+        monkeypatch.setattr(
+            browser_identity,
+            "_FINGERPRINT_GENERATOR",
+            SimpleNamespace(generate=_generate),
+        )
+
+        options = browser_identity.build_playwright_context_options()
+    finally:
+        crawler_runtime_settings.browser_identity_min_chrome_version = old_min_version
+
+    assert attempts["count"] == 3
+    assert options["user_agent"].endswith("Chrome/129.0.0.0 Safari/537.36")
+    assert options["extra_http_headers"]["sec-ch-ua"] == (
+        '"Not.A/Brand";v="24", "Chromium";v="129", "Google Chrome";v="129"'
+    )
 
 
 def test_fingerprint_generator_rebuilds_when_runtime_settings_change(
@@ -869,7 +924,7 @@ def test_browser_runtime_snapshot_reports_runtime_capacity_without_host_cache() 
 
 @pytest.mark.asyncio
 async def test_persist_storage_state_for_domain_commits_owned_session(db_session) -> None:
-    domain = f"owned-session-{uuid4().hex}.example.test"
+    domain = f"owned-session-{uuid4().hex}.example.com"
     saved = await cookie_store.persist_storage_state_for_domain(
         f"https://{domain}/products/widget",
         {
@@ -890,3 +945,63 @@ async def test_persist_storage_state_for_domain_commits_owned_session(db_session
     assert saved is True
     assert len(rows) == 1
     assert rows[0]["domain"] == domain
+
+
+@pytest.mark.asyncio
+async def test_persist_storage_state_for_domain_persists_test_domains(db_session) -> None:
+    domain = f"owned-session-{uuid4().hex}.example.test"
+
+    saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "abc",
+                    "domain": f".{domain}",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        session=db_session,
+    )
+
+    rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+
+    assert saved is True
+    assert len(rows) == 1
+    assert rows[0]["domain"] == domain
+    assert loaded is not None
+
+
+@pytest.mark.asyncio
+async def test_persist_storage_state_for_domain_persists_localhost_with_port(db_session) -> None:
+    domain = "http://localhost:3000/products/widget"
+
+    saved = await cookie_store.persist_storage_state_for_domain(
+        domain,
+        {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "abc",
+                    "domain": "localhost",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        session=db_session,
+    )
+
+    rows = await cookie_store.list_domain_cookie_memory("localhost:3000", session=db_session)
+    all_rows = await cookie_store.list_domain_cookie_memory(session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain("localhost:3000", session=db_session)
+
+    assert saved is True
+    assert len(rows) == 1
+    assert rows[0]["domain"] == "localhost:3000"
+    assert any(row["domain"] == "localhost:3000" for row in all_rows)
+    assert loaded is not None

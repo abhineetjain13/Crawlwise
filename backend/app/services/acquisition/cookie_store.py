@@ -168,7 +168,7 @@ async def persist_storage_state_for_domain(
         row.storage_state = normalized_state
         row.state_fingerprint = fingerprint
     await session.flush()
-    return False
+    return True
 
 
 async def list_domain_cookie_memory(

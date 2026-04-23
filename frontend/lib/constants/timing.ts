@@ -5,6 +5,10 @@ export const POLLING_INTERVALS = {
  STUCK_RUN_WARNING_MS: 120000,
 } as const;
 
+export const RETRY_LIMITS = {
+ TERMINAL_RECORDS_RETRY_LIMIT: 4,
+} as const;
+
 export const UI_DELAYS = {
  DEBOUNCE_MS: 250,
  PHASE_TRANSITION_MS: 1500,

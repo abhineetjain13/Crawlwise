@@ -88,6 +88,8 @@ LISTING_UTILITY_TITLE_PATTERNS: tuple[str, ...] = (
     r"^\+?\s*(?:[$€£]|chf|usd|inr|rs\.?)?\s*[\d,.]+\s+shipping$",
     r"^(?:make offer\s*/\s*details|details\s*/\s*make offer)$",
     r"^(?:post a job|product help|product tips)$",
+    # Bare "Product Name" can be a legitimate catalog title, so keep the utility pattern more specific.
+    r"^\d[\d,\s]*\s+reviews?\s+given\s+by\s+verified\s+buyers$",
     r"^how posting dates work$",
     r"^download(?:\s+the)?\s+.+\s+app$",
     r"^shop all categories$",
@@ -127,6 +129,7 @@ LISTING_UTILITY_URL_TOKENS: tuple[str, ...] = (
     "/shipping",
     "/support",
     "/terms",
+    "/termsofuse",
 )
 
 DYNAMIC_FIELD_NAME_MAX_TOKENS = crawler_runtime_settings.dynamic_field_name_max_tokens
@@ -185,9 +188,12 @@ NON_PRODUCT_IMAGE_HINTS: tuple[str, ...] = (
     "blog",
     "brand",
     "breadcrumb",
+    "discount",
     "flag",
     "icon",
+    "loader",
     "logo",
+    "offer",
     "payment",
     "placeholder",
     "promo",

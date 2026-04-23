@@ -466,7 +466,36 @@ async def _run_http_fetch_chain(
     context: _FetchRuntimeContext,
 ) -> tuple[PageFetchResult | None, bool]:
     vendor_block_confirmed = False
-    fetcher = _select_http_fetcher(context)
+    primary_fetcher = _select_http_fetcher(context)
+    result, vendor_block_confirmed = await _run_http_fetch_chain_with_fetcher(
+        context,
+        fetcher=primary_fetcher,
+    )
+    if result is not None or vendor_block_confirmed:
+        return result, vendor_block_confirmed
+    if (
+        primary_fetcher is _curl_fetch
+        and not crawler_runtime_settings.force_httpx
+        and context.last_error is not None
+    ):
+        logger.info(
+            "curl_cffi transport failed for %s (%s); retrying via httpx",
+            context.url,
+            type(context.last_error).__name__,
+        )
+        return await _run_http_fetch_chain_with_fetcher(
+            context,
+            fetcher=_http_fetch,
+        )
+    return None, vendor_block_confirmed
+
+
+async def _run_http_fetch_chain_with_fetcher(
+    context: _FetchRuntimeContext,
+    *,
+    fetcher,
+) -> tuple[PageFetchResult | None, bool]:
+    vendor_block_confirmed = False
     for proxy in context.proxies:
         if vendor_block_confirmed:
             break
@@ -482,6 +511,8 @@ async def _run_http_fetch_chain(
 
 def _select_http_fetcher(context: _FetchRuntimeContext):
     del context
+    if crawler_runtime_settings.force_httpx:
+        return _http_fetch
     return _curl_fetch
 
 

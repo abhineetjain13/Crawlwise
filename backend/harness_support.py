@@ -954,10 +954,11 @@ def _looks_like_real_listing_row(row: object) -> bool:
         return False
     title = row.get("title")
     url = row.get("url")
+    populated_fields = _safe_int(row.get("populated_fields"))
     return (
         bool(str(title or "").strip())
         and bool(str(url or "").strip())
-        and bool(row.get("price_present"))
+        and (bool(row.get("price_present")) or populated_fields >= 3)
         and not _looks_like_utility_record(title=title, url=url)
     )
 

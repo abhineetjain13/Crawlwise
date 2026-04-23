@@ -25,6 +25,9 @@ from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
     LISTING_WEAK_TITLES,
+    NON_PRODUCT_IMAGE_HINTS,
+    NON_PRODUCT_PROVIDER_HINTS,
+    TITLE_PROMOTION_PREFIXES,
 )
 from app.services.config.selectors import CARD_SELECTORS
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -460,6 +463,7 @@ def _record_is_supported_listing_candidate(
 ) -> bool:
     title = clean_text(record.get("title"))
     url = str(record.get("url") or "").strip()
+    source_kind = str(record.get("_source") or "").strip().lower()
     if not title or not url or _listing_title_is_noise(title) or _url_is_structural(url, page_url):
         return False
     if _listing_url_or_title_looks_like_utility(title=title, url=url):
@@ -479,7 +483,7 @@ def _record_is_supported_listing_candidate(
         return True
     if is_job_surface and _job_listing_url_looks_like_posting(url):
         return True
-    return not is_job_surface and len(title) >= 12
+    return not is_job_surface and source_kind == "structured_listing" and len(title) >= 12
 
 
 def _listing_url_or_title_looks_like_utility(*, title: str, url: str) -> bool:
@@ -518,6 +522,7 @@ def _listing_card_html_fragments(
     seen: set[str] = set()
     scored: list[tuple[int, int, object]] = []
     order = 0
+    fragment_limit = max(1, int(crawler_runtime_settings.listing_fallback_fragment_limit))
     for selector in selectors:
         try:
             matches = dom_parser.css(selector)
@@ -533,10 +538,7 @@ def _listing_card_html_fragments(
                 continue
             seen.add(fragment)
             scored.append((score, order, node))
-    if scored:
-        return _sorted_listing_fragment_nodes(scored)
     scanned = 0
-    fragment_limit = max(1, int(crawler_runtime_settings.listing_fallback_fragment_limit))
     for node in dom_parser.css(LISTING_FALLBACK_CONTAINER_SELECTOR):
         scanned += 1
         if scanned > fragment_limit * 40:
@@ -613,6 +615,53 @@ def _listing_fragment_score(node) -> int:
         score += 3
     if tag_name in {"article", "li", "tr", "section"}:
         score += 2
+    if _extract_price_signal_from_card(node):
+        score += 5
+    title_node = _card_title_node(node)
+    if title_node is not None:
+        title_text = _node_text(title_node)
+        if title_text and not _listing_title_is_noise(title_text):
+            score += 4
+        else:
+            score -= 6
+    anchor_texts = _meaningful_anchor_texts(node)
+    meaningful_anchor_text_count = sum(
+        len(re.findall(r"[a-z0-9]+", text, flags=re.I)) >= 3 and not PRICE_RE.search(text)
+        for text in anchor_texts
+    )
+    if meaningful_anchor_text_count:
+        score += 4
+    elif anchor_texts:
+        score -= 6
+    hrefs = [
+        str(getattr(link, "attributes", {}).get("href") or "").strip()
+        for link in links
+        if str(getattr(link, "attributes", {}).get("href") or "").strip()
+    ]
+    unique_hrefs = {href for href in hrefs if href}
+    detail_like_hrefs = {
+        href
+        for href in unique_hrefs
+        if _detail_like_path(href, is_job=False)
+    }
+    if detail_like_hrefs:
+        score += 4
+        if len(detail_like_hrefs) == 1:
+            score += 4
+            if link_count >= 2:
+                score += 4
+            if meaningful_anchor_text_count >= 2:
+                score += 8
+    elif len(unique_hrefs) > 3:
+        score -= 6
+    if len(unique_hrefs) > 8:
+        score -= 4
+    try:
+        images = node.css("img")
+    except Exception:
+        images = []
+    if images and detail_like_hrefs:
+        score += 2
     return score
 
 
@@ -661,6 +710,35 @@ def _node_css(node, selector: str) -> list[object]:
         return []
 
 
+def _meaningful_anchor_texts(card) -> list[str]:
+    texts: list[str] = []
+    seen: set[str] = set()
+    for link in _node_css(card, "a[href]"):
+        text = clean_text(_node_attr(link, "title") or _node_text(link))
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        texts.append(text)
+    return texts
+
+
+def _same_url_anchor_text_candidates(card, url: str) -> list[str]:
+    if not url:
+        return []
+    texts: list[str] = []
+    seen: set[str] = set()
+    for link in _node_css(card, "a[href]"):
+        href = _node_attr(link, "href")
+        if not href or absolute_url(url, href) != url:
+            continue
+        text = clean_text(_node_attr(link, "title") or _node_text(link))
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        texts.append(text)
+    return texts
+
+
 def _extract_price_signal_from_card(card) -> str | None:
     candidates: list[tuple[int, int, str]] = []
     order = 0
@@ -686,6 +764,14 @@ def _extract_price_signal_from_card(card) -> str | None:
             attrs = _node_signature(node)
             if "price" in attrs:
                 score += 5
+            lowered_raw_text = raw_text.lower()
+            if any(token in attrs or token in lowered_raw_text for token in ("sale", "now")):
+                score += 4
+            if any(
+                token in attrs or token in lowered_raw_text
+                for token in ("regular", "original", "mrp", "list")
+            ):
+                score -= 6
             if len(raw_text) <= 40:
                 score += 2
             if extract_currency_code(price_text):
@@ -862,6 +948,17 @@ def _detail_like_path(url: str, *, is_job: bool) -> bool:
     lowered = url.lower()
     if is_job:
         return _job_detail_like_path(lowered)
+    parsed = urlsplit(lowered)
+    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
+    if "products" in segments:
+        products_index = segments.index("products")
+        tail_segments = segments[products_index + 1 :]
+        if (
+            len(tail_segments) > 2
+            and not parsed.query
+            and not any(re.search(r"\d", segment) for segment in tail_segments[-2:])
+        ):
+            return False
     if any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS):
         return True
     hints = detail_path_hints("ecommerce_detail")
@@ -898,46 +995,77 @@ def _extract_page_images_from_node(root, page_url: str) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
     for node in _node_css(root, "img"):
-        candidate = absolute_url(
-            page_url,
-            _node_attr(node, "src")
-            or _node_attr(node, "data-src")
-            or _node_attr(node, "data-original"),
-        )
-        if not candidate:
-            continue
-        lowered = candidate.lower()
-        if lowered.startswith("data:"):
-            continue
-        if any(
-            token in lowered
-            for token in (
-                "analytics",
-                "tracking",
-                "pixel",
-                "spacer",
-                "blank.gif",
-                "doubleclick",
-                "google-analytics",
-                "googletagmanager",
-            )
-        ):
-            continue
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        values.append(candidate)
+        for attr_name in ("data-original", "data-src", "src"):
+            candidate = absolute_url(page_url, _node_attr(node, attr_name))
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if lowered.startswith("data:"):
+                continue
+            if _listing_image_candidate_is_noise(node, candidate_url=candidate):
+                continue
+            if any(
+                token in lowered
+                for token in (
+                    "analytics",
+                    "tracking",
+                    "pixel",
+                    "spacer",
+                    "blank.gif",
+                    "doubleclick",
+                    "google-analytics",
+                    "googletagmanager",
+                )
+            ):
+                continue
+            if candidate in seen:
+                break
+            seen.add(candidate)
+            values.append(candidate)
+            break
     return values[:12]
 
 
-def _extract_image_title_hint(root) -> str | None:
+def _listing_image_candidate_is_noise(node, *, candidate_url: str = "") -> bool:
+    context = " ".join(
+        part
+        for part in (
+            str(candidate_url or "").strip().lower(),
+            _node_signature(node),
+            _node_attr(node, "alt").lower(),
+            _node_attr(node, "title").lower(),
+            _node_attr(node, "aria-label").lower(),
+        )
+        if part
+    )
+    return any(token in context for token in (*NON_PRODUCT_IMAGE_HINTS, *NON_PRODUCT_PROVIDER_HINTS))
+
+
+def _extract_image_title_hint(root, *, page_url: str) -> str | None:
     for node in _node_css(root, "img"):
+        candidate_url = absolute_url(
+            page_url,
+            _node_attr(node, "data-original")
+            or _node_attr(node, "data-src")
+            or _node_attr(node, "src"),
+        )
+        if _listing_image_candidate_is_noise(node, candidate_url=candidate_url):
+            continue
         for attr_name in ("alt", "title", "aria-label"):
-            candidate = clean_text(_node_attr(node, attr_name))
+            candidate = _normalize_listing_title(clean_text(_node_attr(node, attr_name)))
             if not candidate or _listing_title_is_noise(candidate):
                 continue
             return candidate
     return None
+
+
+def _normalize_listing_title(title: str) -> str:
+    normalized = clean_text(title)
+    lowered = normalized.lower()
+    for prefix in TITLE_PROMOTION_PREFIXES:
+        if lowered.startswith(prefix):
+            return clean_text(normalized[len(prefix) :])
+    return normalized
 
 
 def _title_token_overlap(left: str, right: str) -> int:
@@ -1057,15 +1185,31 @@ def _listing_record_from_card(
     anchor_node, url, anchor_text, anchor_score = primary_anchor
     title_node = title_node or anchor_node
     title_score = _card_title_score(title_node)
-    image_title_hint = _extract_image_title_hint(card)
+    image_title_hint = _extract_image_title_hint(card, page_url=page_url)
     title = clean_text(
         _node_attr(title_node, "title")
         or _node_attr(title_node, "alt")
         or _node_text(title_node)
         or anchor_text
     )
+    same_url_texts = _same_url_anchor_text_candidates(card, url)
+    best_same_url_text = next(
+        (
+            text
+            for text in sorted(same_url_texts, key=len, reverse=True)
+            if len(re.findall(r"[a-z0-9]+", text, flags=re.I)) >= 3
+            and not PRICE_RE.search(text)
+            and not _listing_title_is_noise(text)
+        ),
+        None,
+    )
+    if best_same_url_text and (
+        len(re.findall(r"[a-z0-9]+", title, flags=re.I)) < 3 or _listing_title_is_noise(title)
+    ):
+        title = best_same_url_text
     if _should_replace_title_with_image_hint(title, image_title_hint):
         title = clean_text(image_title_hint)
+    title = _normalize_listing_title(title)
     if len(title) < 4 or _listing_title_is_noise(title):
         return None
     if anchor_score < 4 and title_score < 8:
@@ -1099,6 +1243,21 @@ def _listing_record_from_card(
     )
     if image_urls and not candidates.get("image_url"):
         add_candidate(candidates, "image_url", image_urls[0])
+    if best_same_url_text and not candidates.get("description"):
+        description_text = next(
+            (
+                text
+                for text in same_url_texts
+                if text != title
+                and len(text) >= 20
+                and len(re.findall(r"[a-z0-9]+", text, flags=re.I)) >= 3
+                and not PRICE_RE.search(text)
+                and not _listing_title_is_noise(text)
+            ),
+            None,
+        )
+        if description_text:
+            add_candidate(candidates, "description", description_text)
     for label, value in _extract_label_value_pairs_from_node(card):
         normalized_label = normalize_requested_field(label)
         if not normalized_label:

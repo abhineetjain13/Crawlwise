@@ -19,6 +19,7 @@ _last_disable_log_at: float = 0.0
 _redis_failure_total: int = 0
 _T = TypeVar("_T")
 _DISABLE_COOLDOWN_SECONDS = 30.0
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
 def redis_is_enabled() -> bool:
@@ -114,4 +115,6 @@ def schedule_fail_open(
             operation_name=operation_name,
         )
 
-    loop.create_task(_runner())
+    task = loop.create_task(_runner())
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)

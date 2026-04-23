@@ -7,6 +7,7 @@ import { cn } from"../../lib/utils";
 
 type ThemeMode ="light"|"dark";
 const THEME_STORAGE_KEY ="crawlerai-theme";
+const THEME_TRANSITION_ATTR ="data-theme-transition";
 
 export function ThemeToggle({ compact }: Readonly<{ compact?: boolean }>) {
  const theme = useSyncExternalStore(subscribeTheme, readTheme, () =>"light");
@@ -45,8 +46,15 @@ function readTheme(): ThemeMode {
 
 function applyTheme(value: string | null | undefined) {
  const nextTheme: ThemeMode = value ==="dark"?"dark":"light";
- document.documentElement.dataset.theme = nextTheme;
+ const root = document.documentElement;
+ root.setAttribute(THEME_TRANSITION_ATTR,"true");
+ root.dataset.theme = nextTheme;
  window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+ window.requestAnimationFrame(() => {
+ window.requestAnimationFrame(() => {
+ root.removeAttribute(THEME_TRANSITION_ATTR);
+ });
+ });
 }
 
 function subscribeTheme(onStoreChange: () => void) {

@@ -6,6 +6,17 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+_SPECIAL_USE_HOSTNAMES = {
+    "localhost",
+    "localhost.localdomain",
+}
+_SPECIAL_USE_SUFFIXES = (
+    ".example",
+    ".invalid",
+    ".local",
+    ".localhost",
+)
+
 
 def hostname(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
@@ -46,3 +57,14 @@ def normalize_domain(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def is_special_use_domain(value: str) -> bool:
+    host = normalize_domain(value)
+    if not host:
+        return True
+    hostname_only, _separator, _port = host.partition(":")
+    # Ports do not change special-use hostname classification.
+    return hostname_only in _SPECIAL_USE_HOSTNAMES or any(
+        hostname_only.endswith(suffix) for suffix in _SPECIAL_USE_SUFFIXES
+    )

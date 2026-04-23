@@ -489,6 +489,58 @@ def test_evaluate_quality_flags_listing_sample_window_without_real_product_rows(
     assert quality["quality_checks"]["listing_noise_ok"] is False
 
 
+def test_evaluate_quality_accepts_non_utility_listing_rows_without_price_when_field_coverage_is_strong() -> None:
+    site = {
+        "url": "https://www.sigmaaldrich.com/IN/en/products/chemistry-and-biochemicals/biochemicals/antibiotics",
+        "surface": "ecommerce_listing",
+        "quality_expectations": {
+            "require_listing_noise_free": True,
+        },
+    }
+    result = {
+        "surface": "ecommerce_listing",
+        "sample_title": "Antibiotic Antimycotic Solution (100×), Stabilized",
+        "sample_url": "https://www.sigmaaldrich.com/IN/en/product/sigma/a5955",
+        "records": 8,
+        "populated_fields": 3,
+        "sample_records": [
+            {
+                "title": "Antibiotic Antimycotic Solution (100×), Stabilized",
+                "url": "https://www.sigmaaldrich.com/IN/en/product/sigma/a5955",
+                "populated_fields": 3,
+                "price_present": False,
+            },
+            {
+                "title": "Puromycin dihydrochloride from Streptomyces alboniger",
+                "url": "https://www.sigmaaldrich.com/IN/en/product/sigma/p8833",
+                "populated_fields": 3,
+                "price_present": False,
+            },
+            {
+                "title": "Ampicillin sodium salt",
+                "url": "https://www.sigmaaldrich.com/IN/en/product/sigma/a5354",
+                "populated_fields": 3,
+                "price_present": False,
+            },
+        ],
+        "sample_semantics": {
+            "price_present": False,
+            "variant_count": 0,
+            "selected_variant_present": False,
+            "variant_axes_keys": [],
+            "variant_axes_semantic": False,
+            "selected_variant_has_price": False,
+        },
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "good"
+    assert quality["observed_failure_mode"] == "control_good"
+    assert quality["quality_checks"]["listing_noise_ok"] is True
+
+
 def test_acceptance_runner_uses_quality_verdict_for_curated_sites() -> None:
     site = {
         "name": "Catalog",

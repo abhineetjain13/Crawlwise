@@ -304,6 +304,19 @@ async def crawls_domain_run_profiles(
     domain: str = "",
     surface: str = "",
 ) -> list[DomainRunProfileRecordResponse]:
+    return await _list_domain_run_profile_responses(
+        session,
+        domain=domain,
+        surface=surface,
+    )
+
+
+async def _list_domain_run_profile_responses(
+    session: AsyncSession,
+    *,
+    domain: str = "",
+    surface: str = "",
+) -> list[DomainRunProfileRecordResponse]:
     rows = await list_domain_run_profiles(
         session,
         domain=domain,
@@ -329,22 +342,11 @@ async def crawls_domain_memory_run_profiles(
     domain: str = "",
     surface: str = "",
 ) -> list[DomainRunProfileRecordResponse]:
-    rows = await list_domain_run_profiles(
+    return await _list_domain_run_profile_responses(
         session,
         domain=domain,
         surface=surface,
     )
-    return [
-        DomainRunProfileRecordResponse(
-            id=row.id,
-            domain=row.domain,
-            surface=row.surface,
-            profile=dict(row.profile or {}),
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-        )
-        for row in rows
-    ]
 
 
 @router.get("/domain-memory/cookies")

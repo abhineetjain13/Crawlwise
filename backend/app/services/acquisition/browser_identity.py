@@ -212,7 +212,7 @@ def _is_version_coherent(fingerprint) -> bool:
     if not match:
         return True  # can't validate, accept
     ua_major = int(match.group(1))
-    if ua_major < 120:  # reject ancient versions
+    if ua_major < crawler_runtime_settings.browser_identity_min_chrome_version:
         return False
     user_agent_data = fingerprint.navigator.userAgentData
     if not isinstance(user_agent_data, dict):

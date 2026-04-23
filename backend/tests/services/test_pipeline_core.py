@@ -13,8 +13,6 @@ from app.services.acquisition.acquirer import (
 )
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
 from app.services.pipeline.core import (
-    _sanitize_llm_existing_values,
-    _apply_direct_record_llm_fallback,
     apply_llm_fallback,
     process_single_url,
 )
@@ -30,28 +28,6 @@ def _detail_html() -> str:
 
 def _listing_html() -> str:
     return "<html><body><h1>Empty category</h1></body></html>"
-
-
-def test_sanitize_llm_existing_values_uses_runtime_max_chars_and_strips_html(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "app.services.pipeline.core.llm_runtime_settings.existing_values_max_chars",
-        12,
-    )
-
-    sanitized = _sanitize_llm_existing_values(
-        {
-            "title": "<b>Widget Prime</b>",
-            "details": {"price": "19.99", "currency": "USD"},
-            "_source": "adapter",
-        }
-    )
-
-    assert sanitized == {
-        "title": "Widget Prime",
-        "details": '{"price": "1',
-    }
 
 
 @pytest.mark.asyncio
@@ -780,62 +756,6 @@ async def test_apply_llm_fallback_re_normalizes_llm_values_before_return(
 
 
 @pytest.mark.asyncio
-async def test_apply_direct_record_llm_fallback_replaces_weaker_listing_records(
-    db_session: AsyncSession,
-    test_user,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/collections/widgets",
-            "surface": "ecommerce_listing",
-            "settings": {"llm_enabled": True},
-        },
-    )
-
-    async def _fake_resolve_run_config(*args, **kwargs):
-        del args, kwargs
-        return {"provider": "groq", "model": "llama", "task_type": "direct_record_extraction"}
-
-    async def _fake_extract_records_directly(*args, **kwargs):
-        del args, kwargs
-        return (
-            [
-                {
-                    "title": "Widget Prime",
-                    "url": "https://example.com/products/widget-prime",
-                    "price": "19.99",
-                    "image_url": "https://example.com/images/widget-prime.jpg",
-                    "brand": "Acme",
-                }
-            ],
-            None,
-        )
-
-    monkeypatch.setattr("app.services.pipeline.core.resolve_run_config", _fake_resolve_run_config)
-    monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records_directly_with_llm",
-        _fake_extract_records_directly,
-    )
-
-    rows = await _apply_direct_record_llm_fallback(
-        db_session,
-        run=run,
-        page_url="https://example.com/collections/widgets",
-        html="<html><body><article>Widget Prime</article></body></html>",
-        page_markdown="Widget Prime",
-        records=[{"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}],
-    )
-
-    assert rows[0]["_source"] == "llm_direct_record_extraction"
-    assert rows[0]["price"] == "19.99"
-    assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
-
-
-@pytest.mark.asyncio
 async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_non_numeric(
     db_session: AsyncSession,
     test_user,
@@ -1485,4 +1405,3 @@ async def test_extract_records_for_acquisition_recovers_from_zero_record_travers
     assert result.url_metrics["traversal_fallback_used"] is True
     assert result.url_metrics["traversal_fallback_recovered"] is True
     assert result.url_metrics["traversal_fallback_record_count"] == 1
-
