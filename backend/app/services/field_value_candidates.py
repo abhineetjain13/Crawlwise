@@ -174,6 +174,22 @@ def _coerce_structured_candidate_value(
     return coerce_field_value(canonical, value, page_url)
 
 
+def _is_product_attribute_row(payload: dict[str, object]) -> bool:
+    keys = {normalize_field_key(str(key or "")) for key in payload}
+    return bool(keys & {"id", "name", "label"}) and bool(keys & {"value", "values"})
+
+
+def _structured_alias_allowed(
+    *,
+    canonical: str,
+    normalized_key: str,
+    payload: dict[str, object],
+) -> bool:
+    if canonical == "sku" and normalized_key == "id" and _is_product_attribute_row(payload):
+        return False
+    return True
+
+
 def collect_structured_candidates(
     payload: object,
     alias_lookup: dict[str, str],
@@ -270,6 +286,10 @@ def collect_structured_candidates(
             if canonical and not (
                 review_like
                 and canonical in {"title", "description", "image_url", "additional_images"}
+            ) and _structured_alias_allowed(
+                canonical=canonical,
+                normalized_key=normalized_key,
+                payload=payload,
             ):
                 add_candidate(
                     candidates,

@@ -5,37 +5,37 @@ import re
 from typing import Any
 
 from app.services.config.extraction_rules import (
+    VARIANT_AXIS_LABEL_NOISE_PATTERNS,
+    VARIANT_AXIS_LABEL_NOISE_TOKENS,
     VARIANT_AXIS_ALIASES,
     VARIANT_CHOICE_GROUP_SELECTOR,
+    VARIANT_COLOR_HINT_WORDS,
+    VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SELECT_GROUP_SELECTOR,
 )
 from app.services.field_value_core import clean_text
 
 _VARIANT_AXIS_LABEL_NOISE_TOKENS = frozenset(
-    {
-        "answer",
-        "answers",
-        "delivery",
-        "emi",
-        "faq",
-        "helpfulness",
-        "payment",
-        "question",
-        "questions",
-        "rating",
-        "ratings",
-        "review",
-        "reviews",
-        "shipping",
-        "warranty",
-    }
+    str(token).strip().lower()
+    for token in VARIANT_AXIS_LABEL_NOISE_TOKENS
+    if str(token).strip()
 )
 _VARIANT_AXIS_LABEL_NOISE_PATTERNS = (
-    re.compile(r"\bq&a\b", re.I),
-    re.compile(r"\b\d+\s+answers?\b", re.I),
-    re.compile(r"\bask\s+a\s+question\b", re.I),
-    re.compile(r"\bcontent\s+helpfulness\b", re.I),
-    re.compile(r"\breport\s+this\s+answer\b", re.I),
+    tuple(
+        re.compile(str(pattern), re.I)
+        for pattern in VARIANT_AXIS_LABEL_NOISE_PATTERNS
+        if str(pattern).strip()
+    )
+)
+_VARIANT_COLOR_HINT_WORDS = frozenset(
+    str(token).strip().lower()
+    for token in VARIANT_COLOR_HINT_WORDS
+    if str(token).strip()
+)
+_VARIANT_SIZE_VALUE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in VARIANT_SIZE_VALUE_PATTERNS
+    if str(pattern).strip()
 )
 _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
     {
@@ -209,6 +209,10 @@ def resolve_variant_group_name(node: Any) -> str:
             ):
                 return normalized_name
             return cleaned_name
+    if tag_name == "select":
+        inferred_from_values = infer_variant_group_name_from_values(_select_option_texts(node))
+        if inferred_from_values:
+            return inferred_from_values
     if hasattr(node, "select"):
         for child in node.select(
             "[data-option-name], [aria-label], [data-testid], [data-qa-action], [role='radio'], input, button"
@@ -220,6 +224,22 @@ def resolve_variant_group_name(node: Any) -> str:
     if nearby:
         return nearby
     return clean_text(inferred_name)
+
+
+def infer_variant_group_name_from_values(values: list[object]) -> str:
+    cleaned_values = [clean_text(value) for value in list(values or []) if clean_text(value)]
+    if len(cleaned_values) < 2:
+        return ""
+    size_hits = sum(
+        1 for value in cleaned_values
+        if any(pattern.fullmatch(value) for pattern in _VARIANT_SIZE_VALUE_PATTERNS)
+    )
+    if size_hits >= 2 and size_hits / len(cleaned_values) >= 0.5:
+        return "size"
+    color_hits = sum(1 for value in cleaned_values if _value_looks_like_color(value))
+    if color_hits >= 2 and color_hits / len(cleaned_values) >= 0.5:
+        return "color"
+    return ""
 
 
 def _node_attr_can_hold_group_label(node: Any) -> bool:
@@ -252,6 +272,28 @@ def _nearby_variant_group_name(node: Any) -> str:
             break
         current = parent
     return ""
+
+
+def _select_option_texts(node: Any) -> list[str]:
+    if not hasattr(node, "select"):
+        return []
+    values: list[str] = []
+    for option in node.select("option")[:24]:
+        text = clean_text(option.get_text(" ", strip=True)) if hasattr(option, "get_text") else ""
+        if text:
+            values.append(text)
+    return values
+
+
+def _value_looks_like_color(value: object) -> bool:
+    tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", clean_text(value).lower())
+        if token and not token.isdigit()
+    ]
+    if not tokens:
+        return False
+    return any(token in _VARIANT_COLOR_HINT_WORDS for token in tokens)
 
 
 def _semantic_group_label_from_text(value: object) -> str:
@@ -310,9 +352,21 @@ def variant_axis_name_is_semantic(value: object) -> bool:
 
 def iter_variant_select_groups(soup: Any) -> list[Any]:
     groups: list[Any] = []
+    seen_ids: set[int] = set()
     for select in soup.select(VARIANT_SELECT_GROUP_SELECTOR):
         if resolve_variant_group_name(select):
             groups.append(select)
+            seen_ids.add(id(select))
+        if len(groups) >= 4:
+            break
+    if len(groups) >= 4:
+        return groups
+    for select in soup.select("select"):
+        if id(select) in seen_ids:
+            continue
+        if resolve_variant_group_name(select):
+            groups.append(select)
+            seen_ids.add(id(select))
         if len(groups) >= 4:
             break
     return groups

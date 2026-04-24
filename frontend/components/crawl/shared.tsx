@@ -617,7 +617,7 @@ export function SettingSection({
  {renderedIcon}
  </div>
  <div className="flex items-center gap-1.5 min-w-0">
- <div className="text-sm font-semibold tracking-[-0.01em] text-primary leading-normal">{label}</div>
+ <div className="text-sm font-semibold tracking-normal text-primary leading-normal">{label}</div>
  <Tooltip content={description}>
  <Info className="size-3.5 text-muted hover:text-secondary cursor-help transition-colors"/>
  </Tooltip>

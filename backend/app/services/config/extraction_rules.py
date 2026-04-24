@@ -111,6 +111,17 @@ LISTING_UTILITY_URL_TOKENS: tuple[str, ...] = (
     "/support",
     "/terms",
     "/termsofuse",
+    ".doc",
+    ".docx",
+    ".pdf",
+)
+JOB_LISTING_DETAIL_PATH_MARKERS: tuple[str, ...] = tuple(
+    marker
+    for marker in LISTING_DETAIL_PATH_MARKERS
+    if any(
+        token in marker
+        for token in ("career", "job", "opening", "position", "posting")
+    )
 )
 
 DYNAMIC_FIELD_NAME_MAX_TOKENS = crawler_runtime_settings.dynamic_field_name_max_tokens
@@ -173,6 +184,7 @@ NON_PRODUCT_IMAGE_HINTS: tuple[str, ...] = (
     "flag",
     "icon",
     "loader",
+    "location",
     "logo",
     "offer",
     "payment",
@@ -235,6 +247,103 @@ DETAIL_UTILITY_PATH_TOKENS: tuple[str, ...] = (
     "signin",
     "support",
     "wishlist",
+)
+DETAIL_NON_PAGE_FILE_EXTENSIONS: tuple[str, ...] = (
+    ".avif",
+    ".bmp",
+    ".doc",
+    ".docx",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".json",
+    ".mp4",
+    ".pdf",
+    ".png",
+    ".svg",
+    ".webm",
+    ".webp",
+    ".zip",
+)
+DETAIL_IRRELEVANT_JSON_LD_TYPES: tuple[str, ...] = (
+    "audiobook",
+    "audioobject",
+    "breadcrumblist",
+    "clip",
+    "imageobject",
+    "listitem",
+    "mediaobject",
+    "movie",
+    "siteNavigationElement",
+    "videoobject",
+    "webpage",
+    "website",
+)
+VARIANT_AXIS_LABEL_NOISE_TOKENS: tuple[str, ...] = (
+    "answer",
+    "answers",
+    "delivery",
+    "emi",
+    "faq",
+    "helpfulness",
+    "language",
+    "payment",
+    "question",
+    "questions",
+    "rating",
+    "ratings",
+    "review",
+    "reviews",
+    "shipping",
+    "translate",
+    "translator",
+    "warranty",
+    "widget",
+)
+VARIANT_AXIS_LABEL_NOISE_PATTERNS: tuple[str, ...] = (
+    r"\bq&a\b",
+    r"\b\d+\s+answers?\b",
+    r"\bask\s+a\s+question\b",
+    r"\bcontent\s+helpfulness\b",
+    r"\blanguage\s+translate\s+widget\b",
+    r"\breport\s+this\s+answer\b",
+)
+VARIANT_COLOR_HINT_WORDS: tuple[str, ...] = (
+    "beige",
+    "black",
+    "blue",
+    "brown",
+    "charcoal",
+    "cream",
+    "gold",
+    "gray",
+    "green",
+    "grey",
+    "ivory",
+    "khaki",
+    "maroon",
+    "navy",
+    "nude",
+    "olive",
+    "orange",
+    "pearl",
+    "pink",
+    "purple",
+    "red",
+    "sand",
+    "silver",
+    "tan",
+    "teal",
+    "white",
+    "yellow",
+)
+VARIANT_SIZE_VALUE_PATTERNS: tuple[str, ...] = (
+    r"^(?:xxxs|xxs|xs|s|m|l|xl|xxl|xxxl)$",
+    r"^(?:one|free|single)\s+size$",
+    r"^(?:os|o/s)$",
+    r"^(?:(?:eu|uk|us|cm|mm)[-\s]?)?\d{1,3}(?:/\d{1,3})?$",
+    r"^\d+(?:\.\d+)?\s?(?:cm|mm|in\.?|inch|inches)$",
 )
 DETAIL_EXPAND_SELECTORS: tuple[str, ...] = (
     "summary",
@@ -349,6 +458,8 @@ __all__ = sorted(
         "DETAIL_BLOCKED_TOKENS",
         "DETAIL_EXPAND_KEYWORD_EXTENSIONS",
         "DETAIL_EXPAND_SELECTORS",
+        "DETAIL_IRRELEVANT_JSON_LD_TYPES",
+        "DETAIL_NON_PAGE_FILE_EXTENSIONS",
         "DETAIL_UTILITY_PATH_TOKENS",
         "DETAIL_TITLE_SOURCE_RANKS",
         "DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES",
@@ -356,6 +467,7 @@ __all__ = sorted(
         "DYNAMIC_FIELD_NAME_MAX_TOKENS",
         "JOB_ERROR_PAGE_HEADINGS",
         "JOB_ERROR_PAGE_TITLES",
+        "JOB_LISTING_DETAIL_PATH_MARKERS",
         "JOB_REDIRECT_SHELL_CANONICAL_URLS",
         "JOB_REDIRECT_SHELL_HEADINGS",
         "JOB_REDIRECT_SHELL_TITLES",
@@ -377,7 +489,11 @@ __all__ = sorted(
         "TITLE_PROMOTION_PREFIXES",
         "TITLE_PROMOTION_SEPARATOR",
         "TITLE_PROMOTION_SUBSTRINGS",
+        "VARIANT_AXIS_LABEL_NOISE_PATTERNS",
+        "VARIANT_AXIS_LABEL_NOISE_TOKENS",
         "VARIANT_CHOICE_GROUP_SELECTOR",
+        "VARIANT_COLOR_HINT_WORDS",
+        "VARIANT_SIZE_VALUE_PATTERNS",
         "VARIANT_SELECT_GROUP_SELECTOR",
     ]
 )

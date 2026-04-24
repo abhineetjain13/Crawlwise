@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from bs4 import BeautifulSoup
+
 from app.services.extract.shared_variant_logic import (
+    resolve_variant_group_name,
     resolve_variants,
     variant_axis_name_is_semantic,
 )
@@ -184,3 +187,20 @@ def test_resolve_variants_dedupes_no_option_values_against_each_other() -> None:
 def test_variant_axis_name_is_semantic_accepts_non_generic_axis_labels() -> None:
     assert variant_axis_name_is_semantic("shoe width") is True
     assert variant_axis_name_is_semantic("variant option") is False
+    assert variant_axis_name_is_semantic("Language Translate Widget") is False
+
+
+def test_resolve_variant_group_name_infers_unlabeled_select_size_axis_from_values() -> None:
+    soup = BeautifulSoup(
+        """
+        <select>
+          <option>-- Click to choose size --</option>
+          <option>EU-36</option>
+          <option>EU-37</option>
+          <option>EU-38</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("select")) == "size"

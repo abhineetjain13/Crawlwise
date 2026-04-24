@@ -20,7 +20,7 @@ class SaaSHRAdapter(BaseAdapter):
     platform_family = "saashr"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        return self._matches_platform_family(url, html)
+        return bool(self._discover_board_url(url, html))
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records = await self.try_public_endpoint(url, html, surface)

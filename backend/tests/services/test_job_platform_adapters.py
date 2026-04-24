@@ -709,6 +709,19 @@ async def test_saashr_detail_mode_filters_to_requested_job(
     ]
 
 
+@pytest.mark.asyncio
+async def test_saashr_adapter_handles_embedded_iframe_boards() -> None:
+    html = """
+    <html>
+      <body>
+        <iframe src="https://secure7.saashr.com/ta/6208610.careers?CareersSearch&ein_id=118959061&career_portal_id=6062087&InFrameset=1&HostedBy=lcbhs.net"></iframe>
+      </body>
+    </html>
+    """
+
+    assert await SaaSHRAdapter().can_handle("https://lcbhs.net/careers/", html)
+
+
 def test_registered_adapters_include_workday_and_ultipro() -> None:
     names = {adapter.name for adapter in registered_adapters()}
 

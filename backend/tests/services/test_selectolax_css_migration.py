@@ -494,6 +494,81 @@ def test_listing_extractor_filters_acceptance_artifact_noise(
         assert all(term not in lowered_url for term in blocked_terms)
 
 
+def test_job_listing_extractor_accepts_careerdetail_id_cards() -> None:
+    html = """
+    <html>
+      <body>
+        <ul>
+          <li data-testid="careers-search-result-listing">
+            <article class="mb-2">
+              <a href="/careerdetail/?id=100901" class="listings__link bg-white rounded-lg p-4 md:p-6 text-left block">
+                <div>
+                  <img src="https://cdn.example.com/logo.png" alt="">
+                  <h2 data-testid="careers-search-result-listing-job-title">
+                    1st Shift Inbound Assistant Manager
+                  </h2>
+                  <span data-testid="careers-search-result-listing-company-name">
+                    WebstaurantStore
+                  </span>
+                  <span data-testid="careers-search-result-listing-job-location">
+                    <img src="https://cdn.example.com/vectorlocation.svg" alt="location:">
+                    Dayton, NV
+                  </span>
+                </div>
+              </a>
+            </article>
+          </li>
+        </ul>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://careers.clarkassociatesinc.biz/",
+        "job_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "1st Shift Inbound Assistant Manager"
+    assert (
+        rows[0]["url"]
+        == "https://careers.clarkassociatesinc.biz/careerdetail/?id=100901"
+    )
+
+
+def test_job_listing_extractor_rejects_footer_document_asset_rows() -> None:
+    html = """
+    <html>
+      <body>
+        <footer>
+          <div>
+            <p>
+              © 2025 Lewis & Clark Behavioral Health
+              <a href="https://lcbhs.net/privacy-policy/" title="Privacy Policy">Privacy Policy</a>
+              <a href="https://lcbhs.net/wp-content/uploads/990-Posted-on-Website-2023.pdf"
+                 title="LCBHS 990">LCBHS 990</a>
+              <a href="https://productionmonkeys.com/" title="Production Monkeys">
+                Website Design by Production Monkeys
+              </a>
+            </p>
+          </div>
+        </footer>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://lcbhs.net/careers/",
+        "job_listing",
+        max_records=10,
+    )
+
+    assert rows == []
+
+
 def test_listing_extractor_ignores_none_embedded_json_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -302,11 +302,11 @@ export default function DomainMemoryManagePage() {
  .map((row) => row.domain),
  ]);
 
- return Array.from(visibleDomains)
- .map((domain) => {
+ const workspaces: DomainWorkspace[] = [];
+ for (const domain of visibleDomains) {
  const normalizedDomain = String(domain || "").trim();
  if (!normalizedDomain || isSpecialUseDomain(normalizedDomain)) {
- return null;
+ continue;
  }
  const surfaces = Array.from((byDomain.get(domain) ?? new Map<string, SurfaceWorkspace>()).values())
  .sort((left, right) => left.surface.localeCompare(right.surface));
@@ -328,19 +328,22 @@ export default function DomainMemoryManagePage() {
  completedRunCount,
  )
  ) {
- return null;
+ continue;
  }
- return {
+ if (!surfaces.length && !cookieMemory) {
+ continue;
+ }
+ workspaces.push({
  domain,
  surfaces,
  cookieMemory,
  learning,
  completedRunCount,
  latestCompletedAt,
- };
- })
- .filter((entry): entry is DomainWorkspace => Boolean(entry && (entry.surfaces.length || entry.cookieMemory)))
- .sort((left, right) => {
+ });
+ }
+
+ return workspaces.sort((left, right) => {
  const completedDelta = right.completedRunCount - left.completedRunCount;
  if (completedDelta !== 0) {
  return completedDelta;

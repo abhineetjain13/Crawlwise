@@ -10,7 +10,9 @@ export function QueryProvider({ children }: Readonly<{ children: React.ReactNode
  defaultOptions: {
  queries: {
  retry: 1,
- staleTime: 5_000,
+ staleTime: 15_000,
+ gcTime: 5 * 60_000,
+ refetchOnWindowFocus: false,
  },
  },
  }),

@@ -19,6 +19,7 @@ from app.services.config.field_mappings import (
 from app.services.config.extraction_rules import (
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
+    DETAIL_NON_PAGE_FILE_EXTENSIONS,
     DETAIL_UTILITY_PATH_TOKENS,
     DETAIL_TITLE_SOURCE_RANKS,
     LISTING_ALT_TEXT_TITLE_PATTERN,
@@ -73,6 +74,7 @@ from app.services.js_state_helpers import select_variant
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 from app.services.normalizers import normalize_decimal_price
 from app.services.extract.shared_variant_logic import (
+    infer_variant_group_name_from_values,
     iter_variant_choice_groups,
     iter_variant_select_groups,
     normalized_variant_axis_display_name,
@@ -539,10 +541,12 @@ def _detail_url_candidate_is_low_signal(candidate_url: object, *, page_url: str)
     page_parsed = urlparse(page_url)
     candidate_host = (candidate_parsed.hostname or "").lower()
     page_host = (page_parsed.hostname or "").lower()
-    if candidate_host and page_host and candidate_host != page_host:
-        return False
+    if candidate_host and page_host and not same_site(page_url, candidate):
+        return True
     candidate_path = str(candidate_parsed.path or "").strip()
     page_path = str(page_parsed.path or "").strip()
+    if any(candidate_path.lower().endswith(ext) for ext in DETAIL_NON_PAGE_FILE_EXTENSIONS):
+        return True
     if same_site(page_url, candidate) and _detail_url_is_utility(candidate):
         return True
     return page_path not in {"", "/"} and candidate_path in {"", "/"}
@@ -1510,6 +1514,8 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
     return (
         not value
         or lowered in {"select", "choose", "option", "size guide"}
+        or re.fullmatch(r"[-\s]*(?:click\s+to\s+)?(?:choose|select)\b.*", lowered) is not None
+        or re.fullmatch(r"[-\s]+.+[-\s]+", lowered) is not None
         or re.fullmatch(r"\(\d+\)", value) is not None
         or re.fullmatch(r"\d{3,5}/\d{2,5}/\d{2,5}", value) is not None
     )
@@ -1883,16 +1889,36 @@ def _extract_variants_from_dom(
 ) -> dict[str, object]:
     option_groups: list[dict[str, object]] = []
     for select in iter_variant_select_groups(soup):
-        cleaned_name = resolve_variant_group_name(select)
+        raw_option_values = [
+            clean_text(option.get_text(" ", strip=True))
+            for option in select.find_all("option")
+            if clean_text(option.get_text(" ", strip=True))
+        ]
+        cleaned_name = (
+            resolve_variant_group_name(select)
+            or infer_variant_group_name_from_values(raw_option_values)
+        )
+        inferred_name = infer_variant_group_name_from_values(raw_option_values)
+        if inferred_name and normalized_variant_axis_key(cleaned_name) != inferred_name:
+            cleaned_name = inferred_name
         if not cleaned_name:
             continue
         option_entries: list[dict[str, object]] = []
-        for option in select.find_all("option"):
-            cleaned_value = clean_text(option.get_text(" ", strip=True))
+        axis_key = normalized_variant_axis_key(cleaned_name)
+        select_options = list(select.find_all("option"))
+        for option_index, option in enumerate(select_options):
+            cleaned_value = text_or_none(
+                coerce_field_value(
+                    axis_key if axis_key in {"color", "size"} else "size",
+                    option.get_text(" ", strip=True),
+                    page_url,
+                )
+            ) or clean_text(option.get_text(" ", strip=True))
+            raw_value_attr = text_or_none(option.get("value"))
             if (
                 not cleaned_value
-                or cleaned_value.lower() in {"select", "choose", "option", "size guide"}
-                or str(option.get("value") or "").strip().lower() in {"", "select", "choose"}
+                or _variant_option_value_is_noise(cleaned_value)
+                or (raw_value_attr is not None and raw_value_attr.lower() in {"select", "choose"})
             ):
                 continue
             entry: dict[str, object] = {"value": cleaned_value}
@@ -1923,6 +1949,9 @@ def _extract_variants_from_dom(
             continue
         option_entries = _collect_variant_choice_entries(container, page_url=page_url)
         deduped_values = [str(entry["value"]) for entry in option_entries if text_or_none(entry.get("value"))]
+        inferred_name = infer_variant_group_name_from_values(deduped_values)
+        if inferred_name and normalized_variant_axis_key(cleaned_name) != inferred_name:
+            cleaned_name = inferred_name
         if len(deduped_values) >= 2:
             option_groups.append(
                 {

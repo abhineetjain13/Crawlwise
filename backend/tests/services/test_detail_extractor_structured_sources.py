@@ -1250,6 +1250,158 @@ def test_extract_ecommerce_detail_ignores_generic_selector_axis_names_without_se
     assert "selected_variant" not in record
 
 
+def test_extract_ecommerce_detail_infers_unlabeled_select_variants_and_ignores_translate_widget() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>JARIX 1.5 ดีไซน์ใหม่ (จาริกซ์) VEPRO Foam</h1>
+          <div class="price">฿1997.00</div>
+          <select>
+            <option>-- คลิกเพื่อเลือก สี --</option>
+            <option>Sand Beige</option>
+            <option>Sirrocco Nude</option>
+            <option>Machine Grey</option>
+            <option>1.5 Pearl White</option>
+          </select>
+          <select>
+            <option>-- คลิกเพื่อเลือก ขนาด --</option>
+            <option>EU-36</option>
+            <option>EU-37</option>
+            <option>EU-38</option>
+          </select>
+          <select aria-label="Language Translate Widget">
+            <option>English</option>
+            <option>Thai</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.shop.ving.run/product/jarix-1-5-vepro-foam/11000742818002471",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {
+        "color": ["Sand Beige", "Sirrocco Nude", "Machine Grey", "1.5 Pearl White"],
+        "size": ["EU-36", "EU-37", "EU-38"],
+    }
+    assert record["selected_variant"]["option_values"] == {
+        "color": "Sand Beige",
+        "size": "EU-36",
+    }
+    assert "language_translate_widget" not in str(record.get("variant_axes") or "")
+
+
+def test_extract_ecommerce_detail_keeps_size_axis_when_bad_dom_label_says_color() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/json">
+        {
+          "@type": "Product",
+          "name": "Montecito 2.0 Hard Side Graphite Carry On Suitcase",
+          "brand": "Ricardo Beverly Hills",
+          "attributes": {
+            "GTIN14": {"Id": "GTIN14", "Values": [{"Value": "00018982111874"}]},
+            "AVAILABILITY": {"Id": "AVAILABILITY", "Values": [{"Value": "True"}]}
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Montecito 2.0 Hard Side Graphite Carry On Suitcase</h1>
+          <div class="price">$136.00</div>
+          <select aria-label="Color">
+            <option>Graphite</option>
+            <option>Hunter</option>
+          </select>
+          <select aria-label="Color">
+            <option>21 in.</option>
+            <option>25 in.</option>
+            <option>29 in.</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/p/ricardo-beverly-hills-montecito-2.0-hard-side-graphite-carry-on-suitcase/620017811756553.html",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record.get("sku") != "AVAILABILITY"
+    assert record["variant_axes"] == {
+        "color": ["Graphite", "Hunter"],
+        "size": ["21 in.", "25 in.", "29 in."],
+    }
+    assert record["available_sizes"] == "21 in., 25 in., 29 in."
+    assert record["selected_variant"]["option_values"] == {
+        "color": "Graphite",
+        "size": "21 in.",
+    }
+    assert "AVAILABILITY" not in record.get("product_attributes", {})
+
+
+def test_extract_automobile_detail_ignores_irrelevant_video_json_ld_when_dom_title_exists() -> None:
+    html = """
+    <html>
+      <head>
+        <link rel="canonical" href="https://www.autotrader.co.uk/cars/leasing/product/202402287036788" />
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "VideoObject",
+          "name": "NEW Abarth 500E: The LOUDEST Electric Car! 4K",
+          "description": "Promo video copy that is not the vehicle detail.",
+          "thumbnailUrl": "https://m.atcdn.co.uk/a/media/w800/b75b88d781b647dcb7f8a802e7b6fa8e.jpg",
+          "publisher": {
+            "@type": "Organization",
+            "name": "Auto Trader",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://m.atcdn.co.uk/static/media/logos/autotrader-logo.png"
+            }
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Abarth 500e 42kWh Turismo Auto 3dr</h1>
+          <p>Lease deal available now.</p>
+          <img src="https://m.atcdn.co.uk/a/media/w800/b75b88d781b647dcb7f8a802e7b6fa8e.jpg" alt="Abarth 500e 42kWh Turismo Auto 3dr" />
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.autotrader.co.uk/cars/leasing/product/202402287036788",
+        "automobile_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Abarth 500e 42kWh Turismo Auto 3dr"
+    assert record["url"] == "https://www.autotrader.co.uk/cars/leasing/product/202402287036788"
+    assert record["_source"] == "dom_h1"
+
+
 def test_extract_ecommerce_detail_allows_dom_variants_to_fill_weak_js_state_variants() -> None:
     html = """
     <html>

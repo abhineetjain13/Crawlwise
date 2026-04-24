@@ -9,6 +9,7 @@ from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
     EXTRACTION_RULES,
+    JOB_LISTING_DETAIL_PATH_MARKERS,
     LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_ACTION_NOISE_PATTERNS,
     LISTING_DETAIL_PATH_MARKERS,
@@ -562,12 +563,12 @@ def _listing_card_html_fragments(
     return select_listing_fragment_nodes(
         dom_parser,
         surface="job_listing" if is_job else "ecommerce_listing",
-        score_node=_listing_fragment_score,
+        score_node=lambda node: _listing_fragment_score(node, is_job=is_job),
         limit=max(1, int(crawler_runtime_settings.listing_fallback_fragment_limit)),
     )
 
 
-def _listing_fragment_score(node) -> int:
+def _listing_fragment_score(node, *, is_job: bool = False) -> int:
     score = base_listing_fragment_score(node)
     if score <= 0:
         return score
@@ -606,7 +607,7 @@ def _listing_fragment_score(node) -> int:
     detail_like_hrefs = {
         href
         for href in unique_hrefs
-        if _detail_like_path(href, is_job=False)
+        if _detail_like_path(href, is_job=is_job)
     }
     if detail_like_hrefs:
         score += 4
@@ -939,6 +940,8 @@ def _job_detail_like_path(url: str) -> bool:
         return False
     query = parsed.query.lower()
     if any(token in query for token in ("showjob=", "jobid=", "job_id=", "gh_jid=")):
+        return True
+    if any(marker in parsed.path.lower() for marker in JOB_LISTING_DETAIL_PATH_MARKERS):
         return True
     if _job_listing_url_looks_like_posting(url):
         return True

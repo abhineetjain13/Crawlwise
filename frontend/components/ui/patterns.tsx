@@ -1,7 +1,7 @@
 "use client";
 
 import { LucideIcon } from"lucide-react";
-import { Children, isValidElement, useEffectEvent, useLayoutEffect } from"react";
+import { Children, isValidElement, useEffectEvent, useLayoutEffect, useMemo } from"react";
 import type { ReactNode } from"react";
 
 import { useTopBarStore } from"../layout/top-bar-context";
@@ -46,7 +46,10 @@ export function PageHeader({
  actions?: ReactNode;
 }>) {
  const { setHeader } = useTopBarStore();
- const signature = `${stableNodeSignature(title)}::${description ??""}::${stableNodeSignature(actions)}`;
+ const signature = useMemo(
+ () => `${stableNodeSignature(title)}::${description ??""}::${stableNodeSignature(actions)}`,
+ [title, description, actions],
+ );
  const syncHeader = useEffectEvent(() => {
  setHeader({ title, description, actions });
  });
@@ -148,10 +151,10 @@ export function TabBar({
  aria-pressed={value === option.value}
  onClick={() => onChange(option.value)}
  className={cn(
-"relative z-10 inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-[4px] py-0 text-sm leading-[1.35] font-semibold tracking-[-0.01em] transition-all duration-200",
+"relative z-10 inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-[4px] py-0 text-sm leading-[1.35] font-semibold tracking-normal transition-all duration-200",
  padX,
  value === option.value
- ?"bg-[var(--accent)] text-white shadow-[0_1px_2px_rgba(15,23,42,0.12)]"
+ ?"bg-[var(--accent)] text-[var(--tab-active-fg)] shadow-[0_1px_2px_rgba(15,23,42,0.12)]"
  :"text-secondary hover:text-primary",
  )}
  >

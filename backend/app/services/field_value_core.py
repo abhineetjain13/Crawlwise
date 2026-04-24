@@ -13,6 +13,7 @@ from app.services.config.extraction_rules import (
     CURRENCY_ALIAS_PATTERNS,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
+    NOISY_PRODUCT_ATTRIBUTE_KEYS,
 )
 from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
 from app.services.config.surface_hints import detail_path_hints
@@ -80,6 +81,11 @@ STRUCTURED_OBJECT_LIST_FIELDS = {"variants"}
 _PRICE_FIELD_NAMES = {"price", "sale_price", "original_price", "discount_amount"}
 # Integer-only fields: string values like "out_of_stock" should be nulled
 _INTEGER_FIELD_NAMES = {"stock_quantity", "variant_count", "image_count"}
+_NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
+    normalize_field_key(str(key or ""))
+    for key in tuple(NOISY_PRODUCT_ATTRIBUTE_KEYS or ())
+    if str(key or "").strip()
+) | {"availability", "available", "in_stock", "stock_status"}
 LONG_TEXT_FIELDS = {
     "benefits",
     "care",
@@ -618,6 +624,51 @@ def coerce_variant_axes(value: object) -> dict[str, list[str]] | None:
     return normalized_axes or None
 
 
+def coerce_product_attributes(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    cleaned = _clean_product_attribute_dict(value)
+    return cleaned or None
+
+
+def _product_attribute_key_is_noise(value: object) -> bool:
+    normalized = normalize_field_key(str(value or ""))
+    return bool(normalized and normalized in _NOISY_PRODUCT_ATTRIBUTE_KEYS)
+
+
+def _product_attribute_row_is_noise(value: dict[str, object]) -> bool:
+    row_id = value.get("Id") or value.get("id") or value.get("name") or value.get("label")
+    return _product_attribute_key_is_noise(row_id)
+
+
+def _clean_product_attribute_value(value: object) -> object | None:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, dict):
+        if _product_attribute_row_is_noise(value):
+            return None
+        return _clean_product_attribute_dict(value)
+    if isinstance(value, list):
+        rows = [
+            cleaned
+            for item in value
+            if (cleaned := _clean_product_attribute_value(item)) not in (None, "", [], {})
+        ]
+        return rows or None
+    return value
+
+
+def _clean_product_attribute_dict(value: dict[str, object]) -> dict[str, object]:
+    cleaned: dict[str, object] = {}
+    for key, item in value.items():
+        if _product_attribute_key_is_noise(key):
+            continue
+        cleaned_value = _clean_product_attribute_value(item)
+        if cleaned_value not in (None, "", [], {}):
+            cleaned[str(key)] = cleaned_value
+    return cleaned
+
+
 def coerce_availability_dict(value: object) -> str | None:
     if not isinstance(value, dict):
         return None
@@ -643,6 +694,8 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         return None
     if field_name == "variant_axes":
         return coerce_variant_axes(value)
+    if field_name == "product_attributes":
+        return coerce_product_attributes(value)
     if field_name in STRUCTURED_OBJECT_FIELDS and isinstance(value, dict):
         return value
     if field_name in STRUCTURED_OBJECT_LIST_FIELDS and isinstance(value, list):

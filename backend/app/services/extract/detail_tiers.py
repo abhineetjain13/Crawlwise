@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.config.extraction_rules import DETAIL_IRRELEVANT_JSON_LD_TYPES
+
 
 @dataclass(slots=True)
 class DetailTierState:
@@ -95,6 +97,12 @@ def collect_structured_data_tier(
         if source_name == "js_state":
             continue
         for payload in payloads:
+            if (
+                source_name == "json_ld"
+                and "detail" in str(state.surface or "").strip().lower()
+                and _detail_json_ld_payload_is_irrelevant(payload)
+            ):
+                continue
             collect_structured_payload_candidates(
                 payload,
                 alias_lookup=alias_lookup,
@@ -105,6 +113,21 @@ def collect_structured_data_tier(
                 selector_trace_candidates=state.selector_trace_candidates,
                 source=source_name,
             )
+
+
+def _detail_json_ld_payload_is_irrelevant(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    raw_types = payload.get("@type")
+    normalized_types = {
+        str(item or "").strip().lower()
+        for item in (raw_types if isinstance(raw_types, list) else [raw_types])
+        if str(item or "").strip()
+    }
+    if not normalized_types:
+        return False
+    irrelevant_types = {str(value).strip().lower() for value in DETAIL_IRRELEVANT_JSON_LD_TYPES}
+    return bool(normalized_types) and normalized_types <= irrelevant_types
 
 
 def collect_js_state_tier(
