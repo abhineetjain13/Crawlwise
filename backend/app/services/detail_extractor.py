@@ -730,13 +730,7 @@ def _detail_identity_codes_match(
 ) -> bool:
     if not expected_codes or not candidate_codes:
         return False
-    return any(
-        expected == candidate
-        or expected.startswith(candidate)
-        or candidate.startswith(expected)
-        for expected in expected_codes
-        for candidate in candidate_codes
-    )
+    return not expected_codes.isdisjoint(candidate_codes)
 
 def _detail_redirect_identity_is_mismatched(
     record: dict[str, Any],

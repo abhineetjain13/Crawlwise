@@ -1164,6 +1164,20 @@ def _truncate_text(value: object, *, limit: int) -> str:
     return normalized[:limit] if limit > 0 else normalized
 
 
+def _failed_target_diagnostic(*, url: str, error: str) -> dict[str, object]:
+    parsed = urlparse(url)
+    host = _normalize_space(parsed.netloc or parsed.path)
+    return {
+        "target_id": _slugify(host or url),
+        "url": url,
+        "host": host,
+        "geo": {},
+        "httpx": {"status": "failed", "error": error},
+        "curl_cffi": {"status": "failed", "error": error},
+        "browser": {"status": "failed", "error": error},
+    }
+
+
 def _text_snippet_from_html(html: str) -> str:
     text = re.sub(r"<[^>]+>", " ", str(html or ""))
     text = _WHITESPACE_RE.sub(" ", text).strip()
@@ -1809,13 +1823,25 @@ async def build_report(
         raw = _normalize_space(raw_url)
         if not raw:
             continue
-        url = _validated_target_url(raw)
-        diagnostic = await _run_target_diagnostic(
-            runtime,
-            url=url,
-            runtime_source=runtime_source,
-            artifacts_dir=report_dir,
-        )
+        try:
+            url = _validated_target_url(raw)
+        except ValueError as exc:
+            target_diagnostics.append(
+                _failed_target_diagnostic(url=raw, error=f"{type(exc).__name__}: {exc}")
+            )
+            continue
+        try:
+            diagnostic = await _run_target_diagnostic(
+                runtime,
+                url=url,
+                runtime_source=runtime_source,
+                artifacts_dir=report_dir,
+            )
+        except Exception as exc:
+            diagnostic = _failed_target_diagnostic(
+                url=url,
+                error=f"{type(exc).__name__}: {exc}",
+            )
         diagnostic["root_cause"] = _target_root_cause(
             consensus=consensus,
             diagnostic=diagnostic,

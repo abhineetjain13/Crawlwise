@@ -427,3 +427,100 @@ async def test_build_report_keeps_partial_report_when_site_context_fails(
     assert "probe_site_failure" in {
         finding["category"] for finding in report["findings"]
     }
+
+
+@pytest.mark.asyncio
+async def test_build_report_keeps_invalid_target_urls_as_failed_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeRuntime:
+        def snapshot(self) -> dict[str, object]:
+            return {"ready": True}
+
+    async def _fake_runtime_provider(*, proxy: str | None = None, browser_engine: str = "chromium"):
+        del proxy, browser_engine
+        return FakeRuntime()
+
+    async def _fake_target_diagnostic(*args, **kwargs):
+        del args, kwargs
+        return _target_diagnostic(browser_blocked=False, httpx_blocked=False, curl_blocked=False)
+
+    monkeypatch.setattr(probe, "BROWSER_SURFACE_PROBE_TARGETS", ())
+    monkeypatch.setattr(probe, "_run_target_diagnostic", _fake_target_diagnostic)
+
+    report = await probe.build_report(
+        runtime_source=probe.RuntimeSource(
+            source_kind="direct",
+            run_id=None,
+            identity_run_id=123,
+            proxy_list=[],
+            proxy_profile={},
+            locality_profile={"geo_country": "auto", "language_hint": None, "currency_hint": None},
+            selected_proxy=None,
+            selected_proxy_index=None,
+            browser_engine="chromium",
+        ),
+        report_dir=tmp_path,
+        target_urls=["http://localhost/admin", "https://www.chewy.com/b/dry-food-294"],
+        runtime_provider=_fake_runtime_provider,
+    )
+
+    assert [item["url"] for item in report["target_diagnostics"]] == [
+        "http://localhost/admin",
+        "https://www.chewy.com/b/dry-food-294",
+    ]
+    assert report["target_diagnostics"][0]["browser"]["status"] == "failed"
+    assert "target URL host must not be local" in report["target_diagnostics"][0]["browser"]["error"]
+    assert report["target_diagnostics"][1]["browser"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_build_report_keeps_partial_target_diagnostics_when_one_target_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeRuntime:
+        def snapshot(self) -> dict[str, object]:
+            return {"ready": True}
+
+    async def _fake_runtime_provider(*, proxy: str | None = None, browser_engine: str = "chromium"):
+        del proxy, browser_engine
+        return FakeRuntime()
+
+    async def _fake_target_diagnostic(_runtime, *, url: str, **_kwargs):
+        if url.endswith("/broken"):
+            raise RuntimeError("target fetch failed")
+        return _target_diagnostic(
+            browser_blocked=False,
+            httpx_blocked=False,
+            curl_blocked=False,
+        )
+
+    monkeypatch.setattr(probe, "BROWSER_SURFACE_PROBE_TARGETS", ())
+    monkeypatch.setattr(probe, "_run_target_diagnostic", _fake_target_diagnostic)
+
+    report = await probe.build_report(
+        runtime_source=probe.RuntimeSource(
+            source_kind="direct",
+            run_id=None,
+            identity_run_id=123,
+            proxy_list=[],
+            proxy_profile={},
+            locality_profile={"geo_country": "auto", "language_hint": None, "currency_hint": None},
+            selected_proxy=None,
+            selected_proxy_index=None,
+            browser_engine="chromium",
+        ),
+        report_dir=tmp_path,
+        target_urls=["https://example.com/broken", "https://www.chewy.com/b/dry-food-294"],
+        runtime_provider=_fake_runtime_provider,
+    )
+
+    assert [item["url"] for item in report["target_diagnostics"]] == [
+        "https://example.com/broken",
+        "https://www.chewy.com/b/dry-food-294",
+    ]
+    assert report["target_diagnostics"][0]["browser"]["status"] == "failed"
+    assert "RuntimeError: target fetch failed" in report["target_diagnostics"][0]["browser"]["error"]
+    assert report["target_diagnostics"][1]["browser"]["status"] == "ok"

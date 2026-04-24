@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.services import crawl_fetch_runtime
+from app.services import detail_extractor
 from app.services.detail_extractor import _normalize_variant_record
 from app.services.extraction_runtime import extract_records
 
@@ -120,6 +121,17 @@ def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts(
             "url": "https://example.com/products/widget-prime",
         }
     ]
+
+
+def test_detail_identity_codes_require_exact_match() -> None:
+    assert detail_extractor._detail_identity_codes_match(
+        {"ABC12345"},
+        {"ABC123456"},
+    ) is False
+    assert detail_extractor._detail_identity_codes_match(
+        {"ABC12345"},
+        {"ABC12345"},
+    ) is True
 
 
 def test_extract_records_rejects_visual_artifact_cta_and_footer_clusters() -> None:

@@ -910,6 +910,8 @@ def test_build_playwright_context_spec_masks_webrtc_candidates() -> None:
 
     assert spec.init_script is not None
     assert "MaskedRTCPeerConnection" in spec.init_script
+    assert "addTrack(track)" in spec.init_script
+    assert "getSenders() { return this._senders.slice(); }" in spec.init_script
     assert "createOffer() { return Promise.resolve({ type: 'offer'" in spec.init_script
     assert "generateCertificate = () => Promise.resolve({})" in spec.init_script
 
