@@ -575,68 +575,63 @@ export const LogTerminal = memo(function LogTerminal({
 });
 
 export function SettingSection({
- label,
- description,
- icon,
- checked,
- onChange,
- children,
+  label,
+  description,
+  icon,
+  checked,
+  onChange,
+  children,
 }: Readonly<{
- label: string;
- description: string;
- icon: ReactElement<IconElementProps>;
- checked: boolean;
- onChange: (value: boolean) => void;
- children?: ReactNode;
+  label: string;
+  description: string;
+  icon?: ReactElement<IconElementProps>;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  children?: ReactNode;
 }>) {
- const renderedIcon = React.isValidElement<IconElementProps>(icon)
- ? React.cloneElement(icon, {
- className: cn(icon.props.className,"size-4"),
- })
- : null;
+  const renderedIcon = React.isValidElement<IconElementProps>(icon)
+    ? React.cloneElement(icon, {
+        className: cn(icon.props.className, "size-4"),
+      })
+    : null;
 
- return (
- <div
- className={cn(
-"transition-all",
- checked
- ?"bg-[var(--setting-surface-active-bg)]"
- :"hover:bg-[var(--bg-alt)]/50",
- )}
- >
- <div className="flex items-center justify-between gap-4 px-5 py-3.5">
- <div className="flex min-w-0 items-center gap-3">
- <div
- className={cn(
-"flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors",
- checked
- ?"border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--setting-icon-active-shadow)]"
- :"border-[var(--border)] bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
- )}
- >
- {renderedIcon}
- </div>
- <div className="flex items-center gap-1.5 min-w-0">
- <div className="text-sm font-semibold tracking-normal text-primary leading-normal">{label}</div>
- <Tooltip content={description}>
- <Info className="size-3.5 text-muted hover:text-secondary cursor-help transition-colors"/>
- </Tooltip>
- </div>
- </div>
- <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
- </div>
- {children ? (
- <div
- className={cn(
-"transition-[max-height] duration-200 ease-out",
- checked ?"max-h-[500px] overflow-visible":"max-h-0 overflow-hidden",
- )}
- >
- <div className="border-t border-[var(--divider)] bg-[var(--setting-body-bg)] px-5 py-4 space-y-3">{children}</div>
- </div>
- ) : null}
- </div>
- );
+  return (
+    <div className="transition-all h-9 flex items-center w-full">
+      <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {renderedIcon ? (
+            <div
+              className={cn(
+                "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors",
+                checked
+                  ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--setting-icon-active-shadow)]"
+                  : "border-[var(--border)] bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
+              )}
+            >
+              {renderedIcon}
+            </div>
+          ) : null}
+          <div className="field-label mb-0 min-w-0">{label}</div>
+          <Tooltip content={description}>
+            <Info className="size-3.5 text-muted hover:text-secondary cursor-help transition-colors"/>
+          </Tooltip>
+        </div>
+        <div className="flex justify-start">
+          <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
+        </div>
+      </div>
+      {children ? (
+        <div
+          className={cn(
+            "transition-[max-height] duration-200 ease-out",
+            checked ? "max-h-[500px] overflow-visible" : "max-h-0 overflow-hidden",
+          )}
+        >
+          <div className="border-t border-[var(--divider)] bg-[var(--setting-body-bg)] px-5 py-4 space-y-3">{children}</div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function SliderRow({
@@ -649,7 +644,6 @@ export function SliderRow({
  onChange,
  onReset,
  suffix,
- grouped = false,
 }: Readonly<{
  label: string;
  description?: string;
@@ -660,19 +654,15 @@ export function SliderRow({
  onChange: (value: string) => void;
  onReset: () => void;
  suffix?: string;
- grouped?: boolean;
 }>) {
  return (
  <div
  className={cn(
- "grid gap-2.5 md:grid-cols-[132px_minmax(0,1fr)_96px] md:items-center",
- grouped
- ? "px-3 py-3"
- : "rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4",
+ "grid gap-2.5 md:grid-cols-[140px_minmax(0,1fr)_112px] md:items-center w-full",
  )}
  >
  <div className="flex items-center gap-1.5 min-w-0">
- <span className="text-sm font-medium text-secondary leading-normal">{label}</span>
+ <span className="field-label mb-0">{label}</span>
  {description ? (
  <Tooltip content={description}>
  <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
@@ -697,13 +687,13 @@ export function SliderRow({
  className="slider-control w-full"
  />
  <div className="relative">
- <input
+ <Input
  type="text"
  inputMode="numeric"
  value={value}
  onChange={(event) => onChange(event.target.value.replace(/[^\d]/g,""))}
  onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
- className="h-9 w-full rounded-[var(--radius-md)] border border-border bg-[var(--slider-value-bg)] py-0 pl-2.5 pr-8 text-right font-mono text-sm leading-normal tabular-nums text-[var(--text-primary)] focus:ring-0 focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)]"
+ className="pr-8 text-right font-mono tabular-nums"
  />
  {suffix ? (
  <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-sm leading-normal lowercase text-muted">

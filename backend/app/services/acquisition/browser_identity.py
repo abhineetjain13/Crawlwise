@@ -67,6 +67,17 @@ _HOST_OS_PLATFORM_LABELS = {
     "macos": "macOS",
     "linux": "Linux",
 }
+_USER_AGENT_PLATFORM_LABELS = (
+    ("windows nt", "Windows"),
+    ("macintosh", "macOS"),
+    ("mac os x", "macOS"),
+    ("linux", "Linux"),
+)
+_NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL = {
+    "Windows": "Win32",
+    "macOS": "MacIntel",
+    "Linux": "Linux x86_64",
+}
 _TIMEZONE_ALIASES = {
     "asia/calcutta": "Asia/Kolkata",
 }
@@ -230,6 +241,70 @@ def _resolved_hardware_concurrency(raw_value: object) -> int | None:
     return host_cpu_count or raw_cpu_count
 
 
+def _platform_label_from_user_agent(user_agent: object) -> str:
+    lowered = str(user_agent or "").strip().lower()
+    for token, label in _USER_AGENT_PLATFORM_LABELS:
+        if token in lowered:
+            return label
+    return _HOST_OS_PLATFORM_LABELS[_HOST_OS]
+
+
+def _navigator_platform_from_user_agent(
+    user_agent: object,
+    *,
+    fallback: object = None,
+) -> str:
+    platform_label = _platform_label_from_user_agent(user_agent)
+    fallback_value = str(fallback or "").strip()
+    return _NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL.get(platform_label) or fallback_value or "Win32"
+
+
+def _align_raw_fingerprint_to_user_agent_platform(raw_fingerprint: Any | None) -> Any | None:
+    if raw_fingerprint is None:
+        return None
+    try:
+        aligned_fingerprint = _copy.deepcopy(raw_fingerprint)
+    except Exception:
+        try:
+            aligned_fingerprint = _copy.copy(raw_fingerprint)
+        except Exception:
+            return raw_fingerprint
+        fallback_navigator = getattr(aligned_fingerprint, "navigator", None)
+        if fallback_navigator is not None:
+            try:
+                setattr(aligned_fingerprint, "navigator", _copy.copy(fallback_navigator))
+            except Exception:
+                return raw_fingerprint
+    navigator = getattr(aligned_fingerprint, "navigator", None)
+    if navigator is None:
+        return raw_fingerprint
+    user_agent = str(getattr(navigator, "userAgent", "") or "")
+    platform_label = _platform_label_from_user_agent(user_agent)
+    navigator_platform = _navigator_platform_from_user_agent(
+        user_agent,
+        fallback=getattr(navigator, "platform", None),
+    )
+    setattr(navigator, "platform", navigator_platform)
+    existing_user_agent_data = getattr(navigator, "userAgentData", None)
+    if isinstance(existing_user_agent_data, dict):
+        user_agent_data = dict(existing_user_agent_data)
+        user_agent_data["platform"] = platform_label
+        setattr(navigator, "userAgentData", user_agent_data)
+    headers = _drop_sec_ch_headers(getattr(aligned_fingerprint, "headers", {}) or {})
+    coherent_hints = _coherent_client_hints_from_user_agent(
+        user_agent,
+        mobile=(
+            bool(existing_user_agent_data.get("mobile"))
+            if isinstance(existing_user_agent_data, Mapping)
+            else None
+        ),
+    )
+    if coherent_hints:
+        headers.update(_coherent_sec_ch_headers(coherent_hints))
+    setattr(aligned_fingerprint, "headers", headers)
+    return aligned_fingerprint
+
+
 def _align_raw_fingerprint_to_runtime_hardware(raw_fingerprint: Any | None) -> Any | None:
     if raw_fingerprint is None:
         return None
@@ -328,8 +403,10 @@ def _harmonize_fingerprint_screen_geometry(
 
 
 def create_browser_identity() -> BrowserIdentity:
-    fingerprint = _align_raw_fingerprint_to_runtime_hardware(
-        _generate_coherent_fingerprint()
+    fingerprint = _align_raw_fingerprint_to_user_agent_platform(
+        _align_raw_fingerprint_to_runtime_hardware(
+            _generate_coherent_fingerprint()
+        )
     )
     screen = fingerprint.screen
     navigator = fingerprint.navigator
@@ -767,7 +844,7 @@ def _resolve_timezone_id(locality_profile: Mapping[str, object] | None) -> str |
     )
     if country:
         country_timezones = tuple(pytz.country_timezones.get(country, ()))
-        if len(country_timezones) == 1:
+        if country_timezones:
             return _normalize_timezone_id(country_timezones[0])
     return _local_timezone_id()
 
@@ -1226,12 +1303,116 @@ def _playwright_init_script_from_identity(
             "})();",
         ]
     )
+    webrtc_mask_script = "\n".join(
+        [
+            "(() => {",
+            f"  const enabled = {_json.dumps(bool(crawler_runtime_settings.browser_mask_webrtc_local_ips))};",
+            "  if (!enabled) {",
+            "    return;",
+            "  }",
+            "  const emptyStats = new Map();",
+            "  const noop = () => undefined;",
+            "  class MaskedRTCDataChannel {",
+            "    constructor(label = '') {",
+            "      this.label = String(label || '');",
+            "      this.readyState = 'open';",
+            "      this.bufferedAmount = 0;",
+            "      this.binaryType = 'blob';",
+            "      this.onopen = null;",
+            "      this.onclose = null;",
+            "      this.onerror = null;",
+            "      this.onmessage = null;",
+            "    }",
+            "    addEventListener() {}",
+            "    removeEventListener() {}",
+            "    dispatchEvent() { return true; }",
+            "    close() {",
+            "      this.readyState = 'closed';",
+            "      if (typeof this.onclose === 'function') {",
+            "        try { this.onclose(new Event('close')); } catch (_) {}",
+            "      }",
+            "    }",
+            "    send() {}",
+            "  }",
+            "  class MaskedRTCPeerConnection {",
+            "    constructor() {",
+            "      this.localDescription = null;",
+            "      this.remoteDescription = null;",
+            "      this.pendingLocalDescription = null;",
+            "      this.pendingRemoteDescription = null;",
+            "      this.connectionState = 'new';",
+            "      this.iceConnectionState = 'new';",
+            "      this.iceGatheringState = 'complete';",
+            "      this.signalingState = 'stable';",
+            "      this.canTrickleIceCandidates = false;",
+            "      this.onicecandidate = null;",
+            "      this.onicecandidateerror = null;",
+            "      this.onconnectionstatechange = null;",
+            "      this.oniceconnectionstatechange = null;",
+            "      this.onicegatheringstatechange = null;",
+            "      this.onnegotiationneeded = null;",
+            "      this.onsignalingstatechange = null;",
+            "      this.ondatachannel = null;",
+            "      queueMicrotask(() => {",
+            "        if (typeof this.onicecandidate === 'function') {",
+            "          try { this.onicecandidate({ candidate: null, type: 'icecandidate', target: this, currentTarget: this }); } catch (_) {}",
+            "        }",
+            "      });",
+            "    }",
+            "    addEventListener() {}",
+            "    removeEventListener() {}",
+            "    dispatchEvent() { return true; }",
+            "    createDataChannel(label) { return new MaskedRTCDataChannel(label); }",
+            "    createOffer() { return Promise.resolve({ type: 'offer', sdp: 'v=0\\r\\n' }); }",
+            "    createAnswer() { return Promise.resolve({ type: 'answer', sdp: 'v=0\\r\\n' }); }",
+            "    setLocalDescription(description) {",
+            "      this.localDescription = description || { type: 'offer', sdp: 'v=0\\r\\n' };",
+            "      this.pendingLocalDescription = this.localDescription;",
+            "      return Promise.resolve();",
+            "    }",
+            "    setRemoteDescription(description) {",
+            "      this.remoteDescription = description || null;",
+            "      this.pendingRemoteDescription = this.remoteDescription;",
+            "      return Promise.resolve();",
+            "    }",
+            "    addIceCandidate() { return Promise.resolve(); }",
+            "    getConfiguration() { return { iceServers: [] }; }",
+            "    setConfiguration() {}",
+            "    getSenders() { return []; }",
+            "    getReceivers() { return []; }",
+            "    getTransceivers() { return []; }",
+            "    getStats() { return Promise.resolve(emptyStats); }",
+            "    removeTrack() {}",
+            "    restartIce() {}",
+            "    close() {",
+            "      this.connectionState = 'closed';",
+            "      this.iceConnectionState = 'closed';",
+            "      this.signalingState = 'closed';",
+            "    }",
+            "  }",
+            "  MaskedRTCPeerConnection.prototype.createDTMFSender = noop;",
+            "  MaskedRTCPeerConnection.generateCertificate = () => Promise.resolve({});",
+            "  try {",
+            "    Object.defineProperty(MaskedRTCPeerConnection, 'name', { value: 'RTCPeerConnection' });",
+            "  } catch (_) {}",
+            "  globalThis.RTCPeerConnection = MaskedRTCPeerConnection;",
+            "  if (globalThis.webkitRTCPeerConnection) {",
+            "    globalThis.webkitRTCPeerConnection = MaskedRTCPeerConnection;",
+            "  }",
+            "  if (globalThis.mozRTCPeerConnection) {",
+            "    globalThis.mozRTCPeerConnection = MaskedRTCPeerConnection;",
+            "  }",
+            "})();",
+        ]
+    )
     locality_script = "\n".join(
         [
             "(() => {",
             f"  const locale = {_json.dumps(identity.locale)};",
             f"  const languages = {_json.dumps(_locale_languages(identity.locale))};",
             f"  const timezoneId = {_json.dumps(timezone_id)};",
+            f"  const navigatorPlatform = {_json.dumps(_navigator_platform_from_user_agent(identity.user_agent))};",
+            f"  const uaPlatform = {_json.dumps(_platform_label_from_user_agent(identity.user_agent))};",
             "  try {",
             "    Object.defineProperty(Navigator.prototype, 'language', {",
             "      get: () => locale,",
@@ -1245,6 +1426,37 @@ def _playwright_init_script_from_identity(
             "      enumerable: false,",
             "      configurable: true,",
             "    });",
+            "  } catch (_) {}",
+            "  try {",
+            "    Object.defineProperty(Navigator.prototype, 'platform', {",
+            "      get: () => navigatorPlatform,",
+            "      enumerable: false,",
+            "      configurable: true,",
+            "    });",
+            "  } catch (_) {}",
+            "  try {",
+            "    const nativeUaData = Navigator.prototype.userAgentData || navigator.userAgentData;",
+            "    if (nativeUaData) {",
+            "      const patchedUaData = new Proxy(nativeUaData, {",
+            "        get(target, prop, receiver) {",
+            "          if (prop === 'platform') {",
+            "            return uaPlatform;",
+            "          }",
+            "          if (prop === 'getHighEntropyValues') {",
+            "            return async (hints) => {",
+            "              const result = await target.getHighEntropyValues(hints);",
+            "              return { ...result, platform: uaPlatform };",
+            "            };",
+            "          }",
+            "          return Reflect.get(target, prop, receiver);",
+            "        },",
+            "      });",
+            "      Object.defineProperty(Navigator.prototype, 'userAgentData', {",
+            "        get: () => patchedUaData,",
+            "        enumerable: false,",
+            "        configurable: true,",
+            "      });",
+            "    }",
             "  } catch (_) {}",
             "  if (!timezoneId) {",
             "    return;",
@@ -1290,7 +1502,7 @@ def _playwright_init_script_from_identity(
     )
     if raw_fingerprint is None or _BrowserforgeInjectFunction is None:
         return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
             f"{locality_script}\n{runtime_hardware_script}"
         )
     if (
@@ -1298,18 +1510,18 @@ def _playwright_init_script_from_identity(
         and not isinstance(raw_fingerprint, _BrowserforgeFingerprint)
     ):
         return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
             f"{locality_script}\n{runtime_hardware_script}"
         )
     if not callable(getattr(raw_fingerprint, "dumps", None)):
         return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
             f"{locality_script}\n{runtime_hardware_script}"
         )
     try:
         browserforge_script = str(_BrowserforgeInjectFunction(raw_fingerprint))
         return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
             f"{locality_script}\n"
             f"{browserforge_script}\n"
             f"{runtime_hardware_script}"
@@ -1317,7 +1529,7 @@ def _playwright_init_script_from_identity(
     except Exception:
         _logger.debug("Failed to build browserforge init script", exc_info=True)
         return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
             f"{locality_script}\n{runtime_hardware_script}"
         )
 

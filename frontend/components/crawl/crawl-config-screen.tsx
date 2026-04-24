@@ -82,9 +82,13 @@ const CAPTURE_NETWORK_OPTIONS = new Set<CaptureNetworkMode>([
  "matched_only",
  "all_small_json",
 ]);
-const RUN_SETUP_ICON_CLASS =
- "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--setting-icon-active-shadow)]";
-const ADVANCED_CONTROL_ROW_CLASS = "grid gap-1.5 md:grid-cols-[132px_minmax(0,1fr)] md:items-center md:gap-3";
+const RUN_SETUP_ROW_CLASS = "grid gap-2 md:grid-cols-[140px_minmax(0,1fr)] md:items-center md:gap-3";
+const RUN_SETUP_CONTROL_CLASS = "flex md:justify-self-start";
+const RUN_SETUP_LABEL_CLASS = "flex min-w-0 h-[var(--control-height)] items-center gap-3";
+const RUN_SETUP_STACK_CLASS = "flex flex-col gap-3";
+const ADVANCED_CONTROL_ROW_CLASS = "grid gap-1.5 md:grid-cols-[140px_minmax(0,1fr)] md:items-center md:gap-3";
+const ADVANCED_COLUMN_CLASS = "flex flex-col gap-3";
+const ADVANCED_SUBSECTION_CLASS = "flex flex-col gap-3";
 const ADVANCED_SECTION_TITLE_CLASS = "flex items-center gap-1.5 text-base font-semibold text-foreground";
 
 const DIAGNOSTICS_PRESETS: Record<
@@ -737,7 +741,7 @@ export function CrawlConfigScreen({
  }
 
  return (
- <div className="page-stack">
+ <div className={RUN_SETUP_STACK_CLASS}>
  <PageHeader title="Crawl Studio" />
 
  <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
@@ -868,13 +872,11 @@ export function CrawlConfigScreen({
  </label>
  )}
 
- <div className="min-h-[1.5rem]">
  {savedProfileMessage ? (
  <div className="rounded-[var(--radius-md)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-2 text-sm leading-[1.5] text-secondary">
  {savedProfileMessage}
  </div>
  ) : null}
- </div>
 
  <AdditionalFieldInput
  value={additionalDraft}
@@ -922,7 +924,7 @@ export function CrawlConfigScreen({
  </div>
  {fieldConfigMessage ? <p className="text-sm leading-[1.5] text-success">{fieldConfigMessage}</p> : null}
  {fieldConfigError ? <InlineAlert message={fieldConfigError} /> : null}
- <div className="space-y-3">
+ <div className="flex flex-col gap-3">
  {fieldRows.length ? (
  <>
  <FieldEditorHeader />
@@ -979,19 +981,19 @@ export function CrawlConfigScreen({
  <div className="h-full xl:sticky xl:top-[68px]">
  <Card className="section-card">
  <SectionHeader
- title="Run Setup"
+ title="Crawl Settings"
+ description="Basic run controls."
  />
  <div className="page-stack">
- <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">
- <div className="flex min-w-0 items-center gap-3">
- <div className={RUN_SETUP_ICON_CLASS}>
- <Globe className="size-4" />
- </div>
+ <div className={RUN_SETUP_ROW_CLASS}>
+ <div className={RUN_SETUP_LABEL_CLASS}>
+ <Globe className="size-4 shrink-0 text-[var(--accent)]" />
  <div className="field-label mb-0">Domain</div>
  </div>
  <TabBar
  value={crawlDomain}
  compact
+ className={RUN_SETUP_CONTROL_CLASS}
  onChange={(value) => {
  if (value === "commerce" || value === "jobs") {
  setCrawlDomain(value);
@@ -1004,11 +1006,9 @@ export function CrawlConfigScreen({
  />
  </div>
 
- <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">
- <div className="flex min-w-0 items-center gap-3">
- <div className={RUN_SETUP_ICON_CLASS}>
- <SlidersHorizontal className="size-4" />
- </div>
+ <div className={RUN_SETUP_ROW_CLASS}>
+ <div className={RUN_SETUP_LABEL_CLASS}>
+ <SlidersHorizontal className="size-4 shrink-0 text-[var(--accent)]" />
  <div className="flex items-center gap-1.5">
  <div className="field-label mb-0">Mode</div>
  <Tooltip content="Advanced Mode exposes the full fetch, locality, diagnostics, and selector controls.">
@@ -1019,6 +1019,7 @@ export function CrawlConfigScreen({
  <TabBar
  value={studioMode}
  compact
+ className={RUN_SETUP_CONTROL_CLASS}
  onChange={(value) => {
  if (value === "quick" || value === "advanced") {
  setStudioMode(value);
@@ -1031,11 +1032,9 @@ export function CrawlConfigScreen({
  />
  </div>
 
- <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">
- <div className="flex min-w-0 items-center gap-3">
- <div className={RUN_SETUP_ICON_CLASS}>
- <Sparkles className="size-4" />
- </div>
+ <div className={RUN_SETUP_ROW_CLASS}>
+ <div className={RUN_SETUP_LABEL_CLASS}>
+ <Sparkles className="size-4 shrink-0 text-[var(--accent)]" />
  <div className="flex items-center gap-1.5">
  <div className="field-label mb-0">LLM Enabled</div>
  <Tooltip content="Per-run enrichment only. This does not overwrite saved domain defaults.">
@@ -1043,15 +1042,15 @@ export function CrawlConfigScreen({
  </Tooltip>
  </div>
  </div>
+ <div className={RUN_SETUP_CONTROL_CLASS}>
  <Toggle checked={smartExtraction} onChange={setSmartExtraction} ariaLabel="LLM enabled" />
  </div>
-
- <div className="rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">
- <div className="flex items-start justify-between gap-3">
- <div className="flex min-w-0 items-start gap-3">
- <div className={RUN_SETUP_ICON_CLASS}>
- <Globe className="size-4" />
  </div>
+
+ <div className={RUN_SETUP_STACK_CLASS}>
+ <div className={RUN_SETUP_ROW_CLASS}>
+ <div className={RUN_SETUP_LABEL_CLASS}>
+ <Globe className="size-4 shrink-0 text-[var(--accent)]" />
  <div className="min-w-0">
  <div className="flex items-center gap-1.5">
  <div className="field-label mb-0">Proxy List</div>
@@ -1061,14 +1060,16 @@ export function CrawlConfigScreen({
  </div>
  </div>
  </div>
+ <div className={RUN_SETUP_CONTROL_CLASS}>
  <Toggle
  checked={proxyEnabled}
  onChange={setProxyEnabled}
  ariaLabel="Proxy List enabled"
  />
  </div>
+ </div>
  {proxyEnabled ? (
- <div className="mt-3 space-y-2">
+  <div className="mt-6 ml-7 flex flex-col gap-3">
  <div className="field-label">Example Proxy List To Enter</div>
  <Textarea
  value={proxyInput}
@@ -1084,7 +1085,7 @@ export function CrawlConfigScreen({
  </div>
 
  {singleUrlMode && savedProfileLoaded ? (
- <div className="rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-2 text-sm leading-[1.5] text-secondary">
+ <div className="text-sm leading-[1.5] text-secondary">
  Saved domain profile active: <span className="font-medium text-foreground">{savedProfileDomain}</span> · {surfaceLabel(surface)}
  </div>
  ) : null}
@@ -1100,9 +1101,9 @@ export function CrawlConfigScreen({
  icon={SlidersHorizontal}
  description="Fine-tune fetch, limits, locality, and diagnostics for this exploratory run."
  />
- <div className="grid gap-5 xl:grid-cols-3">
- <section className="space-y-5">
- <div className="border-b border-[var(--divider)] pb-4">
+ <div className="grid gap-6 xl:grid-cols-3">
+ <section className={ADVANCED_COLUMN_CLASS}>
+ <div>
  <div className={ADVANCED_SECTION_TITLE_CLASS}>
  <h3>Execution</h3>
  <Tooltip content="Control how the crawler fetches, renders, and traverses the target.">
@@ -1110,7 +1111,7 @@ export function CrawlConfigScreen({
  </Tooltip>
  </div>
  </div>
- <div className="grid gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4">
+ <div className={ADVANCED_SUBSECTION_CLASS}>
  <div className={ADVANCED_CONTROL_ROW_CLASS}>
  <div className="field-label">Fetch Mode</div>
  <Dropdown<FetchMode>
@@ -1219,11 +1220,10 @@ export function CrawlConfigScreen({
  />
  </div>
  </div>
- <div className="relative overflow-visible rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] divide-y divide-[var(--divider)] bg-[var(--bg-panel)]">
+ <div className={ADVANCED_SUBSECTION_CLASS}>
  <SettingSection
  label="Include iframes"
  description="Allow iframe content to participate in extraction and selector recovery."
- icon={<Globe className="size-4" />}
  checked={runProfile.fetch_profile.include_iframes}
  onChange={(next) =>
  markProfileDirty((current) => ({
@@ -1238,15 +1238,14 @@ export function CrawlConfigScreen({
  <SettingSection
  label="Respect robots.txt"
  description="Skip disallowed paths and honor crawl-delay."
- icon={<Shield className="size-4" />}
  checked={respectRobotsTxt}
  onChange={setRespectRobotsTxt}
  />
  </div>
  </section>
 
- <section className="space-y-5 border-t border-[var(--divider)] pt-5 xl:border-t-0 xl:border-l xl:pl-6 xl:pt-0">
- <div className="border-b border-[var(--divider)] pb-4">
+ <section className={ADVANCED_COLUMN_CLASS}>
+ <div>
  <div className={ADVANCED_SECTION_TITLE_CLASS}>
  <h3>Limits &amp; Locales</h3>
  <Tooltip content="Set repeat-run bounds and regional hints before dispatch.">
@@ -1254,7 +1253,7 @@ export function CrawlConfigScreen({
  </Tooltip>
  </div>
  </div>
- <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] divide-y divide-[var(--divider)] bg-[var(--bg-panel)]">
+ <div className={ADVANCED_SUBSECTION_CLASS}>
  <SliderRow
  label="Request Delay"
  description="Wait time between requests to the same target."
@@ -1263,7 +1262,6 @@ export function CrawlConfigScreen({
  max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
  step={100}
  suffix="ms"
- grouped
  onChange={(next) =>
  markProfileDirty((current) => ({
  ...current,
@@ -1295,7 +1293,6 @@ export function CrawlConfigScreen({
  min={CRAWL_LIMITS.MIN_PAGES}
  max={CRAWL_LIMITS.MAX_PAGES}
  step={1}
- grouped
  onChange={(next) =>
  markProfileDirty((current) => ({
  ...current,
@@ -1322,7 +1319,6 @@ export function CrawlConfigScreen({
  min={CRAWL_LIMITS.MIN_SCROLLS}
  max={CRAWL_LIMITS.MAX_SCROLLS}
  step={1}
- grouped
  onChange={(next) =>
  markProfileDirty((current) => ({
  ...current,
@@ -1349,20 +1345,19 @@ export function CrawlConfigScreen({
  min={CRAWL_LIMITS.MIN_RECORDS}
  max={CRAWL_LIMITS.MAX_RECORDS}
  step={10}
- grouped
  onChange={setMaxRecords}
  onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
  />
  </div>
- <div className="grid gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4">
+ <div className={ADVANCED_SUBSECTION_CLASS}>
  <div className="flex items-center gap-1.5">
- <div className="field-label">Locale Hints</div>
+ <div className="text-sm font-medium text-foreground">Locale Hints</div>
  <Tooltip content="Keep country, language, and currency aligned with the market you want to simulate.">
  <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
  </Tooltip>
  </div>
- <label className="grid gap-1.5">
- <span className="field-label">Geo Country</span>
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
+ <div className="field-label mb-0">Geo Country</div>
  <Input
  value={runProfile.locality_profile.geo_country}
  onChange={(event) =>
@@ -1376,9 +1371,9 @@ export function CrawlConfigScreen({
  }
  aria-label="Geo country"
  />
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Language Hint</span>
+ </div>
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
+ <div className="field-label mb-0">Language Hint</div>
  <Input
  value={runProfile.locality_profile.language_hint ?? ""}
  onChange={(event) =>
@@ -1392,9 +1387,9 @@ export function CrawlConfigScreen({
  }
  aria-label="Language hint"
  />
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Currency Hint</span>
+ </div>
+ <div className={ADVANCED_CONTROL_ROW_CLASS}>
+ <div className="field-label mb-0">Currency Hint</div>
  <Input
  value={runProfile.locality_profile.currency_hint ?? ""}
  onChange={(event) =>
@@ -1408,12 +1403,12 @@ export function CrawlConfigScreen({
  }
  aria-label="Currency hint"
  />
- </label>
+ </div>
  </div>
  </section>
 
- <section className="space-y-5 border-t border-[var(--divider)] pt-5 xl:border-t-0 xl:border-l xl:pl-6 xl:pt-0">
- <div className="border-b border-[var(--divider)] pb-4">
+ <section className={ADVANCED_COLUMN_CLASS}>
+ <div>
  <div className={ADVANCED_SECTION_TITLE_CLASS}>
  <h3>Output &amp; Diagnostics</h3>
  <Tooltip content="Choose what evidence and artifacts stay attached to this run.">
@@ -1421,7 +1416,7 @@ export function CrawlConfigScreen({
  </Tooltip>
  </div>
  </div>
- <div className="grid gap-3 rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4">
+ <div className={ADVANCED_SUBSECTION_CLASS}>
  <div className={ADVANCED_CONTROL_ROW_CLASS}>
  <div className="field-label">Diagnostics</div>
  <Dropdown<DiagnosticsPreset>
@@ -1463,11 +1458,10 @@ export function CrawlConfigScreen({
  />
  </div>
  </div>
- <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] divide-y divide-[var(--divider)] bg-[var(--bg-panel)]">
+ <div className={ADVANCED_SUBSECTION_CLASS}>
  <SettingSection
  label="Capture HTML"
  description="Persist the page HTML artifact for this run."
- icon={<SlidersHorizontal className="size-4" />}
  checked={runProfile.diagnostics_profile.capture_html}
  onChange={(next) =>
  markProfileDirty((current) => ({
@@ -1482,7 +1476,6 @@ export function CrawlConfigScreen({
  <SettingSection
  label="Capture Screenshot"
  description="Store browser screenshots when available."
- icon={<SlidersHorizontal className="size-4" />}
  checked={runProfile.diagnostics_profile.capture_screenshot}
  onChange={(next) =>
  markProfileDirty((current) => ({
@@ -1497,7 +1490,6 @@ export function CrawlConfigScreen({
  <SettingSection
  label="Capture Response Headers"
  description="Preserve response-header diagnostics."
- icon={<Shield className="size-4" />}
  checked={runProfile.diagnostics_profile.capture_response_headers}
  onChange={(next) =>
  markProfileDirty((current) => ({
@@ -1512,7 +1504,6 @@ export function CrawlConfigScreen({
  <SettingSection
  label="Capture Browser Diagnostics"
  description="Keep detailed browser-attempt diagnostics for debugging."
- icon={<Shield className="size-4" />}
  checked={runProfile.diagnostics_profile.capture_browser_diagnostics}
  onChange={(next) =>
  markProfileDirty((current) => ({

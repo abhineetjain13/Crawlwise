@@ -126,10 +126,17 @@ class SharedBrowserRuntime(_SharedBrowserRuntime):
         *,
         run_id: int | None = None,
         locality_profile: dict[str, object] | None = None,
+        inject_init_script: bool = False,
     ) -> PlaywrightContextSpec:
-        return build_playwright_context_spec(
+        spec = build_playwright_context_spec(
             run_id=run_id,
             locality_profile=locality_profile,
+        )
+        if inject_init_script:
+            return spec
+        return PlaywrightContextSpec(
+            context_options=dict(spec.context_options),
+            init_script=None,
         )
 
     def _build_context_options(

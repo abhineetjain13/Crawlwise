@@ -27,6 +27,10 @@ _BRIDGE_COUNTERS = {
 }
 
 
+class _ClientNotifiedSocksError(ValueError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class Socks5UpstreamProxy:
     scheme: str
@@ -157,6 +161,9 @@ class Socks5AuthBridge:
             )
         except asyncio.CancelledError:
             raise
+        except _ClientNotifiedSocksError:
+            _BRIDGE_COUNTERS["failures"] += 1
+            logger.debug("SOCKS5 auth bridge rejected client request", exc_info=True)
         except Exception:
             _BRIDGE_COUNTERS["failures"] += 1
             logger.debug("SOCKS5 auth bridge request failed", exc_info=True)
@@ -190,7 +197,9 @@ async def _read_client_request(
         raise ValueError(f"Unsupported SOCKS version: {version}")
     methods = await reader.readexactly(method_count)
     if _SOCKS_AUTH_NONE not in methods:
-        raise ValueError("Browser SOCKS client did not offer no-auth method")
+        writer.write(bytes([_SOCKS_VERSION, _SOCKS_AUTH_NO_ACCEPTABLE]))
+        await writer.drain()
+        raise _ClientNotifiedSocksError("Browser SOCKS client did not offer no-auth method")
     writer.write(bytes([_SOCKS_VERSION, _SOCKS_AUTH_NONE]))
     await writer.drain()
     request_header = await reader.readexactly(4)
@@ -198,7 +207,9 @@ async def _read_client_request(
     if version != _SOCKS_VERSION:
         raise ValueError(f"Unsupported SOCKS request version: {version}")
     if command != _SOCKS_CMD_CONNECT:
-        raise ValueError(f"Unsupported SOCKS command: {command}")
+        writer.write(_failure_response(_SOCKS_REPLY_COMMAND_NOT_SUPPORTED))
+        await writer.drain()
+        raise _ClientNotifiedSocksError(f"Unsupported SOCKS command: {command}")
     address_bytes = await _read_address_bytes(reader, address_type)
     port_bytes = await reader.readexactly(2)
     return _Socks5ConnectRequest(

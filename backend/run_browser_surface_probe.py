@@ -10,10 +10,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from ipaddress import ip_address
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 
 import pytz
 
 from app.core.database import SessionLocal
+from app.services.acquisition.runtime import (
+    classify_block_from_headers,
+    classify_blocked_page,
+    copy_headers,
+    curl_fetch,
+    http_fetch,
+)
 from app.services.acquisition.browser_runtime import (
     SharedBrowserRuntime,
     _display_proxy,
@@ -35,6 +44,14 @@ from app.services.config.browser_surface_probe import (
     BROWSER_SURFACE_PROBE_SANNYSOFT_LABELS,
     BROWSER_SURFACE_PROBE_TABLE_ROW_LIMIT,
     BROWSER_SURFACE_PROBE_TARGETS,
+    BROWSER_SURFACE_PROBE_TARGET_BODY_ARTIFACT_LIMIT,
+    BROWSER_SURFACE_PROBE_TARGET_CHALLENGE_COOKIE_TOKENS,
+    BROWSER_SURFACE_PROBE_TARGET_COOKIE_NAME_LIMIT,
+    BROWSER_SURFACE_PROBE_TARGET_GEO_ENDPOINTS,
+    BROWSER_SURFACE_PROBE_TARGET_HTTP_TIMEOUT_SECONDS,
+    BROWSER_SURFACE_PROBE_TARGET_NAVIGATION_TIMEOUT_MS,
+    BROWSER_SURFACE_PROBE_TARGET_RESPONSE_HEADER_ALLOWLIST,
+    BROWSER_SURFACE_PROBE_TARGET_VISIBLE_TEXT_SNIPPET_LIMIT,
     BROWSER_SURFACE_PROBE_TIMEZONE_ALIASES,
     BROWSER_SURFACE_PROBE_VISIBLE_TEXT_LIMIT,
     BROWSER_SURFACE_PROBE_WEBRTC_GATHER_TIMEOUT_MS,
@@ -72,6 +89,7 @@ class RuntimeSource:
     identity_run_id: int
     proxy_list: list[str]
     proxy_profile: dict[str, object]
+    locality_profile: dict[str, object]
     selected_proxy: str | None
     selected_proxy_index: int | None
     browser_engine: str
@@ -97,6 +115,24 @@ def _coerce_proxy_profile(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _coerce_locality_profile(
+    *,
+    geo_country: object = None,
+    language_hint: object = None,
+    currency_hint: object = None,
+) -> dict[str, object]:
+    normalized_geo = _normalize_space(geo_country).upper() or "auto"
+    if len(normalized_geo) != 2 or not normalized_geo.isalpha():
+        normalized_geo = "auto"
+    normalized_language = _normalize_space(language_hint) or None
+    normalized_currency = _normalize_space(currency_hint) or None
+    return {
+        "geo_country": normalized_geo,
+        "language_hint": normalized_language,
+        "currency_hint": normalized_currency,
+    }
+
+
 async def _load_run_runtime_source(run_id: int, *, browser_engine: str) -> RuntimeSource:
     async with SessionLocal() as session:
         run = await get_run(session, run_id)
@@ -105,6 +141,7 @@ async def _load_run_runtime_source(run_id: int, *, browser_engine: str) -> Runti
     settings_view = run.settings_view
     proxy_list = settings_view.proxy_list()
     proxy_profile = settings_view.proxy_profile()
+    locality_profile = settings_view.locality_profile()
     enabled = bool(proxy_profile.get("enabled"))
     selected_proxy = proxy_list[0] if enabled and proxy_list else None
     selected_proxy_index = 0 if selected_proxy is not None else None
@@ -114,6 +151,7 @@ async def _load_run_runtime_source(run_id: int, *, browser_engine: str) -> Runti
         identity_run_id=run.id,
         proxy_list=proxy_list,
         proxy_profile=proxy_profile,
+        locality_profile=locality_profile,
         selected_proxy=selected_proxy,
         selected_proxy_index=selected_proxy_index,
         browser_engine=browser_engine,
@@ -124,6 +162,7 @@ def _load_explicit_runtime_source(
     *,
     proxies: list[str],
     proxy_profile_path: str | None,
+    locality_profile: dict[str, object],
     browser_engine: str,
 ) -> RuntimeSource:
     proxy_profile: dict[str, object] = {}
@@ -145,6 +184,7 @@ def _load_explicit_runtime_source(
         identity_run_id=identity_run_id,
         proxy_list=proxy_list,
         proxy_profile=proxy_profile,
+        locality_profile=locality_profile,
         selected_proxy=selected_proxy,
         selected_proxy_index=selected_proxy_index,
         browser_engine=browser_engine,
@@ -160,6 +200,11 @@ async def _resolve_runtime_source(args: argparse.Namespace) -> RuntimeSource:
     return _load_explicit_runtime_source(
         proxies=explicit_proxies,
         proxy_profile_path=args.proxy_profile_json,
+        locality_profile=_coerce_locality_profile(
+            geo_country=args.geo_country,
+            language_hint=args.language_hint,
+            currency_hint=args.currency_hint,
+        ),
         browser_engine=args.browser_engine,
     )
 
@@ -228,6 +273,16 @@ def _looks_like_truthy_risk(value: str) -> bool:
         except ValueError:
             continue
     return False
+
+
+def _percent_value(value: object) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)%", str(value or ""))
+    if match is None:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -628,12 +683,161 @@ def _consensus_baseline(per_site: dict[str, dict[str, object]]) -> dict[str, obj
     }
 
 
+def _target_identity_mismatch(
+    *,
+    locale: str,
+    timezone_name: str,
+    geo_country_code: str | None,
+) -> dict[str, object]:
+    locale_region = _locale_region(locale)
+    timezone_match = _timezone_matches_country(timezone_name, geo_country_code)
+    return {
+        "geo_country_code": geo_country_code,
+        "locale_region": locale_region,
+        "locale_country_match": (
+            locale_region == geo_country_code
+            if locale_region and geo_country_code
+            else None
+        ),
+        "timezone_country_match": timezone_match,
+    }
+
+
+def _target_root_cause(
+    *,
+    consensus: dict[str, object],
+    diagnostic: dict[str, object],
+) -> dict[str, object]:
+    geo = dict(diagnostic.get("geo") or {}).get("consensus") or {}
+    geo_country = _country_code_from_value(str(dict(geo).get("country") or ""))
+    mismatch = _target_identity_mismatch(
+        locale=str(consensus.get("locale") or ""),
+        timezone_name=str(consensus.get("timezone") or ""),
+        geo_country_code=geo_country,
+    )
+    transport_payloads = [
+        dict(diagnostic.get("httpx") or {}),
+        dict(diagnostic.get("curl_cffi") or {}),
+    ]
+    browser = dict(diagnostic.get("browser") or {})
+    transport_blocked = [
+        payload
+        for payload in transport_payloads
+        if payload.get("status") == "ok" and bool(payload.get("blocked"))
+    ]
+    transport_ok = [
+        payload
+        for payload in transport_payloads
+        if payload.get("status") == "ok" and not bool(payload.get("blocked"))
+    ]
+    browser_blocked = browser.get("status") == "ok" and bool(browser.get("blocked"))
+    browser_ok = browser.get("status") == "ok" and not bool(browser.get("blocked"))
+    browser_classification = dict(browser.get("classification") or {})
+    vendor = (
+        browser_classification.get("header_vendor")
+        or _coalesce(
+            [
+                dict(payload.get("classification") or {}).get("header_vendor")
+                for payload in transport_payloads
+            ]
+        )
+        or _coalesce(
+            [
+                _coalesce(list(dict(payload.get("classification") or {}).get("provider_hits") or []))
+                for payload in [browser, *transport_payloads]
+            ]
+        )
+    )
+    if transport_blocked and browser_blocked:
+        return {
+            "category": "target_precontent_block",
+            "confidence": "high",
+            "message": "HTTP and browser paths both blocked before usable content.",
+            "evidence": {
+                "vendor": vendor,
+                "geo_identity": mismatch,
+                "httpx": {
+                    "status_code": transport_payloads[0].get("status_code"),
+                    "outcome": dict(transport_payloads[0].get("classification") or {}).get("outcome"),
+                },
+                "curl_cffi": {
+                    "status_code": transport_payloads[1].get("status_code"),
+                    "outcome": dict(transport_payloads[1].get("classification") or {}).get("outcome"),
+                },
+                "browser": {
+                    "status_code": browser.get("status_code"),
+                    "outcome": browser_classification.get("outcome"),
+                    "challenge_cookie_names": browser.get("challenge_cookie_names"),
+                },
+            },
+        }
+    if browser_blocked and transport_ok:
+        if mismatch.get("timezone_country_match") is False or mismatch.get("locale_country_match") is False:
+            return {
+                "category": "browser_geo_identity_mismatch",
+                "confidence": "high",
+                "message": "Browser path blocked while transport passes and browser geo identity drifts from observed egress country.",
+                "evidence": {
+                    "geo_identity": mismatch,
+                    "browser": {
+                        "status_code": browser.get("status_code"),
+                        "outcome": browser_classification.get("outcome"),
+                    },
+                },
+            }
+        return {
+            "category": "browser_session_or_fingerprint_block",
+            "confidence": "high",
+            "message": "Browser path blocked while transport passes; failure is browser session or browser-only fingerprint flow.",
+            "evidence": {
+                "vendor": vendor,
+                "browser": {
+                    "status_code": browser.get("status_code"),
+                    "outcome": browser_classification.get("outcome"),
+                    "challenge_cookie_names": browser.get("challenge_cookie_names"),
+                },
+            },
+        }
+    if browser_ok and transport_blocked:
+        return {
+            "category": "transport_only_block",
+            "confidence": "high",
+            "message": "Transport paths blocked while browser path stays usable.",
+            "evidence": {
+                "vendor": vendor,
+                "httpx_status_code": transport_payloads[0].get("status_code"),
+                "curl_status_code": transport_payloads[1].get("status_code"),
+            },
+        }
+    if browser_ok or transport_ok:
+        return {
+            "category": "no_target_block_detected",
+            "confidence": "high",
+            "message": "At least one acquisition path reached usable content.",
+            "evidence": {
+                "geo_identity": mismatch,
+            },
+        }
+    return {
+        "category": "target_diagnostic_inconclusive",
+        "confidence": "low",
+        "message": "Target diagnostics did not produce enough successful paths to classify the failure mechanically.",
+        "evidence": {
+            "geo_identity": mismatch,
+            "browser_status": browser.get("status"),
+            "httpx_status": transport_payloads[0].get("status"),
+            "curl_status": transport_payloads[1].get("status"),
+        },
+    }
+
+
 def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     baseline = dict(report.get("baseline") or {})
     consensus = dict(baseline.get("consensus") or {})
     drift = dict(baseline.get("drift") or {})
     sites = dict(report.get("sites") or {})
+    target_diagnostics = list(report.get("target_diagnostics") or [])
     failed_probe_sites = [
         site_id
         for site_id, site_payload in sites.items()
@@ -670,9 +874,35 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
         list(dict(pixelscan.get("extracted") or {}).get("country_values") or [])
     )
     pixelscan_country_code = _country_code_from_value(str(pixelscan_country or ""))
+    observed_geo_country = None
+    for diagnostic in target_diagnostics:
+        diagnostic_geo = dict(dict(diagnostic or {}).get("geo") or {}).get("consensus") or {}
+        observed_geo_country = _country_code_from_value(str(diagnostic_geo.get("country") or ""))
+        if observed_geo_country:
+            break
+    geo_provider_drift = bool(
+        pixelscan_country_code
+        and observed_geo_country
+        and pixelscan_country_code != observed_geo_country
+    )
+    if geo_provider_drift:
+        findings.append(
+            {
+                "severity": "warn",
+                "category": "proxy_geo_provider_drift",
+                "message": (
+                    f"Pixelscan geolocates the same exit IP as {pixelscan_country_code} "
+                    f"while direct geo endpoints report {observed_geo_country}."
+                ),
+                "evidence": {
+                    "pixelscan_country": pixelscan_country,
+                    "observed_geo_country": observed_geo_country,
+                },
+            }
+        )
     timezone_value = str(consensus.get("timezone") or "")
     timezone_country_match = _timezone_matches_country(timezone_value, pixelscan_country_code)
-    if timezone_country_match is False:
+    if timezone_country_match is False and not geo_provider_drift:
         findings.append(
             {
                 "severity": "fail",
@@ -686,7 +916,12 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
         )
 
     locale_region = _locale_region(str(consensus.get("locale") or ""))
-    if locale_region and pixelscan_country_code and locale_region != pixelscan_country_code:
+    if (
+        locale_region
+        and pixelscan_country_code
+        and locale_region != pixelscan_country_code
+        and not geo_provider_drift
+    ):
         findings.append(
             {
                 "severity": "warn",
@@ -738,7 +973,16 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
     headless_evidence: list[str] = []
     headless_evidence.extend(list(dict(creepjs.get("extracted") or {}).get("headless_hits") or []))
     headless_evidence.extend(list(dict(creepjs.get("extracted") or {}).get("keyword_hits", {}).get("headless") or []))
-    headless_evidence = [value for value in headless_evidence if _looks_like_truthy_risk(value)]
+    filtered_headless_evidence: list[str] = []
+    for value in headless_evidence:
+        normalized = _normalize_space(value).lower()
+        if " like headless" in normalized:
+            percent = _percent_value(value)
+            if percent is None or percent < 10:
+                continue
+        if _looks_like_truthy_risk(value):
+            filtered_headless_evidence.append(value)
+    headless_evidence = filtered_headless_evidence
     if headless_evidence:
         findings.append(
             {
@@ -829,6 +1073,32 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
             }
         )
 
+    for diagnostic in target_diagnostics:
+        target_payload = dict(diagnostic or {})
+        target_url = str(target_payload.get("url") or "target")
+        root_cause = _target_root_cause(
+            consensus=consensus,
+            diagnostic=target_payload,
+        )
+        category = str(root_cause.get("category") or "")
+        severity = "info"
+        if category in {
+            "target_precontent_block",
+            "browser_geo_identity_mismatch",
+            "browser_session_or_fingerprint_block",
+        }:
+            severity = "fail"
+        elif category in {"transport_only_block", "target_diagnostic_inconclusive"}:
+            severity = "warn"
+        findings.append(
+            {
+                "severity": severity,
+                "category": category,
+                "message": f"{target_url}: {root_cause.get('message')}",
+                "evidence": root_cause.get("evidence"),
+            }
+        )
+
     if not findings:
         findings.append(
             {
@@ -856,6 +1126,410 @@ def _site_signal_payload(site_id: str, snapshot: dict[str, object]) -> dict[str,
     if site_id == "creepjs":
         return _extract_creepjs(snapshot)
     return {}
+
+
+def _slugify(value: object) -> str:
+    normalized = _NON_ALNUM_RE.sub("-", _normalize_space(value).lower()).strip("-")
+    return normalized or "target"
+
+
+def _validated_target_url(value: object) -> str:
+    url = _normalize_space(value)
+    parsed = urlparse(url)
+    scheme = str(parsed.scheme or "").strip().lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError("target URL must use http or https")
+    if not parsed.hostname:
+        raise ValueError("target URL must include a hostname")
+    host = str(parsed.hostname).strip().lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError("target URL host must not be local")
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return url
+    if (
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+    ):
+        raise ValueError("target URL host must not be local or private")
+    return url
+
+
+def _truncate_text(value: object, *, limit: int) -> str:
+    normalized = _normalize_space(value)
+    return normalized[:limit] if limit > 0 else normalized
+
+
+def _text_snippet_from_html(html: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", str(html or ""))
+    text = _WHITESPACE_RE.sub(" ", text).strip()
+    return _truncate_text(text, limit=int(BROWSER_SURFACE_PROBE_TARGET_VISIBLE_TEXT_SNIPPET_LIMIT))
+
+
+def _target_artifacts(base_dir: Path, target_id: str, variant: str) -> dict[str, Path]:
+    return {
+        "body": base_dir / f"{target_id}_{variant}.txt",
+        "html": base_dir / f"{target_id}_{variant}.html",
+        "screenshot": base_dir / f"{target_id}_{variant}.png",
+    }
+
+
+def _write_target_body_artifact(path: Path, body: str) -> None:
+    path.write_text(
+        str(body or "")[: int(BROWSER_SURFACE_PROBE_TARGET_BODY_ARTIFACT_LIMIT)],
+        encoding="utf-8",
+    )
+
+
+def _selected_headers(headers: Any) -> dict[str, str]:
+    normalized = copy_headers(headers)
+    allowlist = {str(value).strip().lower() for value in BROWSER_SURFACE_PROBE_TARGET_RESPONSE_HEADER_ALLOWLIST}
+    selected: dict[str, str] = {}
+    for key, value in normalized.multi_items():
+        lowered = str(key or "").strip().lower()
+        if lowered not in allowlist:
+            continue
+        if lowered == "set-cookie":
+            selected.setdefault(lowered, value)
+            continue
+        selected[lowered] = value
+    return selected
+
+
+def _classification_payload(*, html: str, status_code: int, headers: Any) -> dict[str, object]:
+    classification = classify_blocked_page(html, status_code)
+    return {
+        "blocked": bool(classification.blocked),
+        "outcome": classification.outcome,
+        "evidence": list(classification.evidence),
+        "provider_hits": list(classification.provider_hits),
+        "active_provider_hits": list(classification.active_provider_hits),
+        "strong_hits": list(classification.strong_hits),
+        "weak_hits": list(classification.weak_hits),
+        "title_matches": list(classification.title_matches),
+        "challenge_element_hits": list(classification.challenge_element_hits),
+        "header_vendor": classify_block_from_headers(headers),
+    }
+
+
+def _geo_payload_from_text(text: str) -> dict[str, object]:
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    timezone = payload.get("timezone")
+    if isinstance(timezone, dict):
+        timezone = timezone.get("id") or timezone.get("name")
+    connection = payload.get("connection")
+    connection = dict(connection) if isinstance(connection, dict) else {}
+    return {
+        "ip": _normalize_space(payload.get("ip")),
+        "city": _normalize_space(payload.get("city")),
+        "region": _normalize_space(payload.get("region") or payload.get("regionName")),
+        "country": _normalize_space(
+            payload.get("country")
+            or payload.get("country_code")
+            or payload.get("country_name")
+        ),
+        "timezone": _normalize_space(timezone),
+        "org": _normalize_space(
+            payload.get("org")
+            or payload.get("isp")
+            or connection.get("org")
+        ),
+        "raw": payload,
+    }
+
+
+def _geo_consensus(results: list[dict[str, object]]) -> dict[str, object]:
+    keys = ("ip", "city", "region", "country", "timezone", "org")
+    consensus: dict[str, object] = {}
+    for key in keys:
+        consensus[key] = _coalesce([result.get(key) for result in results])
+    return consensus
+
+
+async def _run_geo_endpoint_checks(proxy: str | None) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    for endpoint in BROWSER_SURFACE_PROBE_TARGET_GEO_ENDPOINTS:
+        url = str(endpoint.get("url") or "").strip()
+        label = str(endpoint.get("label") or endpoint.get("id") or url).strip()
+        if not url:
+            continue
+        for method_name, fetcher in (("httpx", http_fetch), ("curl_cffi", curl_fetch)):
+            try:
+                result = await fetcher(
+                    url,
+                    float(BROWSER_SURFACE_PROBE_TARGET_HTTP_TIMEOUT_SECONDS),
+                    proxy=proxy,
+                )
+                payload = _geo_payload_from_text(result.html)
+                checks.append(
+                    {
+                        "label": label,
+                        "method": method_name,
+                        "url": url,
+                        "status_code": result.status_code,
+                        "final_url": result.final_url,
+                        "geo": payload,
+                    }
+                )
+            except Exception as exc:
+                checks.append(
+                    {
+                        "label": label,
+                        "method": method_name,
+                        "url": url,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "geo": {},
+                    }
+                )
+    return {
+        "checks": checks,
+        "consensus": _geo_consensus(
+            [dict(check.get("geo") or {}) for check in checks if dict(check.get("geo") or {})]
+        ),
+    }
+
+
+async def _target_transport_payload(
+    *,
+    method_label: str,
+    fetcher,
+    url: str,
+    proxy: str | None,
+    artifacts_dir: Path,
+    target_id: str,
+) -> dict[str, object]:
+    artifacts = _target_artifacts(artifacts_dir, target_id, method_label)
+    try:
+        result = await fetcher(
+            url,
+            float(BROWSER_SURFACE_PROBE_TARGET_HTTP_TIMEOUT_SECONDS),
+            proxy=proxy,
+        )
+    except Exception as exc:
+        return {
+            "method": method_label,
+            "url": url,
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "artifacts": {"body": None, "html": None, "screenshot": None},
+        }
+    _write_target_body_artifact(artifacts["body"], result.html)
+    if "html" in str(result.content_type or "").lower():
+        artifacts["html"].write_text(result.html, encoding="utf-8")
+        html_name = artifacts["html"].name
+    else:
+        html_name = None
+    return {
+        "method": method_label,
+        "url": url,
+        "status": "ok",
+        "status_code": result.status_code,
+        "final_url": result.final_url,
+        "content_type": result.content_type,
+        "blocked": bool(result.blocked),
+        "classification": _classification_payload(
+            html=result.html,
+            status_code=result.status_code,
+            headers=result.headers,
+        ),
+        "response_headers": _selected_headers(result.headers),
+        "visible_text_snippet": _text_snippet_from_html(result.html),
+        "artifacts": {
+            "body": artifacts["body"].name,
+            "html": html_name,
+            "screenshot": None,
+        },
+    }
+
+
+async def _response_headers_dict(response: object | None) -> dict[str, str]:
+    if response is None:
+        return {}
+    for attr in ("all_headers", "headers"):
+        candidate = getattr(response, attr, None)
+        if candidate is None:
+            continue
+        try:
+            resolved = await candidate() if callable(candidate) else candidate
+        except TypeError:
+            try:
+                resolved = candidate()
+            except Exception:
+                continue
+        except Exception:
+            continue
+        if isinstance(resolved, dict):
+            return {str(key): str(value) for key, value in resolved.items()}
+    return {}
+
+
+async def _browser_cookie_names(page: Any, final_url: str) -> list[str]:
+    context = getattr(page, "context", None)
+    if context is None:
+        return []
+    cookies_method = getattr(context, "cookies", None)
+    if cookies_method is None:
+        return []
+    try:
+        cookies = await cookies_method([final_url]) if callable(cookies_method) else []
+    except Exception:
+        return []
+    names = [
+        _normalize_space(cookie.get("name"))
+        for cookie in cookies
+        if isinstance(cookie, dict) and _normalize_space(cookie.get("name"))
+    ]
+    return _dedupe(names)[: int(BROWSER_SURFACE_PROBE_TARGET_COOKIE_NAME_LIMIT)]
+
+
+def _challenge_cookie_names(cookie_names: list[str]) -> list[str]:
+    tokens = tuple(str(token).strip().lower() for token in BROWSER_SURFACE_PROBE_TARGET_CHALLENGE_COOKIE_TOKENS)
+    return [
+        name
+        for name in cookie_names
+        if any(token and token in name.lower() for token in tokens)
+    ]
+
+
+async def _target_browser_payload(
+    runtime: SharedBrowserRuntime,
+    *,
+    url: str,
+    run_id: int,
+    locality_profile: dict[str, object],
+    artifacts_dir: Path,
+    target_id: str,
+) -> dict[str, object]:
+    artifacts = _target_artifacts(artifacts_dir, target_id, "browser")
+    async with runtime.page(
+        run_id=run_id,
+        locality_profile=locality_profile,
+        allow_storage_state=False,
+        inject_init_script=True,
+    ) as page:
+        response = await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=int(BROWSER_SURFACE_PROBE_TARGET_NAVIGATION_TIMEOUT_MS),
+        )
+        for state, timeout_ms in (("load", 10000), ("networkidle", 8000)):
+            try:
+                await page.wait_for_load_state(state, timeout=timeout_ms)
+            except Exception:
+                continue
+        await page.wait_for_timeout(int(BROWSER_SURFACE_PROBE_POST_NAVIGATION_WAIT_MS))
+        html = await page.content()
+        snapshot = await _collect_page_snapshot(page)
+        baseline = await _collect_baseline(page)
+        await page.screenshot(path=str(artifacts["screenshot"]), full_page=True)
+        artifacts["html"].write_text(html, encoding="utf-8")
+        _write_target_body_artifact(artifacts["body"], html)
+        final_url = _normalize_space(page.url)
+        response_headers = await _response_headers_dict(response)
+        status_code = 0
+        if response is not None:
+            status_attr = getattr(response, "status", None)
+            try:
+                status_code = int(status_attr() if callable(status_attr) else status_attr or 0)
+            except Exception:
+                status_code = 0
+        cookie_names = await _browser_cookie_names(page, final_url or url)
+        return {
+            "method": "browser",
+            "url": url,
+            "status": "ok",
+            "status_code": status_code,
+            "final_url": final_url,
+            "title": _normalize_space(await page.title()),
+            "blocked": bool(classify_blocked_page(html, status_code).blocked),
+            "classification": _classification_payload(
+                html=html,
+                status_code=status_code,
+                headers=response_headers,
+            ),
+            "response_headers": _selected_headers(response_headers),
+            "baseline": baseline,
+            "snapshot_summary": {
+                "line_count": snapshot.get("line_count", 0),
+                "lines": list(snapshot.get("lines") or []),
+            },
+            "visible_text_snippet": _truncate_text(
+                " ".join(str(line) for line in list(snapshot.get("lines") or [])[:12]),
+                limit=int(BROWSER_SURFACE_PROBE_TARGET_VISIBLE_TEXT_SNIPPET_LIMIT),
+            ),
+            "cookie_names": cookie_names,
+            "challenge_cookie_names": _challenge_cookie_names(cookie_names),
+            "artifacts": {
+                "body": artifacts["body"].name,
+                "html": artifacts["html"].name,
+                "screenshot": artifacts["screenshot"].name,
+            },
+        }
+
+
+async def _run_target_diagnostic(
+    runtime: SharedBrowserRuntime,
+    *,
+    url: str,
+    runtime_source: RuntimeSource,
+    artifacts_dir: Path,
+) -> dict[str, object]:
+    url = _validated_target_url(url)
+    parsed = urlparse(url)
+    host = _normalize_space(parsed.netloc or parsed.path)
+    target_id = _slugify(host)
+    geo = await _run_geo_endpoint_checks(runtime_source.selected_proxy)
+    transport_http = await _target_transport_payload(
+        method_label="httpx",
+        fetcher=http_fetch,
+        url=url,
+        proxy=runtime_source.selected_proxy,
+        artifacts_dir=artifacts_dir,
+        target_id=target_id,
+    )
+    transport_curl = await _target_transport_payload(
+        method_label="curl_cffi",
+        fetcher=curl_fetch,
+        url=url,
+        proxy=runtime_source.selected_proxy,
+        artifacts_dir=artifacts_dir,
+        target_id=target_id,
+    )
+    try:
+        browser_payload = await _target_browser_payload(
+            runtime,
+            url=url,
+            run_id=runtime_source.identity_run_id,
+            locality_profile=runtime_source.locality_profile,
+            artifacts_dir=artifacts_dir,
+            target_id=target_id,
+        )
+    except Exception as exc:
+        browser_payload = {
+            "method": "browser",
+            "url": url,
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "artifacts": {"body": None, "html": None, "screenshot": None},
+        }
+    return {
+        "target_id": target_id,
+        "url": url,
+        "host": host,
+        "geo": geo,
+        "httpx": transport_http,
+        "curl_cffi": transport_curl,
+        "browser": browser_payload,
+    }
 
 
 async def _navigate_probe_target(page, url: str) -> None:
@@ -926,6 +1600,7 @@ async def _probe_site(
     site_label: str,
     url: str,
     run_id: int,
+    locality_profile: dict[str, object],
     artifacts_dir: Path,
 ) -> dict[str, object]:
     artifacts = _site_artifacts(artifacts_dir, site_id)
@@ -933,7 +1608,12 @@ async def _probe_site(
     last_error = ""
     for attempt in range(1, max_attempts + 1):
         try:
-            async with runtime.page(run_id=run_id, allow_storage_state=False) as page:
+            async with runtime.page(
+                run_id=run_id,
+                locality_profile=locality_profile,
+                allow_storage_state=False,
+                inject_init_script=True,
+            ) as page:
                 try:
                     await _navigate_probe_target(page, url)
                     baseline = await _collect_baseline(page)
@@ -998,6 +1678,7 @@ def _render_markdown(report: dict[str, object]) -> str:
     consensus = dict(baseline.get("consensus") or {})
     findings = list(report.get("findings") or [])
     sites = dict(report.get("sites") or {})
+    target_diagnostics = list(report.get("target_diagnostics") or [])
 
     lines = [
         "# Browser Fingerprint Report",
@@ -1007,6 +1688,7 @@ def _render_markdown(report: dict[str, object]) -> str:
         f"- Source: {metadata.get('source_kind')}",
         f"- Selected proxy: {metadata.get('selected_proxy_mask')}",
         f"- Proxy inventory: {', '.join(list(metadata.get('proxy_inventory_masked') or [])) or 'direct'}",
+        f"- Locality profile: {json.dumps(metadata.get('locality_profile'), sort_keys=True)}",
         "",
         "## Findings",
     ]
@@ -1062,6 +1744,28 @@ def _render_markdown(report: dict[str, object]) -> str:
             lines.append(f"- {key}: {json.dumps(value, sort_keys=True)}")
         if site_id != list(sites.keys())[-1]:
             lines.append("")
+    if target_diagnostics:
+        lines.extend(["", "## Target Diagnostics"])
+        for diagnostic in target_diagnostics:
+            payload = dict(diagnostic or {})
+            root_cause = dict(payload.get("root_cause") or {})
+            geo = dict(dict(payload.get("geo") or {}).get("consensus") or {})
+            lines.extend(
+                [
+                    f"### {payload.get('host') or payload.get('url')}",
+                    f"- URL: {payload.get('url')}",
+                    f"- Root cause: {root_cause.get('category')} ({root_cause.get('confidence')})",
+                    f"- Root cause message: {root_cause.get('message')}",
+                    f"- Geo consensus: {json.dumps(geo, sort_keys=True)}",
+                ]
+            )
+            for method_key in ("httpx", "curl_cffi", "browser"):
+                method_payload = dict(payload.get(method_key) or {})
+                if not method_payload:
+                    continue
+                lines.append(
+                    f"- {method_key}: {json.dumps({k: method_payload.get(k) for k in ('status', 'status_code', 'final_url', 'blocked', 'title', 'visible_text_snippet', 'challenge_cookie_names', 'response_headers', 'classification') if method_payload.get(k) not in (None, '', [], {})}, sort_keys=True)}"
+                )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -1069,6 +1773,7 @@ async def build_report(
     *,
     runtime_source: RuntimeSource,
     report_dir: Path,
+    target_urls: list[str] | None = None,
     runtime_provider=get_browser_runtime,
 ) -> dict[str, object]:
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -1084,6 +1789,7 @@ async def build_report(
             site_label=str(target["label"]),
             url=str(target["url"]),
             run_id=runtime_source.identity_run_id,
+            locality_profile=runtime_source.locality_profile,
             artifacts_dir=report_dir,
         )
         sites[str(target["id"])] = site_payload
@@ -1097,6 +1803,24 @@ async def build_report(
             if isinstance(site_payload, dict)
         }
     )
+    consensus = dict(baseline.get("consensus") or {})
+    target_diagnostics: list[dict[str, object]] = []
+    for raw_url in list(target_urls or []):
+        raw = _normalize_space(raw_url)
+        if not raw:
+            continue
+        url = _validated_target_url(raw)
+        diagnostic = await _run_target_diagnostic(
+            runtime,
+            url=url,
+            runtime_source=runtime_source,
+            artifacts_dir=report_dir,
+        )
+        diagnostic["root_cause"] = _target_root_cause(
+            consensus=consensus,
+            diagnostic=diagnostic,
+        )
+        target_diagnostics.append(diagnostic)
     site_statuses = {
         site_id: str(site_payload.get("site_status") or "unknown")
         for site_id, site_payload in sites.items()
@@ -1111,6 +1835,7 @@ async def build_report(
         "selected_proxy_index": runtime_source.selected_proxy_index,
         "proxy_inventory_masked": _masked_proxy_inventory(runtime_source.proxy_list),
         "proxy_profile": runtime_source.proxy_profile,
+        "locality_profile": runtime_source.locality_profile,
         "runtime_snapshot": runtime.snapshot(),
         "site_statuses": site_statuses,
         "degraded": any(status != "ok" for status in site_statuses.values()),
@@ -1123,9 +1848,11 @@ async def build_report(
             "selected_proxy_mask": _display_proxy(runtime_source.selected_proxy),
             "proxy_inventory_masked": _masked_proxy_inventory(runtime_source.proxy_list),
             "proxy_profile": runtime_source.proxy_profile,
+            "locality_profile": runtime_source.locality_profile,
         },
         "baseline": baseline,
         "sites": sites,
+        "target_diagnostics": target_diagnostics,
     }
     report["findings"] = build_findings(report)
     (report_dir / "report.json").write_text(_json_dump(report), encoding="utf-8")
@@ -1138,6 +1865,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", type=int, default=None)
     parser.add_argument("--proxy", action="append", default=[])
     parser.add_argument("--proxy-profile-json", default=None)
+    parser.add_argument("--target-url", action="append", default=[])
+    parser.add_argument("--geo-country", default=None)
+    parser.add_argument("--language-hint", default=None)
+    parser.add_argument("--currency-hint", default=None)
     parser.add_argument(
         "--browser-engine",
         choices=("chromium", "real_chrome"),
@@ -1153,6 +1884,7 @@ async def async_main(args: argparse.Namespace) -> Path:
     await build_report(
         runtime_source=runtime_source,
         report_dir=bundle_dir,
+        target_urls=list(args.target_url or []),
     )
     return bundle_dir
 

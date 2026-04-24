@@ -1435,7 +1435,7 @@ html:not([data-theme="dark"]) .domain-memory-stat {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  background: var(--surface-header);
+  background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -1467,6 +1467,7 @@ html:not([data-theme="dark"]) .domain-memory-stat {
 .app-page-frame {
   flex: 1;
   overflow-y: auto;
+  background: var(--bg-alt);
 }
 
 .app-page-inner {

@@ -33,6 +33,7 @@ from app.services.config.extraction_rules import (
     TITLE_PROMOTION_PREFIXES,
     TITLE_PROMOTION_SEPARATOR,
     TITLE_PROMOTION_SUBSTRINGS,
+    VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_SIZE_VALUE_PATTERNS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -100,6 +101,11 @@ logger = logging.getLogger(__name__)
 _DETAIL_VARIANT_SIZE_VALUE_PATTERNS = tuple(
     re.compile(str(pattern), re.I)
     for pattern in VARIANT_SIZE_VALUE_PATTERNS
+    if str(pattern).strip()
+)
+_VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS
     if str(pattern).strip()
 )
 _LOW_SIGNAL_LONG_TEXT_VALUES = frozenset(
@@ -622,7 +628,7 @@ def _record_matches_requested_detail_identity(
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     record_codes = _detail_identity_codes_from_record(record)
-    if requested_codes and record_codes and requested_codes & record_codes:
+    if _detail_identity_codes_match(requested_codes, record_codes):
         return True
     requested_title = _detail_title_from_url(requested_page_url) or requested_page_url
     requested_tokens = _detail_identity_tokens(requested_title)
@@ -645,7 +651,7 @@ def _detail_url_matches_requested_identity(
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     candidate_codes = _detail_identity_codes_from_url(candidate_url)
-    if requested_codes and candidate_codes and requested_codes & candidate_codes:
+    if _detail_identity_codes_match(requested_codes, candidate_codes):
         return True
     requested_title = _detail_title_from_url(requested_page_url) or requested_page_url
     requested_tokens = _detail_identity_tokens(requested_title)
@@ -717,6 +723,21 @@ def _normalized_detail_identity_code(value: object) -> str | None:
         return None
     return text
 
+
+def _detail_identity_codes_match(
+    expected_codes: set[str],
+    candidate_codes: set[str],
+) -> bool:
+    if not expected_codes or not candidate_codes:
+        return False
+    return any(
+        expected == candidate
+        or expected.startswith(candidate)
+        or candidate.startswith(expected)
+        for expected in expected_codes
+        for candidate in candidate_codes
+    )
+
 def _detail_redirect_identity_is_mismatched(
     record: dict[str, Any],
     *,
@@ -731,7 +752,10 @@ def _detail_redirect_identity_is_mismatched(
         return False
     requested_codes = _detail_identity_codes_from_url(requested)
     record_field_codes = _detail_identity_codes_from_record_fields(record)
-    if requested_codes and record_field_codes and not (requested_codes & record_field_codes):
+    if requested_codes and record_field_codes and not _detail_identity_codes_match(
+        requested_codes,
+        record_field_codes,
+    ):
         return True
     candidate_url = text_or_none(record.get("url")) or current
     if candidate_url and candidate_url != requested and same_site(requested, candidate_url):
@@ -1527,6 +1551,16 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
         or re.fullmatch(r"\d{3,5}/\d{2,5}/\d{2,5}", value) is not None
     )
 
+
+def _strip_variant_option_value_suffix_noise(value: object) -> str:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    stripped = cleaned
+    for pattern in _VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS:
+        stripped = pattern.sub("", stripped).strip()
+    return stripped or cleaned
+
 def _variant_input_label(container: Any, input_node: Any) -> Any | None:
     input_id = text_or_none(input_node.get("id")) if hasattr(input_node, "get") else None
     if input_id:
@@ -1704,6 +1738,7 @@ def _collect_variant_choice_entries(container: Any, *, page_url: str) -> list[di
                 page_url,
             )
         )
+        cleaned = _strip_variant_option_value_suffix_noise(cleaned)
         if _variant_option_value_is_noise(cleaned):
             continue
         entry = entries_by_value.setdefault(cleaned, {"value": cleaned})
@@ -1729,6 +1764,7 @@ def _collect_variant_choice_entries(container: Any, *, page_url: str) -> list[di
                 page_url,
             )
         )
+        cleaned = _strip_variant_option_value_suffix_noise(cleaned)
         if _variant_option_value_is_noise(cleaned):
             continue
         entry = entries_by_value.setdefault(cleaned, {"value": cleaned})
@@ -2019,6 +2055,7 @@ def _extract_variants_from_dom(
                     page_url,
                 )
             ) or clean_text(option.get_text(" ", strip=True))
+            cleaned_value = _strip_variant_option_value_suffix_noise(cleaned_value)
             raw_value_attr = text_or_none(option.get("value"))
             if (
                 not cleaned_value

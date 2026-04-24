@@ -26,6 +26,52 @@ BROWSER_SURFACE_PROBE_WEBRTC_GATHER_TIMEOUT_MS = 2500
 BROWSER_SURFACE_PROBE_VISIBLE_TEXT_LIMIT = 800
 BROWSER_SURFACE_PROBE_TABLE_ROW_LIMIT = 400
 BROWSER_SURFACE_PROBE_NEIGHBOR_LINE_WINDOW = 2
+BROWSER_SURFACE_PROBE_TARGET_HTTP_TIMEOUT_SECONDS = 30
+BROWSER_SURFACE_PROBE_TARGET_NAVIGATION_TIMEOUT_MS = 30000
+BROWSER_SURFACE_PROBE_TARGET_VISIBLE_TEXT_SNIPPET_LIMIT = 240
+BROWSER_SURFACE_PROBE_TARGET_COOKIE_NAME_LIMIT = 20
+BROWSER_SURFACE_PROBE_TARGET_BODY_ARTIFACT_LIMIT = 200000
+BROWSER_SURFACE_PROBE_TARGET_GEO_ENDPOINTS = (
+    {
+        "id": "ipinfo",
+        "label": "IPInfo",
+        "url": "https://ipinfo.io/json",
+    },
+    {
+        "id": "ipapi",
+        "label": "IPAPI",
+        "url": "https://ipapi.co/json/",
+    },
+    {
+        "id": "ipwhois",
+        "label": "IPWhois",
+        "url": "https://ipwho.is/",
+    },
+)
+BROWSER_SURFACE_PROBE_TARGET_CHALLENGE_COOKIE_TOKENS = (
+    "_abck",
+    "ak_bmsc",
+    "bm_sz",
+    "datadome",
+    "dd_session",
+    "px",
+    "_px",
+)
+BROWSER_SURFACE_PROBE_TARGET_RESPONSE_HEADER_ALLOWLIST = (
+    "akamai-grn",
+    "cf-mitigated",
+    "content-type",
+    "location",
+    "retry-after",
+    "server",
+    "set-cookie",
+    "x-akamai-transformed",
+    "x-datadome",
+    "x-datadome-cid",
+    "x-kpsdk-ct",
+    "x-kpsdk-r",
+    "x-px-block",
+)
 BROWSER_SURFACE_PROBE_HIGH_ENTROPY_HINTS = (
     "architecture",
     "bitness",

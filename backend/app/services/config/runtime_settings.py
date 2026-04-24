@@ -191,6 +191,7 @@ class CrawlerRuntimeSettings(BaseSettings):
         "_playwrightInstance",
     )
     browser_disable_web_workers: bool = True
+    browser_mask_webrtc_local_ips: bool = True
     fingerprint_browser: str = "chrome"
     fingerprint_os: tuple[str, ...] = ("windows", "macos", "linux")
     fingerprint_device: str = "desktop"

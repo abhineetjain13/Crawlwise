@@ -3643,6 +3643,75 @@ def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents(
     assert record["original_price"] == "1565"
 
 
+def test_extract_detail_keeps_shopify_variant_record_when_requested_url_has_product_code_prefix() -> None:
+    html = """
+    <html>
+      <head>
+        <script>
+          ShopifyAnalytics.meta = {
+            "product": {
+              "id": 8214341320770,
+              "title": "Phoenix dark brown leather boots",
+              "vendor": "Chloe",
+              "product_type": "Boots",
+              "variants": [
+                {
+                  "id": 43633711644738,
+                  "sku": "CH28105S360",
+                  "price": 126500,
+                  "option1": "36"
+                }
+              ]
+            }
+          };
+        </script>
+      </head>
+      <body>
+        <h1>Phoenix dark brown leather boots</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://savannahs.com/collections/all-boots/products/phoenix-dark-brown-leather-boots-ch28105s",
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url="https://savannahs.com/collections/all-boots/products/phoenix-dark-brown-leather-boots-ch28105s",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Phoenix dark brown leather boots"
+
+
+def test_extract_detail_strips_variant_availability_suffix_from_option_values() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Phoenix dark brown leather boots</h1>
+        <fieldset>
+          <legend>Size</legend>
+          <input id="size-36" type="radio" name="size" checked>
+          <label for="size-36">36 Variant sold out or unavailable</label>
+          <input id="size-37" type="radio" name="size">
+          <label for="size-37">37 Variant sold out or unavailable</label>
+        </fieldset>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://savannahs.com/collections/all-boots/products/phoenix-dark-brown-leather-boots-ch28105s",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["variant_axes"] == {"size": ["36", "37"]}
+    assert rows[0]["selected_variant"]["option_values"] == {"size": "36"}
+
+
 def test_extract_detail_dom_images_excludes_related_product_cards() -> None:
     html = """
     <html>

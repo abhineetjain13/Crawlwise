@@ -89,11 +89,65 @@ def _report(
                 }
             },
         },
+        "target_diagnostics": [],
     }
 
 
 def _finding_categories(report: dict[str, object]) -> set[str]:
     return {str(item.get("category")) for item in probe.build_findings(report)}
+
+
+def _target_diagnostic(
+    *,
+    geo_country: str = "US",
+    browser_blocked: bool = True,
+    httpx_blocked: bool = True,
+    curl_blocked: bool = True,
+    browser_status_code: int = 429,
+    transport_status_code: int = 429,
+) -> dict[str, object]:
+    return {
+        "url": "https://www.chewy.com/b/dry-food-294",
+        "host": "www.chewy.com",
+        "geo": {
+            "consensus": {
+                "country": geo_country,
+                "timezone": "America/New_York",
+                "ip": "37.202.206.253",
+            }
+        },
+        "httpx": {
+            "status": "ok",
+            "blocked": httpx_blocked,
+            "status_code": transport_status_code,
+            "classification": {
+                "outcome": "rate_limited" if httpx_blocked else "ok",
+                "header_vendor": "akamai" if httpx_blocked else None,
+                "provider_hits": ["akamai"] if httpx_blocked else [],
+            },
+        },
+        "curl_cffi": {
+            "status": "ok",
+            "blocked": curl_blocked,
+            "status_code": transport_status_code,
+            "classification": {
+                "outcome": "rate_limited" if curl_blocked else "ok",
+                "header_vendor": "akamai" if curl_blocked else None,
+                "provider_hits": ["akamai"] if curl_blocked else [],
+            },
+        },
+        "browser": {
+            "status": "ok",
+            "blocked": browser_blocked,
+            "status_code": browser_status_code,
+            "challenge_cookie_names": ["_abck"] if browser_blocked else [],
+            "classification": {
+                "outcome": "rate_limited" if browser_blocked else "ok",
+                "header_vendor": "akamai" if browser_blocked else None,
+                "provider_hits": ["akamai"] if browser_blocked else [],
+            },
+        },
+    }
 
 
 def test_build_findings_flags_timezone_country_mismatch() -> None:
@@ -134,6 +188,47 @@ def test_build_findings_surfaces_webdriver_headless_and_webrtc() -> None:
 def test_build_findings_flags_screen_and_viewport_drift() -> None:
     categories = _finding_categories(_report(screen_drift=True))
     assert "screen_viewport_drift" in categories
+
+
+def test_build_findings_flags_target_precontent_block() -> None:
+    report = _report(timezone="America/New_York", locale="en-US", pixelscan_country="United States")
+    report["target_diagnostics"] = [_target_diagnostic()]
+    categories = _finding_categories(report)
+    assert "target_precontent_block" in categories
+
+
+def test_build_findings_flags_browser_geo_identity_mismatch() -> None:
+    report = _report(timezone="Asia/Kolkata", locale="en-IN", pixelscan_country="India")
+    report["target_diagnostics"] = [
+        _target_diagnostic(
+            geo_country="US",
+            browser_blocked=True,
+            httpx_blocked=False,
+            curl_blocked=False,
+            browser_status_code=403,
+            transport_status_code=200,
+        )
+    ]
+    categories = _finding_categories(report)
+    assert "browser_geo_identity_mismatch" in categories
+
+
+def test_validated_target_url_rejects_non_http_and_local_targets() -> None:
+    for url in ("file:///etc/passwd", "http://localhost/admin", "http://127.0.0.1/admin"):
+        with pytest.raises(ValueError):
+            probe._validated_target_url(url)
+
+
+def test_geo_payload_from_text_accepts_alternate_provider_shapes() -> None:
+    payload = probe._geo_payload_from_text(
+        '{"ip":"8.8.8.8","country_code":"US","regionName":"California",'
+        '"timezone":{"id":"America/Los_Angeles"},"connection":{"org":"Google"}}'
+    )
+
+    assert payload["country"] == "US"
+    assert payload["region"] == "California"
+    assert payload["timezone"] == "America/Los_Angeles"
+    assert payload["org"] == "Google"
 
 
 @pytest.mark.asyncio
@@ -262,6 +357,7 @@ async def test_build_report_uses_runtime_page_init_script_path(
             identity_run_id=123,
             proxy_list=[],
             proxy_profile={},
+            locality_profile={"geo_country": "auto", "language_hint": None, "currency_hint": None},
             selected_proxy=None,
             selected_proxy_index=None,
             browser_engine="chromium",
@@ -317,6 +413,7 @@ async def test_build_report_keeps_partial_report_when_site_context_fails(
             identity_run_id=123,
             proxy_list=[],
             proxy_profile={},
+            locality_profile={"geo_country": "auto", "language_hint": None, "currency_hint": None},
             selected_proxy=None,
             selected_proxy_index=None,
             browser_engine="chromium",

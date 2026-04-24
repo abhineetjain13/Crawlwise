@@ -168,6 +168,10 @@ def _real_chrome_candidate_paths() -> tuple[str, ...]:
     return (
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/opt/google/chrome/chrome",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     )
 
 
@@ -373,6 +377,7 @@ class SharedBrowserRuntime:
         *,
         run_id: int | None = None,
         locality_profile: dict[str, object] | None = None,
+        inject_init_script: bool = False,
     ) -> PlaywrightContextSpec:
         browser_major_version = None
         if self._browser is not None:
@@ -381,10 +386,16 @@ class SharedBrowserRuntime:
                 browser_major_version = int(raw_version.split(".", 1)[0])
             except ValueError:
                 browser_major_version = None
-        return build_playwright_context_spec(
+        spec = build_playwright_context_spec(
             run_id=run_id,
             browser_major_version=browser_major_version,
             locality_profile=locality_profile,
+        )
+        if inject_init_script:
+            return spec
+        return PlaywrightContextSpec(
+            context_options=dict(spec.context_options),
+            init_script=None,
         )
 
     def _build_context_options(
@@ -409,6 +420,7 @@ class SharedBrowserRuntime:
         domain: str | None = None,
         locality_profile: dict[str, object] | None = None,
         allow_storage_state: bool = True,
+        inject_init_script: bool = False,
     ):
         normalized_proxy = _normalized_proxy_value(proxy)
         if self.launch_proxy is None:
@@ -436,6 +448,7 @@ class SharedBrowserRuntime:
             context_spec = self._build_context_spec(
                 run_id=run_id,
                 locality_profile=locality_profile,
+                inject_init_script=inject_init_script,
             )
             context_options = dict(context_spec.context_options)
             allow_domain_storage_state = bool(
@@ -644,26 +657,38 @@ async def _evict_idle_browser_runtimes_locked() -> None:
         0, int(crawler_runtime_settings.browser_runtime_pool_idle_ttl_seconds)
     )
     max_entries = max(1, int(crawler_runtime_settings.browser_runtime_pool_max_entries))
-    candidates: list[tuple[tuple[str, str], SharedBrowserRuntime]] = []
-    for key, runtime in list(_PROXIED_BROWSER_RUNTIMES.items()):
-        active_and_queued, _last_used = runtime.eviction_key()
-        if active_and_queued > 0:
-            continue
-        if idle_ttl_seconds > 0 and runtime.idle_seconds() >= idle_ttl_seconds:
-            candidates.append((key, runtime))
-    while len(_PROXIED_BROWSER_RUNTIMES) - len(candidates) >= max_entries:
+    pools = (
+        ("direct", _DIRECT_BROWSER_RUNTIMES),
+        ("proxied", _PROXIED_BROWSER_RUNTIMES),
+    )
+    candidates: list[tuple[str, object, SharedBrowserRuntime]] = []
+    for pool_name, pool in pools:
+        for key, runtime in list(pool.items()):
+            active_and_queued, _last_used = runtime.eviction_key()
+            if active_and_queued > 0:
+                continue
+            if idle_ttl_seconds > 0 and runtime.idle_seconds() >= idle_ttl_seconds:
+                candidates.append((pool_name, key, runtime))
+    while sum(len(pool) for _pool_name, pool in pools) - len(candidates) >= max_entries:
+        candidate_keys = {
+            (pool_name, key) for pool_name, key, _runtime in candidates
+        }
         remaining = [
-            (key, runtime)
-            for key, runtime in list(_PROXIED_BROWSER_RUNTIMES.items())
-            if key not in {candidate_key for candidate_key, _ in candidates}
+            (pool_name, key, runtime)
+            for pool_name, pool in pools
+            for key, runtime in list(pool.items())
+            if (pool_name, key) not in candidate_keys
             and runtime.eviction_key()[0] == 0
         ]
         if not remaining:
             break
-        remaining.sort(key=lambda item: item[1].eviction_key())
+        remaining.sort(key=lambda item: item[2].eviction_key())
         candidates.append(remaining[0])
-    for key, runtime in candidates:
-        _PROXIED_BROWSER_RUNTIMES.pop(key, None)
+    for pool_name, key, runtime in candidates:
+        if pool_name == "direct":
+            _DIRECT_BROWSER_RUNTIMES.pop(key, None)
+        else:
+            _PROXIED_BROWSER_RUNTIMES.pop(key, None)
         await runtime.close()
 
 
@@ -689,6 +714,7 @@ async def get_browser_runtime(
         if normalized_proxy is None:
             runtime = _DIRECT_BROWSER_RUNTIMES.get(normalized_engine)
             if runtime is None:
+                await _evict_idle_browser_runtimes_locked()
                 runtime = SharedBrowserRuntime(
                     max_contexts=settings.browser_pool_size,
                     browser_engine=normalized_engine,

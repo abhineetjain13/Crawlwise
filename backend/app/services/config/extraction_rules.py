@@ -325,6 +325,11 @@ VARIANT_GROUP_ATTR_NOISE_PATTERNS: tuple[str, ...] = (
     r"\bship(?:ping)?\s+to\s+country\b",
     r"\bregions?\s+etsy\s+does\s+business\s+in\b",
 )
+VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS: tuple[str, ...] = (
+    r"\s+(?:variant\s+)?sold\s+out(?:\s+or\s+unavailable)?\s*$",
+    r"\s+out\s+of\s+stock\s*$",
+    r"\s+unavailable\s*$",
+)
 VARIANT_COLOR_HINT_WORDS: tuple[str, ...] = (
     "beige",
     "black",
