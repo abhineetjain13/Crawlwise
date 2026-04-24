@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-
 from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +16,13 @@ from app.services.domain_utils import normalize_host
 class HostProtectionPolicy:
     host: str
     prefer_browser: bool = False
-    prefer_proxy: bool = False
     last_block_vendor: str | None = None
     hard_block_count: int = 0
+    request_blocked: bool = False
+    chromium_blocked: bool = False
+    real_chrome_blocked: bool = False
+    real_chrome_success: bool = False
+    last_block_method: str | None = None
 
 
 def _now() -> datetime:
@@ -42,6 +45,44 @@ def _coerce_method(value: object) -> str:
     return str(value or "").strip().lower()
 
 
+def _is_browser_method(value: str | None) -> bool:
+    return bool(value) and str(value).startswith("browser")
+
+
+def _recent_success_overrides_block(
+    row: HostProtectionMemory,
+    *,
+    now: datetime,
+) -> bool:
+    last_success_at = row.last_success_at
+    if not _is_recent(last_success_at, now=now):
+        return False
+    last_blocked_at = row.last_blocked_at
+    return last_blocked_at is None or last_success_at >= last_blocked_at
+
+
+def _recent_block_method(
+    row: HostProtectionMemory,
+    *,
+    now: datetime,
+) -> str | None:
+    if not _is_recent(row.last_blocked_at, now=now):
+        return None
+    if _recent_success_overrides_block(row, now=now):
+        return None
+    return _coerce_method(row.last_block_method) or None
+
+
+def _recent_success_method(
+    row: HostProtectionMemory,
+    *,
+    now: datetime,
+) -> str | None:
+    if not _is_recent(row.last_success_at, now=now):
+        return None
+    return _coerce_method(getattr(row, "last_success_method", None)) or None
+
+
 async def load_host_protection_policy(
     value: str | None,
     *,
@@ -54,15 +95,23 @@ async def load_host_protection_policy(
         async with SessionLocal() as owned_session:
             return await load_host_protection_policy(normalized, session=owned_session)
     row = await _load_row(session, host=normalized)
+    now = _now()
     if row is None:
         return HostProtectionPolicy(host=normalized)
-    now = _now()
+    last_block_method = _recent_block_method(row, now=now)
+    last_success_method = _recent_success_method(row, now=now)
     return HostProtectionPolicy(
         host=normalized,
         prefer_browser=bool(row.browser_first_until and row.browser_first_until > now),
-        prefer_proxy=bool(row.proxy_required_until and row.proxy_required_until > now),
         last_block_vendor=str(row.last_block_vendor or "").strip() or None,
         hard_block_count=int(row.hard_block_count or 0),
+        request_blocked=bool(
+            last_block_method not in {None, "browser", "browser:chromium", "browser:real_chrome"}
+        ),
+        chromium_blocked=last_block_method == "browser:chromium",
+        real_chrome_blocked=last_block_method == "browser:real_chrome",
+        real_chrome_success=last_success_method == "browser:real_chrome",
+        last_block_method=last_block_method,
     )
 
 
@@ -72,6 +121,7 @@ async def note_host_hard_block(
     method: str,
     vendor: str | None = None,
     status_code: int | None = None,
+    proxy_used: bool = False,
     session: AsyncSession | None = None,
 ) -> HostProtectionPolicy:
     normalized = normalize_host(value or "")
@@ -84,6 +134,7 @@ async def note_host_hard_block(
                 method=method,
                 vendor=vendor,
                 status_code=status_code,
+                proxy_used=proxy_used,
                 session=owned_session,
             )
             await owned_session.commit()
@@ -95,7 +146,6 @@ async def note_host_hard_block(
     if not _is_recent(row.last_blocked_at, now=now):
         row.hard_block_count = 0
         row.browser_first_until = None
-        row.proxy_required_until = None
     row.hard_block_count = int(row.hard_block_count or 0) + 1
     row.last_block_vendor = str(vendor or "").strip() or None
     row.last_block_status_code = int(status_code) if status_code is not None else None
@@ -117,6 +167,8 @@ async def note_host_hard_block(
 async def note_host_usable_fetch(
     value: str | None,
     *,
+    method: str | None = None,
+    proxy_used: bool = False,
     session: AsyncSession | None = None,
 ) -> HostProtectionPolicy:
     normalized = normalize_host(value or "")
@@ -124,21 +176,24 @@ async def note_host_usable_fetch(
         return HostProtectionPolicy(host="")
     if session is None:
         async with SessionLocal() as owned_session:
-            policy = await note_host_usable_fetch(normalized, session=owned_session)
+            policy = await note_host_usable_fetch(
+                normalized,
+                method=method,
+                proxy_used=proxy_used,
+                session=owned_session,
+            )
             await owned_session.commit()
             return policy
-    row = await _load_row(session, host=normalized)
+    row = await _ensure_row(session, host=normalized)
+    now = _now()
+    normalized_method = _coerce_method(method)
     if row is None:
         return HostProtectionPolicy(host=normalized)
-    now = _now()
     row.last_success_at = now
-    if not (
-        row.browser_first_until is not None
-        and row.browser_first_until > now
-        and int(row.hard_block_count or 0) > 0
-    ):
+    row.last_success_method = normalized_method or None
+    if not _is_browser_method(normalized_method):
         row.browser_first_until = None
-        row.hard_block_count = 0
+    row.hard_block_count = 0
     await session.flush()
     return await load_host_protection_policy(normalized, session=session)
 

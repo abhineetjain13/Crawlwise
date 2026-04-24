@@ -139,7 +139,18 @@ class BrowserAcquisitionResultBuilder:
     async def build(self) -> dict[str, object]:
         payload = self.payload
         response_missing = payload.response is None
-        status_code = payload.response.status if payload.response is not None else 0
+        status_code = (
+            int(
+                getattr(
+                    payload.response,
+                    "browser_recovered_status",
+                    getattr(payload.response, "status", 0),
+                )
+                or 0
+            )
+            if payload.response is not None
+            else 0
+        )
         payload_capture_started_at = time.perf_counter()
         capture_summary = await payload.payload_capture.close(payload.page)
         payload.phase_timings_ms["payload_capture"] = self.elapsed_ms(payload_capture_started_at)
@@ -589,6 +600,10 @@ async def navigate_browser_page_impl(
         classify_blocked_page=classify_blocked_page_async,
         get_page_html=get_page_html,
     )
+    if response is not None:
+        recovered_strategy = getattr(response, "browser_navigation_strategy", None)
+        if recovered_strategy is not None:
+            navigation_strategy = str(recovered_strategy) or navigation_strategy
     return response, navigation_strategy
 async def settle_browser_page_impl(
     page: Any,

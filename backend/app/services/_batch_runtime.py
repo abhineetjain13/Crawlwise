@@ -15,6 +15,7 @@ from app.services.crawl_state import (
     update_run_status,
 )
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls_async
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
 from app.services.pipeline.core import _mark_run_failed, process_single_url
 from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE, log_event, set_stage
@@ -76,6 +77,13 @@ def _touch_run_heartbeat(run: CrawlRun) -> None:
     run.last_heartbeat_at = datetime.now(UTC)
 
 
+def _url_timeout_seconds(settings_view) -> float:
+    configured_timeout = settings_view.get("url_timeout_seconds")
+    if configured_timeout not in (None, ""):
+        return settings_view.url_timeout_seconds()
+    return crawler_runtime_settings.default_url_process_timeout_seconds()
+
+
 async def process_run(session: AsyncSession, run_id: int) -> None:
     try:
         run = await session.get(CrawlRun, run_id)
@@ -95,7 +103,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
         max_records = settings_view.max_records()
         sleep_ms = settings_view.sleep_ms()
-        url_timeout_seconds = settings_view.url_timeout_seconds()
+        url_timeout_seconds = _url_timeout_seconds(settings_view)
 
         run.update_summary(
             url_count=total_urls,
@@ -165,6 +173,12 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
             except TimeoutError:
                 logger.warning("URL processing timed out for run=%s url=%s", run.id, url)
+                await log_event(
+                    session,
+                    run.id,
+                    "warning",
+                    f"URL processing timed out for {url} (timeout_seconds={url_timeout_seconds})",
+                )
                 url_result = URLProcessingResult(
                     records=[],
                     verdict=VERDICT_ERROR,
@@ -174,6 +188,12 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 logger.warning("URL processing failed for run=%s url=%s", run.id, url, exc_info=True)
+                await log_event(
+                    session,
+                    run.id,
+                    "warning",
+                    f"URL processing failed for {url}: {type(exc).__name__}: {exc}",
+                )
                 url_metrics: dict[str, object] = {
                     "error": f"{type(exc).__name__}: {exc}"
                 }

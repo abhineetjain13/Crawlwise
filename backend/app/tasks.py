@@ -11,6 +11,7 @@ from typing import Iterator
 
 from app.core.celery_app import celery_app, worker_process_init, worker_process_shutdown
 from app.core.database import SessionLocal
+from app.core.telemetry import install_asyncio_exception_filter
 from app.services.acquisition import shutdown_browser_runtime_sync
 from app.services._batch_runtime import process_run as process_run_async
 
@@ -76,6 +77,7 @@ def _run_task_in_worker_loop(run_id: int) -> None:
     _WORKER_TASK_STATE.termination_requested = False
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    install_asyncio_exception_filter(loop)
     task = loop.create_task(_run_with_session(run_id), name=f"crawl-run-{run_id}")
     _WORKER_TASK_STATE.active_task_loop = loop
     _WORKER_TASK_STATE.active_run_task = task

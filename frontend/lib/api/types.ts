@@ -208,10 +208,6 @@ export type DomainRunProfile = {
  capture_response_headers: boolean;
  capture_browser_diagnostics: boolean;
  };
- proxy_profile: {
- enabled: boolean;
- proxy_list: string[];
- };
  source_run_id?: number | null;
  saved_at?: string | null;
 };

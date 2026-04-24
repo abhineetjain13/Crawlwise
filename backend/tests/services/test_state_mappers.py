@@ -416,6 +416,74 @@ def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_varian
     }
 
 
+def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_product_object() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__STATE_A__": {
+                "product": {
+                    "id": "prod-1",
+                    "name": "Dress",
+                    "price": "99.95",
+                    "currency": "USD",
+                    "variants": [
+                        {
+                            "id": "v1",
+                            "size": "2",
+                            "price": "99.95",
+                            "available": False,
+                        },
+                        {
+                            "id": "v2",
+                            "size": "4",
+                            "price": "99.95",
+                            "available": False,
+                        },
+                    ],
+                }
+            },
+            "__STATE_B__": {
+                "product": {
+                    "id": "prod-1",
+                    "name": "Dress",
+                    "variants": [
+                        {
+                            "id": "v1",
+                            "size": "2",
+                            "price": "99.95",
+                            "available": True,
+                            "inventory_quantity": 5,
+                            "compare_at_price": "119.95",
+                        },
+                        {
+                            "id": "v2",
+                            "size": "4",
+                            "price": "99.95",
+                            "available": True,
+                            "inventory_quantity": 6,
+                            "compare_at_price": "119.95",
+                        },
+                    ],
+                }
+            },
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/p/dress?variant=v1",
+    )
+
+    assert mapped["availability"] == "in_stock"
+    assert mapped["stock_quantity"] == 5
+    assert mapped["original_price"] == "119.95"
+    assert mapped["selected_variant"]["variant_id"] == "v1"
+    assert mapped["selected_variant"]["availability"] == "in_stock"
+    assert mapped["selected_variant"]["stock_quantity"] == 5
+    assert mapped["selected_variant"]["original_price"] == "119.95"
+    assert mapped["variants"][0]["availability"] == "in_stock"
+    assert mapped["variants"][0]["stock_quantity"] == 5
+    assert mapped["variants"][0]["original_price"] == "119.95"
+    assert mapped["variants"][1]["availability"] == "in_stock"
+    assert mapped["variants"][1]["stock_quantity"] == 6
+
+
 def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_payload() -> None:
     mapped = map_js_state_to_fields(
         {

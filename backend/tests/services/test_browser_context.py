@@ -9,10 +9,22 @@ import pytest
 from app.services import crawl_fetch_runtime
 from app.models.crawl import DomainCookieMemory
 from app.services.acquisition import browser_identity
+from app.services.acquisition import browser_proxy_bridge
 from app.services.acquisition import cookie_store
 from app.services.acquisition import browser_runtime as acquisition_browser_runtime
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import is_special_use_domain
+
+
+def _context_spec(
+    context_options: dict[str, object] | None = None,
+    *,
+    init_script: str | None = None,
+) -> browser_identity.PlaywrightContextSpec:
+    return browser_identity.PlaywrightContextSpec(
+        context_options=dict(context_options or {}),
+        init_script=init_script,
+    )
 
 
 def test_build_playwright_context_options_uses_generated_identity(
@@ -52,11 +64,12 @@ def test_build_playwright_context_options_uses_generated_identity(
         "_FINGERPRINT_GENERATOR",
         SimpleNamespace(generate=lambda: fingerprint),
     )
+    monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "America/New_York")
 
     options = browser_identity.build_playwright_context_options()
 
     assert options["user_agent"].endswith("Chrome/145.0.0.0 Safari/537.36")
-    assert options["viewport"] == {"width": 1440, "height": 900}
+    assert options["viewport"] == {"width": 1440, "height": 800}
     assert options["locale"] == "en-US"
     assert options["device_scale_factor"] == 2.0
     assert options["has_touch"] is False
@@ -70,6 +83,157 @@ def test_build_playwright_context_options_uses_generated_identity(
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
     }
+
+
+def test_create_browser_identity_keeps_desktop_viewport_shorter_than_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = SimpleNamespace(
+        screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=1.5),
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            language="en-US",
+            maxTouchPoints=0,
+            userAgentData={
+                "brands": [{"brand": "Google Chrome", "version": "145"}],
+                "mobile": False,
+            },
+        ),
+        headers={"Accept": "text/html"},
+    )
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=lambda: fingerprint),
+    )
+
+    identity = browser_identity.create_browser_identity()
+
+    assert identity.viewport == {"width": 1440, "height": 800}
+    assert identity.raw_fingerprint is not None
+    assert identity.raw_fingerprint.screen.innerHeight == 800
+    assert identity.raw_fingerprint.screen.height == 900
+    assert identity.raw_fingerprint.screen.outerHeight == 888
+    assert identity.raw_fingerprint.screen.availHeight == 800
+
+
+def test_create_browser_identity_keeps_outer_height_below_screen_when_frame_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = SimpleNamespace(
+        screen=SimpleNamespace(
+            width=1366,
+            height=768,
+            availWidth=1366,
+            availHeight=728,
+            devicePixelRatio=1,
+        ),
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            language="en-US",
+            maxTouchPoints=0,
+            userAgentData={"brands": [], "mobile": False},
+        ),
+        headers={"Accept": "text/html"},
+    )
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=lambda: fingerprint),
+    )
+
+    identity = browser_identity.create_browser_identity()
+
+    assert identity.viewport == {"width": 1366, "height": 728}
+    assert identity.raw_fingerprint is not None
+    assert identity.raw_fingerprint.screen.outerHeight == 767
+
+
+def test_create_browser_identity_aligns_runtime_hardware_to_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = SimpleNamespace(
+        screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=1.25),
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            language="en-US",
+            maxTouchPoints=0,
+            hardwareConcurrency=20,
+            deviceMemory=4,
+            userAgentData={"brands": [], "mobile": False},
+        ),
+        headers={"Accept": "text/html"},
+    )
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=lambda: fingerprint),
+    )
+    monkeypatch.setattr(browser_identity._os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(
+        browser_identity,
+        "_host_total_memory_bytes",
+        lambda: 16 * 1024**3,
+    )
+
+    identity = browser_identity.create_browser_identity()
+
+    assert identity.raw_fingerprint is not None
+    assert identity.raw_fingerprint.navigator.hardwareConcurrency == 12
+    assert identity.raw_fingerprint.navigator.deviceMemory == 8.0
+
+
+def test_build_playwright_context_options_prefers_available_screen_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = SimpleNamespace(
+        screen=SimpleNamespace(
+            width=1536,
+            height=864,
+            availWidth=1536,
+            availHeight=816,
+            devicePixelRatio=1.25,
+        ),
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            language="en-US",
+            maxTouchPoints=0,
+            userAgentData={
+                "brands": [{"brand": "Google Chrome", "version": "145"}],
+                "mobile": False,
+            },
+        ),
+        headers={"Accept": "text/html"},
+    )
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=lambda: fingerprint),
+    )
+
+    options = browser_identity.build_playwright_context_options()
+
+    assert options["viewport"] == {"width": 1536, "height": 816}
 
 
 def test_is_special_use_domain_ignores_ports() -> None:
@@ -101,6 +265,7 @@ def test_build_playwright_context_options_keeps_security_invariants(
 
     assert options["service_workers"] == "block"
     assert options["bypass_csp"] is False
+    assert options["permissions"] == ["geolocation"]
     assert options["has_touch"] is True
     assert options["is_mobile"] is True
 
@@ -224,6 +389,7 @@ def test_build_playwright_context_options_replaces_malformed_client_hints_withou
         "_FINGERPRINT_GENERATOR",
         SimpleNamespace(generate=lambda: fingerprint),
     )
+    monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "America/New_York")
 
     options = browser_identity.build_playwright_context_options()
 
@@ -313,6 +479,297 @@ def test_build_playwright_context_options_aligns_user_agent_to_browser_major() -
     assert options["extra_http_headers"]["sec-ch-ua"] == (
         '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"'
     )
+
+
+def test_build_playwright_context_options_drops_stale_client_hint_headers() -> None:
+    identity = browser_identity.BrowserIdentity(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1366, "height": 768},
+        extra_http_headers={
+            "Accept": "text/html",
+            "sec-ch-ua": '"Not:A-Brand";v="99", "Google Chrome";v="125", "Chromium";v="125"',
+            "sec-ch-ua-full-version": '"125.0.0.0"',
+            "sec-ch-ua-platform": '"Windows"',
+        },
+        locale="en-US",
+        device_scale_factor=1.0,
+        has_touch=False,
+        is_mobile=False,
+    )
+
+    options = browser_identity.build_playwright_context_options(
+        identity=identity,
+        browser_major_version=145,
+    )
+
+    assert "sec-ch-ua-full-version" not in options["extra_http_headers"]
+    assert options["extra_http_headers"]["sec-ch-ua"] == (
+        '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"'
+    )
+
+
+def test_align_raw_fingerprint_to_browser_major_falls_back_to_safe_shallow_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_fingerprint = SimpleNamespace(
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            userAgentData={
+                "brands": [{"brand": "Google Chrome", "version": "125"}],
+                "mobile": False,
+                "platform": "Windows",
+            },
+        ),
+        headers={
+            "Accept": "text/html",
+            "sec-ch-ua": '"Google Chrome";v="125", "Chromium";v="125"',
+            "sec-ch-ua-platform": '"Windows"',
+        },
+    )
+
+    def _raise_deepcopy(_value, _memo=None):
+        raise RuntimeError("deepcopy boom")
+
+    monkeypatch.setattr(browser_identity._copy, "deepcopy", _raise_deepcopy)
+
+    aligned = browser_identity._align_raw_fingerprint_to_browser_major(
+        raw_fingerprint,
+        browser_major_version=145,
+        is_mobile=False,
+    )
+
+    assert aligned is not raw_fingerprint
+    assert raw_fingerprint.navigator.userAgent.endswith("Chrome/125.0.0.0 Safari/537.36")
+    assert aligned.navigator.userAgent.endswith("Chrome/145.0.0.0 Safari/537.36")
+    assert raw_fingerprint.headers["sec-ch-ua"] == (
+        '"Google Chrome";v="125", "Chromium";v="125"'
+    )
+    assert aligned.headers["sec-ch-ua"] == (
+        '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"'
+    )
+
+
+def test_align_raw_fingerprint_to_browser_major_returns_original_when_navigator_missing() -> None:
+    raw_fingerprint = SimpleNamespace(
+        navigator=None,
+        headers={"sec-ch-ua": '"Google Chrome";v="125", "Chromium";v="125"'},
+    )
+
+    aligned = browser_identity._align_raw_fingerprint_to_browser_major(
+        raw_fingerprint,
+        browser_major_version=145,
+        is_mobile=False,
+    )
+
+    assert aligned is raw_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_read_socks5_response_rejects_unexpected_upstream_version() -> None:
+    reader = asyncio.StreamReader()
+    reader.feed_data(bytes([4, 0, 0, 1, 127, 0, 0, 1, 0, 80]))
+    reader.feed_eof()
+
+    with pytest.raises(ValueError, match="Unexpected upstream SOCKS response version"):
+        await browser_proxy_bridge._read_socks5_response(reader)
+
+
+@pytest.mark.asyncio
+async def test_socks5_auth_bridge_start_is_singleflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_calls = 0
+
+    class _Socket:
+        def getsockname(self):
+            return ("127.0.0.1", 41001)
+
+    class _Server:
+        sockets = [_Socket()]
+
+        def close(self) -> None:
+            return None
+
+        async def wait_closed(self) -> None:
+            return None
+
+    async def _fake_start_server(*_args, **_kwargs):
+        nonlocal start_calls
+        start_calls += 1
+        await asyncio.sleep(0)
+        return _Server()
+
+    monkeypatch.setattr(browser_proxy_bridge.asyncio, "start_server", _fake_start_server)
+    bridge = browser_proxy_bridge.Socks5AuthBridge(
+        browser_proxy_bridge.Socks5UpstreamProxy(
+            scheme="socks5",
+            host="proxy.example",
+            port=1080,
+            username="user",
+            password="pass",
+        )
+    )
+
+    first, second = await asyncio.gather(bridge.start(), bridge.start())
+    await bridge.close()
+
+    assert first == second == "socks5://127.0.0.1:41001"
+    assert start_calls == 1
+
+
+def test_build_playwright_context_spec_masks_page_globals_for_non_browserforge_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeFingerprint:
+        def dumps(self) -> str:
+            return "{}"
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_BrowserforgeInjectFunction",
+        lambda fingerprint: str(type(fingerprint).__name__),
+    )
+
+    spec = browser_identity.build_playwright_context_spec(
+        identity=browser_identity.BrowserIdentity(
+            user_agent="Mozilla/5.0 Chrome/145.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720},
+            extra_http_headers={},
+            locale="en-US",
+            device_scale_factor=1.0,
+            has_touch=False,
+            is_mobile=False,
+            raw_fingerprint=_FakeFingerprint(),
+        )
+    )
+
+    assert spec.init_script is not None
+    assert "__pwInitScripts" in spec.init_script
+    assert "__playwright__binding__" in spec.init_script
+    assert "maskGlobal('Worker')" in spec.init_script
+    assert "maskGlobal('SharedWorker')" in spec.init_script
+    assert "Notification" in spec.init_script
+    assert "contentIndex" in spec.init_script
+    assert "downlinkMax" in spec.init_script
+    assert "prefers-color-scheme" in spec.init_script
+
+
+def test_build_playwright_context_spec_injects_runtime_hardware_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(browser_identity._os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(
+        browser_identity,
+        "_host_total_memory_bytes",
+        lambda: 16 * 1024**3,
+    )
+
+    spec = browser_identity.build_playwright_context_spec(
+        identity=browser_identity.BrowserIdentity(
+            user_agent="Mozilla/5.0 Chrome/145.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720},
+            extra_http_headers={},
+            locale="en-US",
+            device_scale_factor=1.0,
+            has_touch=False,
+            is_mobile=False,
+            raw_fingerprint=SimpleNamespace(
+                navigator=SimpleNamespace(
+                    hardwareConcurrency=20,
+                    deviceMemory=4,
+                )
+            ),
+        )
+    )
+
+    assert spec.init_script is not None
+    assert "const hardwareConcurrency = 12;" in spec.init_script
+    assert "const deviceMemory = 8.0;" in spec.init_script
+
+
+def test_build_playwright_context_options_aligns_locale_region_to_local_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = SimpleNamespace(
+        screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=2),
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            language="en-US",
+            maxTouchPoints=0,
+            userAgentData={
+                "brands": [{"brand": "Google Chrome", "version": "145"}],
+                "mobile": False,
+            },
+        ),
+        headers={"Accept": "text/html"},
+    )
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=lambda: fingerprint),
+    )
+    monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "Asia/Calcutta")
+
+    options = browser_identity.build_playwright_context_options()
+
+    assert options["locale"] == "en-IN"
+    assert options["timezone_id"] == "Asia/Kolkata"
+    assert options["extra_http_headers"]["Accept-Language"] == "en-IN,en;q=0.9"
+
+
+def test_build_playwright_context_options_prefers_explicit_locality_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprint = SimpleNamespace(
+        screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=1),
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            language="en-US",
+            maxTouchPoints=0,
+            userAgentData={"brands": [], "mobile": False},
+        ),
+        headers={"Accept": "text/html"},
+    )
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=lambda: fingerprint),
+    )
+    monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "America/New_York")
+
+    options = browser_identity.build_playwright_context_options(
+        locality_profile={
+            "geo_country": "IN",
+            "language_hint": "en-IN",
+        }
+    )
+
+    assert options["locale"] == "en-IN"
+    assert options["timezone_id"] == "Asia/Kolkata"
+    assert options["extra_http_headers"]["Accept-Language"] == "en-IN,en;q=0.9"
+
+
+def test_normalize_timezone_id_rejects_invalid_timezone() -> None:
+    assert browser_identity._normalize_timezone_id("Not/AZone") is None
+    assert browser_identity._normalize_timezone_id("Asia/Calcutta") == "Asia/Kolkata"
 
 
 def test_fingerprint_generator_rebuilds_when_runtime_settings_change(
@@ -583,18 +1040,20 @@ async def test_shared_browser_runtime_passes_generated_context_options(
 
     monkeypatch.setattr(
         crawl_fetch_runtime,
-        "build_playwright_context_options",
-        lambda **_: {
-            "user_agent": "Mozilla/5.0 Runtime/145.0",
-            "viewport": {"width": 1600, "height": 900},
-            "extra_http_headers": {"Accept": "text/html"},
-            "locale": "en-US",
-            "device_scale_factor": 1.0,
-            "has_touch": False,
-            "is_mobile": False,
-            "service_workers": "block",
-            "bypass_csp": False,
-        },
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(
+            {
+                "user_agent": "Mozilla/5.0 Runtime/145.0",
+                "viewport": {"width": 1600, "height": 900},
+                "extra_http_headers": {"Accept": "text/html"},
+                "locale": "en-US",
+                "device_scale_factor": 1.0,
+                "has_touch": False,
+                "is_mobile": False,
+                "service_workers": "block",
+                "bypass_csp": False,
+            }
+        ),
     )
 
     async with runtime.page() as page:
@@ -614,6 +1073,257 @@ async def test_shared_browser_runtime_passes_generated_context_options(
         }
     ]
     assert routed_patterns == ["**/*"]
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_applies_playwright_stealth_with_browserforge_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stealth_calls: list[object] = []
+    init_scripts: list[str] = []
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
+            init_scripts.append(script)
+
+        async def new_page(self):
+            return SimpleNamespace(context=self)
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            del kwargs
+            return FakeContext()
+
+    async def _fake_stealth(target) -> None:
+        stealth_calls.append(target)
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(max_contexts=1)
+    runtime._browser = FakeBrowser()
+    runtime._playwright = object()
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(init_script="window.__browserforge = true;"),
+    )
+    monkeypatch.setattr(acquisition_browser_runtime, "_STEALTH_APPLIER", _fake_stealth)
+
+    async with runtime.page():
+        pass
+
+    assert init_scripts == ["window.__browserforge = true;"]
+    assert len(stealth_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_uses_socks5_auth_bridge_and_keeps_context_proxy_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_launch_kwargs: list[dict[str, object]] = []
+    captured_context_kwargs: list[dict[str, object]] = []
+    bridge_start_calls: list[str] = []
+    bridge_close_calls: list[str] = []
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def new_page(self):
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            captured_context_kwargs.append(kwargs)
+            return FakeContext()
+
+    class FakePlaywrightInstance:
+        def __init__(self) -> None:
+            self.chromium = SimpleNamespace(launch=self._launch)
+
+        async def _launch(self, **kwargs):
+            captured_launch_kwargs.append(kwargs)
+            return FakeBrowser()
+
+        async def stop(self) -> None:
+            return None
+
+    class FakePlaywrightManager:
+        async def start(self) -> FakePlaywrightInstance:
+            return FakePlaywrightInstance()
+
+    class FakeBridge:
+        def __init__(self, upstream) -> None:
+            self.upstream = upstream
+
+        async def start(self) -> str:
+            bridge_start_calls.append(
+                f"{self.upstream.scheme}://{self.upstream.username}:***@{self.upstream.host}:{self.upstream.port}"
+            )
+            return "socks5://127.0.0.1:8899"
+
+        async def close(self) -> None:
+            bridge_close_calls.append("closed")
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
+    )
+    monkeypatch.setattr(acquisition_browser_runtime, "Socks5AuthBridge", FakeBridge)
+    monkeypatch.setattr(
+        "playwright.async_api.async_playwright",
+        lambda: FakePlaywrightManager(),
+    )
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(
+        max_contexts=1,
+        launch_proxy="socks5://user-name:pass-word@31.58.9.4:6077",
+    )
+
+    async with runtime.page():
+        pass
+
+    assert captured_launch_kwargs == [
+        {
+            "headless": False,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--headless=new",
+            ],
+            "proxy": {
+                "server": "socks5://127.0.0.1:8899",
+            },
+        }
+    ]
+    assert captured_context_kwargs == [{}]
+    assert bridge_start_calls == ["socks5://user-name:***@31.58.9.4:6077"]
+    await runtime.close()
+    assert bridge_close_calls == ["closed"]
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_launches_http_proxy_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_launch_kwargs: list[dict[str, object]] = []
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def new_page(self):
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            del kwargs
+            return FakeContext()
+
+    class FakePlaywrightInstance:
+        def __init__(self) -> None:
+            self.chromium = SimpleNamespace(launch=self._launch)
+
+        async def _launch(self, **kwargs):
+            captured_launch_kwargs.append(kwargs)
+            return FakeBrowser()
+
+        async def stop(self) -> None:
+            return None
+
+    class FakePlaywrightManager:
+        async def start(self) -> FakePlaywrightInstance:
+            return FakePlaywrightInstance()
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
+    )
+    monkeypatch.setattr(
+        "playwright.async_api.async_playwright",
+        lambda: FakePlaywrightManager(),
+    )
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(
+        max_contexts=1,
+        launch_proxy="http://user-name:pass-word@31.58.9.4:6077",
+    )
+
+    async with runtime.page():
+        pass
+
+    assert captured_launch_kwargs == [
+        {
+            "headless": False,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--headless=new",
+            ],
+            "proxy": {
+                "server": "http://31.58.9.4:6077",
+                "username": "user-name",
+                "password": "pass-word",
+            },
+        }
+    ]
+
+
+def test_display_proxy_masks_authenticated_proxy_credentials() -> None:
+    assert acquisition_browser_runtime._display_proxy(
+        "http://user-name:pass-word@31.58.9.4:6077"
+    ) == "http://***:***@31.58.9.4:6077"
+
+
+@pytest.mark.asyncio
+async def test_block_unneeded_route_allows_fonts_and_protected_challenge_urls() -> None:
+    events: list[str] = []
+
+    class FakeRoute:
+        def __init__(self, *, resource_type: str, url: str) -> None:
+            self.request = SimpleNamespace(resource_type=resource_type, url=url)
+
+        async def abort(self) -> None:
+            events.append(f"abort:{self.request.resource_type}:{self.request.url}")
+
+        async def continue_(self) -> None:
+            events.append(f"continue:{self.request.resource_type}:{self.request.url}")
+
+    await acquisition_browser_runtime._block_unneeded_route(
+        FakeRoute(
+            resource_type="font",
+            url="https://www.autozone.com/assets/fonts/site-font.woff2",
+        )
+    )
+    await acquisition_browser_runtime._block_unneeded_route(
+        FakeRoute(
+            resource_type="script",
+            url="https://geo.captcha-delivery.com/captcha/?initialCid=abc",
+        )
+    )
+
+    assert events == [
+        "continue:font:https://www.autozone.com/assets/fonts/site-font.woff2",
+        "continue:script:https://geo.captcha-delivery.com/captcha/?initialCid=abc",
+    ]
 
 
 @pytest.mark.asyncio
@@ -665,8 +1375,8 @@ async def test_shared_browser_runtime_reuses_run_storage_state(
 
     monkeypatch.setattr(
         crawl_fetch_runtime,
-        "build_playwright_context_options",
-        lambda **_: {},
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
     )
 
     async def _fake_load_storage_state_for_run(run_id: int | None):
@@ -759,6 +1469,142 @@ async def test_shared_browser_runtime_reuses_run_storage_state(
 
 
 @pytest.mark.asyncio
+async def test_shared_browser_runtime_skips_storage_state_reuse_when_disallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: list[dict[str, object]] = []
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def new_page(self):
+            return object()
+
+        async def storage_state(self) -> dict[str, object]:
+            return {"cookies": [], "origins": []}
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            captured_kwargs.append(kwargs)
+            return FakeContext()
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(max_contexts=1)
+    runtime._browser = FakeBrowser()
+    runtime._playwright = object()
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
+    )
+
+    async def _boom(*args, **kwargs):
+        raise AssertionError(f"storage state should not load: {args} {kwargs}")
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "load_storage_state_for_run",
+        _boom,
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "load_storage_state_for_domain",
+        _boom,
+    )
+
+    async with runtime.page(
+        run_id=77,
+        domain="example.com",
+        allow_storage_state=False,
+    ):
+        pass
+
+    assert captured_kwargs == [{}]
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_skips_domain_storage_for_proxied_runtime_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: list[dict[str, object]] = []
+    domain_load_calls: list[str | None] = []
+    domain_persist_calls: list[str] = []
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def new_page(self):
+            return object()
+
+        async def storage_state(self) -> dict[str, object]:
+            return {"cookies": [], "origins": []}
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            captured_kwargs.append(kwargs)
+            return FakeContext()
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(
+        max_contexts=1,
+        launch_proxy="http://proxy-one",
+    )
+    runtime._browser = FakeBrowser()
+    runtime._playwright = object()
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
+    )
+
+    async def _load_run(run_id: int | None):
+        del run_id
+        return None
+
+    async def _load_domain(domain: str | None, session=None):
+        del session
+        domain_load_calls.append(domain)
+        return {"cookies": [], "origins": []}
+
+    async def _persist_domain(domain: str, storage_state: dict[str, object]) -> None:
+        del storage_state
+        domain_persist_calls.append(domain)
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "load_storage_state_for_run",
+        _load_run,
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "load_storage_state_for_domain",
+        _load_domain,
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "persist_storage_state_for_domain",
+        _persist_domain,
+    )
+
+    async with runtime.page(run_id=77, domain="example.com"):
+        pass
+
+    assert captured_kwargs == [{}]
+    assert domain_load_calls == []
+    assert domain_persist_calls == []
+
+
+@pytest.mark.asyncio
 async def test_shared_browser_runtime_suppresses_storage_state_persist_failures(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -788,8 +1634,8 @@ async def test_shared_browser_runtime_suppresses_storage_state_persist_failures(
 
     monkeypatch.setattr(
         crawl_fetch_runtime,
-        "build_playwright_context_options",
-        lambda **_: {},
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
     )
     async def _boom(*args, **kwargs) -> None:
         del args, kwargs
@@ -814,6 +1660,119 @@ async def test_shared_browser_runtime_suppresses_storage_state_persist_failures(
 
     assert any(
         "Failed to persist browser storage state for run_id=77" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_bounds_hung_context_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    blocker = asyncio.Event()
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def new_page(self):
+            return object()
+
+        async def storage_state(self) -> dict[str, object]:
+            await blocker.wait()
+            return {"cookies": [], "origins": []}
+
+        async def close(self) -> None:
+            await blocker.wait()
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            del kwargs
+            return FakeContext()
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(max_contexts=1)
+    runtime._browser = FakeBrowser()
+    runtime._playwright = object()
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_context_timeout_ms",
+        50,
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_close_timeout_ms",
+        50,
+    )
+
+    with caplog.at_level("WARNING", logger=acquisition_browser_runtime.logger.name):
+        async with asyncio.timeout(0.5):
+            async with runtime.page(run_id=77, domain="example.com"):
+                pass
+
+    assert any(
+        "Timed out capturing browser storage state" in record.message
+        for record in caplog.records
+    )
+    assert any(
+        "Timed out closing browser context" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_close_bounds_hung_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    blocker = asyncio.Event()
+
+    class FakeBrowser:
+        async def close(self) -> None:
+            await blocker.wait()
+
+    class FakePlaywright:
+        async def stop(self) -> None:
+            await blocker.wait()
+
+    class FakeBridge:
+        async def close(self) -> None:
+            await blocker.wait()
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(max_contexts=1)
+    runtime._browser = FakeBrowser()
+    runtime._playwright = FakePlaywright()
+    runtime._socks5_auth_bridge = FakeBridge()
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_close_timeout_ms",
+        50,
+    )
+
+    with caplog.at_level("WARNING", logger=acquisition_browser_runtime.logger.name):
+        async with asyncio.timeout(0.5):
+            await runtime.close()
+
+    assert runtime._browser is None
+    assert runtime._playwright is None
+    assert runtime._socks5_auth_bridge is None
+    assert any(
+        "Timed out closing browser runtime" in record.message
+        for record in caplog.records
+    )
+    assert any(
+        "Timed out stopping playwright" in record.message
+        for record in caplog.records
+    )
+    assert any(
+        "Timed out closing SOCKS5 auth bridge" in record.message
         for record in caplog.records
     )
 
@@ -956,8 +1915,8 @@ async def test_shared_browser_runtime_snapshot_tracks_queue_without_private_sema
 
     monkeypatch.setattr(
         crawl_fetch_runtime,
-        "build_playwright_context_options",
-        lambda **_: {},
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
     )
 
     async def _hold_page() -> None:
@@ -1017,8 +1976,8 @@ async def test_shared_browser_runtime_recycles_browser_without_deadlocking(
             self.chromium = SimpleNamespace(launch=self._launch)
             self._events = events
 
-        async def _launch(self, *, headless: bool):
-            del headless
+        async def _launch(self, **kwargs):
+            del kwargs
             self._events.append("launched")
             return FakeBrowser(self._events)
 
@@ -1041,8 +2000,8 @@ async def test_shared_browser_runtime_recycles_browser_without_deadlocking(
 
     monkeypatch.setattr(
         crawl_fetch_runtime,
-        "build_playwright_context_options",
-        lambda **_: {},
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
     )
     monkeypatch.setattr(
         crawl_fetch_runtime.crawler_runtime_settings,
@@ -1063,6 +2022,75 @@ def test_browser_runtime_snapshot_reports_runtime_capacity_without_host_cache() 
 
     assert "preferred_hosts" not in snapshot
     assert "capacity" in snapshot
+
+
+@pytest.mark.asyncio
+async def test_get_browser_runtime_evicts_idle_proxied_runtime_when_pool_is_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[tuple[str | None, str]] = []
+    closed: list[tuple[str | None, str]] = []
+
+    class FakeRuntime:
+        def __init__(self, *, max_contexts: int, launch_proxy: str | None = None, browser_engine: str = "chromium") -> None:
+            del max_contexts
+            self.launch_proxy = launch_proxy
+            self.browser_engine = browser_engine
+            self.browser_binary = browser_engine
+            self._last_used_at = 0.0
+            created.append((launch_proxy, browser_engine))
+
+        def touch(self) -> None:
+            self._last_used_at += 1
+
+        def idle_seconds(self) -> float:
+            return 999.0
+
+        def bridge_used(self) -> bool:
+            return False
+
+        def eviction_key(self) -> tuple[int, float]:
+            return (0, self._last_used_at)
+
+        def snapshot(self) -> dict[str, int | bool | str]:
+            return {"active": 0, "queued": 0, "ready": False, "browser_engine": self.browser_engine}
+
+        async def close(self) -> None:
+            closed.append((self.launch_proxy, self.browser_engine))
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "SharedBrowserRuntime",
+        FakeRuntime,
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_runtime_pool_max_entries",
+        1,
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_runtime_pool_idle_ttl_seconds",
+        0,
+    )
+
+    await acquisition_browser_runtime.shutdown_browser_runtime()
+    first = await acquisition_browser_runtime.get_browser_runtime(
+        proxy="http://proxy-one",
+        browser_engine="chromium",
+    )
+    second = await acquisition_browser_runtime.get_browser_runtime(
+        proxy="http://proxy-two",
+        browser_engine="real_chrome",
+    )
+
+    assert first is not second
+    assert created == [
+        ("http://proxy-one", "chromium"),
+        ("http://proxy-two", "real_chrome"),
+    ]
+    assert closed == [("http://proxy-one", "chromium")]
+    await acquisition_browser_runtime.shutdown_browser_runtime()
 
 
 @pytest.mark.asyncio
@@ -1228,12 +2256,25 @@ async def test_load_storage_state_for_domain_filters_existing_challenge_state(
                         "domain": f".{domain}",
                         "path": "/",
                     },
+                    {
+                        "name": "datadome",
+                        "value": "challenge-token",
+                        "domain": f".{domain}",
+                        "path": "/",
+                    },
+                    {
+                        "name": "analytics",
+                        "value": "bot_management:captcha",
+                        "domain": f".{domain}",
+                        "path": "/",
+                    },
                 ],
                 "origins": [
                     {
                         "origin": f"https://{domain}",
                         "localStorage": [
                             {"name": "PXapp_px_hvd", "value": "challenge"},
+                            {"name": "safe-key", "value": "datadome blocked"},
                             {"name": "consent", "value": "accepted"},
                         ],
                     }
@@ -1288,12 +2329,19 @@ async def test_persist_storage_state_for_domain_rejects_challenge_only_state(
                     "domain": f".{domain}",
                     "path": "/",
                 },
+                {
+                    "name": "datadome",
+                    "value": "challenge",
+                    "domain": f".{domain}",
+                    "path": "/",
+                },
             ],
             "origins": [
                 {
                     "origin": f"https://{domain}",
                     "localStorage": [
                         {"name": "PXapp_px_fp", "value": "challenge"},
+                        {"name": "safe-key", "value": "captcha page"},
                     ],
                 }
             ],

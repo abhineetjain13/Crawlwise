@@ -19,6 +19,7 @@ from app.services.pipeline.core import process_single_url
 from app.services.pipeline.types import URLProcessingConfig
 from app.services.platform_policy import configured_adapter_names, detect_platform_family, job_platform_families, platform_config_for_family
 from app.services.publish import VERDICT_PARTIAL, VERDICT_SUCCESS
+from app.services.publish.metrics import diagnostics_indicate_block
 from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_UTILITY_TITLE_TOKENS,
@@ -331,7 +332,7 @@ async def run_site_harness(*, url: str, surface: str, mode: str) -> dict[str, ob
             "platform_family": str(metrics.get("platform_family") or "").strip() or None,
             "status_code": metrics.get("status_code"),
             "blocked": bool(metrics.get("blocked")),
-            "browser_diagnostics": {},
+            "browser_diagnostics": dict(metrics.get("browser_diagnostics") or {}),
             "records": int(metrics.get("record_count", 0) or 0),
             "sample_title": "",
             "populated_fields": 0,
@@ -367,6 +368,7 @@ def classify_failure_mode(result: dict[str, object]) -> str:
     diagnostics = dict(result.get("browser_diagnostics")) if isinstance(result.get("browser_diagnostics"), dict) else {}
     error_text = str(result.get("error") or "").lower()
     browser_outcome = str(diagnostics.get("browser_outcome") or "").strip().lower()
+    failure_kind = str(diagnostics.get("failure_kind") or "").strip().lower()
     status_code = _safe_int(result.get("status_code"))
     if verdict in _SUCCESS_VERDICTS and _looks_like_detail_identity_mismatch(result):
         return "detail_identity_mismatch"
@@ -378,6 +380,10 @@ def classify_failure_mode(result: dict[str, object]) -> str:
         return "spa_shell_404"
     if browser_outcome == "low_content_shell":
         return "spa_shell_low_content"
+    if failure_kind in {"unsupported_proxy", "proxy_error"}:
+        return "proxy_failure"
+    if failure_kind == "engine_unavailable":
+        return "engine_failure"
     if "timeout" in error_text:
         return "timeout"
     if "getaddrinfo failed" in error_text:
@@ -415,8 +421,7 @@ def classify_failure_mode(result: dict[str, object]) -> str:
 
 
 def _diagnostics_indicate_challenge(diagnostics: dict[str, object]) -> bool:
-    evidence = [str(item or "").strip().lower() for item in list(diagnostics.get("challenge_evidence") or []) if str(item or "").strip()]
-    return str(diagnostics.get("browser_outcome") or "").strip().lower() == "challenge_page" or bool(list(diagnostics.get("challenge_element_hits") or [])) or bool(list(diagnostics.get("challenge_provider_hits") or [])) or any(item.startswith(("title:", "strong:", "provider:", "active_provider:", "challenge_element:")) for item in evidence)
+    return diagnostics_indicate_block(diagnostics)
 
 
 def _challenge_summary_from_diagnostics(diagnostics: dict[str, object]) -> dict[str, object] | None:

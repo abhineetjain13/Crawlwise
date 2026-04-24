@@ -6,6 +6,7 @@ import pytest
 
 from app.services._batch_runtime import process_run
 from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.crawl_crud import create_crawl_run, get_run_records
 from app.services.robots_policy import (
     ROBOTS_ALLOWED,
@@ -296,6 +297,56 @@ async def test_process_run_enforces_url_timeout_from_settings(
 
 
 @pytest.mark.asyncio
+async def test_process_run_default_timeout_includes_acquisition_slack(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/slow-widget",
+            "surface": "ecommerce_detail",
+        },
+    )
+
+    original_url_timeout = crawler_runtime_settings.url_process_timeout_seconds
+    original_buffer = crawler_runtime_settings.url_process_timeout_buffer_seconds
+    original_acquisition_timeout = (
+        crawler_runtime_settings.acquisition_attempt_timeout_seconds
+    )
+    crawler_runtime_settings.url_process_timeout_seconds = 0.01
+    crawler_runtime_settings.url_process_timeout_buffer_seconds = 0.03
+    crawler_runtime_settings.acquisition_attempt_timeout_seconds = 0.02
+
+    async def _slow_process_single_url(*args, **kwargs):
+        del args, kwargs
+        await asyncio.sleep(0.025)
+        return [], "success", {"record_count": 0}
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.process_single_url",
+        _slow_process_single_url,
+    )
+
+    try:
+        await process_run(db_session, run.id)
+        await db_session.refresh(run)
+    finally:
+        crawler_runtime_settings.url_process_timeout_seconds = original_url_timeout
+        crawler_runtime_settings.url_process_timeout_buffer_seconds = original_buffer
+        crawler_runtime_settings.acquisition_attempt_timeout_seconds = (
+            original_acquisition_timeout
+        )
+
+    assert run.status == "completed"
+    assert run.result_summary["extraction_verdict"] == "success"
+    assert run.result_summary["url_verdicts"] == ["success"]
+
+
+@pytest.mark.asyncio
 async def test_process_batch_run_preserves_requested_fields_for_every_url(
     db_session: AsyncSession,
     test_user,
@@ -331,6 +382,54 @@ async def test_process_batch_run_preserves_requested_fields_for_every_url(
     await process_run(db_session, run.id)
 
     assert captured_requested_fields == [["materials"], ["materials"]]
+
+
+@pytest.mark.asyncio
+async def test_process_batch_run_preserves_proxy_list_for_every_url(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "urls": [
+                "https://example.com/products/widget-1",
+                "https://example.com/products/widget-2",
+            ],
+            "surface": "ecommerce_detail",
+            "settings": {
+                "proxy_enabled": True,
+                "proxy_list": ["http://proxy-a", "http://proxy-b"],
+                "proxy_profile": {
+                    "enabled": True,
+                    "proxy_list": ["http://proxy-a", "http://proxy-b"],
+                },
+            },
+        },
+    )
+    captured_proxy_lists: list[list[str]] = []
+
+    async def _fake_acquire(request):
+        captured_proxy_lists.append(list(request.proxy_list))
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+
+    await process_run(db_session, run.id)
+
+    assert captured_proxy_lists == [
+        ["http://proxy-a", "http://proxy-b"],
+        ["http://proxy-a", "http://proxy-b"],
+    ]
 
 
 @pytest.mark.asyncio

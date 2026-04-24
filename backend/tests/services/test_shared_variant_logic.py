@@ -204,3 +204,72 @@ def test_resolve_variant_group_name_infers_unlabeled_select_size_axis_from_value
     )
 
     assert resolve_variant_group_name(soup.select_one("select")) == "size"
+
+
+def test_resolve_variant_group_name_rejects_shipping_country_select() -> None:
+    soup = BeautifulSoup(
+        """
+        <label for="estimated-shipping-country">Country</label>
+        <select
+          id="estimated-shipping-country"
+          name="estimated-shipping-country"
+          aria-label="Choose country"
+        >
+          <option>Australia</option>
+          <option>Canada</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("select")) == ""
+
+
+def test_resolve_variant_group_name_rejects_report_reason_select() -> None:
+    soup = BeautifulSoup(
+        """
+        <label for="report-item-choices" class="wt-screen-reader-only">Choose a reason…</label>
+        <select id="report-item-choices">
+          <option value="default">Choose a reason…</option>
+          <option value="order-problem">There’s a problem with my order</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("select")) == ""
+
+
+def test_resolve_variant_group_name_reads_external_label_for_select() -> None:
+    soup = BeautifulSoup(
+        """
+        <label for="variation-selector-0">Style &amp; Size</label>
+        <select id="variation-selector-0">
+          <option>Sweatshirt S</option>
+          <option>Sweatshirt M</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("select")) == "Style & Size"
+
+
+def test_resolve_variant_group_name_ignores_external_option_label_for_radio() -> None:
+    soup = BeautifulSoup(
+        """
+        <ul class="sizelist">
+          <li class="oval outstock">
+            <input id="size_0_0" disabled type="radio" name="sub_prod_0" />
+            <label for="size_0_0"><span>XXS</span><span>0 Left</span></label>
+          </li>
+          <li class="oval selected">
+            <input id="size_0_1" checked type="radio" name="sub_prod_0" />
+            <label for="size_0_1"><span>XS</span><span>17 Left</span></label>
+          </li>
+        </ul>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("input")) == "size"

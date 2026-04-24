@@ -80,6 +80,8 @@ def _should_run_direct_record_llm_fallback(
 ) -> bool:
     if not str(page_markdown or "").strip():
         return False
+    if "listing" in str(run.surface or "").strip().lower() and not records:
+        return False
     min_records = max(
         1,
         int(crawler_runtime_settings.llm_direct_record_extraction_min_records or 3),

@@ -123,7 +123,7 @@ describe("CrawlConfigScreen bulk prefill", () => {
  expect(screen.queryByText("Loaded 1 saved selector from domain memory.")).not.toBeInTheDocument();
  });
 
- it("applies saved proxy defaults from the domain run profile", async () => {
+ it("does not apply proxy defaults from the saved domain run profile", async () => {
  getDomainRunProfileMock.mockResolvedValue({
  domain: "example.com",
  surface: "ecommerce_listing",
@@ -151,10 +151,6 @@ describe("CrawlConfigScreen bulk prefill", () => {
  capture_response_headers: true,
  capture_browser_diagnostics: true,
  },
- proxy_profile: {
- enabled: true,
- proxy_list: ["http://proxy-a", "http://proxy-b"],
- },
  source_run_id: 11,
  saved_at: "2026-04-23T00:00:00Z",
  },
@@ -176,7 +172,7 @@ describe("CrawlConfigScreen bulk prefill", () => {
  fireEvent.click(screen.getByRole("button", { name:"Advanced" }));
 
  await waitFor(() => {
- expect(screen.getByLabelText("Proxy pool input")).toHaveValue("http://proxy-a\nhttp://proxy-b");
+ expect(screen.queryByLabelText("Proxy pool input")).not.toBeInTheDocument();
  });
  });
 

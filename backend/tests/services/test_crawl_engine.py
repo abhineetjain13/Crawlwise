@@ -250,7 +250,75 @@ def test_extract_records_keeps_visual_artifact_product_without_price_when_title_
     ]
 
 
-def test_extract_records_rejects_visual_artifact_auth_links() -> None:
+def test_extract_records_keeps_adjacent_visual_product_cards_separate() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/beauty/makeup/face-makeup/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "img",
+                    "href": "/p/brand-alpha-foundation/111.html",
+                    "src": "/images/alpha-a.jpg",
+                    "alt": "Alpha Foundation",
+                    "x": 204,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "text": "",
+                },
+                {
+                    "tag": "img",
+                    "href": "/p/brand-alpha-foundation/111.html",
+                    "src": "/images/alpha-b.jpg",
+                    "alt": "Alpha Foundation",
+                    "x": 204,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "text": "",
+                },
+                {
+                    "tag": "img",
+                    "href": "/p/brand-beta-concealer/222.html",
+                    "src": "/images/beta-a.jpg",
+                    "alt": "Beta Concealer",
+                    "x": 587,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "text": "",
+                },
+                {
+                    "tag": "img",
+                    "href": "/p/brand-gamma-powder/333.html",
+                    "src": "/images/gamma-a.jpg",
+                    "alt": "Gamma Powder",
+                    "x": 970,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "text": "",
+                },
+            ]
+        },
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Alpha Foundation",
+        "Beta Concealer",
+        "Gamma Powder",
+    ]
+    assert [row["url"] for row in rows] == [
+        "https://www.belk.com/p/brand-alpha-foundation/111.html",
+        "https://www.belk.com/p/brand-beta-concealer/222.html",
+        "https://www.belk.com/p/brand-gamma-powder/333.html",
+    ]
+
+
+def test_extract_records_rejects_visual_artifact_auth_links_without_dropping_product() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.customink.com/products/sweatshirts/hoodies/71",
@@ -313,7 +381,17 @@ def test_extract_records_rejects_visual_artifact_auth_links() -> None:
         },
     )
 
-    assert rows == []
+    assert rows == [
+        {
+            "source_url": "https://www.customink.com/products/sweatshirts/hoodies/71",
+            "_source": "visual_listing",
+            "title": "Independent Trading Midweight Hooded Sweatshirt",
+            "price": "39.99",
+            "currency": "USD",
+            "image_url": "https://www.customink.com/images/hoodie-1.jpg",
+            "url": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+        }
+    ]
 
 
 def test_extract_records_prefers_image_hint_over_brand_or_review_title_noise() -> None:

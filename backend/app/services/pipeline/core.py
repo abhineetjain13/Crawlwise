@@ -58,6 +58,7 @@ from app.services.publish import (
     build_url_metrics,
     compute_verdict,
     finalize_url_metrics,
+    is_effectively_blocked,
 )
 from app.services.robots_policy import (
     ROBOTS_FETCH_FAILURE,
@@ -146,7 +147,90 @@ def _resolved_url_processing_config(
     persist_logs: bool,
 ) -> URLProcessingConfig:
     if config is not None:
-        return config
+        plan = config.resolved_acquisition_plan(surface=surface)
+        resolved_proxy_list = list(plan.proxy_list or config.proxy_list or proxy_list or [])
+        resolved_traversal_mode = (
+            plan.traversal_mode
+            if plan.traversal_mode is not None
+            else config.traversal_mode
+            if config.traversal_mode is not None
+            else traversal_mode
+        )
+        plan_max_pages = plan.max_pages
+        config_max_pages = config.max_pages
+        resolved_plan_max_pages = (
+            int(plan_max_pages) if plan_max_pages is not None else None
+        )
+        resolved_config_max_pages = (
+            int(config_max_pages) if config_max_pages is not None else None
+        )
+        resolved_max_pages = (
+            resolved_plan_max_pages
+            if resolved_plan_max_pages is not None and resolved_plan_max_pages > 0
+            else resolved_config_max_pages
+            if resolved_config_max_pages is not None and resolved_config_max_pages > 0
+            else int(max_pages)
+        )
+        plan_max_scrolls = plan.max_scrolls
+        config_max_scrolls = config.max_scrolls
+        resolved_plan_max_scrolls = (
+            int(plan_max_scrolls) if plan_max_scrolls is not None else None
+        )
+        resolved_config_max_scrolls = (
+            int(config_max_scrolls) if config_max_scrolls is not None else None
+        )
+        resolved_max_scrolls = (
+            resolved_plan_max_scrolls
+            if resolved_plan_max_scrolls is not None and resolved_plan_max_scrolls > 0
+            else resolved_config_max_scrolls
+            if resolved_config_max_scrolls is not None and resolved_config_max_scrolls > 0
+            else int(max_scrolls)
+        )
+        plan_max_records = plan.max_records
+        config_max_records = config.max_records
+        resolved_plan_max_records = (
+            int(plan_max_records) if plan_max_records is not None else None
+        )
+        resolved_config_max_records = (
+            int(config_max_records) if config_max_records is not None else None
+        )
+        resolved_max_records = (
+            resolved_plan_max_records
+            if resolved_plan_max_records is not None and resolved_plan_max_records > 0
+            else resolved_config_max_records
+            if resolved_config_max_records is not None and resolved_config_max_records > 0
+            else int(max_records)
+        )
+        plan_sleep_ms = plan.sleep_ms
+        config_sleep_ms = config.sleep_ms
+        resolved_plan_sleep_ms = (
+            int(plan_sleep_ms) if plan_sleep_ms is not None else None
+        )
+        resolved_config_sleep_ms = (
+            int(config_sleep_ms) if config_sleep_ms is not None else None
+        )
+        resolved_sleep_ms = (
+            resolved_plan_sleep_ms
+            if resolved_plan_sleep_ms is not None and resolved_plan_sleep_ms > 0
+            else resolved_config_sleep_ms
+            if resolved_config_sleep_ms is not None and resolved_config_sleep_ms > 0
+            else int(sleep_ms)
+        )
+        return URLProcessingConfig.from_acquisition_plan(
+            AcquisitionPlan(
+                surface=surface,
+                proxy_list=tuple(resolved_proxy_list),
+                traversal_mode=resolved_traversal_mode,
+                max_pages=resolved_max_pages,
+                max_scrolls=resolved_max_scrolls,
+                max_records=resolved_max_records,
+                sleep_ms=resolved_sleep_ms,
+            ),
+            update_run_state=config.update_run_state,
+            persist_logs=config.persist_logs,
+            prefetch_only=config.prefetch_only,
+            record_writer=config.record_writer,
+        )
     return URLProcessingConfig.from_acquisition_plan(
         AcquisitionPlan(
             surface=surface,
@@ -215,6 +299,10 @@ def _browser_outcome(acquisition_result: AcquisitionResult) -> str:
     diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     return str(diagnostics.get("browser_outcome") or "").strip().lower()
 
+
+def _effective_blocked(acquisition_result: AcquisitionResult) -> bool:
+    return is_effectively_blocked(acquisition_result)
+
 def _screenshot_required(browser_outcome: str) -> bool:
     return browser_outcome in {
         "challenge_page",
@@ -245,16 +333,17 @@ async def process_single_url(
     *,
     proxy_list: list[str] | None = None,
     traversal_mode: str | None = None,
-    max_pages: int = crawler_runtime_settings.default_max_pages,
-    max_scrolls: int = crawler_runtime_settings.default_max_scrolls,
-    max_records: int = crawler_runtime_settings.default_max_records,
-    sleep_ms: int = crawler_runtime_settings.default_sleep_ms,
+    max_pages: int | None = None,
+    max_scrolls: int | None = None,
+    max_records: int | None = None,
+    sleep_ms: int | None = None,
     checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
     prefetched_acquisition: AcquisitionResult | None = None,
 ) -> URLProcessingResult:
     del checkpoint
+    settings_view = run.settings_view
     context = _URLProcessingContext.build(
         session=session,
         run=run,
@@ -262,12 +351,12 @@ async def process_single_url(
         config=_resolved_url_processing_config(
             config,
             surface=run.surface,
-            proxy_list=proxy_list,
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
-            max_records=max_records,
-            sleep_ms=sleep_ms,
+            proxy_list=proxy_list if proxy_list is not None else settings_view.proxy_list(),
+            traversal_mode=traversal_mode if traversal_mode is not None else settings_view.traversal_mode(),
+            max_pages=max_pages if max_pages is not None else settings_view.max_pages(),
+            max_scrolls=max_scrolls if max_scrolls is not None else settings_view.max_scrolls(),
+            max_records=max_records if max_records is not None else settings_view.max_records(),
+            sleep_ms=sleep_ms if sleep_ms is not None else settings_view.sleep_ms(),
             update_run_state=update_run_state,
             persist_logs=persist_logs,
         ),
@@ -425,7 +514,7 @@ async def _run_acquisition_stage(
         getattr(acquisition_result, "browser_diagnostics", {}) and
         getattr(acquisition_result, "browser_diagnostics", {}).get("browser_attempted")
     )
-    if getattr(acquisition_result, "blocked", False) and not browser_attempted:
+    if _effective_blocked(acquisition_result) and not browser_attempted:
         await _log_pipeline_event(
             context,
             "warning",
@@ -447,7 +536,7 @@ def _build_prefetch_only_result(
 ) -> URLProcessingResult:
     verdict = compute_verdict(
         is_listing="listing" in context.surface,
-        blocked=bool(fetched.acquisition_result.blocked),
+        blocked=_effective_blocked(fetched.acquisition_result),
         record_count=1 if fetched.acquisition_result.html else 0,
     )
     return URLProcessingResult(
@@ -632,6 +721,8 @@ async def _apply_extraction_post_processing(
             network_payloads=acquisition_result.network_payloads,
             selector_rules=selector_rules,
         )
+    if not _browser_result_is_extractable(acquisition_result):
+        return records, selector_rules
     if not context.run.settings_view.llm_enabled():
         return records, selector_rules
     records = await _apply_direct_record_llm_fallback(
@@ -701,7 +792,7 @@ async def _populate_adapter_records(
     )
     if (
         (adapter_result is None or not list(adapter_result.records or []))
-        and acquisition_result.blocked
+        and _effective_blocked(acquisition_result)
     ):
         adapter_result = await try_blocked_adapter_recovery(
             acquisition_result.final_url,
@@ -839,7 +930,7 @@ def _empty_extraction_browser_retry_decision(
             "reason": "browser_already_attempted",
             "browser_outcome": browser_outcome or None,
         }
-    if acquisition_result.blocked:
+    if _effective_blocked(acquisition_result):
         return {"should_retry": False, "reason": "blocked"}
     content_type = str(getattr(acquisition_result, "content_type", "") or "").lower()
     if "json" in content_type:
@@ -881,7 +972,7 @@ async def _run_persistence_stage(
     )
     verdict = compute_verdict(
         is_listing="listing" in context.surface,
-        blocked=bool(acquisition_result.blocked),
+        blocked=_effective_blocked(acquisition_result),
         record_count=persisted_count,
     )
     await _log_pipeline_event(

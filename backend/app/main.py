@@ -31,6 +31,7 @@ from app.core.database import SessionLocal, dispose_engine
 from app.core.telemetry import (
     configure_logging,
     generate_correlation_id,
+    install_asyncio_exception_filter,
     reset_correlation_id,
     set_correlation_id,
 )
@@ -48,6 +49,10 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    try:
+        install_asyncio_exception_filter()
+    except RuntimeError:
+        logger.debug("Asyncio exception filter not installed; no running loop")
     validate_cookie_policy_config()
     async with SessionLocal() as session:
         await bootstrap_admin_user(session)

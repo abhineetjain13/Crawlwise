@@ -61,6 +61,16 @@ _CHALLENGE_LOCAL_STORAGE_NAME_TOKENS = tuple(
     for value in _STORAGE_STATE_SIGNATURES.get("local_storage_name_tokens", [])
     if str(value or "").strip()
 )
+_CHALLENGE_COOKIE_VALUE_TOKENS = tuple(
+    str(value or "").strip().lower()
+    for value in _STORAGE_STATE_SIGNATURES.get("cookie_value_tokens", [])
+    if str(value or "").strip()
+)
+_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS = tuple(
+    str(value or "").strip().lower()
+    for value in _STORAGE_STATE_SIGNATURES.get("local_storage_value_tokens", [])
+    if str(value or "").strip()
+)
 
 
 async def clear_cookie_store_cache() -> None:
@@ -313,7 +323,7 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
         if not cookie.get("name") or not cookie.get("value"):
             continue
         # Do not learn challenge-state cookies as reusable domain memory.
-        if _cookie_name_is_challenge_state(cookie.get("name")):
+        if _cookie_is_challenge_state(cookie):
             continue
         expires = cookie.get("expires")
         if isinstance(expires, (int, float)) and float(expires) > 0 and float(expires) <= now:
@@ -338,7 +348,7 @@ def _normalize_origins(value: object) -> list[dict[str, object]]:
             if not name:
                 continue
             # Do not replay anti-bot localStorage across future runs.
-            if _local_storage_name_is_challenge_state(name):
+            if _local_storage_entry_is_challenge_state(entry):
                 continue
             local_storage_rows.append(
                 {
@@ -359,11 +369,29 @@ def _cookie_name_is_challenge_state(value: object) -> bool:
     return any(lowered.startswith(prefix) for prefix in _CHALLENGE_COOKIE_NAME_PREFIXES)
 
 
+def _cookie_is_challenge_state(cookie: Mapping[str, object]) -> bool:
+    if _cookie_name_is_challenge_state(cookie.get("name")):
+        return True
+    value = str(cookie.get("value") or "").strip().lower()
+    if not value:
+        return False
+    return any(token in value for token in _CHALLENGE_COOKIE_VALUE_TOKENS)
+
+
 def _local_storage_name_is_challenge_state(value: object) -> bool:
     lowered = str(value or "").strip().lower()
     if not lowered:
         return False
     return any(token in lowered for token in _CHALLENGE_LOCAL_STORAGE_NAME_TOKENS)
+
+
+def _local_storage_entry_is_challenge_state(entry: Mapping[str, object]) -> bool:
+    if _local_storage_name_is_challenge_state(entry.get("name")):
+        return True
+    value = str(entry.get("value") or "").strip().lower()
+    if not value:
+        return False
+    return any(token in value for token in _CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS)
 
 
 def _clone_storage_state(

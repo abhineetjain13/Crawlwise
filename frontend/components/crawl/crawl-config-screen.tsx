@@ -133,10 +133,6 @@ function defaultRunProfile(): DomainRunProfile {
  currency_hint: null,
  },
  diagnostics_profile: { ...DIAGNOSTICS_PRESETS.standard },
- proxy_profile: {
- enabled: false,
- proxy_list: [],
- },
  source_run_id: null,
  saved_at: null,
  };
@@ -160,13 +156,6 @@ function cloneRunProfile(profile: DomainRunProfile | null | undefined): DomainRu
  diagnostics_profile: {
  ...base.diagnostics_profile,
  ...(profile.diagnostics_profile ?? {}),
- },
- proxy_profile: {
- ...base.proxy_profile,
- ...(profile.proxy_profile ?? {}),
- proxy_list: Array.isArray(profile.proxy_profile?.proxy_list)
- ? [...profile.proxy_profile.proxy_list]
- : [],
  },
  source_run_id: profile.source_run_id ?? null,
  saved_at: profile.saved_at ?? null,
@@ -372,8 +361,6 @@ export function CrawlConfigScreen({
  setSavedProfileDomain("");
  setSavedProfileMessage("");
  setRunProfile(defaultRunProfile());
- setProxyEnabled(false);
- setProxyInput("");
  return;
  }
  }
@@ -395,8 +382,6 @@ export function CrawlConfigScreen({
  setSavedProfileDomain(response.domain);
  if (savedProfile && !profileDirtyRef.current) {
  setRunProfile(cloneRunProfile(savedProfile));
- setProxyEnabled(Boolean(savedProfile.proxy_profile?.enabled));
- setProxyInput((savedProfile.proxy_profile?.proxy_list ?? []).join("\n"));
  setSavedProfileLoaded(true);
  setSavedProfileMessage(
  `Saved domain profile applied for ${response.domain} on ${surfaceLabel(response.surface)}. Explicit edits below override it for this run.`,
@@ -410,8 +395,6 @@ export function CrawlConfigScreen({
  );
  if (!savedProfile && !profileDirtyRef.current) {
  setRunProfile(defaultRunProfile());
- setProxyEnabled(false);
- setProxyInput("");
  }
  }
  } catch {
@@ -1004,7 +987,7 @@ export function CrawlConfigScreen({
  <div className={RUN_SETUP_ICON_CLASS}>
  <Globe className="size-4" />
  </div>
- <div className="field-label mb-0">DOMAIN</div>
+ <div className="field-label mb-0">Domain</div>
  </div>
  <TabBar
  value={crawlDomain}
@@ -1027,7 +1010,7 @@ export function CrawlConfigScreen({
  <SlidersHorizontal className="size-4" />
  </div>
  <div className="flex items-center gap-1.5">
- <div className="field-label mb-0">STUDIO MODE</div>
+ <div className="field-label mb-0">Mode</div>
  <Tooltip content="Advanced Mode exposes the full fetch, locality, diagnostics, and selector controls.">
  <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
  </Tooltip>
@@ -1061,6 +1044,43 @@ export function CrawlConfigScreen({
  </div>
  </div>
  <Toggle checked={smartExtraction} onChange={setSmartExtraction} ariaLabel="LLM enabled" />
+ </div>
+
+ <div className="rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-3">
+ <div className="flex items-start justify-between gap-3">
+ <div className="flex min-w-0 items-start gap-3">
+ <div className={RUN_SETUP_ICON_CLASS}>
+ <Globe className="size-4" />
+ </div>
+ <div className="min-w-0">
+ <div className="flex items-center gap-1.5">
+ <div className="field-label mb-0">Proxy List</div>
+ <Tooltip content={"Example:\nhttp://host:port\nhttp://user:pass@host:port"}>
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ </div>
+ </div>
+ </div>
+ <Toggle
+ checked={proxyEnabled}
+ onChange={setProxyEnabled}
+ ariaLabel="Proxy List enabled"
+ />
+ </div>
+ {proxyEnabled ? (
+ <div className="mt-3 space-y-2">
+ <div className="field-label">Example Proxy List To Enter</div>
+ <Textarea
+ value={proxyInput}
+ onChange={(event) => {
+ setProxyInput(event.target.value);
+ }}
+ placeholder={"http://host:port\nhttp://user:pass@host:port"}
+ className="min-h-[104px] text-mono-body leading-[1.55]"
+ aria-label="Proxy pool input"
+ />
+ </div>
+ ) : null}
  </div>
 
  {singleUrlMode && savedProfileLoaded ? (
@@ -1222,30 +1242,6 @@ export function CrawlConfigScreen({
  checked={respectRobotsTxt}
  onChange={setRespectRobotsTxt}
  />
- <SettingSection
- label="Proxy"
- description="Use a proxy pool for this run."
- icon={<Globe className="size-4" />}
- checked={proxyEnabled}
- onChange={(next) => {
- profileDirtyRef.current = true;
- setProxyEnabled(next);
- }}
- >
- <div className="space-y-2">
- <div className="field-label">Proxy Pool</div>
- <Textarea
- value={proxyInput}
- onChange={(event) => {
- profileDirtyRef.current = true;
- setProxyInput(event.target.value);
- }}
- placeholder={"host:port\nhost:port:user:pass"}
- className="min-h-[104px] text-mono-body leading-[1.55]"
- aria-label="Proxy pool input"
- />
- </div>
- </SettingSection>
  </div>
  </section>
 

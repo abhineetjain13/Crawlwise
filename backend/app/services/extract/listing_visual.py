@@ -105,6 +105,8 @@ def _cluster_visual_elements(
     anchors.sort(key=lambda item: (int(item.get("y") or 0), int(item.get("x") or 0)))
     clusters: list[list[dict[str, Any]]] = []
     for anchor in anchors:
+        anchor_href = str(anchor.get("href") or "")
+        anchor_y = int(anchor.get("y") or 0)
         cluster = [anchor]
         left = int(anchor.get("x") or 0) - 80
         right = left + int(anchor.get("width") or 0) + 160
@@ -113,10 +115,15 @@ def _cluster_visual_elements(
         for item in elements:
             if item is anchor:
                 continue
+            item_href = str(item.get("href") or "")
+            if item_href and item_href != anchor_href:
+                continue
             x = int(item.get("x") or 0)
             y = int(item.get("y") or 0)
             width = int(item.get("width") or 0)
             height = int(item.get("height") or 0)
+            if not item_href and y + height < anchor_y:
+                continue
             if x + width < left or x > right or y + height < top or y > bottom:
                 continue
             cluster.append(item)

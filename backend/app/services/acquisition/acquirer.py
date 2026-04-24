@@ -105,6 +105,19 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             effective_url,
             run_id=request.run_id,
             proxy_list=request.proxy_list,
+            proxy_profile=(
+                dict(request.acquisition_profile.get("proxy_profile"))
+                if isinstance(request.acquisition_profile.get("proxy_profile"), Mapping)
+                else None
+            ),
+            locality_profile=(
+                dict(request.acquisition_profile.get("locality_profile"))
+                if isinstance(
+                    request.acquisition_profile.get("locality_profile"),
+                    Mapping,
+                )
+                else None
+            ),
             fetch_mode=fetch_mode,
             prefer_browser=prefer_browser,
             surface=request.surface,

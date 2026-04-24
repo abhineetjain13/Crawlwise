@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 
 from app.services.adapters.myntra import MyntraAdapter
+from app.services.detail_extractor import _variant_option_availability
 from app.services.extraction_runtime import extract_records
 
 
@@ -996,6 +998,147 @@ def test_extract_ecommerce_detail_ignores_review_qa_controls_and_payment_icons()
     assert "variants" not in record
 
 
+def test_extract_ecommerce_detail_does_not_treat_etsy_report_radios_as_variants() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Black Popular And In Demand Unisex T-Shirt</h1>
+          <div class="price">INR 2476.00</div>
+          <div class="listing-report-modal">
+            <ul>
+              <li>
+                <input id="flag_1" type="radio" name="flag_type_mnemonic" value="LISTING_GRT_T1" />
+                <label for="flag_1">It's not handmade, vintage, or craft supplies</label>
+              </li>
+              <li>
+                <input id="flag_2" type="radio" name="flag_type_mnemonic" value="OC_PORNOGRAPHY" />
+                <label for="flag_2">It's pornographic</label>
+              </li>
+              <li>
+                <input id="flag_3" type="radio" name="flag_type_mnemonic" value="LISTING_MINOR_SAFETY" />
+                <label for="flag_3">It's a threat to minor safety</label>
+              </li>
+            </ul>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.etsy.com/listing/1210769675/example",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Black Popular And In Demand Unisex T-Shirt"
+    assert record["price"] == "2476.00"
+    assert "option1_name" not in record
+    assert "variant_axes" not in record
+    assert "selected_variant" not in record
+    assert "variants" not in record
+
+
+def test_extract_ecommerce_detail_does_not_treat_shipping_country_selector_as_variant_axis() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Custom Embroidered Mom Picture Sweatshirt</h1>
+          <div class="price">INR 3121.00</div>
+          <label for="variation-selector-1">Color</label>
+          <select id="variation-selector-1">
+            <option>Select an option</option>
+            <option>Heather Dark Green</option>
+            <option>White</option>
+          </select>
+          <label for="estimated-shipping-country">Country</label>
+          <select
+            id="estimated-shipping-country"
+            name="estimated-shipping-country"
+            aria-label="Choose country"
+          >
+            <option>----------</option>
+            <option>Australia</option>
+            <option>Canada</option>
+            <option>France</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.etsy.com/listing/1210769675/example",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Custom Embroidered Mom Picture Sweatshirt"
+    assert record["variant_axes"] == {"color": ["Heather Dark Green", "White"]}
+    assert record["variant_count"] == 2
+    assert "choose_country" not in record.get("variant_axes", {})
+    assert "option2_name" not in record
+
+
+def test_extract_ecommerce_detail_splits_style_and_size_from_compound_select_before_color() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Custom Sweatshirt</h1>
+          <div class="price">$10.00</div>
+          <label for="variation-selector-0">Style &amp; Size</label>
+          <select id="variation-selector-0">
+            <option value="">Select an option</option>
+            <option value="1">Sweatshirt S ($10.00)</option>
+            <option value="2">Sweatshirt M ($10.00)</option>
+            <option value="3">Hoodie S ($12.00)</option>
+            <option value="4">Hoodie M ($12.00)</option>
+          </select>
+          <label for="variation-selector-1">Colors</label>
+          <select id="variation-selector-1">
+            <option value="">Select an option</option>
+            <option value="10">Black</option>
+            <option value="11">White</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.etsy.com/listing/1210769675/example",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {
+        "style": ["Sweatshirt", "Hoodie"],
+        "size": ["S", "M"],
+        "color": ["Black", "White"],
+    }
+    assert record["variant_count"] == 8
+    assert record["option1_name"] == "Style"
+    assert record["option1_values"] == "Sweatshirt, Hoodie"
+    assert record["available_sizes"] == "S, M"
+    assert record["selected_variant"]["option_values"] == {
+        "style": "Sweatshirt",
+        "size": "S",
+        "color": "Black",
+    }
+
+
 def test_extract_ecommerce_detail_does_not_treat_question_radiogroup_as_size_variants() -> None:
     html = """
     <html>
@@ -1352,7 +1495,32 @@ def test_extract_ecommerce_detail_keeps_size_axis_when_bad_dom_label_says_color(
         "color": "Graphite",
         "size": "21 in.",
     }
+    assert "GTIN14" not in record.get("product_attributes", {})
     assert "AVAILABILITY" not in record.get("product_attributes", {})
+
+
+def test_variant_option_availability_does_not_treat_disabled_control_as_out_of_stock() -> None:
+    soup = BeautifulSoup(
+        """
+        <li class="size disabled selected">
+          <input checked disabled type="radio" name="size" value="2" />
+          <label>2</label>
+        </li>
+        """,
+        "html.parser",
+    )
+
+    node = soup.select_one("input")
+    label = soup.select_one("label")
+
+    assert node is not None
+    availability, stock_quantity = _variant_option_availability(
+        node=node,
+        label_node=label,
+    )
+
+    assert availability is None
+    assert stock_quantity is None
 
 
 def test_extract_automobile_detail_ignores_irrelevant_video_json_ld_when_dom_title_exists() -> None:

@@ -29,7 +29,7 @@ PERFORMANCE_PROFILES: dict[str, dict[str, int]] = {
     },
     "BALANCED": {
         "browser_fallback_visible_text_min": 500,
-        "challenge_wait_max_seconds": 7,
+        "challenge_wait_max_seconds": 15,
         "origin_warm_pause_ms": 500,
         "surface_readiness_max_wait_ms": 6000,
     },
@@ -82,6 +82,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     batch_url_concurrency: int = 8
     url_batch_concurrency: int = 4
     url_process_timeout_seconds: float = 90.0
+    url_process_timeout_buffer_seconds: float = 15.0
     max_url_process_timeout_seconds: float = 600.0
     worker_max_concurrent_jobs: int = 8
     worker_orphan_recovery_grace_seconds: int = 900
@@ -132,13 +133,21 @@ class CrawlerRuntimeSettings(BaseSettings):
     pacing_host_cache_ttl_seconds: int = 3600
     browser_first_host_block_threshold: int = 2
     stealth_prefer_ttl_hours: int = 24
-    challenge_wait_max_seconds: int | None = 7
+    challenge_wait_max_seconds: int | None = 15
     challenge_poll_interval_ms: int = 1000
+    challenge_activity_mouse_steps: int = 12
+    challenge_activity_edge_padding_px: int = 48
+    challenge_activity_jitter_moves: int = 4
+    challenge_activity_jitter_delta_px: int = 100
+    challenge_activity_pause_min_ms: int = 50
+    challenge_activity_pause_jitter_ms: int = 150
+    challenge_activity_scroll_px: int = 120
     surface_readiness_max_wait_ms: int | None = 6000
     surface_readiness_poll_ms: int = 250
     origin_warm_pause_ms: int | None = 500
     browser_error_retry_attempts: int = 1
     browser_error_retry_delay_ms: int = 1000
+    browser_post_block_cooldown_ms: int = 500
     browser_navigation_networkidle_timeout_ms: int = 30000
     browser_navigation_load_timeout_ms: int = 15000
     browser_navigation_domcontentloaded_timeout_ms: int = 15000
@@ -152,12 +161,49 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_capture_read_timeout_seconds: float = 5.0
     browser_capture_queue_join_timeout_ms: int = 2000
     browser_artifact_capture_timeout_ms: int = 4000
+    browser_first_nav_pause_ms: int = 0
     platform_detection_html_search_limit: int = 500000
+    browser_real_chrome_enabled: bool = False
+    browser_real_chrome_executable_path: str = ""
+    browser_launch_args: tuple[str, ...] = (
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    )
+    browser_use_new_headless: bool = True
+    browser_runtime_pool_max_entries: int = 8
+    browser_runtime_pool_idle_ttl_seconds: int = 300
+    browser_proxy_bridge_connect_timeout_seconds: float = 10.0
+    browser_proxy_bridge_auth_timeout_seconds: float = 10.0
+    browser_proxy_bridge_first_byte_timeout_seconds: float = 15.0
+    browser_proxy_domain_storage_enabled: bool = False
+    proxy_rotation_sticky_tokens: tuple[str, ...] = ("sticky", "session", "affinity")
+    proxy_rotation_rotating_tokens: tuple[str, ...] = ("rotating", "rotate", "random")
+    proxy_sticky_username_markers: tuple[str, ...] = ("-session-", "session-")
+    proxy_session_rewrite_enabled_keys: tuple[str, ...] = (
+        "session_rewrite_enabled",
+        "sessionize_per_run",
+    )
+    browser_context_permissions: tuple[str, ...] = ("geolocation",)
+    browser_mask_playwright_globals: tuple[str, ...] = (
+        "__pwInitScripts",
+        "__playwright__binding__",
+        "_playwrightInstance",
+    )
+    browser_disable_web_workers: bool = True
     fingerprint_browser: str = "chrome"
     fingerprint_os: tuple[str, ...] = ("windows", "macos", "linux")
     fingerprint_device: str = "desktop"
     fingerprint_locale: str = "en-US"
+    fingerprint_color_scheme: str = "dark"
+    fingerprint_timezone_id: str = ""
+    fingerprint_locale_auto_align_timezone_region: bool = True
+    fingerprint_hardware_concurrency: int = 0
+    fingerprint_device_memory_gb: float = 0.0
     browser_identity_min_chrome_version: int = 120
+    browser_desktop_viewport_reserved_height_px: int = 100
+    browser_desktop_window_frame_width_px: int = 16
+    browser_desktop_window_frame_height_px: int = 88
     browser_readiness_visible_text_min: int = 120
     interruptible_wait_poll_ms: int = 250
     cooperative_sleep_poll_ms: int = 250
@@ -260,6 +306,8 @@ class CrawlerRuntimeSettings(BaseSettings):
             self.max_max_pages = self.min_max_pages
         if self.url_process_timeout_seconds <= 0:
             raise ValueError("url_process_timeout_seconds must be > 0")
+        if self.url_process_timeout_buffer_seconds < 0:
+            raise ValueError("url_process_timeout_buffer_seconds must be >= 0")
         if self.max_url_process_timeout_seconds <= 0:
             raise ValueError("max_url_process_timeout_seconds must be > 0")
         if self.browser_render_timeout_seconds <= 0:
@@ -276,8 +324,28 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("browser_capture_queue_join_timeout_ms must be > 0")
         if self.browser_artifact_capture_timeout_ms <= 0:
             raise ValueError("browser_artifact_capture_timeout_ms must be > 0")
+        if self.browser_post_block_cooldown_ms < 0:
+            raise ValueError("browser_post_block_cooldown_ms must be >= 0")
+        if self.browser_first_nav_pause_ms < 0:
+            raise ValueError("browser_first_nav_pause_ms must be >= 0")
         if self.platform_detection_html_search_limit <= 0:
             raise ValueError("platform_detection_html_search_limit must be > 0")
+        if self.browser_runtime_pool_max_entries <= 0:
+            raise ValueError("browser_runtime_pool_max_entries must be > 0")
+        if self.browser_runtime_pool_idle_ttl_seconds < 0:
+            raise ValueError("browser_runtime_pool_idle_ttl_seconds must be >= 0")
+        if self.browser_proxy_bridge_connect_timeout_seconds <= 0:
+            raise ValueError(
+                "browser_proxy_bridge_connect_timeout_seconds must be > 0"
+            )
+        if self.browser_proxy_bridge_auth_timeout_seconds <= 0:
+            raise ValueError(
+                "browser_proxy_bridge_auth_timeout_seconds must be > 0"
+            )
+        if self.browser_proxy_bridge_first_byte_timeout_seconds <= 0:
+            raise ValueError(
+                "browser_proxy_bridge_first_byte_timeout_seconds must be > 0"
+            )
         if self.browser_identity_min_chrome_version <= 0:
             raise ValueError("browser_identity_min_chrome_version must be > 0")
         if (
@@ -307,6 +375,17 @@ class CrawlerRuntimeSettings(BaseSettings):
         if timeout <= 0:
             return float(self.url_process_timeout_seconds)
         return min(timeout, float(self.max_url_process_timeout_seconds))
+
+    def default_url_process_timeout_seconds(self) -> float:
+        timeout = self.coerce_url_timeout_seconds(self.url_process_timeout_seconds)
+        acquisition_timeout = max(0.0, float(self.acquisition_attempt_timeout_seconds))
+        buffer_seconds = max(0.0, float(self.url_process_timeout_buffer_seconds))
+        if acquisition_timeout <= 0:
+            return timeout
+        return min(
+            max(timeout, acquisition_timeout + buffer_seconds),
+            float(self.max_url_process_timeout_seconds),
+        )
 
 
 crawler_runtime_settings = CrawlerRuntimeSettings()

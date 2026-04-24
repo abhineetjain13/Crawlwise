@@ -223,21 +223,11 @@ class DomainRunDiagnosticsProfile(BaseModel):
     capture_browser_diagnostics: bool = True
 
 
-class DomainRunProxyProfile(BaseModel):
-    enabled: bool = False
-    proxy_list: list[str] = Field(default_factory=list)
-
-    @field_serializer("proxy_list")
-    def _serialize_proxy_list(self, value: list[str]) -> list[str]:
-        return [_mask_proxy_url(item) for item in value]
-
-
 class DomainRunProfilePayload(BaseModel):
     version: int = 1
     fetch_profile: DomainRunFetchProfile = Field(default_factory=DomainRunFetchProfile)
     locality_profile: DomainRunLocalityProfile = Field(default_factory=DomainRunLocalityProfile)
     diagnostics_profile: DomainRunDiagnosticsProfile = Field(default_factory=DomainRunDiagnosticsProfile)
-    proxy_profile: DomainRunProxyProfile = Field(default_factory=DomainRunProxyProfile)
     source_run_id: int | None = None
     saved_at: datetime | None = None
 

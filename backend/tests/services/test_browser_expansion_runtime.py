@@ -2352,6 +2352,29 @@ def test_build_failed_browser_diagnostics_preserves_failure_stage() -> None:
     assert diagnostics["phase_timings_ms"] == {"navigation": 420}
 
 
+def test_build_failed_browser_diagnostics_marks_unsupported_proxy_explicitly() -> None:
+    diagnostics = browser_runtime.build_failed_browser_diagnostics(
+        browser_reason="http-escalation",
+        exc=RuntimeError("Browser does not support socks5 proxy authentication"),
+    )
+
+    assert diagnostics["browser_outcome"] == "navigation_failed"
+    assert diagnostics["failure_kind"] == "unsupported_proxy"
+
+
+def test_build_failed_browser_diagnostics_uses_exception_proxy_mode() -> None:
+    exc = RuntimeError("proxied page failed")
+    setattr(exc, "browser_proxy_mode", "page")
+
+    diagnostics = browser_runtime.build_failed_browser_diagnostics(
+        browser_reason="http-escalation",
+        exc=exc,
+        proxy="http://proxy.example:8080",
+    )
+
+    assert diagnostics["browser_proxy_mode"] == "page"
+
+
 @pytest.mark.asyncio
 async def test_browser_fetch_logs_non_usable_outcomes(caplog: pytest.LogCaptureFixture) -> None:
     page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
@@ -2542,6 +2565,227 @@ async def test_capture_rendered_listing_fragments_ignores_non_listing_surfaces()
 
 
 @pytest.mark.asyncio
+async def test_emit_challenge_activity_randomizes_mouse_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    move_calls: list[tuple[int, int]] = []
+    wheel_calls: list[tuple[int, int]] = []
+    wait_calls: list[int] = []
+
+    class _Mouse:
+        async def move(self, x: int, y: int) -> None:
+            move_calls.append((x, y))
+
+        async def wheel(self, delta_x: int, delta_y: int) -> None:
+            wheel_calls.append((delta_x, delta_y))
+
+    class _Page:
+        mouse = _Mouse()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            del script, arg
+            return {"width": 900, "height": 700}
+
+        async def wait_for_timeout(self, delay_ms: int) -> None:
+            wait_calls.append(delay_ms)
+
+    random_counter = {"value": 0}
+
+    def _fake_randbelow(limit: int) -> int:
+        random_counter["value"] += 1
+        return random_counter["value"] % max(1, int(limit))
+
+    monkeypatch.setattr(browser_recovery.secrets, "randbelow", _fake_randbelow)
+
+    await browser_recovery._emit_challenge_activity(_Page())
+
+    assert len(move_calls) == 1 + (
+        int(crawler_runtime_settings.challenge_activity_jitter_moves)
+        * int(crawler_runtime_settings.challenge_activity_mouse_steps)
+    )
+    assert all(len(call) == 2 for call in move_calls)
+    assert len(set(move_calls)) > 2
+    assert wait_calls
+    assert wheel_calls == [
+        (0, int(crawler_runtime_settings.challenge_activity_scroll_px))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emit_challenge_activity_ignores_negative_scroll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel_calls: list[tuple[int, int]] = []
+    original_scroll_px = crawler_runtime_settings.challenge_activity_scroll_px
+
+    class _Mouse:
+        async def move(self, x: int, y: int, *, steps: int) -> None:
+            del x, y, steps
+
+        async def wheel(self, delta_x: int, delta_y: int) -> None:
+            wheel_calls.append((delta_x, delta_y))
+
+    class _Page:
+        mouse = _Mouse()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            del script, arg
+            return {"width": 900, "height": 700}
+
+        async def wait_for_timeout(self, delay_ms: int) -> None:
+            del delay_ms
+
+    monkeypatch.setattr(browser_recovery.secrets, "randbelow", lambda limit: 0)
+    crawler_runtime_settings.challenge_activity_scroll_px = -120
+    try:
+        await browser_recovery._emit_challenge_activity(_Page())
+    finally:
+        crawler_runtime_settings.challenge_activity_scroll_px = original_scroll_px
+
+    assert wheel_calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_browser_challenge_keeps_original_response_when_retry_stays_blocked() -> None:
+    original_response = SimpleNamespace(status=403, name="original")
+    retried_response = SimpleNamespace(status=200, name="retried")
+
+    class _Page:
+        def __init__(self) -> None:
+            self.mouse = None
+            self.goto_calls = 0
+
+        async def goto(self, *_args, **_kwargs):
+            self.goto_calls += 1
+            return retried_response
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    page = _Page()
+
+    async def _get_page_html(_page: Any) -> str:
+        return "<html><body>blocked</body></html>"
+
+    async def _classify_blocked_page(_html: str, _status_code: int):
+        return SimpleNamespace(blocked=True, provider_hits=[])
+
+    result = await browser_recovery.recover_browser_challenge(
+        page,
+        url="https://example.com/products/widget",
+        response=original_response,
+        timeout_seconds=5,
+        phase_timings_ms={},
+        challenge_wait_max_seconds=1,
+        challenge_poll_interval_ms=100,
+        navigation_timeout_ms=1000,
+        elapsed_ms=lambda _started_at: 0,
+        classify_blocked_page=_classify_blocked_page,
+        get_page_html=_get_page_html,
+    )
+
+    assert result is original_response
+    assert page.goto_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_browser_challenge_drops_stale_block_status_after_wait_clear() -> None:
+    original_response = SimpleNamespace(status=403, headers={"content-type": "text/html"})
+    status_codes: list[int] = []
+
+    class _Page:
+        mouse = None
+
+        async def goto(self, *_args, **_kwargs):
+            raise AssertionError("retry should not run after challenge clears")
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    async def _get_page_html(_page: Any) -> str:
+        return "<html><body>product title $12.00 add to cart</body></html>"
+
+    async def _classify_blocked_page(_html: str, status_code: int):
+        status_codes.append(status_code)
+        return SimpleNamespace(blocked=len(status_codes) == 1, provider_hits=[])
+
+    result = await browser_recovery.recover_browser_challenge(
+        _Page(),
+        url="https://example.com/products/widget",
+        response=original_response,
+        timeout_seconds=5,
+        phase_timings_ms={},
+        challenge_wait_max_seconds=1,
+        challenge_poll_interval_ms=100,
+        navigation_timeout_ms=1000,
+        elapsed_ms=lambda _started_at: 0,
+        classify_blocked_page=_classify_blocked_page,
+        get_page_html=_get_page_html,
+    )
+
+    assert status_codes == [403, 200]
+    assert result is original_response
+    assert result.browser_recovered_status == 200
+    assert result.headers == original_response.headers
+
+
+@pytest.mark.asyncio
+async def test_recover_browser_challenge_marks_retry_response_without_wrapping() -> None:
+    retried_response = SimpleNamespace(
+        status=403,
+        headers={"content-type": "text/html"},
+        url="https://example.com/products/widget",
+        request=SimpleNamespace(method="GET"),
+        name="retried",
+    )
+
+    class _Page:
+        mouse = None
+
+        def __init__(self) -> None:
+            self.retried = False
+
+        async def goto(self, *_args, **_kwargs):
+            self.retried = True
+            return retried_response
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    async def _get_page_html(page: Any) -> str:
+        return (
+            "<html><body>product title $12.00 add to cart</body></html>"
+            if page.retried
+            else "<html><body>blocked</body></html>"
+        )
+
+    async def _classify_blocked_page(html: str, _status_code: int):
+        return SimpleNamespace(blocked="blocked" in html, provider_hits=[])
+
+    page = _Page()
+    result = await browser_recovery.recover_browser_challenge(
+        page,
+        url="https://example.com/products/widget",
+        response=SimpleNamespace(status=403, headers={"content-type": "text/html"}),
+        timeout_seconds=5,
+        phase_timings_ms={},
+        challenge_wait_max_seconds=1,
+        challenge_poll_interval_ms=100,
+        navigation_timeout_ms=1000,
+        elapsed_ms=lambda _started_at: 0,
+        classify_blocked_page=_classify_blocked_page,
+        get_page_html=_get_page_html,
+    )
+
+    assert result is retried_response
+    assert result.browser_recovered_status == 200
+    assert result.url == retried_response.url
+    assert result.request is retried_response.request
+    assert result.name == "retried"
+    assert result.browser_navigation_strategy == "domcontentloaded"
+
+
+@pytest.mark.asyncio
 async def test_wait_for_listing_readiness_treats_only_playwright_timeout_as_recoverable() -> None:
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
@@ -2623,6 +2867,7 @@ async def test_origin_warmup_uses_sibling_page_not_active_page() -> None:
         url="https://example.com/products/widget",
         surface="ecommerce_detail",
         browser_reason="http-escalation",
+        proxy_profile=None,
         timeout_seconds=5,
         phase_timings_ms={},
     )
@@ -2631,6 +2876,105 @@ async def test_origin_warmup_uses_sibling_page_not_active_page() -> None:
     assert len(page.spawned_pages) == 1
     assert page.spawned_pages[0].goto_calls == ["domcontentloaded"]
     assert page.spawned_pages[0].page_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_runs_for_job_detail() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Job</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/jobs/123",
+        surface="job_detail",
+        browser_reason="http-escalation",
+        proxy_profile=None,
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.goto_calls == []
+    assert len(page.spawned_pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_skips_for_rotating_proxy_profile() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_reason="http-escalation",
+        proxy_profile={"rotation": "rotating"},
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.goto_calls == []
+    assert page.spawned_pages == []
+
+
+def test_browser_runtime_snapshot_uses_capacity_fallback_for_pooled_runtimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        def snapshot(self) -> dict[str, int | bool]:
+            return {
+                "ready": True,
+                "size": 1,
+                "active": 1,
+                "queued": 0,
+                "capacity": 3,
+            }
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(browser_runtime, "_DIRECT_BROWSER_RUNTIMES", {"direct": _FakeRuntime()})
+    monkeypatch.setattr(browser_runtime, "_PROXIED_BROWSER_RUNTIMES", {"proxy": _FakeRuntime()})
+
+    snapshot = browser_runtime.browser_runtime_snapshot()
+
+    assert snapshot["capacity"] == 6
+    assert snapshot["max_size"] == 6
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_disables_storage_reuse_for_rotating_proxy_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_allow_storage_state: list[bool] = []
+
+    class _StopFetch(Exception):
+        pass
+
+    @asynccontextmanager
+    async def _fake_page_context():
+        raise _StopFetch
+        yield
+
+    def _fake_resolve_proxied_page_factory(*args, **kwargs):
+        del args
+        captured_allow_storage_state.append(bool(kwargs["allow_storage_state"]))
+        return _fake_page_context()
+
+    monkeypatch.setattr(
+        browser_runtime,
+        "_resolve_proxied_page_factory",
+        _fake_resolve_proxied_page_factory,
+    )
+
+    with pytest.raises(_StopFetch):
+        await browser_runtime.browser_fetch(
+            "https://example.com/products/widget",
+            5,
+            proxy="http://proxy.example:8080",
+            proxy_profile={"rotation": "rotating"},
+            surface="ecommerce_detail",
+            proxied_page_factory=lambda **_: None,
+        )
+
+    assert captured_allow_storage_state == [False]
 
 
 @pytest.mark.asyncio

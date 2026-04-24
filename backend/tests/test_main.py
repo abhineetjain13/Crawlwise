@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import Request
 from fastapi.responses import Response
 
+from app.core.telemetry import install_asyncio_exception_filter
 from app.main import (
     _sanitize_header_name,
     _sanitize_header_value,
@@ -91,3 +92,64 @@ def test_sanitize_header_value_preserves_safe_content() -> None:
 
 def test_sanitize_header_name_rejects_invalid_tokens() -> None:
     assert _sanitize_header_name("X-Request-ID:Bad") == "X-Request-ID"
+
+
+def test_install_asyncio_exception_filter_suppresses_known_pipe_reset() -> None:
+    class FakeLoop:
+        def __init__(self) -> None:
+            self.handler = None
+            self.default_calls: list[object] = []
+
+        def get_exception_handler(self):
+            return None
+
+        def set_exception_handler(self, handler) -> None:
+            self.handler = handler
+
+        def default_exception_handler(self, context) -> None:
+            self.default_calls.append(context)
+
+    loop = FakeLoop()
+    install_asyncio_exception_filter(loop)  # type: ignore[arg-type]
+
+    assert loop.handler is not None
+
+    loop.handler(
+        loop,
+        {
+            "message": "Exception in callback _ProactorBasePipeTransport._call_connection_lost()",
+            "exception": ConnectionResetError(
+                10054,
+                "An existing connection was forcibly closed by the remote host",
+            ),
+        },
+    )
+
+    assert loop.default_calls == []
+
+
+def test_install_asyncio_exception_filter_delegates_unknown_errors() -> None:
+    class FakeLoop:
+        def __init__(self) -> None:
+            self.handler = None
+            self.default_calls: list[object] = []
+
+        def get_exception_handler(self):
+            return None
+
+        def set_exception_handler(self, handler) -> None:
+            self.handler = handler
+
+        def default_exception_handler(self, context) -> None:
+            self.default_calls.append(context)
+
+    loop = FakeLoop()
+    install_asyncio_exception_filter(loop)  # type: ignore[arg-type]
+
+    context = {
+        "message": "Exception in callback something_else()",
+        "exception": RuntimeError("boom"),
+    }
+    loop.handler(loop, context)
+
+    assert loop.default_calls == [context]

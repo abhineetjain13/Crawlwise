@@ -357,6 +357,11 @@
           "__type__": "set",
           "items": [
             "dealer_name",
+            "gtin",
+            "gtin8",
+            "gtin12",
+            "gtin13",
+            "gtin14",
             "sku",
             "vin"
           ]
@@ -544,7 +549,12 @@
       "id",
       "code",
       "vin",
-      "mpn"
+      "mpn",
+      "gtin",
+      "gtin8",
+      "gtin12",
+      "gtin13",
+      "gtin14"
     ]
   },
   "CANDIDATE_IMAGE_CANDIDATE_DICT_KEYS": {
@@ -1635,6 +1645,11 @@
                     "value": {
                       "__type__": "list",
                       "items": [
+                        "gtin",
+                        "gtin8",
+                        "gtin12",
+                        "gtin13",
+                        "gtin14",
                         "sku",
                         "vin",
                         "dealer_name"
@@ -1772,7 +1787,12 @@
                         "id",
                         "code",
                         "vin",
-                        "mpn"
+                        "mpn",
+                        "gtin",
+                        "gtin8",
+                        "gtin12",
+                        "gtin13",
+                        "gtin14"
                       ]
                     }
                   },

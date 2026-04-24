@@ -83,6 +83,28 @@ def test_classify_blocked_page_detects_datadome_captcha_delivery_challenge() -> 
     assert "captcha_delivery_iframe" in classification.challenge_element_hits
 
 
+def test_classify_blocked_page_detects_kasada_kpsdk_shell() -> None:
+    html = """
+    <html>
+      <head></head>
+      <body>
+        <script>window.KPSDK={};KPSDK.start=Date.now();</script>
+        <script src="/kpsdk/149e9513/2d206a39/ips.js?KP_UIDz=abc"></script>
+        <iframe src="javascript:;" style="display:none"></iframe>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is True
+    assert classification.outcome == "challenge_page"
+    assert "kpsdk" in classification.provider_hits
+    assert "kpsdk" in classification.active_provider_hits
+    assert "kasada_ips_script" in classification.challenge_element_hits
+    assert "kasada_kpsdk_bootstrap" in classification.challenge_element_hits
+
+
 def test_classify_blocked_page_keeps_perimeterx_evidence_on_403() -> None:
     html = """
     <html>

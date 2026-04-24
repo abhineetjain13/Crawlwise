@@ -33,6 +33,7 @@ from app.services.config.extraction_rules import (
     TITLE_PROMOTION_PREFIXES,
     TITLE_PROMOTION_SEPARATOR,
     TITLE_PROMOTION_SUBSTRINGS,
+    VARIANT_SIZE_VALUE_PATTERNS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extraction_context import (
@@ -82,6 +83,7 @@ from app.services.extract.shared_variant_logic import (
     resolve_variants,
     resolve_variant_group_name,
     split_variant_axes,
+    variant_axis_name_is_semantic,
     variant_dom_cues_present,
 )
 from app.services.field_policy import exact_requested_field_key
@@ -95,6 +97,11 @@ from app.services.extract.detail_tiers import (
 )
 
 logger = logging.getLogger(__name__)
+_DETAIL_VARIANT_SIZE_VALUE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in VARIANT_SIZE_VALUE_PATTERNS
+    if str(pattern).strip()
+)
 _LOW_SIGNAL_LONG_TEXT_VALUES = frozenset(
     {
         "description",
@@ -1566,7 +1573,6 @@ def _node_attr_is_truthy(node: Any, *attr_names: str) -> bool:
 def _variant_option_availability(*, node: Any, label_node: Any | None) -> tuple[str | None, int | None]:
     attr_probe_parts: list[str] = []
     text_probe_parts: list[str] = []
-    disabled = _node_attr_is_truthy(node, "disabled", "aria-disabled")
     for candidate in (
         node,
         label_node,
@@ -1590,9 +1596,9 @@ def _variant_option_availability(*, node: Any, label_node: Any | None) -> tuple[
     text_probe = clean_text(" ".join(text_probe_parts)).lower()
     if any(
         token in attr_probe
-        for token in ("outstock", "out-stock", "soldout", "sold-out", "unavailable", "disabled")
+        for token in ("outstock", "out-stock", "soldout", "sold-out", "unavailable")
     ):
-        disabled = True
+        return "out_of_stock", 0
     stock_match = re.search(r"\b(\d+)\s+left\b", text_probe)
     if stock_match:
         quantity = int(stock_match.group(1))
@@ -1601,8 +1607,6 @@ def _variant_option_availability(*, node: Any, label_node: Any | None) -> tuple[
         return "out_of_stock", 0
     if "in stock" in text_probe or "available" in text_probe:
         return "in_stock", None
-    if disabled:
-        return "out_of_stock", 0
     return None, None
 
 def _variant_option_url(
@@ -1757,6 +1761,107 @@ def _variant_choice_entry_value(
         or node.get("aria-label")
         or node.get("value")
     )
+
+
+def _split_compound_axis_name(name: object) -> list[tuple[str, str]]:
+    cleaned = clean_text(name)
+    if not cleaned:
+        return []
+    parts = [
+        clean_text(part)
+        for part in re.split(r"\s*(?:&|/|\band\b)\s*", cleaned, flags=re.I)
+        if clean_text(part)
+    ]
+    if len(parts) < 2:
+        return []
+    resolved: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for part in parts:
+        if not variant_axis_name_is_semantic(part):
+            return []
+        axis_key = normalized_variant_axis_key(part)
+        if not axis_key or axis_key in seen:
+            return []
+        seen.add(axis_key)
+        resolved.append((axis_key, normalized_variant_axis_display_name(part) or part))
+    return resolved if len(resolved) >= 2 else []
+
+
+def _strip_variant_option_price_suffix(value: object) -> str:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    without_price = re.sub(r"\s*\([^)]*[\d][^)]*\)\s*$", "", cleaned).strip()
+    return without_price or cleaned
+
+
+def _split_compound_option_value(
+    value: object,
+    *,
+    axis_keys: tuple[str, ...],
+) -> dict[str, str] | None:
+    cleaned = _strip_variant_option_price_suffix(value)
+    if not cleaned or len(axis_keys) != 2 or "size" not in axis_keys:
+        return None
+    other_axis = next((axis for axis in axis_keys if axis != "size"), "")
+    if not other_axis:
+        return None
+    tokens = [token for token in cleaned.split() if token]
+    for width in range(min(3, len(tokens)), 0, -1):
+        size_candidate = " ".join(tokens[-width:])
+        if not any(pattern.fullmatch(size_candidate) for pattern in _DETAIL_VARIANT_SIZE_VALUE_PATTERNS):
+            continue
+        other_value = clean_text(" ".join(tokens[:-width]))
+        if not other_value:
+            return None
+        return {
+            other_axis: other_value,
+            "size": size_candidate,
+        }
+    return None
+
+
+def _expand_compound_option_group(group: dict[str, object]) -> list[dict[str, object]] | None:
+    axis_parts = _split_compound_axis_name(group.get("name"))
+    if len(axis_parts) != 2:
+        return None
+    entries = [entry for entry in list(group.get("entries") or []) if isinstance(entry, dict)]
+    if not entries:
+        return None
+    axis_keys = tuple(axis_key for axis_key, _ in axis_parts)
+    parsed_rows: list[dict[str, str]] = []
+    for entry in entries:
+        parsed = _split_compound_option_value(entry.get("value"), axis_keys=axis_keys)
+        if not parsed:
+            return None
+        parsed_rows.append(parsed)
+    axis_values: dict[str, list[str]] = {axis_key: [] for axis_key, _ in axis_parts}
+    observed_combos: set[tuple[str, ...]] = set()
+    for parsed in parsed_rows:
+        combo = tuple(parsed.get(axis_key, "") for axis_key, _ in axis_parts)
+        if any(not value for value in combo):
+            return None
+        observed_combos.add(combo)
+        for axis_key, _ in axis_parts:
+            axis_value = parsed[axis_key]
+            if axis_value not in axis_values[axis_key]:
+                axis_values[axis_key].append(axis_value)
+    expected_combo_count = 1
+    for axis_key, _ in axis_parts:
+        values = axis_values.get(axis_key) or []
+        if len(values) < 2:
+            return None
+        expected_combo_count *= len(values)
+    if len(observed_combos) != len(parsed_rows) or len(observed_combos) != expected_combo_count:
+        return None
+    return [
+        {
+            "name": display_name,
+            "values": axis_values[axis_key],
+            "entries": [{"value": axis_value} for axis_value in axis_values[axis_key]],
+        }
+        for axis_key, display_name in axis_parts
+    ]
 
 def _variant_query_url(page_url: str, *, query_key: str, query_value: str) -> str | None:
     normalized_key = text_or_none(query_key)
@@ -1961,9 +2066,17 @@ def _extract_variants_from_dom(
                 }
             )
 
+    expanded_option_groups: list[dict[str, object]] = []
+    for group in option_groups:
+        compound_groups = _expand_compound_option_group(group)
+        if compound_groups:
+            expanded_option_groups.extend(compound_groups)
+            continue
+        expanded_option_groups.append(group)
+
     deduped_groups: list[dict[str, object]] = []
     merged_groups: dict[str, dict[str, object]] = {}
-    for group in option_groups:
+    for group in expanded_option_groups:
         values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
         if len(values) < 2:
             continue
@@ -2004,7 +2117,7 @@ def _extract_variants_from_dom(
                 "entries": list((group.get("entries") or {}).values()),
             }
         )
-        if len(deduped_groups) >= 2:
+        if len(deduped_groups) >= 4:
             break
 
     if not deduped_groups:

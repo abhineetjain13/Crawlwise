@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -49,6 +50,27 @@ class _FakeResponse:
         if self._error is not None:
             raise self._error
         return self._body
+
+
+@pytest.fixture(autouse=True)
+async def _reset_fetch_runtime_state_between_tests(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+
+    async def _default_load_policy(url: str, *, session=None):
+        del url, session
+        return HostProtectionPolicy(host="")
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        _default_load_policy,
+    )
+    try:
+        yield
+    finally:
+        await crawl_fetch_runtime.reset_fetch_runtime_state()
 
 
 def test_should_capture_network_payload_skips_noise_and_large_declared_payloads() -> None:
@@ -303,9 +325,10 @@ async def test_fetch_page_preserves_requested_fields_on_http_to_browser_escalati
         reason: str,
         requested_fields: list[str] | None = None,
         listing_recovery_mode: str | None = None,
+        capture_page_markdown: bool = False,
         proxies: list[str | None] | None = None,
     ):
-        del context, reason, listing_recovery_mode, proxies
+        del context, reason, listing_recovery_mode, capture_page_markdown, proxies
         nonlocal captured_requested_fields
         captured_requested_fields = list(requested_fields or [])
         return PageFetchResult(
@@ -349,9 +372,10 @@ async def test_fetch_page_preserves_requested_fields_on_browser_first_path(
         reason: str,
         requested_fields: list[str] | None = None,
         listing_recovery_mode: str | None = None,
+        capture_page_markdown: bool = False,
         proxies: list[str | None] | None = None,
     ):
-        del context, reason, listing_recovery_mode, proxies
+        del context, reason, listing_recovery_mode, capture_page_markdown, proxies
         nonlocal captured_requested_fields
         captured_requested_fields = list(requested_fields or [])
         return PageFetchResult(
@@ -571,6 +595,384 @@ async def test_fetch_page_preserves_proxy_list_on_browser_first_path(
     )
 
     assert sorted(captured_proxies or []) == ["http://proxy-one", "http://proxy-two"]
+
+
+def test_resolve_proxy_attempts_preserves_order_and_deduplicates() -> None:
+    proxies = crawl_fetch_runtime._resolve_proxy_attempts(
+        [
+            "socks5://proxy-b",
+            "http://proxy-a",
+            "socks5://proxy-b",
+            "http://proxy-c",
+        ]
+    )
+
+    assert proxies == [
+        "socks5://proxy-b",
+        "http://proxy-a",
+        "http://proxy-c",
+    ]
+
+
+def test_attach_proxy_run_session_replaces_existing_session_marker() -> None:
+    proxy = (
+        "socks5://user-session-oldvalue:pass@rp.scrapegw.com:6060"
+    )
+
+    resolved = crawl_fetch_runtime._attach_proxy_run_session(proxy, run_id=42)
+
+    assert (
+        resolved
+        == "socks5://user-session-r42:pass@rp.scrapegw.com:6060"
+    )
+
+
+def test_resolve_proxy_attempts_does_not_rewrite_proxy_session_by_default() -> None:
+    proxies = crawl_fetch_runtime._resolve_proxy_attempts(
+        [
+            "socks5://user-session-oldvalue:pass@rp.scrapegw.com:6060",
+            "socks5://user-session-other:pass@rp.scrapegw.com:6060",
+        ],
+        run_id=42,
+    )
+
+    assert proxies == [
+        "socks5://user-session-oldvalue:pass@rp.scrapegw.com:6060",
+        "socks5://user-session-other:pass@rp.scrapegw.com:6060",
+    ]
+
+
+def test_resolve_proxy_attempts_rewrites_proxy_session_when_explicitly_enabled() -> None:
+    proxies = crawl_fetch_runtime._resolve_proxy_attempts(
+        [
+            "socks5://user-session-oldvalue:pass@rp.scrapegw.com:6060",
+            "socks5://user-session-other:pass@rp.scrapegw.com:6060",
+        ],
+        run_id=42,
+        proxy_profile={"session_rewrite_enabled": True},
+    )
+
+    assert proxies == [
+        "socks5://user-session-r42:pass@rp.scrapegw.com:6060",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_browser_only_retries_proxies_in_user_order_and_stamps_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted_proxies: list[str | None] = []
+
+    async def _fake_browser_fetch(url: str, timeout: float, **kwargs):
+        del url, timeout
+        proxy = kwargs.get("proxy")
+        attempted_proxies.append(proxy)
+        if proxy == "socks5://proxy-a":
+            raise RuntimeError("proxy-a failed")
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html><body><h1>Widget</h1></body></html>",
+            status_code=200,
+            method="browser",
+            browser_diagnostics={"browser_attempted": True},
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser_fetch)
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/products/widget",
+        surface="ecommerce_detail",
+        fetch_mode="browser_only",
+        proxy_list=["socks5://proxy-a", "socks5://proxy-b", "socks5://proxy-a"],
+    )
+
+    assert attempted_proxies == ["socks5://proxy-a", "socks5://proxy-b"]
+    assert result.method == "browser"
+    assert result.browser_diagnostics["proxy_scheme"] == "socks5"
+    assert result.browser_diagnostics["browser_proxy_mode"] == "launch"
+    assert result.browser_diagnostics["proxy_attempt_index"] == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_browser_only_prefers_real_chrome_lane_after_chromium_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted_engines: list[str] = []
+
+    async def _fake_browser_fetch(url: str, timeout: float, **kwargs):
+        del url, timeout
+        attempted_engines.append(str(kwargs.get("browser_engine")))
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html><body><h1>Widget</h1></body></html>",
+            status_code=200,
+            method="browser",
+            browser_diagnostics={
+                "browser_engine": str(kwargs.get("browser_engine")),
+                "browser_binary": "chrome.exe",
+                "bridge_used": False,
+                "escalation_lane": str(kwargs.get("escalation_lane")),
+                "host_policy_snapshot": dict(kwargs.get("host_policy_snapshot") or {}),
+            },
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser_fetch)
+    monkeypatch.setattr(
+        crawl_fetch_runtime.crawler_runtime_settings,
+        "browser_real_chrome_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        AsyncMock(
+            return_value=HostProtectionPolicy(
+                host="example.com",
+                prefer_browser=True,
+                chromium_blocked=True,
+            )
+        ),
+    )
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/products/widget",
+        surface="ecommerce_detail",
+        fetch_mode="browser_only",
+    )
+
+    assert attempted_engines == ["real_chrome"]
+    assert result.browser_diagnostics["browser_engine"] == "real_chrome"
+    assert result.browser_diagnostics["escalation_lane"] == "browser_only"
+    assert result.browser_diagnostics["host_policy_snapshot"]["chromium_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_browser_only_stamps_engine_and_lane_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_browser_fetch(url: str, timeout: float, **kwargs):
+        del url, timeout
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html><body><h1>Widget</h1></body></html>",
+            status_code=200,
+            method="browser",
+            browser_diagnostics={
+                "browser_engine": str(kwargs.get("browser_engine")),
+                "browser_binary": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+                "bridge_used": True,
+                "escalation_lane": str(kwargs.get("escalation_lane")),
+                "host_policy_snapshot": dict(kwargs.get("host_policy_snapshot") or {}),
+            },
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser_fetch)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        AsyncMock(
+            return_value=HostProtectionPolicy(
+                host="example.com",
+                prefer_browser=True,
+                request_blocked=True,
+                last_block_vendor="datadome",
+            )
+        ),
+    )
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/products/widget",
+        surface="ecommerce_detail",
+        fetch_mode="browser_only",
+        proxy_list=["socks5://proxy-a"],
+    )
+
+    assert result.browser_diagnostics["browser_engine"] == "chromium"
+    assert result.browser_diagnostics["bridge_used"] is True
+    assert result.browser_diagnostics["escalation_lane"] == "browser_only_proxy"
+    assert result.browser_diagnostics["host_policy_snapshot"]["prefer_browser"] is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_forwards_proxy_profile_to_browser_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_proxy_profile: dict[str, object] | None = None
+
+    async def _fake_browser_fetch(url: str, timeout: float, **kwargs):
+        del url, timeout
+        nonlocal captured_proxy_profile
+        captured_proxy_profile = dict(kwargs.get("proxy_profile") or {})
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html><body><h1>Widget</h1></body></html>",
+            status_code=200,
+            method="browser",
+            browser_diagnostics={"browser_attempted": True},
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser_fetch)
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/products/widget",
+        surface="ecommerce_detail",
+        fetch_mode="browser_only",
+        proxy_list=["socks5://proxy-a"],
+        proxy_profile={"enabled": True, "rotation": "rotating"},
+    )
+
+    assert result.method == "browser"
+    assert captured_proxy_profile == {"enabled": True, "rotation": "rotating"}
+
+
+@pytest.mark.asyncio
+async def test_run_browser_attempts_treats_none_cooldown_as_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted_engines: list[str] = []
+    host_policy = HostProtectionPolicy(host="example.com")
+    context = crawl_fetch_runtime._FetchRuntimeContext(
+        url="https://example.com/products/widget",
+        resolved_timeout=5.0,
+        run_id=None,
+        surface="ecommerce_detail",
+        traversal_mode=None,
+        max_pages=1,
+        max_scrolls=1,
+        on_event=None,
+        browser_reason=None,
+        requested_fields=[],
+        listing_recovery_mode=None,
+        proxies=[None],
+        proxy_profile={},
+        traversal_required=False,
+        fetch_mode="browser_only",
+        runtime_policy={},
+    )
+
+    async def _fake_browser_fetch(url: str, timeout: float, **kwargs):
+        del url, timeout
+        browser_engine = str(kwargs.get("browser_engine"))
+        attempted_engines.append(browser_engine)
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html><body><h1>Rendered</h1></body></html>",
+            status_code=200,
+            method="browser",
+            blocked=browser_engine == "chromium",
+            browser_diagnostics={},
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser_fetch)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "_browser_engine_attempts",
+        lambda **_kwargs: ["chromium", "real_chrome"],
+    )
+    monkeypatch.setattr(crawl_fetch_runtime, "wait_for_host_slot", AsyncMock())
+    monkeypatch.setattr(crawl_fetch_runtime, "_update_host_result_memory", AsyncMock())
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        AsyncMock(return_value=host_policy),
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime.crawler_runtime_settings,
+        "browser_post_block_cooldown_ms",
+        None,
+    )
+
+    result = await crawl_fetch_runtime._run_browser_attempts(
+        context,
+        reason="browser-only",
+        host_policy=host_policy,
+    )
+
+    assert attempted_engines == ["chromium", "real_chrome"]
+    assert result.method == "browser"
+    assert result.blocked is False
+
+
+@pytest.mark.asyncio
+async def test_invoke_run_browser_attempts_skips_host_policy_for_legacy_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_call: dict[str, object] = {}
+    context = crawl_fetch_runtime._FetchRuntimeContext(
+        url="https://example.com/products/widget",
+        resolved_timeout=5.0,
+        run_id=None,
+        surface="ecommerce_detail",
+        traversal_mode=None,
+        max_pages=1,
+        max_scrolls=1,
+        on_event=None,
+        browser_reason=None,
+        requested_fields=[],
+        listing_recovery_mode=None,
+        proxies=[None],
+        proxy_profile={},
+        traversal_required=False,
+        fetch_mode="browser_only",
+        runtime_policy={},
+    )
+
+    async def _legacy_run_browser_attempts(
+        _context,
+        *,
+        reason: str,
+        requested_fields: list[str] | None = None,
+        listing_recovery_mode: str | None = None,
+        capture_page_markdown: bool = False,
+        proxies: list[str | None] | None = None,
+    ) -> PageFetchResult:
+        del _context
+        captured_call.update(
+            {
+                "reason": reason,
+                "requested_fields": requested_fields,
+                "listing_recovery_mode": listing_recovery_mode,
+                "capture_page_markdown": capture_page_markdown,
+                "proxies": proxies,
+            }
+        )
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html></html>",
+            status_code=200,
+            method="browser",
+        )
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "_run_browser_attempts",
+        _legacy_run_browser_attempts,
+    )
+
+    result = await crawl_fetch_runtime._invoke_run_browser_attempts(
+        context,
+        reason="browser-only",
+        requested_fields=["price"],
+        listing_recovery_mode="expand",
+        capture_page_markdown=True,
+        proxies=[None],
+        host_policy=HostProtectionPolicy(host="example.com"),
+    )
+
+    assert result.method == "browser"
+    assert captured_call == {
+        "reason": "browser-only",
+        "requested_fields": ["price"],
+        "listing_recovery_mode": "expand",
+        "capture_page_markdown": True,
+        "proxies": [None],
+    }
 
 
 @pytest.mark.asyncio
@@ -1187,7 +1589,7 @@ async def test_fetch_page_stops_http_waterfall_after_vendor_confirmed_block(
         )
 
     assert len(curl_proxies) == 1
-    assert browser_proxies == curl_proxies
+    assert browser_proxies == ["http://proxy-b"]
 
 
 @pytest.mark.asyncio

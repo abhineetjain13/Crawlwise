@@ -29,6 +29,8 @@ BLOCK_SIGNATURES = {
         {"marker": "cf-challenge", "provider": "cloudflare"},
         {"marker": "cf-browser-verification", "provider": "cloudflare"},
         {"marker": "dd-modal", "provider": "datadome"},
+        {"marker": "kpsdk", "provider": "kasada"},
+        {"marker": "window.kpsdk", "provider": "kasada"},
         {"marker": "incapsula", "provider": "incapsula"},
         {"marker": "distil", "provider": "distil"},
         {"marker": "shape security", "provider": "shape security"},
@@ -53,6 +55,7 @@ BLOCK_SIGNATURES = {
         "datadome",
         "dd-modal",
         "kasada",
+        "kpsdk",
         "incapsula",
         "distil",
         "shape security",
@@ -101,11 +104,15 @@ BLOCK_SIGNATURES = {
         "script_src_markers": {
             "captcha-delivery.com": "captcha_delivery_script",
             "datadome": "datadome_script",
+            "kasada.io/ips.js": "kasada_ips_script",
+            "/kpsdk/": "kasada_ips_script",
+            "kp_uid": "kasada_ips_script",
         },
         "html_markers": {
             "geo.captcha-delivery.com": "captcha_delivery_host",
             "ct.captcha-delivery.com": "captcha_delivery_bootstrap",
             'title="datadome captcha"': "datadome_captcha_title",
+            "window.kpsdk": "kasada_kpsdk_bootstrap",
         },
         "storage_state": {
             "cookie_name_prefixes": [
@@ -113,9 +120,23 @@ BLOCK_SIGNATURES = {
             ],
             "cookie_name_exact": [
                 "pxcts",
+                "datadome",
+            ],
+            "cookie_value_tokens": [
+                "access denied",
+                "bot_management",
+                "captcha",
+                "datadome",
             ],
             "local_storage_name_tokens": [
                 "_px",
+                "datadome",
+            ],
+            "local_storage_value_tokens": [
+                "access denied",
+                "bot_management",
+                "captcha",
+                "datadome",
             ],
         },
     },

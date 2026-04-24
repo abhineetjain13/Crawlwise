@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.crawl_utils import normalize_target_url, resolve_traversal_mode
@@ -33,6 +34,35 @@ def _coerce_sequence(value: object) -> list[object]:
 
 def _mapping(value: object) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _proxy_username(proxy_url: object) -> str:
+    try:
+        return str(urlparse(str(proxy_url or "").strip()).username or "").strip()
+    except Exception:
+        return ""
+
+
+def _infer_proxy_rotation(
+    *,
+    proxy_list: Sequence[str],
+    stored_rotation: object,
+) -> str | None:
+    normalized = str(stored_rotation or "").strip().lower()
+    if normalized:
+        return normalized
+    sticky_markers = tuple(
+        str(value or "").strip().lower()
+        for value in tuple(crawler_runtime_settings.proxy_sticky_username_markers or ())
+        if str(value or "").strip()
+    )
+    if not sticky_markers:
+        return None
+    for proxy_url in proxy_list:
+        username = _proxy_username(proxy_url).lower()
+        if username and any(marker in username for marker in sticky_markers):
+            return "sticky"
+    return None
 
 
 @dataclass(slots=True)
@@ -74,13 +104,21 @@ class CrawlRunSettings:
                 values.append(text)
         return values
 
-    def proxy_profile(self) -> dict[str, object]:
+    def proxy_profile(self, *, infer_rotation: bool = True) -> dict[str, object]:
         stored = _mapping(self.data.get("proxy_profile"))
         profile: dict[str, object] = dict(stored)
+        proxy_list = self.proxy_list()
         profile["enabled"] = bool(
             stored.get("enabled", self.data.get("proxy_enabled", False))
         )
-        profile["proxy_list"] = self.proxy_list()
+        profile["proxy_list"] = proxy_list
+        if infer_rotation:
+            inferred_rotation = _infer_proxy_rotation(
+                proxy_list=proxy_list,
+                stored_rotation=stored.get("rotation"),
+            )
+            if inferred_rotation is not None:
+                profile["rotation"] = inferred_rotation
         return profile
 
     def traversal_mode(self) -> str | None:
@@ -250,6 +288,9 @@ class CrawlRunSettings:
                 "capture_browser_diagnostics": diagnostics_profile["capture_browser_diagnostics"],
             }
         )
+        proxy_profile = self.proxy_profile()
+        profile["proxy_profile"] = proxy_profile
+        profile["locality_profile"] = self.locality_profile()
         return profile
 
     def acquisition_plan(
@@ -290,7 +331,7 @@ class CrawlRunSettings:
         normalized["traversal_mode"] = self.traversal_mode()
         normalized["proxy_enabled"] = bool(self.proxy_profile()["enabled"])
         normalized["proxy_list"] = self.proxy_list()
-        normalized["proxy_profile"] = self.proxy_profile()
+        normalized["proxy_profile"] = self.proxy_profile(infer_rotation=False)
         if self.advanced_enabled():
             normalized["advanced_mode"] = self.get("advanced_mode")
         elif "advanced_mode" in normalized:

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import logging as _logging
+import copy as _copy
+import ctypes as _ctypes
+import json as _json
+import os as _os
 import platform as _platform
 import re as _re
 import threading as _threading
@@ -10,10 +14,22 @@ from types import SimpleNamespace as _SimpleNamespace
 from typing import Any
 
 from browserforge.fingerprints import FingerprintGenerator
+import pytz
+from tzlocal import get_localzone_name as _get_localzone_name
+
+try:
+    from browserforge.fingerprints import Fingerprint as _BrowserforgeFingerprint
+except Exception:  # pragma: no cover - optional dependency contract
+    _BrowserforgeFingerprint = None
 from cachetools import TTLCache
 
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.network_resolution import _accept_language_for_locale
+
+try:
+    from browserforge.injectors.utils import InjectFunction as _BrowserforgeInjectFunction
+except Exception:  # pragma: no cover - optional dependency contract
+    _BrowserforgeInjectFunction = None
 
 
 def _host_os_fingerprint_arg() -> str:
@@ -51,6 +67,15 @@ _HOST_OS_PLATFORM_LABELS = {
     "macos": "macOS",
     "linux": "Linux",
 }
+_TIMEZONE_ALIASES = {
+    "asia/calcutta": "Asia/Kolkata",
+}
+_DEVICE_MEMORY_BUCKETS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
+_TIMEZONE_TO_COUNTRY = {
+    timezone_name: country_code
+    for country_code, timezone_names in pytz.country_timezones.items()
+    for timezone_name in timezone_names
+}
 _logger = _logging.getLogger(__name__)
 MAX_BROWSER_IDENTITIES = 1024
 BROWSER_IDENTITY_TTL_SECONDS = 60 * 60
@@ -71,10 +96,241 @@ class BrowserIdentity:
     device_scale_factor: float
     has_touch: bool
     is_mobile: bool
+    raw_fingerprint: Any | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PlaywrightContextSpec:
+    context_options: dict[str, Any]
+    init_script: str | None = None
+
+
+def _viewport_from_screen(
+    screen: Any,
+    *,
+    is_mobile: bool,
+) -> dict[str, int]:
+    screen_width = max(1, int(getattr(screen, "width", 0) or 0))
+    screen_height = max(1, int(getattr(screen, "height", 0) or 0))
+    avail_width = int(getattr(screen, "availWidth", 0) or 0)
+    avail_height = int(getattr(screen, "availHeight", 0) or 0)
+    viewport_width = (
+        avail_width
+        if 0 < avail_width <= screen_width
+        else screen_width
+    )
+    viewport_height = (
+        avail_height
+        if 0 < avail_height < screen_height
+        else (
+            screen_height
+            if is_mobile
+            else max(
+                1,
+                screen_height
+                - int(
+                    crawler_runtime_settings.browser_desktop_viewport_reserved_height_px
+                    or 0
+                ),
+            )
+        )
+    )
+    return {
+        "width": viewport_width,
+        "height": viewport_height,
+    }
+
+
+def _positive_int(value: object) -> int | None:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _positive_float(value: object) -> float | None:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _host_total_memory_bytes() -> int | None:
+    if _HOST_OS == "windows":
+        try:
+            class _MemoryStatusEx(_ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", _ctypes.c_ulong),
+                    ("dwMemoryLoad", _ctypes.c_ulong),
+                    ("ullTotalPhys", _ctypes.c_ulonglong),
+                    ("ullAvailPhys", _ctypes.c_ulonglong),
+                    ("ullTotalPageFile", _ctypes.c_ulonglong),
+                    ("ullAvailPageFile", _ctypes.c_ulonglong),
+                    ("ullTotalVirtual", _ctypes.c_ulonglong),
+                    ("ullAvailVirtual", _ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", _ctypes.c_ulonglong),
+                ]
+
+            status = _MemoryStatusEx()
+            status.dwLength = _ctypes.sizeof(_MemoryStatusEx)
+            if _ctypes.windll.kernel32.GlobalMemoryStatusEx(_ctypes.byref(status)):
+                return int(status.ullTotalPhys)
+        except Exception:
+            return None
+        return None
+    try:
+        page_size = int(_os.sysconf("SC_PAGE_SIZE"))
+        page_count = int(_os.sysconf("SC_PHYS_PAGES"))
+    except (AttributeError, OSError, ValueError):
+        return None
+    total_bytes = page_size * page_count
+    return total_bytes if total_bytes > 0 else None
+
+
+def _bucket_device_memory_gb(value: object) -> float | None:
+    normalized = _positive_float(value)
+    if normalized is None:
+        return None
+    bucket = _DEVICE_MEMORY_BUCKETS[0]
+    for candidate in _DEVICE_MEMORY_BUCKETS:
+        if normalized >= candidate:
+            bucket = candidate
+        else:
+            break
+    return bucket
+
+
+def _resolved_device_memory_gb(raw_value: object) -> float | None:
+    configured = _bucket_device_memory_gb(
+        crawler_runtime_settings.fingerprint_device_memory_gb
+    )
+    if configured is not None:
+        return configured
+    host_total_memory = _host_total_memory_bytes()
+    if host_total_memory is not None:
+        host_gb = host_total_memory / float(1024**3)
+        bucketed = _bucket_device_memory_gb(host_gb)
+        if bucketed is not None:
+            return bucketed
+    return _bucket_device_memory_gb(raw_value)
+
+
+def _resolved_hardware_concurrency(raw_value: object) -> int | None:
+    configured = _positive_int(
+        crawler_runtime_settings.fingerprint_hardware_concurrency
+    )
+    if configured is not None:
+        return configured
+    host_cpu_count = _positive_int(_os.cpu_count())
+    raw_cpu_count = _positive_int(raw_value)
+    if host_cpu_count is not None and raw_cpu_count is not None:
+        return min(raw_cpu_count, host_cpu_count)
+    return host_cpu_count or raw_cpu_count
+
+
+def _align_raw_fingerprint_to_runtime_hardware(raw_fingerprint: Any | None) -> Any | None:
+    if raw_fingerprint is None:
+        return None
+    try:
+        aligned_fingerprint = _copy.deepcopy(raw_fingerprint)
+    except Exception:
+        try:
+            aligned_fingerprint = _copy.copy(raw_fingerprint)
+        except Exception:
+            return raw_fingerprint
+        fallback_navigator = getattr(aligned_fingerprint, "navigator", None)
+        if fallback_navigator is not None:
+            try:
+                setattr(aligned_fingerprint, "navigator", _copy.copy(fallback_navigator))
+            except Exception:
+                return raw_fingerprint
+    navigator = getattr(aligned_fingerprint, "navigator", None)
+    if navigator is None:
+        return raw_fingerprint
+    hardware_concurrency = _resolved_hardware_concurrency(
+        getattr(navigator, "hardwareConcurrency", None)
+    )
+    if hardware_concurrency is not None:
+        setattr(navigator, "hardwareConcurrency", hardware_concurrency)
+    device_memory_gb = _resolved_device_memory_gb(
+        getattr(navigator, "deviceMemory", None)
+    )
+    if device_memory_gb is not None:
+        setattr(navigator, "deviceMemory", device_memory_gb)
+    return aligned_fingerprint
+
+
+def _harmonize_fingerprint_screen_geometry(
+    screen: Any,
+    *,
+    viewport: Mapping[str, int],
+    is_mobile: bool,
+) -> None:
+    viewport_width = max(1, int(viewport.get("width", 0) or 0))
+    viewport_height = max(1, int(viewport.get("height", 0) or 0))
+    screen_width = max(
+        viewport_width,
+        int(getattr(screen, "width", 0) or 0),
+    )
+    screen_height = max(
+        viewport_height,
+        int(getattr(screen, "height", 0) or 0),
+    )
+    setattr(screen, "innerWidth", viewport_width)
+    setattr(screen, "innerHeight", viewport_height)
+    setattr(screen, "clientWidth", viewport_width)
+    setattr(screen, "clientHeight", viewport_height)
+    if is_mobile:
+        return
+    frame_width = max(
+        1,
+        int(crawler_runtime_settings.browser_desktop_window_frame_width_px or 1),
+    )
+    frame_height = max(
+        1,
+        int(crawler_runtime_settings.browser_desktop_window_frame_height_px or 1),
+    )
+    outer_width = max(
+        viewport_width + frame_width,
+        int(getattr(screen, "outerWidth", 0) or 0),
+    )
+    outer_width = min(screen_width, outer_width)
+    outer_height = max(
+        viewport_height + frame_height,
+        int(getattr(screen, "outerHeight", 0) or 0),
+    )
+    if outer_height >= screen_height:
+        outer_height = max(viewport_height + 1, screen_height - 1)
+    else:
+        outer_height = min(screen_height, outer_height)
+    avail_width = min(
+        screen_width,
+        max(
+            viewport_width,
+            int(getattr(screen, "availWidth", 0) or 0),
+        ),
+    )
+    avail_height = min(
+        screen_height,
+        max(
+            viewport_height,
+            int(getattr(screen, "availHeight", 0) or 0),
+        ),
+    )
+    setattr(screen, "outerWidth", outer_width)
+    setattr(screen, "outerHeight", outer_height)
+    setattr(screen, "availWidth", avail_width)
+    setattr(screen, "availHeight", avail_height)
+    setattr(screen, "width", screen_width)
+    setattr(screen, "height", screen_height)
 
 
 def create_browser_identity() -> BrowserIdentity:
-    fingerprint = _generate_coherent_fingerprint()
+    fingerprint = _align_raw_fingerprint_to_runtime_hardware(
+        _generate_coherent_fingerprint()
+    )
     screen = fingerprint.screen
     navigator = fingerprint.navigator
     headers = {
@@ -113,17 +369,21 @@ def create_browser_identity() -> BrowserIdentity:
     has_touch = bool((navigator.maxTouchPoints or 0) > 0)
     if not is_mobile:
         has_touch = False
+    viewport = _viewport_from_screen(screen, is_mobile=is_mobile)
+    _harmonize_fingerprint_screen_geometry(
+        screen,
+        viewport=viewport,
+        is_mobile=is_mobile,
+    )
     return BrowserIdentity(
         user_agent=user_agent,
-        viewport={
-            "width": max(1, int(screen.width or 0)),
-            "height": max(1, int(screen.height or 0)),
-        },
+        viewport=viewport,
         extra_http_headers=headers,
         locale=locale,
         device_scale_factor=max(1.0, float(screen.devicePixelRatio or 1.0)),
         has_touch=has_touch,
         is_mobile=is_mobile,
+        raw_fingerprint=fingerprint,
     )
 
 
@@ -428,6 +688,111 @@ def _accept_language_matches_locale(value: object, *, locale: str) -> bool:
     return first_language == normalized_locale
 
 
+def _normalized_locale(locale: object) -> str:
+    return str(locale or "").strip().replace("_", "-")
+
+
+def _locale_language(locale: object) -> str:
+    normalized = _normalized_locale(locale)
+    if not normalized:
+        return ""
+    return normalized.split("-", 1)[0].strip()
+
+
+def _locale_region(locale: object) -> str | None:
+    normalized = _normalized_locale(locale)
+    if not normalized:
+        return None
+    parts = [part.strip() for part in normalized.split("-") if part.strip()]
+    for part in parts[1:]:
+        if len(part) == 2 and part.isalpha():
+            return part.upper()
+    return None
+
+
+def _locale_languages(locale: object) -> list[str]:
+    normalized = _normalized_locale(locale)
+    if not normalized:
+        return []
+    language = _locale_language(normalized)
+    if not language or language.lower() == normalized.lower():
+        return [normalized]
+    return [normalized, language]
+
+
+def _country_code(value: object) -> str | None:
+    normalized = str(value or "").strip().upper()
+    if not normalized or normalized == "AUTO":
+        return None
+    if normalized in pytz.country_timezones:
+        return normalized
+    return None
+
+
+def _normalize_timezone_id(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    alias = _TIMEZONE_ALIASES.get(normalized.lower())
+    candidate = alias or normalized
+    if candidate in pytz.all_timezones_set:
+        return candidate
+    if alias and alias in pytz.all_timezones_set:
+        return alias
+    return None
+
+
+def _country_code_from_timezone(timezone_id: object) -> str | None:
+    normalized_timezone = _normalize_timezone_id(timezone_id)
+    if not normalized_timezone:
+        return None
+    return _TIMEZONE_TO_COUNTRY.get(normalized_timezone)
+
+
+def _local_timezone_id() -> str | None:
+    try:
+        return _normalize_timezone_id(_get_localzone_name())
+    except Exception:
+        return None
+
+
+def _resolve_timezone_id(locality_profile: Mapping[str, object] | None) -> str | None:
+    configured = _normalize_timezone_id(
+        crawler_runtime_settings.fingerprint_timezone_id
+    )
+    if configured:
+        return configured
+    country = _country_code(
+        locality_profile.get("geo_country") if locality_profile else None
+    )
+    if country:
+        country_timezones = tuple(pytz.country_timezones.get(country, ()))
+        if len(country_timezones) == 1:
+            return _normalize_timezone_id(country_timezones[0])
+    return _local_timezone_id()
+
+
+def _locale_with_region(
+    locale: object,
+    region: str | None,
+    *,
+    replace_region: bool,
+) -> str:
+    normalized = _normalized_locale(locale)
+    if not normalized:
+        return ""
+    normalized_region = str(region or "").strip().upper()
+    if not normalized_region:
+        return normalized
+    language = _locale_language(normalized)
+    current_region = _locale_region(normalized)
+    if current_region and not replace_region:
+        return normalized
+    if not language:
+        return normalized
+    return f"{language}-{normalized_region}"
+
+
 def _chrome_major_version(user_agent: str) -> int | None:
     match = _UA_VERSION_RE.search(str(user_agent or ""))
     if match is None:
@@ -442,6 +807,14 @@ def _replace_chrome_major_version(user_agent: str, major_version: int) -> str:
     return _UA_VERSION_RE.sub(f"Chrome/{int(major_version)}.", str(user_agent or ""), count=1)
 
 
+def _drop_sec_ch_headers(headers: Mapping[str, object]) -> dict[str, str]:
+    return {
+        str(key): str(value)
+        for key, value in headers.items()
+        if not str(key).lower().startswith("sec-ch-ua")
+    }
+
+
 def _align_identity_to_browser_major(
     identity: BrowserIdentity,
     *,
@@ -451,16 +824,23 @@ def _align_identity_to_browser_major(
     if resolved_major <= 0:
         return identity
     current_major = _chrome_major_version(identity.user_agent)
+    if current_major is None:
+        return identity
     if current_major == resolved_major:
         return identity
     aligned_user_agent = _replace_chrome_major_version(identity.user_agent, resolved_major)
-    aligned_headers = dict(identity.extra_http_headers)
+    aligned_headers = _drop_sec_ch_headers(identity.extra_http_headers)
     coherent_hints = _coherent_client_hints_from_user_agent(
         aligned_user_agent,
         mobile=identity.is_mobile,
     )
     if coherent_hints:
         aligned_headers.update(_coherent_sec_ch_headers(coherent_hints))
+    aligned_fingerprint = _align_raw_fingerprint_to_browser_major(
+        identity.raw_fingerprint,
+        browser_major_version=resolved_major,
+        is_mobile=identity.is_mobile,
+    )
     return BrowserIdentity(
         user_agent=aligned_user_agent,
         viewport=dict(identity.viewport),
@@ -469,21 +849,173 @@ def _align_identity_to_browser_major(
         device_scale_factor=identity.device_scale_factor,
         has_touch=identity.has_touch,
         is_mobile=identity.is_mobile,
+        raw_fingerprint=aligned_fingerprint,
     )
 
 
-def build_playwright_context_options(
-    identity: BrowserIdentity | None = None,
+def _align_raw_fingerprint_to_browser_major(
+    raw_fingerprint: Any | None,
     *,
-    run_id: int | None = None,
-    browser_major_version: int | None = None,
-) -> dict[str, Any]:
-    identity = identity or browser_identity_for_run(run_id)
-    identity = _align_identity_to_browser_major(
-        identity,
-        browser_major_version=browser_major_version,
+    browser_major_version: int | None,
+    is_mobile: bool,
+) -> Any | None:
+    resolved_major = int(browser_major_version or 0)
+    if raw_fingerprint is None or resolved_major <= 0:
+        return raw_fingerprint
+    navigator = getattr(raw_fingerprint, "navigator", None)
+    original_user_agent = str(getattr(navigator, "userAgent", "") or "")
+    if not original_user_agent:
+        return raw_fingerprint
+    current_major = _chrome_major_version(original_user_agent)
+    if current_major is None:
+        return raw_fingerprint
+    if current_major == resolved_major:
+        return raw_fingerprint
+    aligned_user_agent = _replace_chrome_major_version(
+        original_user_agent,
+        resolved_major,
     )
-    return {
+    try:
+        aligned_fingerprint = _copy.deepcopy(raw_fingerprint)
+    except Exception:
+        try:
+            aligned_fingerprint = _copy.copy(raw_fingerprint)
+        except Exception:
+            return raw_fingerprint
+        fallback_navigator = getattr(aligned_fingerprint, "navigator", None)
+        if fallback_navigator is not None:
+            try:
+                setattr(aligned_fingerprint, "navigator", _copy.copy(fallback_navigator))
+            except Exception:
+                return raw_fingerprint
+    aligned_navigator = getattr(aligned_fingerprint, "navigator", None)
+    if aligned_navigator is None:
+        return raw_fingerprint
+    user_agent_data = (
+        dict(getattr(aligned_navigator, "userAgentData", {}) or {})
+        if isinstance(getattr(aligned_navigator, "userAgentData", None), dict)
+        else {}
+    )
+    coherent_hints = _coherent_client_hints_from_user_agent(
+        aligned_user_agent,
+        mobile=is_mobile,
+    )
+    if coherent_hints:
+        user_agent_data.update(coherent_hints)
+    headers = _drop_sec_ch_headers(getattr(aligned_fingerprint, "headers", {}) or {})
+    if coherent_hints:
+        headers.update(_coherent_sec_ch_headers(user_agent_data))
+    setattr(aligned_navigator, "userAgent", aligned_user_agent)
+    if user_agent_data:
+        setattr(aligned_navigator, "userAgentData", user_agent_data)
+    setattr(aligned_fingerprint, "headers", headers)
+    return aligned_fingerprint
+
+
+def _align_raw_fingerprint_to_locale(
+    raw_fingerprint: Any | None,
+    *,
+    locale: str,
+) -> Any | None:
+    if raw_fingerprint is None:
+        return None
+    try:
+        aligned_fingerprint = _copy.deepcopy(raw_fingerprint)
+    except Exception:
+        try:
+            aligned_fingerprint = _copy.copy(raw_fingerprint)
+        except Exception:
+            return raw_fingerprint
+        fallback_navigator = getattr(aligned_fingerprint, "navigator", None)
+        if fallback_navigator is not None:
+            try:
+                setattr(aligned_fingerprint, "navigator", _copy.copy(fallback_navigator))
+            except Exception:
+                return raw_fingerprint
+    navigator = getattr(aligned_fingerprint, "navigator", None)
+    if navigator is None:
+        return raw_fingerprint
+    setattr(navigator, "language", locale)
+    setattr(navigator, "languages", _locale_languages(locale))
+    headers = dict(getattr(aligned_fingerprint, "headers", {}) or {})
+    headers["Accept-Language"] = _accept_language_for_locale(locale)
+    setattr(aligned_fingerprint, "headers", headers)
+    return aligned_fingerprint
+
+
+def _resolve_locale(
+    identity: BrowserIdentity,
+    *,
+    locality_profile: Mapping[str, object] | None,
+    timezone_id: str | None,
+) -> str:
+    explicit_locale = _normalized_locale(
+        locality_profile.get("language_hint") if locality_profile else None
+    )
+    if explicit_locale:
+        return _locale_with_region(
+            explicit_locale,
+            _country_code(locality_profile.get("geo_country") if locality_profile else None),
+            replace_region=False,
+        )
+    locale = _normalized_locale(identity.locale) or _normalized_locale(
+        crawler_runtime_settings.fingerprint_locale
+    )
+    if not bool(
+        crawler_runtime_settings.fingerprint_locale_auto_align_timezone_region
+    ):
+        return locale
+    return _locale_with_region(
+        locale,
+        _country_code_from_timezone(timezone_id),
+        replace_region=True,
+    )
+
+
+def _align_identity_to_locality(
+    identity: BrowserIdentity,
+    *,
+    locality_profile: Mapping[str, object] | None,
+) -> tuple[BrowserIdentity, str | None]:
+    timezone_id = _resolve_timezone_id(locality_profile)
+    resolved_locale = _resolve_locale(
+        identity,
+        locality_profile=locality_profile,
+        timezone_id=timezone_id,
+    )
+    if not resolved_locale:
+        return identity, timezone_id
+    headers = dict(identity.extra_http_headers)
+    if not _accept_language_matches_locale(
+        headers.get("Accept-Language"),
+        locale=resolved_locale,
+    ):
+        headers["Accept-Language"] = _accept_language_for_locale(resolved_locale)
+    raw_fingerprint = _align_raw_fingerprint_to_locale(
+        identity.raw_fingerprint,
+        locale=resolved_locale,
+    )
+    return (
+        BrowserIdentity(
+            user_agent=identity.user_agent,
+            viewport=dict(identity.viewport),
+            extra_http_headers=headers,
+            locale=resolved_locale,
+            device_scale_factor=identity.device_scale_factor,
+            has_touch=identity.has_touch,
+            is_mobile=identity.is_mobile,
+            raw_fingerprint=raw_fingerprint,
+        ),
+        timezone_id,
+    )
+
+
+def _playwright_context_options_from_identity(
+    identity: BrowserIdentity,
+    *,
+    timezone_id: str | None = None,
+) -> dict[str, Any]:
+    options = {
         "user_agent": identity.user_agent,
         "viewport": dict(identity.viewport),
         "extra_http_headers": dict(identity.extra_http_headers),
@@ -494,3 +1026,340 @@ def build_playwright_context_options(
         "service_workers": "block",
         "bypass_csp": False,
     }
+    permissions = [
+        str(value or "").strip()
+        for value in tuple(crawler_runtime_settings.browser_context_permissions or ())
+        if str(value or "").strip()
+    ]
+    if permissions:
+        options["permissions"] = permissions
+    if timezone_id:
+        options["timezone_id"] = timezone_id
+    return options
+
+
+def _playwright_masking_init_script() -> str:
+    globals_to_mask = [
+        str(value or "").strip()
+        for value in tuple(crawler_runtime_settings.browser_mask_playwright_globals or ())
+        if str(value or "").strip()
+    ]
+    lines = [
+        "(() => {",
+        "  const roots = [globalThis];",
+        "  if (typeof window !== 'undefined' && window !== globalThis) {",
+        "    roots.push(window);",
+        "  }",
+        "  const maskGlobal = (key) => {",
+        "    for (const root of roots) {",
+        "      try {",
+        "        Object.defineProperty(root, key, {",
+        "          get: () => undefined,",
+        "          set: () => true,",
+        "          enumerable: false,",
+        "          configurable: false,",
+        "        });",
+        "      } catch (_) {}",
+        "    }",
+        "  };",
+        f"  const pwKeys = {globals_to_mask!r};",
+        "  for (const key of pwKeys) {",
+        "    maskGlobal(key);",
+        "  }",
+    ]
+    if bool(crawler_runtime_settings.browser_disable_web_workers):
+        lines.extend(
+            [
+                "  maskGlobal('Worker');",
+                "  maskGlobal('SharedWorker');",
+                "  try {",
+                "    Object.defineProperty(Navigator.prototype, 'serviceWorker', {",
+                "      get: () => undefined,",
+                "      set: () => true,",
+                "      enumerable: false,",
+                "      configurable: true,",
+                "    });",
+                "  } catch (_) {}",
+            ]
+        )
+    lines.append("})();")
+    return "\n".join(lines)
+
+
+def _playwright_init_script_from_identity(
+    identity: BrowserIdentity,
+    *,
+    timezone_id: str | None = None,
+) -> str | None:
+    masking_script = _playwright_masking_init_script()
+    raw_fingerprint = identity.raw_fingerprint
+    color_scheme = str(
+        crawler_runtime_settings.fingerprint_color_scheme or ""
+    ).strip().lower()
+    permissions_script = "\n".join(
+        [
+            "(() => {",
+            "  const installDescriptor = (target, key, getter) => {",
+            "    if (!target) {",
+            "      return;",
+            "    }",
+            "    try {",
+            "      Object.defineProperty(target, key, {",
+            "        get: getter,",
+            "        enumerable: false,",
+            "        configurable: true,",
+            "      });",
+            "    } catch (_) {}",
+            "  };",
+            "  try {",
+            "    if (typeof Notification !== 'undefined') {",
+            "      installDescriptor(Notification, 'permission', () => 'default');",
+            "    }",
+            "  } catch (_) {}",
+            "  try {",
+            "    const nativeQuery = Navigator.prototype.permissions?.query || navigator.permissions?.query?.bind(navigator.permissions);",
+            "    if (nativeQuery) {",
+            "      const buildPermissionStatus = (state) => ({",
+            "        state,",
+            "        onchange: null,",
+            "        addEventListener() {},",
+            "        removeEventListener() {},",
+            "        dispatchEvent() { return true; },",
+            "      });",
+            "      const wrappedQuery = async function query(permissionDesc) {",
+            "        const name = String(permissionDesc && permissionDesc.name || '').toLowerCase();",
+            "        if (name === 'notifications') {",
+            "          return buildPermissionStatus('prompt');",
+            "        }",
+            "        return nativeQuery.call(this, permissionDesc);",
+            "      };",
+            "      if (navigator.permissions) {",
+            "        navigator.permissions.query = wrappedQuery.bind(navigator.permissions);",
+            "      }",
+            "      try {",
+            "        installDescriptor(Permissions.prototype, 'query', () => wrappedQuery);",
+            "      } catch (_) {}",
+            "    }",
+            "  } catch (_) {}",
+            "  try {",
+            "    if (typeof NetworkInformation !== 'undefined') {",
+            "      installDescriptor(NetworkInformation.prototype, 'downlinkMax', () => 10);",
+            "    }",
+            "  } catch (_) {}",
+            "  try {",
+            "    if (typeof ContentIndex === 'undefined') {",
+            "      globalThis.ContentIndex = class ContentIndex {",
+            "        async add() { return undefined; }",
+            "        async delete() { return undefined; }",
+            "        async getAll() { return []; }",
+            "      };",
+            "    }",
+            "    if (typeof ServiceWorkerRegistration === 'undefined') {",
+            "      globalThis.ServiceWorkerRegistration = class ServiceWorkerRegistration {};",
+            "    }",
+            "    installDescriptor(ServiceWorkerRegistration.prototype, 'contentIndex', () => new ContentIndex());",
+            "  } catch (_) {}",
+            "  try {",
+            "    if (typeof ContactsManager === 'undefined') {",
+            "      globalThis.ContactsManager = class ContactsManager {",
+            "        async getProperties() { return ['name', 'email', 'tel', 'address', 'icon']; }",
+            "        async select() { return []; }",
+            "      };",
+            "    }",
+            "    installDescriptor(Navigator.prototype, 'contacts', () => new ContactsManager());",
+            "  } catch (_) {}",
+            "})();",
+        ]
+    )
+    runtime_hardware_script = "\n".join(
+        [
+            "(() => {",
+            f"  const hardwareConcurrency = {_json.dumps(_resolved_hardware_concurrency(getattr(getattr(raw_fingerprint, 'navigator', None), 'hardwareConcurrency', None)))};",
+            f"  const deviceMemory = {_json.dumps(_resolved_device_memory_gb(getattr(getattr(raw_fingerprint, 'navigator', None), 'deviceMemory', None)))};",
+            "  const installNavigatorValue = (key, value) => {",
+            "    if (value === null || value === undefined) {",
+            "      return;",
+            "    }",
+            "    try {",
+            "      Object.defineProperty(Navigator.prototype, key, {",
+            "        get: () => value,",
+            "        enumerable: false,",
+            "        configurable: true,",
+            "      });",
+            "    } catch (_) {}",
+            "  };",
+            "  installNavigatorValue('hardwareConcurrency', hardwareConcurrency);",
+            "  installNavigatorValue('deviceMemory', deviceMemory);",
+            "})();",
+        ]
+    )
+    color_scheme_script = "\n".join(
+        [
+            "(() => {",
+            f"  const preferredColorScheme = {_json.dumps(color_scheme)};",
+            "  if (!preferredColorScheme || typeof window.matchMedia !== 'function') {",
+            "    return;",
+            "  }",
+            "  const nativeMatchMedia = window.matchMedia.bind(window);",
+            "  window.matchMedia = function matchMedia(query) {",
+            "    const result = nativeMatchMedia(query);",
+            "    const normalized = String(query || '').toLowerCase();",
+            "    if (!normalized.includes('prefers-color-scheme')) {",
+            "      return result;",
+            "    }",
+            "    const matches = normalized.includes(preferredColorScheme);",
+            "    const wrapped = Object.create(result);",
+            "    try {",
+            "      Object.defineProperty(wrapped, 'matches', {",
+            "        get: () => matches,",
+            "        enumerable: true,",
+            "        configurable: true,",
+            "      });",
+            "      Object.defineProperty(wrapped, 'media', {",
+            "        get: () => result.media,",
+            "        enumerable: true,",
+            "        configurable: true,",
+            "      });",
+            "    } catch (_) {}",
+            "    return wrapped;",
+            "  };",
+            "})();",
+        ]
+    )
+    locality_script = "\n".join(
+        [
+            "(() => {",
+            f"  const locale = {_json.dumps(identity.locale)};",
+            f"  const languages = {_json.dumps(_locale_languages(identity.locale))};",
+            f"  const timezoneId = {_json.dumps(timezone_id)};",
+            "  try {",
+            "    Object.defineProperty(Navigator.prototype, 'language', {",
+            "      get: () => locale,",
+            "      enumerable: false,",
+            "      configurable: true,",
+            "    });",
+            "  } catch (_) {}",
+            "  try {",
+            "    Object.defineProperty(Navigator.prototype, 'languages', {",
+            "      get: () => Array.from(languages),",
+            "      enumerable: false,",
+            "      configurable: true,",
+            "    });",
+            "  } catch (_) {}",
+            "  if (!timezoneId) {",
+            "    return;",
+            "  }",
+            "  const NativeDateTimeFormat = Intl.DateTimeFormat;",
+            "  const nativeResolvedOptions = NativeDateTimeFormat.prototype.resolvedOptions;",
+            "  const PatchedDateTimeFormat = function DateTimeFormat(...args) {",
+            "    const formatter = new NativeDateTimeFormat(...args);",
+            "    return new Proxy(formatter, {",
+            "      get(target, prop, receiver) {",
+            "        if (prop === 'resolvedOptions') {",
+            "          return () => ({ ...nativeResolvedOptions.call(target), timeZone: timezoneId });",
+            "        }",
+            "        return Reflect.get(target, prop, receiver);",
+            "      },",
+            "    });",
+            "  };",
+            "  for (const key of [...Object.getOwnPropertyNames(NativeDateTimeFormat), ...Object.getOwnPropertySymbols(NativeDateTimeFormat)]) {",
+            "    if (key === 'prototype') continue;",
+            "    try {",
+            "      const descriptor = Object.getOwnPropertyDescriptor(NativeDateTimeFormat, key);",
+            "      if (!descriptor) continue;",
+            "      if (typeof descriptor.value === 'function') {",
+            "        descriptor.value = descriptor.value.bind(NativeDateTimeFormat);",
+            "      }",
+            "      Object.defineProperty(PatchedDateTimeFormat, key, descriptor);",
+            "    } catch (_) {}",
+            "  }",
+            "  try {",
+            "    Object.defineProperty(PatchedDateTimeFormat, 'prototype', { value: NativeDateTimeFormat.prototype });",
+            "  } catch (_) {",
+            "    PatchedDateTimeFormat.prototype = NativeDateTimeFormat.prototype;",
+            "  }",
+            "  try {",
+            "    Object.defineProperty(PatchedDateTimeFormat, 'toString', {",
+            "      value: NativeDateTimeFormat.toString.bind(NativeDateTimeFormat),",
+            "      configurable: true,",
+            "    });",
+            "  } catch (_) {}",
+            "  Intl.DateTimeFormat = PatchedDateTimeFormat;",
+            "})();",
+        ]
+    )
+    if raw_fingerprint is None or _BrowserforgeInjectFunction is None:
+        return (
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{locality_script}\n{runtime_hardware_script}"
+        )
+    if (
+        _BrowserforgeFingerprint is not None
+        and not isinstance(raw_fingerprint, _BrowserforgeFingerprint)
+    ):
+        return (
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{locality_script}\n{runtime_hardware_script}"
+        )
+    if not callable(getattr(raw_fingerprint, "dumps", None)):
+        return (
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{locality_script}\n{runtime_hardware_script}"
+        )
+    try:
+        browserforge_script = str(_BrowserforgeInjectFunction(raw_fingerprint))
+        return (
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{locality_script}\n"
+            f"{browserforge_script}\n"
+            f"{runtime_hardware_script}"
+        )
+    except Exception:
+        _logger.debug("Failed to build browserforge init script", exc_info=True)
+        return (
+            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n"
+            f"{locality_script}\n{runtime_hardware_script}"
+        )
+
+
+def build_playwright_context_spec(
+    identity: BrowserIdentity | None = None,
+    *,
+    run_id: int | None = None,
+    browser_major_version: int | None = None,
+    locality_profile: Mapping[str, object] | None = None,
+) -> PlaywrightContextSpec:
+    identity = identity or browser_identity_for_run(run_id)
+    identity = _align_identity_to_browser_major(
+        identity,
+        browser_major_version=browser_major_version,
+    )
+    identity, timezone_id = _align_identity_to_locality(
+        identity,
+        locality_profile=locality_profile,
+    )
+    return PlaywrightContextSpec(
+        context_options=_playwright_context_options_from_identity(
+            identity,
+            timezone_id=timezone_id,
+        ),
+        init_script=_playwright_init_script_from_identity(
+            identity,
+            timezone_id=timezone_id,
+        ),
+    )
+
+
+def build_playwright_context_options(
+    identity: BrowserIdentity | None = None,
+    *,
+    run_id: int | None = None,
+    browser_major_version: int | None = None,
+    locality_profile: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
+    return build_playwright_context_spec(
+        identity=identity,
+        run_id=run_id,
+        browser_major_version=browser_major_version,
+        locality_profile=locality_profile,
+    ).context_options

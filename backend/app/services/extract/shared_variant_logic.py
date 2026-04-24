@@ -10,10 +10,12 @@ from app.services.config.extraction_rules import (
     VARIANT_AXIS_ALIASES,
     VARIANT_CHOICE_GROUP_SELECTOR,
     VARIANT_COLOR_HINT_WORDS,
+    VARIANT_GROUP_ATTR_NOISE_PATTERNS,
+    VARIANT_GROUP_ATTR_NOISE_TOKENS,
     VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SELECT_GROUP_SELECTOR,
 )
-from app.services.field_value_core import clean_text
+from app.services.field_value_core import clean_text, text_or_none
 
 _VARIANT_AXIS_LABEL_NOISE_TOKENS = frozenset(
     str(token).strip().lower()
@@ -24,6 +26,18 @@ _VARIANT_AXIS_LABEL_NOISE_PATTERNS = (
     tuple(
         re.compile(str(pattern), re.I)
         for pattern in VARIANT_AXIS_LABEL_NOISE_PATTERNS
+        if str(pattern).strip()
+    )
+)
+_VARIANT_GROUP_ATTR_NOISE_TOKENS = frozenset(
+    str(token).strip().lower()
+    for token in VARIANT_GROUP_ATTR_NOISE_TOKENS
+    if str(token).strip()
+)
+_VARIANT_GROUP_ATTR_NOISE_PATTERNS = (
+    tuple(
+        re.compile(str(pattern), re.I)
+        for pattern in VARIANT_GROUP_ATTR_NOISE_PATTERNS
         if str(pattern).strip()
     )
 )
@@ -170,24 +184,36 @@ def infer_variant_group_name(node: Any) -> str:
 def resolve_variant_group_name(node: Any) -> str:
     if not hasattr(node, "get"):
         return ""
+    if _variant_group_node_attrs_are_noise(node):
+        return ""
     inferred_name = infer_variant_group_name(node)
-    raw_candidates: list[object] = []
+    visible_candidates: list[object] = []
+    machine_candidates: list[object] = []
     tag_name = str(getattr(node, "name", "") or "").strip().lower()
+    node_id = text_or_none(node.get("id"))
+    if node_id and tag_name not in {"input", "button", "option"}:
+        root = node
+        while getattr(root, "parent", None) is not None:
+            root = root.parent
+        if hasattr(root, "find"):
+            external_label = root.find("label", attrs={"for": node_id})
+            if external_label is not None:
+                visible_candidates.append(external_label.get_text(" ", strip=True))
     label = node.find_parent("label") if hasattr(node, "find_parent") else None
     if label is not None and tag_name not in {"input", "button", "option"}:
-        raw_candidates.append(label.get_text(" ", strip=True))
+        visible_candidates.append(label.get_text(" ", strip=True))
     fieldset = node if tag_name == "fieldset" else (
         node.find_parent("fieldset") if hasattr(node, "find_parent") else None
     )
     if fieldset is not None:
         legend = fieldset.find("legend")
         if legend is not None:
-            raw_candidates.append(legend.get_text(" ", strip=True))
+            visible_candidates.append(legend.get_text(" ", strip=True))
     if _node_attr_can_hold_group_label(node):
         aria_label = node.get("aria-label")
         if aria_label not in (None, "", [], {}):
-            raw_candidates.append(aria_label)
-    raw_candidates.extend(
+            visible_candidates.append(aria_label)
+    machine_candidates.extend(
         node.get(attr_name)
         for attr_name in (
             "data-option-name",
@@ -198,7 +224,7 @@ def resolve_variant_group_name(node: Any) -> str:
         )
         if node.get(attr_name) not in (None, "", [], {})
     )
-    for raw_name in [*raw_candidates, inferred_name]:
+    for raw_name in [*visible_candidates, inferred_name]:
         cleaned_name = clean_text(str(raw_name).replace("_", " ").replace("-", " "))
         if variant_axis_name_is_semantic(cleaned_name):
             normalized_name = normalized_variant_axis_key(cleaned_name)
@@ -209,6 +235,10 @@ def resolve_variant_group_name(node: Any) -> str:
             ):
                 return normalized_name
             return cleaned_name
+    for raw_name in machine_candidates:
+        resolved_name = _resolve_machine_variant_group_name(raw_name)
+        if resolved_name:
+            return resolved_name
     if tag_name == "select":
         inferred_from_values = infer_variant_group_name_from_values(_select_option_texts(node))
         if inferred_from_values:
@@ -240,6 +270,54 @@ def infer_variant_group_name_from_values(values: list[object]) -> str:
     if color_hits >= 2 and color_hits / len(cleaned_values) >= 0.5:
         return "color"
     return ""
+
+
+def _resolve_machine_variant_group_name(value: object) -> str:
+    cleaned = clean_text(str(value).replace("_", " ").replace("-", " "))
+    if not cleaned or not variant_axis_name_is_semantic(cleaned):
+        return ""
+    normalized = normalized_variant_axis_key(cleaned)
+    if not normalized:
+        return ""
+    normalized_tokens = [token for token in normalized.split("_") if token]
+    if not normalized_tokens:
+        return ""
+    if normalized in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+        return normalized
+    if all(
+        token in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS
+        or token in _VARIANT_AXIS_GENERIC_TOKENS
+        or token.isdigit()
+        for token in normalized_tokens
+    ):
+        return normalized
+    return ""
+
+
+def _variant_group_node_attrs_are_noise(node: Any) -> bool:
+    if not hasattr(node, "get"):
+        return False
+    parts: list[str] = []
+    for attr_name in (
+        "aria-label",
+        "data-option-name",
+        "data-testid",
+        "data-qa-action",
+        "id",
+        "name",
+        "class",
+    ):
+        value = node.get(attr_name)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value if item)
+        elif value not in (None, "", [], {}):
+            parts.append(str(value))
+    probe = clean_text(" ".join(parts)).lower()
+    if not probe:
+        return False
+    if any(token in probe for token in _VARIANT_GROUP_ATTR_NOISE_TOKENS):
+        return True
+    return any(pattern.search(probe) for pattern in _VARIANT_GROUP_ATTR_NOISE_PATTERNS)
 
 
 def _node_attr_can_hold_group_label(node: Any) -> bool:

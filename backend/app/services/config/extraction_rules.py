@@ -309,6 +309,22 @@ VARIANT_AXIS_LABEL_NOISE_PATTERNS: tuple[str, ...] = (
     r"\blanguage\s+translate\s+widget\b",
     r"\breport\s+this\s+answer\b",
 )
+VARIANT_GROUP_ATTR_NOISE_TOKENS: tuple[str, ...] = (
+    "country-picker",
+    "estimated-shipping-country",
+    "report-item-choices",
+    "shipping-country",
+    "ship-to-country",
+)
+VARIANT_GROUP_ATTR_NOISE_PATTERNS: tuple[str, ...] = (
+    r"\bchoose\s+a\s+reason\b",
+    r"\bchoose\s+country\b",
+    r"\bcountry\s+picker\b",
+    r"\bestimated\s+shipping\s+country\b",
+    r"\breport\s+item\b",
+    r"\bship(?:ping)?\s+to\s+country\b",
+    r"\bregions?\s+etsy\s+does\s+business\s+in\b",
+)
 VARIANT_COLOR_HINT_WORDS: tuple[str, ...] = (
     "beige",
     "black",
@@ -340,6 +356,7 @@ VARIANT_COLOR_HINT_WORDS: tuple[str, ...] = (
 )
 VARIANT_SIZE_VALUE_PATTERNS: tuple[str, ...] = (
     r"^(?:xxxs|xxs|xs|s|m|l|xl|xxl|xxxl)$",
+    r"^\d+xl$",
     r"^(?:one|free|single)\s+size$",
     r"^(?:os|o/s)$",
     r"^(?:(?:eu|uk|us|cm|mm)[-\s]?)?\d{1,3}(?:/\d{1,3})?$",
@@ -491,6 +508,8 @@ __all__ = sorted(
         "TITLE_PROMOTION_SUBSTRINGS",
         "VARIANT_AXIS_LABEL_NOISE_PATTERNS",
         "VARIANT_AXIS_LABEL_NOISE_TOKENS",
+        "VARIANT_GROUP_ATTR_NOISE_PATTERNS",
+        "VARIANT_GROUP_ATTR_NOISE_TOKENS",
         "VARIANT_CHOICE_GROUP_SELECTOR",
         "VARIANT_COLOR_HINT_WORDS",
         "VARIANT_SIZE_VALUE_PATTERNS",

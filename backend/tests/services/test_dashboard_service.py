@@ -15,7 +15,12 @@ from app.models.crawl import (
     ReviewPromotion,
 )
 from app.models.llm import LLMCostLog
-from app.services.acquisition.host_protection_memory import reset_host_protection_memory
+from app.services.acquisition.host_protection_memory import (
+    load_host_protection_policy,
+    note_host_hard_block,
+    note_host_usable_fetch,
+    reset_host_protection_memory,
+)
 from app.services.crawl_crud import create_crawl_run
 from app.services.dashboard_service import (
     reset_application_data,
@@ -24,6 +29,7 @@ from app.services.dashboard_service import (
 )
 from sqlalchemy import select
 from app.core.database import SessionLocal
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -313,3 +319,51 @@ async def test_reset_host_protection_memory_ignores_missing_table(
     monkeypatch.setattr(db_session, "rollback", _rollback)
 
     await reset_host_protection_memory(session=db_session)
+
+
+@pytest.mark.asyncio
+async def test_host_protection_policy_persists_success_state_across_sessions(
+    db_session: AsyncSession,
+) -> None:
+    session_factory = async_sessionmaker(
+        db_session.bind,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
+
+    await note_host_hard_block(
+        "https://example.com/products/widget",
+        method="browser:chromium",
+        vendor="akamai",
+        proxy_used=False,
+        session=db_session,
+    )
+    await db_session.commit()
+
+    async with session_factory() as verification_session:
+        blocked_policy = await load_host_protection_policy(
+            "https://example.com/products/widget",
+            session=verification_session,
+        )
+
+    assert blocked_policy.prefer_browser is True
+    assert blocked_policy.chromium_blocked is True
+
+    async with session_factory() as success_session:
+        await note_host_usable_fetch(
+            "https://example.com/products/widget",
+            method="browser:real_chrome",
+            proxy_used=True,
+            session=success_session,
+        )
+        await success_session.commit()
+
+    async with session_factory() as verification_session:
+        recovered_policy = await load_host_protection_policy(
+            "https://example.com/products/widget",
+            session=verification_session,
+        )
+
+    assert recovered_policy.prefer_browser is True
+    assert recovered_policy.chromium_blocked is False
+    assert recovered_policy.real_chrome_success is True

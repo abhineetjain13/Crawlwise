@@ -208,19 +208,188 @@ def _map_ecommerce_detail_state(
             if not base_record:
                 base_record = mapped
             elif _mapped_product_identity_matches(base_record, mapped, page_url=page_url):
-                for field_name in (
-                    "variants",
-                    "variant_axes",
-                    "selected_variant",
-                    "variant_count",
-                ):
-                    if base_record.get(field_name) in (None, "", [], {}):
-                        field_value = mapped.get(field_name)
-                        if field_value not in (None, "", [], {}):
-                            base_record[field_name] = field_value
-            if base_record.get("variants") not in (None, "", [], {}):
-                break
+                base_record = _merge_same_product_record(
+                    base_record,
+                    mapped,
+                    page_url=page_url,
+                )
     return base_record
+
+
+def _merge_same_product_record(
+    base_record: dict[str, Any],
+    incoming: dict[str, Any],
+    *,
+    page_url: str,
+) -> dict[str, Any]:
+    merged = dict(base_record)
+    for field_name, field_value in incoming.items():
+        if field_name in {"variants", "variant_axes", "selected_variant", "variant_count"}:
+            continue
+        if merged.get(field_name) in (None, "", [], {}) and field_value not in (
+            None,
+            "",
+            [],
+            {},
+        ):
+            merged[field_name] = field_value
+
+    merged_variants = _merge_variant_rows(
+        base_record.get("variants"),
+        incoming.get("variants"),
+    )
+    if merged_variants:
+        merged["variants"] = merged_variants
+        merged["variant_count"] = len(merged_variants)
+        selected_variant = select_variant(merged_variants, page_url=page_url)
+        if selected_variant is not None:
+            merged["selected_variant"] = selected_variant
+
+    merged_axes = _merge_variant_axes(
+        base_record.get("variant_axes"),
+        incoming.get("variant_axes"),
+    )
+    if not merged_axes and merged_variants:
+        merged_axes = variant_axes(merged_variants)
+    if merged_axes:
+        merged["variant_axes"] = merged_axes
+
+    if merged.get("selected_variant") in (None, "", [], {}):
+        selected_variant = incoming.get("selected_variant")
+        if isinstance(selected_variant, dict) and selected_variant:
+            merged["selected_variant"] = dict(selected_variant)
+
+    _refresh_record_from_selected_variant(merged)
+    return compact_dict(merged)
+
+
+def _merge_variant_rows(
+    existing_rows: Any,
+    incoming_rows: Any,
+) -> list[dict[str, Any]]:
+    merged_by_identity: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+
+    def _remember(row: dict[str, Any]) -> None:
+        identity = _variant_identity(row)
+        if not identity:
+            return
+        current = merged_by_identity.get(identity)
+        if current is None:
+            merged_by_identity[identity] = dict(row)
+            ordered_keys.append(identity)
+            return
+        richer, weaker = _variant_rows_by_richness(current, row)
+        merged_row = dict(richer)
+        for field_name, field_value in weaker.items():
+            if merged_row.get(field_name) in (None, "", [], {}) and field_value not in (
+                None,
+                "",
+                [],
+                {},
+            ):
+                merged_row[field_name] = field_value
+        merged_by_identity[identity] = merged_row
+
+    for rows in (existing_rows, incoming_rows):
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict):
+                _remember(row)
+
+    return [merged_by_identity[key] for key in ordered_keys]
+
+
+def _merge_variant_axes(existing_axes: Any, incoming_axes: Any) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for axes in (existing_axes, incoming_axes):
+        if not isinstance(axes, dict):
+            continue
+        for axis_name, axis_values in axes.items():
+            normalized_axis = text_or_none(axis_name)
+            if not normalized_axis or not isinstance(axis_values, list):
+                continue
+            bucket = merged.setdefault(normalized_axis, [])
+            seen = {value.lower() for value in bucket}
+            for axis_value in axis_values:
+                cleaned_value = text_or_none(axis_value)
+                if not cleaned_value or cleaned_value.lower() in seen:
+                    continue
+                seen.add(cleaned_value.lower())
+                bucket.append(cleaned_value)
+    return merged
+
+
+def _variant_identity(variant: dict[str, Any]) -> str | None:
+    variant_id = text_or_none(variant.get("variant_id"))
+    if variant_id:
+        return f"id:{variant_id}"
+    sku = text_or_none(variant.get("sku"))
+    if sku:
+        return f"sku:{sku}"
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict) and option_values:
+        normalized_pairs = [
+            (str(axis_name).strip(), text_or_none(axis_value) or "")
+            for axis_name, axis_value in option_values.items()
+            if str(axis_name).strip() and text_or_none(axis_value)
+        ]
+        if normalized_pairs:
+            normalized_pairs.sort()
+            return "options:" + "|".join(f"{axis}={value}" for axis, value in normalized_pairs)
+    variant_url = text_or_none(variant.get("url"))
+    if variant_url:
+        return f"url:{variant_url}"
+    return None
+
+
+def _variant_rows_by_richness(
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    left_score = _variant_row_richness(left)
+    right_score = _variant_row_richness(right)
+    if right_score > left_score:
+        return right, left
+    return left, right
+
+
+def _variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
+    populated_fields = sum(
+        1 for value in variant.values() if value not in (None, "", [], {})
+    )
+    option_value_count = (
+        len(variant.get("option_values"))
+        if isinstance(variant.get("option_values"), dict)
+        else 0
+    )
+    has_stock_signal = int(
+        variant.get("stock_quantity") not in (None, "", [], {})
+        or variant.get("original_price") not in (None, "", [], {})
+    )
+    return (populated_fields, option_value_count, has_stock_signal)
+
+
+def _refresh_record_from_selected_variant(record: dict[str, Any]) -> None:
+    selected_variant = record.get("selected_variant")
+    if not isinstance(selected_variant, dict):
+        return
+    for field_name in (
+        "price",
+        "original_price",
+        "currency",
+        "availability",
+        "stock_quantity",
+        "sku",
+        "barcode",
+        "image_url",
+        "color",
+        "size",
+    ):
+        field_value = selected_variant.get(field_name)
+        if field_value not in (None, "", [], {}):
+            record[field_name] = field_value
 
 
 def _mapped_product_identity_matches(
