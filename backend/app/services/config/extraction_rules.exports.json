@@ -4694,8 +4694,13 @@
       "contact",
       "contact_us",
       "customer_service",
+      "ean",
       "faq",
       "faqs",
+      "gtin",
+      "gtin12",
+      "gtin13",
+      "gtin14",
       "policies",
       "privacy",
       "privacy_policy",
@@ -4706,7 +4711,8 @@
       "shopping_cart",
       "store_locations",
       "terms",
-      "terms_policies"
+      "terms_policies",
+      "upc"
     ]
   },
   "NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS": {

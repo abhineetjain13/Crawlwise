@@ -392,7 +392,11 @@ def classify_failure_mode(result: dict[str, object]) -> str:
         return "browser_navigation_failure"
     if verdict == "blocked":
         return "blocked"
-    if result.get("blocked") or _diagnostics_indicate_challenge(diagnostics):
+    if (
+        result.get("blocked")
+        or _diagnostics_indicate_challenge(diagnostics)
+        or _diagnostics_contain_strong_challenge_evidence(diagnostics)
+    ):
         return "blocked"
     if verdict == "listing_detection_failed":
         return "listing_extraction_empty"
@@ -422,6 +426,24 @@ def classify_failure_mode(result: dict[str, object]) -> str:
 
 def _diagnostics_indicate_challenge(diagnostics: dict[str, object]) -> bool:
     return diagnostics_indicate_block(diagnostics)
+
+
+def _diagnostics_contain_strong_challenge_evidence(
+    diagnostics: dict[str, object],
+) -> bool:
+    evidence = [
+        str(item or "").strip().lower()
+        for item in list(diagnostics.get("challenge_evidence") or [])
+        if str(item or "").strip()
+    ]
+    if any(
+        item.startswith(("strong:", "title:", "active_provider:", "challenge_element:"))
+        for item in evidence
+    ):
+        return True
+    return bool(diagnostics.get("challenge_element_hits")) and bool(
+        diagnostics.get("challenge_provider_hits")
+    )
 
 
 def _challenge_summary_from_diagnostics(diagnostics: dict[str, object]) -> dict[str, object] | None:
