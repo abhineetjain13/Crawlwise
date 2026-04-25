@@ -743,6 +743,121 @@ def test_extract_records_prefers_rendered_listing_fragments_over_thin_structured
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
 
 
+def test_extract_records_prefers_browser_visual_rows_over_weak_promo_dom_rows() -> None:
+    html = """
+    <html><body>
+      <section>
+        <a href="/handbags/">Sunnies Sunglasses Shop</a>
+        <span>$50</span>
+      </section>
+      <section>
+        <a href="/mothers-day/">Designer Handbags & Accessories</a>
+        <span>$25</span>
+      </section>
+    </body></html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "text": "Super Soft Solid Microfiber Sheet Set",
+                    "href": "https://www.belk.com/p/modern-southern-home--super-soft-solid-microfiber-sheet-set-/92007011175487.html",
+                    "x": 10,
+                    "y": 20,
+                    "width": 220,
+                    "height": 40,
+                },
+                {
+                    "tag": "span",
+                    "text": "$22.50",
+                    "x": 10,
+                    "y": 70,
+                    "width": 80,
+                    "height": 20,
+                },
+                {
+                    "tag": "a",
+                    "text": "Signature Bath Rug",
+                    "href": "https://www.belk.com/p/modern-southern-home---signature-bath-rug/920089711724242.html",
+                    "x": 10,
+                    "y": 140,
+                    "width": 220,
+                    "height": 40,
+                },
+                {
+                    "tag": "span",
+                    "text": "$18.00",
+                    "x": 10,
+                    "y": 190,
+                    "width": 80,
+                    "height": 20,
+                },
+                {
+                    "tag": "a",
+                    "text": "Basic Bath Bundle",
+                    "href": "https://www.belk.com/p/modern-southern-home--basic-bath-bundle-/920071211789570.html",
+                    "x": 10,
+                    "y": 260,
+                    "width": 220,
+                    "height": 40,
+                },
+                {
+                    "tag": "span",
+                    "text": "$34.00",
+                    "x": 10,
+                    "y": 310,
+                    "width": 80,
+                    "height": 20,
+                },
+            ]
+        },
+    )
+
+    assert len(rows) == 3
+    assert {row["_source"] for row in rows} == {"visual_listing"}
+    assert {row["title"] for row in rows} == {
+        "Super Soft Solid Microfiber Sheet Set",
+        "Signature Bath Rug",
+        "Basic Bath Bundle",
+    }
+
+
+def test_extract_records_enriches_generic_listing_rows_from_matching_adapter_rows() -> None:
+    html = """
+    <html><body>
+      <article class="product-card">
+        <a href="/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html">Checkerboard Quilt Set</a>
+        <span>$22.50</span>
+      </article>
+    </body></html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        adapter_records=[
+            {
+                "title": "Checkerboard Quilt Set",
+                "brand": "Modern Southern Home",
+                "url": "https://www.belk.com/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html",
+                "_source": "belk_adapter",
+            }
+        ],
+    )
+
+    assert rows[0]["_source"] == "dom_listing"
+    assert rows[0]["brand"] == "Modern Southern Home"
+    assert rows[0]["price"] == "22.50"
+
+
 @pytest.mark.asyncio
 async def test_belk_adapter_extracts_listing_brand_from_state_and_tiles() -> None:
     html = """
@@ -786,6 +901,37 @@ async def test_belk_adapter_extracts_listing_brand_from_state_and_tiles() -> Non
     assert result.records[0]["price"] == "89.50"
 
 
+@pytest.mark.asyncio
+async def test_belk_adapter_extracts_title_brand_from_rendered_card_attrs() -> None:
+    html = """
+    <html><body>
+      <article class="product-tile" data-cnstrc-item-name="Cuddlebed 2.0 Mattress Pad" data-cnstrc-item-id="92002171202220">
+        <a href="/p/cuddlebed-cuddlebed-2-0-mattress-pad/92002171202220.html">
+          <img alt="Cuddlebed 2.0 Mattress Pad" src="https://belk.scene7.com/is/image/Belk/9200217">
+        </a>
+        <span>$22.50</span>
+      </article>
+      <article class="product-tile" data-cnstrc-item-name="Crown &amp; Ivy™ Hydrangea Vase">
+        <a href="/p/crown-ivy-hydrangea-vase/760161676226SPH0073IJ.html">
+          <img alt="Crown &amp; Ivy™ Hydrangea Vase" src="https://belk.scene7.com/is/image/Belk/7601616">
+        </a>
+      </article>
+    </body></html>
+    """
+
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        html,
+        "ecommerce_listing",
+    )
+
+    assert result.records[0]["title"] == "Cuddlebed 2.0 Mattress Pad"
+    assert result.records[0]["brand"] == "Cuddlebed"
+    assert result.records[0]["price"] == "22.50"
+    assert result.records[0]["product_id"] == "92002171202220"
+    assert result.records[1]["brand"] == "Crown & Ivy™"
+
+
 def test_listing_extractor_extracts_brand_from_product_tile() -> None:
     rows = extract_records(
         """
@@ -808,7 +954,7 @@ def test_listing_extractor_extracts_brand_from_product_tile() -> None:
     assert rows[0]["brand"] == "Polo Ralph Lauren"
 
 
-def test_listing_extractor_infers_belk_brand_from_pdp_slug_when_fragment_lacks_brand() -> None:
+def test_listing_extractor_does_not_infer_belk_brand_from_pdp_slug_when_fragment_lacks_brand() -> None:
     rows = extract_records(
         """
         <html><body>
@@ -826,7 +972,7 @@ def test_listing_extractor_infers_belk_brand_from_pdp_slug_when_fragment_lacks_b
         max_records=10,
     )
 
-    assert rows[0]["brand"] == "Polo Ralph Lauren"
+    assert "brand" not in rows[0]
 
 
 def test_extract_records_prefers_generic_listing_rows_over_thin_adapter_rows() -> None:
@@ -3378,7 +3524,7 @@ def test_extract_detail_keeps_long_product_titles_that_include_star_ratings() ->
     assert rows[0]["title"] == "Vitamagic Pro 192L 3 Star Radiant Steel Refrigerator"
 
 
-def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record_is_complete() -> None:
+def test_extract_detail_allows_safe_early_exit_before_dom_when_pre_dom_record_is_complete() -> None:
     html = """
     <html>
       <head>
@@ -3416,8 +3562,8 @@ def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["_extraction_tiers"]["early_exit"] == "structured_data"
-    assert record["_extraction_tiers"]["current"] == "structured_data"
+    assert record["_extraction_tiers"]["early_exit"] == "js_state"
+    assert record["_extraction_tiers"]["current"] == "js_state"
 
 
 def test_extract_detail_records_preserves_selector_trace_for_selected_rule() -> None:

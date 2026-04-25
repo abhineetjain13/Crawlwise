@@ -11,8 +11,10 @@ from app.services.acquisition.acquirer import (
     AcquisitionResult,
     acquire,
 )
+from app.services.adapters.base import AdapterResult
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
 from app.services.pipeline.core import (
+    _best_adapter_result,
     _resolved_url_processing_config,
     apply_llm_fallback,
     process_single_url,
@@ -29,6 +31,26 @@ def _detail_html() -> str:
 
 def _listing_html() -> str:
     return "<html><body><h1>Empty category</h1></body></html>"
+
+
+def test_best_adapter_result_deduplicates_unsourced_records() -> None:
+    result = _best_adapter_result(
+        [
+            AdapterResult(
+                records=[{"title": "Widget", "price": "$10"}],
+                source_type="json",
+                adapter_name="first",
+            ),
+            AdapterResult(
+                records=[{"price": "$10", "title": "Widget"}],
+                source_type="json",
+                adapter_name="second",
+            ),
+        ]
+    )
+
+    assert result is not None
+    assert result.records == [{"title": "Widget", "price": "$10"}]
 
 
 @pytest.mark.asyncio
@@ -115,6 +137,153 @@ async def test_process_single_url_prefetch_only_returns_metrics_without_persisti
     assert result.url_metrics["record_count"] == 0
     assert total == 0
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_runs_adapter_against_browser_artifact_fragments(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://www.belk.com/home/",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False, "max_records": 10},
+        },
+    )
+
+    fragment = """
+    <article class="product-tile">
+      <a href="/p/polo-ralph-lauren-slim-straight-jeans/123.html">
+        <span class="product-name">Slim Straight Jeans</span>
+      </a>
+      <span class="product-brand">Polo Ralph Lauren</span>
+      <span class="price">$89.50</span>
+    </article>
+    """
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body><h1>Home</h1></body></html>",
+            method="browser",
+            status_code=200,
+            artifacts={"rendered_listing_fragments": [fragment]},
+        )
+
+    async def _fake_run_adapter(url, html, surface):
+        if "product-tile" not in html:
+            return None
+        return AdapterResult(
+            records=[
+                {
+                    "title": "Slim Straight Jeans",
+                    "brand": "Polo Ralph Lauren",
+                    "price": "89.50",
+                    "url": "https://www.belk.com/p/polo-ralph-lauren-slim-straight-jeans/123.html",
+                    "_source": "belk_adapter",
+                }
+            ],
+            source_type="belk_adapter",
+            adapter_name="belk",
+        )
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    def _fake_extract_records(*args, **kwargs):
+        return list(kwargs.get("adapter_records") or [])
+
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/belk.html"
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _fake_run_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _fake_extract_records)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
+    )
+
+    result = await process_single_url(db_session, run, run.url)
+
+    assert result.url_metrics["adapter_name"] == "belk"
+    assert result.records[0]["brand"] == "Polo Ralph Lauren"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_prefers_richer_adapter_artifact_rows(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://www.belk.com/home/",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False, "max_records": 10},
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>partial product-tile</body></html>",
+            method="browser",
+            status_code=200,
+            artifacts={"rendered_listing_fragments": ["rich product-tile"]},
+        )
+
+    async def _fake_run_adapter(url, html, surface):
+        del url, surface
+        if "rich product-tile" in html:
+            records = [
+                {"title": "Rich One", "brand": "Brand", "url": "https://www.belk.com/p/1.html"},
+                {"title": "Rich Two", "brand": "Brand", "url": "https://www.belk.com/p/2.html"},
+            ]
+        elif "partial product-tile" in html:
+            records = [
+                {"title": "Partial One", "url": "https://www.belk.com/p/1.html"},
+            ]
+        else:
+            return None
+        return AdapterResult(records=records, source_type="belk_adapter", adapter_name="belk")
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    def _fake_extract_records(*args, **kwargs):
+        return list(kwargs.get("adapter_records") or [])
+
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/belk.html"
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _fake_run_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _fake_extract_records)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
+    )
+
+    result = await process_single_url(db_session, run, run.url)
+
+    assert [record["title"] for record in result.records] == ["Rich One", "Rich Two"]
 
 
 def test_url_processing_config_syncs_compatibility_fields_from_acquisition_plan() -> None:

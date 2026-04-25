@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Annotated, Any, NoReturn, cast
 
 from app.core.database import SessionLocal
@@ -20,6 +20,7 @@ from app.schemas.crawl import (
     DomainRecipePromoteSelectorsRequest,
     DomainRecipeResponse,
     DomainRunProfileLookupResponse,
+    DomainRunProfilePayload,
     DomainRunProfileRecordResponse,
     DomainRecipeSaveRunProfileRequest,
     CrawlRunResponse,
@@ -73,6 +74,7 @@ from fastapi import (
     status,
 )
 from jose import JWTError
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
@@ -90,6 +92,17 @@ RUN_CONFLICT_RESPONSE: ResponseSpec = {
     **RUN_NOT_FOUND_RESPONSE,
     status.HTTP_409_CONFLICT: {"description": RUN_CONFLICT_DETAIL},
 }
+
+
+def _domain_run_profile_payload(value: object) -> DomainRunProfilePayload:
+    payload = (
+        dict(value)
+        if isinstance(value, Mapping)
+        else value.model_dump()
+        if isinstance(value, BaseModel)
+        else value
+    )
+    return DomainRunProfilePayload.model_validate(payload)
 
 
 async def _resolve_websocket_user(websocket: WebSocket) -> User | None:
@@ -292,7 +305,9 @@ async def crawls_domain_run_profile_lookup(
         domain=normalized_domain,
         surface=normalized_surface,
         saved_run_profile=(
-            dict(saved_profile.profile or {}) if saved_profile is not None else None
+            _domain_run_profile_payload(saved_profile.profile)
+            if saved_profile is not None
+            else None
         ),
     )
 
@@ -327,7 +342,7 @@ async def _list_domain_run_profile_responses(
             id=row.id,
             domain=row.domain,
             surface=row.surface,
-            profile=dict(row.profile or {}),
+            profile=_domain_run_profile_payload(row.profile),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

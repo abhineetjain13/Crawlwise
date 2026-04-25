@@ -386,6 +386,48 @@ async def test_paginate_traversal_stops_when_card_count_stays_zero() -> None:
 
 
 @pytest.mark.asyncio
+async def test_paginate_traversal_settles_thin_initial_listing_before_stopping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settled_state = _State(
+        html="<html><body>"
+        + "".join(
+            f"<article class='product-card'><a href='/products/widget-{index}'>Widget {index}</a><span>$10</span></article>"
+            for index in range(8)
+        )
+        + "</body></html>",
+        card_count=8,
+        scroll_height=2200,
+    )
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<html><body><section><a href='/promo'>Promo</a><span>$10</span></section></body></html>",
+            card_count=5,
+            scroll_height=900,
+        ),
+    )
+
+    async def _settle(page_arg, **kwargs):
+        del kwargs
+        page_arg.state = settled_state
+
+    monkeypatch.setattr(traversal_module, "_settle_after_action", _settle)
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=3,
+        max_scrolls=1,
+    )
+
+    assert result.progress_events == 1
+    assert result.card_count == 8
+    assert "Widget 7" in result.compose_html()
+
+
+@pytest.mark.asyncio
 async def test_paginate_traversal_blocks_off_domain_links() -> None:
     page = _FakePage(
         surface="ecommerce_listing",

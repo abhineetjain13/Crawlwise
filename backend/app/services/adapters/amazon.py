@@ -15,13 +15,23 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 
 
 def _text(node: object) -> str:
-    return node.text(strip=True) if node is not None else ""
+    if node is None:
+        return ""
+    text_fn = getattr(node, "text", None)
+    if not callable(text_fn):
+        return ""
+    try:
+        return str(text_fn(strip=True) or "")
+    except Exception:
+        return ""
 
 
 def _attr(node: object, name: str) -> str | None:
     if node is None:
         return None
-    value = node.attributes.get(name)
+    raw_attrs = getattr(node, "attributes", {}) or {}
+    attrs = raw_attrs if isinstance(raw_attrs, Mapping) else {}
+    value = attrs.get(name)
     if value is None:
         return None
     return str(value).strip() or None

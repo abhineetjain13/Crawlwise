@@ -8,9 +8,11 @@ def build_acquisition_profile(settings_view) -> dict[str, object]:
 
 
 def _challenge_evidence_rows(diagnostics: dict[str, object]) -> list[str]:
+    raw_evidence = diagnostics.get("challenge_evidence")
+    evidence_items = raw_evidence if isinstance(raw_evidence, list) else []
     return [
         str(item or "").strip().lower()
-        for item in list(diagnostics.get("challenge_evidence") or [])
+        for item in evidence_items
         if str(item or "").strip()
     ]
 
@@ -18,8 +20,10 @@ def _challenge_evidence_rows(diagnostics: dict[str, object]) -> list[str]:
 def diagnostics_indicate_block(diagnostics: dict[str, object] | object) -> bool:
     payload = dict(diagnostics or {}) if isinstance(diagnostics, dict) else {}
     browser_outcome = str(payload.get("browser_outcome") or "").strip().lower()
-    challenge_elements = list(payload.get("challenge_element_hits") or [])
-    provider_hits = list(payload.get("challenge_provider_hits") or [])
+    challenge_elements_raw = payload.get("challenge_element_hits")
+    challenge_elements = challenge_elements_raw if isinstance(challenge_elements_raw, list) else []
+    provider_hits_raw = payload.get("challenge_provider_hits")
+    provider_hits = provider_hits_raw if isinstance(provider_hits_raw, list) else []
     evidence = _challenge_evidence_rows(payload)
     if browser_outcome == "challenge_page":
         return True

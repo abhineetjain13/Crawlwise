@@ -9,7 +9,13 @@ from bs4 import BeautifulSoup, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.crawl_fetch_runtime import fetch_page
-from app.services.config.extraction_rules import EXTRACTION_RULES, SELECTOR_NOISE_VALUES
+from app.services.config.extraction_rules import (
+    COMMERCE_FIELD_HINTS,
+    EXTRACTION_RULES,
+    JOB_FIELD_HINTS,
+    LISTING_URL_HINTS,
+    SELECTOR_NOISE_VALUES,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
 from app.services.domain_memory_service import (
@@ -31,34 +37,6 @@ from app.services.xpath_service import (
 from app.services.url_safety import ensure_public_crawl_targets
 
 
-_COMMERCE_FIELD_HINTS = {
-    "title",
-    "price",
-    "brand",
-    "sku",
-    "rating",
-    "in_stock",
-    "availability",
-    "image_url",
-}
-_JOB_FIELD_HINTS = {
-    "company",
-    "location",
-    "apply_url",
-    "salary",
-    "remote",
-    "responsibilities",
-    "qualifications",
-}
-_LISTING_URL_HINTS = (
-    "/shop/", "/category/", "/collection/", "/search",
-    "/browse/", "/c/", "/catalog/", "/products",
-    "/makeup/", "/skincare/", "/hair/", "/fragrance/",
-    "?q=", "?query=", "?search=",
-    "/p/", "/plp/", "/clp/",
-)
-
-
 def _coerce_int(value: object, default: int = 0) -> int:
     try:
         return int(str(value if value is not None else "").strip())
@@ -71,13 +49,11 @@ def infer_surface(*, url: str, expected_fields: Iterable[str] | None = None) -> 
         normalize_field_key(value) for value in list(expected_fields or []) if value
     }
     lowered_url = str(url or "").lower()
-    if normalized_fields & _JOB_FIELD_HINTS:
+    if normalized_fields & JOB_FIELD_HINTS:
         return "job_detail"
-    if any(hint in lowered_url for hint in _LISTING_URL_HINTS):
-        if normalized_fields & _COMMERCE_FIELD_HINTS:
-            return "ecommerce_listing"
+    if any(hint in lowered_url for hint in LISTING_URL_HINTS):
         return "ecommerce_listing"
-    if normalized_fields & _COMMERCE_FIELD_HINTS:
+    if normalized_fields & COMMERCE_FIELD_HINTS:
         return "ecommerce_detail"
     detected_family = str(detect_platform_family(url) or "").strip().lower()
     if detected_family and detected_family in job_platform_families():

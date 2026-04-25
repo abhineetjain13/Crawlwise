@@ -153,3 +153,31 @@ def test_install_asyncio_exception_filter_delegates_unknown_errors() -> None:
     loop.handler(loop, context)
 
     assert loop.default_calls == [context]
+
+
+def test_install_asyncio_exception_filter_preserves_original_context_for_previous_handler() -> None:
+    previous_calls: list[object] = []
+
+    class FakeLoop:
+        def __init__(self) -> None:
+            self.handler = None
+
+        def get_exception_handler(self):
+            return lambda inner_loop, context: previous_calls.append((inner_loop, context))
+
+        def set_exception_handler(self, handler) -> None:
+            self.handler = handler
+
+        def default_exception_handler(self, context) -> None:
+            raise AssertionError("default handler should not run")
+
+    loop = FakeLoop()
+    install_asyncio_exception_filter(loop)  # type: ignore[arg-type]
+
+    context = {
+        "message": "Exception in callback something_else()",
+        "exception": RuntimeError("boom"),
+    }
+    loop.handler(loop, context)
+
+    assert previous_calls == [(loop, context)]

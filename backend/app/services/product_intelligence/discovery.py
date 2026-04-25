@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from app.services.config.product_intelligence import (
     AGGREGATOR_DOMAINS,
     BRAND_DOMAIN_MAP,
+    DISCOVERY_SOURCE_TYPE_PRIORITY,
     DUCKDUCKGO_BASE_URL,
     DUCKDUCKGO_HTML_URL,
     DUCKDUCKGO_QUERY_PARAM,
@@ -56,6 +57,7 @@ class DiscoveredCandidate:
     query_used: str
     search_rank: int
     payload: dict[str, object] | None = None
+    query_order: int = 0
 
 
 @dataclass(slots=True)
@@ -111,7 +113,11 @@ async def discover_candidates(
     seen: set[str] = set()
     domain_counts: dict[str, int] = {}
     provider_name = str(provider or product_intelligence_settings.default_search_provider).strip().lower()
-    for query in queries:
+    pool_limit = max(
+        max_candidates,
+        max_candidates * product_intelligence_settings.discovery_pool_multiplier,
+    )
+    for query_order, query in enumerate(queries):
         results = await _search_results(provider_name, query)
         for rank, result in enumerate(results, start=1):
             normalized_url = _clean_result_url(result.url)
@@ -132,13 +138,18 @@ async def discover_candidates(
                     query_used=query,
                     search_rank=rank,
                     payload=result.payload,
+                    query_order=query_order,
                 )
             )
-            if len(candidates) >= max_candidates:
-                return candidates
-        if product_intelligence_settings.search_delay_ms > 0:
+            if len(candidates) >= pool_limit:
+                return _rank_discovered_candidates(candidates)[:max_candidates]
+        if (
+            product_intelligence_settings.search_delay_ms > 0
+            and len(candidates) < pool_limit
+            and query_order < len(queries) - 1
+        ):
             await asyncio.sleep(product_intelligence_settings.search_delay_ms / 1000)
-    return candidates
+    return _rank_discovered_candidates(candidates)[:max_candidates]
 
 
 def classify_source_type(domain: str, product: dict[str, object]) -> str:
@@ -153,6 +164,19 @@ def classify_source_type(domain: str, product: dict[str, object]) -> str:
     if any(_domain_matches(normalized_domain, item) for item in RETAILER_DOMAINS):
         return SOURCE_TYPE_RETAILER
     return SOURCE_TYPE_UNKNOWN
+
+
+def _rank_discovered_candidates(
+    candidates: list[DiscoveredCandidate],
+) -> list[DiscoveredCandidate]:
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            int(DISCOVERY_SOURCE_TYPE_PRIORITY.get(candidate.source_type, 99)),
+            candidate.query_order,
+            candidate.search_rank,
+        ),
+    )
 
 
 async def _search_results(provider: str, query: str) -> list[SearchResult]:

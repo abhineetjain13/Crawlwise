@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from sqlalchemy import select
 
+from app.api.crawls import _domain_run_profile_payload
+from app.schemas.crawl import DomainRunProfilePayload
 from app.core.dependencies import get_current_user, get_db
 from app.main import app
 from app.models.crawl import DomainFieldFeedback
@@ -12,6 +15,21 @@ from app.services.acquisition.cookie_store import persist_storage_state_for_doma
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.crawl_crud import create_crawl_run
 from app.services.domain_memory_service import save_domain_memory
+
+
+def test_domain_run_profile_payload_rejects_non_mapping() -> None:
+    with pytest.raises(ValidationError):
+        _domain_run_profile_payload("not-a-profile")
+
+
+def test_domain_run_profile_payload_accepts_pydantic_models() -> None:
+    payload = _domain_run_profile_payload(
+        DomainRunProfilePayload(
+            fetch_profile={"fetch_mode": "browser_only"},
+        )
+    )
+
+    assert payload.fetch_profile.fetch_mode == "browser_only"
 
 
 @pytest.fixture

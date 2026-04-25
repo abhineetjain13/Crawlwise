@@ -10,6 +10,7 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.config.extraction_rules import (
     BELK_BRAND_SELECTORS,
+    BELK_CARD_TITLE_ATTRS,
     BELK_IMAGE_SELECTORS,
     BELK_PRICE_SELECTORS,
     BELK_PRODUCT_BRAND_KEYS,
@@ -26,7 +27,7 @@ from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_UTILITY_TITLE_TOKENS,
 )
-from app.services.field_value_core import absolute_url, clean_text, finalize_record, text_or_none
+from app.services.field_value_core import absolute_url, clean_text, extract_price_text, finalize_record, text_or_none
 from app.services.js_state_helpers import compact_dict, normalize_price
 from app.services.structured_sources import harvest_js_state_objects
 
@@ -195,13 +196,38 @@ def _record_from_card(node: Any, *, page_url: str) -> dict[str, Any]:
     anchor = node.css_first("a[href]")
     href = _attr(anchor, "href") if anchor is not None else ""
     image = _first_selector_attr(node, BELK_IMAGE_SELECTORS, ("src", "data-src", "srcset"))
+    image_title = _first_selector_attr(
+        node,
+        BELK_IMAGE_SELECTORS,
+        ("alt", "title", "aria-label"),
+    )
+    title = (
+        _first_belk_title(node)
+        or _first_node_attr(node, BELK_CARD_TITLE_ATTRS)
+        or image_title
+    )
+    url = absolute_url(page_url, href)
+    brand = (
+        _first_selector_text(node, BELK_BRAND_SELECTORS)
+        or _infer_brand_from_title_marker(title)
+        or _infer_brand_from_url_slug(
+            url=url,
+            title=title,
+        )
+    )
     return compact_dict(
         {
-            "title": _first_belk_title(node),
-            "brand": _first_selector_text(node, BELK_BRAND_SELECTORS),
-            "price": normalize_price(_first_selector_text(node, BELK_PRICE_SELECTORS), interpret_integral_as_cents=False),
+            "title": title,
+            "brand": brand,
+            "price": normalize_price(
+                _first_selector_text(node, BELK_PRICE_SELECTORS)
+                or extract_price_text(node.text(separator=" ", strip=True), prefer_last=False),
+                interpret_integral_as_cents=False,
+            ),
             "image_url": absolute_url(page_url, _srcset_first(image)) if image else None,
-            "url": absolute_url(page_url, href),
+            "product_id": _attr(node, "data-cnstrc-item-id")
+            or _attr(node, "data-tile-pid"),
+            "url": url,
         }
     )
 
@@ -216,6 +242,14 @@ def _first_text(payload: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     for key in keys:
         value = text_or_none(payload.get(key))
         if value:
+            return value
+    return None
+
+
+def _first_node_attr(node: Any, attrs: tuple[str, ...]) -> str | None:
+    for attr in attrs:
+        value = clean_text(_attr(node, str(attr)))
+        if _valid_belk_title(value):
             return value
     return None
 
@@ -256,6 +290,51 @@ def _valid_belk_title(value: object) -> bool:
     if any(re.search(pattern, lowered, flags=re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS):
         return False
     return not any(token in lowered for token in LISTING_UTILITY_TITLE_TOKENS)
+
+
+def _infer_brand_from_url_slug(*, url: str, title: object) -> str | None:
+    title_tokens = _slug_tokens(title)
+    if len(title_tokens) < 2:
+        return None
+    path_parts = [part for part in (urlparse(str(url or "")).path or "").split("/") if part]
+    if len(path_parts) < 2 or path_parts[0].lower() != "p":
+        return None
+    slug_tokens = _slug_tokens(path_parts[1])
+    if len(slug_tokens) <= len(title_tokens):
+        return None
+    for start in range(1, len(slug_tokens) - len(title_tokens) + 1):
+        if slug_tokens[start : start + len(title_tokens)] != title_tokens:
+            continue
+        brand_tokens = slug_tokens[:start]
+        if len(brand_tokens) > 5:
+            return None
+        return " ".join(token.capitalize() for token in brand_tokens)
+    return None
+
+
+def _infer_brand_from_title_marker(title: object) -> str | None:
+    text = clean_text(title)
+    if not text:
+        return None
+    marker_positions = [
+        index
+        for marker in ("\u2122", "\u00ae")
+        if (index := text.find(marker)) > 0
+    ]
+    if not marker_positions:
+        return None
+    brand = clean_text(text[: min(marker_positions) + 1])
+    if not brand or len(_slug_tokens(brand)) > 6:
+        return None
+    return brand
+
+
+def _slug_tokens(value: object) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
+        if token
+    ]
 
 
 def _first_selector_attr(node: Any, selectors: tuple[str, ...], attrs: tuple[str, ...]) -> str | None:

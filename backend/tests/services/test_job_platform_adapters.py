@@ -954,6 +954,50 @@ def test_shopify_adapter_treats_blank_tag_string_as_empty_list() -> None:
     assert record["tags"] == []
 
 
+def test_shopify_adapter_preserves_localized_product_path() -> None:
+    adapter = ShopifyAdapter()
+
+    record = adapter._build_product_record(
+        {
+            "title": "Widget",
+            "vendor": "Acme",
+            "handle": "widget",
+            "images": [],
+            "tags": [],
+            "variants": [
+                {"id": 101, "option1": "M", "options": ["M"], "price": 2500},
+            ],
+            "options": [{"name": "Size"}],
+        },
+        page_url="https://example.com/en-lb/products/widget?variant=101",
+        surface="ecommerce_detail",
+    )
+
+    assert record["url"] == "https://example.com/en-lb/products/widget"
+    assert record["variants"][0]["url"] == (
+        "https://example.com/en-lb/products/widget?variant=101"
+    )
+
+
+def test_shopify_adapter_recovers_locale_prefix_without_products_marker() -> None:
+    adapter = ShopifyAdapter()
+
+    record = adapter._build_product_record(
+        {
+            "title": "Widget",
+            "vendor": "Acme",
+            "handle": "widget",
+            "images": [],
+            "tags": [],
+            "variants": [],
+        },
+        page_url="https://example.com/en-lb?variant=101",
+        surface="ecommerce_detail",
+    )
+
+    assert record["url"] == "https://example.com/en-lb/products/widget"
+
+
 def test_job_listing_url_looks_like_posting_uses_segment_tokenization_for_non_listing_hubs() -> None:
     assert not _job_listing_url_looks_like_posting(
         "https://jobs.example.com/jobs/search-results/role-12345-senior-engineer"

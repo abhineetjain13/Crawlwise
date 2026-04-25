@@ -5,6 +5,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Sequence
 from urllib.parse import unquote, urlsplit
 
 from app.core.database import SessionLocal
@@ -194,7 +195,7 @@ def load_site_set(path: Path, *, site_set_name: str) -> list[dict[str, object]]:
         url = str(item.get("url") or "").strip()
         if not url:
             continue
-        row = {
+        row: dict[str, object] = {
             "name": str(item.get("name") or url).strip(),
             "url": url,
             "surface": infer_surface(
@@ -204,15 +205,15 @@ def load_site_set(path: Path, *, site_set_name: str) -> list[dict[str, object]]:
             "bucket": str(item.get("bucket") or "").strip().lower() or None,
             "expected_failure_modes": [
                 str(value).strip()
-                for value in list(item.get("expected_failure_modes") or [])
+                for value in _object_list(item.get("expected_failure_modes"))
                 if str(value).strip()
             ],
             "artifact_run_id": _safe_int(item.get("artifact_run_id")) or None,
             "seed_failure_mode": str(item.get("seed_failure_mode") or "").strip().lower() or None,
-            "quality_expectations": dict(item.get("quality_expectations") or {}) if isinstance(item.get("quality_expectations"), (dict, type(None))) else {},
+            "quality_expectations": _object_dict(item.get("quality_expectations")),
         }
         gate = str(item.get("gate") or "").strip().lower() or None
-        expected = dict(item.get("expected") or {}) if isinstance(item.get("expected"), dict) else {}
+        expected = _object_dict(item.get("expected"))
         known_failure_mode = str(item.get("known_failure_mode") or "").strip() or None
         if gate:
             row["gate"] = gate
@@ -365,7 +366,7 @@ async def review_saved_run(
 
 def classify_failure_mode(result: dict[str, object]) -> str:
     verdict = str(result.get("verdict") or "").strip().lower()
-    diagnostics = dict(result.get("browser_diagnostics")) if isinstance(result.get("browser_diagnostics"), dict) else {}
+    diagnostics = _object_dict(result.get("browser_diagnostics"))
     error_text = str(result.get("error") or "").lower()
     browser_outcome = str(diagnostics.get("browser_outcome") or "").strip().lower()
     failure_kind = str(diagnostics.get("failure_kind") or "").strip().lower()
@@ -407,9 +408,10 @@ def classify_failure_mode(result: dict[str, object]) -> str:
     if _looks_like_placeholder_or_wrong_content(result, diagnostics):
         return "wrong_content_or_placeholder"
     family = str(result.get("platform_family") or "").strip().lower()
+    platform_config = platform_config_for_family(family) if family else None
     expected_adapters = {
         str(name).strip().lower()
-        for name in ((platform_config_for_family(family).adapter_names if platform_config_for_family(family) else []))
+        for name in (platform_config.adapter_names if platform_config is not None else [])
         if str(name or "").strip()
     }
     missing_registrations = unavailable_configured_adapters()
@@ -433,7 +435,7 @@ def _diagnostics_contain_strong_challenge_evidence(
 ) -> bool:
     evidence = [
         str(item or "").strip().lower()
-        for item in list(diagnostics.get("challenge_evidence") or [])
+        for item in _object_list(diagnostics.get("challenge_evidence"))
         if str(item or "").strip()
     ]
     if any(
@@ -451,20 +453,20 @@ def _challenge_summary_from_diagnostics(diagnostics: dict[str, object]) -> dict[
         return None
     provider_hits = [
         str(item or "").strip()
-        for item in list(diagnostics.get("challenge_provider_hits") or [])
+        for item in _object_list(diagnostics.get("challenge_provider_hits"))
         if str(item or "").strip()
     ]
     element_hits = [
         str(item or "").strip()
-        for item in list(diagnostics.get("challenge_element_hits") or [])
+        for item in _object_list(diagnostics.get("challenge_element_hits"))
         if str(item or "").strip()
     ]
     evidence = [
         str(item or "").strip()
-        for item in list(diagnostics.get("challenge_evidence") or [])
+        for item in _object_list(diagnostics.get("challenge_evidence"))
         if str(item or "").strip()
     ]
-    summary = {
+    summary: dict[str, object] = {
         "browser_outcome": str(diagnostics.get("browser_outcome") or "").strip().lower() or None,
         "provider": provider_hits[0].lower() if provider_hits else None,
         "providers": [item.lower() for item in provider_hits],
@@ -549,7 +551,7 @@ def _populated_field_count(record: dict[str, object]) -> int:
     return sum(1 for key, value in record.items() if value not in (None, "", [], {}) and not str(key).startswith("_"))
 
 
-def _sample_records(rows: list[object]) -> list[dict[str, object]]:
+def _sample_records(rows: Sequence[object]) -> list[dict[str, object]]:
     samples: list[dict[str, object]] = []
     for row in list(rows or [])[:3]:
         data = dict(getattr(row, "data", {}) or {})
@@ -616,19 +618,21 @@ def _identity_path(url: str) -> str:
 def _persisted_run_result(
     *,
     run: CrawlRun,
-    rows: list[object],
+    rows: Sequence[object],
     total_records: int,
     requested_url: str,
     run_source: str,
 ) -> dict[str, object]:
     first = rows[0] if rows else None
-    data = dict(first.data) if first else {}
-    acquisition = dict((first.source_trace or {}).get("acquisition") or {}) if first else {}
+    first_data = getattr(first, "data", {}) if first is not None else {}
+    first_trace = getattr(first, "source_trace", {}) if first is not None else {}
+    data = _object_dict(first_data)
+    acquisition = _object_dict(_object_dict(first_trace).get("acquisition"))
     summary = run.summary_dict()
     sample_records = _sample_records(rows)
     sample_audit = _sample_record_audit(sample_records)
     challenge_summary = _challenge_summary_from_diagnostics(
-        dict(acquisition.get("browser_diagnostics") or {})
+        _object_dict(acquisition.get("browser_diagnostics"))
     )
     return {
         "run_id": run.id,
@@ -639,7 +643,7 @@ def _persisted_run_result(
         "platform_family": _summary_value(summary, "platform_families"),
         "status_code": acquisition.get("status_code"),
         "blocked": bool(acquisition.get("blocked")),
-        "browser_diagnostics": dict(acquisition.get("browser_diagnostics") or {}),
+        "browser_diagnostics": _object_dict(acquisition.get("browser_diagnostics")),
         "records": max(total_records, _safe_int(summary.get("record_count"))),
         "sample_title": str(data.get("title") or "")[:120],
         "sample_url": str(data.get("url") or "")[:240],
@@ -658,10 +662,10 @@ def _persisted_run_result(
 
 
 def _sample_semantics(record: dict[str, object]) -> dict[str, object]:
-    variant_axes = dict(record.get("variant_axes") or {}) if isinstance(record.get("variant_axes"), dict) else {}
+    variant_axes = _object_dict(record.get("variant_axes"))
     axis_keys = [str(key).strip() for key in variant_axes.keys() if str(key).strip()]
-    selected_variant = dict(record.get("selected_variant") or {}) if isinstance(record.get("selected_variant"), dict) else {}
-    variants = list(record.get("variants") or []) if isinstance(record.get("variants"), list) else []
+    selected_variant = _object_dict(record.get("selected_variant"))
+    variants = _object_list(record.get("variants"))
     return {
         "price_present": record.get("price") not in (None, "", [], {}),
         "currency_present": record.get("currency") not in (None, "", [], {}),
@@ -679,7 +683,7 @@ def _sample_semantics(record: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _listing_contract(rows: list[object]) -> dict[str, object]:
+def _listing_contract(rows: Sequence[object]) -> dict[str, object]:
     detail_url_count = 0
     price_present_count = 0
     numeric_price_count = 0
@@ -740,7 +744,7 @@ def _quality_expectations(
     result: dict[str, object],
 ) -> dict[str, bool]:
     surface = str((site.get("surface") or result.get("surface") or "")).strip().lower()
-    configured = dict(site.get("quality_expectations") or {})
+    configured = _object_dict(site.get("quality_expectations"))
     expectations = {
         "require_identity": surface.endswith("_detail"),
         "require_listing_noise_free": surface.endswith("_listing"),
@@ -756,7 +760,7 @@ def _quality_expectations(
 
 
 def _quality_identity_ok(result: dict[str, object]) -> bool:
-    diagnostics = dict(result.get("browser_diagnostics") or {})
+    diagnostics = _object_dict(result.get("browser_diagnostics"))
     if str(result.get("failure_mode") or "").strip().lower() == "blocked":
         return False
     if _looks_like_placeholder_or_wrong_content(result, diagnostics):
@@ -765,7 +769,7 @@ def _quality_identity_ok(result: dict[str, object]) -> bool:
         return False
     surface = str(result.get("surface") or "").strip().lower()
     if surface.endswith("_listing"):
-        sample_records = list(result.get("sample_records") or [])
+        sample_records = _object_list(result.get("sample_records"))
         return any(
             isinstance(row, dict)
             and str(row.get("title") or "").strip()
@@ -785,7 +789,7 @@ def _quality_listing_noise_ok(
         return True
     if _looks_like_utility_chrome_success(result):
         return False
-    sample_records = list(result.get("sample_records") or [])
+    sample_records = _object_list(result.get("sample_records"))
     if sample_records and not any(_looks_like_real_listing_row(row) for row in sample_records[:3]):
         return False
     return True
@@ -798,7 +802,7 @@ def _quality_variant_presence_ok(
 ) -> bool:
     if not expectations.get("expect_variants"):
         return True
-    semantics = dict(result.get("sample_semantics") or {})
+    semantics = _object_dict(result.get("sample_semantics"))
     return _safe_int(semantics.get("variant_count")) >= 2 and bool(semantics.get("selected_variant_present"))
 
 
@@ -809,8 +813,12 @@ def _quality_variant_labels_ok(
 ) -> bool:
     if not expectations.get("require_semantic_variant_labels"):
         return True
-    semantics = dict(result.get("sample_semantics") or {})
-    axis_keys = list(semantics.get("variant_axes_keys") or [])
+    semantics = _object_dict(result.get("sample_semantics"))
+    axis_keys = [
+        str(value).strip()
+        for value in _object_list(semantics.get("variant_axes_keys"))
+        if str(value).strip()
+    ]
     return bool(axis_keys) and bool(semantics.get("variant_axes_semantic"))
 
 
@@ -821,7 +829,7 @@ def _quality_selected_variant_price_ok(
 ) -> bool:
     if not expectations.get("require_selected_variant_price"):
         return True
-    semantics = dict(result.get("sample_semantics") or {})
+    semantics = _object_dict(result.get("sample_semantics"))
     return bool(semantics.get("selected_variant_has_price"))
 
 
@@ -836,9 +844,9 @@ def _price_requirement_failed(
     if surface.endswith("_listing"):
         return not any(
             isinstance(row, dict) and bool(row.get("price_present"))
-            for row in list(result.get("sample_records") or [])
+            for row in _object_list(result.get("sample_records"))
         )
-    semantics = dict(result.get("sample_semantics") or {})
+    semantics = _object_dict(result.get("sample_semantics"))
     return not bool(semantics.get("price_present"))
 
 
@@ -906,7 +914,7 @@ def _looks_like_site_shell_success(result: dict[str, object]) -> bool:
     sample_title = " ".join(str(result.get("sample_title") or "").strip().lower().split())
     if not sample_title:
         return True
-    semantics = dict(result.get("sample_semantics") or {})
+    semantics = _object_dict(result.get("sample_semantics"))
     if bool(semantics.get("price_present")) or _safe_int(semantics.get("variant_count")) >= 2:
         return False
     title_tokens = {
@@ -933,7 +941,7 @@ def _looks_like_promo_or_wrong_page(result: dict[str, object]) -> bool:
 
 
 def _summary_value(summary: dict[str, object], key: str) -> str | None:
-    values = dict(summary.get("acquisition_summary") or {}).get(key)
+    values = _object_dict(summary.get("acquisition_summary")).get(key)
     return str(next(iter(values))) if isinstance(values, dict) and values else None
 
 
@@ -1031,6 +1039,14 @@ def _safe_int(value: object) -> int:
         return 0 if value in (None, "") else int(str(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _object_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _object_dict(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _looks_numeric_price(value: object) -> bool:

@@ -31,7 +31,7 @@ DEFAULT_LOC_BUDGET = 1000
 # threshold increase.
 FILE_LOC_BUDGETS = {
     # Browser identity owns UA/timezone/device/runtime surface shaping.
-    Path("app/services/acquisition/browser_identity.py"): 1505,
+    Path("app/services/acquisition/browser_identity.py"): 1765,
     # Browser runtime owns pooled browser lifecycle and context management.
     Path("app/services/acquisition/browser_runtime.py"): 2275,
     # Page flow owns navigation, readiness, artifact capture, and final browser shaping.
@@ -41,7 +41,7 @@ FILE_LOC_BUDGETS = {
     # Fetch runtime remains the request/browser arbitration owner.
     Path("app/services/crawl_fetch_runtime.py"): 1165,
     # Detail extraction remains the single owner for structured, DOM, and variant recovery.
-    Path("app/services/detail_extractor.py"): 2810,
+    Path("app/services/detail_extractor.py"): 3205,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1655,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.

@@ -24,9 +24,9 @@ from app.services.acquisition.browser_capture import (
 )
 from app.services.acquisition.browser_detail import (
     accessibility_expand_candidates_impl,
-    expand_all_interactive_elements_impl,
+    expand_all_interactive_elements,
     expand_detail_content_if_needed_impl,
-    expand_interactive_elements_via_accessibility_impl,
+    expand_interactive_elements_via_accessibility,
     requested_field_tokens,
 )
 from app.services.acquisition.browser_identity import (
@@ -555,7 +555,7 @@ class SharedBrowserRuntime:
         async with self._stats_lock:
             self._queued_count = max(0, self._queued_count + delta)
 
-    def snapshot(self) -> dict[str, int | bool]:
+    def snapshot(self) -> dict[str, int | bool | str]:
         return {
             "ready": self._browser is not None,
             "size": self._active_contexts,
@@ -661,34 +661,50 @@ async def _evict_idle_browser_runtimes_locked() -> None:
         ("direct", _DIRECT_BROWSER_RUNTIMES),
         ("proxied", _PROXIED_BROWSER_RUNTIMES),
     )
-    candidates: list[tuple[str, object, SharedBrowserRuntime]] = []
+    candidates: list[tuple[str, str | tuple[str, str], SharedBrowserRuntime]] = []
     for pool_name, pool in pools:
         for key, runtime in list(pool.items()):
             active_and_queued, _last_used = runtime.eviction_key()
             if active_and_queued > 0:
                 continue
             if idle_ttl_seconds > 0 and runtime.idle_seconds() >= idle_ttl_seconds:
-                candidates.append((pool_name, key, runtime))
+                if pool_name == "direct":
+                    normalized_key: str | tuple[str, str] = str(key)
+                elif isinstance(key, tuple) and len(key) == 2:
+                    normalized_key = (str(key[0]), str(key[1]))
+                else:
+                    continue
+                candidates.append((pool_name, normalized_key, runtime))
     while sum(len(pool) for _pool_name, pool in pools) - len(candidates) >= max_entries:
         candidate_keys = {
             (pool_name, key) for pool_name, key, _runtime in candidates
         }
-        remaining = [
-            (pool_name, key, runtime)
-            for pool_name, pool in pools
-            for key, runtime in list(pool.items())
-            if (pool_name, key) not in candidate_keys
-            and runtime.eviction_key()[0] == 0
-        ]
+        remaining: list[tuple[str, str | tuple[str, str], SharedBrowserRuntime]] = []
+        for pool_name, pool in pools:
+            for key, runtime in list(pool.items()):
+                if runtime.eviction_key()[0] != 0:
+                    continue
+                normalized_remaining_key: str | tuple[str, str]
+                if pool_name == "direct":
+                    normalized_remaining_key = str(key)
+                elif isinstance(key, tuple) and len(key) == 2:
+                    normalized_remaining_key = (str(key[0]), str(key[1]))
+                else:
+                    continue
+                if (pool_name, normalized_remaining_key) in candidate_keys:
+                    continue
+                remaining.append((pool_name, normalized_remaining_key, runtime))
         if not remaining:
             break
         remaining.sort(key=lambda item: item[2].eviction_key())
         candidates.append(remaining[0])
     for pool_name, key, runtime in candidates:
         if pool_name == "direct":
-            _DIRECT_BROWSER_RUNTIMES.pop(key, None)
+            _DIRECT_BROWSER_RUNTIMES.pop(str(key), None)
         else:
-            _PROXIED_BROWSER_RUNTIMES.pop(key, None)
+            proxied_key = key if isinstance(key, tuple) and len(key) == 2 else None
+            if proxied_key is not None:
+                _PROXIED_BROWSER_RUNTIMES.pop(proxied_key, None)
         await runtime.close()
 
 
@@ -956,7 +972,7 @@ def _mapping_value(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _snapshot_count(snapshot: dict[str, int | bool], *keys: str) -> int:
+def _snapshot_count(snapshot: dict[str, int | bool | str], *keys: str) -> int:
     for key in keys:
         value = snapshot.get(key)
         if value is not None:
@@ -1621,45 +1637,6 @@ async def expand_detail_content_if_needed(
         expand_all_interactive_elements=expand_all_interactive_elements,
         probe_browser_readiness=probe_browser_readiness,
         expand_interactive_elements_via_accessibility=expand_interactive_elements_via_accessibility,
-    )
-
-
-async def expand_all_interactive_elements(
-    page: Any,
-    *,
-    surface: str = "",
-    requested_fields: list[str] | None = None,
-    checkpoint: Any = None,
-    max_elapsed_ms: int | None = None,
-) -> dict[str, object]:
-    del checkpoint
-    return await expand_all_interactive_elements_impl(
-        page,
-        surface=surface,
-        requested_fields=requested_fields,
-        detail_expand_selectors=DETAIL_EXPAND_SELECTORS,
-        detail_expansion_keywords=detail_expansion_keywords,
-        interactive_candidate_snapshot=interactive_candidate_snapshot,
-        elapsed_ms=_elapsed_ms,
-        max_elapsed_ms=max_elapsed_ms,
-    )
-
-
-async def expand_interactive_elements_via_accessibility(
-    page: Any,
-    *,
-    surface: str = "",
-    requested_fields: list[str] | None = None,
-    max_elapsed_ms: int | None = None,
-) -> dict[str, object]:
-    return await expand_interactive_elements_via_accessibility_impl(
-        page,
-        surface=surface,
-        requested_fields=requested_fields,
-        accessibility_expand_candidates=accessibility_expand_candidates,
-        detail_expansion_keywords=detail_expansion_keywords,
-        elapsed_ms=_elapsed_ms,
-        max_elapsed_ms=max_elapsed_ms,
     )
 
 

@@ -19,7 +19,12 @@ from app.services.config.product_intelligence import (
 )
 from app.services.llm_config_service import get_prompt_task
 from app.services.product_intelligence.discovery import SearchResult, build_search_queries, classify_source_type, discover_candidates
-from app.services.product_intelligence.matching import extract_product_snapshot, extract_serpapi_snapshot, score_candidate
+from app.services.product_intelligence.matching import (
+    extract_product_snapshot,
+    extract_serpapi_snapshot,
+    normalize_brand,
+    score_candidate,
+)
 from app.services.product_intelligence.service import (
     _poll_candidate_and_score,
     create_product_intelligence_job,
@@ -88,6 +93,15 @@ def test_product_intelligence_scorer_parses_european_price_formats() -> None:
 def test_product_intelligence_classification_avoids_suffix_collisions() -> None:
     assert classify_source_type("badamazon.com", {}) == "unknown"
     assert classify_source_type("shop.amazon.com", {}) == "marketplace"
+
+
+def test_product_intelligence_classifies_known_mall_mirrors_as_aggregators() -> None:
+    assert classify_source_type("thesummitbirmingham.com", {}) == "aggregator"
+    assert classify_source_type("www.coolspringsgalleria.com", {}) == "aggregator"
+
+
+def test_product_intelligence_normalizes_childrenswear_brand_alias() -> None:
+    assert normalize_brand("Ralph Lauren Childrenswear") == "ralph lauren"
 
 
 def test_product_intelligence_infers_brand_from_source_url() -> None:
@@ -209,6 +223,41 @@ async def test_product_intelligence_discovery_spreads_result_domains(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_product_intelligence_discovery_prioritizes_brand_site_over_aggregator_pool(monkeypatch) -> None:
+    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+        if "site:levi.com" in query:
+            return [
+                SearchResult(url="https://thesummitbirmingham.com/buy/product/511", payload={"title": "Levi 511"}),
+                SearchResult(url="https://www.hamiltonplace.com/products/product/511", payload={"title": "Levi 511"}),
+                SearchResult(url="https://www.coolspringsgalleria.com/products/product/511", payload={"title": "Levi 511"}),
+            ]
+        return [
+            SearchResult(url="https://www.levi.com/p/04511.html", payload={"title": "Levi 511"}),
+            SearchResult(url="https://www.macys.com/p/04511.html", payload={"title": "Levi 511"}),
+        ]
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery._search_results",
+        fake_search_results,
+    )
+
+    candidates = await discover_candidates(
+        {
+            "brand": "Levis",
+            "title": "Men 511 Slim Fit Jeans",
+            "sku": "04511",
+        },
+        source_domain_value="belk.com",
+        provider="serpapi",
+        allowed_domains=[],
+        excluded_domains=[],
+        max_candidates=2,
+    )
+
+    assert [candidate.domain for candidate in candidates] == ["levi.com", "macys.com"]
+
+
+@pytest.mark.asyncio
 async def test_product_intelligence_discovery_skips_duckduckgo_ads(monkeypatch) -> None:
     async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
         return [
@@ -236,6 +285,51 @@ async def test_product_intelligence_discovery_skips_duckduckgo_ads(monkeypatch) 
         max_candidates=1,
     )
 
+    assert len(candidates) == 1
+    assert candidates[0].domain == "levi.com"
+
+
+@pytest.mark.asyncio
+async def test_product_intelligence_discovery_keeps_search_delay_while_filling_pool(monkeypatch) -> None:
+    recorded_delays: list[float] = []
+
+    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+        if query == "query one":
+            return [
+                SearchResult(url="https://www.levi.com/p/04511.html", payload={"title": "Levi 511"}),
+            ]
+        return [
+            SearchResult(url="https://www.macys.com/p/04511.html", payload={"title": "Levi 511"}),
+        ]
+
+    async def fake_sleep(delay: float) -> None:
+        recorded_delays.append(delay)
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery.build_search_queries",
+        lambda product, *, source_domain_value: ["query one", "query two"],
+    )
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery._search_results",
+        fake_search_results,
+    )
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery.asyncio.sleep",
+        fake_sleep,
+    )
+    monkeypatch.setattr(product_intelligence_settings, "search_delay_ms", 25)
+    monkeypatch.setattr(product_intelligence_settings, "discovery_pool_multiplier", 2)
+
+    candidates = await discover_candidates(
+        {"brand": "Levis", "title": "Men 511 Slim Fit Jeans", "sku": "04511"},
+        source_domain_value="belk.com",
+        provider="serpapi",
+        allowed_domains=[],
+        excluded_domains=[],
+        max_candidates=1,
+    )
+
+    assert recorded_delays == [0.025]
     assert len(candidates) == 1
     assert candidates[0].domain == "levi.com"
 
@@ -369,7 +463,9 @@ async def test_product_intelligence_discovery_returns_max_urls_per_input_source(
     monkeypatch,
 ) -> None:
     async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
-        title_token = query.split('"')[3].split()[0]
+        quoted = query.split('"')
+        title_source = quoted[3] if len(quoted) > 3 else quoted[1] if len(quoted) > 1 else quoted[0]
+        title_token = title_source.split()[0]
         return [
             SearchResult(url=f"https://www.levi.com/p/{title_token}.html", payload={"provider": provider, "title": title_token}),
             SearchResult(url=f"https://www.macys.com/p/{title_token}.html", payload={"provider": provider, "title": title_token}),
@@ -407,6 +503,62 @@ async def test_product_intelligence_discovery_returns_max_urls_per_input_source(
     assert response["source_count"] == 4
     assert response["candidate_count"] == 12
     assert {candidate["source_index"] for candidate in response["candidates"]} == {0, 1, 2, 3}
+
+
+@pytest.mark.asyncio
+async def test_product_intelligence_discovery_source_count_excludes_private_label(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch,
+) -> None:
+    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+        del query
+        return [
+            SearchResult(
+                url="https://www.levi.com/p/511.html",
+                payload={"provider": provider, "title": "511 Jeans"},
+            )
+        ]
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery._search_results",
+        fake_search_results,
+    )
+
+    response = await discover_product_intelligence_candidates(
+        db_session,
+        user=test_user,
+        payload={
+            "source_records": [
+                {
+                    "source_url": "https://www.belk.com/p/private.html",
+                    "data": {
+                        "brand": "New Directions",
+                        "title": "Private label shirt",
+                        "url": "https://www.belk.com/p/private.html",
+                    },
+                },
+                {
+                    "source_url": "https://www.belk.com/p/branded.html",
+                    "data": {
+                        "brand": "Levis",
+                        "title": "511 Jeans",
+                        "url": "https://www.belk.com/p/branded.html",
+                    },
+                },
+            ],
+            "options": {
+                "max_source_products": 2,
+                "max_candidates_per_product": 1,
+                "private_label_mode": "exclude",
+                "search_provider": "serpapi",
+            },
+        },
+    )
+
+    assert response["source_count"] == 1
+    assert response["candidate_count"] == 1
+    assert response["candidates"][0]["source_index"] == 1
 
 
 @pytest.mark.asyncio

@@ -57,6 +57,8 @@ def _recent_success_overrides_block(
     last_success_at = row.last_success_at
     if not _is_recent(last_success_at, now=now):
         return False
+    if last_success_at is None:
+        return False
     last_blocked_at = row.last_blocked_at
     return last_blocked_at is None or last_success_at >= last_blocked_at
 

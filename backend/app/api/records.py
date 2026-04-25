@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 from app.core.database import SessionLocal
@@ -39,9 +40,17 @@ router = APIRouter(tags=["records"])
 
 
 def _route_responses(
-    responses: dict[int | str, dict[str, Any]],
-) -> dict[int | str, dict[str, Any]]:
-    return {key: dict(value) for key, value in responses.items()}
+    responses: object,
+) -> dict[int | str, dict[str, object]]:
+    if not isinstance(responses, Mapping):
+        return {}
+    normalized: dict[int | str, dict[str, object]] = {}
+    for key, value in responses.items():
+        if not isinstance(value, Mapping):
+            continue
+        normalized_key: int | str = key if isinstance(key, (int, str)) else str(key)
+        normalized[normalized_key] = dict(value)
+    return normalized
 
 
 def _summary_expects_records(summary: object) -> bool:

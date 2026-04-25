@@ -10,22 +10,17 @@ from selectolax.lexbor import LexborHTMLParser
 from app.services.config.extraction_rules import (
     EXTRACTION_RULES,
     JOB_LISTING_DETAIL_PATH_MARKERS,
-    LISTING_ALT_TEXT_TITLE_PATTERN,
-    LISTING_ACTION_NOISE_PATTERNS,
+    JOB_UTILITY_URL_TOKENS,
     LISTING_BRAND_MAX_WORDS,
     LISTING_BRAND_SELECTORS,
     LISTING_DETAIL_PATH_MARKERS,
-    LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_LABEL_NOISE_TOKENS,
-    LISTING_MERCHANDISING_TITLE_PREFIXES,
     LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_STRUCTURE_NEGATIVE_HINTS,
-    LISTING_TITLE_CTA_TITLES,
     LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
-    LISTING_WEAK_TITLES,
     NON_PRODUCT_IMAGE_HINTS,
     NON_PRODUCT_PROVIDER_HINTS,
     TITLE_PROMOTION_PREFIXES,
@@ -55,6 +50,7 @@ from app.services.field_value_core import (
     extract_currency_code,
     extract_price_text,
     finalize_record,
+    is_title_noise,
     same_host,
     same_site,
     surface_alias_lookup,
@@ -118,19 +114,12 @@ def _structured_listing_record(
     if not url:
         return {}
     title = clean_text(record.get("title"))
-    if not title or _listing_title_is_noise(title):
+    if not title or is_title_noise(title):
         fallback_title = _title_from_url(url)
-        if fallback_title and not _listing_title_is_noise(fallback_title):
+        if fallback_title and not is_title_noise(fallback_title):
             record["title"] = fallback_title
     if not record.get("title"):
         return {}
-    if surface == "ecommerce_listing" and not clean_text(record.get("brand")):
-        inferred_brand = _infer_belk_listing_brand(
-            url=str(record.get("url") or ""),
-            title=str(record.get("title") or ""),
-        )
-        if inferred_brand:
-            record["brand"] = inferred_brand
     if _url_is_structural(url, page_url):
         return {}
     return _finalize_listing_price_fields(finalize_record(record, surface=surface))
@@ -356,32 +345,6 @@ def _looks_like_untyped_listing_payload(payload: dict[str, Any]) -> bool:
     return has_url and (has_price or has_image or has_job_data)
 
 
-def _listing_title_is_noise(title: str) -> bool:
-    cleaned = clean_text(title)
-    lowered = cleaned.lower()
-    if not lowered:
-        return True
-    if cleaned.isdigit():
-        return True
-    if _REVIEW_TITLE_RE.fullmatch(cleaned):
-        return True
-    if "star" in lowered and RATING_RE.search(lowered):
-        return True
-    if lowered in LISTING_TITLE_CTA_TITLES:
-        return True
-    if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
-        return True
-    if any(pattern.search(lowered) for pattern in _UTILITY_TITLE_REGEXES):
-        return True
-    if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
-        return True
-    if any(lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES):
-        return True
-    if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
-        return True
-    return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
-
-
 def _title_from_url(url: str) -> str | None:
     path = str(urlsplit(str(url or "")).path or "").strip("/")
     if not path:
@@ -503,7 +466,7 @@ def _job_listing_url_is_utility(url: str) -> bool:
     lowered = url.lower()
     return any(
         token in lowered
-        for token in ("/applicant/", "/careerexplorer/", "/help/", "/savedsearches")
+        for token in JOB_UTILITY_URL_TOKENS
     )
 
 
@@ -516,7 +479,7 @@ def _record_is_supported_listing_candidate(
     title = clean_text(record.get("title"))
     url = str(record.get("url") or "").strip()
     source_kind = str(record.get("_source") or "").strip().lower()
-    if not title or not url or _listing_title_is_noise(title) or _url_is_structural(url, page_url):
+    if not title or not url or is_title_noise(title) or _url_is_structural(url, page_url):
         return False
     if _listing_url_or_title_looks_like_utility(title=title, url=url):
         return False
@@ -592,7 +555,7 @@ def _listing_fragment_score(node, *, is_job: bool = False) -> int:
     title_node = _card_title_node(node)
     if title_node is not None:
         title_text = _node_text(title_node)
-        if title_text and not _listing_title_is_noise(title_text):
+        if title_text and not is_title_noise(title_text):
             score += 4
             if tag_name == "tr":
                 score += 4
@@ -654,7 +617,8 @@ def _node_html(node) -> str:
 
 
 def _node_attr(node, name: str) -> str:
-    attrs = getattr(node, "attributes", {}) or {}
+    raw_attrs = getattr(node, "attributes", {}) or {}
+    attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
     return str(attrs.get(name) or "").strip()
 
 
@@ -770,9 +734,11 @@ def _extract_price_signal_from_card(card) -> str | None:
 
 def _card_title_node(card) -> object | None:
     candidates: list[object] = []
-    for selector in EXTRACTION_RULES.get("listing_extraction", {}).get(
-        "card_title_selectors", []
-    ):
+    listing_extraction = EXTRACTION_RULES.get("listing_extraction")
+    listing_extraction_map = listing_extraction if isinstance(listing_extraction, dict) else {}
+    selectors = listing_extraction_map.get("card_title_selectors")
+    selector_values = selectors if isinstance(selectors, list) else []
+    for selector in selector_values:
         candidates.extend(_node_css(card, str(selector)))
     if candidates:
         best = max(candidates, key=lambda node: (_card_title_score(node), len(_node_text(node))))
@@ -857,7 +823,7 @@ def _card_title_score_parts(
         score -= 6
     elif text_len > 220:
         score -= 2
-    if _listing_title_is_noise(normalized_text):
+    if is_title_noise(normalized_text):
         score -= 4
     if href_present:
         score += 2
@@ -1029,7 +995,7 @@ def _extract_image_title_hint(root, *, page_url: str) -> str | None:
             continue
         for attr_name in ("alt", "title", "aria-label"):
             candidate = _normalize_listing_title(clean_text(_node_attr(node, attr_name)))
-            if not candidate or _listing_title_is_noise(candidate):
+            if not candidate or is_title_noise(candidate):
                 continue
             return candidate
     return None
@@ -1063,13 +1029,13 @@ def _title_token_overlap(left: str, right: str) -> int:
 def _should_replace_title_with_image_hint(title: str, image_title_hint: str | None) -> bool:
     hint = clean_text(image_title_hint)
     current = clean_text(title)
-    if not hint or _listing_title_is_noise(hint):
+    if not hint or is_title_noise(hint):
         return False
     if not current:
         return True
     if current == hint:
         return False
-    if _listing_title_is_noise(current):
+    if is_title_noise(current):
         return True
     return _title_token_overlap(current, hint) == 0
 
@@ -1140,49 +1106,10 @@ def _extract_brand_signal_from_card(card, title: str) -> str | None:
                 continue
             if len(re.findall(r"[a-z0-9]+", value, flags=re.I)) > LISTING_BRAND_MAX_WORDS:
                 continue
-            if _listing_title_is_noise(value):
+            if is_title_noise(value):
                 continue
             return value
     return None
-
-
-def _infer_belk_listing_brand(*, url: str, title: str) -> str | None:
-    try:
-        parsed = urlsplit(str(url or ""))
-    except ValueError:
-        return None
-    host = str(parsed.hostname or "").removeprefix("www.").lower()
-    if host != "belk.com":
-        return None
-    segments = [segment for segment in str(parsed.path or "").split("/") if segment]
-    if len(segments) < 2 or segments[0].lower() != "p":
-        return None
-    slug_tokens = _listing_brand_tokens(segments[1])
-    title_tokens = _listing_brand_tokens(title)
-    if len(slug_tokens) < 2 or len(title_tokens) < 2:
-        return None
-    for start in range(max(1, len(slug_tokens) - len(title_tokens) + 1)):
-        if slug_tokens[start : start + len(title_tokens)] != title_tokens:
-            continue
-        brand_tokens = slug_tokens[:start]
-        if not brand_tokens or len(brand_tokens) > 5:
-            return None
-        return " ".join(_format_brand_token(token) for token in brand_tokens)
-    return None
-
-
-def _listing_brand_tokens(value: object) -> list[str]:
-    return [
-        token
-        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
-        if token
-    ]
-
-
-def _format_brand_token(token: str) -> str:
-    if token in {"pga", "usa", "nba", "nfl"}:
-        return token.upper()
-    return token.capitalize()
 
 
 def _listing_record_from_card(
@@ -1206,7 +1133,7 @@ def _listing_record_from_card(
                     for key, value in trace.items()
                     if not str(key).startswith("_")
                 }
-        trace = next((row for row in traces if isinstance(row, dict)), None)
+        trace = next((row for row in traces if isinstance(row, dict)), {})
         if not isinstance(trace, dict):
             return None
         return {
@@ -1242,18 +1169,18 @@ def _listing_record_from_card(
             for text in sorted(same_url_texts, key=len, reverse=True)
             if len(re.findall(r"[a-z0-9]+", text, flags=re.I)) >= 3
             and not PRICE_RE.search(text)
-            and not _listing_title_is_noise(text)
+            and not is_title_noise(text)
         ),
         None,
     )
     if best_same_url_text and (
-        len(re.findall(r"[a-z0-9]+", title, flags=re.I)) < 3 or _listing_title_is_noise(title)
+        len(re.findall(r"[a-z0-9]+", title, flags=re.I)) < 3 or is_title_noise(title)
     ):
         title = best_same_url_text
     if _should_replace_title_with_image_hint(title, image_title_hint):
         title = clean_text(image_title_hint)
     title = _normalize_listing_title(title)
-    if len(title) < 4 or _listing_title_is_noise(title):
+    if len(title) < 4 or is_title_noise(title):
         return None
     if anchor_score < 4 and title_score < 8:
         return None
@@ -1288,10 +1215,6 @@ def _listing_record_from_card(
         brand_text = _extract_brand_signal_from_card(card, title)
         if brand_text:
             add_candidate(candidates, "brand", brand_text)
-    if not is_job and not candidates.get("brand"):
-        inferred_brand = _infer_belk_listing_brand(url=url, title=title)
-        if inferred_brand:
-            add_candidate(candidates, "brand", inferred_brand)
     if image_urls and not candidates.get("image_url"):
         add_candidate(candidates, "image_url", image_urls[0])
     if best_same_url_text and not candidates.get("description"):
@@ -1303,7 +1226,7 @@ def _listing_record_from_card(
                 and len(text) >= 20
                 and len(re.findall(r"[a-z0-9]+", text, flags=re.I)) >= 3
                 and not PRICE_RE.search(text)
-                and not _listing_title_is_noise(text)
+                and not is_title_noise(text)
                 and (
                     _title_token_overlap(text, title) >= 2
                     or len(re.findall(r"[a-z0-9]+", text, flags=re.I)) >= 5
@@ -1540,29 +1463,6 @@ def extract_listing_records(
                 rendered_parser,
                 limit=candidate_limit,
             )
-    candidate_sets: list[tuple[str, list[dict[str, Any]]]] = [
-        ("structured", structured_records),
-        ("dom", dom_records),
-        ("structured_plus_dom", [*dom_records, *structured_records]),
-    ]
-    if original_dom_records:
-        candidate_sets.append(("original_dom", original_dom_records))
-    if rendered_dom_records:
-        candidate_sets.append(("rendered_dom", rendered_dom_records))
-    best_non_visual = best_listing_candidate_set(
-        candidate_sets,
-        page_url=page_url,
-        surface=surface,
-        max_records=max_records,
-        title_is_noise=_listing_title_is_noise,
-        url_is_structural=_url_is_structural,
-        detail_like_url=lambda candidate_url: _detail_like_path(
-            candidate_url,
-            is_job=is_job_surface,
-        ),
-    )
-    if best_non_visual:
-        return best_non_visual[:max_records]
     listing_visual_elements = (
         artifacts.get("listing_visual_elements") if isinstance(artifacts, dict) else None
     )
@@ -1571,7 +1471,7 @@ def extract_listing_records(
         page_url=page_url,
         surface=surface,
         max_records=max_records,
-        title_is_noise=_listing_title_is_noise,
+        title_is_noise=is_title_noise,
         url_is_structural=_url_is_structural,
     )
     visual_records = [
@@ -1583,6 +1483,29 @@ def extract_listing_records(
             surface=surface,
         )
     ]
+    candidate_sets: list[tuple[str, list[dict[str, Any]]]] = [
+        ("structured", structured_records),
+        ("dom", dom_records),
+        ("structured_plus_dom", [*dom_records, *structured_records]),
+    ]
+    if original_dom_records:
+        candidate_sets.append(("original_dom", original_dom_records))
+    if rendered_dom_records:
+        candidate_sets.append(("rendered_dom", rendered_dom_records))
     if visual_records:
-        return visual_records[:max_records]
+        candidate_sets.append(("visual", visual_records))
+    best_records = best_listing_candidate_set(
+        candidate_sets,
+        page_url=page_url,
+        surface=surface,
+        max_records=max_records,
+        title_is_noise=is_title_noise,
+        url_is_structural=_url_is_structural,
+        detail_like_url=lambda candidate_url: _detail_like_path(
+            candidate_url,
+            is_job=is_job_surface,
+        ),
+    )
+    if best_records:
+        return best_records[:max_records]
     return []

@@ -14,22 +14,24 @@ from types import SimpleNamespace as _SimpleNamespace
 from typing import Any
 
 from browserforge.fingerprints import FingerprintGenerator
-import pytz
+import pytz  # type: ignore[import-untyped]
 from tzlocal import get_localzone_name as _get_localzone_name
 
 try:
-    from browserforge.fingerprints import Fingerprint as _BrowserforgeFingerprint
+    from browserforge.fingerprints import Fingerprint as _BrowserforgeFingerprintType
 except Exception:  # pragma: no cover - optional dependency contract
-    _BrowserforgeFingerprint = None
+    _BrowserforgeFingerprintType = None  # type: ignore[assignment,misc]
+_BrowserforgeFingerprint: Any | None = _BrowserforgeFingerprintType
 from cachetools import TTLCache
 
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.network_resolution import _accept_language_for_locale
 
 try:
-    from browserforge.injectors.utils import InjectFunction as _BrowserforgeInjectFunction
+    from browserforge.injectors.utils import InjectFunction as _BrowserforgeInjectFunctionType
 except Exception:  # pragma: no cover - optional dependency contract
-    _BrowserforgeInjectFunction = None
+    _BrowserforgeInjectFunctionType = None  # type: ignore[assignment]
+_BrowserforgeInjectFunction: Any | None = _BrowserforgeInjectFunctionType
 
 
 def _host_os_fingerprint_arg() -> str:
@@ -154,7 +156,7 @@ def _viewport_from_screen(
 
 def _positive_int(value: object) -> int | None:
     try:
-        normalized = int(value)
+        normalized = int(value) if isinstance(value, (int, float)) else int(str(value))
     except (TypeError, ValueError):
         return None
     return normalized if normalized > 0 else None
@@ -162,7 +164,9 @@ def _positive_int(value: object) -> int | None:
 
 def _positive_float(value: object) -> float | None:
     try:
-        normalized = float(value)
+        normalized = (
+            float(value) if isinstance(value, (int, float)) else float(str(value))
+        )
     except (TypeError, ValueError):
         return None
     return normalized if normalized > 0 else None
@@ -191,10 +195,13 @@ def _host_total_memory_bytes() -> int | None:
         except Exception:
             return None
         return None
+    sysconf = getattr(_os, "sysconf", None)
+    if not callable(sysconf):
+        return None
     try:
-        page_size = int(_os.sysconf("SC_PAGE_SIZE"))
-        page_count = int(_os.sysconf("SC_PHYS_PAGES"))
-    except (AttributeError, OSError, ValueError):
+        page_size = int(sysconf("SC_PAGE_SIZE"))
+        page_count = int(sysconf("SC_PHYS_PAGES"))
+    except (OSError, ValueError):
         return None
     total_bytes = page_size * page_count
     return total_bytes if total_bytes > 0 else None
@@ -408,6 +415,8 @@ def create_browser_identity() -> BrowserIdentity:
             _generate_coherent_fingerprint()
         )
     )
+    if fingerprint is None:
+        raise RuntimeError("Browser fingerprint generation returned no identity")
     screen = fingerprint.screen
     navigator = fingerprint.navigator
     headers = {
@@ -584,7 +593,7 @@ def _is_version_coherent(fingerprint) -> bool:
     return True
 
 
-def _generate_coherent_fingerprint():
+def _generate_coherent_fingerprint() -> Any:
     expected_token = _HOST_OS_UA_TOKENS[_HOST_OS]
     fallback_fingerprint = None
     for _ in range(3):
@@ -601,7 +610,7 @@ def _generate_coherent_fingerprint():
     return _repair_incoherent_client_hints(fallback_fingerprint)
 
 
-def _repair_incoherent_client_hints(fingerprint):
+def _repair_incoherent_client_hints(fingerprint: Any) -> Any:
     original_user_agent_data = getattr(fingerprint.navigator, "userAgentData", None)
     user_agent = str(getattr(fingerprint.navigator, "userAgent", "") or "").strip()
     original_mobile = (
@@ -631,7 +640,7 @@ def _repair_incoherent_client_hints(fingerprint):
     )
 
 
-def _strip_incoherent_client_hints(fingerprint):
+def _strip_incoherent_client_hints(fingerprint: Any) -> Any:
     original_user_agent_data = getattr(fingerprint.navigator, "userAgentData", None)
     user_agent_data = (
         dict(original_user_agent_data)
@@ -839,6 +848,11 @@ def _resolve_timezone_id(locality_profile: Mapping[str, object] | None) -> str |
     )
     if configured:
         return configured
+    explicit_locality_timezone = _normalize_timezone_id(
+        locality_profile.get("timezone_id") if locality_profile else None
+    )
+    if explicit_locality_timezone:
+        return explicit_locality_timezone
     country = _country_code(
         locality_profile.get("geo_country") if locality_profile else None
     )
@@ -1040,7 +1054,7 @@ def _resolve_locale(
     )
     if not bool(
         crawler_runtime_settings.fingerprint_locale_auto_align_timezone_region
-    ):
+    ) or timezone_id is None:
         return locale
     return _locale_with_region(
         locale,

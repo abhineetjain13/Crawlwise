@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import re
+from collections.abc import Sequence
 from typing import Any
 
 from app.services.config.extraction_rules import (
@@ -268,7 +269,7 @@ def resolve_variant_group_name(node: Any) -> str:
     return clean_text(inferred_name)
 
 
-def infer_variant_group_name_from_values(values: list[object]) -> str:
+def infer_variant_group_name_from_values(values: Sequence[object]) -> str:
     cleaned_values = [clean_text(value) for value in list(values or []) if clean_text(value)]
     if len(cleaned_values) < 2:
         return ""

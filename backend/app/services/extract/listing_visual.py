@@ -89,7 +89,9 @@ def _coerce_visual_number(value: object) -> int:
     if value is None:
         return 0
     try:
-        return int(float(value))
+        if isinstance(value, (int, float)):
+            return int(float(value))
+        return int(float(str(value)))
     except (TypeError, ValueError):
         return 0
 

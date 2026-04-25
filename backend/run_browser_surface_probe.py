@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlparse
 
-import pytz
+import pytz  # type: ignore[import-untyped]
 
 from app.core.database import SessionLocal
 from app.services.acquisition.runtime import (
@@ -113,6 +113,26 @@ def _utc_stamp() -> str:
 
 def _coerce_proxy_profile(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _object_dict(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _object_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _string_list(value: object) -> list[str]:
+    return [str(item) for item in _object_list(value)]
+
+
+def _int_list(value: object) -> list[int]:
+    return [item for item in _object_list(value) if isinstance(item, int)]
+
+
+def _dict_rows(value: object) -> list[dict[str, object]]:
+    return [_object_dict(item) for item in _object_list(value) if isinstance(item, dict)]
 
 
 def _coerce_locality_profile(
@@ -242,10 +262,31 @@ def _extract_ip_values(values: list[str]) -> list[str]:
     return sorted(set(ips))
 
 
+def _looks_like_networkish_ipv4(value: str) -> bool:
+    octets = str(value or "").split(".")
+    if len(octets) != 4:
+        return False
+    try:
+        numbers = [int(item) for item in octets]
+    except ValueError:
+        return False
+    if any(number < 0 or number > 255 for number in numbers):
+        return True
+    if numbers[1:] in ([0, 0, 0], [255, 255, 255]):
+        return True
+    if numbers[2:] in ([0, 0], [255, 255]):
+        return True
+    if numbers[3] in {0, 255}:
+        return True
+    return False
+
+
 def _clean_ip_values(values: list[str], *, known_versions: list[int] | None = None) -> list[str]:
     version_set = {int(value) for value in list(known_versions or [])}
     cleaned: list[str] = []
     for value in values:
+        if _looks_like_networkish_ipv4(value):
+            continue
         octets = str(value).split(".")
         if len(octets) == 4 and octets[1:] == ["0", "0", "0"]:
             try:
@@ -298,6 +339,47 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(lowered)
         deduped.append(normalized)
     return deduped
+
+
+def _normalize_snapshot_row(row: object) -> dict[str, object] | None:
+    if not isinstance(row, dict):
+        return None
+    raw_cells = row.get("cells")
+    cells = (
+        [_normalize_space(value) for value in list(raw_cells) if _normalize_space(value)]
+        if isinstance(raw_cells, list)
+        else []
+    )
+    label = _normalize_space(row.get("label")) or (cells[0] if cells else "")
+    value = _normalize_space(row.get("value")) or " | ".join(cells[1:])
+    if not (label or value or cells):
+        return None
+    return {
+        "cells": cells,
+        "label": label,
+        "value": value,
+    }
+
+
+def _dedupe_snapshot_rows(rows: list[object]) -> tuple[list[dict[str, object]], int]:
+    normalized_rows = [
+        normalized
+        for row in rows
+        if (normalized := _normalize_snapshot_row(row)) is not None
+    ]
+    seen: set[tuple[tuple[str, ...], str, str]] = set()
+    deduped: list[dict[str, object]] = []
+    for row in normalized_rows:
+        marker = (
+            tuple(str(value).casefold() for value in _object_list(row.get("cells"))),
+            _normalize_space(row.get("label")).casefold(),
+            _normalize_space(row.get("value")).casefold(),
+        )
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(row)
+    return deduped, len(normalized_rows)
 
 
 def _flatten_signal_values(payload: object) -> list[str]:
@@ -370,7 +452,7 @@ def _extract_keyword_hits(lines: list[str], keyword_group: str) -> list[str]:
 
 
 async def _collect_page_snapshot(page) -> dict[str, object]:
-    return await page.evaluate(
+    raw_snapshot = await page.evaluate(
         """(limits) => {
             const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
             const rawBodyText = document.body ? (document.body.innerText || '') : '';
@@ -409,6 +491,27 @@ async def _collect_page_snapshot(page) -> dict[str, object]:
             "tableRowLimit": int(BROWSER_SURFACE_PROBE_TABLE_ROW_LIMIT),
         },
     )
+    snapshot_payload = dict(raw_snapshot) if isinstance(raw_snapshot, dict) else {}
+    raw_lines = [
+        _normalize_space(value)
+        for value in list(snapshot_payload.get("lines") or [])
+        if _normalize_space(value)
+    ]
+    deduped_lines = _dedupe(raw_lines)
+    deduped_rows, raw_row_count = _dedupe_snapshot_rows(
+        list(snapshot_payload.get("rows") or [])
+    )
+    return {
+        "body_text": _normalize_space(snapshot_payload.get("body_text")),
+        "lines": deduped_lines,
+        "line_count": len(deduped_lines),
+        "line_count_raw": len(raw_lines),
+        "rows": deduped_rows,
+        "row_count": len(deduped_rows),
+        "row_count_raw": raw_row_count,
+        "has_creep_object": bool(snapshot_payload.get("has_creep_object")),
+        "has_fingerprint_object": bool(snapshot_payload.get("has_fingerprint_object")),
+    }
 
 
 async def _collect_baseline(page) -> dict[str, object]:
@@ -557,38 +660,54 @@ def _generic_line_signals(
 
 
 def _extract_pixelscan(snapshot: dict[str, object]) -> dict[str, object]:
-    lines = [str(value) for value in list(snapshot.get("lines") or [])]
+    lines = [str(value) for value in _object_list(snapshot.get("lines"))]
     payload = _generic_line_signals(lines=lines, label_map=BROWSER_SURFACE_PROBE_PIXELSCAN_LABELS)
-    payload["country_values"] = _flatten_signal_values(payload["labeled_values"].get("country"))
+    labeled_values = _object_dict(payload.get("labeled_values"))
+    payload["country_values"] = _flatten_signal_values(labeled_values.get("country"))
     payload["ip_values"] = _clean_ip_values(
-        _extract_ip_values(_flatten_signal_values(payload["labeled_values"].get("ip"))),
-        known_versions=list(payload.get("signal_versions") or []),
+        _extract_ip_values(_flatten_signal_values(labeled_values.get("ip"))),
+        known_versions=_int_list(payload.get("signal_versions")),
     )
     payload["timezone_values"] = _flatten_signal_values(
         {
-            "js_timezone": payload["labeled_values"].get("js_timezone"),
-            "ip_time": payload["labeled_values"].get("ip_time"),
+            "js_timezone": labeled_values.get("js_timezone"),
+            "ip_time": labeled_values.get("ip_time"),
         }
     )
-    payload["proxy_values"] = _flatten_signal_values(payload["labeled_values"].get("proxy_verdict"))
-    payload["language_values"] = _flatten_signal_values(payload["labeled_values"].get("language_headers"))
-    payload["screen_values"] = _flatten_signal_values(payload["labeled_values"].get("screen_size"))
-    payload["webgl_values"] = _flatten_signal_values(payload["labeled_values"].get("webgl"))
+    payload["proxy_values"] = _flatten_signal_values(labeled_values.get("proxy_verdict"))
+    payload["language_values"] = _flatten_signal_values(labeled_values.get("language_headers"))
+    payload["screen_values"] = _flatten_signal_values(labeled_values.get("screen_size"))
+    payload["webgl_values"] = _flatten_signal_values(labeled_values.get("webgl"))
     return payload
 
 
 def _extract_creepjs(snapshot: dict[str, object]) -> dict[str, object]:
-    lines = [str(value) for value in list(snapshot.get("lines") or [])]
+    lines = [str(value) for value in _object_list(snapshot.get("lines"))]
     payload = _generic_line_signals(lines=lines, label_map=BROWSER_SURFACE_PROBE_CREEPJS_LABELS)
-    payload["fp_id_values"] = _flatten_signal_values(payload["labeled_values"].get("fp_id"))
+    labeled_values = _object_dict(payload.get("labeled_values"))
+    payload["fp_id_values"] = _flatten_signal_values(labeled_values.get("fp_id"))
     payload["fuzzy_fp_id_values"] = _flatten_signal_values(
-        payload["labeled_values"].get("fuzzy_fp_id")
+        labeled_values.get("fuzzy_fp_id")
     )
-    payload["headless_hits"] = payload["keyword_hits"].get("headless", [])
-    payload["webrtc_hits"] = payload["keyword_hits"].get("webrtc", [])
-    payload["timezone_hits"] = payload["keyword_hits"].get("timezone", [])
-    payload["screen_hits"] = payload["keyword_hits"].get("screen", [])
-    payload["ip_values"] = _extract_ip_values(payload["webrtc_hits"])
+    keyword_hits = _object_dict(payload.get("keyword_hits"))
+    payload["headless_hits"] = _object_list(keyword_hits.get("headless"))
+    payload["webrtc_hits"] = _object_list(keyword_hits.get("webrtc"))
+    payload["timezone_hits"] = _object_list(keyword_hits.get("timezone"))
+    payload["screen_hits"] = _object_list(keyword_hits.get("screen"))
+    payload["ip_values"] = _clean_ip_values(
+        _extract_ip_values(_string_list(payload.get("webrtc_hits"))),
+        known_versions=_int_list(payload.get("signal_versions")),
+    )
+    return payload
+
+
+def _extract_generic_site(snapshot: dict[str, object]) -> dict[str, object]:
+    lines = [str(value) for value in _object_list(snapshot.get("lines"))]
+    payload = _generic_line_signals(lines=lines, label_map={})
+    payload["ip_values"] = _clean_ip_values(
+        _extract_ip_values(lines),
+        known_versions=_int_list(payload.get("signal_versions")),
+    )
     return payload
 
 
@@ -632,7 +751,7 @@ def _locale_region(locale_value: str | None) -> str | None:
     return region if len(region) == 2 and region.isalpha() else None
 
 
-def _coalesce(values: list[object]) -> object | None:
+def _coalesce(values: Sequence[object]) -> object | None:
     for value in values:
         if value not in (None, "", [], {}):
             return value
@@ -641,7 +760,7 @@ def _coalesce(values: list[object]) -> object | None:
 
 def _consensus_baseline(per_site: dict[str, dict[str, object]]) -> dict[str, object]:
     if not per_site:
-        return {}
+        return {"consensus": {}, "drift": {}}
     keys = (
         "user_agent",
         "user_agent_data",
@@ -678,7 +797,6 @@ def _consensus_baseline(per_site: dict[str, dict[str, object]]) -> dict[str, obj
             drift[key] = unique_values
     return {
         "consensus": consensus,
-        "per_site": per_site,
         "drift": drift,
     }
 
@@ -708,18 +826,18 @@ def _target_root_cause(
     consensus: dict[str, object],
     diagnostic: dict[str, object],
 ) -> dict[str, object]:
-    geo = dict(diagnostic.get("geo") or {}).get("consensus") or {}
-    geo_country = _country_code_from_value(str(dict(geo).get("country") or ""))
+    geo = _object_dict(_object_dict(diagnostic.get("geo")).get("consensus"))
+    geo_country = _country_code_from_value(str(geo.get("country") or ""))
     mismatch = _target_identity_mismatch(
         locale=str(consensus.get("locale") or ""),
         timezone_name=str(consensus.get("timezone") or ""),
         geo_country_code=geo_country,
     )
     transport_payloads = [
-        dict(diagnostic.get("httpx") or {}),
-        dict(diagnostic.get("curl_cffi") or {}),
+        _object_dict(diagnostic.get("httpx")),
+        _object_dict(diagnostic.get("curl_cffi")),
     ]
-    browser = dict(diagnostic.get("browser") or {})
+    browser = _object_dict(diagnostic.get("browser"))
     transport_blocked = [
         payload
         for payload in transport_payloads
@@ -732,18 +850,20 @@ def _target_root_cause(
     ]
     browser_blocked = browser.get("status") == "ok" and bool(browser.get("blocked"))
     browser_ok = browser.get("status") == "ok" and not bool(browser.get("blocked"))
-    browser_classification = dict(browser.get("classification") or {})
+    browser_classification = _object_dict(browser.get("classification"))
     vendor = (
         browser_classification.get("header_vendor")
         or _coalesce(
             [
-                dict(payload.get("classification") or {}).get("header_vendor")
+                _object_dict(payload.get("classification")).get("header_vendor")
                 for payload in transport_payloads
             ]
         )
         or _coalesce(
             [
-                _coalesce(list(dict(payload.get("classification") or {}).get("provider_hits") or []))
+                _coalesce(
+                    _object_list(_object_dict(payload.get("classification")).get("provider_hits"))
+                )
                 for payload in [browser, *transport_payloads]
             ]
         )
@@ -758,11 +878,11 @@ def _target_root_cause(
                 "geo_identity": mismatch,
                 "httpx": {
                     "status_code": transport_payloads[0].get("status_code"),
-                    "outcome": dict(transport_payloads[0].get("classification") or {}).get("outcome"),
+                    "outcome": _object_dict(transport_payloads[0].get("classification")).get("outcome"),
                 },
                 "curl_cffi": {
                     "status_code": transport_payloads[1].get("status_code"),
-                    "outcome": dict(transport_payloads[1].get("classification") or {}).get("outcome"),
+                    "outcome": _object_dict(transport_payloads[1].get("classification")).get("outcome"),
                 },
                 "browser": {
                     "status_code": browser.get("status_code"),
@@ -833,20 +953,20 @@ def _target_root_cause(
 
 def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
-    baseline = dict(report.get("baseline") or {})
-    consensus = dict(baseline.get("consensus") or {})
-    drift = dict(baseline.get("drift") or {})
-    sites = dict(report.get("sites") or {})
-    target_diagnostics = list(report.get("target_diagnostics") or [])
+    baseline = _object_dict(report.get("baseline"))
+    consensus = _object_dict(baseline.get("consensus"))
+    drift = _object_dict(baseline.get("drift"))
+    sites = _object_dict(report.get("sites"))
+    target_diagnostics = _object_list(report.get("target_diagnostics"))
     failed_probe_sites = [
         site_id
         for site_id, site_payload in sites.items()
-        if dict(site_payload or {}).get("site_status") == "failed"
+        if _object_dict(site_payload).get("site_status") == "failed"
     ]
     degraded_probe_sites = [
         site_id
         for site_id, site_payload in sites.items()
-        if dict(site_payload or {}).get("site_status") == "degraded"
+        if _object_dict(site_payload).get("site_status") == "degraded"
     ]
     if failed_probe_sites:
         findings.append(
@@ -866,17 +986,17 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
                 "evidence": degraded_probe_sites,
             }
         )
-    pixelscan = dict(sites.get("pixelscan") or {})
-    sannysoft = dict(sites.get("sannysoft") or {})
-    creepjs = dict(sites.get("creepjs") or {})
+    pixelscan = _object_dict(sites.get("pixelscan"))
+    sannysoft = _object_dict(sites.get("sannysoft"))
+    creepjs = _object_dict(sites.get("creepjs"))
 
     pixelscan_country = _coalesce(
-        list(dict(pixelscan.get("extracted") or {}).get("country_values") or [])
+        _string_list(_object_dict(pixelscan.get("extracted")).get("country_values"))
     )
     pixelscan_country_code = _country_code_from_value(str(pixelscan_country or ""))
     observed_geo_country = None
     for diagnostic in target_diagnostics:
-        diagnostic_geo = dict(dict(diagnostic or {}).get("geo") or {}).get("consensus") or {}
+        diagnostic_geo = _object_dict(_object_dict(_object_dict(diagnostic).get("geo")).get("consensus"))
         observed_geo_country = _country_code_from_value(str(diagnostic_geo.get("country") or ""))
         if observed_geo_country:
             break
@@ -935,10 +1055,12 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
         )
 
     baseline_versions = _extract_versions([str(consensus.get("user_agent") or "")])
-    extracted_versions = []
+    extracted_versions: list[int] = []
     for site in sites.values():
-        extracted_versions.extend(list(dict(site.get("extracted") or {}).get("signal_versions") or []))
-    extracted_versions = sorted(set(int(value) for value in extracted_versions if isinstance(value, int)))
+        extracted_versions.extend(
+            _int_list(_object_dict(_object_dict(site).get("extracted")).get("signal_versions"))
+        )
+    extracted_versions = sorted(set(extracted_versions))
     if baseline_versions and extracted_versions and any(
         version not in baseline_versions for version in extracted_versions
     ):
@@ -957,8 +1079,13 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
     webdriver_evidence: list[str] = []
     if bool(consensus.get("webdriver")):
         webdriver_evidence.append("baseline.navigator.webdriver=true")
-    webdriver_evidence.extend(list(dict(sannysoft.get("extracted") or {}).get("webdriver_hits") or []))
-    webdriver_evidence.extend(list(dict(creepjs.get("extracted") or {}).get("keyword_hits", {}).get("webdriver") or []))
+    webdriver_evidence.extend(
+        _string_list(_object_dict(sannysoft.get("extracted")).get("webdriver_hits"))
+    )
+    creepjs_keyword_hits = _object_dict(
+        _object_dict(creepjs.get("extracted")).get("keyword_hits")
+    )
+    webdriver_evidence.extend(_string_list(creepjs_keyword_hits.get("webdriver")))
     webdriver_evidence = [value for value in webdriver_evidence if _looks_like_truthy_risk(value)]
     if webdriver_evidence:
         findings.append(
@@ -971,8 +1098,11 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
         )
 
     headless_evidence: list[str] = []
-    headless_evidence.extend(list(dict(creepjs.get("extracted") or {}).get("headless_hits") or []))
-    headless_evidence.extend(list(dict(creepjs.get("extracted") or {}).get("keyword_hits", {}).get("headless") or []))
+    creepjs_extracted = _object_dict(creepjs.get("extracted"))
+    headless_evidence.extend(_string_list(creepjs_extracted.get("headless_hits")))
+    headless_evidence.extend(
+        _string_list(_object_dict(creepjs_extracted.get("keyword_hits")).get("headless"))
+    )
     filtered_headless_evidence: list[str] = []
     for value in headless_evidence:
         normalized = _normalize_space(value).lower()
@@ -993,7 +1123,11 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
             }
         )
 
-    webrtc_ips = [str(value) for value in list(consensus.get("webrtc_ips") or []) if _normalize_space(value)]
+    webrtc_ips = [
+        str(value)
+        for value in _object_list(consensus.get("webrtc_ips"))
+        if _normalize_space(value)
+    ]
     public_webrtc_ips: list[str] = []
     private_webrtc_ips: list[str] = []
     for value in webrtc_ips:
@@ -1042,9 +1176,9 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
     site_ips: list[str] = []
     site_countries: list[str] = []
     for site_payload in sites.values():
-        extracted = dict(site_payload.get("extracted") or {})
-        site_ips.extend(list(extracted.get("ip_values") or []))
-        site_countries.extend(list(extracted.get("country_values") or []))
+        extracted = _object_dict(_object_dict(site_payload).get("extracted"))
+        site_ips.extend(_string_list(extracted.get("ip_values")))
+        site_countries.extend(_string_list(extracted.get("country_values")))
     public_site_ips: list[str] = []
     for value in site_ips:
         try:
@@ -1074,7 +1208,7 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
         )
 
     for diagnostic in target_diagnostics:
-        target_payload = dict(diagnostic or {})
+        target_payload = _object_dict(diagnostic)
         target_url = str(target_payload.get("url") or "target")
         root_cause = _target_root_cause(
             consensus=consensus,
@@ -1120,12 +1254,12 @@ def _site_artifacts(base_dir: Path, site_id: str) -> dict[str, Path]:
 
 def _site_signal_payload(site_id: str, snapshot: dict[str, object]) -> dict[str, object]:
     if site_id == "sannysoft":
-        return _sannysoft_signal_rows(list(snapshot.get("rows") or []))
+        return _sannysoft_signal_rows(_dict_rows(snapshot.get("rows")))
     if site_id == "pixelscan":
         return _extract_pixelscan(snapshot)
     if site_id == "creepjs":
         return _extract_creepjs(snapshot)
-    return {}
+    return _extract_generic_site(snapshot)
 
 
 def _slugify(value: object) -> str:
@@ -1307,7 +1441,11 @@ async def _run_geo_endpoint_checks(proxy: str | None) -> dict[str, object]:
     return {
         "checks": checks,
         "consensus": _geo_consensus(
-            [dict(check.get("geo") or {}) for check in checks if dict(check.get("geo") or {})]
+            [
+                geo_payload
+                for check in checks
+                if (geo_payload := _object_dict(check.get("geo")))
+            ]
         ),
     }
 
@@ -1474,10 +1612,11 @@ async def _target_browser_payload(
             "baseline": baseline,
             "snapshot_summary": {
                 "line_count": snapshot.get("line_count", 0),
-                "lines": list(snapshot.get("lines") or []),
+                "line_count_raw": snapshot.get("line_count_raw", snapshot.get("line_count", 0)),
+                "lines": _object_list(snapshot.get("lines")),
             },
             "visible_text_snippet": _truncate_text(
-                " ".join(str(line) for line in list(snapshot.get("lines") or [])[:12]),
+                " ".join(str(line) for line in _object_list(snapshot.get("lines"))[:12]),
                 limit=int(BROWSER_SURFACE_PROBE_TARGET_VISIBLE_TEXT_SNIPPET_LIMIT),
             ),
             "cookie_names": cookie_names,
@@ -1568,8 +1707,8 @@ async def _capture_probe_artifacts(page, artifacts: dict[str, Path]) -> None:
 
 
 def _site_validation_warnings(site_id: str, snapshot: dict[str, object]) -> list[str]:
-    lines = list(snapshot.get("lines") or [])
-    rows = list(snapshot.get("rows") or [])
+    lines = _object_list(snapshot.get("lines"))
+    rows = _object_list(snapshot.get("rows"))
     warnings: list[str] = []
     if not lines and not rows:
         warnings.append("no_visible_text_or_rows")
@@ -1653,8 +1792,11 @@ async def _probe_site(
                         "baseline": baseline,
                         "snapshot_summary": {
                             "line_count": snapshot.get("line_count", 0),
-                            "lines": list(snapshot.get("lines") or []),
-                            "rows": list(snapshot.get("rows") or []),
+                            "line_count_raw": snapshot.get("line_count_raw", snapshot.get("line_count", 0)),
+                            "lines": _object_list(snapshot.get("lines")),
+                            "row_count": snapshot.get("row_count", 0),
+                            "row_count_raw": snapshot.get("row_count_raw", snapshot.get("row_count", 0)),
+                            "rows": _object_list(snapshot.get("rows")),
                             "has_creep_object": bool(snapshot.get("has_creep_object")),
                             "has_fingerprint_object": bool(snapshot.get("has_fingerprint_object")),
                         },
@@ -1686,100 +1828,155 @@ async def _probe_site(
     )
 
 
-def _render_markdown(report: dict[str, object]) -> str:
-    metadata = dict(report.get("metadata") or {})
-    baseline = dict(report.get("baseline") or {})
-    consensus = dict(baseline.get("consensus") or {})
-    findings = list(report.get("findings") or [])
-    sites = dict(report.get("sites") or {})
-    target_diagnostics = list(report.get("target_diagnostics") or [])
+def _ua_major(user_agent: object) -> int | None:
+    match = _BROWSER_VERSION_RE.search(str(user_agent or ""))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
+
+def _build_agent_summary(report: dict[str, object]) -> dict[str, object]:
+    metadata = _object_dict(report.get("metadata"))
+    baseline = _object_dict(report.get("baseline"))
+    consensus = _object_dict(baseline.get("consensus"))
+    findings = _object_list(report.get("findings"))
+    sites = _object_dict(report.get("sites"))
+    target_diagnostics = _object_list(report.get("target_diagnostics"))
+    severity_counts: dict[str, int] = {"fail": 0, "warn": 0, "info": 0}
+    normalized_findings = [_object_dict(finding) for finding in findings if isinstance(finding, dict)]
+    for finding in normalized_findings:
+        severity = str(finding.get("severity") or "").strip().lower()
+        if severity not in severity_counts:
+            continue
+        severity_counts[severity] += 1
+    site_rows: list[dict[str, object]] = []
+    for site_id, raw_site_payload in sorted(sites.items()):
+        site_payload = _object_dict(raw_site_payload)
+        snapshot_summary = _object_dict(site_payload.get("snapshot_summary"))
+        site_rows.append(
+            {
+                "site_id": site_id,
+                "label": site_payload.get("label"),
+                "status": site_payload.get("site_status"),
+                "attempts": site_payload.get("attempts"),
+                "line_count": snapshot_summary.get("line_count"),
+                "line_count_raw": snapshot_summary.get("line_count_raw"),
+                "row_count": snapshot_summary.get("row_count"),
+                "row_count_raw": snapshot_summary.get("row_count_raw"),
+                "validation_warnings": _object_list(site_payload.get("validation_warnings")),
+                "final_url": site_payload.get("final_url") or site_payload.get("url"),
+                "error": site_payload.get("error"),
+            }
+        )
+    target_rows: list[dict[str, object]] = []
+    for raw_payload in target_diagnostics:
+        if not isinstance(raw_payload, dict):
+            continue
+        payload = _object_dict(raw_payload)
+        root_cause = _object_dict(payload.get("root_cause"))
+        browser = _object_dict(payload.get("browser"))
+        httpx_payload = _object_dict(payload.get("httpx"))
+        curl_payload = _object_dict(payload.get("curl_cffi"))
+        target_rows.append(
+            {
+                "url": payload.get("url"),
+                "host": payload.get("host"),
+                "root_cause_category": root_cause.get("category"),
+                "root_cause_confidence": root_cause.get("confidence"),
+                "browser_status": browser.get("status"),
+                "browser_blocked": browser.get("blocked"),
+                "httpx_status": httpx_payload.get("status"),
+                "httpx_blocked": httpx_payload.get("blocked"),
+                "curl_status": curl_payload.get("status"),
+                "curl_blocked": curl_payload.get("blocked"),
+            }
+        )
+    return {
+        "generated_at": metadata.get("generated_at"),
+        "engine": metadata.get("browser_engine"),
+        "source_kind": metadata.get("source_kind"),
+        "degraded": bool(metadata.get("degraded")),
+        "selected_proxy_mask": metadata.get("selected_proxy_mask"),
+        "severity_counts": severity_counts,
+        "findings": [
+            {
+                "severity": str(finding.get("severity") or ""),
+                "category": str(finding.get("category") or ""),
+                "message": str(finding.get("message") or ""),
+                "evidence": (
+                    _object_list(finding.get("evidence"))[:5]
+                    if isinstance(finding.get("evidence"), list)
+                    else finding.get("evidence")
+                ),
+            }
+            for finding in normalized_findings
+        ],
+        "baseline": {
+            "user_agent_major": _ua_major(consensus.get("user_agent")),
+            "locale": consensus.get("locale"),
+            "timezone": consensus.get("timezone"),
+            "webdriver": consensus.get("webdriver"),
+            "webrtc_ip_count": len(_object_list(consensus.get("webrtc_ips"))),
+            "drift_keys": sorted(list(_object_dict(baseline.get("drift")).keys())),
+        },
+        "sites": site_rows,
+        "target_diagnostics": target_rows,
+    }
+
+
+def _render_markdown(report: dict[str, object]) -> str:
+    summary = _build_agent_summary(report)
+    findings = _object_list(summary.get("findings"))
+    sites = _object_list(summary.get("sites"))
+    target_diagnostics = _object_list(summary.get("target_diagnostics"))
+    baseline = _object_dict(summary.get("baseline"))
+    severity_counts = _object_dict(summary.get("severity_counts"))
     lines = [
         "# Browser Fingerprint Report",
         "",
-        f"- Generated: {metadata.get('generated_at')}",
-        f"- Engine: {metadata.get('browser_engine')}",
-        f"- Source: {metadata.get('source_kind')}",
-        f"- Selected proxy: {metadata.get('selected_proxy_mask')}",
-        f"- Proxy inventory: {', '.join(list(metadata.get('proxy_inventory_masked') or [])) or 'direct'}",
-        f"- Locality profile: {json.dumps(metadata.get('locality_profile'), sort_keys=True)}",
+        f"- Generated: {summary.get('generated_at')}",
+        f"- Engine: {summary.get('engine')}",
+        f"- Source: {summary.get('source_kind')}",
+        f"- Degraded: {summary.get('degraded')}",
+        f"- Proxy: {summary.get('selected_proxy_mask')}",
+        f"- Findings: fail={severity_counts.get('fail', 0)}, warn={severity_counts.get('warn', 0)}, info={severity_counts.get('info', 0)}",
+        "",
+        "## Baseline",
+        f"- UA major: {baseline.get('user_agent_major')}",
+        f"- Locale: {baseline.get('locale')}",
+        f"- Timezone: {baseline.get('timezone')}",
+        f"- Webdriver: {baseline.get('webdriver')}",
+        f"- WebRTC IP count: {baseline.get('webrtc_ip_count')}",
+        f"- Drift keys: {', '.join(_string_list(baseline.get('drift_keys'))) or 'none'}",
         "",
         "## Findings",
     ]
-    for finding in findings:
+    if findings:
+        for raw_finding in findings:
+            finding = _object_dict(raw_finding)
+            lines.append(
+                f"- {str(finding.get('severity') or '').upper()} [{finding.get('category')}]: {finding.get('message')}"
+            )
+    else:
+        lines.append("- INFO: no findings")
+    lines.extend(["", "## Sites"])
+    for raw_site in sites:
+        site = _object_dict(raw_site)
+        warnings = _string_list(site.get("validation_warnings"))
+        warning_text = ",".join(warnings) if warnings else "none"
         lines.append(
-            f"- {str(finding.get('severity') or '').upper()}: {finding.get('message')}"
+            f"- {site.get('site_id')}: status={site.get('status')} attempts={site.get('attempts')} lines={site.get('line_count')}/{site.get('line_count_raw')} rows={site.get('row_count')}/{site.get('row_count_raw')} warnings={warning_text}"
         )
-    lines.extend(
-        [
-            "",
-            "## Baseline",
-            f"- User-Agent: {consensus.get('user_agent')}",
-            f"- Locale: {consensus.get('locale')}",
-            f"- Languages: {', '.join(list(consensus.get('languages') or []))}",
-            f"- Timezone: {consensus.get('timezone')}",
-            f"- Webdriver: {consensus.get('webdriver')}",
-            f"- Screen: {json.dumps(consensus.get('screen'), sort_keys=True)}",
-            f"- Viewport: {json.dumps(consensus.get('viewport'), sort_keys=True)}",
-            f"- WebGL: {json.dumps(consensus.get('webgl'), sort_keys=True)}",
-            f"- WebRTC IPs: {', '.join(list(consensus.get('webrtc_ips') or [])) or 'none'}",
-            "",
-            "## Sites",
-        ]
-    )
-    for site_id, site_payload in sites.items():
-        lines.extend(
-            [
-                f"### {site_payload.get('label')}",
-                f"- URL: {site_payload.get('final_url') or site_payload.get('url')}",
-                f"- Status: {site_payload.get('site_status') or 'unknown'}",
-                f"- Attempts: {site_payload.get('attempts') or 0}",
-                f"- Title: {site_payload.get('title') or site_payload.get('error') or ''}",
-                f"- Screenshot: {dict(site_payload.get('artifacts') or {}).get('screenshot')}",
-                f"- HTML: {dict(site_payload.get('artifacts') or {}).get('html')}",
-            ]
-        )
-        extracted = dict(site_payload.get("extracted") or {})
-        interesting_keys = (
-            "matched_rows",
-            "failed_rows",
-            "labeled_values",
-            "keyword_hits",
-            "fp_id_values",
-            "fuzzy_fp_id_values",
-            "country_values",
-            "ip_values",
-            "proxy_values",
-        )
-        for key in interesting_keys:
-            value = extracted.get(key)
-            if value in (None, "", [], {}):
-                continue
-            lines.append(f"- {key}: {json.dumps(value, sort_keys=True)}")
-        if site_id != list(sites.keys())[-1]:
-            lines.append("")
     if target_diagnostics:
         lines.extend(["", "## Target Diagnostics"])
-        for diagnostic in target_diagnostics:
-            payload = dict(diagnostic or {})
-            root_cause = dict(payload.get("root_cause") or {})
-            geo = dict(dict(payload.get("geo") or {}).get("consensus") or {})
-            lines.extend(
-                [
-                    f"### {payload.get('host') or payload.get('url')}",
-                    f"- URL: {payload.get('url')}",
-                    f"- Root cause: {root_cause.get('category')} ({root_cause.get('confidence')})",
-                    f"- Root cause message: {root_cause.get('message')}",
-                    f"- Geo consensus: {json.dumps(geo, sort_keys=True)}",
-                ]
+        for raw_payload in target_diagnostics:
+            payload = _object_dict(raw_payload)
+            lines.append(
+                f"- {payload.get('host') or payload.get('url')}: {payload.get('root_cause_category')} ({payload.get('root_cause_confidence')}) browser={payload.get('browser_status')}/{payload.get('browser_blocked')} httpx={payload.get('httpx_status')}/{payload.get('httpx_blocked')} curl={payload.get('curl_status')}/{payload.get('curl_blocked')}"
             )
-            for method_key in ("httpx", "curl_cffi", "browser"):
-                method_payload = dict(payload.get(method_key) or {})
-                if not method_payload:
-                    continue
-                lines.append(
-                    f"- {method_key}: {json.dumps({k: method_payload.get(k) for k in ('status', 'status_code', 'final_url', 'blocked', 'title', 'visible_text_snippet', 'challenge_cookie_names', 'response_headers', 'classification') if method_payload.get(k) not in (None, '', [], {})}, sort_keys=True)}"
-                )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -1812,12 +2009,12 @@ async def build_report(
             await asyncio.sleep(delay_ms / 1000)
     baseline = _consensus_baseline(
         {
-            site_id: dict(site_payload.get("baseline") or {})
+            site_id: _object_dict(site_payload.get("baseline"))
             for site_id, site_payload in sites.items()
             if isinstance(site_payload, dict)
         }
     )
-    consensus = dict(baseline.get("consensus") or {})
+    consensus = _object_dict(baseline.get("consensus"))
     target_diagnostics: list[dict[str, object]] = []
     for raw_url in list(target_urls or []):
         raw = _normalize_space(raw_url)
@@ -1866,7 +2063,7 @@ async def build_report(
         "site_statuses": site_statuses,
         "degraded": any(status != "ok" for status in site_statuses.values()),
     }
-    report = {
+    report: dict[str, object] = {
         "metadata": metadata,
         "connection_source": {
             "source_kind": runtime_source.source_kind,
@@ -1881,6 +2078,7 @@ async def build_report(
         "target_diagnostics": target_diagnostics,
     }
     report["findings"] = build_findings(report)
+    report["agent_summary"] = _build_agent_summary(report)
     (report_dir / "report.json").write_text(_json_dump(report), encoding="utf-8")
     (report_dir / "report.md").write_text(_render_markdown(report), encoding="utf-8")
     return report

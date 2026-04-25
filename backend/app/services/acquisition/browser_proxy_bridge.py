@@ -124,7 +124,7 @@ class Socks5AuthBridge:
                     crawler_runtime_settings.browser_proxy_bridge_first_byte_timeout_seconds
                 ),
             )
-            upstream_reader, upstream_writer = await asyncio.wait_for(
+            opened_reader, opened_writer = await asyncio.wait_for(
                 asyncio.open_connection(
                     self.upstream.host,
                     self.upstream.port,
@@ -133,20 +133,22 @@ class Socks5AuthBridge:
                     crawler_runtime_settings.browser_proxy_bridge_connect_timeout_seconds
                 ),
             )
+            upstream_reader = opened_reader
+            upstream_writer = opened_writer
             await asyncio.wait_for(
                 _authenticate_upstream(
-                    upstream_reader,
-                    upstream_writer,
+                    opened_reader,
+                    opened_writer,
                     upstream=self.upstream,
                 ),
                 timeout=float(
                     crawler_runtime_settings.browser_proxy_bridge_auth_timeout_seconds
                 ),
             )
-            upstream_writer.write(request.raw_request)
-            await upstream_writer.drain()
+            opened_writer.write(request.raw_request)
+            await opened_writer.drain()
             response = await asyncio.wait_for(
-                _read_socks5_response(upstream_reader),
+                _read_socks5_response(opened_reader),
                 timeout=float(
                     crawler_runtime_settings.browser_proxy_bridge_first_byte_timeout_seconds
                 ),
@@ -156,8 +158,8 @@ class Socks5AuthBridge:
             if response[1] != 0:
                 return
             await asyncio.gather(
-                _relay_stream(reader, upstream_writer),
-                _relay_stream(upstream_reader, writer),
+                _relay_stream(reader, opened_writer),
+                _relay_stream(opened_reader, writer),
             )
         except asyncio.CancelledError:
             raise

@@ -11,6 +11,7 @@ from app.services.acquisition.acquirer import AcquisitionRequest
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.acquirer import acquire as _acquire
 from app.services.acquisition_plan import AcquisitionPlan
+from app.services.adapters.base import AdapterResult
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
 from app.services.acquisition.browser_runtime import build_failed_browser_diagnostics
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
@@ -785,11 +786,19 @@ async def _populate_adapter_records(
     acquisition_result.adapter_name = None
     acquisition_result.adapter_source_type = None
 
-    adapter_result = await run_adapter(
-        acquisition_result.final_url,
-        acquisition_result.html,
-        context.surface,
-    )
+    adapter_results = []
+    for html in [
+        str(acquisition_result.html or ""),
+        *_adapter_browser_artifact_htmls(acquisition_result),
+    ]:
+        adapter_result = await run_adapter(
+            acquisition_result.final_url,
+            html,
+            context.surface,
+        )
+        if adapter_result is not None and list(adapter_result.records or []):
+            adapter_results.append(adapter_result)
+    adapter_result = _best_adapter_result(adapter_results)
     if (
         (adapter_result is None or not list(adapter_result.records or []))
         and _effective_blocked(acquisition_result)
@@ -812,6 +821,86 @@ async def _populate_adapter_records(
         acquisition_result.adapter_records = list(adapter_result.records or [])
         acquisition_result.adapter_name = adapter_result.adapter_name or None
         acquisition_result.adapter_source_type = adapter_result.source_type or None
+
+def _best_adapter_result(adapter_results: list[AdapterResult]) -> AdapterResult | None:
+    if not adapter_results:
+        return None
+    best = max(
+        adapter_results,
+        key=lambda result: _adapter_result_score(list(getattr(result, "records", []) or [])),
+    )
+    merged_records: dict[str, dict[str, object]] = {}
+    unsourced_records: list[dict[str, object]] = []
+    seen_unsourced: set[str] = set()
+    for result in sorted(
+        adapter_results,
+        key=lambda item: _adapter_result_score(list(item.records or [])),
+        reverse=True,
+    ):
+        for record in list(result.records or []):
+            if not isinstance(record, dict):
+                continue
+            url = str(record.get("url") or "").strip()
+            if not url:
+                fingerprint = json.dumps(record, sort_keys=True, default=str)
+                if fingerprint in seen_unsourced:
+                    continue
+                seen_unsourced.add(fingerprint)
+                unsourced_records.append(dict(record))
+                continue
+            existing = merged_records.setdefault(url, {})
+            for key, value in record.items():
+                if value in (None, "", [], {}):
+                    continue
+                if existing.get(key) in (None, "", [], {}):
+                    existing[key] = value
+    return AdapterResult(
+        records=[*merged_records.values(), *unsourced_records],
+        source_type=best.source_type,
+        adapter_name=best.adapter_name,
+    )
+
+def _adapter_result_score(records: list[object]) -> tuple[int, int]:
+    populated = 0
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        populated += sum(
+            value not in (None, "", [], {})
+            for key, value in record.items()
+            if not str(key).startswith("_")
+        )
+    return len(records), populated
+
+def _adapter_browser_artifact_htmls(
+    acquisition_result: AcquisitionResult,
+) -> list[str]:
+    artifacts = mapping_or_empty(getattr(acquisition_result, "artifacts", {}))
+    seen = {str(getattr(acquisition_result, "html", "") or "").strip()}
+    htmls: list[str] = []
+    for value in (
+        artifacts.get("full_rendered_html"),
+        _rendered_listing_fragments_html(artifacts.get("rendered_listing_fragments")),
+    ):
+        html = str(value or "").strip()
+        if not html or html in seen:
+            continue
+        seen.add(html)
+        htmls.append(html)
+    return htmls
+
+def _rendered_listing_fragments_html(value: object) -> str:
+    if not isinstance(value, list):
+        return ""
+    fragments = [
+        fragment
+        for fragment in (str(item or "").strip() for item in value)
+        if fragment
+    ]
+    if not fragments:
+        return ""
+    joined = "\n".join(fragments)
+    return f"<html><body>{joined}</body></html>"
 
 def _assign_platform_family(acquisition_result: AcquisitionResult) -> None:
     platform_family = detect_platform_family(

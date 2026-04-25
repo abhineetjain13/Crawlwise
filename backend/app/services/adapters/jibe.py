@@ -85,11 +85,8 @@ class JibeAdapter(BaseAdapter):
             if value:
                 merged[key] = value
         search_config = self._extract_search_config(html)
-        config_query = (
-            search_config.get("query")
-            if isinstance(search_config.get("query"), dict)
-            else {}
-        )
+        raw_query = search_config.get("query")
+        config_query = raw_query if isinstance(raw_query, dict) else {}
         for key, value in config_query.items():
             normalized = self._normalize_query_value(value)
             if normalized and key not in merged:

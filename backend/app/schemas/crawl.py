@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Iterable, Literal
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.schemas.selectors import SelectorRecordResponse
 
 _DISPLAY_HIDDEN_RECORD_FIELDS = {"page_markdown", "table_markdown", "record_type"}
@@ -59,6 +59,21 @@ class CrawlRecordResponse(BaseModel):
     provenance_available: bool = False
     raw_html_path: str | None = None
     created_at: datetime
+
+    @field_validator("data", "raw_data", "discovered_data", "source_trace", mode="before")
+    @classmethod
+    def _coerce_dict_payload(cls, value: object) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    @model_validator(mode="after")
+    def _normalize_record_payloads(self) -> CrawlRecordResponse:
+        self.data = self.data if isinstance(self.data, dict) else {}
+        self.raw_data = self.raw_data if isinstance(self.raw_data, dict) else {}
+        self.discovered_data = (
+            self.discovered_data if isinstance(self.discovered_data, dict) else {}
+        )
+        self.source_trace = self.source_trace if isinstance(self.source_trace, dict) else {}
+        return self
 
 
 class DashboardResponse(BaseModel):
@@ -351,7 +366,10 @@ _SENSITIVE_SETTING_KEYS = {
     "api_key",
     "api_key_encrypted",
     "authorization",
+    "password",
     "proxy_password",
+    "secret",
+    "token",
 }
 _SENSITIVE_PROXY_KEYS = {
     "api_key",

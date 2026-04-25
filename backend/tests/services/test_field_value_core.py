@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.services.field_value_core import (
     extract_currency_code,
     extract_urls,
+    is_title_noise,
     strip_tracking_query_params,
     validate_and_clean,
     validate_record_for_surface,
@@ -123,6 +124,12 @@ def test_extract_currency_code_supports_rs_price_prefixes() -> None:
 
 def test_extract_currency_code_ignores_non_currency_uppercase_acronyms() -> None:
     assert extract_currency_code("SKU 499") is None
+
+
+def test_is_title_noise_keeps_short_non_numeric_product_titles() -> None:
+    assert is_title_noise("Hat") is False
+    assert is_title_noise("UGG") is False
+    assert is_title_noise("Tie") is False
 
 
 def test_extract_urls_trims_trailing_punctuation_from_embedded_urls() -> None:

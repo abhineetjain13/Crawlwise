@@ -40,7 +40,10 @@ from app.services.xpath_service import validate_xpath_syntax
 
 logger = logging.getLogger(__name__)
 
-_CANDIDATE_CLEANUP = dict(EXTRACTION_RULES.get("candidate_cleanup") or {})
+_candidate_cleanup_raw = EXTRACTION_RULES.get("candidate_cleanup")
+_CANDIDATE_CLEANUP = (
+    dict(_candidate_cleanup_raw) if isinstance(_candidate_cleanup_raw, dict) else {}
+)
 _IMAGE_FILE_EXTENSIONS = tuple(_CANDIDATE_CLEANUP.get("image_file_extensions") or ())
 _PAGE_FILE_EXTENSIONS = (".asp", ".aspx", ".htm", ".html", ".jsp", ".php")
 _IMAGE_URL_HINTS = tuple(_CANDIDATE_CLEANUP.get("image_url_hint_tokens") or ())
@@ -1042,7 +1045,8 @@ def requested_content_extractability(
         if normalized
     }
     fields = surface_fields(surface, requested_fields)
-    dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
+    dom_patterns_raw = EXTRACTION_RULES.get("dom_patterns")
+    dom_patterns = dict(dom_patterns_raw) if isinstance(dom_patterns_raw, dict) else {}
     dom_pattern_fields = {
         field_name
         for field_name in fields
@@ -1174,7 +1178,8 @@ def apply_selector_fallbacks(
                 )
         if values:
             selector_hit_fields.add(field_name)
-    dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
+    dom_patterns_raw = EXTRACTION_RULES.get("dom_patterns")
+    dom_patterns = dict(dom_patterns_raw) if isinstance(dom_patterns_raw, dict) else {}
     for field_name in fields:
         if field_name in selector_hit_fields:
             continue

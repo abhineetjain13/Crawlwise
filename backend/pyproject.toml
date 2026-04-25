@@ -77,11 +77,6 @@ prod = [
 where = ["."]
 include = ["app*"]
 
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
-asyncio_mode = "auto"
-
 [tool.pylint.main]
 ignore-paths = [
   "^tests/.*$",

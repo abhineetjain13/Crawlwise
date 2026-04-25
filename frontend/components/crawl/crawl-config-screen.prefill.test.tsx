@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from"@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from"vitest";
+import { fireEvent, render, screen, waitFor } from"@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from"vitest";
 
 import { STORAGE_KEYS } from"../../lib/constants/storage-keys";
 import { UI_DELAYS } from"../../lib/constants/timing";
@@ -46,6 +46,21 @@ function renderConfigScreen() {
  );
 }
 
+function enterTargetUrl(url: string): void {
+ fireEvent.change(screen.getByLabelText("Target URL input"), {
+ target: { value: url },
+ });
+}
+
+async function expectDomainProfileLookup(url: string, surface = "ecommerce_listing"): Promise<void> {
+ await waitFor(() => {
+ expect(getDomainRunProfileMock).toHaveBeenCalledWith({
+ url,
+ surface,
+ });
+ }, { timeout: UI_DELAYS.DEBOUNCE_MS * 6 });
+}
+
 describe("CrawlConfigScreen bulk prefill", () => {
  beforeEach(() => {
  vi.clearAllMocks();
@@ -58,11 +73,6 @@ describe("CrawlConfigScreen bulk prefill", () => {
  listSelectorsMock.mockResolvedValue([]);
  createCrawlMock.mockResolvedValue({ run_id: 321 });
  });
-
- afterEach(() => {
- cleanup();
- });
-
  it("restores the jobs domain from batch prefill storage", async () => {
  window.sessionStorage.setItem(
  STORAGE_KEYS.BULK_PREFILL,
@@ -105,17 +115,10 @@ describe("CrawlConfigScreen bulk prefill", () => {
 
  renderConfigScreen();
 
- fireEvent.change(screen.getByLabelText("Target URL input"), {
- target: { value: "https://example.com/collections/chairs" },
- });
+ enterTargetUrl("https://example.com/collections/chairs");
 
- await waitFor(() => {
- expect(getDomainRunProfileMock).toHaveBeenCalledWith({
- url: "https://example.com/collections/chairs",
- surface: "ecommerce_listing",
- });
+ await expectDomainProfileLookup("https://example.com/collections/chairs");
  expect(listSelectorsMock).toHaveBeenCalledWith({ domain: "example.com" });
- }, { timeout: UI_DELAYS.DEBOUNCE_MS * 6 });
 
  fireEvent.click(screen.getByRole("button", { name:"Advanced" }));
 
@@ -158,16 +161,9 @@ describe("CrawlConfigScreen bulk prefill", () => {
 
  renderConfigScreen();
 
- fireEvent.change(screen.getByLabelText("Target URL input"), {
- target: { value: "https://example.com/collections/chairs" },
- });
+ enterTargetUrl("https://example.com/collections/chairs");
 
- await waitFor(() => {
- expect(getDomainRunProfileMock).toHaveBeenCalledWith({
- url: "https://example.com/collections/chairs",
- surface: "ecommerce_listing",
- });
- }, { timeout: UI_DELAYS.DEBOUNCE_MS * 6 });
+ await expectDomainProfileLookup("https://example.com/collections/chairs");
 
  fireEvent.click(screen.getByRole("button", { name:"Advanced" }));
 
@@ -179,9 +175,7 @@ describe("CrawlConfigScreen bulk prefill", () => {
  it("refreshes the route after launching a crawl so the new run screen loads immediately", async () => {
  renderConfigScreen();
 
- fireEvent.change(screen.getByLabelText("Target URL input"), {
- target: { value: "https://example.com/collections/chairs" },
- });
+ enterTargetUrl("https://example.com/collections/chairs");
 
  fireEvent.click(screen.getByRole("button", { name: "Start Crawl" }));
 

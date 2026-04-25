@@ -13,6 +13,14 @@ from app.services.config.extraction_rules import (
     CURRENCY_ALIAS_PATTERNS,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
+    LISTING_ACTION_NOISE_PATTERNS,
+    LISTING_ALT_TEXT_TITLE_PATTERN,
+    LISTING_EDITORIAL_TITLE_PATTERNS,
+    LISTING_MERCHANDISING_TITLE_PREFIXES,
+    LISTING_NAVIGATION_TITLE_HINTS,
+    LISTING_TITLE_CTA_TITLES,
+    LISTING_UTILITY_TITLE_PATTERNS,
+    LISTING_WEAK_TITLES,
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
 )
 from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
@@ -114,11 +122,43 @@ TRACKING_PARAM_PREFIXES = ("utm_", "click_")
 TRACKING_STRIP_URL_FIELDS = {"apply_url", "source_url", "url"}
 _PRESERVED_SHORT_QUERY_KEYS = {"id", "ids", "p", "page", "pid", "q", "sku", "v"}
 _SHORT_TRACKING_VALUE_RE = re.compile(r"^[a-z0-9_-]{0,8}$", re.I)
+_REVIEW_TITLE_RE = re.compile(r"^\s*\d[\d,\s]*\s+reviews?\s*$", re.I)
+_LISTING_UTILITY_TITLE_REGEXES = tuple(
+    re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
+)
 
 
 def clean_text(value: object) -> str:
     text = unescape(str(value or "")).strip()
     return WHITESPACE_RE.sub(" ", text)
+
+
+def is_title_noise(title: object) -> bool:
+    cleaned = clean_text(title)
+    lowered = cleaned.lower()
+    if not lowered:
+        return True
+    if "undefined" in lowered or lowered in {"nan", "none", "null"}:
+        return True
+    if cleaned.isdigit():
+        return True
+    if _REVIEW_TITLE_RE.fullmatch(cleaned):
+        return True
+    if "star" in lowered and RATING_RE.search(lowered) and len(cleaned.split()) <= 4:
+        return True
+    if lowered in LISTING_TITLE_CTA_TITLES:
+        return True
+    if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
+        return True
+    if any(lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES):
+        return True
+    if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
+        return True
+    if any(pattern.search(lowered) for pattern in _LISTING_UTILITY_TITLE_REGEXES):
+        return True
+    if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
+        return True
+    return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
 
 
 class _HTMLTextStripper(HTMLParser):

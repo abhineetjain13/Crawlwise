@@ -1,6 +1,7 @@
 # Indeed job board adapter.
 from __future__ import annotations
 
+from collections.abc import Mapping
 from urllib.parse import urlsplit
 
 from selectolax.lexbor import LexborHTMLParser
@@ -11,13 +12,21 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 def _text(node: object, *, separator: str = "") -> str:
     if node is None:
         return ""
-    return node.text(separator=separator, strip=True)
+    text_fn = getattr(node, "text", None)
+    if not callable(text_fn):
+        return ""
+    try:
+        return str(text_fn(separator=separator, strip=True) or "")
+    except Exception:
+        return ""
 
 
 def _attr(node: object, name: str) -> str | None:
     if node is None:
         return None
-    value = node.attributes.get(name)
+    raw_attrs = getattr(node, "attributes", {}) or {}
+    attrs = raw_attrs if isinstance(raw_attrs, Mapping) else {}
+    value = attrs.get(name)
     if value is None:
         return None
     return str(value).strip() or None

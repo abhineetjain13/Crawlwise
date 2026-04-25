@@ -6,7 +6,7 @@ import re
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from defusedxml import ElementTree as ET
+from defusedxml import ElementTree as ET  # type: ignore[import-untyped]
 
 from app.services.acquisition.runtime import classify_blocked_page
 from app.services.config.block_signatures import BLOCK_SIGNATURES
@@ -21,6 +21,7 @@ from app.services.field_value_core import (
     coerce_text,
     direct_record_to_surface_fields,
     finalize_record,
+    is_title_noise,
     surface_alias_lookup,
     surface_fields,
 )
@@ -36,7 +37,6 @@ from app.services.extract.listing_candidate_ranking import best_listing_candidat
 from app.services.listing_extractor import (
     _finalize_listing_price_fields,
     _detail_like_path,
-    _listing_title_is_noise,
     _url_is_structural,
     extract_listing_records,
 )
@@ -145,6 +145,10 @@ def extract_records(
             for row in listing_rows
             if isinstance(row, dict)
         ]
+        listing_rows = _backfill_listing_rows_from_adapter(
+            listing_rows,
+            adapter_rows=adapter_rows,
+        )
         if adapter_rows and listing_rows:
             candidate_rows = best_listing_candidate_set(
                 [
@@ -155,7 +159,7 @@ def extract_records(
                 page_url=page_url,
                 surface=surface,
                 max_records=max_records,
-                title_is_noise=_listing_title_is_noise,
+                title_is_noise=is_title_noise,
                 url_is_structural=_url_is_structural,
                 detail_like_url=lambda candidate_url: _detail_like_path(
                     candidate_url,
@@ -191,26 +195,36 @@ def _html_is_blocked_extraction_shell(html: str) -> bool:
     classification = classify_blocked_page(html, 0)
     if classification.blocked:
         return True
+    phrases_raw = BLOCK_SIGNATURES.get("phrases")
+    blocked_phrase_values = phrases_raw if isinstance(phrases_raw, list) else []
     blocked_phrases = [
         str(phrase or "").strip().lower()
-        for phrase in BLOCK_SIGNATURES.get("phrases", [])
+        for phrase in blocked_phrase_values
         if str(phrase or "").strip()
     ]
+    active_provider_markers_raw = BLOCK_SIGNATURES.get("active_provider_markers")
+    active_provider_markers = (
+        active_provider_markers_raw if isinstance(active_provider_markers_raw, list) else []
+    )
     active_markers = [
         str(item.get("marker") or "").strip().lower()
-        for item in BLOCK_SIGNATURES.get("active_provider_markers", [])
+        for item in active_provider_markers
         if isinstance(item, dict) and str(item.get("marker") or "").strip()
     ]
+    challenge_elements_raw = BLOCK_SIGNATURES.get("challenge_elements")
+    challenge_elements = challenge_elements_raw if isinstance(challenge_elements_raw, dict) else {}
+    html_markers_raw = challenge_elements.get("html_markers")
+    html_markers_map = html_markers_raw if isinstance(html_markers_raw, dict) else {}
     html_markers = [
         str(marker or "").strip().lower()
-        for marker in (
-            BLOCK_SIGNATURES.get("challenge_elements", {}).get("html_markers", {}) or {}
-        ).keys()
+        for marker in html_markers_map.keys()
         if str(marker or "").strip()
     ]
+    title_patterns_raw = BLOCK_SIGNATURES.get("title_regexes")
+    title_pattern_values = title_patterns_raw if isinstance(title_patterns_raw, list) else []
     title_patterns = [
         str(pattern or "").strip()
-        for pattern in BLOCK_SIGNATURES.get("title_regexes", [])
+        for pattern in title_pattern_values
         if str(pattern or "").strip()
     ]
     phrase_hit = any(phrase in lowered for phrase in blocked_phrases)
@@ -270,6 +284,34 @@ def _backfill_listing_rows_from_network(
             row["price"] = price
         if currency not in (None, "", [], {}) and row.get("currency") in (None, "", [], {}):
             row["currency"] = currency
+    return rows
+
+
+def _backfill_listing_rows_from_adapter(
+    rows: list[dict],
+    *,
+    adapter_rows: list[dict[str, Any]],
+) -> list[dict]:
+    if not rows or not adapter_rows:
+        return rows
+    adapter_by_url = {
+        str(row.get("url") or "").strip(): row
+        for row in adapter_rows
+        if isinstance(row, dict) and str(row.get("url") or "").strip()
+    }
+    if not adapter_by_url:
+        return rows
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        adapter_row = adapter_by_url.get(str(row.get("url") or "").strip())
+        if not isinstance(adapter_row, dict):
+            continue
+        for field_name, value in adapter_row.items():
+            if str(field_name).startswith("_") or value in (None, "", [], {}):
+                continue
+            if row.get(field_name) in (None, "", [], {}):
+                row[field_name] = value
     return rows
 
 

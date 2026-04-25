@@ -139,7 +139,7 @@ class _ProductIntelligenceEnrichmentPayload(BaseModel):
         return value
 
 
-_PAYLOAD_ADAPTERS = {
+_PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "direct_record_extraction": TypeAdapter(list[dict[_FieldKey, Any]]),
     "xpath_discovery": TypeAdapter(list[_XPathSelector]),
     "missing_field_extraction": TypeAdapter(dict[_FieldKey, Any]),
@@ -252,7 +252,7 @@ async def run_prompt_task(
             )
         )
 
-    payload = _parse_payload(raw, response_type=response_type)
+    payload: object = _parse_payload(raw, response_type=response_type)
     if payload is None:
         return _finish(
             LLMTaskResult(
@@ -304,8 +304,9 @@ async def run_prompt_task(
         )
     )
     await session.flush()
+    normalized_payload = payload if isinstance(payload, (dict, list)) else None
     result = LLMTaskResult(
-        payload=payload,
+        payload=normalized_payload,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         provider=provider,
@@ -488,7 +489,7 @@ def _parse_payload(raw_text: str, *, response_type: str) -> dict | list | None:
 def _validate_task_payload(
     task_type: str,
     payload: object,
-) -> tuple[dict | list | object, str | None]:
+) -> tuple[object, str | None]:
     adapter = _PAYLOAD_ADAPTERS.get(str(task_type or "").strip())
     if adapter is None:
         return payload, None
@@ -614,6 +615,14 @@ def _prune_html_for_llm(html_text: str) -> str:
 def _extract_structured_data(html_text: str) -> dict[str, object]:
     soup = BeautifulSoup(html_text, "html.parser")
     structured: dict[str, object] = {}
+
+    def _append_structured_item(type_name: str, item: dict[str, object]) -> None:
+        existing = structured.get(type_name)
+        if isinstance(existing, list):
+            existing.append(item)
+        else:
+            structured[type_name] = [item]
+
     for script in soup.find_all("script", type="application/ld+json"):
         try:
             data = parse_json(script.string or "")
@@ -625,15 +634,15 @@ def _extract_structured_data(html_text: str) -> dict[str, object]:
                 for item in graph:
                     if isinstance(item, dict) and item.get("@type"):
                         type_name = str(item["@type"]).split("/")[-1]
-                        structured.setdefault(type_name, []).append(item)
+                        _append_structured_item(type_name, item)
             elif data.get("@type"):
                 type_name = str(data["@type"]).split("/")[-1]
-                structured.setdefault(type_name, []).append(data)
+                _append_structured_item(type_name, data)
         elif isinstance(data, list):
             for item in data:
                 if isinstance(item, dict) and item.get("@type"):
                     type_name = str(item["@type"]).split("/")[-1]
-                    structured.setdefault(type_name, []).append(item)
+                    _append_structured_item(type_name, item)
     next_data_script = soup.find("script", id="__NEXT_DATA__")
     if next_data_script:
         try:
@@ -777,8 +786,8 @@ def _truncate_json_literal(value: Any, limit: int) -> str:
     if isinstance(compact, list):
         trimmed_list: list[Any] = []
         for item in compact:
-            candidate = [*trimmed_list, item]
-            if len(json.dumps(candidate, default=str)) > limit:
+            candidate_list = [*trimmed_list, item]
+            if len(json.dumps(candidate_list, default=str)) > limit:
                 break
             trimmed_list.append(item)
         return json.dumps(trimmed_list, default=str)

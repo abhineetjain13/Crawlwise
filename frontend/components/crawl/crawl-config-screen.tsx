@@ -1,12 +1,13 @@
 "use client";
 
-import { Globe, Info, Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Check, Globe, Info, Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { FormEvent, startTransition, useEffect, useMemo, useRef, useState } from "react";
 
+import { cn } from "../../lib/utils";
 import { InlineAlert, PageHeader, SectionHeader, TabBar } from "../ui/patterns";
-import { Button, Dropdown, Card, Input, Textarea, Toggle, Tooltip } from "../ui/primitives";
+import { Badge, Button, Dropdown, Card, Input, Textarea, Toggle, Tooltip } from "../ui/primitives";
 import { api } from "../../lib/api";
 import type {
  CrawlConfig,
@@ -86,10 +87,10 @@ const RUN_SETUP_ROW_CLASS = "grid gap-2 md:grid-cols-[140px_minmax(0,1fr)] md:it
 const RUN_SETUP_CONTROL_CLASS = "flex md:justify-self-start";
 const RUN_SETUP_LABEL_CLASS = "flex min-w-0 h-[var(--control-height)] items-center gap-3";
 const RUN_SETUP_STACK_CLASS = "flex flex-col gap-3";
-const ADVANCED_CONTROL_ROW_CLASS = "grid gap-1.5 md:grid-cols-[140px_minmax(0,1fr)] md:items-center md:gap-3";
-const ADVANCED_COLUMN_CLASS = "flex flex-col gap-3";
-const ADVANCED_SUBSECTION_CLASS = "flex flex-col gap-3";
-const ADVANCED_SECTION_TITLE_CLASS = "flex items-center gap-1.5 text-base font-semibold text-foreground";
+const ADVANCED_CONTROL_ROW_CLASS = "grid gap-1.5 md:grid-cols-[120px_minmax(0,1fr)] md:items-center md:gap-3";
+const ADVANCED_COLUMN_CLASS = "flex flex-col gap-4";
+const ADVANCED_SUBSECTION_CLASS = "flex flex-col gap-2.5";
+const ADVANCED_SECTION_TITLE_CLASS = "flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted";
 
 const DIAGNOSTICS_PRESETS: Record<
  DiagnosticsPreset,
@@ -740,19 +741,34 @@ export function CrawlConfigScreen({
  }
  }
 
- return (
- <div className={RUN_SETUP_STACK_CLASS}>
- <PageHeader title="Crawl Studio" />
+ const hasTarget = (singleUrlMode || categoryMode === "sitemap")
+ ? targetUrl.trim().length > 0
+ : (bulkUrls.trim().length > 0 || csvFile !== null);
+ const canSubmit = canPreview(config, fieldRows, { runProfile, studioMode }) && !isSubmitting;
 
- <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
+ return (
+ <div className="page-stack gap-4">
+ <PageHeader title="Crawl Studio" description="Configure and launch crawls across product listings and detail pages." />
+
+ {/* Flow Stepper */}
+ <div className="flex items-center gap-0 text-[11px]">
+ <CsFlowStep step={1} label="Target" active={hasTarget} />
+ <CsFlowConnector active={hasTarget} />
+ <CsFlowStep step={2} label="Configure" active={studioMode === "advanced" || crawlDomain !== "commerce"} />
+ <CsFlowConnector active={studioMode === "advanced" || crawlDomain !== "commerce"} />
+ <CsFlowStep step={3} label="Launch" active={canSubmit} />
+ </div>
+
+ <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_380px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
  <div className="page-stack">
- <Card className="section-card">
- <SectionHeader
- title="Target URL"
- description="Choose the crawl type, set your entry point, and define which fields should be captured."
- />
+ <Card className="section-card overflow-hidden">
+ <header className="cs-panel-header">
+ <span className="cs-panel-title">Target URL</span>
+ <Badge tone="info" className="h-5 px-1.5 text-[10px]">{crawlTab === "category" ? "Category" : "PDP"}</Badge>
+ </header>
+ <div className="p-4 space-y-4">
  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
- <div className="flex flex-wrap items-center gap-2.5">
+ <div className="flex flex-wrap items-center gap-2">
  <TabBar
  value={crawlTab}
  onChange={(value) => {
@@ -804,10 +820,10 @@ export function CrawlConfigScreen({
  variant="accent"
  size="lg"
  type="submit"
- disabled={!canPreview(config, fieldRows, { runProfile, studioMode }) || isSubmitting}
- className="min-w-[124px] justify-self-start lg:justify-self-end"
+ disabled={!canSubmit}
+ className="min-w-[140px] justify-self-start lg:justify-self-end shadow-[0_8px_24px_color-mix(in_srgb,var(--accent)_20%,transparent)]"
  >
- {isSubmitting ? "Starting..." : "Start Crawl"}
+ {isSubmitting ? <><span className="cs-live-dot mr-1.5" />Starting...</> : "Start Crawl"}
  </Button>
  </div>
 
@@ -885,43 +901,42 @@ export function CrawlConfigScreen({
  onCommit={(value) => setAdditionalFields((current) => uniqueRequestedFields([...current, value]))}
  onRemove={(value) => setAdditionalFields((current) => current.filter((field) => field !== value))}
  />
+ </div>
  </Card>
 
  {studioMode === "advanced" ? (
- <Card className="section-card">
- <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
- <SectionHeader
- title="Field Configuration"
- description="Generate selector suggestions or add manual overrides."
- />
- <div className="flex justify-end lg:pt-0.5">
- <div className="inline-flex flex-wrap items-center justify-end gap-2 rounded-[18px] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-1.5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+ <Card className="section-card overflow-hidden">
+ <header className="cs-panel-header">
+ <span className="cs-panel-title">Field Configuration</span>
+ <div className="flex items-center gap-2">
  <Button
  variant="ghost"
  type="button"
+ size="sm"
  onClick={() => void generateFieldSelectors()}
  disabled={generatingSelectors}
- className="rounded-xl px-3.5"
+ className="h-7 rounded-lg px-2.5 text-[11px]"
  >
- <Sparkles className="size-3.5" />
+ <Sparkles className="size-3" />
  {generatingSelectors ? "Generating..." : "Generate"}
  </Button>
- <Button variant="ghost" type="button" onClick={addManualField} className="rounded-xl px-3.5">
- <Plus className="size-3.5" />
+ <Button variant="ghost" type="button" size="sm" onClick={addManualField} className="h-7 rounded-lg px-2.5 text-[11px]">
+ <Plus className="size-3" />
  New Field
  </Button>
  <Button
  variant="accent"
  type="button"
+ size="sm"
  onClick={() => void saveToDomainMemory()}
  disabled={savingDomainMemory || !fieldRows.some((row) => normalizeField(row.fieldName) && (row.cssSelector.trim() || row.xpath.trim() || row.regex.trim()))}
- className="rounded-xl px-4 shadow-[0_10px_24px_color-mix(in_srgb,var(--accent)_24%,transparent)]"
+ className="h-7 rounded-lg px-3 text-[11px] shadow-[0_6px_16px_color-mix(in_srgb,var(--accent)_20%,transparent)]"
  >
- {savingDomainMemory ? "Saving..." : "Save to Domain Memory"}
+ {savingDomainMemory ? "Saving..." : "Save to Memory"}
  </Button>
  </div>
- </div>
- </div>
+ </header>
+ <div className="p-4 space-y-3">
  {fieldConfigMessage ? <p className="text-sm leading-[1.5] text-success">{fieldConfigMessage}</p> : null}
  {fieldConfigError ? <InlineAlert message={fieldConfigError} /> : null}
  <div className="flex flex-col gap-3">
@@ -971,6 +986,7 @@ export function CrawlConfigScreen({
  </div>
  )}
  </div>
+ </div>
  </Card>
  ) : null}
 
@@ -979,12 +995,12 @@ export function CrawlConfigScreen({
 
  <div className="h-full xl:self-stretch">
  <div className="h-full xl:sticky xl:top-[68px]">
- <Card className="section-card">
- <SectionHeader
- title="Crawl Settings"
- description="Basic run controls."
- />
- <div className="page-stack">
+ <Card className="section-card overflow-hidden">
+ <header className="cs-panel-header">
+ <span className="cs-panel-title">Crawl Settings</span>
+ <Badge tone="neutral" className="h-5 px-1.5 text-[10px]">{studioMode === "advanced" ? "Advanced" : "Quick"}</Badge>
+ </header>
+ <div className="p-4 page-stack">
  <div className={RUN_SETUP_ROW_CLASS}>
  <div className={RUN_SETUP_LABEL_CLASS}>
  <Globe className="size-4 shrink-0 text-[var(--accent)]" />
@@ -1095,21 +1111,20 @@ export function CrawlConfigScreen({
  </div>
 
  {studioMode === "advanced" ? (
- <Card className="section-card xl:col-span-2">
- <SectionHeader
- title="Advanced Settings"
- icon={SlidersHorizontal}
- description="Fine-tune fetch, limits, locality, and diagnostics for this exploratory run."
- />
- <div className="grid gap-6 xl:grid-cols-3">
- <section className={ADVANCED_COLUMN_CLASS}>
- <div>
+ <Card className="section-card xl:col-span-2 overflow-hidden">
+ <header className="cs-panel-header">
+ <span className="cs-panel-title flex items-center gap-1.5"><SlidersHorizontal className="size-3.5" /> Advanced Settings</span>
+ <Tooltip content="Fine-tune fetch, limits, locality, and diagnostics for this exploratory run.">
+ <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ </Tooltip>
+ </header>
+ <div className="p-5 grid gap-0 xl:grid-cols-3 xl:divide-x xl:divide-[var(--border)]">
+ <section className={cn(ADVANCED_COLUMN_CLASS, "xl:pr-6")}>
  <div className={ADVANCED_SECTION_TITLE_CLASS}>
  <h3>Execution</h3>
  <Tooltip content="Control how the crawler fetches, renders, and traverses the target.">
- <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ <Info className="size-3 cursor-help text-muted transition-colors hover:text-secondary" />
  </Tooltip>
- </div>
  </div>
  <div className={ADVANCED_SUBSECTION_CLASS}>
  <div className={ADVANCED_CONTROL_ROW_CLASS}>
@@ -1244,14 +1259,12 @@ export function CrawlConfigScreen({
  </div>
  </section>
 
- <section className={ADVANCED_COLUMN_CLASS}>
- <div>
+ <section className={cn(ADVANCED_COLUMN_CLASS, "xl:px-6")}>
  <div className={ADVANCED_SECTION_TITLE_CLASS}>
  <h3>Limits &amp; Locales</h3>
  <Tooltip content="Set repeat-run bounds and regional hints before dispatch.">
- <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ <Info className="size-3 cursor-help text-muted transition-colors hover:text-secondary" />
  </Tooltip>
- </div>
  </div>
  <div className={ADVANCED_SUBSECTION_CLASS}>
  <SliderRow
@@ -1350,10 +1363,10 @@ export function CrawlConfigScreen({
  />
  </div>
  <div className={ADVANCED_SUBSECTION_CLASS}>
- <div className="flex items-center gap-1.5">
- <div className="text-sm font-medium text-foreground">Locale Hints</div>
+ <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted">
+ <span>Locale Hints</span>
  <Tooltip content="Keep country, language, and currency aligned with the market you want to simulate.">
- <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ <Info className="size-3 cursor-help text-muted transition-colors hover:text-secondary" />
  </Tooltip>
  </div>
  <div className={ADVANCED_CONTROL_ROW_CLASS}>
@@ -1407,14 +1420,12 @@ export function CrawlConfigScreen({
  </div>
  </section>
 
- <section className={ADVANCED_COLUMN_CLASS}>
- <div>
+ <section className={cn(ADVANCED_COLUMN_CLASS, "xl:pl-6")}>
  <div className={ADVANCED_SECTION_TITLE_CLASS}>
  <h3>Output &amp; Diagnostics</h3>
  <Tooltip content="Choose what evidence and artifacts stay attached to this run.">
- <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+ <Info className="size-3 cursor-help text-muted transition-colors hover:text-secondary" />
  </Tooltip>
- </div>
  </div>
  <div className={ADVANCED_SUBSECTION_CLASS}>
  <div className={ADVANCED_CONTROL_ROW_CLASS}>
@@ -1809,4 +1820,31 @@ function mergeFieldRows(currentRows: FieldRow[], incomingRows: FieldRow[]) {
  });
  }
  return Array.from(merged.values());
+}
+
+function CsFlowStep({ step, label, active }: Readonly<{ step: number; label: string; active: boolean }>) {
+ return (
+  <span className={cn(
+   "inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-all",
+   active
+    ? "bg-[var(--accent-subtle)] text-accent"
+    : "text-muted",
+  )}>
+   <span className={cn(
+    "inline-flex size-4 items-center justify-center rounded-full text-[9px] font-bold",
+    active
+     ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+     : "bg-[var(--border)] text-muted",
+   )}>
+    {active ? <Check className="size-2.5" /> : step}
+   </span>
+   {label}
+  </span>
+ );
+}
+
+function CsFlowConnector({ active }: Readonly<{ active: boolean }>) {
+ return (
+  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-[var(--border)]")} />
+ );
 }

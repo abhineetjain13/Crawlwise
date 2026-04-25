@@ -1,22 +1,21 @@
 "use client";
 
 import { useQuery } from"@tanstack/react-query";
-import { ArrowRightCircle, ChevronsDown, Copy, Download, Info, Plus, Search } from"lucide-react";
+import { ArrowRightCircle, Check, ChevronsDown, Copy, Download, Info, Plus, Search } from"lucide-react";
 import { useRouter } from"next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from"react";
 import ReactMarkdown from"react-markdown";
 import remarkGfm from"remark-gfm";
 
+import { cn } from "../../lib/utils";
 import {
  DataRegionEmpty,
  DataRegionLoading,
  InlineAlert,
  PageHeader,
  ProgressBar,
- RunSummaryChips,
  RunWorkspaceShell,
  SectionHeader,
- StatusDot,
  TabBar,
 } from"../ui/patterns";
 import { Badge, Button, Card, Dropdown, Field, Input, Textarea, Toggle, Tooltip } from"../ui/primitives";
@@ -48,7 +47,6 @@ import {
  isListingRun,
  LogTerminal,
  type OutputTabKey,
- PreviewRow,
  progressPercent,
  qualityTone,
  RecordsTable,
@@ -521,19 +519,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }, [logs, live]);
 
  useEffect(() => {
- setTablePage(1);
- setTableRecords([]);
- setTableTotal(0);
- setJsonVisibleCount(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
- setLogItems([]);
- setLogCursorAfterId(undefined);
- setLogSocketConnected(false);
- setRecipeProfile(defaultDomainRunProfile());
- setRecipeActionPending(null);
- setRecipeActionError("");
-}, [runId]);
-
- useEffect(() => {
  if (!run) {
  return;
  }
@@ -821,7 +806,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
 
  return (
- <div className="page-stack">
+ <div className="page-stack gap-4">
  <PageHeader
  title={run?.url ? (
  <span className="flex items-center gap-1.5">
@@ -835,6 +820,46 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </Button>
  }
  />
+
+ {/* Flow Stepper */}
+ <div className="flex items-center gap-0 text-[11px]">
+ <CsFlowStep step={1} label="Launch" active={!!run} />
+ <CsFlowConnector active={!!run} />
+ <CsFlowStep step={2} label="Crawl" active={live || terminal} />
+ <CsFlowConnector active={live || terminal} />
+ <CsFlowStep step={3} label="Complete" active={terminal} />
+ </div>
+
+ {/* Status Metrics Bar */}
+ {run && !showRunLoadingState ? (
+ <div className="cs-status-bar">
+ <div className="cs-metric">
+ <span className="cs-live-dot" />
+ <span className="cs-metric-value">{humanizeStatus(run.status)}</span>
+ <span className="cs-metric-label">Status</span>
+ </div>
+ <div className="cs-metric">
+ <span className="cs-metric-value">{summary.records}</span>
+ <span className="cs-metric-label">Records</span>
+ </div>
+ <div className="cs-metric">
+ <span className="cs-metric-value">{summary.pages}</span>
+ <span className="cs-metric-label">Pages</span>
+ </div>
+ <div className="cs-metric">
+ <span className="cs-metric-value">{summary.duration}</span>
+ <span className="cs-metric-label">Elapsed</span>
+ </div>
+ <div className="cs-metric">
+ <Badge tone={extractionVerdictTone(verdict)} className="text-[10px]">{humanizeVerdict(verdict)}</Badge>
+ <span className="cs-metric-label">Verdict</span>
+ </div>
+ <div className="cs-metric">
+ <Badge tone={qualityTone(completedQualityLevel)} className="text-[10px]">{humanizeQuality(completedQualityLevel)} ({Math.round(quality.score * 100)}%)</Badge>
+ <span className="cs-metric-label">Quality</span>
+ </div>
+ </div>
+ ) : null}
 
  {showRunLoadingState ? (
  <Card className="space-y-3 px-6 py-8">
@@ -869,61 +894,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </Card>
  ) : null}
  {!showRunLoadingState && !terminal ? (
- <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.32fr)_minmax(0,0.68fr)]">
- <Card className="section-card">
- <SectionHeader title="Progress"description={run ? <ProgressBar percent={progressPercent(run)} /> :"Loading run state..."} />
- <PreviewRow label="Run ID"value={run ? `#${run.id}` :"--"} mono />
- <PreviewRow
- label="Status"
- value={
- run ? (
- <span className="inline-flex items-center gap-1.5">
- <StatusDot tone={statusTone(run.status)} />
- {humanizeStatus(run.status)}
+ <Card className="section-card overflow-hidden">
+ <header className="cs-panel-header">
+ <span className="cs-panel-title flex items-center gap-2">
+ Live Log Stream
+ {logSocketConnected ? <span className="cs-live-dot is-success" /> : <span className="cs-live-dot" />}
  </span>
- ) : (
-"--"
- )
- }
- />
- <PreviewRow label="Crawl Type"value={run?.run_type ??"--"} />
-
- <PreviewRow label="Records"value={String(summary.records)} />
- <PreviewRow label="Pages"value={String(summary.pages)} />
- <PreviewRow label="Elapsed"value={summary.duration} />
- <PreviewRow
- label="Verdict"
- value={
- <Badge tone={extractionVerdictTone(verdict)}>
- {humanizeVerdict(verdict)}
- </Badge>
- }
- />
- <PreviewRow
- label="Data Quality"
- value={
- <span className="inline-flex items-center gap-2">
- <Badge tone={qualityTone(completedQualityLevel)}>
- {humanizeQuality(completedQualityLevel)} ({Math.round(quality.score * 100)}%)
- </Badge>
- <Tooltip content="Quality reflects how complete and useful the extracted rows are. High means rows are consistently rich. Low can still be usable, but it is sparser.">
- <button type="button"aria-label="Explain data quality"className="text-muted transition-colors hover:text-foreground">
- <Info className="size-3.5"aria-hidden="true"/>
- </button>
- </Tooltip>
- </span>
- }
- />
-
- {runActionError ? <InlineAlert message={runActionError} /> : null}
- </Card>
-
- <Card className="section-card">
- <SectionHeader
- title="Live Log Stream"
- description="Auto-scrolls while you stay at the bottom."
- action={
- <div className="flex items-center gap-2">
+ <div className="flex items-center gap-3">
+ {run ? <div className="w-28"><ProgressBar percent={progressPercent(run)} /></div> : null}
  {liveJumpAvailable ? (
  <button
  type="button"
@@ -944,11 +922,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  danger
  />
  </div>
- }
- />
+ </header>
  <LogTerminal logs={logs} live viewportRef={logViewportRef} />
  </Card>
- </div>
  ) : null}
 
  {!showRunLoadingState && terminal ? (
@@ -1012,13 +988,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  { value:"learning", label:"Learning"},
  { value:"run_config", label:"Run Config"},
  ]}
- />
- }
- summary={
- <RunSummaryChips
- duration={summary.duration}
- verdict={humanizeVerdict(verdict)}
- quality={humanizeQuality(completedQualityLevel)}
  />
  }
  content={
@@ -1516,5 +1485,32 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </div>
  ) : null}
  </div>
+ );
+}
+
+function CsFlowStep({ step, label, active }: Readonly<{ step: number; label: string; active: boolean }>) {
+ return (
+  <span className={cn(
+   "inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-all",
+   active
+    ? "bg-[var(--accent-subtle)] text-accent"
+    : "text-muted",
+  )}>
+   <span className={cn(
+    "inline-flex size-4 items-center justify-center rounded-full text-[9px] font-bold",
+    active
+     ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+     : "bg-[var(--border)] text-muted",
+   )}>
+    {active ? <Check className="size-2.5" /> : step}
+   </span>
+   {label}
+  </span>
+ );
+}
+
+function CsFlowConnector({ active }: Readonly<{ active: boolean }>) {
+ return (
+  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-[var(--border)]")} />
  );
 }

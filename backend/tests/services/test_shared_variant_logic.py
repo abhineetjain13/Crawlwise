@@ -226,6 +226,17 @@ def test_resolve_variant_group_name_rejects_shipping_country_select() -> None:
     assert resolve_variant_group_name(soup.select_one("select")) == ""
 
 
+def test_resolve_variant_group_name_rejects_size_chart_controls() -> None:
+    soup = BeautifulSoup(
+        """
+        <button id="size-chart-button" aria-label="Size Chart">Size Chart</button>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("button")) == ""
+
+
 def test_resolve_variant_group_name_rejects_report_reason_select() -> None:
     soup = BeautifulSoup(
         """

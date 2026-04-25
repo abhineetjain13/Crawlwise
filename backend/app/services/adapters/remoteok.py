@@ -68,6 +68,6 @@ def _safe_int(value: object) -> int | None:
     if value in (None, ""):
         return None
     try:
-        return int(value)
+        return int(value) if isinstance(value, (int, float)) else int(str(value))
     except (TypeError, ValueError):
         return None

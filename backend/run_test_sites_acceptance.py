@@ -30,29 +30,35 @@ DEFAULT_REPORT_DIR = Path("artifacts/test_sites_acceptance")
 _MISSING = object()
 
 
-async def _run_one(site: dict[str, str], mode: str) -> dict[str, object]:
+async def _run_one(site: dict[str, object], mode: str) -> dict[str, object]:
     started = time.perf_counter()
-    result = {
-        "name": site["name"],
-        "url": site["url"],
-        "surface": site["surface"],
+    result: dict[str, object] = {
+        "name": str(site.get("name") or ""),
+        "url": str(site.get("url") or ""),
+        "surface": str(site.get("surface") or ""),
         "mode": mode,
         "timeout_owner": timeout_owner_for_mode(mode),
         "bucket": site.get("bucket"),
         "gate": site.get("gate"),
-        "expected_failure_modes": list(site.get("expected_failure_modes") or []),
+        "expected_failure_modes": _object_list(site.get("expected_failure_modes")),
     }
     try:
-        artifact_run_id = site.get("artifact_run_id")
+        artifact_run_id = _safe_int(site.get("artifact_run_id"))
         if bool(site.get("prefer_artifact")) and artifact_run_id:
             result.update(
                 await review_saved_run(
-                    run_id=int(artifact_run_id),
-                    requested_url=site["url"],
+                    run_id=artifact_run_id,
+                    requested_url=str(site.get("url") or ""),
                 )
             )
         else:
-            result.update(await run_site_harness(url=site["url"], surface=site["surface"], mode=mode))
+            result.update(
+                await run_site_harness(
+                    url=str(site.get("url") or ""),
+                    surface=str(site.get("surface") or ""),
+                    mode=mode,
+                )
+            )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         result["error"] = f"{type(exc).__name__}: {exc}"
     result["elapsed_s"] = round(time.perf_counter() - started, 2)
@@ -113,7 +119,7 @@ def _write_report(results: list[dict[str, object]], *, start_line: int, source_p
 
 
 def _expectation_met(site: dict[str, object], result: dict[str, object]) -> bool:
-    expected = dict(site.get("expected") or {})
+    expected = _object_dict(site.get("expected"))
     if expected:
         return _expected_contract_met(site, result, expected=expected)
     if site.get("quality_expectations"):
@@ -125,7 +131,7 @@ def _expectation_met(site: dict[str, object], result: dict[str, object]) -> bool
     bucket = str(site.get("bucket") or "").strip().lower()
     expected_failure_modes = {
         str(value or "").strip().lower()
-        for value in list(site.get("expected_failure_modes") or [])
+        for value in _object_list(site.get("expected_failure_modes"))
         if str(value or "").strip()
     }
     if expected_failure_modes:
@@ -143,28 +149,26 @@ def _expected_contract_met(
     *,
     expected: dict[str, object],
 ) -> bool:
-    record_count = int(result.get("records") or 0)
-    if record_count < int(expected.get("min_record_count") or 0):
+    record_count = _safe_int(result.get("records"))
+    if record_count < _safe_int(expected.get("min_record_count")):
         return False
-    sample_record = dict(result.get("sample_record_data") or {})
-    for field_name in list(expected.get("fields_must_be_present") or []):
+    sample_record = _object_dict(result.get("sample_record_data"))
+    for field_name in _object_list(expected.get("fields_must_be_present")):
         if _nested_value(sample_record, str(field_name)) is _MISSING:
             return False
-    for field_name in list(expected.get("fields_must_not_be_null") or []):
+    for field_name in _object_list(expected.get("fields_must_not_be_null")):
         if _nested_value(sample_record, str(field_name)) in (None, "", [], {}):
             return False
-    min_variant_count = int(expected.get("min_variant_count") or 0)
+    min_variant_count = _safe_int(expected.get("min_variant_count"))
     if min_variant_count > 0:
-        variant_count = int(
-            dict(result.get("sample_semantics") or {}).get("variant_count") or 0
-        )
+        variant_count = _safe_int(_object_dict(result.get("sample_semantics")).get("variant_count"))
         if variant_count < min_variant_count:
             return False
     if bool(expected.get("price_must_be_numeric")):
-        listing_contract = dict(result.get("listing_contract") or {})
+        listing_contract = _object_dict(result.get("listing_contract"))
         surface = str((site.get("surface") or result.get("surface") or "")).strip().lower()
         if surface.endswith("_listing"):
-            if int(listing_contract.get("price_numeric_count") or 0) <= 0:
+            if _safe_int(listing_contract.get("price_numeric_count")) <= 0:
                 return False
         else:
             price_value = _nested_value(sample_record, "price")
@@ -173,7 +177,7 @@ def _expected_contract_met(
             if not _looks_numeric_price(price_value):
                 return False
     if bool(expected.get("detail_urls_must_be_present")):
-        if not bool(dict(result.get("listing_contract") or {}).get("detail_urls_present")):
+        if not bool(_object_dict(result.get("listing_contract")).get("detail_urls_present")):
             return False
     return True
 
@@ -223,11 +227,17 @@ async def main(argv: list[str]) -> int:
     explicit_urls = [str(value or "").strip() for value in args.url if str(value or "").strip()]
     explicit_surfaces = [str(value or "").strip() for value in args.surface if str(value or "").strip()]
     if explicit_urls:
-        sites = build_explicit_sites(explicit_urls, explicit_surfaces=explicit_surfaces)
+        sites: list[dict[str, object]] = [
+            _as_object_row(site)
+            for site in build_explicit_sites(explicit_urls, explicit_surfaces=explicit_surfaces)
+        ]
     elif str(args.site_set or "").strip():
         sites = load_site_set(Path(args.site_set_path), site_set_name=str(args.site_set).strip())
     else:
-        sites = parse_test_sites_markdown(source_path, start_line=args.start_line)
+        sites = [
+            _as_object_row(site)
+            for site in parse_test_sites_markdown(source_path, start_line=args.start_line)
+        ]
     if args.prefer_artifacts:
         sites = [{**site, "prefer_artifact": True} for site in sites]
     if args.limit is not None:
@@ -260,16 +270,16 @@ async def main(argv: list[str]) -> int:
         if row.get("sample_utility_noise_hits"):
             print(f"  Audit utility hits: {row['sample_utility_noise_hits']}")
         if isinstance(row.get("challenge_summary"), dict):
-            challenge_summary = dict(row["challenge_summary"])
+            challenge_summary = _object_dict(row.get("challenge_summary"))
             provider = str(challenge_summary.get("provider") or "").strip()
-            evidence = list(challenge_summary.get("evidence") or [])
+            evidence = _object_list(challenge_summary.get("evidence"))
             provider_text = provider or "unknown"
             print(f"  Challenge: provider={provider_text}")
             if evidence:
                 print(f"  Challenge evidence: {', '.join(str(item) for item in evidence[:3])}")
         failed_quality_checks = [
             name
-            for name, value in dict(row.get("quality_checks") or {}).items()
+            for name, value in _object_dict(row.get("quality_checks")).items()
             if not bool(value)
         ]
         if failed_quality_checks:
@@ -284,6 +294,25 @@ async def main(argv: list[str]) -> int:
     report_path = _write_report(results, start_line=args.start_line, source_path=source_path, mode=args.mode)
     print(f"Report: {report_path}")
     return 0 if summary["failed"] == 0 else 1
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return 0 if value in (None, "") else int(str(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _object_dict(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _object_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _as_object_row(row: dict[str, str]) -> dict[str, object]:
+    return {key: value for key, value in row.items()}
 
 
 if __name__ == "__main__":

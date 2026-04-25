@@ -134,6 +134,83 @@ def _variant_axes_from_rows(variants: list[dict[str, object]]) -> dict[str, list
     return axes
 
 
+def _variation_attribute_labels(payload: dict[str, object]) -> dict[str, dict[str, str]]:
+    labels: dict[str, dict[str, str]] = {}
+    raw_attributes = payload.get("variationAttributes")
+    if not isinstance(raw_attributes, list):
+        raw_attributes = payload.get("variation_attributes")
+    for attribute in raw_attributes if isinstance(raw_attributes, list) else []:
+        if not isinstance(attribute, dict):
+            continue
+        axis_key = normalized_variant_axis_key(
+            attribute.get("id") or attribute.get("name") or attribute.get("label")
+        )
+        values = attribute.get("values")
+        if not axis_key or not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            raw_value = text_or_none(item.get("value") or item.get("id"))
+            display = text_or_none(
+                item.get("name")
+                or item.get("displayValue")
+                or item.get("display_value")
+                or item.get("label")
+            )
+            if raw_value and display:
+                labels.setdefault(axis_key, {})[raw_value] = display
+    return labels
+
+
+def _structured_variants_from_product_payload(
+    payload: dict[str, object],
+    page_url: str,
+) -> list[dict[str, object]]:
+    raw_variants = payload.get("variants")
+    if not isinstance(raw_variants, list):
+        return []
+    labels = _variation_attribute_labels(payload)
+    rows: list[dict[str, object]] = []
+    for item in raw_variants:
+        if not isinstance(item, dict):
+            continue
+        variation_values = item.get("variationValues")
+        if not isinstance(variation_values, dict):
+            variation_values = item.get("variation_values")
+        if not isinstance(variation_values, dict):
+            continue
+        option_values: dict[str, str] = {}
+        for axis_name, raw_value in variation_values.items():
+            axis_key = normalized_variant_axis_key(axis_name)
+            cleaned = text_or_none(raw_value)
+            if not axis_key or not cleaned:
+                continue
+            option_values[axis_key] = labels.get(axis_key, {}).get(cleaned, cleaned)
+        if not option_values:
+            continue
+        row: dict[str, object] = {"option_values": option_values}
+        sku = text_or_none(item.get("sku") or item.get("productId") or item.get("product_id"))
+        if sku:
+            row["sku"] = sku
+        variant_id = text_or_none(item.get("id") or item.get("productId") or item.get("product_id"))
+        if variant_id:
+            row["variant_id"] = variant_id
+        price = _coerce_structured_candidate_value(
+            "price",
+            item.get("price"),
+            page_url=page_url,
+            payload=payload,
+        )
+        if price not in (None, "", [], {}):
+            row["price"] = price
+        for axis_key, axis_value in option_values.items():
+            if axis_key in {"color", "size"}:
+                row[axis_key] = axis_value
+        rows.append(row)
+    return rows
+
+
 def _uses_integral_price_payload(payload: object) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -335,6 +412,9 @@ def collect_structured_candidates(
                 add_candidate(candidates, "image_url", images[0])
                 add_candidate(candidates, "additional_images", images[1:])
             variants = _structured_variant_rows(payload.get("hasVariant"), page_url)
+            product_variants = _structured_variants_from_product_payload(payload, page_url)
+            if product_variants:
+                variants.extend(product_variants)
             if variants:
                 axes = _variant_axes_from_rows(variants)
                 if axes:

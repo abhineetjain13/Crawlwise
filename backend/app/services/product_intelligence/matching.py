@@ -123,8 +123,8 @@ def extract_serpapi_snapshot(
     domain: str,
 ) -> dict[str, object]:
     data = dict(payload or {})
-    raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
-    raw_data = dict(raw or {})
+    raw_value = data.get("raw")
+    raw_data = raw_value if isinstance(raw_value, dict) else {}
     merged = {**raw_data, **data}
     price_value = _first_present(merged, ("extracted_price", "price"))
     description = _first_present(merged, ("description", "snippet"))
@@ -203,7 +203,7 @@ def _infer_known_brand(*values: object) -> str:
     known_brands = {*BRAND_ALIAS_MAP.values(), *BRAND_ALIAS_MAP.keys(), *BRAND_DOMAIN_MAP.keys()}
     for brand in sorted(known_brands, key=len, reverse=True):
         if re.search(rf"\b{re.escape(brand.replace('-', ' '))}\b", normalized):
-            return brand
+            return BRAND_ALIAS_MAP.get(brand, brand)
     return ""
 
 

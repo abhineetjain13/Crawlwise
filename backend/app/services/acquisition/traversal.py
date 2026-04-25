@@ -459,6 +459,17 @@ async def _run_paginate_traversal(
             break
         locator = await _find_actionable_locator(page, "next_page")
         if locator is None:
+            settled = await _settle_thin_initial_listing(
+                page,
+                previous=previous,
+                result=result,
+                surface=surface,
+                deadline_at=deadline_at,
+                on_event=on_event,
+            )
+            if settled:
+                previous = settled
+                continue
             _set_stop_reason(result, "next_page_not_found", surface=surface)
             break
         result.iterations += 1
@@ -569,6 +580,38 @@ async def _run_paginate_traversal(
     else:
         _set_stop_reason(result, "paginate_limit_reached", surface=surface)
     result.card_count = previous["card_count"]
+
+async def _settle_thin_initial_listing(
+    page,
+    *,
+    previous: dict[str, int],
+    result: TraversalResult,
+    surface: str,
+    deadline_at: float | None,
+    on_event,
+) -> dict[str, int] | None:
+    if result.progress_events > 0 or result.iterations > 0:
+        return None
+    current_count = int(previous.get("card_count", 0))
+    if current_count >= max(6, int(crawler_runtime_settings.listing_min_items) * 3):
+        return None
+    await _settle_after_action(
+        page,
+        deadline_at=deadline_at,
+        timeout_ms=int(crawler_runtime_settings.traversal_settle_networkidle_timeout_ms),
+    )
+    current = await _page_snapshot(page, surface=surface)
+    if not _snapshot_progressed(previous, current):
+        return None
+    await _append_html_fragment(page, result, surface=surface)
+    result.progress_events += 1
+    message = (
+        "Initial listing settled - "
+        f"{previous.get('card_count', 0)} -> {current.get('card_count', 0)} records"
+    )
+    result.events.append(("info", message))
+    await _emit_event(on_event, "info", message)
+    return current
 
 
 async def _find_actionable_locator(page, selector_group: str):

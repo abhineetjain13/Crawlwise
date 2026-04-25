@@ -8,8 +8,10 @@ import { useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
     Activity,
+    Brain,
     ChevronLeft,
     ChevronRight,
+    Database,
     Globe,
     History,
     LayoutDashboard,
@@ -38,10 +40,10 @@ const navGroups = [
         items: [
             { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
             { href: "/crawl", label: "Crawl Studio", icon: Globe },
-            { href: "/product-intelligence", label: "Product Intelligence", icon: Search },
             { href: "/runs", label: "History", icon: History },
+            { href: "/product-intelligence", label: "Product Intelligence", icon: Brain },
             { href: "/selectors", label: "Selector Tool", icon: Search, exactMatch: true },
-            { href: "/selectors/manage", label: "Domain Memory", icon: Search },
+            { href: "/selectors/manage", label: "Domain Memory", icon: Database },
             { href: "/jobs", label: "Jobs", icon: Activity },
         ],
     },

@@ -16,6 +16,26 @@ BROWSER_SURFACE_PROBE_TARGETS = (
         "label": "CreepJS",
         "url": "https://abrahamjuliot.github.io/creepjs/",
     },
+    {
+        "id": "browserleaks",
+        "label": "BrowserLeaks JavaScript",
+        "url": "https://browserleaks.com/javascript",
+    },
+    {
+        "id": "cover_your_tracks",
+        "label": "EFF Cover Your Tracks",
+        "url": "https://coveryourtracks.eff.org/",
+    },
+    {
+        "id": "incolumitas",
+        "label": "Incolumitas Bot Test",
+        "url": "https://bot.incolumitas.com/",
+    },
+    {
+        "id": "fingerprintjs_demo",
+        "label": "FingerprintJS Demo",
+        "url": "https://fingerprintjs.github.io/fingerprintjs/",
+    },
 )
 
 BROWSER_SURFACE_PROBE_POST_NAVIGATION_WAIT_MS = 4000

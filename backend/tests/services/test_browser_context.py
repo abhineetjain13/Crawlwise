@@ -85,6 +85,27 @@ def test_build_playwright_context_options_uses_generated_identity(
     }
 
 
+def test_acquisition_package_exports_runtime_expand_function() -> None:
+    from app.services import acquisition
+
+    assert (
+        acquisition.expand_all_interactive_elements
+        is acquisition_browser_runtime.expand_all_interactive_elements
+    )
+
+
+def test_resolve_timezone_id_prefers_explicit_locality_timezone() -> None:
+    assert (
+        browser_identity._resolve_timezone_id(
+            {
+                "geo_country": "US",
+                "timezone_id": "Asia/Calcutta",
+            }
+        )
+        == "Asia/Kolkata"
+    )
+
+
 def test_create_browser_identity_keeps_desktop_viewport_shorter_than_screen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -758,7 +779,7 @@ def test_build_playwright_context_spec_injects_runtime_hardware_values(
     assert "const deviceMemory = 8.0;" in spec.init_script
 
 
-def test_build_playwright_context_options_aligns_locale_region_to_local_timezone(
+def test_build_playwright_context_options_aligns_auto_locality_to_system_timezone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fingerprint = SimpleNamespace(
@@ -786,7 +807,9 @@ def test_build_playwright_context_options_aligns_locale_region_to_local_timezone
     )
     monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "Asia/Calcutta")
 
-    options = browser_identity.build_playwright_context_options()
+    options = browser_identity.build_playwright_context_options(
+        locality_profile={"geo_country": "auto", "language_hint": None}
+    )
 
     assert options["locale"] == "en-IN"
     assert options["timezone_id"] == "Asia/Kolkata"

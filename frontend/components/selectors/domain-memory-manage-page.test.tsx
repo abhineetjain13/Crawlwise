@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TopBarProvider } from "../layout/top-bar-context";
 import DomainMemoryManagePage from "../../app/selectors/manage/page";
@@ -20,10 +20,6 @@ vi.mock("../../lib/api", () => ({
 }));
 
 describe("DomainMemoryManagePage", () => {
- afterEach(() => {
- cleanup();
- });
-
  beforeEach(() => {
  vi.clearAllMocks();
  apiMock.listSelectors.mockResolvedValue([

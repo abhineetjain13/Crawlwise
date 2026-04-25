@@ -53,12 +53,12 @@ _SELECTOR_SYNTHESIS_LOW_VALUE_TAGS = frozenset(
 
 def reduce_html_for_selector_synthesis(html: str) -> str:
     soup = BeautifulSoup(str(html or ""), "html.parser")
-    for node in soup.find_all(string=lambda value: isinstance(value, Comment)):
-        node.extract()
-    for node in list(soup.find_all(_SELECTOR_SYNTHESIS_DROP_TAGS)):
-        node.decompose()
-    for node in list(soup.find_all(_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS)):
-        node.decompose()
+    for comment_node in soup.find_all(string=lambda value: isinstance(value, Comment)):
+        comment_node.extract()
+    for drop_tag in list(soup.find_all(_SELECTOR_SYNTHESIS_DROP_TAGS)):
+        drop_tag.decompose()
+    for low_value_tag in list(soup.find_all(_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS)):
+        low_value_tag.decompose()
     for tag in list(soup.find_all(True)):
         allowed_attrs = {
             key: value
@@ -118,7 +118,13 @@ def _append_reduced_node(
     if len(serialized) <= budget:
         target_parent.append(deepcopy(node))
         return len(serialized)
-    clone = output_soup.new_tag(node.name, attrs=dict(node.attrs))
+    clone_attrs = {
+        str(key): " ".join(str(item) for item in value)
+        if isinstance(value, (list, tuple))
+        else str(value or "")
+        for key, value in dict(node.attrs).items()
+    }
+    clone = output_soup.new_tag(node.name, attrs=clone_attrs)
     empty_size = len(str(clone))
     if empty_size >= budget:
         return 0
@@ -172,8 +178,8 @@ def selector_self_heal_targets(
             targets.append(field_name)
     if targets:
         return targets[:6]
-    for field_name in _list_or_empty(confidence.get("missing_fields")):
-        normalized = str(field_name or "").strip().lower()
+    for missing_field in _list_or_empty(confidence.get("missing_fields")):
+        normalized = str(missing_field or "").strip().lower()
         if (
             normalized
             and field_allowed_for_surface(run.surface, normalized)

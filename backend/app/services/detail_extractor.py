@@ -57,6 +57,7 @@ from app.services.field_value_core import (
     coerce_field_value,
     extract_currency_code,
     finalize_record,
+    is_title_noise,
     same_site,
     surface_alias_lookup,
     surface_fields,
@@ -169,6 +170,24 @@ _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(r"\baccess denied\b", re.I),
 )
 
+
+def _object_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
+def _object_dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _detail_url_path_segments(url: str) -> list[str]:
     parsed = urlparse(str(url or ""))
     segments = [
@@ -194,29 +213,7 @@ def _field_source_rank(surface: str, field_name: str, source: str | None) -> int
             return _LONG_TEXT_SOURCE_RANKS.get(str(source or ""), 20)
         if field_name in ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
             return 2
-    return 100 + _SOURCE_PRIORITY_RANK.get(source, len(_SOURCE_PRIORITY_RANK))
-def _detail_title_is_noise(title: object) -> bool:
-    cleaned = clean_text(title)
-    lowered = cleaned.lower()
-    if not lowered:
-        return True
-    if "undefined" in lowered or lowered in {"nan", "none", "null"}:
-        return True
-    if len(cleaned) < 4 or cleaned.isdigit():
-        return True
-    if "star" in lowered and RATING_RE.search(lowered) and len(cleaned.split()) <= 4:
-        return True
-    if lowered in LISTING_TITLE_CTA_TITLES:
-        return True
-    if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
-        return True
-    if any(lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES):
-        return True
-    if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
-        return True
-    if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
-        return True
-    return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
+    return 100 + _SOURCE_PRIORITY_RANK.get(str(source or ""), len(_SOURCE_PRIORITY_RANK))
 def _detail_title_from_url(page_url: str) -> str | None:
     path_segments = _detail_url_path_segments(page_url)
     if not path_segments:
@@ -230,7 +227,7 @@ def _detail_title_from_url(page_url: str) -> str | None:
         if terminal in {"p", "dp", "product", "products", "job", "jobs", "release"}:
             continue
         title = clean_text(re.sub(r"[-_]+", " ", terminal))
-        if title and not _detail_title_is_noise(title):
+        if title and not is_title_noise(title):
             return title
     return None
 def _apply_dom_fallbacks(
@@ -254,7 +251,7 @@ def _apply_dom_fallbacks(
         (
             candidate
             for candidate in (h1_title, page_title_text)
-            if candidate and not _detail_title_is_noise(candidate)
+            if candidate and not is_title_noise(candidate)
         ),
         None,
     )
@@ -804,11 +801,12 @@ def _selector_self_heal_config(
             and selector_self_heal.get("enabled") is not None
             else crawler_runtime_settings.selector_self_heal_enabled
         ),
-        "threshold": float(
+        "threshold": _coerce_float(
             selector_self_heal.get("min_confidence")
             if isinstance(selector_self_heal, dict)
             and selector_self_heal.get("min_confidence") is not None
-            else crawler_runtime_settings.selector_self_heal_min_confidence
+            else crawler_runtime_settings.selector_self_heal_min_confidence,
+            default=float(crawler_runtime_settings.selector_self_heal_min_confidence),
         ),
     }
 
@@ -830,7 +828,7 @@ def _selected_selector_trace(
                 for key, value in trace.items()
                 if not str(key).startswith("_")
             }
-    trace = next((row for row in traces if isinstance(row, dict)), None)
+    trace = next((row for row in traces if isinstance(row, dict)), {})
     if not isinstance(trace, dict):
         return None
     return {
@@ -935,18 +933,119 @@ def _materialize_record(
     record["_self_heal"] = {
         "enabled": bool(selector_self_heal["enabled"]),
         "triggered": False,
-        "threshold": float(selector_self_heal["threshold"]),
+        "threshold": _coerce_float(selector_self_heal.get("threshold")),
     }
     return finalize_record(record, surface=surface)
 
 def _normalize_variant_record(record: dict[str, Any]) -> None:
     _backfill_selected_variant_from_record(record)
+    _apply_variant_axis_label_aliases(record)
     _dedupe_variant_rows(record)
     _prune_non_selectable_variant_axes(record)
     _normalize_variant_option_summaries(record)
     _prune_duplicate_variant_axis_fields(record)
     _prune_redundant_size_option_summary(record)
     _backfill_variant_prices_from_record(record)
+
+
+def _apply_variant_axis_label_aliases(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or not variants:
+        return
+    aliases: dict[str, dict[str, str]] = {}
+    rows_by_identity: dict[str, list[dict[str, Any]]] = {}
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        identity = text_or_none(variant.get("variant_id")) or text_or_none(variant.get("sku"))
+        if identity:
+            rows_by_identity.setdefault(identity, []).append(variant)
+    for rows in rows_by_identity.values():
+        for left in rows:
+            left_options = left.get("option_values")
+            if not isinstance(left_options, dict):
+                continue
+            for right in rows:
+                if left is right:
+                    continue
+                right_options = right.get("option_values")
+                if not isinstance(right_options, dict):
+                    continue
+                for axis_name, left_value in left_options.items():
+                    right_value = right_options.get(axis_name)
+                    if not _axis_values_describe_same_choice(
+                        left_options,
+                        right_options,
+                        axis_name=str(axis_name),
+                    ):
+                        continue
+                    code, label = _code_label_pair(left_value, right_value)
+                    if code and label:
+                        aliases.setdefault(str(axis_name), {})[code] = label
+    if not aliases:
+        return
+    _rewrite_variant_axis_values(record, aliases)
+
+
+def _axis_values_describe_same_choice(
+    left_options: dict[str, Any],
+    right_options: dict[str, Any],
+    *,
+    axis_name: str,
+) -> bool:
+    for other_axis, left_value in left_options.items():
+        if str(other_axis) == axis_name:
+            continue
+        right_value = right_options.get(other_axis)
+        if clean_text(left_value).lower() != clean_text(right_value).lower():
+            return False
+    return True
+
+
+def _code_label_pair(left: object, right: object) -> tuple[str, str] | tuple[None, None]:
+    left_text = clean_text(left)
+    right_text = clean_text(right)
+    if not left_text or not right_text or left_text.lower() == right_text.lower():
+        return (None, None)
+    if _variant_axis_value_looks_like_code(left_text) and not _variant_axis_value_looks_like_code(right_text):
+        return left_text, right_text
+    if _variant_axis_value_looks_like_code(right_text) and not _variant_axis_value_looks_like_code(left_text):
+        return right_text, left_text
+    return (None, None)
+
+
+def _variant_axis_value_looks_like_code(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9]{2,6}", str(value or "").strip()))
+
+
+def _rewrite_variant_axis_values(
+    record: dict[str, Any],
+    aliases: dict[str, dict[str, str]],
+) -> None:
+    for axis_name, axis_aliases in aliases.items():
+        if clean_text(record.get(axis_name)) in axis_aliases:
+            record[axis_name] = axis_aliases[clean_text(record.get(axis_name))]
+    variant_axes = record.get("variant_axes")
+    if isinstance(variant_axes, dict):
+        for axis_name, axis_values in list(variant_axes.items()):
+            axis_aliases = aliases.get(str(axis_name)) or {}
+            if not axis_aliases or not isinstance(axis_values, list):
+                continue
+            rewritten = [axis_aliases.get(clean_text(value), value) for value in axis_values]
+            variant_axes[axis_name] = list(dict.fromkeys(clean_text(value) for value in rewritten if clean_text(value)))
+    for row in [record.get("selected_variant"), *list(record.get("variants") or [])]:
+        if not isinstance(row, dict):
+            continue
+        for axis_name, axis_aliases in aliases.items():
+            if clean_text(row.get(axis_name)) in axis_aliases:
+                row[axis_name] = axis_aliases[clean_text(row.get(axis_name))]
+        option_values = row.get("option_values")
+        if not isinstance(option_values, dict):
+            continue
+        for axis_name, axis_aliases in aliases.items():
+            current = clean_text(option_values.get(axis_name))
+            if current in axis_aliases:
+                option_values[axis_name] = axis_aliases[current]
 
 
 def _normalize_variant_option_summaries(record: dict[str, Any]) -> None:
@@ -1315,13 +1414,14 @@ def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
 
 def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> bool:
     title = text_or_none(record.get("title")) or ""
-    field_sources = record.get("_field_sources") if isinstance(record.get("_field_sources"), dict) else {}
+    field_sources = _object_dict(record.get("_field_sources"))
+    title_field_sources = _object_list(field_sources.get("title"))
     title_sources = {
         str(source).strip()
-        for source in list(field_sources.get("title") or [])
+        for source in title_field_sources
         if str(source).strip()
     }
-    if _detail_title_is_noise(title):
+    if is_title_noise(title):
         return True
     if _detail_url_is_collection_like(page_url):
         return True
@@ -1873,7 +1973,7 @@ def _expand_compound_option_group(group: dict[str, object]) -> list[dict[str, ob
     axis_parts = _split_compound_axis_name(group.get("name"))
     if len(axis_parts) != 2:
         return None
-    entries = [entry for entry in list(group.get("entries") or []) if isinstance(entry, dict)]
+    entries = [entry for entry in _object_list(group.get("entries")) if isinstance(entry, dict)]
     if not entries:
         return None
     axis_keys = tuple(axis_key for axis_key, _ in axis_parts)
@@ -1992,11 +2092,11 @@ def _state_variant_targets(
                 for option_definition in option_definitions:
                     axis_field = str(option_definition["axis_field"])
                     axis_key = str(option_definition["axis_key"])
-                    value_by_id = dict(option_definition["value_by_id"])
+                    mapping_value_by_id = _object_dict(option_definition.get("value_by_id"))
                     option_id = text_or_none(mapping_row.get(axis_field))
-                    option_value = value_by_id.get(option_id or "")
-                    if option_value:
-                        option_values[axis_key] = option_value
+                    mapped_option_value = mapping_value_by_id.get(option_id or "")
+                    if mapped_option_value:
+                        option_values[axis_key] = str(mapped_option_value)
                 if not option_values:
                     continue
                 row_metadata: dict[str, object] = {}
@@ -2126,7 +2226,7 @@ def _extract_variants_from_dom(
     deduped_groups: list[dict[str, object]] = []
     merged_groups: dict[str, dict[str, object]] = {}
     for group in expanded_option_groups:
-        values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
+        values = [clean_text(value) for value in _object_list(group.get("values")) if clean_text(value)]
         if len(values) < 2:
             continue
         name = clean_text(group.get("name"))
@@ -2136,34 +2236,38 @@ def _extract_variants_from_dom(
         merged = merged_groups.setdefault(axis_key, {"name": name or axis_key, "values": [], "entries": {}})
         if len(name) > len(str(merged.get("name") or "")):
             merged["name"] = name
-        merged["values"] = list(dict.fromkeys([*list(merged.get("values") or []), *values]))
-        merged_entries = merged.setdefault("entries", {})
-        for entry in list(group.get("entries") or []):
-            value = clean_text(entry.get("value"))
+        existing_values = _object_list(merged.get("values"))
+        merged["values"] = list(dict.fromkeys([*existing_values, *values]))
+        merged_entries = _object_dict(merged.setdefault("entries", {}))
+        for group_entry in _object_list(group.get("entries")):
+            if not isinstance(group_entry, dict):
+                continue
+            value = clean_text(group_entry.get("value"))
             if not value:
                 continue
-            existing = merged_entries.get(value, {"value": value})
-            availability = text_or_none(entry.get("availability"))
+            existing = _object_dict(merged_entries.get(value, {"value": value}))
+            availability = text_or_none(group_entry.get("availability"))
             if availability and existing.get("availability") in (None, "", [], {}):
                 existing["availability"] = availability
-            if entry.get("stock_quantity") not in (None, "", [], {}):
-                existing["stock_quantity"] = entry.get("stock_quantity")
-            if entry.get("selected"):
+            if group_entry.get("stock_quantity") not in (None, "", [], {}):
+                existing["stock_quantity"] = group_entry.get("stock_quantity")
+            if group_entry.get("selected"):
                 existing["selected"] = True
-            if entry.get("url") not in (None, "", [], {}) and existing.get("url") in (None, "", [], {}):
-                existing["url"] = entry.get("url")
-            if entry.get("variant_id") not in (None, "", [], {}) and existing.get("variant_id") in (None, "", [], {}):
-                existing["variant_id"] = entry.get("variant_id")
+            if group_entry.get("url") not in (None, "", [], {}) and existing.get("url") in (None, "", [], {}):
+                existing["url"] = group_entry.get("url")
+            if group_entry.get("variant_id") not in (None, "", [], {}) and existing.get("variant_id") in (None, "", [], {}):
+                existing["variant_id"] = group_entry.get("variant_id")
             merged_entries[value] = existing
     for group in merged_groups.values():
-        values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
+        values = [clean_text(value) for value in _object_list(group.get("values")) if clean_text(value)]
         if len(values) < 2:
             continue
+        merged_entries = _object_dict(group.get("entries"))
         deduped_groups.append(
             {
                 "name": clean_text(group.get("name")),
                 "values": values,
-                "entries": list((group.get("entries") or {}).values()),
+                "entries": list(merged_entries.values()),
             }
         )
         if len(deduped_groups) >= 4:
@@ -2182,7 +2286,7 @@ def _extract_variants_from_dom(
     axis_order: list[tuple[str, str, list[str]]] = []
     for group in deduped_groups:
         name = clean_text(group.get("name"))
-        values = list(group.get("values") or [])
+        values = [str(value) for value in _object_list(group.get("values"))]
         axis_key = normalized_variant_axis_key(name)
         if not axis_key:
             continue
@@ -2196,7 +2300,8 @@ def _extract_variants_from_dom(
                 for key in ("availability", "selected", "stock_quantity", "url", "variant_id")
                 if entry.get(key) not in (None, "", [], {})
             }
-            for entry in list(group.get("entries") or [])
+            for entry in _object_list(group.get("entries"))
+            if isinstance(entry, dict)
             if clean_text(entry.get("value"))
         }
         for option_value, state_metadata in dict(state_axis_targets.get(axis_key) or {}).items():
@@ -2332,7 +2437,7 @@ def _promote_detail_title(
             for rank, _, candidate, source in ranked_candidates
             if candidate
             and candidate != title
-            and not _detail_title_is_noise(candidate)
+            and not is_title_noise(candidate)
             and (
                 rank < current_rank
                 or (rank == current_rank and len(candidate) > len(title))
@@ -2350,7 +2455,7 @@ def _title_needs_promotion(title: str, *, page_url: str) -> bool:
     host = str(urlparse(page_url).hostname or "").strip().lower()
     if not normalized_title:
         return False
-    if _detail_title_is_noise(normalized_title):
+    if is_title_noise(normalized_title):
         return True
     if any(normalized_title.startswith(prefix) for prefix in TITLE_PROMOTION_PREFIXES):
         return True
@@ -2404,7 +2509,11 @@ def _requires_dom_completion(
         requested_fields=requested_fields,
         selector_rules=selector_rules,
     )
-    extractable_fields = set(extractability.get("extractable_fields") or [])
+    extractable_fields = {
+        str(field_name).strip()
+        for field_name in _object_list(extractability.get("extractable_fields"))
+        if str(field_name).strip()
+    }
     high_value_fields = set(DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
     advertised_high_value_fields = extractable_fields & high_value_fields
     missing_high_value_fields = {
@@ -2428,9 +2537,18 @@ def _requires_dom_completion(
         for field_name in set(DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ())
         if record.get(field_name) in (None, "", [], {})
     }
-    if optional_cue_fields & set(extractability.get("dom_pattern_fields") or []):
+    dom_pattern_fields = {
+        str(field_name).strip()
+        for field_name in _object_list(extractability.get("dom_pattern_fields"))
+        if str(field_name).strip()
+    }
+    if optional_cue_fields & dom_pattern_fields:
         return True
-    selector_backed_fields = set(extractability.get("selector_backed_fields") or [])
+    selector_backed_fields = {
+        str(field_name).strip()
+        for field_name in _object_list(extractability.get("selector_backed_fields"))
+        if str(field_name).strip()
+    }
     return bool(requested_missing_fields & selector_backed_fields)
 
 def _primary_dom_context(
@@ -2484,7 +2602,7 @@ def build_detail_record(
         surface=surface,
         page_url=page_url,
     )
-    if surface == "ecommerce_detail" and _detail_title_is_noise(js_state_record.get("title")):
+    if surface == "ecommerce_detail" and is_title_noise(js_state_record.get("title")):
         js_state_record = dict(js_state_record)
         js_state_record.pop("title", None)
 
@@ -2505,9 +2623,15 @@ def build_detail_record(
         collect_structured_payload_candidates=_collect_structured_payload_candidates,
     )
     record = materialize_detail_tier(state, tier_name="structured_data", materialize_record=_materialize_record)
+    collect_js_state_tier(
+        state,
+        js_state_record=js_state_record,
+        collect_record_candidates=_collect_record_candidates,
+    )
+    record = materialize_detail_tier(state, tier_name="js_state", materialize_record=_materialize_record)
     if (
-        float(record["_confidence"]["score"])
-        >= float(selector_self_heal["threshold"])
+        _coerce_float(_object_dict(record.get("_confidence")).get("score"))
+        >= _coerce_float(selector_self_heal.get("threshold"))
         and not _requires_dom_completion(
             record=record,
             surface=surface,
@@ -2523,15 +2647,8 @@ def build_detail_record(
             page_url=page_url,
             js_state_objects=js_state_objects,
         )
-        record["_extraction_tiers"]["early_exit"] = "structured_data"
+        record["_extraction_tiers"]["early_exit"] = "js_state"
         return record
-
-    collect_js_state_tier(
-        state,
-        js_state_record=js_state_record,
-        collect_record_candidates=_collect_record_candidates,
-    )
-    record = materialize_detail_tier(state, tier_name="js_state", materialize_record=_materialize_record)
 
     collect_dom_tier(
         state,

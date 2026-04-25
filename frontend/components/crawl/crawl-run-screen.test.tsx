@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from"@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from"@testing-library/react";
+import { fireEvent, render, screen, waitFor } from"@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from"vitest";
 
 import type { CrawlRecord, CrawlRun, DomainRecipe } from"../../lib/api/types";
@@ -224,7 +224,6 @@ function renderRunScreenWithClient(queryClient: QueryClient, runId = 101) {
 describe("CrawlRunScreen", () => {
  afterEach(() => {
  vi.useRealTimers();
- cleanup();
  });
 
  beforeEach(() => {
@@ -409,6 +408,26 @@ describe("CrawlRunScreen", () => {
  expect(screen.getByText("High")).toBeInTheDocument();
  });
 
+ it("keeps the crawl step marked active after terminal completion", async () => {
+ apiMock.getRecords.mockResolvedValue({
+ items: [],
+ meta: { page: 1, limit: 100, total: 0 },
+ });
+
+ renderRunScreen();
+
+ await screen.findByText("completed");
+ const crawlStep = screen.getAllByText("Crawl")
+ .map((element) => element.closest("span"))
+ .find((element) => element?.className.includes("rounded-[var(--radius-md)]"));
+ const completeStep = screen.getAllByText("Complete")
+ .map((element) => element.closest("span"))
+ .find((element) => element?.className.includes("rounded-[var(--radius-md)]"));
+
+ expect(crawlStep).toHaveClass("bg-[var(--accent-subtle)]","text-accent");
+ expect(completeStep).toHaveClass("bg-[var(--accent-subtle)]","text-accent");
+ });
+
  it("supports progressive table loading for large result sets", async () => {
  apiMock.getRecords.mockImplementation(async (_runId: number, params?: { page?: number; limit?: number }) => {
  const page = Math.max(1, params?.page ?? 1);
@@ -482,6 +501,35 @@ describe("CrawlRunScreen", () => {
 
  await waitFor(() => {
  expect(screen.getByText("Item 1")).toBeInTheDocument();
+ });
+ });
+
+ it("keeps cached latest-run table rows visible when reopening from history", async () => {
+ const queryClient = new QueryClient({
+ defaultOptions: {
+ queries: {
+ retry: false,
+ staleTime: 60_000,
+ },
+ },
+ });
+
+ const cachedRows = {
+ items: [makeRecord(1), makeRecord(2)],
+ meta: { page: 1, limit: 100, total: 2 },
+ };
+
+ queryClient.setQueryData(["crawl-run", 101], terminalRun(101));
+ queryClient.setQueryData(["crawl-records-table", 101, 1], cachedRows);
+
+ apiMock.getRecords.mockResolvedValue(cachedRows);
+
+ renderRunScreenWithClient(queryClient);
+
+ expect(await screen.findByText("Item 1")).toBeInTheDocument();
+
+ await waitFor(() => {
+ expect(apiMock.getRecords).toHaveBeenCalledWith(101, { page: 1, limit: 100 });
  });
  });
 

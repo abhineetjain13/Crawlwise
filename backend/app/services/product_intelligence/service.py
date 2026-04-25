@@ -85,7 +85,7 @@ async def create_product_intelligence_job(
     session.add(job)
     await session.flush()
 
-    for row in source_rows[: int(options["max_source_products"])]:
+    for row in source_rows[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]:
         snapshot = extract_product_snapshot(row["data"])
         source_url = str(snapshot.get("url") or row.get("source_url") or "")
         private_label = is_private_label(snapshot.get("brand"))
@@ -251,10 +251,17 @@ async def discover_product_intelligence_candidates(
         await require_accessible_run(session, run_id=source_run_id, user=user)
 
     discovered_payloads: list[dict[str, object]] = []
-    for index, row in enumerate(source_rows[: int(options["max_source_products"])]):
+    max_source_products = _option_int(
+        options,
+        "max_source_products",
+        default=product_intelligence_settings.max_source_products,
+    )
+    processed_source_count = 0
+    for index, row in enumerate(source_rows[:max_source_products]):
         snapshot = extract_product_snapshot(row["data"])
         if is_private_label(snapshot.get("brand")) and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
             continue
+        processed_source_count += 1
         source_url_value = str(snapshot.get("url") or row.get("source_url") or "")
         discovered = await discover_candidates(
             snapshot,
@@ -262,7 +269,11 @@ async def discover_product_intelligence_candidates(
             provider=str(options["search_provider"]),
             allowed_domains=_string_list(options.get("allowed_domains")),
             excluded_domains=_string_list(options.get("excluded_domains")),
-            max_candidates=int(options["max_candidates_per_product"]),
+            max_candidates=_option_int(
+                options,
+                "max_candidates_per_product",
+                default=product_intelligence_settings.max_candidates_per_product,
+            ),
         )
         for candidate in discovered:
             intelligence = build_serpapi_intelligence(
@@ -306,13 +317,14 @@ async def discover_product_intelligence_candidates(
         user=user,
         source_run_id=source_run_id,
         source_rows=source_rows,
+        processed_source_count=processed_source_count,
         options=options,
         discovered_payloads=discovered_payloads,
     )
     return {
         "job_id": job.id,
         "options": options,
-        "source_count": min(len(source_rows), int(options["max_source_products"])),
+        "source_count": min(processed_source_count, max_source_products),
         "candidate_count": len(discovered_payloads),
         "candidates": discovered_payloads,
     }
@@ -324,6 +336,7 @@ async def _persist_discovery_job(
     user: User,
     source_run_id: int | None,
     source_rows: list[dict[str, object]],
+    processed_source_count: int,
     options: dict[str, object],
     discovered_payloads: list[dict[str, object]],
 ) -> ProductIntelligenceJob:
@@ -334,7 +347,14 @@ async def _persist_discovery_job(
         options=options,
         summary={
             "mode": "discovery",
-            "source_count": min(len(source_rows), int(options["max_source_products"])),
+            "source_count": min(
+                processed_source_count,
+                _option_int(
+                    options,
+                    "max_source_products",
+                    default=product_intelligence_settings.max_source_products,
+                ),
+            ),
             "candidate_count": len(discovered_payloads),
             "match_count": len(discovered_payloads),
             "updated_at": datetime.now(UTC).isoformat(),
@@ -345,7 +365,7 @@ async def _persist_discovery_job(
     await session.flush()
 
     source_product_ids_by_index: dict[int, int] = {}
-    for index, row in enumerate(source_rows[: int(options["max_source_products"])]):
+    for index, row in enumerate(source_rows[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]):
         snapshot = extract_product_snapshot(row["data"])
         source_url = str(snapshot.get("url") or row.get("source_url") or "")
         source = ProductIntelligenceSourceProduct(
@@ -378,6 +398,10 @@ async def _persist_discovery_job(
         source_product_id = source_product_ids_by_index.get(source_index)
         if source_product_id is None:
             continue
+        payload_value = candidate_payload.get("payload")
+        payload_data = payload_value if isinstance(payload_value, dict) else {}
+        intelligence_value = candidate_payload.get("intelligence")
+        intelligence = intelligence_value if isinstance(intelligence_value, dict) else {}
         candidate = ProductIntelligenceCandidate(
             job_id=job.id,
             source_product_id=source_product_id,
@@ -385,18 +409,22 @@ async def _persist_discovery_job(
             domain=str(candidate_payload.get("domain") or ""),
             source_type=str(candidate_payload.get("source_type") or ""),
             query_used=str(candidate_payload.get("query_used") or ""),
-            search_rank=int(candidate_payload.get("search_rank") or 0),
+            search_rank=_as_int(candidate_payload.get("search_rank")) or 0,
             payload={
-                **dict(candidate_payload.get("payload") or {}),
-                "intelligence": dict(candidate_payload.get("intelligence") or {}),
+                **payload_data,
+                "intelligence": intelligence,
             },
             status=PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_DISCOVERED,
         )
         session.add(candidate)
         await session.flush()
-        intelligence = dict(candidate_payload.get("intelligence") or {})
         if intelligence:
-            canonical = dict(intelligence.get("canonical_record") or {})
+            canonical_value = intelligence.get("canonical_record")
+            canonical = canonical_value if isinstance(canonical_value, dict) else {}
+            score_reasons_value = intelligence.get("score_reasons")
+            score_reasons = score_reasons_value if isinstance(score_reasons_value, dict) else {}
+            llm_enrichment_value = intelligence.get("llm_enrichment")
+            llm_enrichment = llm_enrichment_value if isinstance(llm_enrichment_value, dict) else {}
             session.add(
                 ProductIntelligenceMatch(
                     job_id=job.id,
@@ -412,8 +440,8 @@ async def _persist_discovery_job(
                     availability=str(canonical.get("availability") or ""),
                     candidate_url=str(canonical.get("url") or candidate.url),
                     candidate_domain=source_domain(canonical.get("url") or candidate.url),
-                    score_reasons=dict(intelligence.get("score_reasons") or {}),
-                    llm_enrichment=dict(intelligence.get("llm_enrichment") or {}),
+                    score_reasons=score_reasons,
+                    llm_enrichment=llm_enrichment,
                 )
             )
     await session.commit()
@@ -432,7 +460,7 @@ async def _run_job(session: AsyncSession, job: ProductIntelligenceJob) -> None:
             )
         ).all()
     )
-    for source in sources[: int(options["max_source_products"])]:
+    for source in sources[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]:
         if source.is_private_label and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
             continue
         source_payload = _source_product_payload(source)
@@ -443,7 +471,11 @@ async def _run_job(session: AsyncSession, job: ProductIntelligenceJob) -> None:
             provider=str(options["search_provider"]),
             allowed_domains=_string_list(options.get("allowed_domains")),
             excluded_domains=_string_list(options.get("excluded_domains")),
-            max_candidates=int(options["max_candidates_per_product"]),
+            max_candidates=_option_int(
+                options,
+                "max_candidates_per_product",
+                default=product_intelligence_settings.max_candidates_per_product,
+            ),
         )
         for discovered_candidate in discovered:
             candidate = ProductIntelligenceCandidate(
@@ -583,14 +615,15 @@ async def _score_candidate_if_ready(
         candidate_snapshot=candidate_snapshot,
         deterministic_result=result,
     )
+    reasons_raw = result.get("reasons")
     session.add(
         ProductIntelligenceMatch(
             job_id=job.id,
             source_product_id=source_product.id,
             candidate_id=candidate.id,
             candidate_record_id=record.id,
-            score=float(result["score"]),
-            score_label=str(result["label"]),
+            score=_as_float_or_default(result.get("score"), 0.0),
+            score_label=str(result.get("label") or ""),
             review_status=PRODUCT_INTELLIGENCE_REVIEW_PENDING,
             source_price=source_product.price,
             candidate_price=_as_price(candidate_snapshot.get("price")),
@@ -598,7 +631,7 @@ async def _score_candidate_if_ready(
             availability=str(candidate_snapshot.get("availability") or ""),
             candidate_url=str(candidate_snapshot.get("url") or candidate.url),
             candidate_domain=source_domain(candidate_snapshot.get("url") or candidate.url),
-            score_reasons=dict(result["reasons"]) if isinstance(result.get("reasons"), dict) else {},
+            score_reasons=dict(reasons_raw) if isinstance(reasons_raw, dict) else {},
             llm_enrichment=llm_enrichment,
         )
     )
@@ -757,11 +790,17 @@ async def _load_source_rows(
             session,
             run.id,
             1,
-            int(options["max_source_products"]),
+            _option_int(
+                options,
+                "max_source_products",
+                default=product_intelligence_settings.max_source_products,
+            ),
         )
         return [_row_from_record(record) for record in records]
 
-    for index, item in enumerate(payload.get("source_records") or []):
+    source_records = payload.get("source_records")
+    source_record_items = source_records if isinstance(source_records, list) else []
+    for index, item in enumerate(source_record_items):
         if not isinstance(item, dict):
             continue
         data = dict(item.get("data") or item)
@@ -825,7 +864,7 @@ def _private_label_mode(value: object) -> str:
 
 def _bounded_int(value: object, default: int) -> int:
     try:
-        parsed = int(value)
+        parsed = int(value) if isinstance(value, (int, float)) else int(str(value))
     except (TypeError, ValueError):
         parsed = int(default)
     return max(1, parsed)
@@ -833,7 +872,9 @@ def _bounded_int(value: object, default: int) -> int:
 
 def _bounded_float(value: object, default: float) -> float:
     try:
-        parsed = float(value)
+        parsed = (
+            float(value) if isinstance(value, (int, float)) else float(str(value))
+        )
     except (TypeError, ValueError):
         parsed = float(default)
     return min(max(parsed, 0.0), 1.0)
@@ -841,7 +882,7 @@ def _bounded_float(value: object, default: float) -> float:
 
 def _as_float_or_default(value: object, default: float) -> float:
     try:
-        return float(value)
+        return float(value) if isinstance(value, (int, float)) else float(str(value))
     except (TypeError, ValueError):
         return default
 
@@ -865,7 +906,7 @@ def _canonical_record_from_llm(base: dict[str, object], payload: dict[str, objec
 
 def _as_int(value: object) -> int | None:
     try:
-        parsed = int(value)
+        parsed = int(value) if isinstance(value, (int, float)) else int(str(value))
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
@@ -873,10 +914,14 @@ def _as_int(value: object) -> int | None:
 
 def _as_nonnegative_int(value: object) -> int | None:
     try:
-        parsed = int(value)
+        parsed = int(value) if isinstance(value, (int, float)) else int(str(value))
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _option_int(options: dict[str, object], key: str, *, default: int) -> int:
+    return _bounded_int(options.get(key), default)
 
 
 def _int_list(value: object) -> list[int]:

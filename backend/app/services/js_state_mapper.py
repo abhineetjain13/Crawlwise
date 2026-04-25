@@ -4,7 +4,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
 import jmespath
-from glom import Coalesce, glom
+from glom import Coalesce, glom  # type: ignore[import-untyped]
 
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.extract.shared_variant_logic import (
@@ -30,6 +30,11 @@ from app.services.platform_policy import JSStateExtractorConfig, platform_js_sta
 
 _SKIP: tuple[object, ...] = ("", [], {})
 
+
+def _as_list(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 PRODUCT_FIELD_SPEC = {
     "title": Coalesce("title", "name", default=None, skip=_SKIP),
     "brand": Coalesce("brand.name", "brand", "vendor.name", "vendor", default=None, skip=_SKIP),
@@ -39,7 +44,7 @@ PRODUCT_FIELD_SPEC = {
     "product_id": Coalesce("id", "product_id", "productId", "legacyResourceId", default=None, skip=_SKIP),
     "category": Coalesce("category", default=None, skip=_SKIP),
     "product_type": Coalesce("product_type", "productType", "type", default=None, skip=_SKIP),
-    "sku": Coalesce("sku", default=None, skip=_SKIP),
+    "sku": Coalesce("sku", "productId", "product_id", default=None, skip=_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=_SKIP),
     "currency": Coalesce(
         "currency",
@@ -359,9 +364,10 @@ def _variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
     populated_fields = sum(
         1 for value in variant.values() if value not in (None, "", [], {})
     )
+    option_values = variant.get("option_values")
     option_value_count = (
-        len(variant.get("option_values"))
-        if isinstance(variant.get("option_values"), dict)
+        len(option_values)
+        if isinstance(option_values, dict)
         else 0
     )
     has_stock_signal = int(
@@ -517,10 +523,10 @@ def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict
 
 
 def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
-    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
-    raw_options = product.get("options") if isinstance(product.get("options"), list) else []
-    raw_colors = product.get("colors") if isinstance(product.get("colors"), list) else []
-    raw_sizes = product.get("sizes") if isinstance(product.get("sizes"), list) else []
+    raw_variants = _as_list(product.get("variants"))
+    raw_options = _as_list(product.get("options"))
+    raw_colors = _as_list(product.get("colors"))
+    raw_sizes = _as_list(product.get("sizes"))
     product_keys = set(product)
     strong_product_keys = {
         "variants",
@@ -603,7 +609,8 @@ def _map_product_payload(
     images = _extract_product_images(product, page_url=page_url)
     shopify_like = _looks_like_shopify_product(product)
     option_names = _option_names(product.get("options"))
-    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
+    option_value_labels = _option_value_labels(product)
+    raw_variants = _as_list(product.get("variants"))
     normalized_variants = [
         normalized
         for variant in raw_variants
@@ -612,6 +619,7 @@ def _map_product_payload(
             normalized := _normalize_variant(
                 variant,
                 option_names=option_names,
+                option_value_labels=option_value_labels,
                 page_url=page_url,
                 interpret_integral_as_cents=shopify_like,
             )
@@ -808,7 +816,7 @@ def _extract_nested_image_urls(value: Any, *, page_url: str, depth: int = 0) -> 
 
 
 def _looks_like_shopify_product(product: dict[str, Any]) -> bool:
-    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
+    raw_variants = _as_list(product.get("variants"))
     return any(
         key in product
         for key in (
@@ -877,7 +885,7 @@ _VARIANT_FIELD_SPEC = {
         default=None,
         skip=_SKIP,
     ),
-    "sku": Coalesce("sku", default=None, skip=_SKIP),
+    "sku": Coalesce("sku", "productId", "product_id", default=None, skip=_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=_SKIP),
 }
 
@@ -886,11 +894,14 @@ def _normalize_variant(
     variant: dict[str, Any],
     *,
     option_names: list[str],
+    option_value_labels: dict[str, dict[str, str]] | None = None,
     page_url: str,
     interpret_integral_as_cents: bool,
 ) -> dict[str, Any] | None:
     row: dict[str, Any] = {}
-    variant_id = text_or_none(variant.get("id"))
+    variant_id = text_or_none(
+        variant.get("id") or variant.get("variantId") or variant.get("variant_id")
+    )
     if variant_id:
         row["variant_id"] = variant_id
         row["url"] = _variant_url(page_url, variant_id)
@@ -938,7 +949,11 @@ def _normalize_variant(
     )
     if image_url:
         row["image_url"] = image_url
-    option_values = _variant_option_values(variant, option_names=option_names)
+    option_values = _variant_option_values(
+        variant,
+        option_names=option_names,
+        option_value_labels=option_value_labels,
+    )
     if option_values:
         row["option_values"] = option_values
         if option_values.get("color"):
@@ -956,6 +971,7 @@ def _variant_option_values(
     variant: dict[str, Any],
     *,
     option_names: list[str],
+    option_value_labels: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, str]:
     option_values: dict[str, str] = {}
     selected_options = (
@@ -973,10 +989,40 @@ def _variant_option_values(
                 continue
             axis_key = normalized_variant_axis_key(axis_name)
             if axis_key:
-                option_values[axis_key] = axis_value
+                option_values[axis_key] = _display_option_value(
+                    axis_key,
+                    axis_value,
+                    option_value_labels=option_value_labels,
+                )
     if option_values:
         return option_values
-    raw_options = variant.get("options") if isinstance(variant.get("options"), list) else []
+    variation_values = variant.get("variationValues")
+    if not isinstance(variation_values, dict):
+        variation_values = variant.get("variation_values")
+    if isinstance(variation_values, dict):
+        direct_axis_keys = {
+            normalized_variant_axis_key(axis_name)
+            for axis_name in variation_values
+            if normalized_variant_axis_key(axis_name)
+            == str(axis_name or "").strip().lower().replace("-", "_")
+        }
+        for axis_name, raw_value in variation_values.items():
+            axis_key = normalized_variant_axis_key(axis_name)
+            cleaned = text_or_none(raw_value)
+            if not axis_key or not cleaned or not variant_axis_name_is_semantic(axis_name):
+                continue
+            if axis_key in direct_axis_keys and axis_key != str(axis_name).strip().lower():
+                continue
+            if axis_key in option_values:
+                continue
+            option_values[axis_key] = _display_option_value(
+                axis_key,
+                cleaned,
+                option_value_labels=option_value_labels,
+            )
+    if option_values:
+        return option_values
+    raw_options = _as_list(variant.get("options"))
     for index in range(1, 4):
         axis_name = (
             option_names[index - 1]
@@ -991,7 +1037,11 @@ def _variant_option_values(
             value = raw_options[index - 1]
         cleaned = text_or_none(value)
         if cleaned:
-            option_values[axis_key] = cleaned
+            option_values[axis_key] = _display_option_value(
+                axis_key,
+                cleaned,
+                option_value_labels=option_value_labels,
+            )
 
     # Fallback: non-Shopify sites use direct axis keys (Magento, SFCC, custom React, etc.)
     if not option_values:
@@ -1003,9 +1053,71 @@ def _variant_option_values(
         ):
             val = variant.get(possible_axis)
             if val and isinstance(val, (str, int, float)):
-                option_values[possible_axis] = str(val).strip()
+                option_values[possible_axis] = _display_option_value(
+                    possible_axis,
+                    str(val).strip(),
+                    option_value_labels=option_value_labels,
+                )
 
     return option_values
+
+
+def _option_value_labels(product: dict[str, Any]) -> dict[str, dict[str, str]]:
+    labels: dict[str, dict[str, str]] = {}
+    raw_attributes = product.get("variationAttributes")
+    if not isinstance(raw_attributes, list):
+        raw_attributes = product.get("variation_attributes")
+    if not isinstance(raw_attributes, list):
+        return labels
+    direct_axis_keys = {
+        normalized_variant_axis_key(
+            text_or_none(attribute.get("id") or attribute.get("name") or attribute.get("label")) or ""
+        )
+        for attribute in raw_attributes
+        if isinstance(attribute, dict)
+        if normalized_variant_axis_key(
+            text_or_none(attribute.get("id") or attribute.get("name") or attribute.get("label")) or ""
+        )
+        == str(text_or_none(attribute.get("id") or "") or "").strip().lower().replace("-", "_")
+    }
+    for attribute in raw_attributes:
+        if not isinstance(attribute, dict):
+            continue
+        axis_name = text_or_none(attribute.get("id") or attribute.get("name") or attribute.get("label"))
+        axis_key = normalized_variant_axis_key(axis_name or "")
+        if not axis_key:
+            continue
+        if axis_key in direct_axis_keys and axis_key != str(axis_name or "").strip().lower():
+            continue
+        values = attribute.get("values")
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            raw_value = text_or_none(item.get("value") or item.get("id"))
+            display = text_or_none(
+                item.get("name")
+                or item.get("displayValue")
+                or item.get("display_value")
+                or item.get("label")
+            )
+            if not raw_value or not display:
+                continue
+            labels.setdefault(axis_key, {})[raw_value] = display
+    return labels
+
+
+def _display_option_value(
+    axis_key: str,
+    value: str,
+    *,
+    option_value_labels: dict[str, dict[str, str]] | None,
+) -> str:
+    cleaned = text_or_none(value)
+    if not cleaned:
+        return ""
+    return (option_value_labels or {}).get(axis_key, {}).get(cleaned, cleaned)
 
 
 def _variant_url(page_url: str, variant_id: str) -> str:

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.api.records import _route_responses
 from app.core.dependencies import get_current_user, get_db
 from app.main import app
 from app.models.crawl import CrawlRecord
@@ -94,3 +95,12 @@ async def test_records_api_retries_empty_first_read_when_run_summary_expects_row
     assert len(payload["items"]) == 1
     assert payload["items"][0]["data"]["title"] == "Widget Prime"
     assert call_count == 2
+
+
+def test_route_responses_preserves_mapping_entries() -> None:
+    class ResponseEntry(dict):
+        pass
+
+    responses = {404: ResponseEntry(description="missing")}
+
+    assert _route_responses(responses) == {404: {"description": "missing"}}

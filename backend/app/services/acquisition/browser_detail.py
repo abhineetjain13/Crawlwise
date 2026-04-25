@@ -5,13 +5,24 @@ import time
 from collections.abc import Iterable
 from typing import Any
 
-from app.services.config.extraction_rules import DETAIL_BLOCKED_TOKENS
+from app.services.config.extraction_rules import (
+    BROWSER_DETAIL_EXPAND_KEYWORDS,
+    DETAIL_BLOCKED_TOKENS,
+    DETAIL_EXPAND_KEYWORD_EXTENSIONS,
+    DETAIL_EXPAND_SELECTORS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_policy import (
     exact_requested_field_key,
     NORMALIZED_REQUESTED_FIELD_ALIASES,
     normalize_requested_field,
 )
+
+_DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
+    str(key): tuple(str(item) for item in list(value or []))
+    for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
+}
+_AOM_EXPAND_ROLES = {"button", "tab", "link", "menuitem"}
 
 
 def _coerce_int(value: object, *, fallback: int = 0) -> int:
@@ -411,7 +422,6 @@ async def expand_interactive_elements_via_accessibility_impl(
     diagnostics["elapsed_ms"] = elapsed_ms(started_at)
     return diagnostics
 
-
 def accessibility_expand_candidates_impl(
     snapshot: dict[str, object] | None,
     *,
@@ -471,3 +481,195 @@ def requested_field_tokens(requested_fields: list[str] | None) -> tuple[str, ...
                 seen.add(cleaned)
                 tokens.append(cleaned)
     return tuple(tokens)
+
+
+def detail_expansion_keywords(
+    surface: str,
+    *,
+    requested_fields: list[str] | None = None,
+) -> tuple[str, ...]:
+    lowered = str(surface or "").strip().lower()
+    if "ecommerce" in lowered:
+        base_keywords = _DETAIL_EXPAND_KEYWORDS.get("ecommerce", ())
+        extended_keywords = DETAIL_EXPAND_KEYWORD_EXTENSIONS.get("ecommerce", ())
+    elif "job" in lowered:
+        base_keywords = _DETAIL_EXPAND_KEYWORDS.get("job", ())
+        extended_keywords = DETAIL_EXPAND_KEYWORD_EXTENSIONS.get("job", ())
+    else:
+        base_keywords = ()
+        extended_keywords = ()
+    dynamic_keywords = requested_field_tokens(requested_fields)
+    keywords = [*base_keywords]
+    if extended_keywords:
+        keywords.extend(extended_keywords)
+    if dynamic_keywords:
+        keywords.extend(dynamic_keywords)
+    return tuple(dict.fromkeys(keywords))
+
+
+def accessibility_expand_candidates(
+    snapshot: dict[str, object] | None,
+    *,
+    surface: str,
+    requested_fields: list[str] | None = None,
+) -> list[tuple[str, str]]:
+    return accessibility_expand_candidates_impl(
+        snapshot,
+        surface=surface,
+        requested_fields=requested_fields,
+        aom_expand_roles=_AOM_EXPAND_ROLES,
+        detail_expansion_keywords=detail_expansion_keywords,
+    )
+
+
+async def interactive_label(handle: Any) -> str:
+    value = await handle.evaluate(
+        """(node) => {
+            const pieces = [
+                node.innerText,
+                node.textContent,
+                node.getAttribute('aria-label'),
+                node.getAttribute('title'),
+                node.getAttribute('data-testid'),
+            ];
+            return pieces.find((item) => item && item.trim()) || '';
+        }"""
+    )
+    return " ".join(str(value or "").split()).strip().lower()
+
+
+async def is_actionable_interactive_handle(handle: Any) -> bool:
+    state = await handle.evaluate(
+        """(node) => {
+            if (!(node instanceof HTMLElement) || !node.isConnected) {
+                return { actionable: false };
+            }
+            const style = window.getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            const disabled = Boolean(
+                node.hasAttribute('disabled') ||
+                node.getAttribute('aria-disabled') === 'true' ||
+                node.inert
+            );
+            const hidden = Boolean(
+                node.hidden ||
+                node.getAttribute('aria-hidden') === 'true' ||
+                style.display === 'none' ||
+                style.visibility === 'hidden' ||
+                style.pointerEvents === 'none'
+            );
+            const collapsed = rect.width <= 0 || rect.height <= 0;
+            return { actionable: !(disabled || hidden || collapsed) };
+        }"""
+    )
+    if not isinstance(state, dict):
+        return False
+    return bool(state.get("actionable"))
+
+
+async def _interactive_handle_attr(handle: Any, attr_name: str) -> str:
+    getter = getattr(handle, "get_attribute", None)
+    if getter is None:
+        return ""
+    try:
+        value = await getter(attr_name)
+    except Exception:
+        return ""
+    return " ".join(str(value or "").split()).strip().lower()
+
+
+async def _interactive_handle_tag_name(handle: Any) -> str:
+    try:
+        value = await handle.evaluate(
+            "(node) => node instanceof Element ? node.tagName.toLowerCase() : ''"
+        )
+    except Exception:
+        return ""
+    return " ".join(str(value or "").split()).strip().lower()
+
+
+async def _interactive_handle_is_visible(handle: Any) -> bool:
+    checker = getattr(handle, "is_visible", None)
+    if checker is None:
+        return True
+    try:
+        return bool(await checker())
+    except Exception:
+        return False
+
+
+async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
+    label = await interactive_label(handle)
+    visible = await _interactive_handle_is_visible(handle)
+    aria_label = await _interactive_handle_attr(handle, "aria-label")
+    title = await _interactive_handle_attr(handle, "title")
+    href = await _interactive_handle_attr(handle, "href")
+    aria_controls = await _interactive_handle_attr(handle, "aria-controls")
+    aria_expanded = await _interactive_handle_attr(handle, "aria-expanded")
+    data_qa_action = await _interactive_handle_attr(handle, "data-qa-action")
+    data_testid = await _interactive_handle_attr(handle, "data-testid")
+    class_name = await _interactive_handle_attr(handle, "class")
+    tag_name = await _interactive_handle_tag_name(handle)
+    probe = " ".join(
+        part
+        for part in (label, aria_label, title, data_qa_action, data_testid)
+        if str(part or "").strip()
+    ).strip().lower()
+    return {
+        "label": label,
+        "probe": probe,
+        "aria_label": aria_label,
+        "title": title,
+        "href": href,
+        "aria_controls": aria_controls,
+        "aria_expanded": aria_expanded,
+        "data_qa_action": data_qa_action,
+        "data_testid": data_testid,
+        "class_name": class_name,
+        "tag_name": tag_name,
+        "visible": visible,
+        "actionable": await is_actionable_interactive_handle(handle),
+    }
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+async def expand_all_interactive_elements(
+    page: Any,
+    *,
+    surface: str = "",
+    requested_fields: list[str] | None = None,
+    checkpoint: Any = None,
+    max_elapsed_ms: int | None = None,
+) -> dict[str, object]:
+    del checkpoint
+    return await expand_all_interactive_elements_impl(
+        page,
+        surface=surface,
+        requested_fields=requested_fields,
+        detail_expand_selectors=DETAIL_EXPAND_SELECTORS,
+        detail_expansion_keywords=detail_expansion_keywords,
+        interactive_candidate_snapshot=interactive_candidate_snapshot,
+        elapsed_ms=_elapsed_ms,
+        max_elapsed_ms=max_elapsed_ms,
+    )
+
+
+async def expand_interactive_elements_via_accessibility(
+    page: Any,
+    *,
+    surface: str = "",
+    requested_fields: list[str] | None = None,
+    max_elapsed_ms: int | None = None,
+) -> dict[str, object]:
+    return await expand_interactive_elements_via_accessibility_impl(
+        page,
+        surface=surface,
+        requested_fields=requested_fields,
+        accessibility_expand_candidates=accessibility_expand_candidates,
+        detail_expansion_keywords=detail_expansion_keywords,
+        elapsed_ms=_elapsed_ms,
+        max_elapsed_ms=max_elapsed_ms,
+    )

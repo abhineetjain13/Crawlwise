@@ -994,22 +994,40 @@ async def _invoke_run_browser_attempts(
     proxies: list[str | None] | None,
     host_policy: HostProtectionPolicy | None,
 ) -> PageFetchResult:
-    browser_attempt_kwargs = {
+    kwargs: dict[str, object] = {
         "reason": reason,
         "requested_fields": requested_fields,
         "listing_recovery_mode": listing_recovery_mode,
         "capture_page_markdown": capture_page_markdown,
+        "capture_screenshot": capture_screenshot,
         "proxies": proxies,
+        "host_policy": host_policy,
     }
-    browser_attempt_parameters = inspect.signature(_run_browser_attempts).parameters
-    if "capture_screenshot" in browser_attempt_parameters:
-        browser_attempt_kwargs["capture_screenshot"] = capture_screenshot
-    if "host_policy" in browser_attempt_parameters:
-        browser_attempt_kwargs["host_policy"] = host_policy
-    return await _run_browser_attempts(
-        context,
-        **browser_attempt_kwargs,
-    )
+    try:
+        signature = inspect.signature(_run_browser_attempts)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        if not accepts_var_kwargs:
+            allowed_names = {
+                name
+                for name, parameter in signature.parameters.items()
+                if parameter.kind
+                in (
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
+            }
+            kwargs = {
+                name: value
+                for name, value in kwargs.items()
+                if name in allowed_names
+            }
+    return await _run_browser_attempts(context, **kwargs)
 
 
 async def _update_host_result_memory(

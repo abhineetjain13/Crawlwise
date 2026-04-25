@@ -2303,6 +2303,24 @@ def test_classify_browser_outcome_marks_empty_category_as_low_content_shell() ->
     ) == "empty_terminal_page"
 
 
+def test_classify_low_content_reason_ignores_empty_phrase_on_contentful_page() -> None:
+    html = """
+    <html><body>
+      <p>Filter summary: 0 results for XXL.</p>
+      <article><a href="/products/widget-1">Widget One</a><span>$10</span></article>
+      <article><a href="/products/widget-2">Widget Two</a><span>$20</span></article>
+      <article><a href="/products/widget-3">Widget Three</a><span>$30</span></article>
+      <article><a href="/products/widget-4">Widget Four</a><span>$40</span></article>
+      <article><a href="/products/widget-5">Widget Five</a><span>$50</span></article>
+    </body></html>
+    """
+
+    assert browser_runtime.classify_low_content_reason(
+        html,
+        html_bytes=len(html.encode("utf-8")),
+    ) is None
+
+
 def test_classify_browser_outcome_keeps_ready_listing_with_no_pagination_progress_usable() -> None:
     html = """
     <html><body>
@@ -3235,9 +3253,9 @@ async def test_browser_fetch_keeps_full_rendered_html_when_traversal_makes_no_pr
             requested_mode="paginate",
             selected_mode="paginate",
             activated=True,
-            stop_reason="paginate_blocked",
+            stop_reason="next_page_not_found",
             progress_events=0,
-            card_count=0,
+            card_count=5,
             html_fragments=[
                 ("<div data-traversal-cards='true'><a href='/privacy'>Privacy notice</a></div>", False),
             ],
@@ -3315,6 +3333,7 @@ async def test_browser_fetch_prefers_rendered_html_when_progress_traversal_fragm
 
     assert "Widget Two" in result.html
     assert "traversal_composed_html" in result.artifacts
+    assert "Widget Two" in result.artifacts["full_rendered_html"]
 
 
 @pytest.mark.asyncio

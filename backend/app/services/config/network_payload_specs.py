@@ -72,6 +72,15 @@ NETWORK_PAYLOAD_LIST_COLLECTION_KEYS: Final[frozenset[str]] = frozenset(
 NETWORK_PAYLOAD_DETAIL_CONTAINER_KEYS: Final[frozenset[str]] = frozenset(
     {"item", "job", "posting", "product", "record"}
 )
+GHOST_ROUTE_COMPATIBLE_SURFACES: Final[frozenset[str]] = frozenset(
+    {
+        "ecommerce_detail",
+        "job_detail",
+    }
+)
+DETAIL_URL_IGNORE_TOKENS: Final[frozenset[str]] = frozenset(
+    {"detail", "details", "dp", "item", "job", "p", "product", "products"}
+)
 
 
 NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {

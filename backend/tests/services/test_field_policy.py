@@ -17,6 +17,8 @@ def test_normalize_requested_field_strips_common_prefixes_before_alias_lookup() 
 
 def test_normalize_requested_field_uses_token_subset_alias_match() -> None:
     assert normalize_requested_field("item_measurements_notes") == "dimensions"
+    assert normalize_requested_field("size") == "size"
+    assert normalize_requested_field("vendor") == "vendor"
 
 
 def test_exact_requested_field_key_keeps_non_alias_composite_labels_stable() -> None:

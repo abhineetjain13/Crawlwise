@@ -950,16 +950,25 @@ export const RecordsTable = memo(function RecordsTable({
  onSelectAll: (checked: boolean) => void;
  onToggleRow: (id: number, checked: boolean) => void;
 }>) {
- const rowHeightPx = 40;
+ const IMAGE_KEYS = new Set(["image_url", "image", "thumbnail", "img"]);
+ const TITLE_KEYS = new Set(["title", "name", "product_name", "product title"]);
+ const PRICE_KEYS = new Set(["price", "sale_price", "offer_price", "current_price", "final_price", "our_price", "deal_price"]);
+ const URL_KEYS = new Set(["url", "source_url", "product_url", "canonical_url"]);
+
+ const imageCol = visibleColumns.find((col) => IMAGE_KEYS.has(col));
+ const dataColumns = visibleColumns.filter((col) => !IMAGE_KEYS.has(col));
+ const hasImageCol = !!imageCol;
+ const totalCols = dataColumns.length + (hasImageCol ? 1 : 0) + 1;
+ const rowHeightPx = 48;
  const overscanRows = 8;
  const [scrollTop, setScrollTop] = useState(0);
  const [viewportHeight, setViewportHeight] = useState(560);
  const [containerNode, setContainerNode] = useState<HTMLDivElement | null>(null);
  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
- setContainerNode(node);
- if (node) {
- setViewportHeight(node.clientHeight || 560);
- }
+  setContainerNode(node);
+  if (node) {
+   setViewportHeight(node.clientHeight || 560);
+  }
  }, []);
  const totalCount = records.length;
  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeightPx) - overscanRows);
@@ -970,84 +979,124 @@ export const RecordsTable = memo(function RecordsTable({
  const bottomSpacerPx = Math.max(0, (totalCount - endIndex) * rowHeightPx);
 
  useEffect(() => {
- if (!containerNode || typeof ResizeObserver ==="undefined") {
- return;
- }
- const observer = new ResizeObserver((entries) => {
- const entry = entries[0];
- if (!entry) {
- return;
- }
- setViewportHeight(entry.contentRect.height || 560);
- });
- observer.observe(containerNode);
- return () => observer.disconnect();
+  if (!containerNode || typeof ResizeObserver === "undefined") {
+   return;
+  }
+  const observer = new ResizeObserver((entries) => {
+   const entry = entries[0];
+   if (!entry) {
+    return;
+   }
+   setViewportHeight(entry.contentRect.height || 560);
+  });
+  observer.observe(containerNode);
+  return () => observer.disconnect();
  }, [containerNode]);
 
+ function renderCell(col: string, record: CrawlRecord) {
+  const raw = formatCellDisplay(readRecordValue(record, col));
+  if (!raw || raw === "--") return <span className="ct-muted">--</span>;
+
+  if (TITLE_KEYS.has(col)) {
+   return <span className="ct-title block max-w-[320px] truncate">{raw}</span>;
+  }
+  if (PRICE_KEYS.has(col)) {
+   return <span className="ct-price">{raw}</span>;
+  }
+  if (URL_KEYS.has(col)) {
+   const isSafe = raw.startsWith("http://") || raw.startsWith("https://");
+   if (isSafe) {
+    return (
+     <a href={raw} target="_blank" rel="noreferrer" className="ct-url block max-w-[200px] truncate" title={raw}>
+      {raw}
+     </a>
+    );
+   }
+  }
+  return <span className="block max-w-[260px] truncate">{raw}</span>;
+ }
+
  return (
- <div
- ref={setContainerRef}
- onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
- className="surface-muted max-h-[70vh] rounded-lg overflow-auto"
- >
- <table className="compact-data-table min-w-[960px]">
- <thead>
- <tr>
- <th className="w-10">
- <input
- type="checkbox"
- checked={selectedIds.length === records.length && records.length > 0}
- onChange={(event) => onSelectAll(event.target.checked)}
- />
- </th>
- {visibleColumns.map((col) => {
- const score = fieldQualityScores?.[col];
- const level = qualityLevelFromScore(score ?? Number.NaN);
- return (
- <th key={col}>
- <div className="flex items-center gap-2">
- <span>{col}</span>
- {Number.isFinite(score) ? (
- <Badge tone={qualityTone(level)}>{humanizeQuality(level)}</Badge>
- ) : null}
- </div>
- </th>
- );
- })}
- </tr>
- </thead>
- <tbody>
- {topSpacerPx > 0 ? (
- <tr aria-hidden="true">
- <td colSpan={visibleColumns.length + 1} style={{ height: `${topSpacerPx}px`, padding: 0 }} />
- </tr>
- ) : null}
- {windowedRecords.map((record) => (
- <tr key={record.id}>
- <td>
- <input
- type="checkbox"
- checked={selectedIds.includes(record.id)}
- onChange={(event) => onToggleRow(record.id, event.target.checked)}
- />
- </td>
- {visibleColumns.map((col) => (
- <td key={col} title={formatCellDisplay(readRecordValue(record, col))}>
- <span className="block max-w-[260px] truncate">
- {formatCellDisplay(readRecordValue(record, col)) || <span className="text-muted/50">--</span>}
- </span>
- </td>
- ))}
- </tr>
- ))}
- {bottomSpacerPx > 0 ? (
- <tr aria-hidden="true">
- <td colSpan={visibleColumns.length + 1} style={{ height: `${bottomSpacerPx}px`, padding: 0 }} />
- </tr>
- ) : null}
- </tbody>
- </table>
- </div>
+  <div
+   ref={setContainerRef}
+   onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+   className="surface-muted max-h-[70vh] rounded-lg overflow-auto"
+  >
+   <table className="commerce-table min-w-[960px]">
+    <thead>
+     <tr>
+      <th className="w-10">
+       <input
+        type="checkbox"
+        checked={selectedIds.length === records.length && records.length > 0}
+        onChange={(event) => onSelectAll(event.target.checked)}
+       />
+      </th>
+      {hasImageCol ? <th>IMG</th> : null}
+      {dataColumns.map((col) => {
+       const score = fieldQualityScores?.[col];
+       const level = qualityLevelFromScore(score ?? Number.NaN);
+       return (
+        <th key={col}>
+         <div className="flex items-center gap-1.5">
+          <span className="truncate">{col}</span>
+          {Number.isFinite(score) ? (
+           <Badge tone={qualityTone(level)} className="ct-header-badge">{humanizeQuality(level)}</Badge>
+          ) : null}
+         </div>
+        </th>
+       );
+      })}
+     </tr>
+    </thead>
+    <tbody>
+     {topSpacerPx > 0 ? (
+      <tr aria-hidden="true">
+       <td colSpan={totalCols} style={{ height: `${topSpacerPx}px`, padding: 0 }} />
+      </tr>
+     ) : null}
+     {windowedRecords.map((record) => (
+      <tr key={record.id}>
+       <td>
+        <input
+         type="checkbox"
+         checked={selectedIds.includes(record.id)}
+         onChange={(event) => onToggleRow(record.id, event.target.checked)}
+        />
+       </td>
+       {hasImageCol ? (
+        <td className="ct-image-cell">
+         {(() => {
+          const src = formatCellDisplay(readRecordValue(record, imageCol!));
+          if (!src || src === "--") return <span className="ct-muted">--</span>;
+          return (
+           <div className="ct-image-wrap">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+             src={src}
+             alt=""
+             onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+           </div>
+          );
+         })()}
+        </td>
+       ) : null}
+       {dataColumns.map((col) => (
+        <td key={col} title={formatCellDisplay(readRecordValue(record, col))}>
+         {renderCell(col, record)}
+        </td>
+       ))}
+      </tr>
+     ))}
+     {bottomSpacerPx > 0 ? (
+      <tr aria-hidden="true">
+       <td colSpan={totalCols} style={{ height: `${bottomSpacerPx}px`, padding: 0 }} />
+      </tr>
+     ) : null}
+    </tbody>
+   </table>
+  </div>
  );
 });
 

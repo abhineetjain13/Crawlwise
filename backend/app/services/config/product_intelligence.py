@@ -105,10 +105,14 @@ BRAND_ALIAS_MAP = {
     "levis": "levi's",
     "levi's": "levi's",
     "lee": "lee",
+    "polo ralph lauren": "ralph lauren",
+    "ralph lauren childrenswear": "ralph lauren",
+    "rare too": "rare editions",
 }
 
 BRAND_DOMAIN_MAP = {
     "adidas": "adidas.com",
+    "bonnie jean": "bonniejean.com",
     "calvin klein": "calvinklein.com",
     "coach": "coach.com",
     "columbia": "columbia.com",
@@ -116,6 +120,7 @@ BRAND_DOMAIN_MAP = {
     "levi's": "levi.com",
     "michael kors": "michaelkors.com",
     "nike": "nike.com",
+    "rare editions": "therareeditions.com",
     "ralph lauren": "ralphlauren.com",
     "tommy hilfiger": "tommy.com",
     "under armour": "underarmour.com",
@@ -148,8 +153,20 @@ MARKETPLACE_DOMAINS = {
 }
 
 AGGREGATOR_DOMAINS = {
+    "coolspringsgalleria.com",
     "google.com",
+    "hamiltonplace.com",
+    "shopmy.us",
     "shopstyle.com",
+    "thesummitbirmingham.com",
+}
+
+DISCOVERY_SOURCE_TYPE_PRIORITY = {
+    SOURCE_TYPE_BRAND_DTC: 0,
+    SOURCE_TYPE_RETAILER: 1,
+    SOURCE_TYPE_MARKETPLACE: 2,
+    SOURCE_TYPE_UNKNOWN: 3,
+    SOURCE_TYPE_AGGREGATOR: 4,
 }
 
 SOURCE_TYPE_AUTHORITY_BONUS = {
@@ -193,6 +210,7 @@ class ProductIntelligenceSettings(BaseSettings):
     )
     max_source_products: int = 50
     max_candidates_per_product: int = 5
+    discovery_pool_multiplier: int = 4
     max_urls_per_result_domain: int = 1
     search_timeout_seconds: float = 20.0
     search_delay_ms: int = 800
@@ -219,6 +237,7 @@ class ProductIntelligenceSettings(BaseSettings):
             self.default_search_provider = SEARCH_PROVIDER_DUCKDUCKGO
         self.max_source_products = max(1, int(self.max_source_products))
         self.max_candidates_per_product = max(1, int(self.max_candidates_per_product))
+        self.discovery_pool_multiplier = max(1, int(self.discovery_pool_multiplier))
         self.max_urls_per_result_domain = max(1, int(self.max_urls_per_result_domain))
         self.search_timeout_seconds = max(1.0, float(self.search_timeout_seconds))
         self.search_delay_ms = max(0, int(self.search_delay_ms))

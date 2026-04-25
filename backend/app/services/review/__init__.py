@@ -34,9 +34,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 def _safe_int(value: object) -> int | None:
     try:
-        return int(value)
+        return int(value) if isinstance(value, (int, float)) else int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _object_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
 
 
 async def _load_domain_mapping(
@@ -409,7 +413,7 @@ async def build_domain_recipe_payload(
     browser_required = False
     actual_fetch_method: str | None = None
     browser_reason: str | None = None
-    affordance_candidates = {
+    affordance_candidates: dict[str, object] = {
         "accordions": [],
         "tabs": [],
         "carousels": [],
@@ -481,11 +485,12 @@ async def build_domain_recipe_payload(
                 )
                 learning_entry["source_record_ids"] = sorted(
                     {
-                        int(value)
+                        parsed
                         for value in [
-                            *list(learning_entry.get("source_record_ids") or []),
+                            *_object_list(learning_entry.get("source_record_ids")),
                             record.id,
                         ]
+                        if (parsed := _safe_int(value)) is not None
                     }
                 )
             if not selector_kind or not selector_value:
@@ -512,14 +517,18 @@ async def build_domain_recipe_payload(
                     "saved_selector_id": saved_selector.get("id") if isinstance(saved_selector, dict) else None,
                     "already_saved": isinstance(saved_selector, dict),
                     "final_field_source": (
-                        list(payload_map.get("sources"))[-1]
-                        if isinstance(payload_map.get("sources"), list) and payload_map.get("sources")
+                        _object_list(payload_map.get("sources"))[-1]
+                        if _object_list(payload_map.get("sources"))
                         else None
                     ),
                 },
             )
             entry["source_record_ids"] = sorted(
-                {int(value) for value in [*list(entry.get("source_record_ids") or []), record.id]}
+                {
+                    parsed
+                    for value in [*_object_list(entry.get("source_record_ids")), record.id]
+                    if (parsed := _safe_int(value)) is not None
+                }
             )
     saved_profile_record = await load_domain_run_profile(
         session,
@@ -619,7 +628,7 @@ async def promote_domain_recipe_selectors(
     for row in selectors:
         selector_kind = str(row.get("selector_kind") or "").strip()
         selector_value = str(row.get("selector_value") or "").strip()
-        field_name = normalize_field_key(row.get("field_name"))
+        field_name = normalize_field_key(str(row.get("field_name") or ""))
         if not field_name or not selector_kind or not selector_value:
             continue
         payload = {
@@ -644,24 +653,27 @@ async def promote_domain_recipe_selectors(
             and "id" in existing_row
             and existing_row["id"] is not None
         ):
-            saved_rows.append(
-                await update_selector_record(
-                    session,
-                    selector_id=int(existing_row["id"]),
-                    payload=payload,
-                    commit=commit,
-                )
+            selector_id = _safe_int(existing_row.get("id"))
+            if selector_id is None:
+                continue
+            updated_row = await update_selector_record(
+                session,
+                selector_id=selector_id,
+                payload=payload,
+                commit=commit,
             )
+            if updated_row is not None:
+                saved_rows.append(updated_row)
             continue
-        saved_rows.append(
-            await create_selector_record(
+        created_row = await create_selector_record(
                 session,
                 domain=domain,
                 surface=run.surface,
                 payload=payload,
                 commit=commit,
             )
-        )
+        if created_row is not None:
+            saved_rows.append(created_row)
     return [row for row in saved_rows if isinstance(row, dict)]
 
 
@@ -688,7 +700,7 @@ async def apply_domain_recipe_field_action(
     action: dict[str, object],
 ) -> dict[str, object]:
     domain = normalize_domain(run.url)
-    field_name = normalize_field_key(action.get("field_name"))
+    field_name = normalize_field_key(str(action.get("field_name") or ""))
     action_name = str(action.get("action") or "").strip().lower()
     selector_kind = str(action.get("selector_kind") or "").strip().lower()
     selector_value = str(action.get("selector_value") or "").strip()
@@ -726,13 +738,16 @@ async def apply_domain_recipe_field_action(
                     else row.get("regex")
                 )
                 if (
-                    normalize_field_key(row.get("field_name")) == field_name
+                    normalize_field_key(str(row.get("field_name") or "")) == field_name
                     and str(matched_value or "").strip() == selector_value
                     and row.get("id") is not None
                 ):
+                    selector_id = _safe_int(row.get("id"))
+                    if selector_id is None:
+                        continue
                     await update_selector_record(
                         session,
-                        selector_id=int(row["id"]),
+                        selector_id=selector_id,
                         payload={"is_active": False},
                         commit=False,
                     )
@@ -753,7 +768,7 @@ async def apply_domain_recipe_field_action(
                     parsed
                     for parsed in (
                         _safe_int(value)
-                        for value in list(action.get("source_record_ids") or [])
+                        for value in _object_list(action.get("source_record_ids"))
                     )
                     if parsed is not None
                 ],
@@ -870,17 +885,21 @@ def _merge_affordance_candidates(
     acquisition: dict[str, object],
     browser_diagnostics: dict[str, object],
 ) -> None:
+    accordion_labels = _object_list(affordance_candidates.get("accordions"))
+    tab_labels = _object_list(affordance_candidates.get("tabs"))
     if not affordance_candidates.get("iframe_promotion"):
         final_url = str(acquisition.get("final_url") or "").strip()
         if final_url and final_url != str(acquisition.get("requested_url") or "").strip():
             affordance_candidates["iframe_promotion"] = final_url
     detail_expansion = mapping_or_empty(browser_diagnostics.get("detail_expansion"))
     for label in _string_values(detail_expansion.get("expanded_elements")):
-        if label not in affordance_candidates["accordions"]:
-            affordance_candidates["accordions"].append(label)
+        if label not in accordion_labels:
+            accordion_labels.append(label)
     for label in _string_values(mapping_or_empty(detail_expansion.get("aom")).get("expanded_elements")):
-        if label not in affordance_candidates["tabs"]:
-            affordance_candidates["tabs"].append(label)
+        if label not in tab_labels:
+            tab_labels.append(label)
+    affordance_candidates["accordions"] = accordion_labels
+    affordance_candidates["tabs"] = tab_labels
 
 
 def _string_values(value: object) -> list[str]:

@@ -830,17 +830,10 @@ async def serialize_browser_page_content_impl(
             on_event=on_event,
         )
         traversal_html = traversal_result.compose_html()
-        should_capture_rendered_html = not (
-            "listing" in str(surface or "").strip().lower()
-            and str(traversal_html or "").strip()
-            and int(getattr(traversal_result, "card_count", 0) or 0)
-            >= max(2, int(crawler_runtime_settings.listing_min_items))
+        rendered_html = await get_page_html(
+            page,
+            flatten_shadow=should_flatten_shadow,
         )
-        if should_capture_rendered_html:
-            rendered_html = await get_page_html(
-                page,
-                flatten_shadow=should_flatten_shadow,
-            )
         html = _select_primary_browser_html(
             surface=surface,
             traversal_result=traversal_result,

@@ -7,7 +7,10 @@ from functools import lru_cache
 from typing import Any
 
 from bs4 import BeautifulSoup
-from app.services.config.extraction_rules import HYDRATED_STATE_PATTERNS
+from app.services.config.extraction_rules import (
+    HYDRATED_STATE_PATTERNS,
+    HYDRATED_STATE_SCRIPT_IDS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.script_text_extractor import (
     extract_script_text_by_id,
@@ -17,7 +20,7 @@ from app.services.script_text_extractor import (
 )
 
 try:
-    import extruct
+    import extruct  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover - dependency may be absent in local test envs
     extruct = None
 
@@ -26,7 +29,6 @@ try:
 except ImportError:  # pragma: no cover - dependency may be absent in local test envs
     get_base_url = None  # type: ignore[assignment]
 
-_STATE_SCRIPT_IDS = {"__next_data__": "__NEXT_DATA__", "__nuxt_data__": "__NUXT_DATA__"}
 _EMBEDDED_ASSIGNMENT_NAMES = ("data", "items", "listings", "posts", "products", "records", "results")
 _NON_STATE_ASSIGNMENT_PATTERNS = (re.compile(r"ShopifyAnalytics\.meta\s*=\s*(\{.*?\})\s*;", re.S), re.compile(r"var\s+meta\s*=\s*(\{.*?\})\s*;", re.S))
 logger = logging.getLogger(__name__)
@@ -191,7 +193,7 @@ def parse_embedded_json(soup: BeautifulSoup, html: str) -> list[dict[str, Any]]:
         }
         if not looks_json:
             continue
-        if node_id in _STATE_SCRIPT_IDS:
+        if node_id in HYDRATED_STATE_SCRIPT_IDS:
             continue
         try:
             payload = json.loads(raw)
@@ -213,7 +215,7 @@ def parse_embedded_json(soup: BeautifulSoup, html: str) -> list[dict[str, Any]]:
 def harvest_js_state_objects(soup: BeautifulSoup | None, html: str) -> dict[str, Any]:
     del soup
     state_objects: dict[str, Any] = {}
-    for node_id, state_name in _STATE_SCRIPT_IDS.items():
+    for node_id, state_name in HYDRATED_STATE_SCRIPT_IDS.items():
         raw = extract_script_text_by_id(html, node_id)
         if not raw:
             continue
