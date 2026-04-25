@@ -932,6 +932,29 @@ async def test_belk_adapter_extracts_title_brand_from_rendered_card_attrs() -> N
     assert result.records[1]["brand"] == "Crown & Ivy™"
 
 
+@pytest.mark.asyncio
+async def test_belk_adapter_infers_brand_from_url_when_title_is_truncated() -> None:
+    html = """
+    <html><body>
+      <article class="product-tile" data-cnstrc-item-name="500 Thread Count Damask Strip US Grown Cotton Softy-Around 95/5 Goose Feather/Down Pillow (2...">
+        <a href="/p/beautyrest-500-thread-count-damask-stripe-us-grown-cotton-softy-around-95-5-goose-feather-down-pillow/92002171202220.html">
+          <img alt="500 Thread Count Damask Strip US Grown Cotton Softy-Around 95/5 Goose Feather/Down Pillow (2..." src="https://belk.scene7.com/is/image/Belk/9200217">
+        </a>
+        <span>$75.50 - $95.50</span>
+      </article>
+    </body></html>
+    """
+
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        html,
+        "ecommerce_listing",
+    )
+
+    assert result.records[0]["brand"] == "Beautyrest"
+    assert result.records[0]["price"] == "75.50"
+
+
 def test_listing_extractor_extracts_brand_from_product_tile() -> None:
     rows = extract_records(
         """
@@ -1283,6 +1306,242 @@ def test_extract_records_backfills_listing_price_from_network_payload_candidates
             "price": "3990",
             "currency": "INR",
             "image_url": "https://image.uniqlo.com/UQ/ST3/in/imagesgoods/482443/item/ingoods_38_482443_3x4.jpg",
+        }
+    ]
+
+
+def test_extract_records_backfills_listing_brand_and_range_price_from_network_payload_candidates() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Beyond Down Bed Pillow",
+                    url="https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+                    image_url="https://belk.scene7.com/is/image/Belk/9200217",
+                )
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "92002171202220",
+                                "name": "Beyond Down Bed Pillow",
+                                "brandName": "Beyond Down",
+                                "offers": {
+                                    "lowPrice": "21.00",
+                                    "highPrice": "26.00",
+                                    "priceCurrency": "USD",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Beyond Down Bed Pillow",
+            "url": "https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+            "image_url": "https://belk.scene7.com/is/image/Belk/9200217",
+            "price": "21.00",
+            "currency": "USD",
+            "brand": "Beyond Down",
+        }
+    ]
+
+
+def test_extract_records_backfills_listing_brand_from_network_when_dom_price_exists() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Beyond Down Bed Pillow",
+                    url="https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+                    price="$21.00",
+                )
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "92002171202220",
+                                "name": "Beyond Down Bed Pillow",
+                                "brandName": "Beyond Down",
+                                "offers": {
+                                    "lowPrice": "21.00",
+                                    "highPrice": "26.00",
+                                    "priceCurrency": "USD",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Beyond Down Bed Pillow",
+            "url": "https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+            "price": "21.00",
+            "currency": "USD",
+            "brand": "Beyond Down",
+        }
+    ]
+
+
+def test_extract_records_backfills_listing_brand_from_network_candidate_without_price() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Elite Airflow Jumbo Pillow",
+                    url="https://www.belk.com/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html",
+                    price="$15.00",
+                )
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "92002171202220",
+                                "productName": "Elite Airflow Jumbo Pillow",
+                                "brandName": "Sealy",
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Elite Airflow Jumbo Pillow",
+            "price": "15.00",
+            "currency": "USD",
+            "url": "https://www.belk.com/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html",
+            "brand": "Sealy",
+        }
+    ]
+
+
+def test_extract_records_backfills_listing_from_network_by_belk_product_id_when_title_differs() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Promo Copy That Does Not Match Payload Title",
+                    url="https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+                    price="$21.00",
+                    image_url="https://belk.scene7.com/is/image/Belk/9200217",
+                )
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "92002171202220",
+                                "name": "Beyond Down Bed Pillow",
+                                "brandName": "Beyond Down",
+                                "offers": {
+                                    "lowPrice": "21.00",
+                                    "priceCurrency": "USD",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Promo Copy That Does Not Match Payload Title",
+            "url": "https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+            "price": "21.00",
+            "currency": "USD",
+            "brand": "Beyond Down",
+        }
+    ]
+
+
+def test_extract_records_backfills_adapter_brand_by_belk_product_identity_when_urls_differ() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <article>
+            <a href="/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html?dwvar_color=White">
+              <img src="/images/9200217.jpg" alt="Elite Airflow Jumbo Pillow">
+              <span>Elite Airflow Jumbo Pillow</span>
+            </a>
+            <span class="price">$15.00</span>
+          </article>
+        </body></html>
+        """,
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        adapter_records=[
+            {
+                "title": "Elite Airflow Jumbo Pillow",
+                "brand": "Sealy",
+                "url": "https://www.belk.com/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html",
+                "_source": "belk_adapter",
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Elite Airflow Jumbo Pillow",
+            "price": "15.00",
+            "currency": "USD",
+            "image_url": "https://www.belk.com/images/9200217.jpg",
+            "url": "https://www.belk.com/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html?dwvar_color=White",
+            "brand": "Sealy",
         }
     ]
 
@@ -2532,6 +2791,47 @@ def test_extract_ecommerce_detail_rejects_fragment_backed_shell_payload_from_spa
         "ecommerce_detail",
         max_records=5,
         requested_page_url="https://practicesoftwaretesting.com/#/product/01HB",
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_rejects_search_results_shell_with_sort_filter_controls() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Trail Shoes" />
+      </head>
+      <body>
+        <main>
+          <h1>Trail Shoes</h1>
+          <label for="sort-by">Sort By</label>
+          <select id="sort-by">
+            <option>Featured</option>
+            <option>Price: Low to High</option>
+          </select>
+          <label for="filter-by">Filter By</label>
+          <select id="filter-by">
+            <option>All</option>
+            <option>Men</option>
+          </select>
+          <article class="product-card">
+            <a href="/dp/B0TRAIL123">
+              <img src="https://cdn.example.com/trail-shoe.jpg" alt="Trail Runner GTX" />
+              <h2>Trail Runner GTX</h2>
+            </a>
+            <div class="price">$129.99</div>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.example.com/s?k=trail+shoes",
+        "ecommerce_detail",
+        max_records=1,
     )
 
     assert rows == []

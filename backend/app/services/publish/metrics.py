@@ -17,29 +17,52 @@ def _challenge_evidence_rows(diagnostics: dict[str, object]) -> list[str]:
     ]
 
 
+def _readiness_probes(diagnostics: dict[str, object]) -> list[dict[str, object]]:
+    raw_probes = diagnostics.get("readiness_probes")
+    if not isinstance(raw_probes, list):
+        return []
+    return [dict(item) for item in raw_probes if isinstance(item, dict)]
+
+
+def _has_ready_readiness_probe(diagnostics: dict[str, object]) -> bool:
+    return any(bool(probe.get("is_ready")) for probe in _readiness_probes(diagnostics))
+
+
+def _has_strong_challenge_evidence(
+    diagnostics: dict[str, object],
+    evidence: list[str],
+) -> bool:
+    challenge_elements_raw = diagnostics.get("challenge_element_hits")
+    challenge_elements = challenge_elements_raw if isinstance(challenge_elements_raw, list) else []
+    if challenge_elements:
+        return True
+    return any(
+        item.startswith(
+            ("title:", "strong:", "active_provider:", "challenge_element:")
+        )
+        for item in evidence
+    )
+
+
 def diagnostics_indicate_block(diagnostics: dict[str, object] | object) -> bool:
     payload = dict(diagnostics or {}) if isinstance(diagnostics, dict) else {}
     browser_outcome = str(payload.get("browser_outcome") or "").strip().lower()
-    challenge_elements_raw = payload.get("challenge_element_hits")
-    challenge_elements = challenge_elements_raw if isinstance(challenge_elements_raw, list) else []
     provider_hits_raw = payload.get("challenge_provider_hits")
     provider_hits = provider_hits_raw if isinstance(provider_hits_raw, list) else []
     evidence = _challenge_evidence_rows(payload)
     if browser_outcome == "challenge_page":
         return True
+    if _has_strong_challenge_evidence(payload, evidence):
+        return True
+    provider_evidence = provider_hits or [
+        item for item in evidence if item.startswith("provider:")
+    ]
+    if provider_evidence:
+        if browser_outcome != "usable_content":
+            return True
+        return not _has_ready_readiness_probe(payload)
     if browser_outcome == "usable_content":
         return False
-    if challenge_elements:
-        return True
-    if any(
-        item.startswith(
-            ("title:", "strong:", "provider:", "active_provider:", "challenge_element:")
-        )
-        for item in evidence
-    ):
-        return True
-    if provider_hits:
-        return True
     return False
 
 
@@ -104,6 +127,7 @@ def build_url_metrics(
         "network_payloads": len(list(acquisition_result.network_payloads or [])),
         "adapter_name": acquisition_result.adapter_name,
         "platform_family": getattr(acquisition_result, "platform_family", None),
+        "failure_reason": browser_diagnostics.get("failure_reason"),
         "browser_navigation_strategy": browser_diagnostics.get("navigation_strategy"),
         "network_payload_count": int(
             browser_diagnostics.get("network_payload_count", 0) or 0

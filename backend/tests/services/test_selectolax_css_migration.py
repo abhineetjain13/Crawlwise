@@ -6,6 +6,7 @@ import pytest
 
 from app.services.adapters.adp import ADPAdapter
 from app.services.adapters.amazon import AmazonAdapter
+from app.services.adapters.belk import BelkAdapter
 from app.services.adapters.ebay import EbayAdapter
 from app.services.adapters.indeed import IndeedAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
@@ -924,6 +925,89 @@ async def test_amazon_adapter_extracts_inline_twister_variants() -> None:
         "color": "Pitch Gray-black",
         "size": "Large",
     }
+
+
+@pytest.mark.asyncio
+async def test_belk_adapter_extracts_nested_state_brand_price_and_currency() -> None:
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        """
+        <html>
+          <body>
+            <script>
+              window.__INITIAL_STATE__ = {
+                "search": {
+                  "products": [
+                    {
+                      "productName": "Checkerboard Quilt Set",
+                      "brand": {"name": "Modern Southern Home"},
+                      "salePrice": {"amount": "22.50", "currencyCode": "USD"},
+                      "image": {"url": "https://belk.scene7.com/is/image/Belk/7100974"},
+                      "productUrl": "/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html"
+                    }
+                  ]
+                }
+              };
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_listing",
+    )
+
+    assert result.records == [
+        {
+            "title": "Checkerboard Quilt Set",
+            "brand": "Modern Southern Home",
+            "price": "22.50",
+            "currency": "USD",
+            "image_url": "https://belk.scene7.com/is/image/Belk/7100974",
+            "url": "https://www.belk.com/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html",
+            "_source": "belk_adapter",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_belk_adapter_prefers_real_currency_fields_over_scalar_price_text() -> None:
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        """
+        <html>
+          <body>
+            <script>
+              window.__INITIAL_STATE__ = {
+                "search": {
+                  "products": [
+                    {
+                      "productName": "Free Sample",
+                      "brand": {"name": "Acme"},
+                      "price": "0.00",
+                      "currencyCode": "USD",
+                      "image": {"url": "https://belk.scene7.com/is/image/Belk/free-sample"},
+                      "productUrl": "/p/free-sample/000.html"
+                    }
+                  ]
+                }
+              };
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_listing",
+    )
+
+    assert result.records == [
+        {
+            "title": "Free Sample",
+            "brand": "Acme",
+            "price": "0.00",
+            "currency": "USD",
+            "image_url": "https://belk.scene7.com/is/image/Belk/free-sample",
+            "url": "https://www.belk.com/p/free-sample/000.html",
+            "_source": "belk_adapter",
+        }
+    ]
 
 
 @pytest.mark.asyncio

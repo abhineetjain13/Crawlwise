@@ -24,6 +24,10 @@ from app.services.domain_utils import normalize_domain
 from app.services.confidence import score_record_confidence
 from app.services.config.llm_runtime import llm_runtime_settings
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.detail_extractor import (
+    detail_record_rejection_reason,
+    infer_detail_failure_reason,
+)
 from app.services.field_value_core import (
     IMAGE_FIELDS,
     LONG_TEXT_FIELDS,
@@ -58,6 +62,7 @@ from app.services.publish import (
     build_acquisition_profile,
     build_url_metrics,
     compute_verdict,
+    diagnostics_indicate_block,
     finalize_url_metrics,
     is_effectively_blocked,
 )
@@ -303,6 +308,13 @@ def _browser_outcome(acquisition_result: AcquisitionResult) -> str:
 
 def _effective_blocked(acquisition_result: AcquisitionResult) -> bool:
     return is_effectively_blocked(acquisition_result)
+
+
+def _suppress_empty_downstream_record_logs(
+    acquisition_result: AcquisitionResult,
+    records: list[dict[str, object]],
+) -> bool:
+    return not records and _effective_blocked(acquisition_result)
 
 def _screenshot_required(browser_outcome: str) -> bool:
     return browser_outcome in {
@@ -560,7 +572,6 @@ async def _run_extraction_stage(
         acquisition_result,
         records,
     )
-    await _log_extraction_outcome(context, acquisition_result, records)
     records, selector_rules = await _retry_empty_extraction_with_browser(
         context,
         fetched,
@@ -574,7 +585,100 @@ async def _run_extraction_stage(
         records=records,
         selector_rules=selector_rules,
     )
+    records, rejection_reason = _apply_detail_rejection_guard(
+        context,
+        fetched,
+        records=records,
+        selector_rules=selector_rules,
+    )
+    await _log_extraction_outcome(context, acquisition_result, records)
+    if rejection_reason:
+        await _log_pipeline_event(
+            context,
+            "warning",
+            f"Rejected detail extraction for {context.url}: {rejection_reason}",
+        )
     return _ExtractedURLStage(fetched=fetched, records=records)
+
+
+def _ready_readiness_probe_present(browser_diagnostics: dict[str, object]) -> bool:
+    readiness_probes = browser_diagnostics.get("readiness_probes")
+    if not isinstance(readiness_probes, list):
+        return False
+    return any(
+        isinstance(probe, dict) and bool(probe.get("is_ready"))
+        for probe in readiness_probes
+    )
+
+
+def _challenge_shell_reason(acquisition_result: AcquisitionResult) -> str | None:
+    browser_diagnostics = mapping_or_empty(
+        getattr(acquisition_result, "browser_diagnostics", {})
+    )
+    browser_outcome = str(browser_diagnostics.get("browser_outcome") or "").strip().lower()
+    browser_reason = str(browser_diagnostics.get("browser_reason") or "").strip().lower()
+    if browser_outcome == "challenge_page":
+        return "challenge_shell"
+    if diagnostics_indicate_block(browser_diagnostics):
+        return "challenge_shell"
+    if browser_outcome == "low_content_shell":
+        return "challenge_shell"
+    if browser_reason.startswith("vendor-block:") and not _ready_readiness_probe_present(
+        browser_diagnostics
+    ):
+        return "challenge_shell"
+    return None
+
+
+def _apply_detail_rejection_guard(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+    *,
+    records: list[dict[str, object]],
+    selector_rules: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], str | None]:
+    if "detail" not in context.surface:
+        return records, None
+    acquisition_result = fetched.acquisition_result
+    rejection_reason = _challenge_shell_reason(acquisition_result)
+    if rejection_reason is None:
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            rejection_reason = detail_record_rejection_reason(
+                dict(record),
+                page_url=acquisition_result.final_url,
+                requested_page_url=context.url,
+            )
+            if rejection_reason:
+                break
+    if rejection_reason is None and not records:
+        rejection_reason = infer_detail_failure_reason(
+            acquisition_result.html,
+            acquisition_result.final_url,
+            context.surface,
+            list(context.requested_fields),
+            requested_page_url=context.url,
+            adapter_records=acquisition_result.adapter_records,
+            network_payloads=acquisition_result.network_payloads,
+            selector_rules=selector_rules,
+            extraction_runtime_snapshot=context.run.settings_view.extraction_runtime_snapshot(),
+        )
+    if not rejection_reason:
+        return records, None
+    _merge_browser_diagnostics(
+        acquisition_result,
+        {"failure_reason": rejection_reason},
+    )
+    if rejection_reason == "challenge_shell":
+        acquisition_result.blocked = True
+        fetched.url_metrics = build_url_metrics(
+            acquisition_result,
+            requested_fields=list(context.requested_fields),
+        )
+        fetched.url_metrics["blocked"] = True
+    fetched.url_metrics["failure_reason"] = rejection_reason
+    return [], rejection_reason
 
 def _record_detail_expansion_extraction_outcome(
     context: _URLProcessingContext,
@@ -625,6 +729,7 @@ async def _run_normalization_stage(
     extracted: _ExtractedURLStage,
 ) -> _ExtractedURLStage:
     await _enter_stage(context, STAGE_NORMALIZE)
+    acquisition_result = extracted.fetched.acquisition_result
     normalized_records: list[dict[str, object]] = []
     for index, record in enumerate(extracted.records, start=1):
         normalized_record, validation_errors = validate_record_for_surface(
@@ -640,11 +745,15 @@ async def _run_normalization_stage(
                 "Schema validation cleaned record "
                 f"{index} for {context.url}: {'; '.join(validation_errors)}",
             )
-    await _log_pipeline_event(
-        context,
-        "info",
-        f"Normalized {len(normalized_records)} record(s) for persistence",
-    )
+    if not _suppress_empty_downstream_record_logs(
+        acquisition_result,
+        normalized_records,
+    ):
+        await _log_pipeline_event(
+            context,
+            "info",
+            f"Normalized {len(normalized_records)} record(s) for persistence",
+        )
     return _ExtractedURLStage(fetched=extracted.fetched, records=normalized_records)
 
 async def _log_extraction_outcome(
@@ -1064,12 +1173,16 @@ async def _run_persistence_stage(
         blocked=_effective_blocked(acquisition_result),
         record_count=persisted_count,
     )
-    await _log_pipeline_event(
-        context,
-        "info",
-        f"Persisted {persisted_count} record(s) for {acquisition_result.final_url}",
-        commit=False,
-    )
+    if not _suppress_empty_downstream_record_logs(
+        acquisition_result,
+        extracted.records[: context.config.max_records],
+    ):
+        await _log_pipeline_event(
+            context,
+            "info",
+            f"Persisted {persisted_count} record(s) for {acquisition_result.final_url}",
+            commit=False,
+        )
     if verdict == VERDICT_EMPTY and "listing" in context.surface and persisted_count == 0:
         verdict = VERDICT_LISTING_FAILED
     return URLProcessingResult(

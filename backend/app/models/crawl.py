@@ -297,10 +297,18 @@ def _merge_run_acquisition_metrics(
     platform_family = str(url_metrics.get("platform_family") or "").strip()
     if platform_family:
         platform_families[platform_family] = as_int(platform_families.get(platform_family, 0)) + 1
+    failure_reasons = {
+        str(key): as_int(value)
+        for key, value in mapping_or_empty(current.get("failure_reasons")).items()
+    }
+    failure_reason = str(url_metrics.get("failure_reason") or "").strip()
+    if failure_reason:
+        failure_reasons[failure_reason] = as_int(failure_reasons.get(failure_reason, 0)) + 1
 
     summary = {
         "methods": methods,
         "platform_families": platform_families,
+        "failure_reasons": failure_reasons,
         "browser_attempted_urls": as_int(current.get("browser_attempted_urls", 0))
         + int(bool(url_metrics.get("browser_attempted"))),
         "browser_used_urls": as_int(current.get("browser_used_urls", 0))

@@ -108,6 +108,10 @@ BRAND_ALIAS_MAP = {
     "polo ralph lauren": "ralph lauren",
     "ralph lauren childrenswear": "ralph lauren",
     "rare too": "rare editions",
+    "skechers slip ins go walk": "skechers",
+    "skechers men s slip ins": "skechers",
+    "skechers men s max cushioning": "skechers",
+    "skechers go run consistent": "skechers",
 }
 
 BRAND_DOMAIN_MAP = {

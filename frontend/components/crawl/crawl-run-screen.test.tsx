@@ -36,7 +36,7 @@ vi.mock("../../lib/api", () => ({
 }));
 
 function terminalRun(runId: number): CrawlRun {
- return {
+  return {
  id: runId,
  user_id: 1,
  run_type:"crawl",
@@ -52,7 +52,30 @@ function terminalRun(runId: number): CrawlRun {
  created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
  updated_at: new Date("2026-04-08T10:05:00Z").toISOString(),
  completed_at: new Date("2026-04-08T10:05:00Z").toISOString(),
- };
+  };
+}
+
+function runningRun(runId: number): CrawlRun {
+  return {
+  id: runId,
+  user_id: 1,
+  run_type:"crawl",
+  url:"https://example.com/products/chair",
+  status:"running",
+  surface:"ecommerce_detail",
+  settings: {},
+  requested_fields: [],
+  result_summary: {
+  extraction_verdict:"unknown",
+  progress: 0,
+  record_count: 0,
+  current_url_index: 1,
+  total_urls: 5,
+  },
+  created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+  updated_at: new Date("2026-04-08T10:01:00Z").toISOString(),
+  completed_at: null,
+  };
 }
 
 function makeRecord(id: number): CrawlRecord {
@@ -426,6 +449,24 @@ describe("CrawlRunScreen", () => {
 
  expect(crawlStep).toHaveClass("bg-[var(--accent-subtle)]","text-accent");
  expect(completeStep).toHaveClass("bg-[var(--accent-subtle)]","text-accent");
+ });
+
+ it("uses live table totals and current URL index for status-bar records/pages when summary counts are zero", async () => {
+ apiMock.getCrawl.mockResolvedValue(runningRun(101));
+ apiMock.getRecords.mockResolvedValue({
+ items: [makeRecord(1), makeRecord(2)],
+ meta: { page: 1, limit: 100, total: 2 },
+ });
+
+ renderRunScreen();
+
+ await screen.findByText("Live Log Stream");
+ await waitFor(() => {
+ const recordsLabel = screen.getByText("Records");
+ const pagesLabel = screen.getByText("Pages");
+ expect(recordsLabel.previousElementSibling).toHaveTextContent("2");
+ expect(pagesLabel.previousElementSibling).toHaveTextContent("1");
+ });
  });
 
  it("supports progressive table loading for large result sets", async () => {

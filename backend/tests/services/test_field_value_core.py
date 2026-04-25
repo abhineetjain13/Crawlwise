@@ -3,6 +3,8 @@ from __future__ import annotations
 from app.services.field_value_core import (
     extract_currency_code,
     extract_urls,
+    infer_brand_from_product_url,
+    infer_brand_from_title_marker,
     is_title_noise,
     strip_tracking_query_params,
     validate_and_clean,
@@ -154,3 +156,20 @@ def test_extract_urls_preserves_balanced_parentheses_and_brackets() -> None:
         "https://example.com/release_(2026)",
         "https://example.com/archive/[spring]",
     ]
+
+
+def test_infer_brand_from_title_marker_keeps_leading_trademark_brand_token() -> None:
+    assert infer_brand_from_title_marker("®Nike Court Vision Low") == "®Nike"
+
+
+def test_infer_brand_from_product_url_skips_overlong_slug_and_keeps_valid_match() -> None:
+    assert (
+        infer_brand_from_product_url(
+            url=(
+                "https://example.com/acme-widget-prime/"
+                "one-two-three-four-five-six-seven-eight-nine-widget-prime"
+            ),
+            title="Widget Prime",
+        )
+        == "Acme"
+    )

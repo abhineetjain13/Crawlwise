@@ -116,6 +116,23 @@ def test_product_intelligence_infers_brand_from_source_url() -> None:
     assert snapshot["normalized_brand"] == "ralph lauren"
 
 
+def test_product_intelligence_query_uses_brand_and_currency_inferred_from_belk_slug() -> None:
+    snapshot = extract_product_snapshot(
+        {
+            "url": "https://www.belk.com/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html",
+            "title": "Checkerboard Quilt Set",
+            "price": "$22.50",
+        }
+    )
+    queries = build_search_queries(snapshot, source_domain_value="belk.com")
+
+    assert snapshot["brand"] == "Modern Southern Home"
+    assert snapshot["normalized_brand"] == "modern southern home"
+    assert snapshot["currency"] == "USD"
+    assert queries
+    assert '"modern southern home"' in queries[0]
+
+
 def test_product_intelligence_serpapi_snapshot_keeps_description() -> None:
     snapshot = extract_serpapi_snapshot(
         {
@@ -129,6 +146,22 @@ def test_product_intelligence_serpapi_snapshot_keeps_description() -> None:
 
     assert snapshot["description"] == "Garment-dyed denim with a slim straight fit."
     assert snapshot["price"] == 125.0
+    assert snapshot["currency"] == "USD"
+
+
+def test_product_intelligence_serpapi_snapshot_tries_brand_from_title_marker() -> None:
+    snapshot = extract_serpapi_snapshot(
+        {
+            "title": "Crown & Ivy™ Hydrangea Vase",
+            "snippet": "Ceramic vase for spring decor.",
+            "price": "$39.99",
+        },
+        url="https://www.belk.com/p/crown-ivy-hydrangea-vase/760161676226SPH0073IJ.html",
+        domain="belk.com",
+    )
+
+    assert snapshot["brand"] == "Crown & Ivy™"
+    assert snapshot["normalized_brand"] == "crown ivy"
     assert snapshot["currency"] == "USD"
 
 

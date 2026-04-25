@@ -4,6 +4,7 @@ import re
 from difflib import SequenceMatcher
 from urllib.parse import urlsplit
 
+from app.services.field_value_core import infer_brand_from_product_url, infer_brand_from_title_marker
 from app.services.config.product_intelligence import (
     BRAND_ALIAS_MAP,
     BRAND_DOMAIN_MAP,
@@ -51,15 +52,16 @@ def extract_product_snapshot(record: object) -> dict[str, object]:
     source_url = _first_present(data, SOURCE_URL_FIELDS)
     brand = _first_present(data, SOURCE_BRAND_FIELDS)
     title = _first_present(data, SOURCE_TITLE_FIELDS)
+    price_value = _first_present(data, SOURCE_PRICE_FIELDS)
     if not str(brand or "").strip():
-        brand = _infer_known_brand(source_url, title)
-    price = _as_float(_first_present(data, SOURCE_PRICE_FIELDS))
+        brand = _infer_brand(source_url=source_url, title=title)
+    price = _as_float(price_value)
     return {
         "title": str(title or "").strip(),
         "brand": str(brand or "").strip(),
         "normalized_brand": normalize_brand(brand),
         "price": price,
-        "currency": str(_first_present(data, SOURCE_CURRENCY_FIELDS) or "").strip(),
+        "currency": str(_first_present(data, SOURCE_CURRENCY_FIELDS) or _currency_from_price(price_value) or "").strip(),
         "image_url": str(_first_present(data, SOURCE_IMAGE_FIELDS) or "").strip(),
         "url": str(source_url or "").strip(),
         "sku": str(_first_present(data, SOURCE_SKU_FIELDS) or "").strip(),
@@ -128,10 +130,17 @@ def extract_serpapi_snapshot(
     merged = {**raw_data, **data}
     price_value = _first_present(merged, ("extracted_price", "price"))
     description = _first_present(merged, ("description", "snippet"))
+    brand = _infer_brand(
+        source_url=url,
+        title=merged.get("title"),
+        domain=domain,
+        snippet=merged.get("snippet"),
+        source=merged.get("source"),
+    )
     return {
         "title": str(merged.get("title") or "").strip(),
-        "brand": _infer_known_brand(domain, merged.get("title"), merged.get("snippet"), merged.get("source")),
-        "normalized_brand": normalize_brand(_infer_known_brand(domain, merged.get("title"), merged.get("snippet"), merged.get("source"))),
+        "brand": brand,
+        "normalized_brand": normalize_brand(brand),
         "price": _as_float(price_value),
         "currency": _currency_from_price(price_value),
         "description": str(description or "").strip(),
@@ -195,6 +204,23 @@ def _first_present(data: dict[str, object], fields: tuple[str, ...]) -> object:
 
 def _normalize_text(value: object) -> str:
     return " ".join(str(value or "").casefold().split())
+
+
+def _infer_brand(
+    *,
+    source_url: object,
+    title: object,
+    domain: object = "",
+    snippet: object = "",
+    source: object = "",
+) -> str:
+    known_brand = _infer_known_brand(domain, source_url, title, snippet, source)
+    if known_brand:
+        return known_brand
+    marker_brand = infer_brand_from_title_marker(title)
+    if marker_brand:
+        return marker_brand
+    return infer_brand_from_product_url(url=str(source_url or ""), title=title) or ""
 
 
 def _infer_known_brand(*values: object) -> str:

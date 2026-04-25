@@ -24,10 +24,19 @@ from app.services.config.extraction_rules import (
     BELK_TITLE_MAX_CHARS,
     BELK_TITLE_MIN_CHARS,
     BELK_TITLE_SELECTORS,
+    LISTING_BRAND_MAX_WORDS,
     LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_UTILITY_TITLE_TOKENS,
 )
-from app.services.field_value_core import absolute_url, clean_text, extract_price_text, finalize_record, text_or_none
+from app.services.field_value_core import (
+    absolute_url,
+    clean_text,
+    coerce_field_value,
+    extract_price_text,
+    finalize_record,
+    infer_brand_from_product_url,
+    infer_brand_from_title_marker,
+)
 from app.services.js_state_helpers import compact_dict, normalize_price
 from app.services.structured_sources import harvest_js_state_objects
 
@@ -56,11 +65,20 @@ def _extract_listing_records(page_url: str, html: str) -> list[dict[str, Any]]:
     state_index = _state_product_index(page_url, html)
     records: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    state_by_identity = {
+        identity: record
+        for record in state_index.values()
+        if (identity := _belk_record_identity(record))
+    }
     for record in _dom_listing_records(page_url, html):
         url = str(record.get("url") or "")
         if not url or url in seen_urls:
             continue
         state_record = state_index.get(url)
+        if state_record is None:
+            identity = _belk_record_identity(record)
+            if identity:
+                state_record = state_by_identity.get(identity)
         if state_record:
             merged = dict(state_record)
             merged.update({key: value for key, value in record.items() if value not in (None, "", [], {})})
@@ -134,27 +152,49 @@ def _walk_product_payloads(value: object) -> list[dict[str, Any]]:
 
 def _looks_like_product_payload(payload: dict[str, Any]) -> bool:
     return bool(
-        _first_text(payload, BELK_PRODUCT_TITLE_KEYS)
-        and _first_text(payload, BELK_PRODUCT_URL_KEYS)
+        _first_payload_field(payload, field_name="title", page_url="", keys=BELK_PRODUCT_TITLE_KEYS)
+        and _first_payload_field(payload, field_name="url", page_url="", keys=BELK_PRODUCT_URL_KEYS)
         and (
-            _first_text(payload, BELK_PRODUCT_BRAND_KEYS)
-            or _first_text(payload, BELK_PRODUCT_PRICE_KEYS)
-            or _first_text(payload, BELK_PRODUCT_IMAGE_KEYS)
+            _first_payload_field(payload, field_name="brand", page_url="", keys=BELK_PRODUCT_BRAND_KEYS)
+            or _first_payload_field(payload, field_name="price", page_url="", keys=BELK_PRODUCT_PRICE_KEYS)
+            or _first_payload_field(payload, field_name="image_url", page_url="", keys=BELK_PRODUCT_IMAGE_KEYS)
         )
     )
 
 
 def _record_from_payload(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
-    image = _first_text(product, BELK_PRODUCT_IMAGE_KEYS)
+    title = _first_payload_field(product, field_name="title", page_url=page_url, keys=BELK_PRODUCT_TITLE_KEYS)
+    brand = _first_payload_field(product, field_name="brand", page_url=page_url, keys=BELK_PRODUCT_BRAND_KEYS)
+    price_value = _first_payload_field(product, field_name="price", page_url=page_url, keys=BELK_PRODUCT_PRICE_KEYS)
+    original_price_value = _first_payload_field(
+        product,
+        field_name="original_price",
+        page_url=page_url,
+        keys=BELK_PRODUCT_ORIGINAL_PRICE_KEYS,
+    )
+    image = _first_payload_field(product, field_name="image_url", page_url=page_url, keys=BELK_PRODUCT_IMAGE_KEYS)
+    url = _first_payload_field(product, field_name="url", page_url=page_url, keys=BELK_PRODUCT_URL_KEYS)
+    if brand in (None, "", [], {}):
+        brand = _infer_belk_brand_from_url(url=str(url or ""), title=title)
+    currency = coerce_field_value("currency", product, page_url)
+    if currency in (None, "", [], {}):
+        for key in (*BELK_PRODUCT_PRICE_KEYS, *BELK_PRODUCT_ORIGINAL_PRICE_KEYS):
+            nested_value = product.get(key)
+            if not isinstance(nested_value, dict):
+                continue
+            currency = coerce_field_value("currency", nested_value, page_url)
+            if currency not in (None, "", [], {}):
+                break
     return compact_dict(
         {
-            "title": _first_text(product, BELK_PRODUCT_TITLE_KEYS),
-            "brand": _first_text(product, BELK_PRODUCT_BRAND_KEYS),
-            "price": normalize_price(_first_text(product, BELK_PRODUCT_PRICE_KEYS), interpret_integral_as_cents=False),
-            "original_price": normalize_price(_first_text(product, BELK_PRODUCT_ORIGINAL_PRICE_KEYS), interpret_integral_as_cents=False),
-            "image_url": absolute_url(page_url, image) if image else None,
-            "product_id": _first_text(product, BELK_PRODUCT_ID_KEYS),
-            "url": absolute_url(page_url, _first_text(product, BELK_PRODUCT_URL_KEYS)),
+            "title": title,
+            "brand": brand,
+            "price": normalize_price(price_value, interpret_integral_as_cents=False),
+            "original_price": normalize_price(original_price_value, interpret_integral_as_cents=False),
+            "currency": currency,
+            "image_url": image,
+            "product_id": _first_payload_field(product, field_name="product_id", page_url=page_url, keys=BELK_PRODUCT_ID_KEYS),
+            "url": url,
         }
     )
 
@@ -209,11 +249,8 @@ def _record_from_card(node: Any, *, page_url: str) -> dict[str, Any]:
     url = absolute_url(page_url, href)
     brand = (
         _first_selector_text(node, BELK_BRAND_SELECTORS)
-        or _infer_brand_from_title_marker(title)
-        or _infer_brand_from_url_slug(
-            url=url,
-            title=title,
-        )
+        or infer_brand_from_title_marker(title)
+        or _infer_belk_brand_from_url(url=url, title=title)
     )
     return compact_dict(
         {
@@ -238,12 +275,88 @@ def _finalize_adapter_record(record: dict[str, Any], *, surface: str) -> dict[st
     return finalize_record(shaped, surface=surface)
 
 
-def _first_text(payload: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+def _first_payload_field(
+    payload: dict[str, Any],
+    *,
+    field_name: str,
+    page_url: str,
+    keys: tuple[str, ...],
+) -> str | None:
     for key in keys:
-        value = text_or_none(payload.get(key))
+        value = coerce_field_value(field_name, payload.get(key), page_url)
         if value:
-            return value
+            return str(value)
     return None
+
+
+def _infer_belk_brand_from_url(*, url: str, title: object) -> str | None:
+    return infer_brand_from_product_url(url=url, title=title) or _infer_belk_brand_from_slug_prefix(
+        url=url,
+        title=title,
+    )
+
+
+def _infer_belk_brand_from_slug_prefix(*, url: str, title: object) -> str | None:
+    title_tokens = _belk_slug_tokens(title)
+    if len(title_tokens) < 2:
+        return None
+    path_parts = [
+        part.split(".", 1)[0]
+        for part in (urlparse(str(url or "")).path or "").split("/")
+        if part
+    ]
+    slug = ""
+    for index, part in enumerate(path_parts):
+        if part.lower() == "p" and index + 1 < len(path_parts):
+            slug = path_parts[index + 1]
+            break
+    if not slug and path_parts:
+        slug = path_parts[-1]
+    path_tokens = _belk_slug_tokens(slug)
+    if len(path_tokens) < 2:
+        return None
+    min_match = min(3, len(title_tokens))
+    for start in range(1, len(path_tokens)):
+        if path_tokens[start] != title_tokens[0]:
+            continue
+        matched = 0
+        while (
+            matched < len(title_tokens)
+            and start + matched < len(path_tokens)
+            and path_tokens[start + matched] == title_tokens[matched]
+        ):
+            matched += 1
+        if matched < min_match:
+            continue
+        brand_tokens = path_tokens[:start]
+        if not brand_tokens or len(brand_tokens) > LISTING_BRAND_MAX_WORDS:
+            continue
+        return " ".join(token.capitalize() for token in brand_tokens)
+    return None
+
+
+def _belk_slug_tokens(value: object) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
+        if token
+    ]
+
+
+def _belk_record_identity(record: dict[str, Any]) -> str:
+    product_id = clean_text(record.get("product_id") or record.get("productId") or record.get("sku"))
+    if product_id:
+        return product_id.lower()
+    return _belk_identity_from_url(str(record.get("url") or ""))
+
+
+def _belk_identity_from_url(url: str) -> str:
+    path = urlparse(str(url or "")).path
+    match = re.search(r"/([^/?#]+)/?$", path)
+    segment = str(match.group(1) if match is not None else "").strip().lower()
+    if not segment:
+        return ""
+    return re.sub(r"\.(?:html?|php|aspx?)$", "", segment)
 
 
 def _first_node_attr(node: Any, attrs: tuple[str, ...]) -> str | None:
@@ -290,51 +403,6 @@ def _valid_belk_title(value: object) -> bool:
     if any(re.search(pattern, lowered, flags=re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS):
         return False
     return not any(token in lowered for token in LISTING_UTILITY_TITLE_TOKENS)
-
-
-def _infer_brand_from_url_slug(*, url: str, title: object) -> str | None:
-    title_tokens = _slug_tokens(title)
-    if len(title_tokens) < 2:
-        return None
-    path_parts = [part for part in (urlparse(str(url or "")).path or "").split("/") if part]
-    if len(path_parts) < 2 or path_parts[0].lower() != "p":
-        return None
-    slug_tokens = _slug_tokens(path_parts[1])
-    if len(slug_tokens) <= len(title_tokens):
-        return None
-    for start in range(1, len(slug_tokens) - len(title_tokens) + 1):
-        if slug_tokens[start : start + len(title_tokens)] != title_tokens:
-            continue
-        brand_tokens = slug_tokens[:start]
-        if len(brand_tokens) > 5:
-            return None
-        return " ".join(token.capitalize() for token in brand_tokens)
-    return None
-
-
-def _infer_brand_from_title_marker(title: object) -> str | None:
-    text = clean_text(title)
-    if not text:
-        return None
-    marker_positions = [
-        index
-        for marker in ("\u2122", "\u00ae")
-        if (index := text.find(marker)) > 0
-    ]
-    if not marker_positions:
-        return None
-    brand = clean_text(text[: min(marker_positions) + 1])
-    if not brand or len(_slug_tokens(brand)) > 6:
-        return None
-    return brand
-
-
-def _slug_tokens(value: object) -> list[str]:
-    return [
-        token
-        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
-        if token
-    ]
 
 
 def _first_selector_attr(node: Any, selectors: tuple[str, ...], attrs: tuple[str, ...]) -> str | None:

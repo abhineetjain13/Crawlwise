@@ -118,6 +118,137 @@ async def test_process_run_marks_empty_listing_as_listing_detection_failed(
 
 
 @pytest.mark.asyncio
+async def test_process_run_tracks_failure_reason_counts(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "urls": [
+                    "https://example.com/search?q=widget",
+                    "https://example.com/products/widget-prime",
+                ],
+            },
+        },
+    )
+
+    async def _fake_process_single_url(*args, **kwargs):
+        url = str(kwargs.get("url") or "")
+        if "search" in url:
+            return (
+                [],
+                "empty",
+                {"record_count": 0, "failure_reason": "non_detail_seed"},
+            )
+        return (
+            [],
+            "blocked",
+            {"record_count": 0, "failure_reason": "challenge_shell"},
+        )
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.process_single_url",
+        _fake_process_single_url,
+    )
+
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
+
+    assert run.result_summary["acquisition_summary"]["failure_reasons"] == {
+        "non_detail_seed": 1,
+        "challenge_shell": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_process_run_aggregates_quality_summary_from_url_metrics(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "urls": [
+                    "https://example.com/products/widget-prime",
+                    "https://example.com/products/widget-lite",
+                ],
+            },
+        },
+    )
+
+    async def _fake_process_single_url(*args, **kwargs):
+        url = str(kwargs.get("url") or "")
+        if "lite" in url:
+            return (
+                [],
+                "partial",
+                {
+                    "record_count": 0,
+                    "quality_summary": {
+                        "score": 0.4,
+                        "level": "low",
+                        "requested_fields_total": 4,
+                        "requested_fields_found_best": 2,
+                        "variant_completeness": {
+                            "applicable": True,
+                            "complete": False,
+                        },
+                    },
+                },
+            )
+        return (
+            [],
+            "success",
+            {
+                "record_count": 0,
+                "quality_summary": {
+                    "score": 0.9,
+                    "level": "high",
+                    "requested_fields_total": 4,
+                    "requested_fields_found_best": 4,
+                    "variant_completeness": {
+                        "applicable": True,
+                        "complete": True,
+                    },
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.process_single_url",
+        _fake_process_single_url,
+    )
+
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
+
+    assert run.result_summary["quality_summary"] == {
+        "level": "medium",
+        "score": 0.65,
+        "scored_urls": 2,
+        "level_counts": {
+            "high": 1,
+            "low": 1,
+        },
+        "listing_incomplete_urls": 0,
+        "variant_incomplete_urls": 1,
+        "requested_fields_total": 4,
+        "requested_fields_found_best": 4,
+    }
+
+
+@pytest.mark.asyncio
 async def test_process_run_blocks_disallowed_url_before_acquire(
     db_session: AsyncSession,
     test_user,

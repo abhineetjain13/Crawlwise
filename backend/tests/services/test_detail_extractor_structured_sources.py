@@ -117,6 +117,39 @@ def test_extract_ecommerce_detail_keeps_page_url_when_opengraph_url_is_site_root
     assert record["_source"] == "opengraph"
 
 
+def test_extract_ecommerce_detail_ignores_placeholder_same_site_json_ld_url() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Biltmore Egyptian Collection Medium/Firm Support Pillow, White, King, Cotton",
+          "url": "https://www.joinhoney.com/shop/undefined/p/undefined/",
+          "priceCurrency": "USD"
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Biltmore Egyptian Collection Medium/Firm Support Pillow, White, King, Cotton</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.joinhoney.com/it/shop/belk/p/7367171691114074156_8bce8b8cc8892988fb42b26670ceaa09_7121c9215dcc3274f45b6a172cf8e8a8",
+        "ecommerce_detail",
+        max_records=1,
+        requested_page_url="https://www.joinhoney.com/it/shop/belk/p/7367171691114074156_8bce8b8cc8892988fb42b26670ceaa09_7121c9215dcc3274f45b6a172cf8e8a8",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Biltmore Egyptian Collection Medium/Firm Support Pillow, White, King, Cotton"
+    assert rows[0]["url"] == "https://www.joinhoney.com/it/shop/belk/p/7367171691114074156_8bce8b8cc8892988fb42b26670ceaa09_7121c9215dcc3274f45b6a172cf8e8a8"
+
+
 def test_extract_ecommerce_detail_ignores_review_json_ld_title_description_and_images() -> None:
     html = """
     <html>
@@ -160,6 +193,56 @@ def test_extract_ecommerce_detail_ignores_review_json_ld_title_description_and_i
     assert record["title"] == "Commuter Backpack"
     assert record["description"] == "Weather resistant pack for daily commuting."
     assert record["image_url"] == "https://example.com/images/product.jpg"
+
+
+def test_extract_ecommerce_detail_ignores_nested_person_name_inside_product_json_ld() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Skechers Max Cushioning Elite",
+          "brand": {
+            "@type": "Brand",
+            "name": "Skechers"
+          },
+          "manufacturer": {
+            "@type": "Organization",
+            "name": "Skechers",
+            "founder": {
+              "@type": "Person",
+              "name": "Robert Greenberg"
+            }
+          },
+          "offers": {
+            "@type": "Offer",
+            "priceCurrency": "USD",
+            "price": "130.00",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Skechers Max Cushioning Elite</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.skechers.com/max-cushioning-elite/220000.html",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Skechers Max Cushioning Elite"
+    assert record["brand"] == "Skechers"
+    assert "Robert Greenberg" not in record.values()
 
 
 def test_extract_ecommerce_detail_ignores_noisy_h1_and_uses_page_title() -> None:
@@ -540,6 +623,98 @@ def test_extract_ecommerce_detail_backfills_visible_display_price() -> None:
     assert len(rows) == 1
     assert rows[0]["price"] == "42.00"
     assert rows[0]["original_price"] == "60.00"
+
+
+def test_extract_ecommerce_detail_drops_low_signal_zero_display_price() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Classic Straight Jeans",
+          "brand": {"@type": "Brand", "name": "Acme Denim"},
+          "image": "https://example.com/jeans.jpg",
+          "description": "Everyday jeans."
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Classic Straight Jeans</h1>
+        <div data-component-id="display-price">
+          <span aria-label="current price $0.00">$0.00</span>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/classic-straight-jeans",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "price" not in record
+
+
+def test_extract_ecommerce_detail_keeps_structured_zero_price_with_authoritative_offer() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Starter Guide Download",
+          "sku": "GUIDE-001",
+          "brand": {"@type": "Brand", "name": "Acme"},
+          "offers": {
+            "@type": "Offer",
+            "priceCurrency": "USD",
+            "price": "0.00",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Starter Guide Download</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/starter-guide-download",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["price"] == "0.00"
+    assert record["currency"] == "USD"
+    assert record["_source"] == "json_ld"
+
+
+def test_extract_ecommerce_detail_keeps_raw_json_zero_price() -> None:
+    rows = extract_records(
+        '{"title":"Free Sample","price":"0.00","currency":"USD","url":"https://example.com/products/free-sample"}',
+        "https://example.com/products/free-sample",
+        "ecommerce_detail",
+        max_records=5,
+        content_type="application/json",
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["price"] == "0.00"
+    assert record["currency"] == "USD"
+    assert record["_source"] == "raw_json"
 
 
 def test_extract_ecommerce_detail_rejects_collection_url_with_visible_tile_prices() -> None:
@@ -1059,6 +1234,47 @@ def test_extract_ecommerce_detail_ignores_review_qa_controls_and_payment_icons()
     assert "option1_name" not in record
     assert "variant_axes" not in record
     assert "variants" not in record
+
+
+def test_extract_ecommerce_detail_ignores_sort_filter_and_availability_controls_as_variants() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Performance Crew Socks</h1>
+          <div class="price">$18.00</div>
+          <label for="sort-by">Sort By</label>
+          <select id="sort-by">
+            <option>Featured</option>
+            <option>Newest</option>
+          </select>
+          <label for="filter-by">Filter By</label>
+          <select id="filter-by">
+            <option>All Reviews</option>
+            <option>Most Helpful</option>
+          </select>
+          <fieldset>
+            <legend>Availability</legend>
+            <label><input type="checkbox" checked> In Stock</label>
+            <label><input type="checkbox"> Out of Stock</label>
+          </fieldset>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/performance-crew-socks",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "variant_axes" not in record
+    assert "variants" not in record
+    assert "selected_variant" not in record
 
 
 def test_extract_ecommerce_detail_does_not_treat_etsy_report_radios_as_variants() -> None:
@@ -1631,6 +1847,39 @@ def test_extract_automobile_detail_ignores_irrelevant_video_json_ld_when_dom_tit
     assert record["title"] == "Abarth 500e 42kWh Turismo Auto 3dr"
     assert record["url"] == "https://www.autotrader.co.uk/cars/leasing/product/202402287036788"
     assert record["_source"] == "dom_h1"
+
+
+def test_extract_automobile_detail_accepts_vehicle_json_ld_title_and_image() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Vehicle",
+          "name": "Roadster GT",
+          "image": "https://example.com/roadster.jpg",
+          "url": "https://example.com/cars/roadster-gt"
+        }
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/cars/roadster-gt",
+        "automobile_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Roadster GT"
+    assert record["image_url"] == "https://example.com/roadster.jpg"
+    assert record["url"] == "https://example.com/cars/roadster-gt"
+    assert record["_source"] == "json_ld"
 
 
 def test_extract_ecommerce_detail_allows_dom_variants_to_fill_weak_js_state_variants() -> None:

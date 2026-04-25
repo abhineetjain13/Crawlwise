@@ -15,6 +15,7 @@ from app.services.config.extraction_rules import (
     CURRENCY_SYMBOL_MAP,
     LISTING_ACTION_NOISE_PATTERNS,
     LISTING_ALT_TEXT_TITLE_PATTERN,
+    LISTING_BRAND_MAX_WORDS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_MERCHANDISING_TITLE_PREFIXES,
     LISTING_NAVIGATION_TITLE_HINTS,
@@ -186,6 +187,61 @@ def strip_html_tags(value: object) -> str:
 def text_or_none(value: object) -> str | None:
     text = clean_text(value)
     return text or None
+
+
+def slug_tokens(value: object) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
+        if token
+    ]
+
+
+def infer_brand_from_title_marker(title: object) -> str | None:
+    text = clean_text(title)
+    if not text:
+        return None
+    leading_marker = next((marker for marker in ("\u2122", "\u00ae") if text.startswith(marker)), "")
+    if leading_marker:
+        leading_token = clean_text(text[len(leading_marker) :]).split(" ", 1)[0].strip()
+        brand = clean_text(f"{leading_marker}{leading_token}") if leading_token else ""
+        if not brand or len(slug_tokens(brand)) > LISTING_BRAND_MAX_WORDS:
+            return None
+        return brand
+    marker_positions = [
+        index
+        for marker in ("\u2122", "\u00ae")
+        if (index := text.find(marker)) >= 0
+    ]
+    if not marker_positions:
+        return None
+    brand = clean_text(text[: min(marker_positions) + 1])
+    if not brand or len(slug_tokens(brand)) > LISTING_BRAND_MAX_WORDS:
+        return None
+    return brand
+
+
+def infer_brand_from_product_url(*, url: str, title: object) -> str | None:
+    title_parts = slug_tokens(title)
+    if len(title_parts) < 2:
+        return None
+    path_parts = [
+        part.split(".", 1)[0]
+        for part in (urlparse(str(url or "")).path or "").split("/")
+        if part
+    ]
+    for path_part in reversed(path_parts):
+        path_tokens = slug_tokens(path_part)
+        if len(path_tokens) <= len(title_parts):
+            continue
+        for start in range(1, len(path_tokens) - len(title_parts) + 1):
+            if path_tokens[start : start + len(title_parts)] != title_parts:
+                continue
+            brand_tokens = path_tokens[:start]
+            if not brand_tokens or len(brand_tokens) > LISTING_BRAND_MAX_WORDS:
+                continue
+            return " ".join(token.capitalize() for token in brand_tokens)
+    return None
 
 
 def absolute_url(base_url: str, candidate: object) -> str:
@@ -791,7 +847,11 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             "amount",
             "value",
             "currentValue",
+            "lowPrice",
+            "minPrice",
             "minValue",
+            "highPrice",
+            "maxPrice",
             "maxValue",
             "displayPrice",
             "formattedPrice",

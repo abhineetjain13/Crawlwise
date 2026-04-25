@@ -17,6 +17,7 @@ from app.services.config.field_mappings import (
     VARIANT_DOM_FIELD_NAMES,
 )
 from app.services.config.extraction_rules import (
+    CANDIDATE_PLACEHOLDER_VALUES,
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
     DETAIL_COLLECTION_PATH_TOKENS,
@@ -24,6 +25,7 @@ from app.services.config.extraction_rules import (
     DETAIL_NON_PAGE_FILE_EXTENSIONS,
     DETAIL_ORIGINAL_PRICE_SELECTORS,
     DETAIL_PRODUCT_PATH_TOKENS,
+    DETAIL_SEARCH_QUERY_KEYS,
     DETAIL_UTILITY_PATH_TOKENS,
     DETAIL_TITLE_SOURCE_RANKS,
     LISTING_ALT_TEXT_TITLE_PATTERN,
@@ -113,6 +115,14 @@ _VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
     for pattern in VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS
     if str(pattern).strip()
 )
+_LOW_SIGNAL_ZERO_PRICE_SOURCES = frozenset(
+    {
+        "dom_selector",
+        "dom_sections",
+        "dom_text",
+        "selector_rule",
+    }
+)
 _LOW_SIGNAL_LONG_TEXT_VALUES = frozenset(
     {
         "description",
@@ -168,6 +178,13 @@ _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(r"\bpage not found\b", re.I),
     re.compile(r"\bnot found\b", re.I),
     re.compile(r"\baccess denied\b", re.I),
+)
+_DETAIL_URL_PLACEHOLDER_SEGMENTS = frozenset(
+    {
+        str(value).strip().lower()
+        for value in tuple(CANDIDATE_PLACEHOLDER_VALUES or ())
+        if str(value).strip()
+    }
 )
 
 
@@ -561,6 +578,13 @@ def _detail_url_candidate_is_low_signal(candidate_url: object, *, page_url: str)
     page_path = str(page_parsed.path or "").strip()
     if any(candidate_path.lower().endswith(ext) for ext in DETAIL_NON_PAGE_FILE_EXTENSIONS):
         return True
+    candidate_segments = {
+        segment.strip().lower()
+        for segment in candidate_path.split("/")
+        if segment.strip()
+    }
+    if candidate_segments & _DETAIL_URL_PLACEHOLDER_SEGMENTS:
+        return True
     if same_site(page_url, candidate) and _detail_url_is_utility(candidate):
         return True
     return page_path not in {"", "/"} and candidate_path in {"", "/"}
@@ -622,7 +646,16 @@ def _detail_url_is_utility(url: str) -> bool:
         for token in re.split(r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower())
         if token
     }
-    return any(token in path_tokens for token in DETAIL_UTILITY_PATH_TOKENS)
+    if any(token in path_tokens for token in DETAIL_UTILITY_PATH_TOKENS):
+        return True
+    query_keys = {
+        str(key).strip().lower()
+        for key, value in parse_qsl(str(urlparse(url).query or ""), keep_blank_values=False)
+        if str(key).strip() and str(value).strip()
+    }
+    if not query_keys:
+        return False
+    return any(str(key).strip().lower() in query_keys for key in DETAIL_SEARCH_QUERY_KEYS)
 
 def _detail_url_is_collection_like(url: str) -> bool:
     path_tokens = {
@@ -921,6 +954,7 @@ def _materialize_record(
         record["_selector_traces"] = selected_selector_traces
     record["_source"] = _primary_source_for_record(record, selected_field_sources)
     _normalize_variant_record(record)
+    drop_low_signal_zero_detail_price(record)
     _dedupe_primary_and_additional_images(record)
     confidence = score_record_confidence(
         record,
@@ -946,6 +980,110 @@ def _normalize_variant_record(record: dict[str, Any]) -> None:
     _prune_duplicate_variant_axis_fields(record)
     _prune_redundant_size_option_summary(record)
     _backfill_variant_prices_from_record(record)
+
+
+def _price_value_is_zero(value: object) -> bool:
+    text = text_or_none(value)
+    if not text:
+        return False
+    normalized = normalize_decimal_price(
+        text,
+        interpret_integral_as_cents=False,
+    )
+    if not normalized:
+        return False
+    return _coerce_float(normalized, default=1.0) == 0.0
+
+
+def _price_value_is_positive(value: object) -> bool:
+    text = text_or_none(value)
+    if not text:
+        return False
+    normalized = normalize_decimal_price(
+        text,
+        interpret_integral_as_cents=False,
+    )
+    if not normalized:
+        return False
+    return _coerce_float(normalized, default=0.0) > 0.0
+
+
+def _record_field_sources(record: dict[str, Any], field_name: str) -> set[str]:
+    field_sources = _object_dict(record.get("_field_sources"))
+    return {
+        str(source).strip()
+        for source in _object_list(field_sources.get(field_name))
+        if str(source).strip()
+    }
+
+
+def _append_record_field_source(
+    record: dict[str, Any],
+    field_name: str,
+    source: str,
+) -> None:
+    normalized_source = str(source).strip()
+    if not normalized_source:
+        return
+    field_sources = record.setdefault("_field_sources", {})
+    if not isinstance(field_sources, dict):
+        return
+    source_bucket = field_sources.setdefault(field_name, [])
+    if not isinstance(source_bucket, list):
+        return
+    if normalized_source not in source_bucket:
+        source_bucket.append(normalized_source)
+
+
+def _detail_record_has_positive_price_corroboration(record: dict[str, Any]) -> bool:
+    if _price_value_is_positive(record.get("original_price")):
+        return True
+    selected_variant = record.get("selected_variant")
+    if isinstance(selected_variant, dict) and any(
+        _price_value_is_positive(selected_variant.get(field_name))
+        for field_name in ("price", "original_price")
+    ):
+        return True
+    variants = record.get("variants")
+    if not isinstance(variants, list):
+        return False
+    return any(
+        isinstance(variant, dict)
+        and any(
+            _price_value_is_positive(variant.get(field_name))
+            for field_name in ("price", "original_price")
+        )
+        for variant in variants
+    )
+
+
+def drop_low_signal_zero_detail_price(record: dict[str, Any]) -> None:
+    if not _price_value_is_zero(record.get("price")):
+        return
+    price_sources = _record_field_sources(record, "price")
+    if not price_sources:
+        return
+    if not price_sources <= _LOW_SIGNAL_ZERO_PRICE_SOURCES:
+        return
+    if _detail_record_has_positive_price_corroboration(record):
+        return
+    record.pop("price", None)
+    selected_variant = record.get("selected_variant")
+    if isinstance(selected_variant, dict) and _price_value_is_zero(selected_variant.get("price")):
+        selected_variant.pop("price", None)
+        selected_variant.pop("currency", None)
+    variants = record.get("variants")
+    if isinstance(variants, list):
+        for variant in variants:
+            if not isinstance(variant, dict) or not _price_value_is_zero(variant.get("price")):
+                continue
+            variant.pop("price", None)
+            variant.pop("currency", None)
+    currency_sources = _record_field_sources(record, "currency")
+    if (not currency_sources or currency_sources <= _LOW_SIGNAL_ZERO_PRICE_SOURCES) and record.get(
+        "original_price"
+    ) in (None, "", [], {}):
+        record.pop("currency", None)
 
 
 def _apply_variant_axis_label_aliases(record: dict[str, Any]) -> None:
@@ -2647,6 +2785,12 @@ def build_detail_record(
             page_url=page_url,
             js_state_objects=js_state_objects,
         )
+        drop_low_signal_zero_detail_price(record)
+        record["_confidence"] = score_record_confidence(
+            record,
+            surface=surface,
+            requested_fields=requested_fields,
+        )
         record["_extraction_tiers"]["early_exit"] = "js_state"
         return record
 
@@ -2695,6 +2839,55 @@ def build_detail_record(
     )
     record["_extraction_tiers"]["early_exit"] = None
     return record
+
+
+def detail_record_rejection_reason(
+    record: dict[str, Any],
+    *,
+    page_url: str,
+    requested_page_url: str | None = None,
+) -> str | None:
+    if _detail_redirect_identity_is_mismatched(
+        record,
+        page_url=page_url,
+        requested_page_url=requested_page_url,
+    ):
+        return "detail_identity_mismatch"
+    if _looks_like_site_shell_record(record, page_url=page_url):
+        return "non_detail_seed"
+    return None
+
+
+def infer_detail_failure_reason(
+    html: str,
+    page_url: str,
+    surface: str,
+    requested_fields: list[str] | None,
+    *,
+    requested_page_url: str | None = None,
+    adapter_records: list[dict[str, Any]] | None = None,
+    network_payloads: list[dict[str, object]] | None = None,
+    selector_rules: list[dict[str, object]] | None = None,
+    extraction_runtime_snapshot: dict[str, object] | None = None,
+) -> str | None:
+    if "detail" not in str(surface or "").strip().lower():
+        return None
+    record = build_detail_record(
+        html,
+        page_url,
+        surface,
+        requested_fields,
+        requested_page_url=requested_page_url,
+        adapter_records=adapter_records,
+        network_payloads=network_payloads,
+        selector_rules=selector_rules,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+    )
+    return detail_record_rejection_reason(
+        record,
+        page_url=page_url,
+        requested_page_url=requested_page_url,
+    )
 
 def extract_detail_records(
     html: str,
@@ -2749,11 +2942,13 @@ def _backfill_detail_price_from_html(record: dict[str, Any], *, html: str) -> No
     currency = text_or_none(record.get("currency")) or _detail_currency_from_html(soup)
     if currency and record.get("currency") in (None, "", [], {}):
         record["currency"] = currency
+        _append_record_field_source(record, "currency", "dom_text")
     price = _detail_price_from_html(soup, currency=currency)
     if price in (None, "", [], {}):
         return
     if record.get("price") in (None, "", [], {}):
         record["price"] = price
+        _append_record_field_source(record, "price", "dom_text")
     if isinstance(selected_variant, dict) and selected_variant.get("price") in (None, "", [], {}):
         selected_variant["price"] = price
         if currency and selected_variant.get("currency") in (None, "", [], {}):
@@ -2766,6 +2961,7 @@ def _backfill_detail_price_from_html(record: dict[str, Any], *, html: str) -> No
         {},
     ):
         record["original_price"] = original_price
+        _append_record_field_source(record, "original_price", "dom_text")
     if (
         isinstance(selected_variant, dict)
         and original_price not in (None, "", [], {})

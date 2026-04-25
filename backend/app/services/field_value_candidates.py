@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from app.services.config.extraction_rules import (
+    DETAIL_IRRELEVANT_JSON_LD_TYPES,
     INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS,
     INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS,
 )
@@ -264,7 +265,33 @@ def _structured_alias_allowed(
 ) -> bool:
     if canonical == "sku" and normalized_key == "id" and _is_product_attribute_row(payload):
         return False
+    payload_types = _structured_payload_types(payload)
+    raw_types = payload.get("@type")
+    if not payload_types:
+        return raw_types in (None, "", [], {})
+    if canonical in {"title", "description", "image_url", "additional_images", "url"} and (
+        payload_types & {"brand", "review", "reviewrating"}
+    ):
+        return False
+    if canonical == "brand" and "person" in payload_types:
+        return False
     return True
+
+
+def _structured_payload_types(payload: dict[str, object]) -> set[str]:
+    raw_types = payload.get("@type")
+    normalized_types = {
+        str(item or "").strip().lower()
+        for item in (raw_types if isinstance(raw_types, list) else [raw_types])
+        if str(item or "").strip()
+    }
+    irrelevant_types = {
+        str(value).strip().lower()
+        for value in DETAIL_IRRELEVANT_JSON_LD_TYPES
+    }
+    if normalized_types and normalized_types <= irrelevant_types:
+        return set()
+    return normalized_types
 
 
 def collect_structured_candidates(

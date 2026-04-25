@@ -189,6 +189,9 @@ def test_variant_axis_name_is_semantic_accepts_non_generic_axis_labels() -> None
     assert variant_axis_name_is_semantic("shoe width") is True
     assert variant_axis_name_is_semantic("variant option") is False
     assert variant_axis_name_is_semantic("Language Translate Widget") is False
+    assert variant_axis_name_is_semantic("Sort By") is False
+    assert variant_axis_name_is_semantic("Filter By") is False
+    assert variant_axis_name_is_semantic("Availability") is False
 
 
 def test_resolve_variant_group_name_infers_unlabeled_select_size_axis_from_values() -> None:

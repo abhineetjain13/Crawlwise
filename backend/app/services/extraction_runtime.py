@@ -10,9 +10,21 @@ from defusedxml import ElementTree as ET  # type: ignore[import-untyped]
 
 from app.services.acquisition.runtime import classify_blocked_page
 from app.services.config.block_signatures import BLOCK_SIGNATURES
+from app.services.config.extraction_rules import (
+    LISTING_NETWORK_BACKFILL_FIELDS,
+    LISTING_NETWORK_BRAND_CANDIDATE_KEYS,
+    LISTING_NETWORK_DIRECT_PRICE_KEYS,
+    LISTING_NETWORK_FALLBACK_PRICE_KEYS,
+    LISTING_NETWORK_ID_KEYS,
+    LISTING_NETWORK_PRICE_BUCKETS,
+    LISTING_NETWORK_PRICE_CANDIDATE_KEYS,
+    LISTING_NETWORK_PRIMARY_PRICE_KEYS,
+    LISTING_NETWORK_TITLE_KEYS,
+)
 from app.services.detail_extractor import (
     _backfill_detail_price_from_html,
     _normalize_variant_record,
+    drop_low_signal_zero_detail_price,
     extract_detail_records,
 )
 from app.services.field_value_core import (
@@ -56,8 +68,6 @@ _JSON_LIST_KEYS = (
     "records",
     "results",
 )
-
-
 def extract_records(
     html: str,
     page_url: str,
@@ -248,6 +258,7 @@ def _postprocess_detail_records(
             continue
         _normalize_variant_record(record)
         _backfill_detail_price_from_html(record, html=html)
+        drop_low_signal_zero_detail_price(record)
         rows.append(record)
     return rows
 
@@ -259,31 +270,37 @@ def _backfill_listing_rows_from_network(
 ) -> list[dict]:
     if not rows or not network_payloads:
         return rows
-    prices_by_id, prices_by_title = _listing_network_price_maps(network_payloads)
-    if not prices_by_id and not prices_by_title:
+    fields_by_id, fields_by_title = _listing_network_backfill_maps(network_payloads)
+    if not fields_by_id and not fields_by_title:
         return rows
     for row in rows:
         if not isinstance(row, dict):
             continue
-        if row.get("price") not in (None, "", [], {}):
+        if all(
+            row.get(field_name) not in (None, "", [], {})
+            for field_name in LISTING_NETWORK_BACKFILL_FIELDS
+        ):
             continue
         candidate = None
         row_url = str(row.get("url") or "").strip()
         row_id = _listing_identity_from_url(row_url)
         if row_id:
-            candidate = prices_by_id.get(row_id)
+            candidate = fields_by_id.get(row_id)
         if candidate is None:
             row_title = clean_text(row.get("title"))
             if row_title:
-                candidate = prices_by_title.get(row_title.lower())
+                candidate = fields_by_title.get(row_title.lower())
         if not isinstance(candidate, dict):
             continue
         price = candidate.get("price")
         currency = candidate.get("currency")
-        if price not in (None, "", [], {}):
+        brand = candidate.get("brand")
+        if price not in (None, "", [], {}) and row.get("price") in (None, "", [], {}):
             row["price"] = price
         if currency not in (None, "", [], {}) and row.get("currency") in (None, "", [], {}):
             row["currency"] = currency
+        if brand not in (None, "", [], {}) and row.get("brand") in (None, "", [], {}):
+            row["brand"] = brand
     return rows
 
 
@@ -299,12 +316,21 @@ def _backfill_listing_rows_from_adapter(
         for row in adapter_rows
         if isinstance(row, dict) and str(row.get("url") or "").strip()
     }
-    if not adapter_by_url:
+    adapter_by_identity = {
+        identity: row
+        for row in adapter_rows
+        if isinstance(row, dict) and (identity := _listing_row_identity(row))
+    }
+    if not adapter_by_url and not adapter_by_identity:
         return rows
     for row in rows:
         if not isinstance(row, dict):
             continue
         adapter_row = adapter_by_url.get(str(row.get("url") or "").strip())
+        if adapter_row is None:
+            row_identity = _listing_row_identity(row)
+            if row_identity:
+                adapter_row = adapter_by_identity.get(row_identity)
         if not isinstance(adapter_row, dict):
             continue
         for field_name, value in adapter_row.items():
@@ -315,27 +341,22 @@ def _backfill_listing_rows_from_adapter(
     return rows
 
 
-def _listing_network_price_maps(
+def _listing_network_backfill_maps(
     network_payloads: list[dict[str, object]],
 ) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
     by_id: dict[str, dict[str, str]] = {}
     by_title: dict[str, dict[str, str]] = {}
+    alias_lookup = surface_alias_lookup("ecommerce_listing", None)
     for payload in list(network_payloads or []):
         body = payload.get("body")
         for candidate in _iter_listing_price_candidates(body):
-            price = _listing_candidate_price(candidate)
-            if not price:
+            entry = _listing_candidate_backfill_entry(candidate, alias_lookup=alias_lookup)
+            if not entry:
                 continue
-            currency = _listing_candidate_currency(candidate)
-            entry = {"price": price}
-            if currency:
-                entry["currency"] = currency
-            identifier = clean_text(
-                candidate.get("productId") or candidate.get("product_id") or candidate.get("id") or candidate.get("sku")
-            )
+            identifier = _first_candidate_text(candidate, LISTING_NETWORK_ID_KEYS)
             if identifier:
                 by_id[identifier.lower()] = entry
-            title = clean_text(candidate.get("name") or candidate.get("title"))
+            title = _first_candidate_text(candidate, LISTING_NETWORK_TITLE_KEYS)
             if title:
                 by_title[title.lower()] = entry
     return by_id, by_title
@@ -346,8 +367,18 @@ def _iter_listing_price_candidates(value: object, *, depth: int = 0) -> list[dic
         return []
     rows: list[dict[str, Any]] = []
     if isinstance(value, dict):
-        if any(key in value for key in ("price", "prices", "sale_price", "offers")) and any(
-            key in value for key in ("name", "title", "productId", "product_id", "id", "sku")
+        if any(
+            key in value
+            for key in (
+                *LISTING_NETWORK_PRICE_CANDIDATE_KEYS,
+                *LISTING_NETWORK_BRAND_CANDIDATE_KEYS,
+            )
+        ) and any(
+            key in value
+            for key in (
+                *LISTING_NETWORK_TITLE_KEYS,
+                *LISTING_NETWORK_ID_KEYS,
+            )
         ):
             rows.append(value)
         for item in value.values():
@@ -359,15 +390,37 @@ def _iter_listing_price_candidates(value: object, *, depth: int = 0) -> list[dic
     return rows
 
 
+def _first_candidate_text(candidate: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = clean_text(candidate.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _listing_candidate_backfill_entry(
+    candidate: dict[str, Any],
+    *,
+    alias_lookup: dict[str, str],
+) -> dict[str, str]:
+    candidates: dict[str, list[object]] = {}
+    collect_structured_candidates(candidate, alias_lookup, "", candidates)
+    entry: dict[str, str] = {}
+    brand = finalize_candidate_value("brand", candidates.get("brand", []))
+    if brand not in (None, "", [], {}):
+        entry["brand"] = str(brand)
+    price = _listing_candidate_price(candidate)
+    if price:
+        entry["price"] = price
+    currency = _listing_candidate_currency(candidate)
+    if currency:
+        entry["currency"] = currency
+    return entry
+
+
 def _listing_candidate_price(candidate: dict[str, Any]) -> str | None:
     currency = _listing_candidate_currency(candidate)
-    raw_price = (
-        candidate.get("price")
-        or (((candidate.get("prices") or {}).get("promo") or {}).get("value") if isinstance(candidate.get("prices"), dict) else None)
-        or (((candidate.get("prices") or {}).get("base") or {}).get("value") if isinstance(candidate.get("prices"), dict) else None)
-        or (((candidate.get("offers") or {}).get("price")) if isinstance(candidate.get("offers"), dict) else None)
-        or candidate.get("sale_price")
-    )
+    raw_price = _listing_candidate_raw_price(candidate)
     if raw_price in (None, "", [], {}):
         return None
     digits_only = re.sub(r"\D+", "", str(raw_price))
@@ -381,20 +434,79 @@ def _listing_candidate_price(candidate: dict[str, Any]) -> str | None:
     )
 
 
+def _listing_candidate_raw_price(candidate: dict[str, Any]) -> object | None:
+    prices = candidate.get("prices")
+    offers = candidate.get("offers")
+    if isinstance(offers, list):
+        offers = next((item for item in offers if isinstance(item, dict)), None)
+    for key in LISTING_NETWORK_DIRECT_PRICE_KEYS:
+        if candidate.get(key) not in (None, "", [], {}):
+            return candidate.get(key)
+    if isinstance(prices, dict):
+        for bucket_name in LISTING_NETWORK_PRICE_BUCKETS:
+            bucket = prices.get(bucket_name)
+            if not isinstance(bucket, dict):
+                continue
+            for key in ("value", *LISTING_NETWORK_PRIMARY_PRICE_KEYS):
+                if bucket.get(key) not in (None, "", [], {}):
+                    return bucket.get(key)
+            for key in LISTING_NETWORK_FALLBACK_PRICE_KEYS:
+                if bucket.get(key) not in (None, "", [], {}):
+                    return bucket.get(key)
+        for key in LISTING_NETWORK_PRIMARY_PRICE_KEYS:
+            if prices.get(key) not in (None, "", [], {}):
+                return prices.get(key)
+        for key in LISTING_NETWORK_FALLBACK_PRICE_KEYS:
+            if prices.get(key) not in (None, "", [], {}):
+                return prices.get(key)
+    if isinstance(offers, dict):
+        for key in LISTING_NETWORK_PRIMARY_PRICE_KEYS:
+            if offers.get(key) not in (None, "", [], {}):
+                return offers.get(key)
+        for key in LISTING_NETWORK_FALLBACK_PRICE_KEYS:
+            if offers.get(key) not in (None, "", [], {}):
+                return offers.get(key)
+    return None
+
+
 def _listing_candidate_currency(candidate: dict[str, Any]) -> str | None:
     prices = candidate.get("prices")
     if isinstance(prices, dict):
-        base_currency = ((prices.get("base") or {}).get("currency") if isinstance(prices.get("base"), dict) else None)
-        if isinstance(base_currency, dict):
-            code = clean_text(base_currency.get("code"))
+        for bucket_name in LISTING_NETWORK_PRICE_BUCKETS:
+            bucket = prices.get(bucket_name)
+            if not isinstance(bucket, dict):
+                continue
+            code = _listing_currency_code(bucket.get("currency"))
+            if code:
+                return code
+        code = _listing_currency_code(prices.get("currency"))
+        if code:
+            return code
+        for key in ("currencyCode", "priceCurrency"):
+            code = clean_text(prices.get(key))
             if code:
                 return code
     offers = candidate.get("offers")
+    if isinstance(offers, list):
+        offers = next((item for item in offers if isinstance(item, dict)), None)
     if isinstance(offers, dict):
         code = clean_text(offers.get("priceCurrency"))
         if code:
             return code
     return clean_text(candidate.get("currency") or candidate.get("currencyCode")) or None
+
+
+def _listing_currency_code(value: object) -> str | None:
+    if isinstance(value, dict):
+        return clean_text(value.get("code") or value.get("currencyCode"))
+    return clean_text(value) or None
+
+
+def _listing_row_identity(row: dict[str, Any]) -> str:
+    product_id = clean_text(row.get("product_id") or row.get("productId") or row.get("sku"))
+    if product_id:
+        return product_id.lower()
+    return _listing_identity_from_url(str(row.get("url") or ""))
 
 
 def _listing_identity_from_url(url: str) -> str:
@@ -405,7 +517,10 @@ def _listing_identity_from_url(url: str) -> str:
     if match is not None:
         return match.group(1).lower()
     match = re.search(r"/([^/?#]+)/?$", path)
-    return str(match.group(1) if match is not None else "").strip().lower()
+    segment = str(match.group(1) if match is not None else "").strip().lower()
+    if not segment:
+        return ""
+    return re.sub(r"\.(?:html?|php|aspx?)$", "", segment)
 
 
 async def extract_records_async(

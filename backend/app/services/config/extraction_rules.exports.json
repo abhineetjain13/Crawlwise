@@ -132,7 +132,18 @@
       "salePrice",
       "sale_price",
       "currentPrice",
-      "current_price"
+      "current_price",
+      "displayPrice",
+      "formattedPrice",
+      "lowPrice",
+      "highPrice",
+      "minPrice",
+      "maxPrice",
+      "minValue",
+      "maxValue",
+      "priceRange",
+      "prices",
+      "offers"
     ]
   },
   "BELK_PRODUCT_TITLE_KEYS": {
@@ -1302,6 +1313,20 @@
       "product",
       "products",
       "sku"
+    ]
+  },
+  "DETAIL_SEARCH_QUERY_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "k",
+      "q",
+      "query",
+      "keyword",
+      "keywords",
+      "search",
+      "search_query",
+      "search_term",
+      "term"
     ]
   },
   "DETAIL_TITLE_SOURCE_RANKS": {
@@ -4154,6 +4179,110 @@
       "sale"
     ]
   },
+  "LISTING_NETWORK_BACKFILL_FIELDS": {
+    "__type__": "tuple",
+    "items": [
+      "price",
+      "currency",
+      "brand"
+    ]
+  },
+  "LISTING_NETWORK_BRAND_CANDIDATE_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "brand",
+      "brandName",
+      "brand_name",
+      "manufacturer",
+      "manufacturerName",
+      "manufacturer_name",
+      "vendor",
+      "vendorName",
+      "vendor_name"
+    ]
+  },
+  "LISTING_NETWORK_DIRECT_PRICE_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "price",
+      "sale_price",
+      "salePrice",
+      "currentPrice",
+      "displayPrice",
+      "formattedPrice",
+      "lowPrice",
+      "minPrice",
+      "minValue",
+      "highPrice",
+      "maxPrice",
+      "maxValue"
+    ]
+  },
+  "LISTING_NETWORK_FALLBACK_PRICE_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "highPrice",
+      "maxPrice",
+      "maxValue"
+    ]
+  },
+  "LISTING_NETWORK_ID_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "productId",
+      "product_id",
+      "id",
+      "sku"
+    ]
+  },
+  "LISTING_NETWORK_PRICE_BUCKETS": {
+    "__type__": "tuple",
+    "items": [
+      "promo",
+      "sale",
+      "current",
+      "base"
+    ]
+  },
+  "LISTING_NETWORK_PRICE_CANDIDATE_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "price",
+      "prices",
+      "sale_price",
+      "salePrice",
+      "offers",
+      "displayPrice",
+      "formattedPrice",
+      "currentPrice",
+      "minValue",
+      "maxValue",
+      "minPrice",
+      "maxPrice",
+      "lowPrice",
+      "highPrice"
+    ]
+  },
+  "LISTING_NETWORK_PRIMARY_PRICE_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "price",
+      "lowPrice",
+      "minPrice",
+      "minValue",
+      "displayPrice",
+      "formattedPrice"
+    ]
+  },
+  "LISTING_NETWORK_TITLE_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "name",
+      "title",
+      "productName",
+      "product_name"
+    ]
+  },
   "LOW_CONTENT_SHELL_PHRASES": {
     "__type__": "tuple",
     "items": [
@@ -5508,12 +5637,15 @@
   "VARIANT_AXIS_LABEL_NOISE_PATTERNS": {
     "__type__": "tuple",
     "items": [
+      "\\bavailability\\b",
+      "\\bfilter\\s+by\\b",
       "\\bq&a\\b",
       "\\b\\d+\\s+answers?\\b",
       "\\bask\\s+a\\s+question\\b",
       "\\bcontent\\s+helpfulness\\b",
       "\\blanguage\\s+translate\\s+widget\\b",
       "\\breport\\s+this\\s+answer\\b",
+      "\\bsort\\s+by\\b",
       "\\bsize\\s+chart\\b",
       "\\bsize\\s+guide\\b"
     ]
@@ -5523,10 +5655,12 @@
     "items": [
       "answer",
       "answers",
+      "availability",
       "background",
       "delivery",
       "emi",
       "faq",
+      "filter",
       "helpfulness",
       "language",
       "payment",
@@ -5539,6 +5673,7 @@
       "shipping",
       "size-chart",
       "sizechart",
+      "sort",
       "text",
       "translate",
       "translator",

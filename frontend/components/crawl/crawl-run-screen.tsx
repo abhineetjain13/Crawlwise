@@ -614,15 +614,19 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  ? `Product Intelligence Selected (${selectedRecords.length})`
  : `Product Intelligence (${productIntelligenceRecords.length})`;
 
- const summaryRecordsFromRun = Number(run?.result_summary?.record_count ?? 0) || 0;
- const summaryPagesFromRun =
- Number(run?.result_summary?.processed_urls ?? run?.result_summary?.completed_urls ?? 0) || 0;
- const summary = {
- records: Math.max(summaryRecordsFromRun, recordsTotal),
- pages: Math.max(
- summaryPagesFromRun,
- Number(run?.result_summary?.progress ?? 0) > 0 ? 1 : 0,
- ),
+  const summaryRecordsFromRun = Number(run?.result_summary?.record_count ?? 0) || 0;
+  const summaryRecordsFromTable =
+  Number(tableRecordsQuery.data?.meta?.total ?? tableRecordsQuery.data?.items?.length ?? 0) || 0;
+  const summaryPagesFromRun =
+  Number(run?.result_summary?.processed_urls ?? run?.result_summary?.completed_urls ?? 0) || 0;
+  const summaryCurrentUrlIndex = Number(run?.result_summary?.current_url_index ?? 0) || 0;
+  const summary = {
+  records: Math.max(summaryRecordsFromRun, recordsTotal, summaryRecordsFromTable),
+  pages: Math.max(
+  summaryPagesFromRun,
+  summaryCurrentUrlIndex,
+  Number(run?.result_summary?.progress ?? 0) > 0 ? 1 : 0,
+  ),
  fields: visibleColumns.length,
  duration:
  (terminal ? formatDurationMs(run?.result_summary?.duration_ms) : null) ??
