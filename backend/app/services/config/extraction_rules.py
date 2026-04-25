@@ -62,6 +62,49 @@ LISTING_STRUCTURE_NEGATIVE_HINTS = (
     "pagination",
 )
 LISTING_FALLBACK_CONTAINER_SELECTOR = "article, li, div, tr, section, [role='row']"
+LISTING_BRAND_SELECTORS = (
+    "[itemprop='brand']",
+    "[data-testid*='brand' i]",
+    "[data-test*='brand' i]",
+    "[data-qa*='brand' i]",
+    "[class*='brand' i]",
+    "[class*='vendor' i]",
+    "[class*='manufacturer' i]",
+)
+LISTING_BRAND_MAX_WORDS = 8
+BELK_PRODUCT_CARD_SELECTORS = (
+    "[data-testid*='product' i]",
+    "[class*='product-tile' i]",
+    "[class*='product-card' i]",
+    "[class*='product-grid' i] li",
+    "article[class*='product' i]",
+    "li[class*='product' i]",
+)
+BELK_TITLE_SELECTORS = (
+    "[data-testid*='product-name' i]",
+    "[class*='product-name' i]",
+    "[class*='product-title' i]",
+    "[class*='name' i]",
+    "a[href*='/product/' i]",
+    "a[class*='product' i]",
+    "[data-testid*='product-name' i] a",
+)
+BELK_TITLE_MIN_CHARS = 4
+BELK_TITLE_MAX_CHARS = 180
+BELK_BRAND_SELECTORS = LISTING_BRAND_SELECTORS
+BELK_PRICE_SELECTORS = (
+    "[data-testid*='price' i]",
+    "[class*='sale-price' i]",
+    "[class*='price' i]",
+)
+BELK_IMAGE_SELECTORS = ("img[src]", "img[data-src]", "source[srcset]")
+BELK_PRODUCT_TITLE_KEYS = ("title", "name", "productName", "product_name")
+BELK_PRODUCT_BRAND_KEYS = ("brand", "brandName", "brand_name", "manufacturer", "vendor")
+BELK_PRODUCT_URL_KEYS = ("url", "productUrl", "product_url", "pdpUrl", "pdp_url", "seoUrl", "seo_url")
+BELK_PRODUCT_PRICE_KEYS = ("price", "salePrice", "sale_price", "currentPrice", "current_price")
+BELK_PRODUCT_ORIGINAL_PRICE_KEYS = ("originalPrice", "original_price", "listPrice", "list_price", "wasPrice", "was_price")
+BELK_PRODUCT_IMAGE_KEYS = ("image", "imageUrl", "image_url", "thumbnail", "primaryImage", "primary_image")
+BELK_PRODUCT_ID_KEYS = ("id", "productId", "product_id", "styleId", "style_id")
 CURRENCY_ALIAS_PATTERNS: dict[str, str] = {
     r"\brs\.?\s*\d": "INR",
 }
@@ -248,6 +291,22 @@ DETAIL_UTILITY_PATH_TOKENS: tuple[str, ...] = (
     "support",
     "wishlist",
 )
+DETAIL_COLLECTION_PATH_TOKENS: tuple[str, ...] = (
+    "c",
+    "category",
+    "categories",
+    "collection",
+    "collections",
+)
+DETAIL_PRODUCT_PATH_TOKENS: tuple[str, ...] = (
+    "dp",
+    "item",
+    "p",
+    "pd",
+    "product",
+    "products",
+    "sku",
+)
 DETAIL_NON_PAGE_FILE_EXTENSIONS: tuple[str, ...] = (
     ".avif",
     ".bmp",
@@ -275,6 +334,9 @@ DETAIL_IRRELEVANT_JSON_LD_TYPES: tuple[str, ...] = (
     "listitem",
     "mediaobject",
     "movie",
+    "corporation",
+    "organization",
+    "person",
     "siteNavigationElement",
     "videoobject",
     "webpage",
@@ -283,6 +345,7 @@ DETAIL_IRRELEVANT_JSON_LD_TYPES: tuple[str, ...] = (
 VARIANT_AXIS_LABEL_NOISE_TOKENS: tuple[str, ...] = (
     "answer",
     "answers",
+    "background",
     "delivery",
     "emi",
     "faq",
@@ -296,6 +359,7 @@ VARIANT_AXIS_LABEL_NOISE_TOKENS: tuple[str, ...] = (
     "review",
     "reviews",
     "shipping",
+    "text",
     "translate",
     "translator",
     "warranty",
@@ -391,6 +455,14 @@ DETAIL_EXPAND_KEYWORD_EXTENSIONS: dict[str, tuple[str, ...]] = {
     ),
     "job": (),
 }
+DETAIL_CURRENT_PRICE_SELECTORS: tuple[str, ...] = (
+    "[data-component-id='display-price'] [aria-label*='current price' i]",
+    "[data-component-id='display-price'] [class*='price' i]",
+)
+DETAIL_ORIGINAL_PRICE_SELECTORS: tuple[str, ...] = (
+    "[data-component-id='display-price'] [aria-label*='original price' i]",
+    "[data-component-id='display-price'] s",
+)
 SOURCE_PRIORITY: tuple[str, ...] = (
     "adapter",
     "network_payload",
@@ -477,6 +549,20 @@ __all__ = sorted(
     [
         *_STATIC_EXPORTS.keys(),
         "CROSS_LINK_CONTAINER_HINTS",
+        "BELK_BRAND_SELECTORS",
+        "BELK_IMAGE_SELECTORS",
+        "BELK_PRICE_SELECTORS",
+        "BELK_PRODUCT_BRAND_KEYS",
+        "BELK_PRODUCT_CARD_SELECTORS",
+        "BELK_PRODUCT_ID_KEYS",
+        "BELK_PRODUCT_IMAGE_KEYS",
+        "BELK_PRODUCT_ORIGINAL_PRICE_KEYS",
+        "BELK_PRODUCT_PRICE_KEYS",
+        "BELK_PRODUCT_TITLE_KEYS",
+        "BELK_PRODUCT_URL_KEYS",
+        "BELK_TITLE_MAX_CHARS",
+        "BELK_TITLE_MIN_CHARS",
+        "BELK_TITLE_SELECTORS",
         "DETAIL_BLOCKED_TOKENS",
         "DETAIL_EXPAND_KEYWORD_EXTENSIONS",
         "DETAIL_EXPAND_SELECTORS",
@@ -486,6 +572,10 @@ __all__ = sorted(
         "DETAIL_TITLE_SOURCE_RANKS",
         "DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES",
         "DETAIL_BRAND_SHELL_TITLE_TOKENS",
+        "DETAIL_CURRENT_PRICE_SELECTORS",
+        "DETAIL_COLLECTION_PATH_TOKENS",
+        "DETAIL_ORIGINAL_PRICE_SELECTORS",
+        "DETAIL_PRODUCT_PATH_TOKENS",
         "DYNAMIC_FIELD_NAME_MAX_TOKENS",
         "JOB_ERROR_PAGE_HEADINGS",
         "JOB_ERROR_PAGE_TITLES",
@@ -496,6 +586,8 @@ __all__ = sorted(
         "JS_STATE_NON_PRODUCT_IMAGE_HINTS",
         "KNOWN_ATS_PLATFORMS",
         "LISTING_FALLBACK_CONTAINER_SELECTOR",
+        "LISTING_BRAND_MAX_WORDS",
+        "LISTING_BRAND_SELECTORS",
         "LISTING_STRUCTURE_NEGATIVE_HINTS",
         "LISTING_STRUCTURE_POSITIVE_HINTS",
         "LISTING_UTILITY_TITLE_PATTERNS",

@@ -504,6 +504,69 @@ def test_extract_ecommerce_detail_flattens_json_ld_size_specifications() -> None
     assert record["variants"][1]["availability"] == "out_of_stock"
 
 
+def test_extract_ecommerce_detail_backfills_visible_display_price() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Men's Flex Pants | 327 | 34 | 30",
+          "brand": {"@type": "Brand", "name": "Columbia"},
+          "image": "https://example.com/flex-pants.jpg",
+          "description": "Trail pants with stretch fabric."
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Men's Flex Pants | 327 | 34 | 30</h1>
+        <div data-component-id="display-price">
+          <span aria-label="current price $42.00">$42.00</span>
+          <s aria-label="original price $60.00">$60.00</s>
+        </div>
+        <p>Trail pants with stretch fabric.</p>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/flex-pants",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["price"] == "42.00"
+    assert rows[0]["original_price"] == "60.00"
+
+
+def test_extract_ecommerce_detail_rejects_collection_url_with_visible_tile_prices() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Short Sleeve</h1>
+        <div data-component-id="product-tile">
+          <a href="/p/trail-shirt-123.html">Trail Shirt</a>
+          <div data-component-id="display-price">
+            <span aria-label="current price $27.00">$27.00</span>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/c/mens-short-sleeve-shirts/",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert rows == []
+
+
 @pytest.mark.asyncio
 async def test_myntra_adapter_extracts_detail_media_and_variants() -> None:
     html = """

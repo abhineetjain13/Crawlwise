@@ -97,6 +97,10 @@ The early exit return path (end of structured_data tier) bypasses the post-tier 
 
 Fix: call `_backfill_detail_price_from_html` and `_backfill_variants_from_dom_if_missing` before every return point in `build_detail_record`, including the early exit.
 
+**Visible detail prices are extraction-owned. Owner: `detail_extractor.py` + `config/extraction_rules.py`.**
+
+When structured data lacks price but the rendered detail DOM exposes a product display-price block, `_backfill_detail_price_from_html` may fill `price` and `original_price` from configured detail price selectors. This is still upstream extraction. Do not add price repair in `publish/` or `pipeline/`.
+
 ---
 
 **VIOLATION signatures — do not introduce these:**
@@ -104,6 +108,7 @@ Fix: call `_backfill_detail_price_from_html` and `_backfill_variants_from_dom_if
 - Adding a new tier or source that writes directly to `record` instead of going through `_add_sourced_candidate`
 - Fixing missing variants by adding browser interaction before verifying Bug 1 and Bug 2 are fixed
 - Calling `_backfill_detail_price_from_html` only at the end of the full tier sequence but not after early exit paths
+- Fixing missing visible PDP prices in persistence/export instead of `detail_extractor.py`
 
 ---
 
@@ -137,11 +142,14 @@ Fix: call `_backfill_detail_price_from_html` and `_backfill_variants_from_dom_if
 
 **Rule:** Acquisition returns observational facts only: URL, final URL, status, method, headers, blocked state, diagnostics, and artifacts. It does not invent blocker causes, insert retries not in policy, or escalate without evidence.
 
+Diagnostics controls are user controls. If `diagnostics_profile.capture_screenshot` is `False`, browser acquisition must not capture any screenshots, regardless of outcome.
+
 **VIOLATION signatures:**
 - Block detection classifies a page as blocked based on a vendor header alone when useful content is present and extractable
 - Block detection classifies a page as blocked from generic `captcha` text or `recaptcha` / `hcaptcha` provider markers alone when the page still has real extractable listing/detail content and no stronger challenge evidence such as challenge-title hits, active challenge markers, or challenge elements
 - A retry happens that is not logged and visible in diagnostics
 - Browser escalation triggers for a URL that returned 200 with extractable content
+- Browser acquisition captures a screenshot when `capture_screenshot=False`
 
 ---
 
@@ -149,10 +157,13 @@ Fix: call `_backfill_detail_price_from_html` and `_backfill_variants_from_dom_if
 
 **Rule:** Listing extraction never falls back into single-record detail behavior. A listing run with zero records produces `listing_detection_failed`. It never produces a fake success with one row of page metadata.
 
+Detail extraction must also reject collection/category URLs that expose product-tile prices. A category URL submitted under `ecommerce_detail` is a bad seed, not a single PDP. Do not turn its first tile or page heading into a detail record.
+
 **VIOLATION signatures:**
 - A listing run returns 1 record containing the page title, OG description, or brand name
 - `verdict.py` returns `success` for a listing run that extracted zero product rows
 - `crawl_engine.py` routes a listing URL through `detail_extractor.py`
+- An `ecommerce_detail` run on `/c/...`, `/category/...`, or `/collections/...` persists a fake detail record from a product tile
 
 ---
 

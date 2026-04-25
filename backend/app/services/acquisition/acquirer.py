@@ -130,6 +130,9 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             capture_page_markdown=bool(
                 request.acquisition_profile.get("capture_page_markdown", False)
             ),
+            capture_screenshot=bool(
+                request.acquisition_profile.get("capture_screenshot", False)
+            ),
             on_event=request.on_event,
         )
     except (httpx.HTTPError, TimeoutError, OSError) as exc:

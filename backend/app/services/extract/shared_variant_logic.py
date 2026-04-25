@@ -99,6 +99,16 @@ _VARIANT_AXIS_TECHNICAL_PATTERNS = (
 )
 
 
+def _variant_axis_label_is_noise(value: object) -> bool:
+    lowered = clean_text(value).lower()
+    if not lowered:
+        return False
+    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    if any(token in _VARIANT_AXIS_LABEL_NOISE_TOKENS for token in tokens):
+        return True
+    return any(pattern.search(lowered) for pattern in _VARIANT_AXIS_LABEL_NOISE_PATTERNS)
+
+
 def normalized_variant_axis_key(value: object) -> str:
     text = str(value or "").strip().lower().replace("&", " ")
     if not text:
@@ -224,6 +234,8 @@ def resolve_variant_group_name(node: Any) -> str:
         )
         if node.get(attr_name) not in (None, "", [], {})
     )
+    if any(_variant_axis_label_is_noise(raw_name) for raw_name in visible_candidates):
+        return ""
     for raw_name in [*visible_candidates, inferred_name]:
         cleaned_name = clean_text(str(raw_name).replace("_", " ").replace("-", " "))
         if variant_axis_name_is_semantic(cleaned_name):
@@ -399,7 +411,7 @@ def variant_axis_name_is_semantic(value: object) -> bool:
     lowered = cleaned.lower()
     if not lowered:
         return False
-    if any(pattern.search(lowered) for pattern in _VARIANT_AXIS_LABEL_NOISE_PATTERNS):
+    if _variant_axis_label_is_noise(cleaned):
         return False
     if any(pattern.fullmatch(lowered) for pattern in _VARIANT_AXIS_TECHNICAL_PATTERNS):
         return False

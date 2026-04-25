@@ -7,6 +7,7 @@ import logging
 from app.services.adapters.adp import ADPAdapter
 from app.services.adapters.amazon import AmazonAdapter
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.belk import BelkAdapter
 from app.services.adapters.ebay import EbayAdapter
 from app.services.adapters.greenhouse import GreenhouseAdapter
 from app.services.adapters.icims import ICIMSAdapter
@@ -14,6 +15,7 @@ from app.services.adapters.indeed import IndeedAdapter
 from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
 from app.services.adapters.myntra import MyntraAdapter
+from app.services.adapters.nike import NikeAdapter
 from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.paycom import PaycomAdapter
 from app.services.adapters.remoteok import RemoteOkAdapter
@@ -30,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 _ADAPTER_FACTORIES: dict[str, type[BaseAdapter]] = {
     "amazon": AmazonAdapter,
+    "belk": BelkAdapter,
     "walmart": WalmartAdapter,
     "ebay": EbayAdapter,
     "adp": ADPAdapter,
@@ -43,6 +46,7 @@ _ADAPTER_FACTORIES: dict[str, type[BaseAdapter]] = {
     "indeed": IndeedAdapter,
     "linkedin": LinkedInAdapter,
     "myntra": MyntraAdapter,
+    "nike": NikeAdapter,
     "greenhouse": GreenhouseAdapter,
     "remotive": RemotiveAdapter,
     "remoteok": RemoteOkAdapter,

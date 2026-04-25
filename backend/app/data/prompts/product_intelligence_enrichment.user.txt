@@ -1,0 +1,60 @@
+Source product JSON:
+$source_product_json
+
+Candidate extracted product JSON:
+$candidate_product_json
+
+SerpAPI result JSON:
+$serpapi_result_json
+
+Deterministic match JSON:
+$deterministic_match_json
+
+Return Product Intelligence enrichment JSON only. Return exactly the schema below, with no markdown or extra keys.
+
+Output schema:
+{
+  "normalized_title": "string",
+  "style_name": "string",
+  "model_name": "string",
+  "inferred_attributes": {"attribute_name": "string"},
+  "suggested_score": 0.0,
+  "confidence": 0.0,
+  "match_explanation": "string",
+  "mismatch_risks": ["string"],
+  "reason_updates": [
+    {
+      "reason_name": "string",
+      "reason_code": "string",
+      "description": "string",
+      "source": "string",
+      "timestamp": "string",
+      "conflicting_value": "string",
+      "resolution_action": "string"
+    }
+  ]
+}
+
+Merge rules:
+- Initialize suggested_score from deterministic_match_json.score when present, then adjust that baseline using semantic matches, identifier evidence, metadata signals, and SerpAPI support.
+- deterministic_match_json is the scoring starting point, not a hard override.
+- Use source_product_json for source truth.
+- Use candidate_product_json for extracted candidate facts.
+- Use serpapi_result_json only as search evidence.
+- protected_fields: brand, price, sku, mpn, gtin, url, availability.
+- Protected fields come from source_product_json and candidate_product_json prior extraction. Never replace a non-empty protected field in those inputs when populating output. Only fill protected-field-derived output when the input value is empty or the replacement is confirmed more accurate by identifier evidence.
+- Prefer identifiers over titles. Prefer extracted candidate facts over SerpAPI snippets.
+
+Conflict rules:
+- If source and candidate identifiers conflict, keep suggested_score low, add a mismatch risk, and explain the conflict.
+- If SerpAPI conflicts with extracted candidate facts, trust extracted candidate facts and record each SerpAPI conflict in reason_updates using only these keys: reason_name, reason_code, description, source, timestamp, conflicting_value, resolution_action.
+- Example reason_updates: [{"reason_name":"serpapi_conflict","reason_code":"serpapi_candidate_conflict","description":"SerpAPI title conflicts with candidate title","source":"serpapi","timestamp":"","conflicting_value":"conflicting title","resolution_action":"trusted_candidate_fact"}].
+- If no usable SerpAPI result exists, keep defaults where evidence is missing, add "no results" risk, and say "no results" in match_explanation.
+
+Missing data:
+- Do not invent facts.
+- Use empty string for missing string fields.
+- Use empty object for inferred_attributes when none apply.
+- Use empty arrays for mismatch_risks and reason_updates when none apply.
+- Use 0.0 for suggested_score and confidence only when total evidence is insufficient, including deterministic_match_json and all other signals.
+- suggested_score and confidence must be numeric decimals from 0.0 to 1.0 inclusive, rounded to three decimals or fewer. Clamp out-of-range values into this range.

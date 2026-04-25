@@ -24,6 +24,7 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `review.py` | Review payloads and approved mapping save |
 | `selectors.py` | Selector CRUD, suggest, test, preview |
 | `llm.py` | LLM provider catalog, config, connection test, cost log |
+| `product_intelligence.py` | Product matching jobs, source products, candidates, match review |
 | `auth.py` | Login, register, `/me` |
 | `users.py`, `dashboard.py`, `jobs.py`, `health.py`, `metrics.py` | Named route modules |
 
@@ -51,6 +52,7 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `DomainCookieMemory` | `crawl.py` | reusable browser state scoped by domain |
 | `DomainFieldFeedback` | `crawl.py` | per-field keep/reject learning history |
 | `ReviewPromotion` | `crawl.py` | approved review schema snapshot |
+| `ProductIntelligenceJob`, `ProductIntelligenceSourceProduct`, `ProductIntelligenceCandidate`, `ProductIntelligenceMatch` | `crawl.py` | web product matching and price comparison jobs |
 | `LLMConfig`, `LLMCostLog` | `llm.py` | LLM config and cost tracking |
 
 ### `schemas/` — request and response DTOs
@@ -68,6 +70,7 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `crawl_crud.py` | DB create and state transitions |
 | `domain_run_profile_service.py` | Load/save reusable execution defaults |
 | `crawl_events.py` | WebSocket log emission |
+| `product_intelligence/*` | Product web discovery, candidate crawl orchestration, deterministic match scoring |
 | `_batch_runtime.py` | URL loop, progress, pause, kill checks |
 | `tasks.py` | Celery task entry |
 | `pipeline/core.py` | Per-URL orchestration: acquire -> extract -> normalize -> persist |
@@ -127,6 +130,7 @@ Canonical config owners:
 | File | Purpose |
 |---|---|
 | `config/field_mappings.py` | field aliases |
+| `config/extraction_rules.py` | extraction/runtime selector tokens, detail price selectors, shell/utility path rules |
 | `config/selectors.py` | DOM selectors |
 | `config/platforms.json` | adapter metadata, signatures, JS mappings, readiness selectors |
 | `config/network_payload_specs.py` | payload specs and endpoint tokens |

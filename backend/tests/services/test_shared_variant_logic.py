@@ -3,6 +3,7 @@ from __future__ import annotations
 from bs4 import BeautifulSoup
 
 from app.services.extract.shared_variant_logic import (
+    iter_variant_select_groups,
     resolve_variant_group_name,
     resolve_variants,
     variant_axis_name_is_semantic,
@@ -238,6 +239,32 @@ def test_resolve_variant_group_name_rejects_report_reason_select() -> None:
     )
 
     assert resolve_variant_group_name(soup.select_one("select")) == ""
+
+
+def test_variant_select_groups_reject_style_control_selects() -> None:
+    """Reject non-product style controls that happen to use select elements."""
+    soup = BeautifulSoup(
+        """
+        <form>
+          <label>Text
+            <select>
+              <option>White</option>
+              <option>Black</option>
+              <option>Red</option>
+            </select>
+          </label>
+          <label>Background
+            <select>
+              <option>Opaque</option>
+              <option>Semi-Transparent</option>
+            </select>
+          </label>
+        </form>
+        """,
+        "html.parser",
+    )
+
+    assert list(iter_variant_select_groups(soup)) == []
 
 
 def test_resolve_variant_group_name_reads_external_label_for_select() -> None:

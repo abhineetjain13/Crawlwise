@@ -9,8 +9,11 @@ import { cn } from"../../lib/utils";
 import { Card, Skeleton } from"./primitives";
 
 function stableNodeSignature(value: ReactNode): string {
- if (value == null || typeof value ==="boolean") {
+ if (value == null) {
  return"";
+ }
+ if (typeof value === "boolean") {
+ return value ? "true" : "false";
  }
  if (typeof value ==="string"|| typeof value ==="number") {
  return String(value);

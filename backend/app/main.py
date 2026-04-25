@@ -15,6 +15,7 @@ from app.api.crawls import router as crawls_router
 from app.api.dashboard import router as dashboard_router
 from app.api.jobs import router as jobs_router
 from app.api.llm import router as llm_router
+from app.api.product_intelligence import router as product_intelligence_router
 from app.api.records import router as records_router
 from app.api.review import router as review_router
 from app.api.selectors import router as selectors_router
@@ -145,5 +146,6 @@ for router in [
     review_router,
     selectors_router,
     llm_router,
+    product_intelligence_router,
 ]:
     app.include_router(router)

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from"@tanstack/react-query";
-import { ArrowRightCircle, ChevronsDown, Copy, Download, Info, Plus } from"lucide-react";
+import { ArrowRightCircle, ChevronsDown, Copy, Download, Info, Plus, Search } from"lucide-react";
 import { useRouter } from"next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from"react";
 import ReactMarkdown from"react-markdown";
@@ -144,6 +144,46 @@ function isSafeHref(href: string) {
  return url.protocol ==="http:"|| url.protocol ==="https:";
  } catch {
  return false;
+ }
+}
+
+type ProductIntelligencePrefillPayload = {
+ source_run_id: number | null;
+ source_domain: string;
+ records: Array<Pick<CrawlRecord,"id"|"run_id"|"source_url"|"data">>;
+};
+
+export function storeProductIntelligencePrefill(
+ payload: ProductIntelligencePrefillPayload,
+ storage: Storage = window.sessionStorage,
+) {
+ try {
+ storage.setItem(
+ STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL,
+ JSON.stringify(payload),
+ );
+ } catch (error) {
+ console.error("Unable to store full Product Intelligence prefill.", error);
+ const reducedPayload = {
+ ...payload,
+ records: payload.records
+ .slice(0, CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4)
+ .map((record) => ({
+ id: record.id,
+ run_id: record.run_id,
+ source_url: record.source_url,
+ data: {},
+ })),
+ };
+ try {
+ storage.setItem(
+ STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL,
+ JSON.stringify(reducedPayload),
+ );
+ } catch (fallbackError) {
+ console.error("Unable to store reduced Product Intelligence prefill.", fallbackError);
+ storage.removeItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL);
+ }
  }
 }
 
@@ -583,7 +623,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  const batchFromResultsUrls = selectedResultUrls.length ? selectedResultUrls : resultUrls;
  const batchFromResultsLabel = selectedResultUrls.length
  ? `Batch Crawl Selected (${selectedResultUrls.length})`
- : `Batch Crawl Results (${resultUrls.length})`;
+ : `Batch Crawl (${resultUrls.length})`;
+ const productIntelligenceRecords = selectedRecords.length ? selectedRecords : batchSourceRecords;
+ const productIntelligenceLabel = selectedRecords.length
+ ? `Product Intelligence Selected (${selectedRecords.length})`
+ : `Product Intelligence (${productIntelligenceRecords.length})`;
 
  const summaryRecordsFromRun = Number(run?.result_summary?.record_count ?? 0) || 0;
  const summaryPagesFromRun =
@@ -702,6 +746,23 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  router.replace("/crawl?module=pdp&mode=batch");
  }
 
+ function triggerProductIntelligenceFromResults() {
+ if (!productIntelligenceRecords.length) {
+ return;
+ }
+ storeProductIntelligencePrefill({
+  source_run_id: run?.id ?? null,
+  source_domain: run?.url ?? "",
+  records: productIntelligenceRecords.map((record) => ({
+  id: record.id,
+  run_id: record.run_id,
+  source_url: record.source_url,
+  data: record.data,
+  })),
+ });
+ router.replace("/product-intelligence");
+ }
+
  async function saveRecipeRunProfile() {
  setRecipeActionPending("profile");
  setRecipeActionError("");
@@ -743,7 +804,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <PageHeader
  title="Crawl Studio"
  actions={
- <Button variant="primary"size="sm"type="button"onClick={resetToConfig}>
+ <Button variant="primary"type="button"className="h-[var(--control-height)]"onClick={resetToConfig}>
  <Plus className="size-3.5"/>
  New Crawl
  </Button>
@@ -768,7 +829,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </span>
  ) :"Crawl Results"}
  actions={
- <Button variant="primary"size="sm"type="button"onClick={resetToConfig}>
+ <Button variant="primary"type="button"className="h-[var(--control-height)]"onClick={resetToConfig}>
  <Plus className="size-3.5"/>
  New Crawl
  </Button>
@@ -801,7 +862,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  )}
  />
  <div>
- <Button variant="secondary"type="button"onClick={() => void retryFailedPanels()}>
+ <Button variant="secondary" type="button" className="h-[var(--control-height)]" onClick={() => void retryFailedPanels()}>
  Retry failed panels
  </Button>
  </div>
@@ -916,6 +977,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <Button variant="accent"type="button"onClick={triggerBatchCrawlFromResults}>
  <ArrowRightCircle className="size-3.5"/>
  {batchFromResultsLabel}
+ </Button>
+ ) : null}
+ {listingRun && productIntelligenceRecords.length ? (
+ <Button variant="secondary"type="button"onClick={triggerProductIntelligenceFromResults}>
+ <Search className="size-3.5"/>
+ {productIntelligenceLabel}
  </Button>
  ) : null}
  <Button variant="secondary"type="button"onClick={() => void downloadExport("csv")}>
@@ -1206,7 +1273,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  {recipeActionPending === "profile" ? "Saving..." : "Save Run Profile"}
  </Button>
  </div>
- <div className="grid gap-3 md:grid-cols-2">
+           <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:col-span-2 md:grid-cols-2 content-start">
  <Field label="Fetch Mode">
  <Dropdown
  value={recipeProfile.fetch_profile.fetch_mode}
@@ -1351,7 +1419,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  { value: "all_small_json", label: "All Small JSON" },
  ]}
  />
- </Field>
+               </Field>
+                        </div>
+            <div className="flex flex-col gap-3">
  <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
  <span className="text-sm font-medium">Include iframes</span>
  <Toggle
@@ -1426,8 +1496,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }))
  }
  />
- </div>
- </div>
+               </div>
+             </div>
+          </div>
  </Card>
  ) : (
  <DataRegionEmpty

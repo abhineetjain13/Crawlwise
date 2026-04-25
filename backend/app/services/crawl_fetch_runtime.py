@@ -96,6 +96,7 @@ class _FetchRuntimeContext:
     traversal_required: bool
     fetch_mode: str
     runtime_policy: dict[str, object]
+    capture_screenshot: bool = False
     locality_profile: dict[str, object] = field(default_factory=dict)
     last_browser_attempt_diagnostics: dict[str, object] = field(default_factory=dict)
     last_error: Exception | None = None
@@ -209,6 +210,7 @@ async def _browser_fetch(
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
     capture_page_markdown: bool = False,
+    capture_screenshot: bool = True,
     max_pages: int = 1,
     max_scrolls: int = 1,
     on_event=None,
@@ -229,6 +231,7 @@ async def _browser_fetch(
         requested_fields=requested_fields,
         listing_recovery_mode=listing_recovery_mode,
         capture_page_markdown=capture_page_markdown,
+        capture_screenshot=capture_screenshot,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
         on_event=on_event,
@@ -303,6 +306,7 @@ async def fetch_page(
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
     capture_page_markdown: bool = False,
+    capture_screenshot: bool = False,
     max_pages: int = 1,
     max_scrolls: int = 1,
     on_event=None,
@@ -330,6 +334,7 @@ async def fetch_page(
         browser_reason=browser_reason,
         requested_fields=list(requested_fields or []),
         listing_recovery_mode=str(listing_recovery_mode or "").strip() or None,
+        capture_screenshot=bool(capture_screenshot),
         proxies=_resolve_proxy_attempts(
             proxy_list,
             run_id=run_id,
@@ -365,6 +370,7 @@ async def fetch_page(
             requested_fields=context.requested_fields,
             listing_recovery_mode=context.listing_recovery_mode,
             capture_page_markdown=bool(capture_page_markdown),
+            capture_screenshot=context.capture_screenshot,
             proxies=context.proxies,
             host_policy=learned_host_policy,
         )
@@ -392,6 +398,7 @@ async def fetch_page(
                 requested_fields=context.requested_fields,
                 listing_recovery_mode=context.listing_recovery_mode,
                 capture_page_markdown=bool(capture_page_markdown),
+                capture_screenshot=context.capture_screenshot,
                 proxies=context.proxies,
                 host_policy=learned_host_policy,
             )
@@ -539,6 +546,7 @@ async def _run_browser_attempts(
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
     capture_page_markdown: bool = False,
+    capture_screenshot: bool = False,
     proxies: list[str | None] | None = None,
     host_policy: HostProtectionPolicy | None = None,
 ) -> PageFetchResult:
@@ -587,6 +595,7 @@ async def _run_browser_attempts(
                     requested_fields=browser_requested_fields,
                     listing_recovery_mode=recovery_mode,
                     capture_page_markdown=capture_page_markdown,
+                    capture_screenshot=capture_screenshot,
                     max_pages=context.max_pages,
                     max_scrolls=context.max_scrolls,
                     on_event=context.on_event,
@@ -840,6 +849,7 @@ async def _handle_http_result(
             requested_fields=context.requested_fields,
             listing_recovery_mode=context.listing_recovery_mode,
             capture_page_markdown=False,
+            capture_screenshot=context.capture_screenshot,
             proxies=browser_proxies,
             host_policy=await load_host_protection_policy(
                 result.final_url or result.url or context.url
@@ -980,6 +990,7 @@ async def _invoke_run_browser_attempts(
     requested_fields: list[str] | None,
     listing_recovery_mode: str | None,
     capture_page_markdown: bool,
+    capture_screenshot: bool,
     proxies: list[str | None] | None,
     host_policy: HostProtectionPolicy | None,
 ) -> PageFetchResult:
@@ -990,7 +1001,10 @@ async def _invoke_run_browser_attempts(
         "capture_page_markdown": capture_page_markdown,
         "proxies": proxies,
     }
-    if "host_policy" in inspect.signature(_run_browser_attempts).parameters:
+    browser_attempt_parameters = inspect.signature(_run_browser_attempts).parameters
+    if "capture_screenshot" in browser_attempt_parameters:
+        browser_attempt_kwargs["capture_screenshot"] = capture_screenshot
+    if "host_policy" in browser_attempt_parameters:
         browser_attempt_kwargs["host_policy"] = host_policy
     return await _run_browser_attempts(
         context,

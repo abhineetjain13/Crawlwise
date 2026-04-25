@@ -115,6 +115,7 @@ class BrowserFinalizeInput:
     page_markdown: str
     phase_timings_ms: dict[str, int]
     started_at: float
+    capture_screenshot: bool = False
 class BrowserAcquisitionResultBuilder:
     def __init__(
         self,
@@ -281,6 +282,9 @@ class BrowserAcquisitionResultBuilder:
         payload = self.payload
         if browser_outcome == "usable_content":
             return ""
+        if not payload.capture_screenshot:
+            payload.phase_timings_ms["screenshot_capture"] = 0
+            return ""
         probes_summary = [{"stage": probe.get("stage"), "is_ready": probe.get("is_ready"), "visible_text": probe.get("visible_text_length"), "cards": probe.get("listing_card_count")} for probe in payload.readiness_probes]
         html_bytes = len(payload.html.encode("utf-8"))
         low_content_reason = self.classify_low_content_reason(
@@ -296,9 +300,10 @@ class BrowserAcquisitionResultBuilder:
             probes_summary,
         )
         screenshot_started_at = time.perf_counter()
-        screenshot_path = await self.capture_browser_screenshot(payload.page)
-        payload.phase_timings_ms["screenshot_capture"] = self.elapsed_ms(screenshot_started_at)
-        return screenshot_path
+        try:
+            return await self.capture_browser_screenshot(payload.page)
+        finally:
+            payload.phase_timings_ms["screenshot_capture"] = self.elapsed_ms(screenshot_started_at)
 
     async def _capture_listing_artifacts(
         self,

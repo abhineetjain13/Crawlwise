@@ -961,6 +961,7 @@ async def test_invoke_run_browser_attempts_skips_host_policy_for_legacy_signatur
         requested_fields=["price"],
         listing_recovery_mode="expand",
         capture_page_markdown=True,
+        capture_screenshot=False,
         proxies=[None],
         host_policy=HostProtectionPolicy(host="example.com"),
     )

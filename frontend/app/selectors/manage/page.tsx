@@ -493,7 +493,7 @@ export default function DomainMemoryManagePage() {
  title="Domain Memory"
  description="Manage learned selectors, run profiles, cookies, and recent learning by domain."
  actions={
- <Button type="button" variant="secondary" onClick={() => void loadWorkspace()} disabled={loading}>
+ <Button type="button" variant="secondary" className="h-[var(--control-height)]" onClick={() => void loadWorkspace()} disabled={loading}>
  <RefreshCcw className="size-3.5" />
  {loading ? "Refreshing..." : "Refresh"}
  </Button>

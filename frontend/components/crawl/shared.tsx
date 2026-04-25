@@ -552,17 +552,17 @@ export const LogTerminal = memo(function LogTerminal({
     >
       {logs.length
         ? logs.map((log) => (
-            <div key={log.id} className="font-mono text-sm leading-6">
-              <span className="text-muted">[{formatTimeHms(log.created_at)}]</span>{" "}
+            <div key={log.id} className={cn("font-mono text-sm leading-6 font-light", logLineTone(log.level))}>
+              <span className="opacity-65">[{formatTimeHms(log.created_at)}]</span>{" "}
               <span
                 className={cn(
-                  "text-sm font-semibold text-muted uppercase inline-flex items-center px-1.5 py-0.5",
+                  "inline-flex items-center px-1.5 py-0.5 text-sm font-normal uppercase",
                   logTone(log.level),
                 )}
               >
                 {normalizeLogLevel(log.level)}
               </span>{" "}
-              <span>{sanitizeLogMessage(log.message)}</span>
+              <span className="font-light">{sanitizeLogMessage(log.message)}</span>
             </div>
           ))
         : (
@@ -1143,10 +1143,16 @@ function validateRegex(value: string): ValidationState {
 
 function logTone(level: string) {
  const normalized = normalizeLogLevel(level);
- if (normalized ==="WARN") return"border-transparent bg-transparent text-warning";
+ if (normalized ==="WARN" || normalized === "WARNING") return"border-transparent bg-transparent text-warning";
  if (normalized ==="ERROR") return"border-transparent bg-transparent text-danger";
- if (normalized ==="PROXY") return"border-transparent bg-transparent text-accent";
- return"border-transparent bg-transparent text-[var(--text-secondary)]";
+ return"border-transparent bg-transparent text-[var(--terminal-fg)]";
+}
+
+function logLineTone(level: string) {
+ const normalized = normalizeLogLevel(level);
+ if (normalized ==="WARN" || normalized === "WARNING") return"text-warning";
+ if (normalized ==="ERROR") return"text-danger";
+ return"text-[var(--terminal-fg)]";
 }
 
 function normalizeLogLevel(level: string) {

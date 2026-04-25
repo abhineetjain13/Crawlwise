@@ -20,14 +20,16 @@ describe("Dropdown", () => {
 
     fireEvent.click(screen.getByRole("combobox", { name: "Surface" }));
 
+    const combobox = screen.getByRole("combobox", { name: "Surface" });
     const listbox = screen.getByRole("listbox");
-    const activeDescendant = listbox.getAttribute("aria-activedescendant");
+    const activeDescendant = combobox.getAttribute("aria-activedescendant");
     const activeOption = screen.getByRole("option", { name: "Jobs Detail" });
     expect(activeOption.id).toMatch(/jobs-detail$/);
     expect(activeOption.id).not.toBe("jobs / detail");
     expect(activeOption.id).not.toBe("");
     expect(activeOption.id).not.toContain(" ");
-    expect(listbox).toHaveAttribute("aria-activedescendant", activeOption.id);
+    expect(combobox).toHaveAttribute("aria-activedescendant", activeOption.id);
+    expect(listbox).not.toHaveAttribute("aria-activedescendant");
     expect(document.getElementById(activeDescendant ?? "")).toBe(activeOption);
 
     const otherOption = screen.getByRole("option", { name: "Commerce Listing" });

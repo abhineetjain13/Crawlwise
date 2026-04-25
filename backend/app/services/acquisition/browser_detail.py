@@ -274,6 +274,9 @@ async def expand_all_interactive_elements_impl(
                     continue
                 if not bool(snapshot.get("visible")) or not bool(snapshot.get("actionable")):
                     continue
+                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
+                    diagnostics["status"] = "time_budget_reached"
+                    break
                 await handle.scroll_into_view_if_needed()
                 try:
                     await handle.click(timeout=click_timeout_ms)
@@ -290,6 +293,9 @@ async def expand_all_interactive_elements_impl(
                 expanded_label = label or probe
                 if expanded_label:
                     expanded_elements.append(expanded_label)
+                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
+                    diagnostics["status"] = "time_budget_reached"
+                    break
             except Exception as exc:
                 interaction_failures.append(str(exc))
     if diagnostics["status"] == "attempted":

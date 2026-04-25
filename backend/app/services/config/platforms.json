@@ -371,6 +371,22 @@
       ]
     },
     {
+      "family": "belk",
+      "domain_patterns": [
+        "belk.com"
+      ],
+      "html_contains": [
+        "belk.com",
+        "product-tile",
+        "brandName"
+      ],
+      "adapter_names": [
+        "belk"
+      ],
+      "job_platform": false,
+      "requires_browser": true
+    },
+    {
       "family": "myntra",
       "domain_patterns": [
         "myntra.com"
@@ -385,6 +401,26 @@
       ],
       "job_platform": false,
       "requires_browser": false
+    },
+    {
+      "family": "nike",
+      "domain_patterns": [
+        "nike.com",
+        "nike.in",
+        "nike.co.in",
+        "nike.co.uk",
+        "nike.com.au",
+        "nike.ca"
+      ],
+      "html_contains": [
+        "__PRELOADED_STATE__",
+        "skuData"
+      ],
+      "adapter_names": [
+        "nike"
+      ],
+      "job_platform": false,
+      "requires_browser": true
     },
     {
       "family": "nextjs",

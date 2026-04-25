@@ -28,7 +28,7 @@ from app.services.llm_provider_client import call_provider_with_retry, estimate_
 from app.services.llm_types import LLMTaskResult
 from bs4 import BeautifulSoup, Comment, Tag
 from app.services.record_export_service import render_markdown_block
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,40 @@ class _SchemaInferencePayload(TypedDict):
     absent_fields: list[_SchemaFieldName]
 
 
+class _ProductIntelligenceEnrichmentPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    normalized_title: str = ""
+    style_name: str = ""
+    model_name: str = ""
+    inferred_attributes: dict[str, Any] = Field(default_factory=dict)
+    suggested_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    match_explanation: str = ""
+    mismatch_risks: list[str] = Field(default_factory=list)
+    reason_updates: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("reason_updates")
+    @classmethod
+    def _validate_reason_updates(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        allowed = {
+            "reason_name",
+            "reason_code",
+            "description",
+            "source",
+            "timestamp",
+            "conflicting_value",
+            "resolution_action",
+        }
+        for item in value:
+            unknown = set(item) - allowed
+            if unknown:
+                raise ValueError(
+                    f"unknown reason_updates keys: {', '.join(sorted(unknown))}"
+                )
+        return value
+
+
 _PAYLOAD_ADAPTERS = {
     "direct_record_extraction": TypeAdapter(list[dict[_FieldKey, Any]]),
     "xpath_discovery": TypeAdapter(list[_XPathSelector]),
@@ -112,6 +146,7 @@ _PAYLOAD_ADAPTERS = {
     "field_cleanup_review": TypeAdapter(_FieldCleanupReviewPayload),
     "page_classification": TypeAdapter(_PageClassificationPayload),
     "schema_inference": TypeAdapter(_SchemaInferencePayload),
+    "product_intelligence_enrichment": TypeAdapter(_ProductIntelligenceEnrichmentPayload),
 }
 
 

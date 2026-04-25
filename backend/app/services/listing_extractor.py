@@ -12,6 +12,8 @@ from app.services.config.extraction_rules import (
     JOB_LISTING_DETAIL_PATH_MARKERS,
     LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_ACTION_NOISE_PATTERNS,
+    LISTING_BRAND_MAX_WORDS,
+    LISTING_BRAND_SELECTORS,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_LABEL_NOISE_TOKENS,
@@ -122,6 +124,13 @@ def _structured_listing_record(
             record["title"] = fallback_title
     if not record.get("title"):
         return {}
+    if surface == "ecommerce_listing" and not clean_text(record.get("brand")):
+        inferred_brand = _infer_belk_listing_brand(
+            url=str(record.get("url") or ""),
+            title=str(record.get("title") or ""),
+        )
+        if inferred_brand:
+            record["brand"] = inferred_brand
     if _url_is_structural(url, page_url):
         return {}
     return _finalize_listing_price_fields(finalize_record(record, surface=surface))
@@ -1109,6 +1118,73 @@ def _label_value_pair_is_noise(label: str) -> bool:
     return any(token in normalized for token in LISTING_LABEL_NOISE_TOKENS)
 
 
+def _extract_brand_signal_from_card(card, title: str) -> str | None:
+    title_text = clean_text(title).casefold()
+    for selector in LISTING_BRAND_SELECTORS:
+        try:
+            matches = card.css(str(selector))
+        except SelectolaxError:
+            continue
+        for node in matches:
+            value = clean_text(
+                _node_attr(node, "content")
+                or _node_attr(node, "title")
+                or _node_attr(node, "aria-label")
+                or _node_text(node)
+            )
+            if not value:
+                continue
+            if value.casefold() == title_text:
+                continue
+            if PRICE_RE.search(value):
+                continue
+            if len(re.findall(r"[a-z0-9]+", value, flags=re.I)) > LISTING_BRAND_MAX_WORDS:
+                continue
+            if _listing_title_is_noise(value):
+                continue
+            return value
+    return None
+
+
+def _infer_belk_listing_brand(*, url: str, title: str) -> str | None:
+    try:
+        parsed = urlsplit(str(url or ""))
+    except ValueError:
+        return None
+    host = str(parsed.hostname or "").removeprefix("www.").lower()
+    if host != "belk.com":
+        return None
+    segments = [segment for segment in str(parsed.path or "").split("/") if segment]
+    if len(segments) < 2 or segments[0].lower() != "p":
+        return None
+    slug_tokens = _listing_brand_tokens(segments[1])
+    title_tokens = _listing_brand_tokens(title)
+    if len(slug_tokens) < 2 or len(title_tokens) < 2:
+        return None
+    for start in range(max(1, len(slug_tokens) - len(title_tokens) + 1)):
+        if slug_tokens[start : start + len(title_tokens)] != title_tokens:
+            continue
+        brand_tokens = slug_tokens[:start]
+        if not brand_tokens or len(brand_tokens) > 5:
+            return None
+        return " ".join(_format_brand_token(token) for token in brand_tokens)
+    return None
+
+
+def _listing_brand_tokens(value: object) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
+        if token
+    ]
+
+
+def _format_brand_token(token: str) -> str:
+    if token in {"pga", "usa", "nba", "nfl"}:
+        return token.upper()
+    return token.capitalize()
+
+
 def _listing_record_from_card(
     card,
     page_url: str,
@@ -1208,6 +1284,14 @@ def _listing_record_from_card(
         selector_rules=selector_rules,
         selector_trace_candidates=selector_trace_candidates,
     )
+    if not is_job and not candidates.get("brand"):
+        brand_text = _extract_brand_signal_from_card(card, title)
+        if brand_text:
+            add_candidate(candidates, "brand", brand_text)
+    if not is_job and not candidates.get("brand"):
+        inferred_brand = _infer_belk_listing_brand(url=url, title=title)
+        if inferred_brand:
+            add_candidate(candidates, "brand", inferred_brand)
     if image_urls and not candidates.get("image_url"):
         add_candidate(candidates, "image_url", image_urls[0])
     if best_same_url_text and not candidates.get("description"):

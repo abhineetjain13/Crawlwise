@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings
 
 from app.services.config.runtime_settings import _settings_config
 
+SUPPORTED_LLM_PROVIDERS = frozenset({"groq", "anthropic", "nvidia"})
+
 
 class LLMRuntimeSettings(BaseSettings):
     """LLM_* exports strip the LLM_ prefix before resolving settings attributes."""
@@ -46,4 +48,4 @@ class LLMRuntimeSettings(BaseSettings):
 
 llm_runtime_settings = LLMRuntimeSettings()
 
-__all__ = ["LLMRuntimeSettings", "llm_runtime_settings"]
+__all__ = ["LLMRuntimeSettings", "SUPPORTED_LLM_PROVIDERS", "llm_runtime_settings"]

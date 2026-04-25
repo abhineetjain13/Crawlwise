@@ -1764,6 +1764,46 @@ async def test_browser_fetch_uses_aom_expansion_when_dom_keyword_scan_misses() -
 
 
 @pytest.mark.asyncio
+async def test_dom_detail_expansion_stops_after_click_exceeds_time_budget() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1></body></html>",
+        labels=[
+            {"label": "Details", "attributes": {"aria-controls": "details"}},
+            {"label": "Materials", "attributes": {"aria-controls": "materials"}},
+        ],
+    )
+
+    async def _snapshot(handle: _FakeHandle) -> dict[str, object]:
+        return {
+            "probe": handle.label.lower(),
+            "label": handle.label.lower(),
+            "aria_expanded": "",
+            "href": "",
+            "aria_controls": handle.attributes.get("aria-controls", ""),
+            "data_qa_action": "",
+            "class_name": "",
+            "tag_name": handle.tag_name,
+            "visible": True,
+            "actionable": True,
+        }
+
+    diagnostics = await browser_detail.expand_all_interactive_elements_impl(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=None,
+        detail_expand_selectors=("button",),
+        detail_expansion_keywords=lambda *_args, **_kwargs: ("details", "materials"),
+        interactive_candidate_snapshot=_snapshot,
+        elapsed_ms=lambda _started_at: 999 if page.expanded else 0,
+        max_elapsed_ms=10,
+    )
+
+    assert diagnostics["status"] == "time_budget_reached"
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["details"]
+
+
+@pytest.mark.asyncio
 async def test_browser_fetch_aom_expansion_respects_interaction_cap() -> None:
     original_limit = crawler_runtime_settings.detail_aom_expand_max_interactions
     crawler_runtime_settings.detail_aom_expand_max_interactions = 1
@@ -2387,11 +2427,40 @@ async def test_browser_fetch_logs_non_usable_outcomes(caplog: pytest.LogCaptureF
             "https://example.com/empty",
             5,
             surface="ecommerce_listing",
+            capture_screenshot=True,
             runtime_provider=_fake_runtime,
         )
 
     assert result.browser_diagnostics["browser_outcome"] == "low_content_shell"
     assert any(
+        "Browser acquisition outcome=low_content_shell url=https://example.com/empty"
+        in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_respects_disabled_screenshot_capture(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    with caplog.at_level("WARNING", logger=browser_page_flow.logger.name):
+        result = await browser_runtime.browser_fetch(
+            "https://example.com/empty",
+            5,
+            surface="ecommerce_listing",
+            capture_screenshot=False,
+            runtime_provider=_fake_runtime,
+        )
+
+    assert result.browser_diagnostics["browser_outcome"] == "low_content_shell"
+    assert result.browser_diagnostics["phase_timings_ms"]["screenshot_capture"] == 0
+    assert not result.artifacts.get("browser_screenshot_path")
+    assert not any(
         "Browser acquisition outcome=low_content_shell url=https://example.com/empty"
         in record.message
         for record in caplog.records

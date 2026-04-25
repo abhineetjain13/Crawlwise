@@ -12,6 +12,10 @@ from app.models.crawl import (
     DomainMemory,
     DomainRunProfile,
     HostProtectionMemory,
+    ProductIntelligenceCandidate,
+    ProductIntelligenceJob,
+    ProductIntelligenceMatch,
+    ProductIntelligenceSourceProduct,
     ReviewPromotion,
 )
 from app.models.llm import LLMCostLog
@@ -26,6 +30,7 @@ from app.services.dashboard_service import (
     reset_application_data,
     reset_crawl_data,
     reset_domain_memory,
+    reset_product_intelligence,
 )
 from sqlalchemy import select
 from app.core.database import SessionLocal
@@ -297,6 +302,67 @@ async def test_resets_commit_when_session_already_has_an_open_transaction(
         assert surviving_run is None
         assert surviving_record is None
         assert surviving_memory is None
+
+
+@pytest.mark.asyncio
+async def test_reset_product_intelligence_preserves_crawl_and_domain_memory(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/product/widget",
+            "surface": "ecommerce_detail",
+        },
+    )
+    db_session.add(DomainMemory(domain="example.com", surface="ecommerce_detail", selectors={}))
+    job = ProductIntelligenceJob(user_id=test_user.id, options={}, summary={})
+    db_session.add(job)
+    await db_session.flush()
+    source = ProductIntelligenceSourceProduct(
+        job_id=job.id,
+        source_url="https://example.com/product/widget",
+        brand="Levi's",
+        normalized_brand="levi's",
+        title="511 Jeans",
+        payload={},
+    )
+    db_session.add(source)
+    await db_session.flush()
+    candidate = ProductIntelligenceCandidate(
+        job_id=job.id,
+        source_product_id=source.id,
+        url="https://www.levi.com/p/511",
+        payload={},
+    )
+    db_session.add(candidate)
+    await db_session.flush()
+    db_session.add(
+        ProductIntelligenceMatch(
+            job_id=job.id,
+            source_product_id=source.id,
+            candidate_id=candidate.id,
+            candidate_url=candidate.url,
+            candidate_domain="levi.com",
+        )
+    )
+    await db_session.commit()
+
+    result = await reset_product_intelligence(db_session)
+
+    assert result["product_intelligence_jobs_deleted"] == 1
+    for model in (
+        ProductIntelligenceMatch,
+        ProductIntelligenceCandidate,
+        ProductIntelligenceSourceProduct,
+        ProductIntelligenceJob,
+    ):
+        assert (await db_session.execute(select(model))).scalars().all() == []
+    assert (await db_session.execute(select(CrawlRun))).scalar_one().id == run.id
+    assert (await db_session.execute(select(DomainMemory))).scalars().all() != []
 
 
 @pytest.mark.asyncio

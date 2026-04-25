@@ -19,7 +19,11 @@ from app.services.config.field_mappings import (
 from app.services.config.extraction_rules import (
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
+    DETAIL_COLLECTION_PATH_TOKENS,
+    DETAIL_CURRENT_PRICE_SELECTORS,
     DETAIL_NON_PAGE_FILE_EXTENSIONS,
+    DETAIL_ORIGINAL_PRICE_SELECTORS,
+    DETAIL_PRODUCT_PATH_TOKENS,
     DETAIL_UTILITY_PATH_TOKENS,
     DETAIL_TITLE_SOURCE_RANKS,
     LISTING_ALT_TEXT_TITLE_PATTERN,
@@ -609,6 +613,8 @@ def _detail_url_looks_like_product(url: str) -> bool:
             return False
     if _detail_url_is_utility(url):
         return False
+    if _detail_url_is_collection_like(url):
+        return False
     if any(token in terminal for token in ("category", "collections", "search", "sale")):
         return False
     return any(separator in terminal for separator in ("-", "_"))
@@ -620,6 +626,16 @@ def _detail_url_is_utility(url: str) -> bool:
         if token
     }
     return any(token in path_tokens for token in DETAIL_UTILITY_PATH_TOKENS)
+
+def _detail_url_is_collection_like(url: str) -> bool:
+    path_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower())
+        if token
+    }
+    if any(token in path_tokens for token in DETAIL_PRODUCT_PATH_TOKENS):
+        return False
+    return any(token in path_tokens for token in DETAIL_COLLECTION_PATH_TOKENS)
 
 def _record_matches_requested_detail_identity(
     record: dict[str, Any],
@@ -1306,6 +1322,8 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         if str(source).strip()
     }
     if _detail_title_is_noise(title):
+        return True
+    if _detail_url_is_collection_like(page_url):
         return True
     generic_detail_fields = (
         "price",
@@ -2623,6 +2641,20 @@ def _backfill_detail_price_from_html(record: dict[str, Any], *, html: str) -> No
         selected_variant["price"] = price
         if currency and selected_variant.get("currency") in (None, "", [], {}):
             selected_variant["currency"] = currency
+    original_price = _detail_original_price_from_html(soup, currency=currency)
+    if original_price not in (None, "", [], {}) and record.get("original_price") in (
+        None,
+        "",
+        [],
+        {},
+    ):
+        record["original_price"] = original_price
+    if (
+        isinstance(selected_variant, dict)
+        and original_price not in (None, "", [], {})
+        and selected_variant.get("original_price") in (None, "", [], {})
+    ):
+        selected_variant["original_price"] = original_price
 
 def _backfill_variants_from_dom_if_missing(
     record: dict[str, Any],
@@ -2703,6 +2735,36 @@ def _detail_price_from_html(soup: BeautifulSoup, *, currency: str | None) -> str
         )
         if normalized:
             return normalized
+    visible_price = _detail_price_from_selector_text(
+        soup,
+        selectors=DETAIL_CURRENT_PRICE_SELECTORS,
+        currency=currency,
+    )
+    if visible_price:
+        return visible_price
+    return None
+
+def _detail_original_price_from_html(soup: BeautifulSoup, *, currency: str | None) -> str | None:
+    return _detail_price_from_selector_text(
+        soup,
+        selectors=DETAIL_ORIGINAL_PRICE_SELECTORS,
+        currency=currency,
+    )
+
+def _detail_price_from_selector_text(
+    soup: BeautifulSoup,
+    *,
+    selectors: tuple[str, ...],
+    currency: str | None,
+) -> str | None:
+    for selector in selectors:
+        for node in soup.select(selector):
+            raw_value = node.get("aria-label") if hasattr(node, "get") else None
+            if raw_value in (None, "", [], {}):
+                raw_value = node.get_text(" ", strip=True)
+            normalized = _normalize_detail_price_candidate(raw_value, currency=currency)
+            if normalized:
+                return normalized
     return None
 
 def _detail_currency_from_html(soup: BeautifulSoup) -> str | None:

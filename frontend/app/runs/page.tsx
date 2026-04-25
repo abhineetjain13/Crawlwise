@@ -189,8 +189,7 @@ export default function RunsPage() {
  title="Run History"
  actions={
  <Link href="/crawl"className="no-underline">
- <Button variant="primary"size="sm">
- <Plus className="size-3.5"/>
+ <Button variant="primary" className="h-[var(--control-height)]"><Plus className="size-3.5"/>
  New Crawl
  </Button>
  </Link>
@@ -225,8 +224,8 @@ export default function RunsPage() {
  ]}
  className="w-full md:w-[180px]"
  />
- <Button onClick={applyFilters} size="sm">Filter</Button>
- <Button variant="ghost"onClick={resetFilters} size="sm">Reset</Button>
+ <Button onClick={applyFilters} className="h-[var(--control-height)]">Filter</Button>
+ <Button variant="ghost" onClick={resetFilters} className="h-[var(--control-height)]">Reset</Button>
  </div>
  </SurfacePanel>
 

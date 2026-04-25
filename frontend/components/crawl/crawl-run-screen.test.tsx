@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from"vitest";
 import type { CrawlRecord, CrawlRun, DomainRecipe } from"../../lib/api/types";
 import { POLLING_INTERVALS } from"../../lib/constants/timing";
 import { TopBarProvider } from"../layout/top-bar-context";
-import { CrawlRunScreen } from"./crawl-run-screen";
+import { CrawlRunScreen, storeProductIntelligencePrefill } from"./crawl-run-screen";
 
 const replaceMock = vi.fn();
 
@@ -229,6 +229,7 @@ describe("CrawlRunScreen", () => {
 
  beforeEach(() => {
  vi.clearAllMocks();
+ window.sessionStorage.clear();
  apiMock.getCrawl.mockResolvedValue(terminalRun(101));
  apiMock.getRecords.mockImplementation(async (_runId: number, params?: { page?: number; limit?: number }) => {
  const limit = params?.limit ?? 100;
@@ -246,6 +247,95 @@ describe("CrawlRunScreen", () => {
  apiMock.saveDomainRunProfile.mockResolvedValue(makeDomainRecipe().saved_run_profile);
  apiMock.applyDomainRecipeFieldAction.mockResolvedValue({});
  apiMock.deleteSelector.mockResolvedValue(undefined);
+ });
+
+ it("prefills Product Intelligence from selected listing records", async () => {
+ apiMock.getCrawl.mockResolvedValue({
+ ...terminalRun(101),
+ surface:"ecommerce_listing",
+ url:"https://www.belk.com/category",
+ settings: { crawl_module:"category", crawl_mode:"single"},
+ });
+ apiMock.getRecords.mockResolvedValue({
+ items: [
+ {
+ ...makeRecord(1),
+ source_url:"https://www.belk.com/p/1",
+ data: { brand:"Levi's", title:"511 Jeans", price:"$59.99", url:"https://www.belk.com/p/1"},
+ },
+ ],
+ meta: { page: 1, limit: 100, total: 1 },
+ });
+
+ renderRunScreen();
+
+ const productButton = await screen.findByRole("button", { name:"Product Intelligence (1)"});
+ fireEvent.click(productButton);
+
+ expect(replaceMock).toHaveBeenCalledWith("/product-intelligence");
+ expect(JSON.parse(window.sessionStorage.getItem("product-intelligence-prefill-v1") || "{}")).toEqual({
+ source_run_id: 101,
+ source_domain:"https://www.belk.com/category",
+ records: [
+ {
+ id: 1,
+ run_id: 101,
+ source_url:"https://www.belk.com/p/1",
+ data: { brand:"Levi's", title:"511 Jeans", price:"$59.99", url:"https://www.belk.com/p/1"},
+ },
+ ],
+ });
+ });
+
+ it("falls back to reduced Product Intelligence prefill when session storage is full", () => {
+ const stored = new Map<string, string>();
+ const setItemMock = vi.fn((key: string, value: string) => {
+ stored.set(key, value);
+ });
+ const consoleSpy = vi.spyOn(console,"error").mockImplementation(() => {});
+ setItemMock.mockImplementationOnce(() => {
+ throw new DOMException("Quota exceeded","QuotaExceededError");
+ });
+ const storage = {
+ setItem: setItemMock,
+ getItem: (key: string) => stored.get(key) ?? null,
+ removeItem: (key: string) => {
+ stored.delete(key);
+ },
+ } as unknown as Storage;
+ try {
+ storeProductIntelligencePrefill(
+ {
+ source_run_id: 101,
+ source_domain:"https://www.belk.com/category",
+ records: [
+ {
+ id: 1,
+ run_id: 101,
+ source_url:"https://www.belk.com/p/1",
+ data: { brand:"Levi's", title:"511 Jeans", price:"$59.99", url:"https://www.belk.com/p/1"},
+ },
+ ],
+ },
+ storage,
+ );
+
+ expect(consoleSpy).toHaveBeenCalled();
+ expect(JSON.parse(storage.getItem("product-intelligence-prefill-v1") || "{}")).toEqual({
+ source_run_id: 101,
+ source_domain:"https://www.belk.com/category",
+ records: [
+ {
+ id: 1,
+ run_id: 101,
+ source_url:"https://www.belk.com/p/1",
+ data: {},
+ },
+ ],
+ });
+ } finally {
+ consoleSpy.mockRestore();
+ }
  });
 
  it("prefetches markdown before the Markdown tab is opened", async () => {
@@ -576,7 +666,7 @@ describe("CrawlRunScreen", () => {
 
  renderRunScreen();
 
- const batchButton = await screen.findByRole("button", { name:"Batch Crawl Results (1)"});
+ const batchButton = await screen.findByRole("button", { name:"Batch Crawl (1)"});
  fireEvent.click(batchButton);
 
  expect(replaceMock).toHaveBeenCalledWith("/crawl?module=pdp&mode=batch");
@@ -623,7 +713,7 @@ describe("CrawlRunScreen", () => {
  const logsTab = await screen.findByRole("button", { name:"Logs"});
  fireEvent.click(logsTab);
 
- const batchButton = await screen.findByRole("button", { name:"Batch Crawl Results (2)"});
+ const batchButton = await screen.findByRole("button", { name:"Batch Crawl (2)"});
  fireEvent.click(batchButton);
 
  expect(replaceMock).toHaveBeenCalledWith("/crawl?module=pdp&mode=batch");

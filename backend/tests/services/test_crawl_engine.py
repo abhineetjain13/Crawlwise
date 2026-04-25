@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from app.services import crawl_fetch_runtime
+from app.services.acquisition.host_protection_memory import HostProtectionPolicy
 from app.services import detail_extractor
+from app.services.adapters.belk import BelkAdapter
 from app.services.detail_extractor import _normalize_variant_record
 from app.services.extraction_runtime import extract_records
 
@@ -739,6 +741,92 @@ def test_extract_records_prefers_rendered_listing_fragments_over_thin_structured
     assert rows[0]["_source"] == "dom_listing"
     assert rows[0]["price"] == "19.99"
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
+
+
+@pytest.mark.asyncio
+async def test_belk_adapter_extracts_listing_brand_from_state_and_tiles() -> None:
+    html = """
+    <html>
+      <body>
+        <script>
+          window.__INITIAL_STATE__ = {
+            "search": {
+              "products": [
+                {
+                  "productName": "Slim Straight Jeans",
+                  "brandName": "Polo Ralph Lauren",
+                  "productUrl": "/p/polo-ralph-lauren-slim-straight-jeans/123.html",
+                  "salePrice": "$89.50",
+                  "imageUrl": "https://belk.scene7.com/is/image/Belk/123"
+                }
+              ]
+            }
+          };
+        </script>
+        <article class="product-tile">
+          <a href="/p/polo-ralph-lauren-slim-straight-jeans/123.html">
+            <img src="https://belk.scene7.com/is/image/Belk/123" alt="Slim Straight Jeans">
+            <span class="product-name">Slim Straight Jeans</span>
+          </a>
+          <span class="product-brand">Polo Ralph Lauren</span>
+          <span class="price">$89.50</span>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/c/men-jeans/",
+        html,
+        "ecommerce_listing",
+    )
+
+    assert result.records[0]["brand"] == "Polo Ralph Lauren"
+    assert result.records[0]["title"] == "Slim Straight Jeans"
+    assert result.records[0]["price"] == "89.50"
+
+
+def test_listing_extractor_extracts_brand_from_product_tile() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <article class="product-tile">
+            <a href="/p/polo-ralph-lauren-slim-straight-jeans/123.html">
+              <img src="/images/123.jpg" alt="Slim Straight Jeans">
+              <span class="product-name">Slim Straight Jeans</span>
+            </a>
+            <span class="product-brand">Polo Ralph Lauren</span>
+            <span class="price">$89.50</span>
+          </article>
+        </body></html>
+        """,
+        "https://www.belk.com/c/men-jeans/",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows[0]["brand"] == "Polo Ralph Lauren"
+
+
+def test_listing_extractor_infers_belk_brand_from_pdp_slug_when_fragment_lacks_brand() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <article>
+            <a href="/p/polo-ralph-lauren-6-inch-polo-prepster-stretch-twill-shorts/320160211731376.html?dwvar_320160211731376_color=250312822425">
+              <img src="/images/123.jpg" alt="6 Inch Polo Prepster Stretch Twill Shorts">
+              <span>6 Inch Polo Prepster Stretch Twill Shorts</span>
+            </a>
+            <span class="price">$225.00</span>
+          </article>
+        </body></html>
+        """,
+        "https://www.belk.com/men/mens-clothing/shorts/",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows[0]["brand"] == "Polo Ralph Lauren"
 
 
 def test_extract_records_prefers_generic_listing_rows_over_thin_adapter_rows() -> None:
@@ -1892,8 +1980,25 @@ async def test_fetch_page_keeps_http_for_structured_shopify_detail(
     async def unexpected_browser(url: str, timeout_seconds: float, **kwargs):
         raise AssertionError(f"browser fallback should not run for {url} {timeout_seconds} {kwargs}")
 
+    async def fake_should_prefer_browser_for_host(url: str) -> bool:
+        del url
+        return False
+
+    async def fake_load_host_protection_policy(url: str) -> HostProtectionPolicy:
+        return HostProtectionPolicy(host=url)
+
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", fake_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", unexpected_browser)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "should_prefer_browser_for_host",
+        fake_should_prefer_browser_for_host,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        fake_load_host_protection_policy,
+    )
 
     result = await crawl_fetch_runtime.fetch_page("https://example.com/products/hatch-jean")
 
