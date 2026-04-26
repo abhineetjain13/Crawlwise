@@ -188,3 +188,24 @@ def test_runtime_settings_reject_invalid_llm_confidence_threshold() -> None:
 
     with pytest.raises(ValueError, match="llm_confidence_threshold must be between 0 and 1"):
         CrawlerRuntimeSettings(llm_confidence_threshold=1.2)
+
+
+def test_runtime_settings_balanced_profile_defaults_longer_challenge_wait() -> None:
+    from app.services.config.runtime_settings import CrawlerRuntimeSettings
+
+    settings = CrawlerRuntimeSettings()
+
+    assert settings.performance_profile == "BALANCED"
+    assert settings.challenge_wait_max_seconds == 15
+
+
+def test_runtime_settings_default_url_timeout_includes_acquisition_slack() -> None:
+    from app.services.config.runtime_settings import CrawlerRuntimeSettings
+
+    settings = CrawlerRuntimeSettings(
+        url_process_timeout_seconds=20,
+        acquisition_attempt_timeout_seconds=30,
+        url_process_timeout_buffer_seconds=12,
+    )
+
+    assert settings.default_url_process_timeout_seconds() == 42.0

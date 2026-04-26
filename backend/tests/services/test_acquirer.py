@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.services.acquisition import acquirer
 from app.services.acquisition.acquirer import AcquisitionRequest, acquire
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.crawl_utils import normalize_target_url
@@ -118,3 +119,23 @@ def test_normalize_target_url_strips_signed_detail_context_query_params() -> Non
     )
 
     assert normalized == "https://www.mouser.in/ProductDetail/Phoenix-Contact/1509524"
+
+
+def test_resolve_fetch_mode_honors_explicit_empty_profile() -> None:
+    request = AcquisitionRequest(
+        run_id=1,
+        url="https://example.com",
+        plan=AcquisitionPlan(surface="ecommerce_detail"),
+        acquisition_profile={"prefer_browser": True, "fetch_mode": "browser_only"},
+    )
+
+    assert acquirer._resolve_fetch_mode(request, acquisition_profile={}) == "auto"
+    assert acquirer._resolve_browser_reason(
+        request=request,
+        acquisition_profile={},
+        requires_browser=False,
+    ) is None
+    assert acquirer._resolve_listing_recovery_mode(
+        request,
+        acquisition_profile={},
+    ) is None

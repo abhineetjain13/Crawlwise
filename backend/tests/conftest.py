@@ -185,7 +185,6 @@ async def _reset_async_acquisition_state():
 @pytest_asyncio.fixture(autouse=True)
 async def _dispose_global_app_engine():
     yield
-    await reset_fetch_runtime_state()
     await app_database.engine.dispose()
 
 

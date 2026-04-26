@@ -1,7 +1,7 @@
 export type User = {
  id: number;
  email: string;
- role:"user"|"admin";
+ role:"user"|"admin"|"harness";
  is_active: boolean;
  created_at: string;
  updated_at: string;
@@ -184,6 +184,135 @@ export type SelectorRecord = {
  updated_at: string;
 };
 
+export type ProductIntelligenceOptions = {
+ max_source_products: number;
+ max_candidates_per_product: number;
+ search_provider: string;
+ private_label_mode: "include"|"flag"|"exclude";
+ confidence_threshold: number;
+ allowed_domains: string[];
+ excluded_domains: string[];
+ llm_enrichment_enabled: boolean;
+};
+
+export type ProductIntelligenceSourceRecordInput = {
+ id?: number | null;
+ run_id?: number | null;
+ source_url?: string;
+ data: Record<string, unknown>;
+};
+
+export type ProductIntelligenceJobCreatePayload = {
+ source_run_id?: number | null;
+ source_record_ids?: number[];
+ source_records?: ProductIntelligenceSourceRecordInput[];
+ options: ProductIntelligenceOptions;
+};
+
+export type ProductIntelligenceDiscoveryPayload = ProductIntelligenceJobCreatePayload;
+
+export type ProductIntelligenceJob = {
+ id: number;
+ user_id: number;
+ source_run_id: number | null;
+ status: string;
+ options: Record<string, unknown>;
+ summary: Record<string, unknown>;
+ created_at: string;
+ updated_at: string;
+ completed_at: string | null;
+};
+
+export type ProductIntelligenceSourceProduct = {
+ id: number;
+ job_id: number;
+ source_run_id: number | null;
+ source_record_id: number | null;
+ source_url: string;
+ brand: string;
+ normalized_brand: string;
+ title: string;
+ sku: string;
+ mpn: string;
+ gtin: string;
+ price: number | null;
+ currency: string;
+ image_url: string;
+ is_private_label: boolean;
+ payload: Record<string, unknown>;
+ created_at: string;
+};
+
+export type ProductIntelligenceCandidate = {
+ id: number;
+ job_id: number;
+ source_product_id: number;
+ candidate_crawl_run_id: number | null;
+ url: string;
+ domain: string;
+ source_type: string;
+ query_used: string;
+ search_rank: number;
+ status: string;
+ payload: Record<string, unknown>;
+ created_at: string;
+ updated_at: string;
+};
+
+export type ProductIntelligenceMatch = {
+ id: number;
+ job_id: number;
+ source_product_id: number;
+ candidate_id: number;
+ candidate_record_id: number | null;
+ score: number;
+ score_label: string;
+ review_status: string;
+ source_price: number | null;
+ candidate_price: number | null;
+ currency: string;
+ availability: string;
+ candidate_url: string;
+ candidate_domain: string;
+ score_reasons: Record<string, unknown>;
+ llm_enrichment: Record<string, unknown>;
+ created_at: string;
+ updated_at: string;
+};
+
+export type ProductIntelligenceJobDetail = {
+ job: ProductIntelligenceJob;
+ source_products: ProductIntelligenceSourceProduct[];
+ candidates: ProductIntelligenceCandidate[];
+ matches: ProductIntelligenceMatch[];
+};
+
+export type ProductIntelligenceDiscoveryCandidate = {
+ source_record_id: number | null;
+ source_run_id: number | null;
+ source_url: string;
+ source_title: string;
+ source_brand: string;
+ source_price: number | null;
+ source_currency: string;
+ source_index: number;
+ url: string;
+ domain: string;
+ source_type: string;
+ query_used: string;
+ search_rank: number;
+ payload: Record<string, unknown>;
+ intelligence?: Record<string, unknown>;
+};
+
+export type ProductIntelligenceDiscoveryResponse = {
+ job_id: number;
+ options: Record<string, unknown>;
+ source_count: number;
+ candidate_count: number;
+ candidates: ProductIntelligenceDiscoveryCandidate[];
+};
+
 export type DomainRunProfile = {
  version: number;
  fetch_profile: {
@@ -193,8 +322,8 @@ export type DomainRunProfile = {
  include_iframes: boolean;
  traversal_mode: "auto"|"scroll"|"load_more"|"view_all"|"paginate"| null;
  request_delay_ms: number;
- max_pages: number;
- max_scrolls: number;
+ max_pages?: number;
+ max_scrolls?: number;
  };
  locality_profile: {
  geo_country: string;
@@ -207,10 +336,6 @@ export type DomainRunProfile = {
  capture_network: "off"|"matched_only"|"all_small_json";
  capture_response_headers: boolean;
  capture_browser_diagnostics: boolean;
- };
- proxy_profile: {
- enabled: boolean;
- proxy_list: string[];
  };
  source_run_id?: number | null;
  saved_at?: string | null;

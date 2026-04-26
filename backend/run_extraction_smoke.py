@@ -320,6 +320,15 @@ async def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     corpus_path = Path(args.corpus)
+    if not corpus_path.exists():
+        if corpus_path == DEFAULT_CORPUS_PATH:
+            print(
+                "Acceptance corpus missing; skipping extraction smoke. "
+                "Provide --corpus PATH to run this check."
+            )
+            return 0
+        print(f"Acceptance corpus not found: {corpus_path}", file=sys.stderr)
+        return 2
     corpus = _load_corpus(corpus_path)
     selected_groups = args.groups or list(corpus)
     sites = _select_sites(corpus, selected_groups, args.limit)

@@ -17,6 +17,25 @@ NETWORK_PAYLOAD_NOISE_DOMAINS: Final[tuple[str, ...]] = (
     "sentry.io",
 )
 
+BLOCKED_BROWSER_ROUTE_TOKENS: Final[tuple[str, ...]] = (
+    "doubleclick",
+    "facebook",
+    "google-analytics",
+    "googletagmanager",
+)
+
+BLOCKED_BROWSER_RESOURCE_TYPES: Final[tuple[str, ...]] = (
+    "media",
+)
+
+PROTECTED_CHALLENGE_ROUTE_TOKENS: Final[tuple[str, ...]] = (
+    "akamai",
+    "akamaized",
+    "captcha-delivery",
+    "datadome",
+    "perimeterx",
+)
+
 NETWORK_PAYLOAD_NOISE_KEYWORDS: Final[tuple[str, ...]] = (
     "geolocation",
     "geoip",
@@ -59,6 +78,8 @@ HIGH_VALUE_NETWORK_PAYLOAD_BUDGET_MULTIPLIER: Final[int] = 4
 
 
 __all__ = [
+    "BLOCKED_BROWSER_RESOURCE_TYPES",
+    "BLOCKED_BROWSER_ROUTE_TOKENS",
     "ENDPOINT_TYPE_PATH_TOKENS",
     "GRAPHQL_PATH_TOKENS",
     "HIGH_VALUE_NETWORK_ENDPOINT_TYPES",
@@ -66,4 +87,5 @@ __all__ = [
     "NETWORK_PAYLOAD_NOISE_DOMAINS",
     "NETWORK_PAYLOAD_NOISE_KEYWORDS",
     "NETWORK_PAYLOAD_NOISE_URL_RE",
+    "PROTECTED_CHALLENGE_ROUTE_TOKENS",
 ]

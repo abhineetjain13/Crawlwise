@@ -16,6 +16,10 @@ from app.models.crawl import (
     DomainMemory,
     DomainRunProfile,
     HostProtectionMemory,
+    ProductIntelligenceCandidate,
+    ProductIntelligenceJob,
+    ProductIntelligenceMatch,
+    ProductIntelligenceSourceProduct,
     ReviewPromotion,
 )
 from app.models.llm import LLMCostLog
@@ -110,10 +114,12 @@ async def reset_application_data(session: AsyncSession) -> dict:
     async with _session_transaction(session):
         crawl_reset = await _reset_crawl_data_db(session)
         memory_reset = await _reset_domain_memory_db(session)
+        intelligence_reset = await _reset_product_intelligence_db(session)
     return {
         **crawl_reset,
         **await _reset_crawl_runtime_state(),
         **memory_reset,
+        **intelligence_reset,
     }
 
 
@@ -129,6 +135,11 @@ async def reset_crawl_data(session: AsyncSession) -> dict:
 async def reset_domain_memory(session: AsyncSession) -> dict:
     async with _session_transaction(session):
         return await _reset_domain_memory_db(session)
+
+
+async def reset_product_intelligence(session: AsyncSession) -> dict:
+    async with _session_transaction(session):
+        return await _reset_product_intelligence_db(session)
 
 
 async def _reset_crawl_data_db(session: AsyncSession) -> dict:
@@ -155,6 +166,17 @@ async def _reset_domain_memory_db(session: AsyncSession) -> dict:
         ),
     }
     await _reset_domain_memory_tables(session)
+    return counts
+
+
+async def _reset_product_intelligence_db(session: AsyncSession) -> dict:
+    counts = {
+        "product_intelligence_jobs_deleted": await _count_rows(session, ProductIntelligenceJob),
+        "product_intelligence_sources_deleted": await _count_rows(session, ProductIntelligenceSourceProduct),
+        "product_intelligence_candidates_deleted": await _count_rows(session, ProductIntelligenceCandidate),
+        "product_intelligence_matches_deleted": await _count_rows(session, ProductIntelligenceMatch),
+    }
+    await _reset_product_intelligence_tables(session)
     return counts
 
 
@@ -264,6 +286,44 @@ async def _reset_domain_memory_tables(session: AsyncSession) -> None:
                     "WHERE name IN ("
                     "'domain_field_feedback', 'domain_cookie_memory', "
                     "'domain_run_profiles', 'host_protection_memory', 'domain_memory'"
+                    ")"
+                )
+            )
+
+
+async def _reset_product_intelligence_tables(session: AsyncSession) -> None:
+    bind = session.get_bind()
+    dialect_name = bind.dialect.name if bind is not None else ""
+    await session.execute(delete(ProductIntelligenceMatch))
+    await session.execute(delete(ProductIntelligenceCandidate))
+    await session.execute(delete(ProductIntelligenceSourceProduct))
+    await session.execute(delete(ProductIntelligenceJob))
+    if dialect_name == "postgresql":
+        await _reset_postgres_identities(
+            session,
+            "product_intelligence_matches",
+            "product_intelligence_candidates",
+            "product_intelligence_source_products",
+            "product_intelligence_jobs",
+        )
+    elif dialect_name == "sqlite":
+        sqlite_sequence_exists = (
+            await session.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'sqlite_sequence'"
+                )
+            )
+        ).scalar()
+        if sqlite_sequence_exists:
+            await session.execute(
+                text(
+                    "DELETE FROM sqlite_sequence "
+                    "WHERE name IN ("
+                    "'product_intelligence_matches', "
+                    "'product_intelligence_candidates', "
+                    "'product_intelligence_source_products', "
+                    "'product_intelligence_jobs'"
                     ")"
                 )
             )

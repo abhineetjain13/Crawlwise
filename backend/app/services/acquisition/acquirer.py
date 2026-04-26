@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
+from pydantic import BaseModel
 
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import normalize_adapter_acquisition_url
@@ -51,6 +52,10 @@ class AcquisitionRequest:
     def max_scrolls(self) -> int:
         return self.plan.max_scrolls
 
+    @property
+    def max_records(self) -> int:
+        return self.plan.max_records
+
 @dataclass(slots=True)
 class AcquisitionResult:
     request: AcquisitionRequest
@@ -85,37 +90,58 @@ async def _emit_event(on_event: Any, level: str, message: str) -> None:
 
 
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
+    acquisition_profile = _coerce_acquisition_profile(request.acquisition_profile)
     requested_url = str(request.url or "")
     effective_url = await normalize_adapter_acquisition_url(requested_url) or requested_url
     runtime_policy = resolve_platform_runtime_policy(
         effective_url,
         surface=request.surface,
     )
-    fetch_mode = _resolve_fetch_mode(request)
-    prefer_browser = bool(request.acquisition_profile.get("prefer_browser")) or bool(
+    fetch_mode = _resolve_fetch_mode(request, acquisition_profile=acquisition_profile)
+    prefer_browser = bool(acquisition_profile.get("prefer_browser")) or bool(
         runtime_policy.get("requires_browser")
     )
     browser_reason = _resolve_browser_reason(
         request=request,
+        acquisition_profile=acquisition_profile,
         requires_browser=bool(runtime_policy.get("requires_browser")),
     )
     try:
+        raw_proxy_profile = acquisition_profile.get("proxy_profile")
+        proxy_profile = (
+            dict(raw_proxy_profile) if isinstance(raw_proxy_profile, Mapping) else None
+        )
+        raw_locality_profile = acquisition_profile.get("locality_profile")
+        locality_profile = (
+            dict(raw_locality_profile)
+            if isinstance(raw_locality_profile, Mapping)
+            else None
+        )
         await _emit_event(request.on_event, "info", f"Acquiring {effective_url}")
         result = await fetch_page(
             effective_url,
             run_id=request.run_id,
             proxy_list=request.proxy_list,
+            proxy_profile=proxy_profile,
+            locality_profile=locality_profile,
             fetch_mode=fetch_mode,
             prefer_browser=prefer_browser,
             surface=request.surface,
             traversal_mode=request.traversal_mode,
             requested_fields=list(request.requested_fields),
-            listing_recovery_mode=_resolve_listing_recovery_mode(request),
+            listing_recovery_mode=_resolve_listing_recovery_mode(
+                request,
+                acquisition_profile=acquisition_profile,
+            ),
             max_pages=request.max_pages,
             max_scrolls=request.max_scrolls,
+            max_records=request.max_records,
             browser_reason=browser_reason,
             capture_page_markdown=bool(
-                request.acquisition_profile.get("capture_page_markdown", False)
+                acquisition_profile.get("capture_page_markdown", False)
+            ),
+            capture_screenshot=bool(
+                acquisition_profile.get("capture_screenshot", False)
             ),
             on_event=request.on_event,
         )
@@ -140,11 +166,20 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     )
 
 
-def _resolve_fetch_mode(request: AcquisitionRequest) -> str:
-    normalized = str(request.acquisition_profile.get("fetch_mode") or "").strip().lower()
+def _resolve_fetch_mode(
+    request: AcquisitionRequest,
+    *,
+    acquisition_profile: Mapping[str, object] | None = None,
+) -> str:
+    profile = _coerce_acquisition_profile(
+        acquisition_profile
+        if acquisition_profile is not None
+        else request.acquisition_profile
+    )
+    normalized = str(profile.get("fetch_mode") or "").strip().lower()
     if normalized in {"auto", "http_only", "browser_only", "http_then_browser"}:
         return normalized
-    if bool(request.acquisition_profile.get("prefer_browser")):
+    if bool(profile.get("prefer_browser")):
         return "browser_only"
     return "auto"
 
@@ -163,10 +198,16 @@ def _headers_to_dict(headers: Mapping[str, object] | Any) -> dict[str, str]:
 def _resolve_browser_reason(
     *,
     request: AcquisitionRequest,
+    acquisition_profile: Mapping[str, object] | None = None,
     requires_browser: bool,
 ) -> str | None:
+    profile = _coerce_acquisition_profile(
+        acquisition_profile
+        if acquisition_profile is not None
+        else request.acquisition_profile
+    )
     retry_reason = _normalized_retry_reason(
-        request.acquisition_profile.get("retry_reason")
+        profile.get("retry_reason")
     )
     if retry_reason == "empty_extraction":
         return "empty-extraction retry"
@@ -177,9 +218,18 @@ def _resolve_browser_reason(
     return None
 
 
-def _resolve_listing_recovery_mode(request: AcquisitionRequest) -> str | None:
+def _resolve_listing_recovery_mode(
+    request: AcquisitionRequest,
+    *,
+    acquisition_profile: Mapping[str, object] | None = None,
+) -> str | None:
+    profile = _coerce_acquisition_profile(
+        acquisition_profile
+        if acquisition_profile is not None
+        else request.acquisition_profile
+    )
     retry_reason = _normalized_retry_reason(
-        request.acquisition_profile.get("retry_reason")
+        profile.get("retry_reason")
     )
     if retry_reason == "thin_listing":
         return retry_reason
@@ -197,3 +247,12 @@ def _normalized_retry_reason(value: object) -> str:
     if normalized.endswith("_retry"):
         normalized = normalized[: -len("_retry")]
     return normalized
+
+
+def _coerce_acquisition_profile(value: object) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, BaseModel):
+        payload = value.model_dump()
+        return payload if isinstance(payload, dict) else {}
+    return {}

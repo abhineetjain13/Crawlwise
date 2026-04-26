@@ -5,8 +5,38 @@ from pathlib import Path
 import pytest
 
 from app.services import crawl_fetch_runtime
+from app.services.acquisition.host_protection_memory import HostProtectionPolicy
+from app.services import detail_extractor
+from app.services.adapters.belk import BelkAdapter
 from app.services.detail_extractor import _normalize_variant_record
 from app.services.extraction_runtime import extract_records
+
+
+def test_listing_raw_json_max_records_does_not_trim_page_overshoot() -> None:
+    html = (
+        "["
+        + ",".join(
+            f'{{"title":"Product {index}","url":"https://example.com/p/{index}","price":"${index}.00"}}'
+            for index in range(1, 6)
+        )
+        + "]"
+    )
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/all",
+        "ecommerce_listing",
+        max_records=3,
+        content_type="application/json",
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Product 1",
+        "Product 2",
+        "Product 3",
+        "Product 4",
+        "Product 5",
+    ]
 
 
 def _js_shell_html() -> str:
@@ -120,6 +150,278 @@ def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts(
             "url": "https://example.com/products/widget-prime",
         }
     ]
+
+
+def test_extract_records_visual_listing_backfills_brand_from_brand_node_and_url() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/shoes/womens-shoes/sandals/flat/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "href": "/p/northside-dogwood-footbed-sandals/290092111811620.html",
+                    "x": 20,
+                    "y": 40,
+                    "width": 180,
+                    "height": 180,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Dogwood Footbed Sandals",
+                    "x": 24,
+                    "y": 190,
+                    "width": 170,
+                    "height": 24,
+                },
+                {
+                    "tag": "div",
+                    "text": "Northside",
+                    "ariaLabel": "brand",
+                    "x": 24,
+                    "y": 216,
+                    "width": 170,
+                    "height": 20,
+                },
+                {
+                    "tag": "div",
+                    "text": "$24.99",
+                    "x": 24,
+                    "y": 240,
+                    "width": 80,
+                    "height": 24,
+                },
+                {
+                    "tag": "a",
+                    "href": "/p/dv-dolce-vita-ubar-sandals/2900965UBAR.html",
+                    "x": 220,
+                    "y": 40,
+                    "width": 180,
+                    "height": 180,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Ubar Sandals",
+                    "x": 224,
+                    "y": 190,
+                    "width": 170,
+                    "height": 24,
+                },
+                {
+                    "tag": "div",
+                    "text": "$20.00",
+                    "x": 224,
+                    "y": 220,
+                    "width": 80,
+                    "height": 24,
+                },
+            ]
+        },
+    )
+
+    assert rows[0]["brand"] == "Northside"
+    assert rows[1]["brand"] == "Dv Dolce Vita"
+
+
+def test_extract_records_visual_listing_rejects_numeric_product_id_brand_prefix() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.desertcart.in/category/fashion/men/accessories",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "href": "/products/492216804-black-leather-belts-for-men?source=category",
+                    "x": 20,
+                    "y": 40,
+                    "width": 180,
+                    "height": 180,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Black Leather Belts for Men",
+                    "x": 24,
+                    "y": 190,
+                    "width": 170,
+                    "height": 24,
+                },
+                {
+                    "tag": "div",
+                    "text": "Rs. 2,791",
+                    "x": 24,
+                    "y": 220,
+                    "width": 80,
+                    "height": 24,
+                },
+            ]
+        },
+    )
+
+    assert rows[0]["title"] == "Black Leather Belts for Men"
+    assert "brand" not in rows[0]
+
+
+def test_extract_records_reads_desertcart_style_product_anchor_cards() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <a class="SearchResultsContainer_cardWrapper__0mkW_"
+             href="/products/492216804-black-leather-belts-for-men?source=category">
+            <div class="ProductCard_productCardContainer__svsD_">
+              <img src="/belt.jpg" alt="Black Leather Belts for Men">
+              <h3 class="ProductCoreDetails_title__m_0uZ">Black Leather Belts for Men</h3>
+              <span>Rs. 2,791</span>
+            </div>
+          </a>
+        </body></html>
+        """,
+        "https://www.desertcart.in/category/fashion/men/accessories",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows[0]["title"] == "Black Leather Belts for Men"
+    assert rows[0]["url"] == (
+        "https://www.desertcart.in/products/"
+        "492216804-black-leather-belts-for-men?source=category"
+    )
+    assert "brand" not in rows[0]
+
+
+def test_extract_records_honors_listing_max_records_above_fragment_default() -> None:
+    cards = "\n".join(
+        f"""
+        <a class="SearchResultsContainer_cardWrapper__0mkW_"
+           href="/products/{index}-widget-{index}?source=category">
+          <div class="ProductCard_productCardContainer__svsD_">
+            <h3 class="ProductCoreDetails_title__m_0uZ">Widget {index}</h3>
+            <span>Rs. {1000 + index}</span>
+          </div>
+        </a>
+        """
+        for index in range(1, 206)
+    )
+
+    rows = extract_records(
+        f"<html><body>{cards}</body></html>",
+        "https://www.desertcart.in/category/fashion/men/accessories",
+        "ecommerce_listing",
+        max_records=205,
+    )
+
+    assert len(rows) == 205
+
+
+def test_extract_records_visual_listing_orders_top_grid_before_lower_recommendations() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
+        "ecommerce_listing",
+        max_records=1,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "img",
+                    "href": "/p/crown-ivy-men-s-chambray-sport-coat/3203855BL1962J.html",
+                    "src": "/images/sport-coat.jpg",
+                    "alt": "Men's Chambray Sport Coat",
+                    "x": 907,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "score": 30,
+                },
+                {
+                    "tag": "div",
+                    "text": "$99.99",
+                    "x": 907,
+                    "y": 1098,
+                    "width": 120,
+                    "height": 24,
+                    "score": 18,
+                },
+                {
+                    "tag": "img",
+                    "href": "/p/izod-advantage-performance-polo-shirt-classic-fit/3203960IZAGB24R.html",
+                    "src": "/images/polo.jpg",
+                    "alt": "Men's Advantage Performance Polo Shirt Classic Fit",
+                    "x": 395,
+                    "y": 13129,
+                    "width": 160,
+                    "height": 228,
+                    "score": 4,
+                },
+                {
+                    "tag": "a",
+                    "href": "/p/izod-advantage-performance-polo-shirt-classic-fit/3203960IZAGB24R.html",
+                    "text": "Quick Add IZOD Men's Advantage Performance Polo Shirt Classic Fit $20.00 after coupon $50.00",
+                    "x": 395,
+                    "y": 13129,
+                    "width": 160,
+                    "height": 343,
+                    "score": 4,
+                },
+            ]
+        },
+    )
+
+    assert rows[0] == {
+        "source_url": "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
+        "_source": "visual_listing",
+        "title": "Men's Chambray Sport Coat",
+        "brand": "Crown Ivy",
+        "price": "99.99",
+        "currency": "USD",
+        "image_url": "https://www.belk.com/images/sport-coat.jpg",
+        "url": "https://www.belk.com/p/crown-ivy-men-s-chambray-sport-coat/3203855BL1962J.html",
+    }
+    assert [row["title"] for row in rows] == [
+        "Men's Chambray Sport Coat",
+        "Men's Advantage Performance Polo Shirt Classic Fit",
+    ]
+
+
+def test_detail_identity_codes_require_exact_match() -> None:
+    assert detail_extractor._detail_identity_codes_match(
+        {"ABC12345"},
+        {"ABC123456"},
+    ) is False
+    assert detail_extractor._detail_identity_codes_match(
+        {"ABC12345"},
+        {"ABC12345"},
+    ) is True
+
+
+def test_detail_identity_allows_canonical_product_url_with_variant_sku_suffix() -> None:
+    requested_url = (
+        "https://savannahs.com/collections/all-boots/products/"
+        "shadow-ban-30-soft-leather-black-boots-hl28112s"
+    )
+    record = {
+        "title": "Shadow Ban 30 soft leather black boots - 36",
+        "url": (
+            "https://savannahs.com/products/"
+            "shadow-ban-30-soft-leather-black-boots-hl28112s?variant=43633735827522"
+        ),
+        "sku": "HL28112S360",
+        "description": "Black leather ankle boots from Herbert Levine.",
+    }
+
+    assert (
+        detail_extractor.detail_record_rejection_reason(
+            record,
+            page_url=requested_url,
+            requested_page_url=requested_url,
+        )
+        is None
+    )
 
 
 def test_extract_records_rejects_visual_artifact_cta_and_footer_clusters() -> None:
@@ -250,7 +552,121 @@ def test_extract_records_keeps_visual_artifact_product_without_price_when_title_
     ]
 
 
-def test_extract_records_rejects_visual_artifact_auth_links() -> None:
+def test_extract_records_reads_listing_card_data_url_and_rejects_chrome_rows() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <div class="promos__item promos_title_content">
+            <a href="/products/hair-care/hair-care-accessories">Explore accessories</a>
+          </div>
+          <ul class="products-grid">
+            <li class="item product product-item">
+              <div class="product-item-link" data-url="/hair-care/hair-straighteners/airstrait-blue-copper">
+                <img src="/airstrait-blue.png" alt="">
+                <h3 class="card_product_name">
+                  <a class="product name product-item-name">Dyson Airstrait dryer and straightener Blue Copper</a>
+                </h3>
+                <span class="price">₹34,900.00</span>
+                <a href="javascript:void(0)">Add to cart</a>
+              </div>
+            </li>
+            <li class="item product product-item">
+              <div class="product-item-link" data-url="/hair-care/hair-straighteners/corrale-copper-nickel">
+                <img src="/corrale.png" alt="">
+                <h3 class="card_product_name">
+                  <a class="product name product-item-name">Dyson Corrale straightener Copper Nickel</a>
+                </h3>
+                <span class="price">₹29,900.00</span>
+                <a href="javascript:void(0)">Add to cart</a>
+              </div>
+            </li>
+          </ul>
+        </body></html>
+        """,
+        "https://www.dyson.in/hair-care/hair-straighteners",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Dyson Airstrait dryer and straightener Blue Copper",
+        "Dyson Corrale straightener Copper Nickel",
+    ]
+    assert rows[0]["url"] == (
+        "https://www.dyson.in/hair-care/hair-straighteners/airstrait-blue-copper"
+    )
+    assert rows[0]["price"] == "34900.00"
+
+
+def test_extract_records_keeps_adjacent_visual_product_cards_separate() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/beauty/makeup/face-makeup/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "img",
+                    "href": "/p/brand-alpha-foundation/111.html",
+                    "src": "/images/alpha-a.jpg",
+                    "alt": "Alpha Foundation",
+                    "x": 204,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "text": "",
+                },
+                {
+                    "tag": "img",
+                    "href": "/p/brand-alpha-foundation/111.html",
+                    "src": "/images/alpha-b.jpg",
+                    "alt": "Alpha Foundation",
+                    "x": 204,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "text": "",
+                },
+                {
+                    "tag": "img",
+                    "href": "/p/brand-beta-concealer/222.html",
+                    "src": "/images/beta-a.jpg",
+                    "alt": "Beta Concealer",
+                    "x": 587,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "text": "",
+                },
+                {
+                    "tag": "img",
+                    "href": "/p/brand-gamma-powder/333.html",
+                    "src": "/images/gamma-a.jpg",
+                    "alt": "Gamma Powder",
+                    "x": 970,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "text": "",
+                },
+            ]
+        },
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Alpha Foundation",
+        "Beta Concealer",
+        "Gamma Powder",
+    ]
+    assert [row["url"] for row in rows] == [
+        "https://www.belk.com/p/brand-alpha-foundation/111.html",
+        "https://www.belk.com/p/brand-beta-concealer/222.html",
+        "https://www.belk.com/p/brand-gamma-powder/333.html",
+    ]
+
+
+def test_extract_records_rejects_visual_artifact_auth_links_without_dropping_product() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.customink.com/products/sweatshirts/hoodies/71",
@@ -313,7 +729,17 @@ def test_extract_records_rejects_visual_artifact_auth_links() -> None:
         },
     )
 
-    assert rows == []
+    assert rows == [
+        {
+            "source_url": "https://www.customink.com/products/sweatshirts/hoodies/71",
+            "_source": "visual_listing",
+            "title": "Independent Trading Midweight Hooded Sweatshirt",
+            "price": "39.99",
+            "currency": "USD",
+            "image_url": "https://www.customink.com/images/hoodie-1.jpg",
+            "url": "https://www.customink.com/products/hoodies/independent-trading-midweight-hooded-sweatshirt/827800",
+        }
+    ]
 
 
 def test_extract_records_prefers_image_hint_over_brand_or_review_title_noise() -> None:
@@ -651,6 +1077,261 @@ def test_extract_records_prefers_rendered_listing_fragments_over_thin_structured
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
 
 
+def test_extract_records_prefers_browser_visual_rows_over_weak_promo_dom_rows() -> None:
+    html = """
+    <html><body>
+      <section>
+        <a href="/handbags/">Sunnies Sunglasses Shop</a>
+        <span>$50</span>
+      </section>
+      <section>
+        <a href="/mothers-day/">Designer Handbags & Accessories</a>
+        <span>$25</span>
+      </section>
+    </body></html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "text": "Super Soft Solid Microfiber Sheet Set",
+                    "href": "https://www.belk.com/p/modern-southern-home--super-soft-solid-microfiber-sheet-set-/92007011175487.html",
+                    "x": 10,
+                    "y": 20,
+                    "width": 220,
+                    "height": 40,
+                },
+                {
+                    "tag": "span",
+                    "text": "$22.50",
+                    "x": 10,
+                    "y": 70,
+                    "width": 80,
+                    "height": 20,
+                },
+                {
+                    "tag": "a",
+                    "text": "Signature Bath Rug",
+                    "href": "https://www.belk.com/p/modern-southern-home---signature-bath-rug/920089711724242.html",
+                    "x": 10,
+                    "y": 140,
+                    "width": 220,
+                    "height": 40,
+                },
+                {
+                    "tag": "span",
+                    "text": "$18.00",
+                    "x": 10,
+                    "y": 190,
+                    "width": 80,
+                    "height": 20,
+                },
+                {
+                    "tag": "a",
+                    "text": "Basic Bath Bundle",
+                    "href": "https://www.belk.com/p/modern-southern-home--basic-bath-bundle-/920071211789570.html",
+                    "x": 10,
+                    "y": 260,
+                    "width": 220,
+                    "height": 40,
+                },
+                {
+                    "tag": "span",
+                    "text": "$34.00",
+                    "x": 10,
+                    "y": 310,
+                    "width": 80,
+                    "height": 20,
+                },
+            ]
+        },
+    )
+
+    assert len(rows) == 3
+    assert {row["_source"] for row in rows} == {"visual_listing"}
+    assert {row["title"] for row in rows} == {
+        "Super Soft Solid Microfiber Sheet Set",
+        "Signature Bath Rug",
+        "Basic Bath Bundle",
+    }
+
+
+def test_extract_records_enriches_generic_listing_rows_from_matching_adapter_rows() -> None:
+    html = """
+    <html><body>
+      <article class="product-card">
+        <a href="/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html">Checkerboard Quilt Set</a>
+        <span>$22.50</span>
+      </article>
+    </body></html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        adapter_records=[
+            {
+                "title": "Checkerboard Quilt Set",
+                "brand": "Modern Southern Home",
+                "url": "https://www.belk.com/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html",
+                "_source": "belk_adapter",
+            }
+        ],
+    )
+
+    assert rows[0]["_source"] == "dom_listing"
+    assert rows[0]["brand"] == "Modern Southern Home"
+    assert rows[0]["price"] == "22.50"
+
+
+@pytest.mark.asyncio
+async def test_belk_adapter_extracts_listing_brand_from_state_and_tiles() -> None:
+    html = """
+    <html>
+      <body>
+        <script>
+          window.__INITIAL_STATE__ = {
+            "search": {
+              "products": [
+                {
+                  "productName": "Slim Straight Jeans",
+                  "brandName": "Polo Ralph Lauren",
+                  "productUrl": "/p/polo-ralph-lauren-slim-straight-jeans/123.html",
+                  "salePrice": "$89.50",
+                  "imageUrl": "https://belk.scene7.com/is/image/Belk/123"
+                }
+              ]
+            }
+          };
+        </script>
+        <article class="product-tile">
+          <a href="/p/polo-ralph-lauren-slim-straight-jeans/123.html">
+            <img src="https://belk.scene7.com/is/image/Belk/123" alt="Slim Straight Jeans">
+            <span class="product-name">Slim Straight Jeans</span>
+          </a>
+          <span class="product-brand">Polo Ralph Lauren</span>
+          <span class="price">$89.50</span>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/c/men-jeans/",
+        html,
+        "ecommerce_listing",
+    )
+
+    assert result.records[0]["brand"] == "Polo Ralph Lauren"
+    assert result.records[0]["title"] == "Slim Straight Jeans"
+    assert result.records[0]["price"] == "89.50"
+
+
+@pytest.mark.asyncio
+async def test_belk_adapter_extracts_title_brand_from_rendered_card_attrs() -> None:
+    html = """
+    <html><body>
+      <article class="product-tile" data-cnstrc-item-name="Cuddlebed 2.0 Mattress Pad" data-cnstrc-item-id="92002171202220">
+        <a href="/p/cuddlebed-cuddlebed-2-0-mattress-pad/92002171202220.html">
+          <img alt="Cuddlebed 2.0 Mattress Pad" src="https://belk.scene7.com/is/image/Belk/9200217">
+        </a>
+        <span>$22.50</span>
+      </article>
+      <article class="product-tile" data-cnstrc-item-name="Crown &amp; Ivy™ Hydrangea Vase">
+        <a href="/p/crown-ivy-hydrangea-vase/760161676226SPH0073IJ.html">
+          <img alt="Crown &amp; Ivy™ Hydrangea Vase" src="https://belk.scene7.com/is/image/Belk/7601616">
+        </a>
+      </article>
+    </body></html>
+    """
+
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        html,
+        "ecommerce_listing",
+    )
+
+    assert result.records[0]["title"] == "Cuddlebed 2.0 Mattress Pad"
+    assert result.records[0]["brand"] == "Cuddlebed"
+    assert result.records[0]["price"] == "22.50"
+    assert result.records[0]["product_id"] == "92002171202220"
+    assert result.records[1]["brand"] == "Crown & Ivy™"
+
+
+@pytest.mark.asyncio
+async def test_belk_adapter_infers_brand_from_url_when_title_is_truncated() -> None:
+    html = """
+    <html><body>
+      <article class="product-tile" data-cnstrc-item-name="500 Thread Count Damask Strip US Grown Cotton Softy-Around 95/5 Goose Feather/Down Pillow (2...">
+        <a href="/p/beautyrest-500-thread-count-damask-stripe-us-grown-cotton-softy-around-95-5-goose-feather-down-pillow/92002171202220.html">
+          <img alt="500 Thread Count Damask Strip US Grown Cotton Softy-Around 95/5 Goose Feather/Down Pillow (2..." src="https://belk.scene7.com/is/image/Belk/9200217">
+        </a>
+        <span>$75.50 - $95.50</span>
+      </article>
+    </body></html>
+    """
+
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        html,
+        "ecommerce_listing",
+    )
+
+    assert result.records[0]["brand"] == "Beautyrest"
+    assert result.records[0]["price"] == "75.50"
+
+
+def test_listing_extractor_extracts_brand_from_product_tile() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <article class="product-tile">
+            <a href="/p/polo-ralph-lauren-slim-straight-jeans/123.html">
+              <img src="/images/123.jpg" alt="Slim Straight Jeans">
+              <span class="product-name">Slim Straight Jeans</span>
+            </a>
+            <span class="product-brand">Polo Ralph Lauren</span>
+            <span class="price">$89.50</span>
+          </article>
+        </body></html>
+        """,
+        "https://www.belk.com/c/men-jeans/",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows[0]["brand"] == "Polo Ralph Lauren"
+
+
+def test_listing_extractor_does_not_infer_belk_brand_from_pdp_slug_when_fragment_lacks_brand() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <article>
+            <a href="/p/polo-ralph-lauren-6-inch-polo-prepster-stretch-twill-shorts/320160211731376.html?dwvar_320160211731376_color=250312822425">
+              <img src="/images/123.jpg" alt="6 Inch Polo Prepster Stretch Twill Shorts">
+              <span>6 Inch Polo Prepster Stretch Twill Shorts</span>
+            </a>
+            <span class="price">$225.00</span>
+          </article>
+        </body></html>
+        """,
+        "https://www.belk.com/men/mens-clothing/shorts/",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert "brand" not in rows[0]
+
+
 def test_extract_records_prefers_generic_listing_rows_over_thin_adapter_rows() -> None:
     rows = extract_records(
         "<html><body></body></html>",
@@ -963,6 +1644,242 @@ def test_extract_records_backfills_listing_price_from_network_payload_candidates
     ]
 
 
+def test_extract_records_backfills_listing_brand_and_range_price_from_network_payload_candidates() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Beyond Down Bed Pillow",
+                    url="https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+                    image_url="https://belk.scene7.com/is/image/Belk/9200217",
+                )
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "92002171202220",
+                                "name": "Beyond Down Bed Pillow",
+                                "brandName": "Beyond Down",
+                                "offers": {
+                                    "lowPrice": "21.00",
+                                    "highPrice": "26.00",
+                                    "priceCurrency": "USD",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Beyond Down Bed Pillow",
+            "url": "https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+            "image_url": "https://belk.scene7.com/is/image/Belk/9200217",
+            "price": "21.00",
+            "currency": "USD",
+            "brand": "Beyond Down",
+        }
+    ]
+
+
+def test_extract_records_backfills_listing_brand_from_network_when_dom_price_exists() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Beyond Down Bed Pillow",
+                    url="https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+                    price="$21.00",
+                )
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "92002171202220",
+                                "name": "Beyond Down Bed Pillow",
+                                "brandName": "Beyond Down",
+                                "offers": {
+                                    "lowPrice": "21.00",
+                                    "highPrice": "26.00",
+                                    "priceCurrency": "USD",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Beyond Down Bed Pillow",
+            "url": "https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+            "price": "21.00",
+            "currency": "USD",
+            "brand": "Beyond Down",
+        }
+    ]
+
+
+def test_extract_records_backfills_listing_brand_from_network_candidate_without_price() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Elite Airflow Jumbo Pillow",
+                    url="https://www.belk.com/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html",
+                    price="$15.00",
+                )
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "92002171202220",
+                                "productName": "Elite Airflow Jumbo Pillow",
+                                "brandName": "Sealy",
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Elite Airflow Jumbo Pillow",
+            "price": "15.00",
+            "currency": "USD",
+            "url": "https://www.belk.com/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html",
+            "brand": "Sealy",
+        }
+    ]
+
+
+def test_extract_records_backfills_listing_from_network_by_belk_product_id_when_title_differs() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_fragments": [
+                _rendered_listing_fragment(
+                    title="Promo Copy That Does Not Match Payload Title",
+                    url="https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+                    price="$21.00",
+                    image_url="https://belk.scene7.com/is/image/Belk/9200217",
+                )
+            ]
+        },
+        network_payloads=[
+            {
+                "body": {
+                    "result": {
+                        "items": [
+                            {
+                                "productId": "92002171202220",
+                                "name": "Beyond Down Bed Pillow",
+                                "brandName": "Beyond Down",
+                                "offers": {
+                                    "lowPrice": "21.00",
+                                    "priceCurrency": "USD",
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Promo Copy That Does Not Match Payload Title",
+            "url": "https://www.belk.com/p/beyond-down-bed-pillow/92002171202220.html",
+            "price": "21.00",
+            "currency": "USD",
+            "brand": "Beyond Down",
+        }
+    ]
+
+
+def test_extract_records_backfills_adapter_brand_by_belk_product_identity_when_urls_differ() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <article>
+            <a href="/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html?dwvar_color=White">
+              <img src="/images/9200217.jpg" alt="Elite Airflow Jumbo Pillow">
+              <span>Elite Airflow Jumbo Pillow</span>
+            </a>
+            <span class="price">$15.00</span>
+          </article>
+        </body></html>
+        """,
+        "https://www.belk.com/home/",
+        "ecommerce_listing",
+        max_records=10,
+        adapter_records=[
+            {
+                "title": "Elite Airflow Jumbo Pillow",
+                "brand": "Sealy",
+                "url": "https://www.belk.com/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html",
+                "_source": "belk_adapter",
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/home/",
+            "_source": "dom_listing",
+            "title": "Elite Airflow Jumbo Pillow",
+            "price": "15.00",
+            "currency": "USD",
+            "image_url": "https://www.belk.com/images/9200217.jpg",
+            "url": "https://www.belk.com/p/sealy-elite-airflow-jumbo-pillow/92002171202220.html?dwvar_color=White",
+            "brand": "Sealy",
+        }
+    ]
+
+
 def test_extract_records_rejects_external_rendered_listing_utility_links() -> None:
     rows = extract_records(
         "<html><body></body></html>",
@@ -1222,6 +2139,57 @@ def test_extract_records_recovers_listing_price_when_card_uses_currency_code_tex
             "image_url": "https://cdn.example.com/teddy.jpg",
         }
     ]
+
+
+def test_extract_records_replaces_generic_item_listing_title_with_product_text() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="thumbnail">
+          <h4 class="title">item</h4>
+          <a href="/test-sites/e-commerce/allinone/product/1">
+            Lenovo ThinkPad X1 Carbon
+          </a>
+          <p class="description">Lenovo ThinkPad X1 Carbon business laptop</p>
+          <h4 class="price">$1,299.00</h4>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Lenovo ThinkPad X1 Carbon"
+
+
+def test_extract_records_infers_listing_currency_from_locale_path_for_bare_price() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="/gb/products/widget"><h2>Widget Prime</h2></a>
+          <span class="price">24.99</span>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/gb/products",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["price"] == "24.99"
+    assert rows[0]["currency"] == "GBP"
 
 
 def test_extract_records_ignores_discount_badge_images_inside_listing_cards() -> None:
@@ -1802,8 +2770,25 @@ async def test_fetch_page_keeps_http_for_structured_shopify_detail(
     async def unexpected_browser(url: str, timeout_seconds: float, **kwargs):
         raise AssertionError(f"browser fallback should not run for {url} {timeout_seconds} {kwargs}")
 
+    async def fake_should_prefer_browser_for_host(url: str) -> bool:
+        del url
+        return False
+
+    async def fake_load_host_protection_policy(url: str) -> HostProtectionPolicy:
+        return HostProtectionPolicy(host=url)
+
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", fake_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", unexpected_browser)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "should_prefer_browser_for_host",
+        fake_should_prefer_browser_for_host,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        fake_load_host_protection_policy,
+    )
 
     result = await crawl_fetch_runtime.fetch_page("https://example.com/products/hatch-jean")
 
@@ -2191,6 +3176,47 @@ def test_extract_ecommerce_detail_rejects_fragment_backed_shell_payload_from_spa
         "ecommerce_detail",
         max_records=5,
         requested_page_url="https://practicesoftwaretesting.com/#/product/01HB",
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_rejects_search_results_shell_with_sort_filter_controls() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Trail Shoes" />
+      </head>
+      <body>
+        <main>
+          <h1>Trail Shoes</h1>
+          <label for="sort-by">Sort By</label>
+          <select id="sort-by">
+            <option>Featured</option>
+            <option>Price: Low to High</option>
+          </select>
+          <label for="filter-by">Filter By</label>
+          <select id="filter-by">
+            <option>All</option>
+            <option>Men</option>
+          </select>
+          <article class="product-card">
+            <a href="/dp/B0TRAIL123">
+              <img src="https://cdn.example.com/trail-shoe.jpg" alt="Trail Runner GTX" />
+              <h2>Trail Runner GTX</h2>
+            </a>
+            <div class="price">$129.99</div>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.example.com/s?k=trail+shoes",
+        "ecommerce_detail",
+        max_records=1,
     )
 
     assert rows == []
@@ -3183,7 +4209,7 @@ def test_extract_detail_keeps_long_product_titles_that_include_star_ratings() ->
     assert rows[0]["title"] == "Vitamagic Pro 192L 3 Star Radiant Steel Refrigerator"
 
 
-def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record_is_complete() -> None:
+def test_extract_detail_allows_safe_early_exit_before_dom_when_pre_dom_record_is_complete() -> None:
     html = """
     <html>
       <head>
@@ -3221,8 +4247,8 @@ def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["_extraction_tiers"]["early_exit"] == "structured_data"
-    assert record["_extraction_tiers"]["current"] == "structured_data"
+    assert record["_extraction_tiers"]["early_exit"] == "js_state"
+    assert record["_extraction_tiers"]["current"] == "js_state"
 
 
 def test_extract_detail_records_preserves_selector_trace_for_selected_rule() -> None:
@@ -3508,6 +4534,63 @@ def test_extract_ecommerce_detail_does_not_infer_price_from_404_body_text() -> N
     assert "currency" not in record
 
 
+def test_extract_ecommerce_detail_rejects_404_record_with_filter_variants() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Error 404 .</h1>
+          <label for="search-type">Type</label>
+          <select id="search-type" name="type">
+            <option>all</option>
+            <option>release</option>
+            <option>artist</option>
+            <option>label</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.discogs.com/release/stale",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_reads_books_table_price_currency() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product_page">
+          <h1>A Light in the Attic</h1>
+          <table>
+            <tr><th>Price (excl. tax)</th><td>£51.77</td></tr>
+            <tr><th>Availability</th><td>In stock</td></tr>
+          </table>
+          <p class="price_color">£51.77</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["price"] == "51.77"
+    assert record["currency"] == "GBP"
+
+
 def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents() -> None:
     html = """
     <html>
@@ -3563,6 +4646,75 @@ def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents(
     record = rows[0]
     assert record["price"] == "939.00"
     assert record["original_price"] == "1565"
+
+
+def test_extract_detail_keeps_shopify_variant_record_when_requested_url_has_product_code_prefix() -> None:
+    html = """
+    <html>
+      <head>
+        <script>
+          ShopifyAnalytics.meta = {
+            "product": {
+              "id": 8214341320770,
+              "title": "Phoenix dark brown leather boots",
+              "vendor": "Chloe",
+              "product_type": "Boots",
+              "variants": [
+                {
+                  "id": 43633711644738,
+                  "sku": "CH28105S360",
+                  "price": 126500,
+                  "option1": "36"
+                }
+              ]
+            }
+          };
+        </script>
+      </head>
+      <body>
+        <h1>Phoenix dark brown leather boots</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://savannahs.com/collections/all-boots/products/phoenix-dark-brown-leather-boots-ch28105s",
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url="https://savannahs.com/collections/all-boots/products/phoenix-dark-brown-leather-boots-ch28105s",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Phoenix dark brown leather boots"
+
+
+def test_extract_detail_strips_variant_availability_suffix_from_option_values() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Phoenix dark brown leather boots</h1>
+        <fieldset>
+          <legend>Size</legend>
+          <input id="size-36" type="radio" name="size" checked>
+          <label for="size-36">36 Variant sold out or unavailable</label>
+          <input id="size-37" type="radio" name="size">
+          <label for="size-37">37 Variant sold out or unavailable</label>
+        </fieldset>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://savannahs.com/collections/all-boots/products/phoenix-dark-brown-leather-boots-ch28105s",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["variant_axes"] == {"size": ["36", "37"]}
+    assert rows[0]["selected_variant"]["option_values"] == {"size": "36"}
 
 
 def test_extract_detail_dom_images_excludes_related_product_cards() -> None:

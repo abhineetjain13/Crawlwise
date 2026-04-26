@@ -1,11 +1,11 @@
 import { QueryClient, QueryClientProvider } from"@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from"@testing-library/react";
+import { fireEvent, render, screen, waitFor } from"@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from"vitest";
 
 import type { CrawlRecord, CrawlRun, DomainRecipe } from"../../lib/api/types";
 import { POLLING_INTERVALS } from"../../lib/constants/timing";
 import { TopBarProvider } from"../layout/top-bar-context";
-import { CrawlRunScreen } from"./crawl-run-screen";
+import { CrawlRunScreen, storeProductIntelligencePrefill } from"./crawl-run-screen";
 
 const replaceMock = vi.fn();
 
@@ -36,7 +36,7 @@ vi.mock("../../lib/api", () => ({
 }));
 
 function terminalRun(runId: number): CrawlRun {
- return {
+  return {
  id: runId,
  user_id: 1,
  run_type:"crawl",
@@ -52,7 +52,30 @@ function terminalRun(runId: number): CrawlRun {
  created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
  updated_at: new Date("2026-04-08T10:05:00Z").toISOString(),
  completed_at: new Date("2026-04-08T10:05:00Z").toISOString(),
- };
+  };
+}
+
+function runningRun(runId: number): CrawlRun {
+  return {
+  id: runId,
+  user_id: 1,
+  run_type:"crawl",
+  url:"https://example.com/products/chair",
+  status:"running",
+  surface:"ecommerce_detail",
+  settings: {},
+  requested_fields: [],
+  result_summary: {
+  extraction_verdict:"unknown",
+  progress: 0,
+  record_count: 0,
+  current_url_index: 1,
+  total_urls: 5,
+  },
+  created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+  updated_at: new Date("2026-04-08T10:01:00Z").toISOString(),
+  completed_at: null,
+  };
 }
 
 function makeRecord(id: number): CrawlRecord {
@@ -187,10 +210,6 @@ function makeDomainRecipe(): DomainRecipe {
  capture_response_headers: true,
  capture_browser_diagnostics: true,
  },
- proxy_profile: {
- enabled: true,
- proxy_list: ["http://proxy-a", "http://proxy-b"],
- },
  source_run_id: 101,
  saved_at:"2026-04-08T10:05:00Z",
  },
@@ -228,11 +247,11 @@ function renderRunScreenWithClient(queryClient: QueryClient, runId = 101) {
 describe("CrawlRunScreen", () => {
  afterEach(() => {
  vi.useRealTimers();
- cleanup();
  });
 
  beforeEach(() => {
  vi.clearAllMocks();
+ window.sessionStorage.clear();
  apiMock.getCrawl.mockResolvedValue(terminalRun(101));
  apiMock.getRecords.mockImplementation(async (_runId: number, params?: { page?: number; limit?: number }) => {
  const limit = params?.limit ?? 100;
@@ -250,6 +269,95 @@ describe("CrawlRunScreen", () => {
  apiMock.saveDomainRunProfile.mockResolvedValue(makeDomainRecipe().saved_run_profile);
  apiMock.applyDomainRecipeFieldAction.mockResolvedValue({});
  apiMock.deleteSelector.mockResolvedValue(undefined);
+ });
+
+ it("prefills Product Intelligence from selected listing records", async () => {
+ apiMock.getCrawl.mockResolvedValue({
+ ...terminalRun(101),
+ surface:"ecommerce_listing",
+ url:"https://www.belk.com/category",
+ settings: { crawl_module:"category", crawl_mode:"single"},
+ });
+ apiMock.getRecords.mockResolvedValue({
+ items: [
+ {
+ ...makeRecord(1),
+ source_url:"https://www.belk.com/p/1",
+ data: { brand:"Levi's", title:"511 Jeans", price:"$59.99", url:"https://www.belk.com/p/1"},
+ },
+ ],
+ meta: { page: 1, limit: 100, total: 1 },
+ });
+
+ renderRunScreen();
+
+ const productButton = await screen.findByRole("button", { name:"Product Intelligence (1)"});
+ fireEvent.click(productButton);
+
+ expect(replaceMock).toHaveBeenCalledWith("/product-intelligence");
+ expect(JSON.parse(window.sessionStorage.getItem("product-intelligence-prefill-v1") || "{}")).toEqual({
+ source_run_id: 101,
+ source_domain:"https://www.belk.com/category",
+ records: [
+ {
+ id: 1,
+ run_id: 101,
+ source_url:"https://www.belk.com/p/1",
+ data: { brand:"Levi's", title:"511 Jeans", price:"$59.99", url:"https://www.belk.com/p/1"},
+ },
+ ],
+ });
+ });
+
+ it("falls back to reduced Product Intelligence prefill when session storage is full", () => {
+ const stored = new Map<string, string>();
+ const setItemMock = vi.fn((key: string, value: string) => {
+ stored.set(key, value);
+ });
+ const consoleSpy = vi.spyOn(console,"error").mockImplementation(() => {});
+ setItemMock.mockImplementationOnce(() => {
+ throw new DOMException("Quota exceeded","QuotaExceededError");
+ });
+ const storage = {
+ setItem: setItemMock,
+ getItem: (key: string) => stored.get(key) ?? null,
+ removeItem: (key: string) => {
+ stored.delete(key);
+ },
+ } as unknown as Storage;
+ try {
+ storeProductIntelligencePrefill(
+ {
+ source_run_id: 101,
+ source_domain:"https://www.belk.com/category",
+ records: [
+ {
+ id: 1,
+ run_id: 101,
+ source_url:"https://www.belk.com/p/1",
+ data: { brand:"Levi's", title:"511 Jeans", price:"$59.99", url:"https://www.belk.com/p/1"},
+ },
+ ],
+ },
+ storage,
+ );
+
+ expect(consoleSpy).toHaveBeenCalled();
+ expect(JSON.parse(storage.getItem("product-intelligence-prefill-v1") || "{}")).toEqual({
+ source_run_id: 101,
+ source_domain:"https://www.belk.com/category",
+ records: [
+ {
+ id: 1,
+ run_id: 101,
+ source_url:"https://www.belk.com/p/1",
+ data: {},
+ },
+ ],
+ });
+ } finally {
+ consoleSpy.mockRestore();
+ }
  });
 
  it("prefetches markdown before the Markdown tab is opened", async () => {
@@ -321,6 +429,44 @@ describe("CrawlRunScreen", () => {
  expect(screen.getByText("Success")).toBeInTheDocument();
  expect(screen.getByText("Quality:")).toBeInTheDocument();
  expect(screen.getByText("High")).toBeInTheDocument();
+ });
+
+ it("keeps the crawl step marked active after terminal completion", async () => {
+ apiMock.getRecords.mockResolvedValue({
+ items: [],
+ meta: { page: 1, limit: 100, total: 0 },
+ });
+
+ renderRunScreen();
+
+ await screen.findByText("completed");
+ const crawlStep = screen.getAllByText("Crawl")
+ .map((element) => element.closest("span"))
+ .find((element) => element?.className.includes("rounded-[var(--radius-md)]"));
+ const completeStep = screen.getAllByText("Complete")
+ .map((element) => element.closest("span"))
+ .find((element) => element?.className.includes("rounded-[var(--radius-md)]"));
+
+ expect(crawlStep).toHaveClass("bg-[var(--accent-subtle)]","text-accent");
+ expect(completeStep).toHaveClass("bg-[var(--accent-subtle)]","text-accent");
+ });
+
+ it("uses live table totals and current URL index for status-bar records/pages when summary counts are zero", async () => {
+ apiMock.getCrawl.mockResolvedValue(runningRun(101));
+ apiMock.getRecords.mockResolvedValue({
+ items: [makeRecord(1), makeRecord(2)],
+ meta: { page: 1, limit: 100, total: 2 },
+ });
+
+ renderRunScreen();
+
+ await screen.findByText("Live Log Stream");
+ await waitFor(() => {
+ const recordsLabel = screen.getByText("Records");
+ const pagesLabel = screen.getByText("Pages");
+ expect(recordsLabel.previousElementSibling).toHaveTextContent("2");
+ expect(pagesLabel.previousElementSibling).toHaveTextContent("1");
+ });
  });
 
  it("supports progressive table loading for large result sets", async () => {
@@ -396,6 +542,35 @@ describe("CrawlRunScreen", () => {
 
  await waitFor(() => {
  expect(screen.getByText("Item 1")).toBeInTheDocument();
+ });
+ });
+
+ it("keeps cached latest-run table rows visible when reopening from history", async () => {
+ const queryClient = new QueryClient({
+ defaultOptions: {
+ queries: {
+ retry: false,
+ staleTime: 60_000,
+ },
+ },
+ });
+
+ const cachedRows = {
+ items: [makeRecord(1), makeRecord(2)],
+ meta: { page: 1, limit: 100, total: 2 },
+ };
+
+ queryClient.setQueryData(["crawl-run", 101], terminalRun(101));
+ queryClient.setQueryData(["crawl-records-table", 101, 1], cachedRows);
+
+ apiMock.getRecords.mockResolvedValue(cachedRows);
+
+ renderRunScreenWithClient(queryClient);
+
+ expect(await screen.findByText("Item 1")).toBeInTheDocument();
+
+ await waitFor(() => {
+ expect(apiMock.getRecords).toHaveBeenCalledWith(101, { page: 1, limit: 100 });
  });
  });
 
@@ -580,7 +755,7 @@ describe("CrawlRunScreen", () => {
 
  renderRunScreen();
 
- const batchButton = await screen.findByRole("button", { name:"Batch Crawl Results (1)"});
+ const batchButton = await screen.findByRole("button", { name:"Batch Crawl (1)"});
  fireEvent.click(batchButton);
 
  expect(replaceMock).toHaveBeenCalledWith("/crawl?module=pdp&mode=batch");
@@ -627,7 +802,7 @@ describe("CrawlRunScreen", () => {
  const logsTab = await screen.findByRole("button", { name:"Logs"});
  fireEvent.click(logsTab);
 
- const batchButton = await screen.findByRole("button", { name:"Batch Crawl Results (2)"});
+ const batchButton = await screen.findByRole("button", { name:"Batch Crawl (2)"});
  fireEvent.click(batchButton);
 
  expect(replaceMock).toHaveBeenCalledWith("/crawl?module=pdp&mode=batch");
@@ -733,10 +908,6 @@ describe("CrawlRunScreen", () => {
  fireEvent.click(screen.getByRole("combobox", { name:"Fetch Mode" }));
  fireEvent.click(await screen.findByRole("option", { name:"Browser Only" }));
  fireEvent.change(screen.getByRole("textbox", { name:"Geo Country" }), { target: { value:"US" } });
- fireEvent.click(screen.getByRole("switch", { name: /Proxy Enabled/i }));
- fireEvent.change(screen.getByRole("textbox", { name:"Proxy Pool" }), {
- target: { value:"http://proxy-one\nhttp://proxy-two" },
- });
  fireEvent.click(screen.getByRole("button", { name:"Save Run Profile"}));
 
  await waitFor(() => {
@@ -748,10 +919,6 @@ describe("CrawlRunScreen", () => {
  locality_profile: expect.objectContaining({
  geo_country:"US",
  }),
- proxy_profile: {
- enabled: false,
- proxy_list: ["http://proxy-one", "http://proxy-two"],
- },
  }),
  });
  });

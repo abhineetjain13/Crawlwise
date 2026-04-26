@@ -19,7 +19,7 @@ _ALL_CANONICAL_FIELDS = frozenset(
 HTML_SECTION_FIELDS = frozenset(
     {"responsibilities", "qualifications", "benefits", "skills"}
 )
-_FIELD_ALIASES = FIELD_ALIASES if isinstance(FIELD_ALIASES, dict) else {}
+_FIELD_ALIASES = FIELD_ALIASES
 
 
 def canonical_fields_for_surface(surface: str) -> list[str]:

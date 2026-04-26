@@ -239,7 +239,10 @@ class ICIMSAdapter(BaseAdapter):
         metadata = self._extract_header_fields(row)
         record = {
             "title": title,
-            "url": self._normalize_job_url(link.get("href", ""), base_url=base_url),
+            "url": self._normalize_job_url(
+                str(link.get("href", "") or ""),
+                base_url=base_url,
+            ),
         }
         description = row.select_one(
             ".description, .iCIMS_JobContent, [class*='description'], [class*='Description']"

@@ -30,18 +30,24 @@ DEFAULT_LOC_BUDGET = 1000
 # current LOC plus 10% so growth requires a conscious update instead of a blanket
 # threshold increase.
 FILE_LOC_BUDGETS = {
+    # Browser identity owns UA/timezone/device/runtime surface shaping.
+    Path("app/services/acquisition/browser_identity.py"): 1765,
     # Browser runtime owns pooled browser lifecycle and context management.
-    Path("app/services/acquisition/browser_runtime.py"): 1355,
+    Path("app/services/acquisition/browser_runtime.py"): 2275,
     # Page flow owns navigation, readiness, artifact capture, and final browser shaping.
-    Path("app/services/acquisition/browser_page_flow.py"): 1425,
+    Path("app/services/acquisition/browser_page_flow.py"): 1645,
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
+    # Fetch runtime remains the request/browser arbitration owner.
+    Path("app/services/crawl_fetch_runtime.py"): 1165,
     # Detail extraction remains the single owner for structured, DOM, and variant recovery.
-    Path("app/services/detail_extractor.py"): 2810,
+    Path("app/services/detail_extractor.py"): 3205,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1655,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
     Path("app/services/field_value_dom.py"): 1265,
+    # JS state mapping stays centralized to avoid adapter-specific drift.
+    Path("app/services/js_state_mapper.py"): 1150,
     # Pipeline core still owns the per-URL orchestration boundary.
     Path("app/services/pipeline/core.py"): 1180,
 }

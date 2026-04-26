@@ -15,12 +15,14 @@ from app.services.crawl_state import (
     update_run_status,
 )
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls_async
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
 from app.services.pipeline.core import _mark_run_failed, process_single_url
 from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE, log_event, set_stage
 from app.services.pipeline.types import URLProcessingConfig, URLProcessingResult
 from app.services.publish import VERDICT_ERROR, _aggregate_verdict
 from app.services.run_summary import as_int
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,13 @@ def _touch_run_heartbeat(run: CrawlRun) -> None:
     run.last_heartbeat_at = datetime.now(UTC)
 
 
+def _url_timeout_seconds(settings_view) -> float:
+    configured_timeout = settings_view.get("url_timeout_seconds")
+    if configured_timeout not in (None, ""):
+        return settings_view.url_timeout_seconds()
+    return crawler_runtime_settings.default_url_process_timeout_seconds()
+
+
 async def process_run(session: AsyncSession, run_id: int) -> None:
     try:
         run = await session.get(CrawlRun, run_id)
@@ -95,20 +104,24 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
         max_records = settings_view.max_records()
         sleep_ms = settings_view.sleep_ms()
-        url_timeout_seconds = settings_view.url_timeout_seconds()
+        url_timeout_seconds = _url_timeout_seconds(settings_view)
 
+        progress_state = run.build_batch_progress_state(
+            total_urls=total_urls,
+            url_domain=normalize_domain(url_list[0]) if url_list else "",
+            persisted_record_count=as_int(run.get_summary("record_count", 0)),
+        )
         run.update_summary(
-            url_count=total_urls,
-            record_count=as_int(run.get_summary("record_count", 0)),
-            progress=as_int(run.get_summary("progress", 0)),
+            **progress_state.build_progress_patch(
+                current_url=url_list[0] if url_list else "",
+                current_url_index=0,
+            ),
             current_stage=STAGE_ACQUIRE,
-            domain=normalize_domain(url_list[0]) if url_list else "",
             resolved_url_list=url_list,
         )
         await session.commit()
 
         verdicts: list[str] = []
-        methods: dict[str, int] = {}
         record_count = as_int(run.get_summary("record_count", 0))
 
         for idx, url in enumerate(url_list, start=1):
@@ -165,6 +178,12 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
             except TimeoutError:
                 logger.warning("URL processing timed out for run=%s url=%s", run.id, url)
+                await log_event(
+                    session,
+                    run.id,
+                    "warning",
+                    f"URL processing timed out for {url} (timeout_seconds={url_timeout_seconds})",
+                )
                 url_result = URLProcessingResult(
                     records=[],
                     verdict=VERDICT_ERROR,
@@ -172,8 +191,21 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                         "error": f"TimeoutError: url exceeded timeout_seconds={url_timeout_seconds}",
                     },
                 )
+            except SQLAlchemyError:
+                logger.exception(
+                    "URL processing hit database error for run=%s url=%s",
+                    run.id,
+                    url,
+                )
+                raise
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 logger.warning("URL processing failed for run=%s url=%s", run.id, url, exc_info=True)
+                await log_event(
+                    session,
+                    run.id,
+                    "warning",
+                    f"URL processing failed for {url}: {type(exc).__name__}: {exc}",
+                )
                 url_metrics: dict[str, object] = {
                     "error": f"{type(exc).__name__}: {exc}"
                 }
@@ -187,20 +219,22 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
 
             verdicts.append(str(url_result.verdict or VERDICT_ERROR))
-            record_count += as_int(
+            records_count = as_int(
                 url_result.url_metrics.get("record_count", len(url_result.records))
             )
-            method = str(url_result.url_metrics.get("method") or "").strip()
-            if method:
-                methods[method] = int(methods.get(method, 0) or 0) + 1
+            record_count += records_count
+            progress_state.record_url_result(
+                idx=idx - 1,
+                records_count=records_count,
+                verdict=str(url_result.verdict or VERDICT_ERROR),
+                url_metrics=url_result.url_metrics,
+            )
             _touch_run_heartbeat(run)
             run.update_summary(
-                progress=int((idx / total_urls) * 100),
-                record_count=record_count,
-                completed_urls=idx,
-                remaining_urls=max(total_urls - idx, 0),
-                url_verdicts=verdicts,
-                acquisition_summary={"methods": methods},
+                **progress_state.build_progress_patch(
+                    current_url=url,
+                    current_url_index=idx,
+                ),
                 duration_ms=_current_duration_ms(run),
             )
             await session.commit()
@@ -224,10 +258,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         update_run_status(run, CrawlStatus.COMPLETED)
         _touch_run_heartbeat(run)
         run.update_summary(
-            progress=100,
-            completed_urls=len(verdicts),
-            remaining_urls=max(total_urls - len(verdicts), 0),
-            extraction_verdict=aggregate_verdict,
+            **progress_state.build_final_patch(aggregate_verdict),
             duration_ms=_current_duration_ms(run),
         )
         await log_event(
@@ -237,5 +268,5 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             f"Pipeline finished. {record_count} records. verdict={aggregate_verdict}",
         )
         await session.commit()
-    except (RuntimeError, ValueError, TypeError) as exc:
+    except (RuntimeError, ValueError, TypeError, SQLAlchemyError) as exc:
         await _mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")

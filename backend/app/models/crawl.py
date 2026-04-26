@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,11 @@ from app.models.crawl_domain import (
 )
 from app.models.crawl_settings import CrawlRunSettings
 from app.services.db_utils import mapping_or_empty
+from app.services.config.product_intelligence import (
+    PRODUCT_INTELLIGENCE_JOB_STATUS_QUEUED,
+    PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_DISCOVERED,
+    PRODUCT_INTELLIGENCE_REVIEW_PENDING,
+)
 from app.services.run_summary import as_int, merge_run_summary_patch
 
 CRAWL_RUN_FK = "crawl_runs.id"
@@ -292,10 +297,18 @@ def _merge_run_acquisition_metrics(
     platform_family = str(url_metrics.get("platform_family") or "").strip()
     if platform_family:
         platform_families[platform_family] = as_int(platform_families.get(platform_family, 0)) + 1
+    failure_reasons = {
+        str(key): as_int(value)
+        for key, value in mapping_or_empty(current.get("failure_reasons")).items()
+    }
+    failure_reason = str(url_metrics.get("failure_reason") or "").strip()
+    if failure_reason:
+        failure_reasons[failure_reason] = as_int(failure_reasons.get(failure_reason, 0)) + 1
 
     summary = {
         "methods": methods,
         "platform_families": platform_families,
+        "failure_reasons": failure_reasons,
         "browser_attempted_urls": as_int(current.get("browser_attempted_urls", 0))
         + int(bool(url_metrics.get("browser_attempted"))),
         "browser_used_urls": as_int(current.get("browser_used_urls", 0))
@@ -537,6 +550,162 @@ class DomainMemory(Base):
     )
 
 
+class ProductIntelligenceJob(Base):
+    __tablename__ = "product_intelligence_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    source_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=PRODUCT_INTELLIGENCE_JOB_STATUS_QUEUED,
+        index=True,
+    )
+    options: Mapped[dict] = mapped_column(JSONB, default=dict)
+    summary: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ProductIntelligenceSourceProduct(Base):
+    __tablename__ = "product_intelligence_source_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("product_intelligence_jobs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    source_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crawl_records.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    brand: Mapped[str] = mapped_column(String(255), default="", index=True)
+    normalized_brand: Mapped[str] = mapped_column(String(255), default="", index=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    sku: Mapped[str] = mapped_column(String(255), default="")
+    mpn: Mapped[str] = mapped_column(String(255), default="")
+    gtin: Mapped[str] = mapped_column(String(255), default="")
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(16), default="")
+    image_url: Mapped[str] = mapped_column(Text, default="")
+    is_private_label: Mapped[bool] = mapped_column(default=False)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class ProductIntelligenceCandidate(Base):
+    __tablename__ = "product_intelligence_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("product_intelligence_jobs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    source_product_id: Mapped[int] = mapped_column(
+        ForeignKey("product_intelligence_source_products.id", ondelete="CASCADE"),
+        index=True,
+    )
+    candidate_crawl_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    url: Mapped[str] = mapped_column(Text)
+    domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    source_type: Mapped[str] = mapped_column(String(64), default="")
+    query_used: Mapped[str] = mapped_column(Text, default="")
+    search_rank: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_DISCOVERED,
+        index=True,
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class ProductIntelligenceMatch(Base):
+    __tablename__ = "product_intelligence_matches"
+    __table_args__ = (
+        Index(
+            "ix_product_intelligence_matches_job_source",
+            "job_id",
+            "source_product_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("product_intelligence_jobs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    source_product_id: Mapped[int] = mapped_column(
+        ForeignKey("product_intelligence_source_products.id", ondelete="CASCADE"),
+        index=True,
+    )
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("product_intelligence_candidates.id", ondelete="CASCADE"),
+        index=True,
+    )
+    candidate_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crawl_records.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    score_label: Mapped[str] = mapped_column(String(32), default="")
+    review_status: Mapped[str] = mapped_column(
+        String(32),
+        default=PRODUCT_INTELLIGENCE_REVIEW_PENDING,
+        index=True,
+    )
+    source_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    candidate_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(16), default="")
+    availability: Mapped[str] = mapped_column(Text, default="")
+    candidate_url: Mapped[str] = mapped_column(Text, default="")
+    candidate_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    score_reasons: Mapped[dict] = mapped_column(JSONB, default=dict)
+    llm_enrichment: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class DomainRunProfile(Base):
     __tablename__ = "domain_run_profiles"
     __table_args__ = (
@@ -646,6 +815,7 @@ class HostProtectionMemory(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    last_success_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

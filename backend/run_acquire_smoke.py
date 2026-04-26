@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.config import settings
-from app.services.acquisition import (
+from app.services.acquisition.acquirer import (
     AcquisitionRequest,
     acquire,
 )

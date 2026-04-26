@@ -9,6 +9,7 @@ from app.services.domain_utils import normalize_host
 _HOST_NEXT_ALLOWED_AT: dict[str, float] = {}
 _HOST_BROWSER_FIRST_UNTIL: dict[str, float] = {}
 _HOST_BROWSER_FIRST_STRIKES: dict[str, tuple[int, float]] = {}
+_HOST_BROWSER_FIRST_SOURCES: dict[str, str] = {}
 _HOST_PACING_LOCK = asyncio.Lock()
 
 
@@ -43,6 +44,7 @@ async def reset_pacing_state() -> None:
         _HOST_NEXT_ALLOWED_AT.clear()
         _HOST_BROWSER_FIRST_UNTIL.clear()
         _HOST_BROWSER_FIRST_STRIKES.clear()
+        _HOST_BROWSER_FIRST_SOURCES.clear()
 
 
 async def mark_browser_first_host(_url: str) -> None:
@@ -57,6 +59,7 @@ async def mark_browser_first_host(_url: str) -> None:
     async with _HOST_PACING_LOCK:
         _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
         _HOST_BROWSER_FIRST_UNTIL[host] = now + ttl_seconds
+        _HOST_BROWSER_FIRST_SOURCES[host] = "explicit"
         _enforce_host_cache_limit()
 
 
@@ -80,6 +83,7 @@ async def note_browser_block_for_host(_url: str) -> bool:
         _HOST_BROWSER_FIRST_STRIKES[host] = (block_count, now)
         if block_count >= threshold:
             _HOST_BROWSER_FIRST_UNTIL[host] = now + ttl_seconds
+            _HOST_BROWSER_FIRST_SOURCES[host] = "learned"
         _enforce_host_cache_limit()
         return block_count >= threshold
 
@@ -95,10 +99,15 @@ async def note_usable_fetch_for_host(_url: str) -> None:
     now = time.monotonic()
     async with _HOST_PACING_LOCK:
         _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
-        if _HOST_BROWSER_FIRST_UNTIL.get(host, 0.0) > now:
+        if (
+            _HOST_BROWSER_FIRST_UNTIL.get(host, 0.0) > now
+            and _HOST_BROWSER_FIRST_SOURCES.get(host) == "explicit"
+        ):
+            _HOST_BROWSER_FIRST_STRIKES.pop(host, None)
             return
         _HOST_BROWSER_FIRST_UNTIL.pop(host, None)
         _HOST_BROWSER_FIRST_STRIKES.pop(host, None)
+        _HOST_BROWSER_FIRST_SOURCES.pop(host, None)
 
 
 async def should_prefer_browser_for_host(_url: str) -> bool:
@@ -163,6 +172,7 @@ def _prune_expired_hosts(*, now: float, ttl_seconds: int) -> None:
     ]
     for host in expired_browser_hosts:
         _HOST_BROWSER_FIRST_UNTIL.pop(host, None)
+        _HOST_BROWSER_FIRST_SOURCES.pop(host, None)
     expired_strike_hosts = [
         host
         for host, (_count, seen_at) in _HOST_BROWSER_FIRST_STRIKES.items()

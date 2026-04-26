@@ -3,6 +3,7 @@ import { AppShell } from "../components/layout/app-shell";
 import { QueryProvider } from "../components/ui/query-provider";
 import { Inter, JetBrains_Mono } from "next/font/google";
 
+
 const mainFont = Inter({
  subsets: ["latin"],
   variable: "--font-inter",
@@ -13,6 +14,7 @@ const jetbrainsMono = JetBrains_Mono({
  subsets: ["latin"],
  variable: "--font-jetbrains-mono",
  display: "swap",
+ weight: ["300", "400", "500", "600", "700"],
 });
 
 // Runs before first paint to set theme and prevent FOUC

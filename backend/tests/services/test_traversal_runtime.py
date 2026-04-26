@@ -10,6 +10,7 @@ from app.services.acquisition.traversal import (
     TraversalResult,
     _click_with_retry,
     _locator_still_resolves,
+    _wait_for_load_more_card_gain,
     count_listing_cards,
     dismiss_overlays_if_needed,
     execute_listing_traversal,
@@ -386,6 +387,48 @@ async def test_paginate_traversal_stops_when_card_count_stays_zero() -> None:
 
 
 @pytest.mark.asyncio
+async def test_paginate_traversal_settles_thin_initial_listing_before_stopping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settled_state = _State(
+        html="<html><body>"
+        + "".join(
+            f"<article class='product-card'><a href='/products/widget-{index}'>Widget {index}</a><span>$10</span></article>"
+            for index in range(8)
+        )
+        + "</body></html>",
+        card_count=8,
+        scroll_height=2200,
+    )
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<html><body><section><a href='/promo'>Promo</a><span>$10</span></section></body></html>",
+            card_count=5,
+            scroll_height=900,
+        ),
+    )
+
+    async def _settle(page_arg, **kwargs):
+        del kwargs
+        page_arg.state = settled_state
+
+    monkeypatch.setattr(traversal_module, "_settle_after_action", _settle)
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=3,
+        max_scrolls=1,
+    )
+
+    assert result.progress_events == 1
+    assert result.card_count == 8
+    assert "Widget 7" in result.compose_html()
+
+
+@pytest.mark.asyncio
 async def test_paginate_traversal_blocks_off_domain_links() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
@@ -717,6 +760,99 @@ async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_more_traversal_stops_at_user_max_records() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>before</div>",
+            card_count=2,
+            scroll_height=900,
+            controls={"load_more"},
+        ),
+        load_more_states=[
+            _State(html="<div>before</div>", card_count=2, scroll_height=900, controls={"load_more"}),
+            _State(html="<div>after</div>", card_count=5, scroll_height=1200, controls={"load_more"}),
+            _State(html="<div>too-far</div>", card_count=9, scroll_height=1500, controls=set()),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="load_more",
+        max_pages=3,
+        max_scrolls=2,
+        max_records=5,
+    )
+
+    assert result.stop_reason == "target_records_reached"
+    assert result.load_more_clicks == 1
+    assert result.card_count == 5
+    assert [f for f, _ in result.html_fragments] == ["<div>before</div>", "<div>after</div>"]
+
+
+@pytest.mark.asyncio
+async def test_paginate_uses_max_records_as_page_stop_not_page_limit() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=80,
+            scroll_height=1200,
+            controls={"next_page"},
+            next_href="https://example.com/listing?page=2",
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=80,
+                scroll_height=1200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=2",
+            ),
+            _State(
+                html="<div>page-2</div>",
+                card_count=80,
+                scroll_height=2200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=3",
+            ),
+            _State(
+                html="<div>page-3</div>",
+                card_count=80,
+                scroll_height=3200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=4",
+            ),
+            _State(
+                html="<div>page-4</div>",
+                card_count=80,
+                scroll_height=4200,
+                controls=set(),
+            ),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=1,
+        max_scrolls=1,
+        max_records=200,
+    )
+
+    assert result.stop_reason == "target_records_reached"
+    assert result.pages_advanced == 2
+    assert result.card_count == 240
+    assert [f for f, _ in result.html_fragments] == [
+        "<div>page-1</div>",
+        "<div>page-2</div>",
+        "<div>page-3</div>",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     page = _FakePage(
         surface="job_listing",
@@ -745,6 +881,42 @@ async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     assert result.selected_mode == "scroll"
     assert result.scroll_iterations >= 1
     assert result.progress_events >= 1
+    assert result.card_count == 6
+    assert [f for f, _ in result.html_fragments][:2] == [
+        "<div>jobs</div>",
+        "<div>jobs more</div>",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scroll_traversal_stops_at_user_max_records() -> None:
+    page = _FakePage(
+        surface="job_listing",
+        initial_state=_State(
+            html="<div>jobs</div>",
+            card_count=2,
+            scroll_height=2500,
+            client_height=600,
+            controls=set(),
+        ),
+        scroll_states=[
+            _State(html="<div>jobs</div>", card_count=2, scroll_height=2500, client_height=600, controls=set()),
+            _State(html="<div>jobs more</div>", card_count=6, scroll_height=3400, client_height=600, controls=set()),
+            _State(html="<div>jobs too-far</div>", card_count=9, scroll_height=4200, client_height=600, controls=set()),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="job_listing",
+        traversal_mode="scroll",
+        max_pages=2,
+        max_scrolls=3,
+        max_records=6,
+    )
+
+    assert result.stop_reason == "target_records_reached"
+    assert result.scroll_iterations == 1
     assert result.card_count == 6
     assert [f for f, _ in result.html_fragments][:2] == [
         "<div>jobs</div>",
@@ -899,8 +1071,8 @@ async def test_scroll_traversal_emits_live_events() -> None:
     )
 
     assert emitted[:2] == [
-        ("info", "Detected listing layout, pagination: scroll"),
-        ("info", "Scroll 1/3 - 2 -> 6 records"),
+        ("info", "Detected listing layout, traversal=scroll, safety_cap=50"),
+        ("info", "Scroll 1 - page_cards=6 (prev_page_cards=2)"),
     ]
 
 
@@ -1127,6 +1299,105 @@ async def test_count_listing_cards_falls_back_to_heuristics_when_selectors_miss(
     count = await count_listing_cards(_SelectorPage(), surface="ecommerce_listing")
 
     assert count == 7
+
+
+@pytest.mark.asyncio
+async def test_count_listing_cards_ignores_weak_product_selector_chrome() -> None:
+    class _WeakProductChromePage:
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            assert "querySelectorAll(selector).length" in script
+            return {
+                selector: (
+                    2
+                    if traversal_module._listing_selector_is_weak(str(selector))
+                    else 0
+                )
+                for selector in list(arg or [])
+            }
+
+        async def content(self) -> str:
+            return """
+            <html>
+              <body>
+                <div class="product newsletter-card">
+                  <a href="/products/hair-care/hair-care-accessories">Explore accessories</a>
+                  <p>Subscribe to Dyson and get ₹2,000 off.</p>
+                </div>
+                <div class="product contact-card">
+                  <a href="/contact">Contact us</a>
+                  <p>You can call us 1-800-258-6688</p>
+                </div>
+              </body>
+            </html>
+            """
+
+    count = await count_listing_cards(
+        _WeakProductChromePage(),
+        surface="ecommerce_listing",
+    )
+
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_count_listing_cards_prefers_product_anchor_count_over_productcard_substring() -> None:
+    class _DesertcartCountPage:
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            assert "querySelectorAll(selector).length" in script
+            return {
+                selector: (
+                    10
+                    if "productcard" in str(selector).lower()
+                    else 4
+                    if str(selector) == "a[href*='/products/']"
+                    else 0
+                )
+                for selector in list(arg or [])
+            }
+
+    count = await count_listing_cards(
+        _DesertcartCountPage(),
+        surface="ecommerce_listing",
+    )
+
+    assert count == 4
+
+
+@pytest.mark.asyncio
+async def test_load_more_wait_keeps_best_delayed_card_gain() -> None:
+    class _DelayedGainPage:
+        def __init__(self) -> None:
+            self.elapsed_ms = 0
+
+        async def wait_for_timeout(self, timeout_ms: int) -> None:
+            self.elapsed_ms += int(timeout_ms)
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> Any:
+            if "querySelectorAll(selector).length" in script:
+                count = 236 if self.elapsed_ms >= 3000 else 144
+                return {
+                    selector: (
+                        count if str(selector) == "a[href*='/products/']" else 0
+                    )
+                    for selector in list(arg or [])
+                }
+            return {
+                "scroll_height": 2000,
+                "client_height": 600,
+                "overflow_containers": 0,
+                "content_signature_source": f"cards-{self.elapsed_ms}",
+            }
+
+    snapshot = await _wait_for_load_more_card_gain(
+        _DelayedGainPage(),
+        previous={"card_count": 144},
+        surface="ecommerce_listing",
+        max_records=200,
+        deadline_at=None,
+    )
+
+    assert snapshot is not None
+    assert snapshot["card_count"] == 236
 
 
 @pytest.mark.asyncio

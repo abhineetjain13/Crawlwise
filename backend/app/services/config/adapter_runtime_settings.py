@@ -16,6 +16,7 @@ class AdapterRuntimeSettings(BaseSettings):
     shopify_catalog_limit: int = 250
     shopify_max_products: int = 500
     shopify_max_option_axis_count: int = 3
+    belk_max_products: int = 500
     icims_pagination_timeout_seconds: int = 15
     icims_page_size: int = 100
     icims_max_offset: int = 1000
@@ -33,6 +34,8 @@ class AdapterRuntimeSettings(BaseSettings):
             raise ValueError("shopify_max_products must be > 0")
         if self.shopify_max_option_axis_count <= 0:
             raise ValueError("shopify_max_option_axis_count must be > 0")
+        if self.belk_max_products <= 0:
+            raise ValueError("belk_max_products must be > 0")
         if self.icims_pagination_timeout_seconds <= 0:
             raise ValueError("icims_pagination_timeout_seconds must be > 0")
         if self.icims_page_size <= 0:

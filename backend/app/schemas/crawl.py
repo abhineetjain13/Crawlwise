@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Iterable, Literal
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.schemas.selectors import SelectorRecordResponse
 
 _DISPLAY_HIDDEN_RECORD_FIELDS = {"page_markdown", "table_markdown", "record_type"}
+
+
+def _dict_payload(value: object) -> dict:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 class CrawlCreate(BaseModel):
@@ -60,6 +65,10 @@ class CrawlRecordResponse(BaseModel):
     raw_html_path: str | None = None
     created_at: datetime
 
+    @field_validator("data", "raw_data", "discovered_data", "source_trace", mode="before")
+    @classmethod
+    def _coerce_dict_payload(cls, value: object) -> dict:
+        return _dict_payload(value)
 
 class DashboardResponse(BaseModel):
     total_runs: int
@@ -223,21 +232,11 @@ class DomainRunDiagnosticsProfile(BaseModel):
     capture_browser_diagnostics: bool = True
 
 
-class DomainRunProxyProfile(BaseModel):
-    enabled: bool = False
-    proxy_list: list[str] = Field(default_factory=list)
-
-    @field_serializer("proxy_list")
-    def _serialize_proxy_list(self, value: list[str]) -> list[str]:
-        return [_mask_proxy_url(item) for item in value]
-
-
 class DomainRunProfilePayload(BaseModel):
     version: int = 1
     fetch_profile: DomainRunFetchProfile = Field(default_factory=DomainRunFetchProfile)
     locality_profile: DomainRunLocalityProfile = Field(default_factory=DomainRunLocalityProfile)
     diagnostics_profile: DomainRunDiagnosticsProfile = Field(default_factory=DomainRunDiagnosticsProfile)
-    proxy_profile: DomainRunProxyProfile = Field(default_factory=DomainRunProxyProfile)
     source_run_id: int | None = None
     saved_at: datetime | None = None
 
@@ -306,18 +305,6 @@ class DomainRecipeFieldActionRequest(BaseModel):
     source_record_ids: list[int] = Field(default_factory=list)
 
 
-class LLMCommitItem(FieldCommitItem):
-    pass
-
-
-class LLMCommitRequest(FieldCommitRequest):
-    pass
-
-
-class LLMCommitResponse(FieldCommitResponse):
-    pass
-
-
 class UnverifiedAttribute(BaseModel):
     key: str
     value: Any
@@ -337,15 +324,13 @@ class CrawlRecordProvenanceResponse(BaseModel):
     raw_html_path: str | None = None
     created_at: datetime
 
+    @field_validator("raw_data", "discovered_data", "source_trace", mode="before")
+    @classmethod
+    def _coerce_dict_payload(cls, value: object) -> dict:
+        return _dict_payload(value)
+
     @model_validator(mode="after")
     def _expand_provenance(self) -> CrawlRecordProvenanceResponse:
-        self.raw_data = self.raw_data if isinstance(self.raw_data, dict) else {}
-        self.discovered_data = (
-            self.discovered_data if isinstance(self.discovered_data, dict) else {}
-        )
-        self.source_trace = (
-            self.source_trace if isinstance(self.source_trace, dict) else {}
-        )
         self.manifest_trace = _extract_manifest_trace(
             self.source_trace, self.discovered_data
         )
@@ -361,7 +346,10 @@ _SENSITIVE_SETTING_KEYS = {
     "api_key",
     "api_key_encrypted",
     "authorization",
+    "password",
     "proxy_password",
+    "secret",
+    "token",
 }
 _SENSITIVE_PROXY_KEYS = {
     "api_key",
@@ -474,8 +462,8 @@ _SOURCE_TRACE_EXCLUDE_KEYS = {"manifest_trace"}
 def _extract_manifest_trace(
     source_trace: object, discovered_data: object
 ) -> dict[str, Any]:
-    trace = source_trace if isinstance(source_trace, dict) else {}
-    discovered = discovered_data if isinstance(discovered_data, dict) else {}
+    trace = _dict_payload(source_trace)
+    discovered = _dict_payload(discovered_data)
     manifest_trace = trace.get("manifest_trace")
     if isinstance(manifest_trace, dict):
         return {

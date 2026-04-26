@@ -10,10 +10,21 @@ from bs4 import BeautifulSoup
 from w3lib.url import url_query_cleaner
 
 from app.services.config.extraction_rules import (
+    CSS_NOISE_PATTERN,
     CURRENCY_ALIAS_PATTERNS,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
+    LISTING_ACTION_NOISE_PATTERNS,
+    LISTING_ALT_TEXT_TITLE_PATTERN,
+    LISTING_BRAND_MAX_WORDS,
+    LISTING_EDITORIAL_TITLE_PATTERNS,
+    LISTING_MERCHANDISING_TITLE_PREFIXES,
+    LISTING_NAVIGATION_TITLE_HINTS,
+    LISTING_TITLE_CTA_TITLES,
+    LISTING_UTILITY_TITLE_PATTERNS,
+    LISTING_WEAK_TITLES,
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
+    PAGE_URL_CURRENCY_HINTS_RAW,
 )
 from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
 from app.services.config.surface_hints import detail_path_hints
@@ -27,7 +38,7 @@ from app.services.normalizers import normalize_record_fields
 
 PRODUCT_URL_HINTS = detail_path_hints("ecommerce_detail")
 JOB_URL_HINTS = detail_path_hints("job_detail")
-_FIELD_ALIASES = FIELD_ALIASES if isinstance(FIELD_ALIASES, dict) else {}
+_FIELD_ALIASES = FIELD_ALIASES
 _CURRENCY_SYMBOL_PATTERN = "|".join(
     re.escape(str(symbol))
     for symbol in sorted(
@@ -110,15 +121,79 @@ TRACKING_DETAIL_CONTEXT_EXACT_KEYS = {
     "qs",
     "sr_prefetch",
 }
+
+
+def _object_list(value: object) -> list:
+    return list(value) if isinstance(value, list) else []
+
+
+def _object_dict(value: object) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _safe_int(value: object, *, default: int | None = None) -> int | None:
+    if value is None or value == "":
+        return default
+    try:
+        return int(str(value))
+    except (ValueError, TypeError):
+        return default
+
+
+def _coerce_int(value: object, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return default
 TRACKING_PARAM_PREFIXES = ("utm_", "click_")
 TRACKING_STRIP_URL_FIELDS = {"apply_url", "source_url", "url"}
 _PRESERVED_SHORT_QUERY_KEYS = {"id", "ids", "p", "page", "pid", "q", "sku", "v"}
 _SHORT_TRACKING_VALUE_RE = re.compile(r"^[a-z0-9_-]{0,8}$", re.I)
+_REVIEW_TITLE_RE = re.compile(r"^\s*\d[\d,\s]*\s+reviews?\s*$", re.I)
+_LISTING_UTILITY_TITLE_REGEXES = tuple(
+    re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
+)
+_CSS_NOISE_RE = re.compile(str(CSS_NOISE_PATTERN), re.I)
+_LEADING_CSS_BLOCK_RE = re.compile(r"^(?:\s*\.[a-z0-9_-]+\{[^{}]*\})+", re.I)
 
 
 def clean_text(value: object) -> str:
     text = unescape(str(value or "")).strip()
+    if text.startswith(".") and _CSS_NOISE_RE.search(text[:256]):
+        text = _LEADING_CSS_BLOCK_RE.sub("", text).strip()
     return WHITESPACE_RE.sub(" ", text)
+
+
+def is_title_noise(title: object) -> bool:
+    cleaned = clean_text(title)
+    lowered = cleaned.lower()
+    if not lowered:
+        return True
+    if "undefined" in lowered or lowered in {"nan", "none", "null"}:
+        return True
+    if cleaned.isdigit():
+        return True
+    if _REVIEW_TITLE_RE.fullmatch(cleaned):
+        return True
+    if "star" in lowered and RATING_RE.search(lowered) and len(cleaned.split()) <= 4:
+        return True
+    if lowered in LISTING_TITLE_CTA_TITLES:
+        return True
+    if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
+        return True
+    if any(lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES):
+        return True
+    if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
+        return True
+    if any(pattern.search(lowered) for pattern in _LISTING_UTILITY_TITLE_REGEXES):
+        return True
+    if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
+        return True
+    return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
 
 
 class _HTMLTextStripper(HTMLParser):
@@ -146,6 +221,65 @@ def strip_html_tags(value: object) -> str:
 def text_or_none(value: object) -> str | None:
     text = clean_text(value)
     return text or None
+
+
+def slug_tokens(value: object) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
+        if token
+    ]
+
+
+def infer_brand_from_title_marker(title: object) -> str | None:
+    text = clean_text(title)
+    if not text:
+        return None
+    leading_marker = next((marker for marker in ("\u2122", "\u00ae") if text.startswith(marker)), "")
+    if leading_marker:
+        leading_token = clean_text(text[len(leading_marker) :]).split(" ", 1)[0].strip()
+        brand = clean_text(f"{leading_marker}{leading_token}") if leading_token else ""
+        if not brand or len(slug_tokens(brand)) > LISTING_BRAND_MAX_WORDS:
+            return None
+        return brand
+    marker_positions = [
+        index
+        for marker in ("\u2122", "\u00ae")
+        if (index := text.find(marker)) >= 0
+    ]
+    if not marker_positions:
+        return None
+    brand = clean_text(text[: min(marker_positions) + 1])
+    if not brand or len(slug_tokens(brand)) > LISTING_BRAND_MAX_WORDS:
+        return None
+    return brand
+
+
+def infer_brand_from_product_url(*, url: str, title: object) -> str | None:
+    title_parts = slug_tokens(title)
+    if len(title_parts) < 2:
+        return None
+    path_parts = [
+        part.split(".", 1)[0]
+        for part in (urlparse(str(url or "")).path or "").split("/")
+        if part
+    ]
+    for path_part in reversed(path_parts):
+        path_tokens = slug_tokens(path_part)
+        if len(path_tokens) <= len(title_parts):
+            continue
+        for start in range(1, len(path_tokens) - len(title_parts) + 1):
+            if path_tokens[start : start + len(title_parts)] != title_parts:
+                continue
+            brand_tokens = path_tokens[:start]
+            if (
+                not brand_tokens
+                or len(brand_tokens) > LISTING_BRAND_MAX_WORDS
+                or not any(re.search(r"[a-z]", token) for token in brand_tokens)
+            ):
+                continue
+            return " ".join(token.capitalize() for token in brand_tokens)
+    return None
 
 
 def absolute_url(base_url: str, candidate: object) -> str:
@@ -435,6 +569,16 @@ def extract_currency_code(value: object) -> str | None:
     code_match = _CURRENCY_CODE_RE.search(text.upper())
     if code_match:
         return code_match.group(1)
+    return None
+
+
+def infer_currency_from_page_url(page_url: object) -> str | None:
+    lowered_url = str(page_url or "").strip().lower()
+    if not lowered_url:
+        return None
+    for token, code in dict(PAGE_URL_CURRENCY_HINTS_RAW or {}).items():
+        if str(token).lower() in lowered_url:
+            return str(code)
     return None
 
 
@@ -751,7 +895,11 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             "amount",
             "value",
             "currentValue",
+            "lowPrice",
+            "minPrice",
             "minValue",
+            "highPrice",
+            "maxPrice",
             "maxValue",
             "displayPrice",
             "formattedPrice",

@@ -318,7 +318,10 @@ class ShopifyAdapter(BaseAdapter):
             product.get("variants", []) if isinstance(product.get("variants"), list) else []
         )
         option_names = self._option_names(product.get("options"))
-        product_url = urljoin(page_url, f"/products/{product.get('handle', '')}")
+        product_url = urljoin(
+            page_url,
+            self._localized_product_path(parsed.path, product.get("handle")),
+        )
         normalized_variants = [
             normalized
             for variant in variants
@@ -460,6 +463,20 @@ class ShopifyAdapter(BaseAdapter):
                 if cleaned not in axes[str(axis_name)]:
                     axes[str(axis_name)].append(cleaned)
         return axes
+
+    def _localized_product_path(self, page_path: str, handle: object) -> str:
+        product_handle = str(handle or "").strip().strip("/")
+        if not product_handle:
+            return str(page_path or "") or "/"
+        raw_path = str(page_path or "").strip()
+        marker = "/products/"
+        marker_index = raw_path.find(marker)
+        prefix = raw_path[:marker_index] if marker_index >= 0 else ""
+        if marker_index < 0:
+            locale_match = re.match(r"^/([a-z]{2}(?:-[a-z]{2})?)(?:/|$)", raw_path, re.I)
+            if locale_match is not None:
+                prefix = f"/{locale_match.group(1)}"
+        return f"{prefix}/products/{product_handle}"
 
     def _dedupe_variants(self, variants: list[dict]) -> list[dict]:
         deduped: list[dict] = []

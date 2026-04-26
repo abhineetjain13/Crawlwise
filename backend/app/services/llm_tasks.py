@@ -28,7 +28,7 @@ from app.services.llm_provider_client import call_provider_with_retry, estimate_
 from app.services.llm_types import LLMTaskResult
 from bs4 import BeautifulSoup, Comment, Tag
 from app.services.record_export_service import render_markdown_block
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -105,13 +105,48 @@ class _SchemaInferencePayload(TypedDict):
     absent_fields: list[_SchemaFieldName]
 
 
-_PAYLOAD_ADAPTERS = {
+class _ProductIntelligenceEnrichmentPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    normalized_title: str = ""
+    style_name: str = ""
+    model_name: str = ""
+    inferred_attributes: dict[str, Any] = Field(default_factory=dict)
+    suggested_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    match_explanation: str = ""
+    mismatch_risks: list[str] = Field(default_factory=list)
+    reason_updates: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("reason_updates")
+    @classmethod
+    def _validate_reason_updates(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        allowed = {
+            "reason_name",
+            "reason_code",
+            "description",
+            "source",
+            "timestamp",
+            "conflicting_value",
+            "resolution_action",
+        }
+        for item in value:
+            unknown = set(item) - allowed
+            if unknown:
+                raise ValueError(
+                    f"unknown reason_updates keys: {', '.join(sorted(unknown))}"
+                )
+        return value
+
+
+_PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "direct_record_extraction": TypeAdapter(list[dict[_FieldKey, Any]]),
     "xpath_discovery": TypeAdapter(list[_XPathSelector]),
     "missing_field_extraction": TypeAdapter(dict[_FieldKey, Any]),
     "field_cleanup_review": TypeAdapter(_FieldCleanupReviewPayload),
     "page_classification": TypeAdapter(_PageClassificationPayload),
     "schema_inference": TypeAdapter(_SchemaInferencePayload),
+    "product_intelligence_enrichment": TypeAdapter(_ProductIntelligenceEnrichmentPayload),
 }
 
 
@@ -217,7 +252,7 @@ async def run_prompt_task(
             )
         )
 
-    payload = _parse_payload(raw, response_type=response_type)
+    payload: object = _parse_payload(raw, response_type=response_type)
     if payload is None:
         return _finish(
             LLMTaskResult(
@@ -269,8 +304,9 @@ async def run_prompt_task(
         )
     )
     await session.flush()
+    normalized_payload = payload if isinstance(payload, (dict, list)) else None
     result = LLMTaskResult(
-        payload=payload,
+        payload=normalized_payload,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         provider=provider,
@@ -453,7 +489,7 @@ def _parse_payload(raw_text: str, *, response_type: str) -> dict | list | None:
 def _validate_task_payload(
     task_type: str,
     payload: object,
-) -> tuple[dict | list | object, str | None]:
+) -> tuple[object, str | None]:
     adapter = _PAYLOAD_ADAPTERS.get(str(task_type or "").strip())
     if adapter is None:
         return payload, None
@@ -579,6 +615,14 @@ def _prune_html_for_llm(html_text: str) -> str:
 def _extract_structured_data(html_text: str) -> dict[str, object]:
     soup = BeautifulSoup(html_text, "html.parser")
     structured: dict[str, object] = {}
+
+    def _append_structured_item(type_name: str, item: dict[str, object]) -> None:
+        existing = structured.get(type_name)
+        if isinstance(existing, list):
+            existing.append(item)
+        else:
+            structured[type_name] = [item]
+
     for script in soup.find_all("script", type="application/ld+json"):
         try:
             data = parse_json(script.string or "")
@@ -590,15 +634,15 @@ def _extract_structured_data(html_text: str) -> dict[str, object]:
                 for item in graph:
                     if isinstance(item, dict) and item.get("@type"):
                         type_name = str(item["@type"]).split("/")[-1]
-                        structured.setdefault(type_name, []).append(item)
+                        _append_structured_item(type_name, item)
             elif data.get("@type"):
                 type_name = str(data["@type"]).split("/")[-1]
-                structured.setdefault(type_name, []).append(data)
+                _append_structured_item(type_name, data)
         elif isinstance(data, list):
             for item in data:
                 if isinstance(item, dict) and item.get("@type"):
                     type_name = str(item["@type"]).split("/")[-1]
-                    structured.setdefault(type_name, []).append(item)
+                    _append_structured_item(type_name, item)
     next_data_script = soup.find("script", id="__NEXT_DATA__")
     if next_data_script:
         try:
@@ -742,8 +786,8 @@ def _truncate_json_literal(value: Any, limit: int) -> str:
     if isinstance(compact, list):
         trimmed_list: list[Any] = []
         for item in compact:
-            candidate = [*trimmed_list, item]
-            if len(json.dumps(candidate, default=str)) > limit:
+            candidate_list = [*trimmed_list, item]
+            if len(json.dumps(candidate_list, default=str)) > limit:
                 break
             trimmed_list.append(item)
         return json.dumps(trimmed_list, default=str)

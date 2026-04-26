@@ -7,6 +7,8 @@ from urllib.parse import urlparse
 import jmespath
 
 from app.services.config.network_payload_specs import (
+    DETAIL_URL_IGNORE_TOKENS,
+    GHOST_ROUTE_COMPATIBLE_SURFACES,
     NETWORK_PAYLOAD_DETAIL_CONTAINER_KEYS,
     NETWORK_PAYLOAD_JOB_SIGNATURE,
     NETWORK_PAYLOAD_LIST_COLLECTION_KEYS,
@@ -24,14 +26,6 @@ from app.services.field_value_core import (
     STRUCTURED_MULTI_FIELDS,
     surface_alias_lookup,
     surface_fields,
-)
-
-_GHOST_ROUTE_COMPATIBLE_SURFACES = {
-    "ecommerce_detail",
-    "job_detail",
-}
-_DETAIL_URL_IGNORE_TOKENS: frozenset[str] = frozenset(
-    {"detail", "details", "dp", "item", "job", "p", "product", "products"}
 )
 
 
@@ -262,7 +256,7 @@ def _ghost_route_payload(
         return None
     normalized_surface = str(surface or "").strip().lower()
     if (
-        normalized_surface in _GHOST_ROUTE_COMPATIBLE_SURFACES
+        normalized_surface in GHOST_ROUTE_COMPATIBLE_SURFACES
         and inferred_surface != normalized_surface
     ):
         return None
@@ -458,12 +452,12 @@ def _detail_url_matches_page(candidate_url: object, page_url: str) -> bool:
     candidate_tokens = {
         token
         for token in re.split(r"[^a-z0-9]+", candidate_path)
-        if len(token) >= 2 and token not in _DETAIL_URL_IGNORE_TOKENS
+        if len(token) >= 2 and token not in DETAIL_URL_IGNORE_TOKENS
     }
     page_tokens = {
         token
         for token in re.split(r"[^a-z0-9]+", page_path)
-        if len(token) >= 2 and token not in _DETAIL_URL_IGNORE_TOKENS
+        if len(token) >= 2 and token not in DETAIL_URL_IGNORE_TOKENS
     }
     if not candidate_tokens or not page_tokens:
         return False

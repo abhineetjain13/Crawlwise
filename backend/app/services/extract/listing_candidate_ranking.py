@@ -63,7 +63,7 @@ def best_listing_candidate_set(
     for _name, records in candidate_sets:
         limited = [
             record
-            for record in list(records or [])[:max_records]
+            for record in list(records or [])
             if isinstance(record, dict)
         ]
         prepared = _prepare_listing_candidate_set(
@@ -97,7 +97,7 @@ def _prepare_listing_candidate_set(
     url_is_structural: Callable[[str, str], bool],
     detail_like_url: Callable[[str], bool] | None,
 ) -> list[dict[str, Any]]:
-    best_by_url: dict[str, tuple[int, int, dict[str, Any]]] = {}
+    best_by_key: dict[str, tuple[int, int, dict[str, Any]]] = {}
     prepared: list[tuple[int, int, dict[str, Any]]] = []
     for order, record in enumerate(records):
         metrics = _listing_record_quality_metrics(
@@ -112,16 +112,41 @@ def _prepare_listing_candidate_set(
             continue
         score = _metric_int(metrics, "score")
         url = str(record.get("url") or "").strip()
-        if url:
-            existing = best_by_url.get(url)
+        dedupe_key = _listing_record_dedupe_key(
+            record,
+            url=url,
+            detail_like_url=detail_like_url,
+        )
+        if dedupe_key:
+            existing = best_by_key.get(dedupe_key)
             candidate = (score, order, record)
             if existing is None or (score, -order) > (existing[0], -existing[1]):
-                best_by_url[url] = candidate
+                best_by_key[dedupe_key] = candidate
             continue
         prepared.append((score, order, record))
-    prepared.extend(best_by_url.values())
+    prepared.extend(best_by_key.values())
     prepared.sort(key=lambda row: (-row[0], row[1]))
     return [record for _score, _order, record in prepared]
+
+
+def _listing_record_dedupe_key(
+    record: dict[str, Any],
+    *,
+    url: str,
+    detail_like_url: Callable[[str], bool] | None,
+) -> str:
+    product_id = clean_text(record.get("product_id") or record.get("productId") or record.get("sku"))
+    if product_id:
+        return f"id:{product_id.lower()}"
+    if not url:
+        return ""
+    if detail_like_url is not None and detail_like_url(url):
+        parsed = urlsplit(url)
+        host = str(parsed.hostname or "").lower()
+        path = str(parsed.path or "").rstrip("/").lower()
+        if host and path:
+            return f"path:{host}{path}"
+    return f"url:{url}"
 
 
 def _listing_record_set_score(

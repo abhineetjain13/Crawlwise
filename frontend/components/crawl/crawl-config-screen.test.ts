@@ -9,7 +9,6 @@ type DomainRunProfileOverrides = {
  fetch_profile?: Partial<DomainRunProfile["fetch_profile"]>;
  locality_profile?: Partial<DomainRunProfile["locality_profile"]>;
  diagnostics_profile?: Partial<DomainRunProfile["diagnostics_profile"]>;
- proxy_profile?: Partial<DomainRunProfile["proxy_profile"]>;
  source_run_id?: DomainRunProfile["source_run_id"];
  saved_at?: DomainRunProfile["saved_at"];
 };
@@ -42,8 +41,6 @@ function baseProfile(overrides: DomainRunProfileOverrides = {}): DomainRunProfil
  include_iframes: false,
  traversal_mode: null,
  request_delay_ms: 2000,
- max_pages: 5,
- max_scrolls: 10,
  ...overrides.fetch_profile,
  },
  locality_profile: {
@@ -59,11 +56,6 @@ function baseProfile(overrides: DomainRunProfileOverrides = {}): DomainRunProfil
  capture_response_headers: true,
  capture_browser_diagnostics: true,
  ...overrides.diagnostics_profile,
- },
- proxy_profile: {
- enabled: false,
- proxy_list: [],
- ...overrides.proxy_profile,
  },
  source_run_id: overrides.source_run_id ?? null,
  saved_at: overrides.saved_at ?? null,
@@ -117,8 +109,6 @@ describe("buildDispatch", () => {
  js_mode: "enabled",
  traversal_mode: "paginate",
  request_delay_ms: 1500,
- max_pages: 8,
- max_scrolls: 12,
  include_iframes: true,
  },
  locality_profile: {
@@ -146,8 +136,6 @@ describe("buildDispatch", () => {
  include_iframes: true,
  traversal_mode: "paginate",
  request_delay_ms: 1500,
- max_pages: 8,
- max_scrolls: 12,
  });
  expect(dispatch.settings.locality_profile).toEqual({
  geo_country: "IN",

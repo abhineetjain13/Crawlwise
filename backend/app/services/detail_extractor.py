@@ -17,9 +17,15 @@ from app.services.config.field_mappings import (
     VARIANT_DOM_FIELD_NAMES,
 )
 from app.services.config.extraction_rules import (
+    CANDIDATE_PLACEHOLDER_VALUES,
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
+    DETAIL_COLLECTION_PATH_TOKENS,
+    DETAIL_CURRENT_PRICE_SELECTORS,
     DETAIL_NON_PAGE_FILE_EXTENSIONS,
+    DETAIL_ORIGINAL_PRICE_SELECTORS,
+    DETAIL_PRODUCT_PATH_TOKENS,
+    DETAIL_SEARCH_QUERY_KEYS,
     DETAIL_UTILITY_PATH_TOKENS,
     DETAIL_TITLE_SOURCE_RANKS,
     LISTING_ALT_TEXT_TITLE_PATTERN,
@@ -33,6 +39,9 @@ from app.services.config.extraction_rules import (
     TITLE_PROMOTION_PREFIXES,
     TITLE_PROMOTION_SEPARATOR,
     TITLE_PROMOTION_SUBSTRINGS,
+    VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
+    VARIANT_OPTION_VALUE_NOISE_TOKENS,
+    VARIANT_SIZE_VALUE_PATTERNS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extraction_context import (
@@ -47,10 +56,13 @@ from app.services.field_value_core import (
     REVIEW_COUNT_RE,
     STRUCTURED_OBJECT_FIELDS,
     STRUCTURED_OBJECT_LIST_FIELDS,
+    _object_dict,
+    _object_list,
     clean_text,
     coerce_field_value,
     extract_currency_code,
     finalize_record,
+    is_title_noise,
     same_site,
     surface_alias_lookup,
     surface_fields,
@@ -82,6 +94,7 @@ from app.services.extract.shared_variant_logic import (
     resolve_variants,
     resolve_variant_group_name,
     split_variant_axes,
+    variant_axis_name_is_semantic,
     variant_dom_cues_present,
 )
 from app.services.field_policy import exact_requested_field_key
@@ -95,6 +108,29 @@ from app.services.extract.detail_tiers import (
 )
 
 logger = logging.getLogger(__name__)
+_DETAIL_VARIANT_SIZE_VALUE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in VARIANT_SIZE_VALUE_PATTERNS
+    if str(pattern).strip()
+)
+_VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS
+    if str(pattern).strip()
+)
+_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
+    str(token).strip().lower()
+    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
+    if str(token).strip()
+)
+_LOW_SIGNAL_ZERO_PRICE_SOURCES = frozenset(
+    {
+        "dom_selector",
+        "dom_sections",
+        "dom_text",
+        "selector_rule",
+    }
+)
 _LOW_SIGNAL_LONG_TEXT_VALUES = frozenset(
     {
         "description",
@@ -146,11 +182,29 @@ _LONG_TEXT_SOURCE_RANKS = {
 }
 _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(r"^404$"),
+    re.compile(r"^(?:error\s*)?404\b", re.I),
     re.compile(r"^oops!? the page you(?:'|’)re looking for can(?:'|’)t be found\.?$", re.I),
     re.compile(r"\bpage not found\b", re.I),
     re.compile(r"\bnot found\b", re.I),
     re.compile(r"\baccess denied\b", re.I),
 )
+_DETAIL_URL_PLACEHOLDER_SEGMENTS = frozenset(
+    {
+        str(value).strip().lower()
+        for value in tuple(CANDIDATE_PLACEHOLDER_VALUES or ())
+        if str(value).strip()
+    }
+)
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return default
+
 
 def _detail_url_path_segments(url: str) -> list[str]:
     parsed = urlparse(str(url or ""))
@@ -177,29 +231,7 @@ def _field_source_rank(surface: str, field_name: str, source: str | None) -> int
             return _LONG_TEXT_SOURCE_RANKS.get(str(source or ""), 20)
         if field_name in ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
             return 2
-    return 100 + _SOURCE_PRIORITY_RANK.get(source, len(_SOURCE_PRIORITY_RANK))
-def _detail_title_is_noise(title: object) -> bool:
-    cleaned = clean_text(title)
-    lowered = cleaned.lower()
-    if not lowered:
-        return True
-    if "undefined" in lowered or lowered in {"nan", "none", "null"}:
-        return True
-    if len(cleaned) < 4 or cleaned.isdigit():
-        return True
-    if "star" in lowered and RATING_RE.search(lowered) and len(cleaned.split()) <= 4:
-        return True
-    if lowered in LISTING_TITLE_CTA_TITLES:
-        return True
-    if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
-        return True
-    if any(lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES):
-        return True
-    if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
-        return True
-    if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
-        return True
-    return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
+    return 100 + _SOURCE_PRIORITY_RANK.get(str(source or ""), len(_SOURCE_PRIORITY_RANK))
 def _detail_title_from_url(page_url: str) -> str | None:
     path_segments = _detail_url_path_segments(page_url)
     if not path_segments:
@@ -213,7 +245,7 @@ def _detail_title_from_url(page_url: str) -> str | None:
         if terminal in {"p", "dp", "product", "products", "job", "jobs", "release"}:
             continue
         title = clean_text(re.sub(r"[-_]+", " ", terminal))
-        if title and not _detail_title_is_noise(title):
+        if title and not is_title_noise(title):
             return title
     return None
 def _apply_dom_fallbacks(
@@ -237,7 +269,7 @@ def _apply_dom_fallbacks(
         (
             candidate
             for candidate in (h1_title, page_title_text)
-            if candidate and not _detail_title_is_noise(candidate)
+            if candidate and not is_title_noise(candidate)
         ),
         None,
     )
@@ -547,6 +579,13 @@ def _detail_url_candidate_is_low_signal(candidate_url: object, *, page_url: str)
     page_path = str(page_parsed.path or "").strip()
     if any(candidate_path.lower().endswith(ext) for ext in DETAIL_NON_PAGE_FILE_EXTENSIONS):
         return True
+    candidate_segments = {
+        segment.strip().lower()
+        for segment in candidate_path.split("/")
+        if segment.strip()
+    }
+    if candidate_segments & _DETAIL_URL_PLACEHOLDER_SEGMENTS:
+        return True
     if same_site(page_url, candidate) and _detail_url_is_utility(candidate):
         return True
     return page_path not in {"", "/"} and candidate_path in {"", "/"}
@@ -596,6 +635,8 @@ def _detail_url_looks_like_product(url: str) -> bool:
             return False
     if _detail_url_is_utility(url):
         return False
+    if _detail_url_is_collection_like(url):
+        return False
     if any(token in terminal for token in ("category", "collections", "search", "sale")):
         return False
     return any(separator in terminal for separator in ("-", "_"))
@@ -606,7 +647,26 @@ def _detail_url_is_utility(url: str) -> bool:
         for token in re.split(r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower())
         if token
     }
-    return any(token in path_tokens for token in DETAIL_UTILITY_PATH_TOKENS)
+    if any(token in path_tokens for token in DETAIL_UTILITY_PATH_TOKENS):
+        return True
+    query_keys = {
+        str(key).strip().lower()
+        for key, value in parse_qsl(str(urlparse(url).query or ""), keep_blank_values=False)
+        if str(key).strip() and str(value).strip()
+    }
+    if not query_keys:
+        return False
+    return any(str(key).strip().lower() in query_keys for key in DETAIL_SEARCH_QUERY_KEYS)
+
+def _detail_url_is_collection_like(url: str) -> bool:
+    path_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower())
+        if token
+    }
+    if any(token in path_tokens for token in DETAIL_PRODUCT_PATH_TOKENS):
+        return False
+    return any(token in path_tokens for token in DETAIL_COLLECTION_PATH_TOKENS)
 
 def _record_matches_requested_detail_identity(
     record: dict[str, Any],
@@ -615,7 +675,7 @@ def _record_matches_requested_detail_identity(
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     record_codes = _detail_identity_codes_from_record(record)
-    if requested_codes and record_codes and requested_codes & record_codes:
+    if _detail_identity_codes_match(requested_codes, record_codes):
         return True
     requested_title = _detail_title_from_url(requested_page_url) or requested_page_url
     requested_tokens = _detail_identity_tokens(requested_title)
@@ -638,7 +698,7 @@ def _detail_url_matches_requested_identity(
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     candidate_codes = _detail_identity_codes_from_url(candidate_url)
-    if requested_codes and candidate_codes and requested_codes & candidate_codes:
+    if _detail_identity_codes_match(requested_codes, candidate_codes):
         return True
     requested_title = _detail_title_from_url(requested_page_url) or requested_page_url
     requested_tokens = _detail_identity_tokens(requested_title)
@@ -710,6 +770,15 @@ def _normalized_detail_identity_code(value: object) -> str | None:
         return None
     return text
 
+
+def _detail_identity_codes_match(
+    expected_codes: set[str],
+    candidate_codes: set[str],
+) -> bool:
+    if not expected_codes or not candidate_codes:
+        return False
+    return not expected_codes.isdisjoint(candidate_codes)
+
 def _detail_redirect_identity_is_mismatched(
     record: dict[str, Any],
     *,
@@ -724,8 +793,23 @@ def _detail_redirect_identity_is_mismatched(
         return False
     requested_codes = _detail_identity_codes_from_url(requested)
     record_field_codes = _detail_identity_codes_from_record_fields(record)
-    if requested_codes and record_field_codes and not (requested_codes & record_field_codes):
-        return True
+    if requested_codes and record_field_codes and not _detail_identity_codes_match(
+        requested_codes,
+        record_field_codes,
+    ):
+        candidate_url = text_or_none(record.get("url")) or current
+        if not (
+            candidate_url
+            and _detail_url_matches_requested_identity(
+                candidate_url,
+                requested_page_url=requested,
+            )
+            and _record_matches_requested_detail_identity(
+                record,
+                requested_page_url=requested,
+            )
+        ):
+            return True
     candidate_url = text_or_none(record.get("url")) or current
     if candidate_url and candidate_url != requested and same_site(requested, candidate_url):
         if not _detail_url_matches_requested_identity(
@@ -763,11 +847,12 @@ def _selector_self_heal_config(
             and selector_self_heal.get("enabled") is not None
             else crawler_runtime_settings.selector_self_heal_enabled
         ),
-        "threshold": float(
+        "threshold": _coerce_float(
             selector_self_heal.get("min_confidence")
             if isinstance(selector_self_heal, dict)
             and selector_self_heal.get("min_confidence") is not None
-            else crawler_runtime_settings.selector_self_heal_min_confidence
+            else crawler_runtime_settings.selector_self_heal_min_confidence,
+            default=float(crawler_runtime_settings.selector_self_heal_min_confidence),
         ),
     }
 
@@ -789,7 +874,7 @@ def _selected_selector_trace(
                 for key, value in trace.items()
                 if not str(key).startswith("_")
             }
-    trace = next((row for row in traces if isinstance(row, dict)), None)
+    trace = next((row for row in traces if isinstance(row, dict)), {})
     if not isinstance(trace, dict):
         return None
     return {
@@ -882,6 +967,7 @@ def _materialize_record(
         record["_selector_traces"] = selected_selector_traces
     record["_source"] = _primary_source_for_record(record, selected_field_sources)
     _normalize_variant_record(record)
+    drop_low_signal_zero_detail_price(record)
     _dedupe_primary_and_additional_images(record)
     confidence = score_record_confidence(
         record,
@@ -894,18 +980,223 @@ def _materialize_record(
     record["_self_heal"] = {
         "enabled": bool(selector_self_heal["enabled"]),
         "triggered": False,
-        "threshold": float(selector_self_heal["threshold"]),
+        "threshold": _coerce_float(selector_self_heal.get("threshold")),
     }
     return finalize_record(record, surface=surface)
 
 def _normalize_variant_record(record: dict[str, Any]) -> None:
     _backfill_selected_variant_from_record(record)
+    _apply_variant_axis_label_aliases(record)
     _dedupe_variant_rows(record)
     _prune_non_selectable_variant_axes(record)
     _normalize_variant_option_summaries(record)
     _prune_duplicate_variant_axis_fields(record)
     _prune_redundant_size_option_summary(record)
     _backfill_variant_prices_from_record(record)
+
+
+def _price_value_is_zero(value: object) -> bool:
+    text = text_or_none(value)
+    if not text:
+        return False
+    normalized = normalize_decimal_price(
+        text,
+        interpret_integral_as_cents=False,
+    )
+    if not normalized:
+        return False
+    return _coerce_float(normalized, default=1.0) == 0.0
+
+
+def _price_value_is_positive(value: object) -> bool:
+    text = text_or_none(value)
+    if not text:
+        return False
+    normalized = normalize_decimal_price(
+        text,
+        interpret_integral_as_cents=False,
+    )
+    if not normalized:
+        return False
+    return _coerce_float(normalized, default=0.0) > 0.0
+
+
+def _record_field_sources(record: dict[str, Any], field_name: str) -> set[str]:
+    field_sources = _object_dict(record.get("_field_sources"))
+    return {
+        str(source).strip()
+        for source in _object_list(field_sources.get(field_name))
+        if str(source).strip()
+    }
+
+
+def _append_record_field_source(
+    record: dict[str, Any],
+    field_name: str,
+    source: str,
+) -> None:
+    normalized_source = str(source).strip()
+    if not normalized_source:
+        return
+    field_sources = record.setdefault("_field_sources", {})
+    if not isinstance(field_sources, dict):
+        return
+    source_bucket = field_sources.setdefault(field_name, [])
+    if not isinstance(source_bucket, list):
+        return
+    if normalized_source not in source_bucket:
+        source_bucket.append(normalized_source)
+
+
+def _detail_record_has_positive_price_corroboration(record: dict[str, Any]) -> bool:
+    if _price_value_is_positive(record.get("original_price")):
+        return True
+    selected_variant = record.get("selected_variant")
+    if isinstance(selected_variant, dict) and any(
+        _price_value_is_positive(selected_variant.get(field_name))
+        for field_name in ("price", "original_price")
+    ):
+        return True
+    variants = record.get("variants")
+    if not isinstance(variants, list):
+        return False
+    return any(
+        isinstance(variant, dict)
+        and any(
+            _price_value_is_positive(variant.get(field_name))
+            for field_name in ("price", "original_price")
+        )
+        for variant in variants
+    )
+
+
+def drop_low_signal_zero_detail_price(record: dict[str, Any]) -> None:
+    if not _price_value_is_zero(record.get("price")):
+        return
+    price_sources = _record_field_sources(record, "price")
+    if not price_sources:
+        return
+    if not price_sources <= _LOW_SIGNAL_ZERO_PRICE_SOURCES:
+        return
+    if _detail_record_has_positive_price_corroboration(record):
+        return
+    record.pop("price", None)
+    selected_variant = record.get("selected_variant")
+    if isinstance(selected_variant, dict) and _price_value_is_zero(selected_variant.get("price")):
+        selected_variant.pop("price", None)
+        selected_variant.pop("currency", None)
+    variants = record.get("variants")
+    if isinstance(variants, list):
+        for variant in variants:
+            if not isinstance(variant, dict) or not _price_value_is_zero(variant.get("price")):
+                continue
+            variant.pop("price", None)
+            variant.pop("currency", None)
+    currency_sources = _record_field_sources(record, "currency")
+    if (not currency_sources or currency_sources <= _LOW_SIGNAL_ZERO_PRICE_SOURCES) and record.get(
+        "original_price"
+    ) in (None, "", [], {}):
+        record.pop("currency", None)
+
+
+def _apply_variant_axis_label_aliases(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or not variants:
+        return
+    aliases: dict[str, dict[str, str]] = {}
+    rows_by_identity: dict[str, list[dict[str, Any]]] = {}
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        identity = text_or_none(variant.get("variant_id")) or text_or_none(variant.get("sku"))
+        if identity:
+            rows_by_identity.setdefault(identity, []).append(variant)
+    for rows in rows_by_identity.values():
+        for left in rows:
+            left_options = left.get("option_values")
+            if not isinstance(left_options, dict):
+                continue
+            for right in rows:
+                if left is right:
+                    continue
+                right_options = right.get("option_values")
+                if not isinstance(right_options, dict):
+                    continue
+                for axis_name, left_value in left_options.items():
+                    right_value = right_options.get(axis_name)
+                    if not _axis_values_describe_same_choice(
+                        left_options,
+                        right_options,
+                        axis_name=str(axis_name),
+                    ):
+                        continue
+                    code, label = _code_label_pair(left_value, right_value)
+                    if code and label:
+                        aliases.setdefault(str(axis_name), {})[code] = label
+    if not aliases:
+        return
+    _rewrite_variant_axis_values(record, aliases)
+
+
+def _axis_values_describe_same_choice(
+    left_options: dict[str, Any],
+    right_options: dict[str, Any],
+    *,
+    axis_name: str,
+) -> bool:
+    for other_axis, left_value in left_options.items():
+        if str(other_axis) == axis_name:
+            continue
+        right_value = right_options.get(other_axis)
+        if clean_text(left_value).lower() != clean_text(right_value).lower():
+            return False
+    return True
+
+
+def _code_label_pair(left: object, right: object) -> tuple[str, str] | tuple[None, None]:
+    left_text = clean_text(left)
+    right_text = clean_text(right)
+    if not left_text or not right_text or left_text.lower() == right_text.lower():
+        return (None, None)
+    if _variant_axis_value_looks_like_code(left_text) and not _variant_axis_value_looks_like_code(right_text):
+        return left_text, right_text
+    if _variant_axis_value_looks_like_code(right_text) and not _variant_axis_value_looks_like_code(left_text):
+        return right_text, left_text
+    return (None, None)
+
+
+def _variant_axis_value_looks_like_code(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9]{2,6}", str(value or "").strip()))
+
+
+def _rewrite_variant_axis_values(
+    record: dict[str, Any],
+    aliases: dict[str, dict[str, str]],
+) -> None:
+    for axis_name, axis_aliases in aliases.items():
+        if clean_text(record.get(axis_name)) in axis_aliases:
+            record[axis_name] = axis_aliases[clean_text(record.get(axis_name))]
+    variant_axes = record.get("variant_axes")
+    if isinstance(variant_axes, dict):
+        for axis_name, axis_values in list(variant_axes.items()):
+            axis_aliases = aliases.get(str(axis_name)) or {}
+            if not axis_aliases or not isinstance(axis_values, list):
+                continue
+            rewritten = [axis_aliases.get(clean_text(value), value) for value in axis_values]
+            variant_axes[axis_name] = list(dict.fromkeys(clean_text(value) for value in rewritten if clean_text(value)))
+    for row in [record.get("selected_variant"), *list(record.get("variants") or [])]:
+        if not isinstance(row, dict):
+            continue
+        for axis_name, axis_aliases in aliases.items():
+            if clean_text(row.get(axis_name)) in axis_aliases:
+                row[axis_name] = axis_aliases[clean_text(row.get(axis_name))]
+        option_values = row.get("option_values")
+        if not isinstance(option_values, dict):
+            continue
+        for axis_name, axis_aliases in aliases.items():
+            current = clean_text(option_values.get(axis_name))
+            if current in axis_aliases:
+                option_values[axis_name] = axis_aliases[current]
 
 
 def _normalize_variant_option_summaries(record: dict[str, Any]) -> None:
@@ -1274,13 +1565,16 @@ def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
 
 def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> bool:
     title = text_or_none(record.get("title")) or ""
-    field_sources = record.get("_field_sources") if isinstance(record.get("_field_sources"), dict) else {}
+    field_sources = _object_dict(record.get("_field_sources"))
+    title_field_sources = _object_list(field_sources.get("title"))
     title_sources = {
         str(source).strip()
-        for source in list(field_sources.get("title") or [])
+        for source in title_field_sources
         if str(source).strip()
     }
-    if _detail_title_is_noise(title):
+    if is_title_noise(title):
+        return True
+    if _detail_url_is_collection_like(page_url):
         return True
     generic_detail_fields = (
         "price",
@@ -1302,6 +1596,18 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         record.get(field_name) not in (None, "", [], {})
         for field_name in generic_detail_fields
     )
+    if _detail_title_looks_like_placeholder(title) and not any(
+        record.get(field_name) not in (None, "", [], {})
+        for field_name in (
+            "price",
+            "original_price",
+            "image_url",
+            "sku",
+            "part_number",
+            "barcode",
+        )
+    ):
+        return True
     if (
         "url_slug" in title_sources
         and float((record.get("_confidence") or {}).get("score") or 0.0) < 0.5
@@ -1513,12 +1819,23 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
     lowered = value.lower()
     return (
         not value
+        or re.sub(r"[^a-z0-9]+", "", lowered) in _VARIANT_OPTION_VALUE_NOISE_TOKENS
         or lowered in {"select", "choose", "option", "size guide"}
         or re.fullmatch(r"[-\s]*(?:click\s+to\s+)?(?:choose|select)\b.*", lowered) is not None
         or re.fullmatch(r"[-\s]+.+[-\s]+", lowered) is not None
         or re.fullmatch(r"\(\d+\)", value) is not None
         or re.fullmatch(r"\d{3,5}/\d{2,5}/\d{2,5}", value) is not None
     )
+
+
+def _strip_variant_option_value_suffix_noise(value: object) -> str:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    stripped = cleaned
+    for pattern in _VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS:
+        stripped = pattern.sub("", stripped).strip()
+    return stripped or cleaned
 
 def _variant_input_label(container: Any, input_node: Any) -> Any | None:
     input_id = text_or_none(input_node.get("id")) if hasattr(input_node, "get") else None
@@ -1566,7 +1883,6 @@ def _node_attr_is_truthy(node: Any, *attr_names: str) -> bool:
 def _variant_option_availability(*, node: Any, label_node: Any | None) -> tuple[str | None, int | None]:
     attr_probe_parts: list[str] = []
     text_probe_parts: list[str] = []
-    disabled = _node_attr_is_truthy(node, "disabled", "aria-disabled")
     for candidate in (
         node,
         label_node,
@@ -1590,9 +1906,9 @@ def _variant_option_availability(*, node: Any, label_node: Any | None) -> tuple[
     text_probe = clean_text(" ".join(text_probe_parts)).lower()
     if any(
         token in attr_probe
-        for token in ("outstock", "out-stock", "soldout", "sold-out", "unavailable", "disabled")
+        for token in ("outstock", "out-stock", "soldout", "sold-out", "unavailable")
     ):
-        disabled = True
+        return "out_of_stock", 0
     stock_match = re.search(r"\b(\d+)\s+left\b", text_probe)
     if stock_match:
         quantity = int(stock_match.group(1))
@@ -1601,8 +1917,6 @@ def _variant_option_availability(*, node: Any, label_node: Any | None) -> tuple[
         return "out_of_stock", 0
     if "in stock" in text_probe or "available" in text_probe:
         return "in_stock", None
-    if disabled:
-        return "out_of_stock", 0
     return None, None
 
 def _variant_option_url(
@@ -1700,6 +2014,7 @@ def _collect_variant_choice_entries(container: Any, *, page_url: str) -> list[di
                 page_url,
             )
         )
+        cleaned = _strip_variant_option_value_suffix_noise(cleaned)
         if _variant_option_value_is_noise(cleaned):
             continue
         entry = entries_by_value.setdefault(cleaned, {"value": cleaned})
@@ -1725,6 +2040,7 @@ def _collect_variant_choice_entries(container: Any, *, page_url: str) -> list[di
                 page_url,
             )
         )
+        cleaned = _strip_variant_option_value_suffix_noise(cleaned)
         if _variant_option_value_is_noise(cleaned):
             continue
         entry = entries_by_value.setdefault(cleaned, {"value": cleaned})
@@ -1757,6 +2073,107 @@ def _variant_choice_entry_value(
         or node.get("aria-label")
         or node.get("value")
     )
+
+
+def _split_compound_axis_name(name: object) -> list[tuple[str, str]]:
+    cleaned = clean_text(name)
+    if not cleaned:
+        return []
+    parts = [
+        clean_text(part)
+        for part in re.split(r"\s*(?:&|/|\band\b)\s*", cleaned, flags=re.I)
+        if clean_text(part)
+    ]
+    if len(parts) < 2:
+        return []
+    resolved: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for part in parts:
+        if not variant_axis_name_is_semantic(part):
+            return []
+        axis_key = normalized_variant_axis_key(part)
+        if not axis_key or axis_key in seen:
+            return []
+        seen.add(axis_key)
+        resolved.append((axis_key, normalized_variant_axis_display_name(part) or part))
+    return resolved if len(resolved) >= 2 else []
+
+
+def _strip_variant_option_price_suffix(value: object) -> str:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    without_price = re.sub(r"\s*\([^)]*[\d][^)]*\)\s*$", "", cleaned).strip()
+    return without_price or cleaned
+
+
+def _split_compound_option_value(
+    value: object,
+    *,
+    axis_keys: tuple[str, ...],
+) -> dict[str, str] | None:
+    cleaned = _strip_variant_option_price_suffix(value)
+    if not cleaned or len(axis_keys) != 2 or "size" not in axis_keys:
+        return None
+    other_axis = next((axis for axis in axis_keys if axis != "size"), "")
+    if not other_axis:
+        return None
+    tokens = [token for token in cleaned.split() if token]
+    for width in range(min(3, len(tokens)), 0, -1):
+        size_candidate = " ".join(tokens[-width:])
+        if not any(pattern.fullmatch(size_candidate) for pattern in _DETAIL_VARIANT_SIZE_VALUE_PATTERNS):
+            continue
+        other_value = clean_text(" ".join(tokens[:-width]))
+        if not other_value:
+            return None
+        return {
+            other_axis: other_value,
+            "size": size_candidate,
+        }
+    return None
+
+
+def _expand_compound_option_group(group: dict[str, object]) -> list[dict[str, object]] | None:
+    axis_parts = _split_compound_axis_name(group.get("name"))
+    if len(axis_parts) != 2:
+        return None
+    entries = [entry for entry in _object_list(group.get("entries")) if isinstance(entry, dict)]
+    if not entries:
+        return None
+    axis_keys = tuple(axis_key for axis_key, _ in axis_parts)
+    parsed_rows: list[dict[str, str]] = []
+    for entry in entries:
+        parsed = _split_compound_option_value(entry.get("value"), axis_keys=axis_keys)
+        if not parsed:
+            return None
+        parsed_rows.append(parsed)
+    axis_values: dict[str, list[str]] = {axis_key: [] for axis_key, _ in axis_parts}
+    observed_combos: set[tuple[str, ...]] = set()
+    for parsed in parsed_rows:
+        combo = tuple(parsed.get(axis_key, "") for axis_key, _ in axis_parts)
+        if any(not value for value in combo):
+            return None
+        observed_combos.add(combo)
+        for axis_key, _ in axis_parts:
+            axis_value = parsed[axis_key]
+            if axis_value not in axis_values[axis_key]:
+                axis_values[axis_key].append(axis_value)
+    expected_combo_count = 1
+    for axis_key, _ in axis_parts:
+        values = axis_values.get(axis_key) or []
+        if len(values) < 2:
+            return None
+        expected_combo_count *= len(values)
+    if len(observed_combos) != len(parsed_rows) or len(observed_combos) != expected_combo_count:
+        return None
+    return [
+        {
+            "name": display_name,
+            "values": axis_values[axis_key],
+            "entries": [{"value": axis_value} for axis_value in axis_values[axis_key]],
+        }
+        for axis_key, display_name in axis_parts
+    ]
 
 def _variant_query_url(page_url: str, *, query_key: str, query_value: str) -> str | None:
     normalized_key = text_or_none(query_key)
@@ -1839,11 +2256,11 @@ def _state_variant_targets(
                 for option_definition in option_definitions:
                     axis_field = str(option_definition["axis_field"])
                     axis_key = str(option_definition["axis_key"])
-                    value_by_id = dict(option_definition["value_by_id"])
+                    mapping_value_by_id = _object_dict(option_definition.get("value_by_id"))
                     option_id = text_or_none(mapping_row.get(axis_field))
-                    option_value = value_by_id.get(option_id or "")
-                    if option_value:
-                        option_values[axis_key] = option_value
+                    mapped_option_value = mapping_value_by_id.get(option_id or "")
+                    if mapped_option_value:
+                        option_values[axis_key] = str(mapped_option_value)
                 if not option_values:
                     continue
                 row_metadata: dict[str, object] = {}
@@ -1914,6 +2331,7 @@ def _extract_variants_from_dom(
                     page_url,
                 )
             ) or clean_text(option.get_text(" ", strip=True))
+            cleaned_value = _strip_variant_option_value_suffix_noise(cleaned_value)
             raw_value_attr = text_or_none(option.get("value"))
             if (
                 not cleaned_value
@@ -1961,10 +2379,18 @@ def _extract_variants_from_dom(
                 }
             )
 
+    expanded_option_groups: list[dict[str, object]] = []
+    for group in option_groups:
+        compound_groups = _expand_compound_option_group(group)
+        if compound_groups:
+            expanded_option_groups.extend(compound_groups)
+            continue
+        expanded_option_groups.append(group)
+
     deduped_groups: list[dict[str, object]] = []
     merged_groups: dict[str, dict[str, object]] = {}
-    for group in option_groups:
-        values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
+    for group in expanded_option_groups:
+        values = [clean_text(value) for value in _object_list(group.get("values")) if clean_text(value)]
         if len(values) < 2:
             continue
         name = clean_text(group.get("name"))
@@ -1974,37 +2400,44 @@ def _extract_variants_from_dom(
         merged = merged_groups.setdefault(axis_key, {"name": name or axis_key, "values": [], "entries": {}})
         if len(name) > len(str(merged.get("name") or "")):
             merged["name"] = name
-        merged["values"] = list(dict.fromkeys([*list(merged.get("values") or []), *values]))
+        existing_values = _object_list(merged.get("values"))
+        merged["values"] = list(dict.fromkeys([*existing_values, *values]))
         merged_entries = merged.setdefault("entries", {})
-        for entry in list(group.get("entries") or []):
-            value = clean_text(entry.get("value"))
+        if not isinstance(merged_entries, dict):
+            merged_entries = {}
+            merged["entries"] = merged_entries
+        for group_entry in _object_list(group.get("entries")):
+            if not isinstance(group_entry, dict):
+                continue
+            value = clean_text(group_entry.get("value"))
             if not value:
                 continue
-            existing = merged_entries.get(value, {"value": value})
-            availability = text_or_none(entry.get("availability"))
+            existing = _object_dict(merged_entries.get(value, {"value": value}))
+            availability = text_or_none(group_entry.get("availability"))
             if availability and existing.get("availability") in (None, "", [], {}):
                 existing["availability"] = availability
-            if entry.get("stock_quantity") not in (None, "", [], {}):
-                existing["stock_quantity"] = entry.get("stock_quantity")
-            if entry.get("selected"):
+            if group_entry.get("stock_quantity") not in (None, "", [], {}):
+                existing["stock_quantity"] = group_entry.get("stock_quantity")
+            if group_entry.get("selected"):
                 existing["selected"] = True
-            if entry.get("url") not in (None, "", [], {}) and existing.get("url") in (None, "", [], {}):
-                existing["url"] = entry.get("url")
-            if entry.get("variant_id") not in (None, "", [], {}) and existing.get("variant_id") in (None, "", [], {}):
-                existing["variant_id"] = entry.get("variant_id")
+            if group_entry.get("url") not in (None, "", [], {}) and existing.get("url") in (None, "", [], {}):
+                existing["url"] = group_entry.get("url")
+            if group_entry.get("variant_id") not in (None, "", [], {}) and existing.get("variant_id") in (None, "", [], {}):
+                existing["variant_id"] = group_entry.get("variant_id")
             merged_entries[value] = existing
     for group in merged_groups.values():
-        values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
+        values = [clean_text(value) for value in _object_list(group.get("values")) if clean_text(value)]
         if len(values) < 2:
             continue
+        merged_entries = _object_dict(group.get("entries"))
         deduped_groups.append(
             {
                 "name": clean_text(group.get("name")),
                 "values": values,
-                "entries": list((group.get("entries") or {}).values()),
+                "entries": list(merged_entries.values()),
             }
         )
-        if len(deduped_groups) >= 2:
+        if len(deduped_groups) >= 4:
             break
 
     if not deduped_groups:
@@ -2020,7 +2453,7 @@ def _extract_variants_from_dom(
     axis_order: list[tuple[str, str, list[str]]] = []
     for group in deduped_groups:
         name = clean_text(group.get("name"))
-        values = list(group.get("values") or [])
+        values = [str(value) for value in _object_list(group.get("values"))]
         axis_key = normalized_variant_axis_key(name)
         if not axis_key:
             continue
@@ -2034,7 +2467,8 @@ def _extract_variants_from_dom(
                 for key in ("availability", "selected", "stock_quantity", "url", "variant_id")
                 if entry.get(key) not in (None, "", [], {})
             }
-            for entry in list(group.get("entries") or [])
+            for entry in _object_list(group.get("entries"))
+            if isinstance(entry, dict)
             if clean_text(entry.get("value"))
         }
         for option_value, state_metadata in dict(state_axis_targets.get(axis_key) or {}).items():
@@ -2170,7 +2604,7 @@ def _promote_detail_title(
             for rank, _, candidate, source in ranked_candidates
             if candidate
             and candidate != title
-            and not _detail_title_is_noise(candidate)
+            and not is_title_noise(candidate)
             and (
                 rank < current_rank
                 or (rank == current_rank and len(candidate) > len(title))
@@ -2188,7 +2622,7 @@ def _title_needs_promotion(title: str, *, page_url: str) -> bool:
     host = str(urlparse(page_url).hostname or "").strip().lower()
     if not normalized_title:
         return False
-    if _detail_title_is_noise(normalized_title):
+    if is_title_noise(normalized_title):
         return True
     if any(normalized_title.startswith(prefix) for prefix in TITLE_PROMOTION_PREFIXES):
         return True
@@ -2242,7 +2676,11 @@ def _requires_dom_completion(
         requested_fields=requested_fields,
         selector_rules=selector_rules,
     )
-    extractable_fields = set(extractability.get("extractable_fields") or [])
+    extractable_fields = {
+        str(field_name).strip()
+        for field_name in _object_list(extractability.get("extractable_fields"))
+        if str(field_name).strip()
+    }
     high_value_fields = set(DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
     advertised_high_value_fields = extractable_fields & high_value_fields
     missing_high_value_fields = {
@@ -2266,9 +2704,18 @@ def _requires_dom_completion(
         for field_name in set(DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ())
         if record.get(field_name) in (None, "", [], {})
     }
-    if optional_cue_fields & set(extractability.get("dom_pattern_fields") or []):
+    dom_pattern_fields = {
+        str(field_name).strip()
+        for field_name in _object_list(extractability.get("dom_pattern_fields"))
+        if str(field_name).strip()
+    }
+    if optional_cue_fields & dom_pattern_fields:
         return True
-    selector_backed_fields = set(extractability.get("selector_backed_fields") or [])
+    selector_backed_fields = {
+        str(field_name).strip()
+        for field_name in _object_list(extractability.get("selector_backed_fields"))
+        if str(field_name).strip()
+    }
     return bool(requested_missing_fields & selector_backed_fields)
 
 def _primary_dom_context(
@@ -2322,7 +2769,7 @@ def build_detail_record(
         surface=surface,
         page_url=page_url,
     )
-    if surface == "ecommerce_detail" and _detail_title_is_noise(js_state_record.get("title")):
+    if surface == "ecommerce_detail" and is_title_noise(js_state_record.get("title")):
         js_state_record = dict(js_state_record)
         js_state_record.pop("title", None)
 
@@ -2343,9 +2790,15 @@ def build_detail_record(
         collect_structured_payload_candidates=_collect_structured_payload_candidates,
     )
     record = materialize_detail_tier(state, tier_name="structured_data", materialize_record=_materialize_record)
+    collect_js_state_tier(
+        state,
+        js_state_record=js_state_record,
+        collect_record_candidates=_collect_record_candidates,
+    )
+    record = materialize_detail_tier(state, tier_name="js_state", materialize_record=_materialize_record)
     if (
-        float(record["_confidence"]["score"])
-        >= float(selector_self_heal["threshold"])
+        _coerce_float(_object_dict(record.get("_confidence")).get("score"))
+        >= _coerce_float(selector_self_heal.get("threshold"))
         and not _requires_dom_completion(
             record=record,
             surface=surface,
@@ -2361,15 +2814,14 @@ def build_detail_record(
             page_url=page_url,
             js_state_objects=js_state_objects,
         )
-        record["_extraction_tiers"]["early_exit"] = "structured_data"
+        drop_low_signal_zero_detail_price(record)
+        record["_confidence"] = score_record_confidence(
+            record,
+            surface=surface,
+            requested_fields=requested_fields,
+        )
+        record["_extraction_tiers"]["early_exit"] = "js_state"
         return record
-
-    collect_js_state_tier(
-        state,
-        js_state_record=js_state_record,
-        collect_record_candidates=_collect_record_candidates,
-    )
-    record = materialize_detail_tier(state, tier_name="js_state", materialize_record=_materialize_record)
 
     collect_dom_tier(
         state,
@@ -2409,6 +2861,13 @@ def build_detail_record(
             title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
             if "url_slug" not in title_sources:
                 title_sources.append("url_slug")
+    _backfill_detail_price_from_html(record, html=html)
+    _backfill_variants_from_dom_if_missing(
+        record,
+        soup=soup,
+        page_url=page_url,
+        js_state_objects=js_state_objects,
+    )
     record["_confidence"] = score_record_confidence(
         record,
         surface=surface,
@@ -2416,6 +2875,55 @@ def build_detail_record(
     )
     record["_extraction_tiers"]["early_exit"] = None
     return record
+
+
+def detail_record_rejection_reason(
+    record: dict[str, Any],
+    *,
+    page_url: str,
+    requested_page_url: str | None = None,
+) -> str | None:
+    if _detail_redirect_identity_is_mismatched(
+        record,
+        page_url=page_url,
+        requested_page_url=requested_page_url,
+    ):
+        return "detail_identity_mismatch"
+    if _looks_like_site_shell_record(record, page_url=page_url):
+        return "non_detail_seed"
+    return None
+
+
+def infer_detail_failure_reason(
+    html: str,
+    page_url: str,
+    surface: str,
+    requested_fields: list[str] | None,
+    *,
+    requested_page_url: str | None = None,
+    adapter_records: list[dict[str, Any]] | None = None,
+    network_payloads: list[dict[str, object]] | None = None,
+    selector_rules: list[dict[str, object]] | None = None,
+    extraction_runtime_snapshot: dict[str, object] | None = None,
+) -> str | None:
+    if "detail" not in str(surface or "").strip().lower():
+        return None
+    record = build_detail_record(
+        html,
+        page_url,
+        surface,
+        requested_fields,
+        requested_page_url=requested_page_url,
+        adapter_records=adapter_records,
+        network_payloads=network_payloads,
+        selector_rules=selector_rules,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+    )
+    return detail_record_rejection_reason(
+        record,
+        page_url=page_url,
+        requested_page_url=requested_page_url,
+    )
 
 def extract_detail_records(
     html: str,
@@ -2470,15 +2978,32 @@ def _backfill_detail_price_from_html(record: dict[str, Any], *, html: str) -> No
     currency = text_or_none(record.get("currency")) or _detail_currency_from_html(soup)
     if currency and record.get("currency") in (None, "", [], {}):
         record["currency"] = currency
+        _append_record_field_source(record, "currency", "dom_text")
     price = _detail_price_from_html(soup, currency=currency)
     if price in (None, "", [], {}):
         return
     if record.get("price") in (None, "", [], {}):
         record["price"] = price
+        _append_record_field_source(record, "price", "dom_text")
     if isinstance(selected_variant, dict) and selected_variant.get("price") in (None, "", [], {}):
         selected_variant["price"] = price
         if currency and selected_variant.get("currency") in (None, "", [], {}):
             selected_variant["currency"] = currency
+    original_price = _detail_original_price_from_html(soup, currency=currency)
+    if original_price not in (None, "", [], {}) and record.get("original_price") in (
+        None,
+        "",
+        [],
+        {},
+    ):
+        record["original_price"] = original_price
+        _append_record_field_source(record, "original_price", "dom_text")
+    if (
+        isinstance(selected_variant, dict)
+        and original_price not in (None, "", [], {})
+        and selected_variant.get("original_price") in (None, "", [], {})
+    ):
+        selected_variant["original_price"] = original_price
 
 def _backfill_variants_from_dom_if_missing(
     record: dict[str, Any],
@@ -2559,6 +3084,36 @@ def _detail_price_from_html(soup: BeautifulSoup, *, currency: str | None) -> str
         )
         if normalized:
             return normalized
+    visible_price = _detail_price_from_selector_text(
+        soup,
+        selectors=DETAIL_CURRENT_PRICE_SELECTORS,
+        currency=currency,
+    )
+    if visible_price:
+        return visible_price
+    return None
+
+def _detail_original_price_from_html(soup: BeautifulSoup, *, currency: str | None) -> str | None:
+    return _detail_price_from_selector_text(
+        soup,
+        selectors=DETAIL_ORIGINAL_PRICE_SELECTORS,
+        currency=currency,
+    )
+
+def _detail_price_from_selector_text(
+    soup: BeautifulSoup,
+    *,
+    selectors: tuple[str, ...],
+    currency: str | None,
+) -> str | None:
+    for selector in selectors:
+        for node in soup.select(selector):
+            raw_value = node.get("aria-label") if hasattr(node, "get") else None
+            if raw_value in (None, "", [], {}):
+                raw_value = node.get_text(" ", strip=True)
+            normalized = _normalize_detail_price_candidate(raw_value, currency=currency)
+            if normalized:
+                return normalized
     return None
 
 def _detail_currency_from_html(soup: BeautifulSoup) -> str | None:
@@ -2580,6 +3135,14 @@ def _detail_currency_from_html(soup: BeautifulSoup) -> str | None:
         match = re.search(r'"priceCurrency"\s*:\s*"(?P<currency>[A-Z]{3})"', script_text)
         if match is not None:
             return text_or_none(match.group("currency"))
+    for selector in (*DETAIL_CURRENT_PRICE_SELECTORS, *DETAIL_ORIGINAL_PRICE_SELECTORS):
+        for node in soup.select(selector):
+            raw_value = node.get("aria-label") if hasattr(node, "get") else None
+            if raw_value in (None, "", [], {}):
+                raw_value = node.get_text(" ", strip=True)
+            currency = extract_currency_code(raw_value)
+            if currency:
+                return currency
     return None
 
 def _normalize_detail_price_candidate(

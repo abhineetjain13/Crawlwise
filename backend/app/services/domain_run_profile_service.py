@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.crawl import DomainRunProfile
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
+from app.models.crawl_settings import _coerce_int as _coerce_int_clamped
 
 _FETCH_MODE_VALUES = {
     "auto",
@@ -67,22 +68,6 @@ def _coerce_country(value: object) -> str:
     return text or "auto"
 
 
-def _coerce_int(
-    value: object,
-    *,
-    default: int,
-    minimum: int,
-    maximum: int | None = None,
-) -> int:
-    try:
-        result = max(minimum, int(str(value)))
-        if maximum is not None:
-            result = min(maximum, result)
-        return result
-    except (TypeError, ValueError):
-        return default
-
-
 def normalize_domain_run_profile(
     profile: object,
     *,
@@ -93,9 +78,8 @@ def normalize_domain_run_profile(
     fetch_profile = dict(payload.get("fetch_profile") or {})
     locality_profile = dict(payload.get("locality_profile") or {})
     diagnostics_profile = dict(payload.get("diagnostics_profile") or {})
-    proxy_profile = dict(payload.get("proxy_profile") or {})
     normalized_saved_at = saved_at or datetime.now(UTC).isoformat()
-    normalized_source_run_id = _coerce_int(
+    normalized_source_run_id = _coerce_int_clamped(
         source_run_id,
         default=0,
         minimum=0,
@@ -125,18 +109,18 @@ def normalize_domain_run_profile(
                 fetch_profile.get("traversal_mode"),
                 _TRAVERSAL_MODE_VALUES,
             ),
-            "request_delay_ms": _coerce_int(
+            "request_delay_ms": _coerce_int_clamped(
                 fetch_profile.get("request_delay_ms"),
                 default=crawler_runtime_settings.min_request_delay_ms,
                 minimum=crawler_runtime_settings.min_request_delay_ms,
             ),
-            "max_pages": _coerce_int(
+            "max_pages": _coerce_int_clamped(
                 fetch_profile.get("max_pages"),
                 default=crawler_runtime_settings.default_max_pages,
                 minimum=crawler_runtime_settings.min_max_pages,
                 maximum=crawler_runtime_settings.max_max_pages,
             ),
-            "max_scrolls": _coerce_int(
+            "max_scrolls": _coerce_int_clamped(
                 fetch_profile.get("max_scrolls"),
                 default=crawler_runtime_settings.default_max_scrolls,
                 minimum=1,
@@ -162,20 +146,6 @@ def normalize_domain_run_profile(
             ),
             "capture_browser_diagnostics": bool(
                 diagnostics_profile.get("capture_browser_diagnostics", True)
-            ),
-        },
-        "proxy_profile": {
-            "enabled": bool(
-                proxy_profile.get(
-                    "enabled",
-                    payload.get("proxy_enabled", False),
-                )
-            ),
-            "proxy_list": _coerce_proxy_list(
-                proxy_profile.get(
-                    "proxy_list",
-                    payload.get("proxy_list"),
-                )
             ),
         },
         "source_run_id": normalized_source_run_id,

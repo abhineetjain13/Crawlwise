@@ -242,6 +242,7 @@ def _log_background_task_exception(
 
 
 async def _dispatch_run_locally(session: AsyncSession, run: CrawlRun) -> CrawlRun:
+    await recover_stale_local_runs(session)
     loaded_run, current = await _load_run_with_normalized_status(session, int(run.id))
     if current not in {CrawlStatus.PENDING, CrawlStatus.RUNNING}:
         raise ValueError(f"Cannot dispatch run in state: {loaded_run.status}")

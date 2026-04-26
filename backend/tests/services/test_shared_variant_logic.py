@@ -3,6 +3,8 @@ from __future__ import annotations
 from bs4 import BeautifulSoup
 
 from app.services.extract.shared_variant_logic import (
+    iter_variant_select_groups,
+    normalized_variant_axis_key,
     resolve_variant_group_name,
     resolve_variants,
     variant_axis_name_is_semantic,
@@ -188,6 +190,9 @@ def test_variant_axis_name_is_semantic_accepts_non_generic_axis_labels() -> None
     assert variant_axis_name_is_semantic("shoe width") is True
     assert variant_axis_name_is_semantic("variant option") is False
     assert variant_axis_name_is_semantic("Language Translate Widget") is False
+    assert variant_axis_name_is_semantic("Sort By") is False
+    assert variant_axis_name_is_semantic("Filter By") is False
+    assert variant_axis_name_is_semantic("Availability") is False
 
 
 def test_resolve_variant_group_name_infers_unlabeled_select_size_axis_from_values() -> None:
@@ -204,3 +209,131 @@ def test_resolve_variant_group_name_infers_unlabeled_select_size_axis_from_value
     )
 
     assert resolve_variant_group_name(soup.select_one("select")) == "size"
+
+
+def test_resolve_variant_group_name_rejects_shipping_country_select() -> None:
+    soup = BeautifulSoup(
+        """
+        <label for="estimated-shipping-country">Country</label>
+        <select
+          id="estimated-shipping-country"
+          name="estimated-shipping-country"
+          aria-label="Choose country"
+        >
+          <option>Australia</option>
+          <option>Canada</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("select")) == ""
+
+
+def test_resolve_variant_group_name_rejects_size_chart_controls() -> None:
+    soup = BeautifulSoup(
+        """
+        <button id="size-chart-button" aria-label="Size Chart">Size Chart</button>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("button")) == ""
+
+
+def test_resolve_variant_group_name_rejects_report_reason_select() -> None:
+    soup = BeautifulSoup(
+        """
+        <label for="report-item-choices" class="wt-screen-reader-only">Choose a reason…</label>
+        <select id="report-item-choices">
+          <option value="default">Choose a reason…</option>
+          <option value="order-problem">There’s a problem with my order</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("select")) == ""
+
+
+def test_variant_select_groups_reject_cookie_consent_token_selects() -> None:
+    soup = BeautifulSoup(
+        """
+        <select id="privacy-type" name="type">
+          <option>OptOut</option>
+          <option>RemoveMe</option>
+          <option>MyInfo</option>
+        </select>
+        <label for="size">Size</label>
+        <select id="size">
+          <option>100 Softgels</option>
+          <option>200 Softgels</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    groups = list(iter_variant_select_groups(soup))
+
+    assert [normalized_variant_axis_key(resolve_variant_group_name(group)) for group in groups] == ["size"]
+
+
+def test_variant_select_groups_reject_style_control_selects() -> None:
+    """Reject non-product style controls that happen to use select elements."""
+    soup = BeautifulSoup(
+        """
+        <form>
+          <label>Text
+            <select>
+              <option>White</option>
+              <option>Black</option>
+              <option>Red</option>
+            </select>
+          </label>
+          <label>Background
+            <select>
+              <option>Opaque</option>
+              <option>Semi-Transparent</option>
+            </select>
+          </label>
+        </form>
+        """,
+        "html.parser",
+    )
+
+    assert list(iter_variant_select_groups(soup)) == []
+
+
+def test_resolve_variant_group_name_reads_external_label_for_select() -> None:
+    soup = BeautifulSoup(
+        """
+        <label for="variation-selector-0">Style &amp; Size</label>
+        <select id="variation-selector-0">
+          <option>Sweatshirt S</option>
+          <option>Sweatshirt M</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("select")) == "Style & Size"
+
+
+def test_resolve_variant_group_name_ignores_external_option_label_for_radio() -> None:
+    soup = BeautifulSoup(
+        """
+        <ul class="sizelist">
+          <li class="oval outstock">
+            <input id="size_0_0" disabled type="radio" name="sub_prod_0" />
+            <label for="size_0_0"><span>XXS</span><span>0 Left</span></label>
+          </li>
+          <li class="oval selected">
+            <input id="size_0_1" checked type="radio" name="sub_prod_0" />
+            <label for="size_0_1"><span>XS</span><span>17 Left</span></label>
+          </li>
+        </ul>
+        """,
+        "html.parser",
+    )
+
+    assert resolve_variant_group_name(soup.select_one("input")) == "size"

@@ -3,8 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 try:
-    from celery import Celery
-    from celery.signals import worker_process_init, worker_process_shutdown
+    from celery import Celery  # type: ignore[import-untyped]
+    from celery.signals import worker_process_init, worker_process_shutdown  # type: ignore[import-untyped]
 except (
     ModuleNotFoundError
 ):  # pragma: no cover - exercised only when Celery is not installed locally.
@@ -21,8 +21,8 @@ except (
         def task(self, *dargs, **dkwargs):
             def _decorate(func):
                 func.app = self
-                func.apply_async = lambda *args, **kwargs: None
-                func.delay = lambda *args, **kwargs: None
+                func.apply_async = lambda *_args, **_kwargs: None
+                func.delay = lambda *_args, **_kwargs: None
                 func.name = dkwargs.get("name", func.__name__)
                 return func
 

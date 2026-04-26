@@ -7,7 +7,9 @@ from typing import Any
 
 from bs4 import BeautifulSoup, Comment
 
+from app.services.acquisition.browser_detail import _coerce_int
 from app.services.acquisition.dom_runtime import get_page_html
+from app.services.config.extraction_rules import LOW_CONTENT_SHELL_PHRASES
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import clean_text
 
@@ -62,11 +64,11 @@ async def wait_for_listing_readiness_impl(
     max_wait_value = override.get("max_wait_ms")
     safe_fallback = _coerce_int(
         crawler_runtime_settings.listing_readiness_max_wait_ms,
-        fallback=0,
+        default=0,
     )
     max_wait_ms = _coerce_int(
         max_wait_value,
-        fallback=safe_fallback,
+        default=safe_fallback,
     )
     if max_wait_ms <= 0:
         return {}
@@ -210,25 +212,6 @@ async def count_matching_selectors(page: Any, *, selectors: list[str]) -> int:
     return matches
 
 
-def _coerce_int(value: object, *, fallback: int = 0) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, (str, bytes)):
-        text = value.decode() if isinstance(value, bytes) else value
-        text = text.strip()
-        if not text:
-            return fallback
-        try:
-            return int(text)
-        except ValueError:
-            return fallback
-    return fallback
-
-
 def classify_browser_outcome_impl(
     *,
     html: str,
@@ -261,18 +244,6 @@ def classify_low_content_reason_impl(html: str, *, html_bytes: int) -> str | Non
     analysis = analyze_html(html)
     if not analysis.html.strip():
         return "empty_html"
-    lowered_text = analysis.normalized_text.lower()
-    if any(
-        phrase in lowered_text
-        for phrase in (
-            "empty category",
-            "no products found",
-            "no jobs found",
-            "0 results",
-            "there are no items",
-        )
-    ):
-        return "empty_terminal_page"
     if len(analysis.visible_text.strip()) >= 120:
         return None
     if any(
@@ -280,6 +251,9 @@ def classify_low_content_reason_impl(html: str, *, html_bytes: int) -> str | Non
         for token in ("product", "jobposting", "__next_data__", "__nuxt__", "application/ld+json")
     ):
         return None
+    lowered_text = analysis.normalized_text.lower()
+    if any(phrase in lowered_text for phrase in LOW_CONTENT_SHELL_PHRASES):
+        return "empty_terminal_page"
     if html_bytes <= 8_000:
         return "low_visible_text"
     return None

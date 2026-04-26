@@ -1,22 +1,21 @@
 "use client";
 
 import { useQuery } from"@tanstack/react-query";
-import { ArrowRightCircle, ChevronsDown, Copy, Download, Info, Plus } from"lucide-react";
+import { ArrowRightCircle, Check, ChevronsDown, Copy, Download, Info, Plus, Search } from"lucide-react";
 import { useRouter } from"next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from"react";
 import ReactMarkdown from"react-markdown";
 import remarkGfm from"remark-gfm";
 
+import { cn } from "../../lib/utils";
 import {
  DataRegionEmpty,
  DataRegionLoading,
  InlineAlert,
  PageHeader,
  ProgressBar,
- RunSummaryChips,
  RunWorkspaceShell,
  SectionHeader,
- StatusDot,
  TabBar,
 } from"../ui/patterns";
 import { Badge, Button, Card, Dropdown, Field, Input, Textarea, Toggle, Tooltip } from"../ui/primitives";
@@ -48,7 +47,6 @@ import {
  isListingRun,
  LogTerminal,
  type OutputTabKey,
- PreviewRow,
  progressPercent,
  qualityTone,
  RecordsTable,
@@ -73,8 +71,6 @@ function defaultDomainRunProfile(): DomainRunProfile {
  include_iframes: false,
  traversal_mode: null,
  request_delay_ms: 500,
- max_pages: 10,
- max_scrolls: 10,
  },
  locality_profile: {
  geo_country:"auto",
@@ -87,10 +83,6 @@ function defaultDomainRunProfile(): DomainRunProfile {
  capture_network:"matched_only",
  capture_response_headers: true,
  capture_browser_diagnostics: true,
- },
- proxy_profile: {
- enabled: false,
- proxy_list: [],
  },
  source_run_id: null,
  saved_at: null,
@@ -115,13 +107,6 @@ function cloneDomainRunProfile(profile: DomainRunProfile | null | undefined): Do
  diagnostics_profile: {
  ...base.diagnostics_profile,
  ...(profile.diagnostics_profile ?? {}),
- },
- proxy_profile: {
- ...base.proxy_profile,
- ...(profile.proxy_profile ?? {}),
- proxy_list: Array.isArray(profile.proxy_profile?.proxy_list)
- ? [...profile.proxy_profile.proxy_list]
- : [],
  },
  source_run_id: profile.source_run_id ?? null,
  saved_at: profile.saved_at ?? null,
@@ -155,6 +140,46 @@ function isSafeHref(href: string) {
  return url.protocol ==="http:"|| url.protocol ==="https:";
  } catch {
  return false;
+ }
+}
+
+type ProductIntelligencePrefillPayload = {
+ source_run_id: number | null;
+ source_domain: string;
+ records: Array<Pick<CrawlRecord,"id"|"run_id"|"source_url"|"data">>;
+};
+
+export function storeProductIntelligencePrefill(
+ payload: ProductIntelligencePrefillPayload,
+ storage: Storage = window.sessionStorage,
+) {
+ try {
+ storage.setItem(
+ STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL,
+ JSON.stringify(payload),
+ );
+ } catch (error) {
+ console.error("Unable to store full Product Intelligence prefill.", error);
+ const reducedPayload = {
+ ...payload,
+ records: payload.records
+ .slice(0, CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4)
+ .map((record) => ({
+ id: record.id,
+ run_id: record.run_id,
+ source_url: record.source_url,
+ data: {},
+ })),
+ };
+ try {
+ storage.setItem(
+ STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL,
+ JSON.stringify(reducedPayload),
+ );
+ } catch (fallbackError) {
+ console.error("Unable to store reduced Product Intelligence prefill.", fallbackError);
+ storage.removeItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL);
+ }
  }
 }
 
@@ -492,19 +517,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }, [logs, live]);
 
  useEffect(() => {
- setTablePage(1);
- setTableRecords([]);
- setTableTotal(0);
- setJsonVisibleCount(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
- setLogItems([]);
- setLogCursorAfterId(undefined);
- setLogSocketConnected(false);
- setRecipeProfile(defaultDomainRunProfile());
- setRecipeActionPending(null);
- setRecipeActionError("");
-}, [runId]);
-
- useEffect(() => {
  if (!run) {
  return;
  }
@@ -594,17 +606,25 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  const batchFromResultsUrls = selectedResultUrls.length ? selectedResultUrls : resultUrls;
  const batchFromResultsLabel = selectedResultUrls.length
  ? `Batch Crawl Selected (${selectedResultUrls.length})`
- : `Batch Crawl Results (${resultUrls.length})`;
+ : `Batch Crawl (${resultUrls.length})`;
+ const productIntelligenceRecords = selectedRecords.length ? selectedRecords : batchSourceRecords;
+ const productIntelligenceLabel = selectedRecords.length
+ ? `Product Intelligence Selected (${selectedRecords.length})`
+ : `Product Intelligence (${productIntelligenceRecords.length})`;
 
- const summaryRecordsFromRun = Number(run?.result_summary?.record_count ?? 0) || 0;
- const summaryPagesFromRun =
- Number(run?.result_summary?.processed_urls ?? run?.result_summary?.completed_urls ?? 0) || 0;
- const summary = {
- records: Math.max(summaryRecordsFromRun, recordsTotal),
- pages: Math.max(
- summaryPagesFromRun,
- Number(run?.result_summary?.progress ?? 0) > 0 ? 1 : 0,
- ),
+  const summaryRecordsFromRun = Number(run?.result_summary?.record_count ?? 0) || 0;
+  const summaryRecordsFromTable =
+  Number(tableRecordsQuery.data?.meta?.total ?? tableRecordsQuery.data?.items?.length ?? 0) || 0;
+  const summaryPagesFromRun =
+  Number(run?.result_summary?.processed_urls ?? run?.result_summary?.completed_urls ?? 0) || 0;
+  const summaryCurrentUrlIndex = Number(run?.result_summary?.current_url_index ?? 0) || 0;
+  const summary = {
+  records: Math.max(summaryRecordsFromRun, recordsTotal, summaryRecordsFromTable),
+  pages: Math.max(
+  summaryPagesFromRun,
+  summaryCurrentUrlIndex,
+  Number(run?.result_summary?.progress ?? 0) > 0 ? 1 : 0,
+  ),
  fields: visibleColumns.length,
  duration:
  (terminal ? formatDurationMs(run?.result_summary?.duration_ms) : null) ??
@@ -713,6 +733,23 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  router.replace("/crawl?module=pdp&mode=batch");
  }
 
+ function triggerProductIntelligenceFromResults() {
+ if (!productIntelligenceRecords.length) {
+ return;
+ }
+ storeProductIntelligencePrefill({
+  source_run_id: run?.id ?? null,
+  source_domain: run?.url ?? "",
+  records: productIntelligenceRecords.map((record) => ({
+  id: record.id,
+  run_id: record.run_id,
+  source_url: record.source_url,
+  data: record.data,
+  })),
+ });
+ router.replace("/product-intelligence");
+ }
+
  async function saveRecipeRunProfile() {
  setRecipeActionPending("profile");
  setRecipeActionError("");
@@ -754,7 +791,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <PageHeader
  title="Crawl Studio"
  actions={
- <Button variant="primary"size="sm"type="button"onClick={resetToConfig}>
+ <Button variant="primary"type="button"className="h-[var(--control-height)]"onClick={resetToConfig}>
  <Plus className="size-3.5"/>
  New Crawl
  </Button>
@@ -771,7 +808,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
 
  return (
- <div className="page-stack">
+ <div className="page-stack gap-4">
  <PageHeader
  title={run?.url ? (
  <span className="flex items-center gap-1.5">
@@ -779,12 +816,52 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </span>
  ) :"Crawl Results"}
  actions={
- <Button variant="primary"size="sm"type="button"onClick={resetToConfig}>
+ <Button variant="primary"type="button"className="h-[var(--control-height)]"onClick={resetToConfig}>
  <Plus className="size-3.5"/>
  New Crawl
  </Button>
  }
  />
+
+ {/* Flow Stepper */}
+ <div className="flex items-center gap-0 text-[11px]">
+ <CsFlowStep step={1} label="Launch" active={!!run} />
+ <CsFlowConnector active={!!run} />
+ <CsFlowStep step={2} label="Crawl" active={live || terminal} />
+ <CsFlowConnector active={live || terminal} />
+ <CsFlowStep step={3} label="Complete" active={terminal} />
+ </div>
+
+ {/* Status Metrics Bar */}
+ {run && !showRunLoadingState ? (
+ <div className="cs-status-bar">
+ <div className="cs-metric">
+ <span className="cs-live-dot" />
+ <span className="cs-metric-value">{humanizeStatus(run.status)}</span>
+ <span className="cs-metric-label">Status</span>
+ </div>
+ <div className="cs-metric">
+ <span className="cs-metric-value">{summary.records}</span>
+ <span className="cs-metric-label">Records</span>
+ </div>
+ <div className="cs-metric">
+ <span className="cs-metric-value">{summary.pages}</span>
+ <span className="cs-metric-label">Pages</span>
+ </div>
+ <div className="cs-metric">
+ <span className="cs-metric-value">{summary.duration}</span>
+ <span className="cs-metric-label">Elapsed</span>
+ </div>
+ <div className="cs-metric">
+ <Badge tone={extractionVerdictTone(verdict)} className="text-[10px]">{humanizeVerdict(verdict)}</Badge>
+ <span className="cs-metric-label">Verdict</span>
+ </div>
+ <div className="cs-metric">
+ <Badge tone={qualityTone(completedQualityLevel)} className="text-[10px]">{humanizeQuality(completedQualityLevel)} ({Math.round(quality.score * 100)}%)</Badge>
+ <span className="cs-metric-label">Quality</span>
+ </div>
+ </div>
+ ) : null}
 
  {showRunLoadingState ? (
  <Card className="space-y-3 px-6 py-8">
@@ -812,68 +889,21 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  )}
  />
  <div>
- <Button variant="secondary"type="button"onClick={() => void retryFailedPanels()}>
+ <Button variant="secondary" type="button" className="h-[var(--control-height)]" onClick={() => void retryFailedPanels()}>
  Retry failed panels
  </Button>
  </div>
  </Card>
  ) : null}
  {!showRunLoadingState && !terminal ? (
- <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.32fr)_minmax(0,0.68fr)]">
- <Card className="section-card">
- <SectionHeader title="Progress"description={run ? <ProgressBar percent={progressPercent(run)} /> :"Loading run state..."} />
- <PreviewRow label="Run ID"value={run ? `#${run.id}` :"--"} mono />
- <PreviewRow
- label="Status"
- value={
- run ? (
- <span className="inline-flex items-center gap-1.5">
- <StatusDot tone={statusTone(run.status)} />
- {humanizeStatus(run.status)}
+ <Card className="section-card overflow-hidden">
+ <header className="cs-panel-header">
+ <span className="cs-panel-title flex items-center gap-2">
+ Live Log Stream
+ {logSocketConnected ? <span className="cs-live-dot is-success" /> : <span className="cs-live-dot" />}
  </span>
- ) : (
-"--"
- )
- }
- />
- <PreviewRow label="Crawl Type"value={run?.run_type ??"--"} />
-
- <PreviewRow label="Records"value={String(summary.records)} />
- <PreviewRow label="Pages"value={String(summary.pages)} />
- <PreviewRow label="Elapsed"value={summary.duration} />
- <PreviewRow
- label="Verdict"
- value={
- <Badge tone={extractionVerdictTone(verdict)}>
- {humanizeVerdict(verdict)}
- </Badge>
- }
- />
- <PreviewRow
- label="Data Quality"
- value={
- <span className="inline-flex items-center gap-2">
- <Badge tone={qualityTone(completedQualityLevel)}>
- {humanizeQuality(completedQualityLevel)} ({Math.round(quality.score * 100)}%)
- </Badge>
- <Tooltip content="Quality reflects how complete and useful the extracted rows are. High means rows are consistently rich. Low can still be usable, but it is sparser.">
- <button type="button"aria-label="Explain data quality"className="text-muted transition-colors hover:text-foreground">
- <Info className="size-3.5"aria-hidden="true"/>
- </button>
- </Tooltip>
- </span>
- }
- />
-
- {runActionError ? <InlineAlert message={runActionError} /> : null}
- </Card>
-
- <Card className="section-card">
- <SectionHeader
- title="Live Log Stream"
- description="Auto-scrolls while you stay at the bottom."
- action={
- <div className="flex items-center gap-2">
+ <div className="flex items-center gap-3">
+ {run ? <div className="w-28"><ProgressBar percent={progressPercent(run)} /></div> : null}
  {liveJumpAvailable ? (
  <button
  type="button"
@@ -894,11 +924,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  danger
  />
  </div>
- }
- />
+ </header>
  <LogTerminal logs={logs} live viewportRef={logViewportRef} />
  </Card>
- </div>
  ) : null}
 
  {!showRunLoadingState && terminal ? (
@@ -929,6 +957,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  {batchFromResultsLabel}
  </Button>
  ) : null}
+ {listingRun && productIntelligenceRecords.length ? (
+ <Button variant="secondary"type="button"onClick={triggerProductIntelligenceFromResults}>
+ <Search className="size-3.5"/>
+ {productIntelligenceLabel}
+ </Button>
+ ) : null}
  <Button variant="secondary"type="button"onClick={() => void downloadExport("csv")}>
  <Download className="size-3.5"/>
  Excel (CSV)
@@ -956,13 +990,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  { value:"learning", label:"Learning"},
  { value:"run_config", label:"Run Config"},
  ]}
- />
- }
- summary={
- <RunSummaryChips
- duration={summary.duration}
- verdict={humanizeVerdict(verdict)}
- quality={humanizeQuality(completedQualityLevel)}
  />
  }
  content={
@@ -1217,7 +1244,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  {recipeActionPending === "profile" ? "Saving..." : "Save Run Profile"}
  </Button>
  </div>
- <div className="grid gap-3 md:grid-cols-2">
+           <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:col-span-2 md:grid-cols-2 content-start">
  <Field label="Fetch Mode">
  <Dropdown
  value={recipeProfile.fetch_profile.fetch_mode}
@@ -1362,43 +1390,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  { value: "all_small_json", label: "All Small JSON" },
  ]}
  />
- </Field>
- <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
- <span className="text-sm font-medium">Proxy Enabled</span>
- <Toggle
- checked={recipeProfile.proxy_profile.enabled}
- ariaLabel="Proxy Enabled"
- onChange={(checked) =>
- setRecipeProfile((current) => ({
- ...current,
- proxy_profile: {
- ...current.proxy_profile,
- enabled: checked,
- },
- }))
- }
- />
- </div>
- <Field label="Proxy Pool">
- <Textarea
- aria-label="Proxy Pool"
- value={recipeProfile.proxy_profile.proxy_list.join("\n")}
- onChange={(event) =>
- setRecipeProfile((current) => ({
- ...current,
- proxy_profile: {
- ...current.proxy_profile,
- proxy_list: event.target.value
- .split(/\r?\n/)
- .map((value) => value.trim())
- .filter(Boolean),
- },
- }))
- }
- placeholder={"host:port\nhost:port:user:pass"}
- className="min-h-[104px] text-mono-body leading-[1.55]"
- />
- </Field>
+               </Field>
+                        </div>
+            <div className="flex flex-col gap-3">
  <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
  <span className="text-sm font-medium">Include iframes</span>
  <Toggle
@@ -1473,8 +1467,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }))
  }
  />
- </div>
- </div>
+               </div>
+             </div>
+          </div>
  </Card>
  ) : (
  <DataRegionEmpty
@@ -1492,5 +1487,32 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </div>
  ) : null}
  </div>
+ );
+}
+
+function CsFlowStep({ step, label, active }: Readonly<{ step: number; label: string; active: boolean }>) {
+ return (
+  <span className={cn(
+   "inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-all",
+   active
+    ? "bg-[var(--accent-subtle)] text-accent"
+    : "text-muted",
+  )}>
+   <span className={cn(
+    "inline-flex size-4 items-center justify-center rounded-full text-[9px] font-bold",
+    active
+     ? "bg-[var(--accent)] text-[var(--accent-fg)]"
+     : "bg-[var(--border)] text-muted",
+   )}>
+    {active ? <Check className="size-2.5" /> : step}
+   </span>
+   {label}
+  </span>
+ );
+}
+
+function CsFlowConnector({ active }: Readonly<{ active: boolean }>) {
+ return (
+  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-[var(--border)]")} />
  );
 }

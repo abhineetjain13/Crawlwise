@@ -5,12 +5,14 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from bs4 import BeautifulSoup
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRun
 from app.services.acquisition.acquirer import AcquisitionRequest
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.acquirer import acquire as _acquire
 from app.services.acquisition_plan import AcquisitionPlan
+from app.services.adapters.base import AdapterResult
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
 from app.services.acquisition.browser_runtime import build_failed_browser_diagnostics
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
@@ -22,7 +24,15 @@ from app.services.db_utils import mapping_or_empty
 from app.services.domain_utils import normalize_domain
 from app.services.confidence import score_record_confidence
 from app.services.config.llm_runtime import llm_runtime_settings
+from app.services.config.extraction_rules import (
+    DETAIL_CURRENT_PRICE_SELECTORS,
+    PRICE_FIELDS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.detail_extractor import (
+    detail_record_rejection_reason,
+    infer_detail_failure_reason,
+)
 from app.services.field_value_core import (
     IMAGE_FIELDS,
     LONG_TEXT_FIELDS,
@@ -35,6 +45,7 @@ from app.services.field_value_core import (
     strip_html_tags,
     validate_record_for_surface,
 )
+from app.services.field_value_dom import requested_content_extractability
 from app.services.field_policy import (
     canonical_requested_fields,
     field_allowed_for_surface,
@@ -57,7 +68,9 @@ from app.services.publish import (
     build_acquisition_profile,
     build_url_metrics,
     compute_verdict,
+    diagnostics_indicate_block,
     finalize_url_metrics,
+    is_effectively_blocked,
 )
 from app.services.robots_policy import (
     ROBOTS_FETCH_FAILURE,
@@ -146,7 +159,63 @@ def _resolved_url_processing_config(
     persist_logs: bool,
 ) -> URLProcessingConfig:
     if config is not None:
-        return config
+        plan = config.resolved_acquisition_plan(surface=surface)
+        resolved_proxy_list = list(plan.proxy_list or config.proxy_list or proxy_list or [])
+        resolved_traversal_mode = (
+            plan.traversal_mode
+            if plan.traversal_mode is not None
+            else config.traversal_mode
+            if config.traversal_mode is not None
+            else traversal_mode
+        )
+        safety_iteration_cap = int(crawler_runtime_settings.traversal_max_iterations_cap)
+        resolved_max_pages = safety_iteration_cap
+        resolved_max_scrolls = safety_iteration_cap
+        plan_max_records = plan.max_records
+        config_max_records = config.max_records
+        resolved_plan_max_records = (
+            int(plan_max_records) if plan_max_records is not None else None
+        )
+        resolved_config_max_records = (
+            int(config_max_records) if config_max_records is not None else None
+        )
+        resolved_max_records = (
+            resolved_plan_max_records
+            if resolved_plan_max_records is not None and resolved_plan_max_records > 0
+            else resolved_config_max_records
+            if resolved_config_max_records is not None and resolved_config_max_records > 0
+            else int(max_records)
+        )
+        plan_sleep_ms = plan.sleep_ms
+        config_sleep_ms = config.sleep_ms
+        resolved_plan_sleep_ms = (
+            int(plan_sleep_ms) if plan_sleep_ms is not None else None
+        )
+        resolved_config_sleep_ms = (
+            int(config_sleep_ms) if config_sleep_ms is not None else None
+        )
+        resolved_sleep_ms = (
+            resolved_plan_sleep_ms
+            if resolved_plan_sleep_ms is not None and resolved_plan_sleep_ms > 0
+            else resolved_config_sleep_ms
+            if resolved_config_sleep_ms is not None and resolved_config_sleep_ms > 0
+            else int(sleep_ms)
+        )
+        return URLProcessingConfig.from_acquisition_plan(
+            AcquisitionPlan(
+                surface=surface,
+                proxy_list=tuple(resolved_proxy_list),
+                traversal_mode=resolved_traversal_mode,
+                max_pages=resolved_max_pages,
+                max_scrolls=resolved_max_scrolls,
+                max_records=resolved_max_records,
+                sleep_ms=resolved_sleep_ms,
+            ),
+            update_run_state=config.update_run_state,
+            persist_logs=config.persist_logs,
+            prefetch_only=config.prefetch_only,
+            record_writer=config.record_writer,
+        )
     return URLProcessingConfig.from_acquisition_plan(
         AcquisitionPlan(
             surface=surface,
@@ -215,6 +284,17 @@ def _browser_outcome(acquisition_result: AcquisitionResult) -> str:
     diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     return str(diagnostics.get("browser_outcome") or "").strip().lower()
 
+
+def _effective_blocked(acquisition_result: AcquisitionResult) -> bool:
+    return is_effectively_blocked(acquisition_result)
+
+
+def _suppress_empty_downstream_record_logs(
+    acquisition_result: AcquisitionResult,
+    records: list[dict[str, object]],
+) -> bool:
+    return not records and _effective_blocked(acquisition_result)
+
 def _screenshot_required(browser_outcome: str) -> bool:
     return browser_outcome in {
         "challenge_page",
@@ -245,16 +325,17 @@ async def process_single_url(
     *,
     proxy_list: list[str] | None = None,
     traversal_mode: str | None = None,
-    max_pages: int = crawler_runtime_settings.default_max_pages,
-    max_scrolls: int = crawler_runtime_settings.default_max_scrolls,
-    max_records: int = crawler_runtime_settings.default_max_records,
-    sleep_ms: int = crawler_runtime_settings.default_sleep_ms,
+    max_pages: int | None = None,
+    max_scrolls: int | None = None,
+    max_records: int | None = None,
+    sleep_ms: int | None = None,
     checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
     prefetched_acquisition: AcquisitionResult | None = None,
 ) -> URLProcessingResult:
     del checkpoint
+    settings_view = run.settings_view
     context = _URLProcessingContext.build(
         session=session,
         run=run,
@@ -262,12 +343,12 @@ async def process_single_url(
         config=_resolved_url_processing_config(
             config,
             surface=run.surface,
-            proxy_list=proxy_list,
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
-            max_records=max_records,
-            sleep_ms=sleep_ms,
+            proxy_list=proxy_list if proxy_list is not None else settings_view.proxy_list(),
+            traversal_mode=traversal_mode if traversal_mode is not None else settings_view.traversal_mode(),
+            max_pages=max_pages if max_pages is not None else settings_view.max_pages(),
+            max_scrolls=max_scrolls if max_scrolls is not None else settings_view.max_scrolls(),
+            max_records=max_records if max_records is not None else settings_view.max_records(),
+            sleep_ms=sleep_ms if sleep_ms is not None else settings_view.sleep_ms(),
             update_run_state=update_run_state,
             persist_logs=persist_logs,
         ),
@@ -425,7 +506,7 @@ async def _run_acquisition_stage(
         getattr(acquisition_result, "browser_diagnostics", {}) and
         getattr(acquisition_result, "browser_diagnostics", {}).get("browser_attempted")
     )
-    if getattr(acquisition_result, "blocked", False) and not browser_attempted:
+    if _effective_blocked(acquisition_result) and not browser_attempted:
         await _log_pipeline_event(
             context,
             "warning",
@@ -447,7 +528,7 @@ def _build_prefetch_only_result(
 ) -> URLProcessingResult:
     verdict = compute_verdict(
         is_listing="listing" in context.surface,
-        blocked=bool(fetched.acquisition_result.blocked),
+        blocked=_effective_blocked(fetched.acquisition_result),
         record_count=1 if fetched.acquisition_result.html else 0,
     )
     return URLProcessingResult(
@@ -470,7 +551,6 @@ async def _run_extraction_stage(
         acquisition_result,
         records,
     )
-    await _log_extraction_outcome(context, acquisition_result, records)
     records, selector_rules = await _retry_empty_extraction_with_browser(
         context,
         fetched,
@@ -484,7 +564,100 @@ async def _run_extraction_stage(
         records=records,
         selector_rules=selector_rules,
     )
+    records, rejection_reason = _apply_detail_rejection_guard(
+        context,
+        fetched,
+        records=records,
+        selector_rules=selector_rules,
+    )
+    await _log_extraction_outcome(context, acquisition_result, records)
+    if rejection_reason:
+        await _log_pipeline_event(
+            context,
+            "warning",
+            f"Rejected detail extraction for {context.url}: {rejection_reason}",
+        )
     return _ExtractedURLStage(fetched=fetched, records=records)
+
+
+def _ready_readiness_probe_present(browser_diagnostics: dict[str, object]) -> bool:
+    readiness_probes = browser_diagnostics.get("readiness_probes")
+    if not isinstance(readiness_probes, list):
+        return False
+    return any(
+        isinstance(probe, dict) and bool(probe.get("is_ready"))
+        for probe in readiness_probes
+    )
+
+
+def _challenge_shell_reason(acquisition_result: AcquisitionResult) -> str | None:
+    browser_diagnostics = mapping_or_empty(
+        getattr(acquisition_result, "browser_diagnostics", {})
+    )
+    browser_outcome = str(browser_diagnostics.get("browser_outcome") or "").strip().lower()
+    browser_reason = str(browser_diagnostics.get("browser_reason") or "").strip().lower()
+    if browser_outcome == "challenge_page":
+        return "challenge_shell"
+    if diagnostics_indicate_block(browser_diagnostics):
+        return "challenge_shell"
+    if browser_outcome == "low_content_shell":
+        return "challenge_shell"
+    if browser_reason.startswith("vendor-block:") and not _ready_readiness_probe_present(
+        browser_diagnostics
+    ):
+        return "challenge_shell"
+    return None
+
+
+def _apply_detail_rejection_guard(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+    *,
+    records: list[dict[str, object]],
+    selector_rules: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], str | None]:
+    if "detail" not in context.surface:
+        return records, None
+    acquisition_result = fetched.acquisition_result
+    rejection_reason = _challenge_shell_reason(acquisition_result)
+    if rejection_reason is None:
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            rejection_reason = detail_record_rejection_reason(
+                dict(record),
+                page_url=acquisition_result.final_url,
+                requested_page_url=context.url,
+            )
+            if rejection_reason:
+                break
+    if rejection_reason is None and not records:
+        rejection_reason = infer_detail_failure_reason(
+            acquisition_result.html,
+            acquisition_result.final_url,
+            context.surface,
+            list(context.requested_fields),
+            requested_page_url=context.url,
+            adapter_records=acquisition_result.adapter_records,
+            network_payloads=acquisition_result.network_payloads,
+            selector_rules=selector_rules,
+            extraction_runtime_snapshot=context.run.settings_view.extraction_runtime_snapshot(),
+        )
+    if not rejection_reason:
+        return records, None
+    _merge_browser_diagnostics(
+        acquisition_result,
+        {"failure_reason": rejection_reason},
+    )
+    if rejection_reason == "challenge_shell":
+        acquisition_result.blocked = True
+        fetched.url_metrics = build_url_metrics(
+            acquisition_result,
+            requested_fields=list(context.requested_fields),
+        )
+        fetched.url_metrics["blocked"] = True
+    fetched.url_metrics["failure_reason"] = rejection_reason
+    return [], rejection_reason
 
 def _record_detail_expansion_extraction_outcome(
     context: _URLProcessingContext,
@@ -535,6 +708,7 @@ async def _run_normalization_stage(
     extracted: _ExtractedURLStage,
 ) -> _ExtractedURLStage:
     await _enter_stage(context, STAGE_NORMALIZE)
+    acquisition_result = extracted.fetched.acquisition_result
     normalized_records: list[dict[str, object]] = []
     for index, record in enumerate(extracted.records, start=1):
         normalized_record, validation_errors = validate_record_for_surface(
@@ -550,11 +724,15 @@ async def _run_normalization_stage(
                 "Schema validation cleaned record "
                 f"{index} for {context.url}: {'; '.join(validation_errors)}",
             )
-    await _log_pipeline_event(
-        context,
-        "info",
-        f"Normalized {len(normalized_records)} record(s) for persistence",
-    )
+    if not _suppress_empty_downstream_record_logs(
+        acquisition_result,
+        normalized_records,
+    ):
+        await _log_pipeline_event(
+            context,
+            "info",
+            f"Normalized {len(normalized_records)} record(s) for persistence",
+        )
     return _ExtractedURLStage(fetched=extracted.fetched, records=normalized_records)
 
 async def _log_extraction_outcome(
@@ -587,9 +765,16 @@ async def _retry_empty_extraction_with_browser(
     selector_rules: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     acquisition_result = fetched.acquisition_result
-    retry_decision = _empty_extraction_browser_retry_decision(acquisition_result, records)
+    retry_decision = _empty_extraction_browser_retry_decision(
+        acquisition_result,
+        records,
+        surface=context.surface,
+        requested_fields=list(context.requested_fields),
+        selector_rules=selector_rules,
+    )
     if not retry_decision["should_retry"]:
         return records, selector_rules
+    await _log_extraction_outcome(context, acquisition_result, records)
     await _log_pipeline_event(context, "info", f"No records via {acquisition_result.method}; retrying browser render for {context.url}")
     browser_result = await _acquire_browser_retry_result(context, fetched, retry_reason="empty_extraction")
     fetched.acquisition_result = browser_result
@@ -632,6 +817,8 @@ async def _apply_extraction_post_processing(
             network_payloads=acquisition_result.network_payloads,
             selector_rules=selector_rules,
         )
+    if not _browser_result_is_extractable(acquisition_result):
+        return records, selector_rules
     if not context.run.settings_view.llm_enabled():
         return records, selector_rules
     records = await _apply_direct_record_llm_fallback(
@@ -694,14 +881,22 @@ async def _populate_adapter_records(
     acquisition_result.adapter_name = None
     acquisition_result.adapter_source_type = None
 
-    adapter_result = await run_adapter(
-        acquisition_result.final_url,
-        acquisition_result.html,
-        context.surface,
-    )
+    adapter_results = []
+    for html in [
+        str(acquisition_result.html or ""),
+        *_adapter_browser_artifact_htmls(acquisition_result),
+    ]:
+        adapter_result = await run_adapter(
+            acquisition_result.final_url,
+            html,
+            context.surface,
+        )
+        if adapter_result is not None and list(adapter_result.records or []):
+            adapter_results.append(adapter_result)
+    adapter_result = _best_adapter_result(adapter_results)
     if (
         (adapter_result is None or not list(adapter_result.records or []))
-        and acquisition_result.blocked
+        and _effective_blocked(acquisition_result)
     ):
         adapter_result = await try_blocked_adapter_recovery(
             acquisition_result.final_url,
@@ -721,6 +916,86 @@ async def _populate_adapter_records(
         acquisition_result.adapter_records = list(adapter_result.records or [])
         acquisition_result.adapter_name = adapter_result.adapter_name or None
         acquisition_result.adapter_source_type = adapter_result.source_type or None
+
+def _best_adapter_result(adapter_results: list[AdapterResult]) -> AdapterResult | None:
+    if not adapter_results:
+        return None
+    best = max(
+        adapter_results,
+        key=lambda result: _adapter_result_score(list(getattr(result, "records", []) or [])),
+    )
+    merged_records: dict[str, dict[str, object]] = {}
+    unsourced_records: list[dict[str, object]] = []
+    seen_unsourced: set[str] = set()
+    for result in sorted(
+        adapter_results,
+        key=lambda item: _adapter_result_score(list(item.records or [])),
+        reverse=True,
+    ):
+        for record in list(result.records or []):
+            if not isinstance(record, dict):
+                continue
+            url = str(record.get("url") or "").strip()
+            if not url:
+                fingerprint = json.dumps(record, sort_keys=True, default=str)
+                if fingerprint in seen_unsourced:
+                    continue
+                seen_unsourced.add(fingerprint)
+                unsourced_records.append(dict(record))
+                continue
+            existing = merged_records.setdefault(url, {})
+            for key, value in record.items():
+                if value in (None, "", [], {}):
+                    continue
+                if existing.get(key) in (None, "", [], {}):
+                    existing[key] = value
+    return AdapterResult(
+        records=[*merged_records.values(), *unsourced_records],
+        source_type=best.source_type,
+        adapter_name=best.adapter_name,
+    )
+
+def _adapter_result_score(records: list[object]) -> tuple[int, int]:
+    populated = 0
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        populated += sum(
+            value not in (None, "", [], {})
+            for key, value in record.items()
+            if not str(key).startswith("_")
+        )
+    return len(records), populated
+
+def _adapter_browser_artifact_htmls(
+    acquisition_result: AcquisitionResult,
+) -> list[str]:
+    artifacts = mapping_or_empty(getattr(acquisition_result, "artifacts", {}))
+    seen = {str(getattr(acquisition_result, "html", "") or "").strip()}
+    htmls: list[str] = []
+    for value in (
+        artifacts.get("full_rendered_html"),
+        _rendered_listing_fragments_html(artifacts.get("rendered_listing_fragments")),
+    ):
+        html = str(value or "").strip()
+        if not html or html in seen:
+            continue
+        seen.add(html)
+        htmls.append(html)
+    return htmls
+
+def _rendered_listing_fragments_html(value: object) -> str:
+    if not isinstance(value, list):
+        return ""
+    fragments = [
+        fragment
+        for fragment in (str(item or "").strip() for item in value)
+        if fragment
+    ]
+    if not fragments:
+        return ""
+    joined = "\n".join(fragments)
+    return f"<html><body>{joined}</body></html>"
 
 def _assign_platform_family(acquisition_result: AcquisitionResult) -> None:
     platform_family = detect_platform_family(
@@ -828,6 +1103,10 @@ async def _extract_records_from_preserved_browser_html(
 def _empty_extraction_browser_retry_decision(
     acquisition_result: AcquisitionResult,
     records: list[dict[str, object]],
+    *,
+    surface: str = "",
+    requested_fields: list[str] | None = None,
+    selector_rules: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     if records:
         return {"should_retry": False, "reason": "records_present"}
@@ -839,12 +1118,66 @@ def _empty_extraction_browser_retry_decision(
             "reason": "browser_already_attempted",
             "browser_outcome": browser_outcome or None,
         }
-    if acquisition_result.blocked:
+    if _effective_blocked(acquisition_result):
         return {"should_retry": False, "reason": "blocked"}
     content_type = str(getattr(acquisition_result, "content_type", "") or "").lower()
     if "json" in content_type:
         return {"should_retry": False, "reason": "json_response"}
+    if _empty_detail_extraction_has_static_evidence(
+        acquisition_result,
+        surface=surface,
+        requested_fields=requested_fields,
+        selector_rules=selector_rules,
+    ):
+        return {"should_retry": False, "reason": "static_detail_extractable"}
     return {"should_retry": True, "reason": "empty_non_browser_html"}
+
+
+def _empty_detail_extraction_has_static_evidence(
+    acquisition_result: AcquisitionResult,
+    *,
+    surface: str,
+    requested_fields: list[str] | None,
+    selector_rules: list[dict[str, object]] | None,
+) -> bool:
+    if "detail" not in str(surface or "").strip().lower():
+        return False
+    html = str(getattr(acquisition_result, "html", "") or "")
+    if not html.strip():
+        return False
+    soup = BeautifulSoup(html, "html.parser")
+    extractability = requested_content_extractability(
+        soup,
+        surface=surface,
+        requested_fields=requested_fields,
+        selector_rules=selector_rules,
+    )
+    extractable_fields = {
+        str(field_name).strip()
+        for field_name in list(extractability.get("extractable_fields") or [])
+        if str(field_name).strip()
+    }
+    matched_requested_fields = {
+        str(field_name).strip()
+        for field_name in list(extractability.get("matched_requested_fields") or [])
+        if str(field_name).strip()
+    }
+    return bool(
+        matched_requested_fields
+        or extractable_fields & set(PRICE_FIELDS)
+        or _html_has_configured_detail_price(soup)
+    )
+
+
+def _html_has_configured_detail_price(soup: BeautifulSoup) -> bool:
+    for selector in DETAIL_CURRENT_PRICE_SELECTORS:
+        for node in soup.select(str(selector or "")):
+            aria_label = node.get("aria-label") if hasattr(node, "get") else ""
+            if str(aria_label or "").strip():
+                return True
+            if str(node.get_text(" ", strip=True) or "").strip():
+                return True
+    return False
 
 async def _load_selector_rules(
     context: _URLProcessingContext,
@@ -875,25 +1208,29 @@ async def _run_persistence_stage(
     persisted_count = await persist_extracted_records(
         context.session,
         context.run,
-        extracted.records[: context.config.max_records],
+        extracted.records,
         acquisition_result=acquisition_result,
         raw_html_path=raw_html_path,
     )
     verdict = compute_verdict(
         is_listing="listing" in context.surface,
-        blocked=bool(acquisition_result.blocked),
+        blocked=_effective_blocked(acquisition_result),
         record_count=persisted_count,
     )
-    await _log_pipeline_event(
-        context,
-        "info",
-        f"Persisted {persisted_count} record(s) for {acquisition_result.final_url}",
-        commit=False,
-    )
+    if not _suppress_empty_downstream_record_logs(
+        acquisition_result,
+        extracted.records,
+    ):
+        await _log_pipeline_event(
+            context,
+            "info",
+            f"Persisted {persisted_count} record(s) for {acquisition_result.final_url}",
+            commit=False,
+        )
     if verdict == VERDICT_EMPTY and "listing" in context.surface and persisted_count == 0:
         verdict = VERDICT_LISTING_FAILED
     return URLProcessingResult(
-        records=extracted.records[: context.config.max_records],
+        records=extracted.records,
         verdict=verdict,
         url_metrics=finalize_url_metrics(
             extracted.fetched.url_metrics,

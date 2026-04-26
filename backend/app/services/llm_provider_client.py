@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
-from app.services.config.llm_runtime import llm_runtime_settings
+from app.services.config.llm_runtime import SUPPORTED_LLM_PROVIDERS, llm_runtime_settings
 from app.services.llm_circuit_breaker import (
     ERROR_PREFIX,
     LLMErrorCategory,
@@ -16,7 +16,6 @@ from app.services.llm_circuit_breaker import (
 from app.services.llm_config_service import provider_env_key
 
 JSON_CONTENT_TYPE = "application/json"
-SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
 
 
 async def call_provider(
@@ -113,11 +112,7 @@ async def test_provider_connection(
 
 
 def _provider_dispatch(provider: str):
-    return {
-        "groq": _call_groq,
-        "anthropic": _call_anthropic,
-        "nvidia": _call_nvidia,
-    }.get(provider)
+    return _PROVIDER_DISPATCH.get(provider)
 
 
 async def _call_groq(
@@ -222,6 +217,18 @@ async def _call_nvidia(
     if response.status_code != 200:
         return _http_error(response), 0, 0
     return _extract_chat_completion_payload(_safe_json_response(response))
+
+
+_PROVIDER_DISPATCH = {
+    "groq": _call_groq,
+    "anthropic": _call_anthropic,
+    "nvidia": _call_nvidia,
+}
+
+if frozenset(_PROVIDER_DISPATCH) != SUPPORTED_LLM_PROVIDERS:
+    raise RuntimeError(
+        "SUPPORTED_LLM_PROVIDERS does not match LLM provider dispatch keys"
+    )
 
 
 def _http_error(response: httpx.Response) -> str:

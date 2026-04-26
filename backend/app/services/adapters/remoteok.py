@@ -5,6 +5,7 @@ import json
 from json import loads as parse_json
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.field_value_core import _safe_int
 
 
 class RemoteOkAdapter(BaseAdapter):
@@ -62,12 +63,3 @@ def _format_salary(job: dict) -> str:
     if max_sal is not None:
         return f"Up to ${max_sal:,}"
     return ""
-
-
-def _safe_int(value: object) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None

@@ -225,7 +225,7 @@ class GreenhouseAdapter(BaseAdapter):
             if isinstance(location, dict)
             else clean_text(location)
         )
-        record = {
+        record: dict[str, object] = {
             "title": title,
             "url": clean_text(payload.get("absolute_url")) or page_url,
             "apply_url": clean_text(payload.get("absolute_url")) or page_url,

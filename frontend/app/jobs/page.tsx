@@ -62,7 +62,7 @@ export default function JobsPage() {
  actions={
  <div className="flex items-center gap-2">
  <span className="text-sm leading-[1.45] text-muted">Last refreshed {lastRefreshed}</span>
- <Button variant="secondary"type="button"onClick={() => void jobsQuery.refetch()}>
+ <Button variant="secondary" type="button" className="h-[var(--control-height)]" onClick={() => void jobsQuery.refetch()}>
  <RefreshCw className="size-3.5"/>
  Refresh
  </Button>

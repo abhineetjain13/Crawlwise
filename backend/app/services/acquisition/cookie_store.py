@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.models.crawl import DomainCookieMemory
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.domain_utils import normalize_domain
+from app.services.field_value_core import _object_list
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +60,16 @@ _CHALLENGE_COOKIE_NAME_EXACT = {
 _CHALLENGE_LOCAL_STORAGE_NAME_TOKENS = tuple(
     str(value or "").strip().lower()
     for value in _STORAGE_STATE_SIGNATURES.get("local_storage_name_tokens", [])
+    if str(value or "").strip()
+)
+_CHALLENGE_COOKIE_VALUE_TOKENS = tuple(
+    str(value or "").strip().lower()
+    for value in _STORAGE_STATE_SIGNATURES.get("cookie_value_tokens", [])
+    if str(value or "").strip()
+)
+_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS = tuple(
+    str(value or "").strip().lower()
+    for value in _STORAGE_STATE_SIGNATURES.get("local_storage_value_tokens", [])
     if str(value or "").strip()
 )
 
@@ -279,14 +290,6 @@ def _normalize_storage_state(storage_state: Mapping[str, object]) -> dict[str, o
     }
 
 
-def _object_list(value: object) -> list[object]:
-    if value is None or isinstance(value, (str, bytes, bytearray, Mapping)):
-        return []
-    if not isinstance(value, Iterable):
-        return []
-    return list(value)
-
-
 def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
     if _object_list(storage_state.get("cookies")):
         return True
@@ -301,7 +304,12 @@ def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
 def _normalize_cookies(value: object) -> list[dict[str, object]]:
     now = time.time()
     cookies: list[dict[str, object]] = []
-    for item in _object_list(value):
+    rows = (
+        list(value)
+        if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, Mapping))
+        else _object_list(value)
+    )
+    for item in rows:
         if not isinstance(item, Mapping):
             continue
         cookie: dict[str, object] = {}
@@ -313,7 +321,7 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
         if not cookie.get("name") or not cookie.get("value"):
             continue
         # Do not learn challenge-state cookies as reusable domain memory.
-        if _cookie_name_is_challenge_state(cookie.get("name")):
+        if _cookie_is_challenge_state(cookie):
             continue
         expires = cookie.get("expires")
         if isinstance(expires, (int, float)) and float(expires) > 0 and float(expires) <= now:
@@ -324,21 +332,33 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
 
 def _normalize_origins(value: object) -> list[dict[str, object]]:
     origins: list[dict[str, object]] = []
-    for item in _object_list(value):
+    rows = (
+        list(value)
+        if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, Mapping))
+        else _object_list(value)
+    )
+    for item in rows:
         if not isinstance(item, Mapping):
             continue
         origin = str(item.get("origin") or "").strip()
         if not origin:
             continue
         local_storage_rows: list[dict[str, str]] = []
-        for entry in _object_list(item.get("localStorage")):
+        raw_entries = item.get("localStorage")
+        entries = (
+            list(raw_entries)
+            if isinstance(raw_entries, Iterable)
+            and not isinstance(raw_entries, (str, bytes, bytearray, Mapping))
+            else _object_list(raw_entries)
+        )
+        for entry in entries:
             if not isinstance(entry, Mapping):
                 continue
             name = str(entry.get("name") or "").strip()
             if not name:
                 continue
             # Do not replay anti-bot localStorage across future runs.
-            if _local_storage_name_is_challenge_state(name):
+            if _local_storage_entry_is_challenge_state(entry):
                 continue
             local_storage_rows.append(
                 {
@@ -359,11 +379,29 @@ def _cookie_name_is_challenge_state(value: object) -> bool:
     return any(lowered.startswith(prefix) for prefix in _CHALLENGE_COOKIE_NAME_PREFIXES)
 
 
+def _cookie_is_challenge_state(cookie: Mapping[str, object]) -> bool:
+    if _cookie_name_is_challenge_state(cookie.get("name")):
+        return True
+    value = str(cookie.get("value") or "").strip().lower()
+    if not value:
+        return False
+    return any(token in value for token in _CHALLENGE_COOKIE_VALUE_TOKENS)
+
+
 def _local_storage_name_is_challenge_state(value: object) -> bool:
     lowered = str(value or "").strip().lower()
     if not lowered:
         return False
     return any(token in lowered for token in _CHALLENGE_LOCAL_STORAGE_NAME_TOKENS)
+
+
+def _local_storage_entry_is_challenge_state(entry: Mapping[str, object]) -> bool:
+    if _local_storage_name_is_challenge_state(entry.get("name")):
+        return True
+    value = str(entry.get("value") or "").strip().lower()
+    if not value:
+        return False
+    return any(token in value for token in _CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS)
 
 
 def _clone_storage_state(

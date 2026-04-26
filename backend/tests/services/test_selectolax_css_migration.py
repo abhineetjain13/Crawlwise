@@ -6,10 +6,12 @@ import pytest
 
 from app.services.adapters.adp import ADPAdapter
 from app.services.adapters.amazon import AmazonAdapter
+from app.services.adapters.belk import BelkAdapter
 from app.services.adapters.ebay import EbayAdapter
 from app.services.adapters.indeed import IndeedAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
-from app.services.detail_extractor import build_detail_record
+from app.services.adapters.nike import NikeAdapter
+from app.services.detail_extractor import build_detail_record, extract_detail_records
 from app.services.extraction_html_helpers import extract_job_sections
 from app.services.listing_extractor import extract_listing_records
 from app.services.xpath_service import extract_selector_value
@@ -856,6 +858,314 @@ async def test_amazon_adapter_preserves_css_field_output() -> None:
     assert record["rating"] == 4.8
     assert record["review_count"] == 128
     assert record["image_url"] == "https://example.com/widget.jpg"
+
+
+@pytest.mark.asyncio
+async def test_amazon_adapter_preserves_store_brand_suffix() -> None:
+    result = await AmazonAdapter().extract(
+        "https://www.amazon.com/dp/example",
+        """
+        <html>
+          <body>
+            <span id="productTitle">Mesh Shorts</span>
+            <a id="bylineInfo">Visit the Under Armour Store</a>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    assert result.records[0]["brand"] == "Under Armour"
+
+
+@pytest.mark.asyncio
+async def test_amazon_adapter_extracts_inline_twister_variants() -> None:
+    result = await AmazonAdapter().extract(
+        "https://www.amazon.com/Under-Armour-Mens-Tech-Shorts/dp/B016APPQ4S",
+        """
+        <html>
+          <body>
+            <span id="productTitle">Under Armour Men's Tech Mesh Shorts</span>
+            <a id="bylineInfo">Visit the Under Armour Store</a>
+            <div id="inline-twister-row-color_name"></div>
+            <div id="inline-twister-row-size_name"></div>
+            <script type="a-state" data-a-state='{"key":"desktop-twister-sort-filter-data"}'>
+            {
+              "sortedVariations": [[0,1],[0,2],[1,3],[1,0]],
+              "sortedDimValuesForAllDims": {
+                "size_name": [
+                  {"indexInDimList":0,"defaultAsin":"B07D7TVW4Y","dimensionValueState":"UNAVAILABLE","dimensionValueDisplayText":"X-Small","pageLoadURL":"/dp/B07D7TVW4Y/ref=twister_B016APPQ4S"},
+                  {"indexInDimList":1,"defaultAsin":"B095SJ18YH","dimensionValueState":"SELECTED","dimensionValueDisplayText":"Large"},
+                  {"indexInDimList":2,"defaultAsin":"B095SGXBJ2","dimensionValueState":"AVAILABLE","dimensionValueDisplayText":"X-Large","pageLoadURL":"/dp/B095SGXBJ2/ref=twister_B016APPQ4S"},
+                  {"indexInDimList":3,"defaultAsin":"B095SL1G2D","dimensionValueState":"UNAVAILABLE","dimensionValueDisplayText":"4X-Large Big","pageLoadURL":"/dp/B095SL1G2D/ref=twister_B016APPQ4S"}
+                ],
+                "color_name": [
+                  {"indexInDimList":0,"defaultAsin":"B095SJ18YH","dimensionValueState":"SELECTED","dimensionValueDisplayText":"Pitch Gray-black"},
+                  {"indexInDimList":1,"defaultAsin":"B095SL1G2D","dimensionValueState":"UNAVAILABLE","dimensionValueDisplayText":"Pitch Gray/Black","pageLoadURL":"/dp/B095SL1G2D/ref=twister_B016APPQ4S"}
+                ]
+              }
+            }
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    record = result.records[0]
+    assert record["brand"] == "Under Armour"
+    assert record["color"] == "Pitch Gray-black"
+    assert record["size"] == "Large"
+    assert record["variant_axes"] == {
+        "color": ["Pitch Gray-black", "Pitch Gray/Black"],
+        "size": ["X-Small", "Large", "X-Large", "4X-Large Big"],
+    }
+    assert record["variant_count"] == 4
+    assert record["selected_variant"]["option_values"] == {
+        "color": "Pitch Gray-black",
+        "size": "Large",
+    }
+
+
+@pytest.mark.asyncio
+async def test_belk_adapter_extracts_nested_state_brand_price_and_currency() -> None:
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        """
+        <html>
+          <body>
+            <script>
+              window.__INITIAL_STATE__ = {
+                "search": {
+                  "products": [
+                    {
+                      "productName": "Checkerboard Quilt Set",
+                      "brand": {"name": "Modern Southern Home"},
+                      "salePrice": {"amount": "22.50", "currencyCode": "USD"},
+                      "image": {"url": "https://belk.scene7.com/is/image/Belk/7100974"},
+                      "productUrl": "/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html"
+                    }
+                  ]
+                }
+              };
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_listing",
+    )
+
+    assert result.records == [
+        {
+            "title": "Checkerboard Quilt Set",
+            "brand": "Modern Southern Home",
+            "price": "22.50",
+            "currency": "USD",
+            "image_url": "https://belk.scene7.com/is/image/Belk/7100974",
+            "url": "https://www.belk.com/p/modern-southern-home--checkerboard-quilt-set/710097411786005.html",
+            "_source": "belk_adapter",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_belk_adapter_prefers_real_currency_fields_over_scalar_price_text() -> None:
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        """
+        <html>
+          <body>
+            <script>
+              window.__INITIAL_STATE__ = {
+                "search": {
+                  "products": [
+                    {
+                      "productName": "Free Sample",
+                      "brand": {"name": "Acme"},
+                      "price": "0.00",
+                      "currencyCode": "USD",
+                      "image": {"url": "https://belk.scene7.com/is/image/Belk/free-sample"},
+                      "productUrl": "/p/free-sample/000.html"
+                    }
+                  ]
+                }
+              };
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_listing",
+    )
+
+    assert result.records == [
+        {
+            "title": "Free Sample",
+            "brand": "Acme",
+            "price": "0.00",
+            "currency": "USD",
+            "image_url": "https://belk.scene7.com/is/image/Belk/free-sample",
+            "url": "https://www.belk.com/p/free-sample/000.html",
+            "_source": "belk_adapter",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_amazon_adapter_does_not_fabricate_multi_axis_twister_product() -> None:
+    result = await AmazonAdapter().extract(
+        "https://www.amazon.com/Under-Armour-Mens-Tech-Shorts/dp/B016APPQ4S",
+        """
+        <html>
+          <body>
+            <span id="productTitle">Under Armour Men's Tech Mesh Shorts</span>
+            <div id="inline-twister-row-color_name"></div>
+            <div id="inline-twister-row-size_name"></div>
+            <script type="a-state" data-a-state='{"key":"desktop-twister-sort-filter-data"}'>
+            {
+              "sortedDimValuesForAllDims": {
+                "size_name": [
+                  {"dimensionValueState":"SELECTED","dimensionValueDisplayText":"Large"},
+                  {"dimensionValueState":"AVAILABLE","dimensionValueDisplayText":"X-Large"}
+                ],
+                "color_name": [
+                  {"dimensionValueState":"SELECTED","dimensionValueDisplayText":"Black"},
+                  {"dimensionValueState":"AVAILABLE","dimensionValueDisplayText":"Blue"}
+                ]
+              }
+            }
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    record = result.records[0]
+    assert "variants" not in record
+    assert record["variant_axes"] == {"color": ["Black", "Blue"], "size": ["Large", "X-Large"]}
+
+
+@pytest.mark.asyncio
+async def test_nike_adapter_maps_preloaded_state_product() -> None:
+    result = await NikeAdapter().extract(
+        "https://www.nike.in/nike-pro-training-men-s-dri-fit-short-sleeve-top/p/24829693",
+        """
+        <html>
+          <body>
+            <script id="__PRELOADED_STATE__" type="application/json">
+            {
+              "details": {
+                "skuData": {
+                  "product": {
+                    "id": "24829693",
+                    "sku": "NIKEX00027953",
+                    "discountedPrice": 1996,
+                    "price": 2495,
+                    "imageUrl": "https://example.com/nike-1.jpg",
+                    "color": {"name": "Green"},
+                    "action_url": "/nike-pro-training-men-s-dri-fit-short-sleeve-top/p/24829693",
+                    "title": "Nike Pro Training",
+                    "subTitle": "Men's Dri-FIT Short-Sleeve Top",
+                    "isOutOfStock": 0,
+                    "product_summary": {"description": "Train with ease."},
+                    "productMedia": [
+                      {"mediaType": "image", "url": "https://example.com/nike-1.jpg"},
+                      {"mediaType": "image", "url": "https://example.com/nike-2.jpg"}
+                    ],
+                    "sizeOptions": {
+                      "title": "Select Size",
+                      "options": [
+                        {"id": "24828378", "sku": "NIKEX00026638", "sizeName": "XXS", "discountedPrice": 1996, "price": 2495, "isOutOfStock": 1},
+                        {"id": "24828336", "sku": "NIKEX00026596", "sizeName": "S", "discountedPrice": 1996, "price": 2495, "isOutOfStock": 0}
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    record = result.records[0]
+    assert record["title"] == "Nike Pro Training Men's Dri-FIT Short-Sleeve Top"
+    assert record["brand"] == "Nike"
+    assert record["color"] == "Green"
+    assert record["size"] == "S"
+    assert record["variant_axes"] == {"size": ["XXS", "S"]}
+    assert record["available_sizes"] == ["XXS", "S"]
+    assert record["selected_variant"]["option_values"] == {"size": "S", "color": "Green"}
+    assert record["selected_variant"]["availability"] == "in_stock"
+
+
+@pytest.mark.asyncio
+async def test_nike_detail_extraction_uses_adapter_and_rejects_shell_json_ld() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {"@context":"https://schema.org","@type":"Corporation","name":"Nike","founders":[{"@type":"Person","name":"Bill Bowerman"}]}
+        </script>
+      </head>
+      <body>
+        <label>Text
+          <select><option>White</option><option>Black</option><option>Red</option></select>
+        </label>
+        <label>Background
+          <select><option>Opaque</option><option>Semi-Transparent</option></select>
+        </label>
+        <script id="__PRELOADED_STATE__" type="application/json">
+        {
+          "details": {
+            "skuData": {
+              "product": {
+                "id": "24809354",
+                "sku": "NIKEX00021288",
+                "discountedPrice": 1495,
+                "price": 1495,
+                "imageUrl": "https://example.com/nike.jpg",
+                "color": {"name": "Black"},
+                "action_url": "/nike-pro-men-s-dri-fit-tight-sleeveless-fitness-top/p/24809354",
+                "title": "Nike Pro",
+                "subTitle": "Men's Dri-FIT Tight Sleeveless Fitness Top",
+                "isOutOfStock": 0,
+                "sizeOptions": {
+                  "title": "Select Size",
+                  "options": [
+                    {"id": "24809169", "sku": "NIKEX00021103", "sizeName": "XS", "discountedPrice": 1495, "price": 1495, "isOutOfStock": 1},
+                    {"id": "24809174", "sku": "NIKEX00021108", "sizeName": "S", "discountedPrice": 1495, "price": 1495, "isOutOfStock": 0}
+                  ]
+                }
+              }
+            }
+          }
+        }
+        </script>
+      </body>
+    </html>
+    """
+    url = "https://www.nike.in/nike-pro-men-s-dri-fit-tight-sleeveless-fitness-top/p/24809354"
+    adapter_records = (await NikeAdapter().extract(url, html, "ecommerce_detail")).records
+    records = extract_detail_records(
+        html,
+        url,
+        "ecommerce_detail",
+        None,
+        adapter_records=adapter_records,
+    )
+
+    record = records[0]
+    assert record["title"] == "Nike Pro Men's Dri-FIT Tight Sleeveless Fitness Top"
+    assert record["brand"] == "Nike"
+    assert record["variant_axes"] == {"size": ["XS", "S"]}
+    assert record["variant_count"] == 2
+    assert record["size"] == "S"
+    assert "Bill Bowerman" not in record.values()
+    assert "background" not in record["variant_axes"]
+    assert "text" not in record["variant_axes"]
 
 
 @pytest.mark.asyncio

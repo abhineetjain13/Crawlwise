@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from app.services.field_value_core import (
+    clean_text,
     extract_currency_code,
     extract_urls,
+    infer_brand_from_product_url,
+    infer_brand_from_title_marker,
+    is_title_noise,
     strip_tracking_query_params,
     validate_and_clean,
     validate_record_for_surface,
@@ -125,6 +129,19 @@ def test_extract_currency_code_ignores_non_currency_uppercase_acronyms() -> None
     assert extract_currency_code("SKU 499") is None
 
 
+def test_clean_text_strips_leading_css_in_js_noise() -> None:
+    assert (
+        clean_text(".css-7u5e79{margin:0.5rem 0rem;} The Legend of Zelda")
+        == "The Legend of Zelda"
+    )
+
+
+def test_is_title_noise_keeps_short_non_numeric_product_titles() -> None:
+    assert is_title_noise("Hat") is False
+    assert is_title_noise("UGG") is False
+    assert is_title_noise("Tie") is False
+
+
 def test_extract_urls_trims_trailing_punctuation_from_embedded_urls() -> None:
     urls = extract_urls(
         "Docs: https://example.com/alpha), https://example.com/beta.",
@@ -147,3 +164,30 @@ def test_extract_urls_preserves_balanced_parentheses_and_brackets() -> None:
         "https://example.com/release_(2026)",
         "https://example.com/archive/[spring]",
     ]
+
+
+def test_infer_brand_from_title_marker_keeps_leading_trademark_brand_token() -> None:
+    assert infer_brand_from_title_marker("®Nike Court Vision Low") == "®Nike"
+
+
+def test_infer_brand_from_product_url_skips_overlong_slug_and_keeps_valid_match() -> None:
+    assert (
+        infer_brand_from_product_url(
+            url=(
+                "https://example.com/acme-widget-prime/"
+                "one-two-three-four-five-six-seven-eight-nine-widget-prime"
+            ),
+            title="Widget Prime",
+        )
+        == "Acme"
+    )
+
+
+def test_infer_brand_from_product_url_rejects_numeric_product_id_prefix() -> None:
+    assert (
+        infer_brand_from_product_url(
+            url="https://example.com/products/492216804-black-leather-belts-for-men",
+            title="Black Leather Belts for Men",
+        )
+        is None
+    )

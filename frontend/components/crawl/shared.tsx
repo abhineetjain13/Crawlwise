@@ -552,17 +552,17 @@ export const LogTerminal = memo(function LogTerminal({
     >
       {logs.length
         ? logs.map((log) => (
-            <div key={log.id} className="font-mono text-sm leading-6">
-              <span className="text-muted">[{formatTimeHms(log.created_at)}]</span>{" "}
+            <div key={log.id} className={cn("font-mono text-sm leading-6 font-light", logLineTone(log.level))}>
+              <span className="opacity-65">[{formatTimeHms(log.created_at)}]</span>{" "}
               <span
                 className={cn(
-                  "text-sm font-semibold text-muted uppercase inline-flex items-center px-1.5 py-0.5",
+                  "inline-flex items-center px-1.5 py-0.5 text-sm font-normal uppercase",
                   logTone(log.level),
                 )}
               >
                 {normalizeLogLevel(log.level)}
               </span>{" "}
-              <span>{sanitizeLogMessage(log.message)}</span>
+              <span className="font-light">{sanitizeLogMessage(log.message)}</span>
             </div>
           ))
         : (
@@ -575,68 +575,63 @@ export const LogTerminal = memo(function LogTerminal({
 });
 
 export function SettingSection({
- label,
- description,
- icon,
- checked,
- onChange,
- children,
+  label,
+  description,
+  icon,
+  checked,
+  onChange,
+  children,
 }: Readonly<{
- label: string;
- description: string;
- icon: ReactElement<IconElementProps>;
- checked: boolean;
- onChange: (value: boolean) => void;
- children?: ReactNode;
+  label: string;
+  description: string;
+  icon?: ReactElement<IconElementProps>;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  children?: ReactNode;
 }>) {
- const renderedIcon = React.isValidElement<IconElementProps>(icon)
- ? React.cloneElement(icon, {
- className: cn(icon.props.className,"size-4"),
- })
- : null;
+  const renderedIcon = React.isValidElement<IconElementProps>(icon)
+    ? React.cloneElement(icon, {
+        className: cn(icon.props.className, "size-4"),
+      })
+    : null;
 
- return (
- <div
- className={cn(
-"transition-all",
- checked
- ?"bg-[var(--setting-surface-active-bg)]"
- :"hover:bg-[var(--bg-alt)]/50",
- )}
- >
- <div className="flex items-center justify-between gap-4 px-5 py-3.5">
- <div className="flex min-w-0 items-center gap-3">
- <div
- className={cn(
-"flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors",
- checked
- ?"border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--setting-icon-active-shadow)]"
- :"border-[var(--border)] bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
- )}
- >
- {renderedIcon}
- </div>
- <div className="flex items-center gap-1.5 min-w-0">
- <div className="text-sm font-semibold tracking-normal text-primary leading-normal">{label}</div>
- <Tooltip content={description}>
- <Info className="size-3.5 text-muted hover:text-secondary cursor-help transition-colors"/>
- </Tooltip>
- </div>
- </div>
- <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
- </div>
- {children ? (
- <div
- className={cn(
-"transition-[max-height] duration-200 ease-out",
- checked ?"max-h-[500px] overflow-visible":"max-h-0 overflow-hidden",
- )}
- >
- <div className="border-t border-[var(--divider)] bg-[var(--setting-body-bg)] px-5 py-4 space-y-3">{children}</div>
- </div>
- ) : null}
- </div>
- );
+  return (
+    <div className="transition-all h-9 flex items-center w-full">
+      <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {renderedIcon ? (
+            <div
+              className={cn(
+                "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors",
+                checked
+                  ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--setting-icon-active-shadow)]"
+                  : "border-[var(--border)] bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
+              )}
+            >
+              {renderedIcon}
+            </div>
+          ) : null}
+          <div className="field-label mb-0 min-w-0">{label}</div>
+          <Tooltip content={description}>
+            <Info className="size-3.5 text-muted hover:text-secondary cursor-help transition-colors"/>
+          </Tooltip>
+        </div>
+        <div className="flex justify-start">
+          <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
+        </div>
+      </div>
+      {children ? (
+        <div
+          className={cn(
+            "transition-[max-height] duration-200 ease-out",
+            checked ? "max-h-[500px] overflow-visible" : "max-h-0 overflow-hidden",
+          )}
+        >
+          <div className="border-t border-[var(--divider)] bg-[var(--setting-body-bg)] px-5 py-4 space-y-3">{children}</div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function SliderRow({
@@ -649,7 +644,6 @@ export function SliderRow({
  onChange,
  onReset,
  suffix,
- grouped = false,
 }: Readonly<{
  label: string;
  description?: string;
@@ -660,19 +654,15 @@ export function SliderRow({
  onChange: (value: string) => void;
  onReset: () => void;
  suffix?: string;
- grouped?: boolean;
 }>) {
  return (
  <div
  className={cn(
- "grid gap-2.5 md:grid-cols-[132px_minmax(0,1fr)_96px] md:items-center",
- grouped
- ? "px-3 py-3"
- : "rounded-[var(--radius-lg)] border border-[var(--subtle-panel-border)] bg-[var(--bg-panel)] p-4",
+ "grid gap-2.5 md:grid-cols-[140px_minmax(0,1fr)_112px] md:items-center w-full",
  )}
  >
  <div className="flex items-center gap-1.5 min-w-0">
- <span className="text-sm font-medium text-secondary leading-normal">{label}</span>
+ <span className="field-label mb-0">{label}</span>
  {description ? (
  <Tooltip content={description}>
  <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
@@ -697,13 +687,13 @@ export function SliderRow({
  className="slider-control w-full"
  />
  <div className="relative">
- <input
+ <Input
  type="text"
  inputMode="numeric"
  value={value}
  onChange={(event) => onChange(event.target.value.replace(/[^\d]/g,""))}
  onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
- className="h-9 w-full rounded-[var(--radius-md)] border border-border bg-[var(--slider-value-bg)] py-0 pl-2.5 pr-8 text-right font-mono text-sm leading-normal tabular-nums text-[var(--text-primary)] focus:ring-0 focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)]"
+ className="pr-8 text-right font-mono tabular-nums"
  />
  {suffix ? (
  <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-sm leading-normal lowercase text-muted">
@@ -960,16 +950,25 @@ export const RecordsTable = memo(function RecordsTable({
  onSelectAll: (checked: boolean) => void;
  onToggleRow: (id: number, checked: boolean) => void;
 }>) {
- const rowHeightPx = 40;
+ const IMAGE_KEYS = new Set(["image_url", "image", "thumbnail", "img"]);
+ const TITLE_KEYS = new Set(["title", "name", "product_name", "product title"]);
+ const PRICE_KEYS = new Set(["price", "sale_price", "offer_price", "current_price", "final_price", "our_price", "deal_price"]);
+ const URL_KEYS = new Set(["url", "source_url", "product_url", "canonical_url"]);
+
+ const imageCol = visibleColumns.find((col) => IMAGE_KEYS.has(col));
+ const dataColumns = visibleColumns.filter((col) => !IMAGE_KEYS.has(col));
+ const hasImageCol = !!imageCol;
+ const totalCols = dataColumns.length + (hasImageCol ? 1 : 0) + 1;
+ const rowHeightPx = 48;
  const overscanRows = 8;
  const [scrollTop, setScrollTop] = useState(0);
  const [viewportHeight, setViewportHeight] = useState(560);
  const [containerNode, setContainerNode] = useState<HTMLDivElement | null>(null);
  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
- setContainerNode(node);
- if (node) {
- setViewportHeight(node.clientHeight || 560);
- }
+  setContainerNode(node);
+  if (node) {
+   setViewportHeight(node.clientHeight || 560);
+  }
  }, []);
  const totalCount = records.length;
  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeightPx) - overscanRows);
@@ -980,84 +979,124 @@ export const RecordsTable = memo(function RecordsTable({
  const bottomSpacerPx = Math.max(0, (totalCount - endIndex) * rowHeightPx);
 
  useEffect(() => {
- if (!containerNode || typeof ResizeObserver ==="undefined") {
- return;
- }
- const observer = new ResizeObserver((entries) => {
- const entry = entries[0];
- if (!entry) {
- return;
- }
- setViewportHeight(entry.contentRect.height || 560);
- });
- observer.observe(containerNode);
- return () => observer.disconnect();
+  if (!containerNode || typeof ResizeObserver === "undefined") {
+   return;
+  }
+  const observer = new ResizeObserver((entries) => {
+   const entry = entries[0];
+   if (!entry) {
+    return;
+   }
+   setViewportHeight(entry.contentRect.height || 560);
+  });
+  observer.observe(containerNode);
+  return () => observer.disconnect();
  }, [containerNode]);
 
+ function renderCell(col: string, record: CrawlRecord) {
+  const raw = formatCellDisplay(readRecordValue(record, col));
+  if (!raw || raw === "--") return <span className="ct-muted">--</span>;
+
+  if (TITLE_KEYS.has(col)) {
+   return <span className="ct-title block max-w-[320px] truncate">{raw}</span>;
+  }
+  if (PRICE_KEYS.has(col)) {
+   return <span className="ct-price">{raw}</span>;
+  }
+  if (URL_KEYS.has(col)) {
+   const isSafe = raw.startsWith("http://") || raw.startsWith("https://");
+   if (isSafe) {
+    return (
+     <a href={raw} target="_blank" rel="noreferrer" className="ct-url block max-w-[200px] truncate" title={raw}>
+      {raw}
+     </a>
+    );
+   }
+  }
+  return <span className="block max-w-[260px] truncate">{raw}</span>;
+ }
+
  return (
- <div
- ref={setContainerRef}
- onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
- className="surface-muted max-h-[70vh] rounded-lg overflow-auto"
- >
- <table className="compact-data-table min-w-[960px]">
- <thead>
- <tr>
- <th className="w-10">
- <input
- type="checkbox"
- checked={selectedIds.length === records.length && records.length > 0}
- onChange={(event) => onSelectAll(event.target.checked)}
- />
- </th>
- {visibleColumns.map((col) => {
- const score = fieldQualityScores?.[col];
- const level = qualityLevelFromScore(score ?? Number.NaN);
- return (
- <th key={col}>
- <div className="flex items-center gap-2">
- <span>{col}</span>
- {Number.isFinite(score) ? (
- <Badge tone={qualityTone(level)}>{humanizeQuality(level)}</Badge>
- ) : null}
- </div>
- </th>
- );
- })}
- </tr>
- </thead>
- <tbody>
- {topSpacerPx > 0 ? (
- <tr aria-hidden="true">
- <td colSpan={visibleColumns.length + 1} style={{ height: `${topSpacerPx}px`, padding: 0 }} />
- </tr>
- ) : null}
- {windowedRecords.map((record) => (
- <tr key={record.id}>
- <td>
- <input
- type="checkbox"
- checked={selectedIds.includes(record.id)}
- onChange={(event) => onToggleRow(record.id, event.target.checked)}
- />
- </td>
- {visibleColumns.map((col) => (
- <td key={col} title={formatCellDisplay(readRecordValue(record, col))}>
- <span className="block max-w-[260px] truncate">
- {formatCellDisplay(readRecordValue(record, col)) || <span className="text-muted/50">--</span>}
- </span>
- </td>
- ))}
- </tr>
- ))}
- {bottomSpacerPx > 0 ? (
- <tr aria-hidden="true">
- <td colSpan={visibleColumns.length + 1} style={{ height: `${bottomSpacerPx}px`, padding: 0 }} />
- </tr>
- ) : null}
- </tbody>
- </table>
- </div>
+  <div
+   ref={setContainerRef}
+   onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+   className="surface-muted max-h-[70vh] rounded-lg overflow-auto"
+  >
+   <table className="commerce-table min-w-[960px]">
+    <thead>
+     <tr>
+      <th className="w-10">
+       <input
+        type="checkbox"
+        checked={selectedIds.length === records.length && records.length > 0}
+        onChange={(event) => onSelectAll(event.target.checked)}
+       />
+      </th>
+      {hasImageCol ? <th>IMG</th> : null}
+      {dataColumns.map((col) => {
+       const score = fieldQualityScores?.[col];
+       const level = qualityLevelFromScore(score ?? Number.NaN);
+       return (
+        <th key={col}>
+         <div className="flex items-center gap-1.5">
+          <span className="truncate">{col}</span>
+          {Number.isFinite(score) ? (
+           <Badge tone={qualityTone(level)} className="ct-header-badge">{humanizeQuality(level)}</Badge>
+          ) : null}
+         </div>
+        </th>
+       );
+      })}
+     </tr>
+    </thead>
+    <tbody>
+     {topSpacerPx > 0 ? (
+      <tr aria-hidden="true">
+       <td colSpan={totalCols} style={{ height: `${topSpacerPx}px`, padding: 0 }} />
+      </tr>
+     ) : null}
+     {windowedRecords.map((record) => (
+      <tr key={record.id}>
+       <td>
+        <input
+         type="checkbox"
+         checked={selectedIds.includes(record.id)}
+         onChange={(event) => onToggleRow(record.id, event.target.checked)}
+        />
+       </td>
+       {hasImageCol ? (
+        <td className="ct-image-cell">
+         {(() => {
+          const src = formatCellDisplay(readRecordValue(record, imageCol!));
+          if (!src || src === "--") return <span className="ct-muted">--</span>;
+          return (
+           <div className="ct-image-wrap">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+             src={src}
+             alt=""
+             onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+           </div>
+          );
+         })()}
+        </td>
+       ) : null}
+       {dataColumns.map((col) => (
+        <td key={col} title={formatCellDisplay(readRecordValue(record, col))}>
+         {renderCell(col, record)}
+        </td>
+       ))}
+      </tr>
+     ))}
+     {bottomSpacerPx > 0 ? (
+      <tr aria-hidden="true">
+       <td colSpan={totalCols} style={{ height: `${bottomSpacerPx}px`, padding: 0 }} />
+      </tr>
+     ) : null}
+    </tbody>
+   </table>
+  </div>
  );
 });
 
@@ -1153,10 +1192,16 @@ function validateRegex(value: string): ValidationState {
 
 function logTone(level: string) {
  const normalized = normalizeLogLevel(level);
- if (normalized ==="WARN") return"border-transparent bg-transparent text-warning";
+ if (normalized ==="WARN" || normalized === "WARNING") return"border-transparent bg-transparent text-warning";
  if (normalized ==="ERROR") return"border-transparent bg-transparent text-danger";
- if (normalized ==="PROXY") return"border-transparent bg-transparent text-accent";
- return"border-transparent bg-transparent text-[var(--text-secondary)]";
+ return"border-transparent bg-transparent text-[var(--terminal-fg)]";
+}
+
+function logLineTone(level: string) {
+ const normalized = normalizeLogLevel(level);
+ if (normalized ==="WARN" || normalized === "WARNING") return"text-warning";
+ if (normalized ==="ERROR") return"text-danger";
+ return"text-[var(--terminal-fg)]";
 }
 
 function normalizeLogLevel(level: string) {

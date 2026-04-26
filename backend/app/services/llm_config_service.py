@@ -8,10 +8,11 @@ from app.core.security import decrypt_secret
 from app.models.crawl import CrawlRun
 from app.models.llm import LLMConfig
 from app.services.config.field_mappings import PROMPT_REGISTRY
+from app.services.config.llm_runtime import SUPPORTED_LLM_PROVIDERS
+from app.services.config.product_intelligence import PRODUCT_INTELLIGENCE_PROMPT_REGISTRY
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
 _PROMPTS_DIR = Path(__file__).resolve().parents[1] / "data" / "prompts"
 _LEGACY_PROMPTS_DIR = (
     Path(__file__).resolve().parents[1] / "data" / "knowledge_base" / "prompts"
@@ -19,7 +20,8 @@ _LEGACY_PROMPTS_DIR = (
 
 
 def get_prompt_task(task_type: str) -> dict | None:
-    task = PROMPT_REGISTRY.get(str(task_type or "").strip())
+    normalized = str(task_type or "").strip()
+    task = PRODUCT_INTELLIGENCE_PROMPT_REGISTRY.get(normalized) or PROMPT_REGISTRY.get(normalized)
     return dict(task) if isinstance(task, dict) else None
 
 
@@ -83,6 +85,7 @@ async def snapshot_active_configs(
         "field_cleanup_review",
         "page_classification",
         "schema_inference",
+        "product_intelligence_enrichment",
     ]:
         config = await resolve_active_config(session, task_type)
         if config is not None:

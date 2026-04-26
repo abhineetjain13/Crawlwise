@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from"@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from"vitest";
+import { fireEvent, render, screen, waitFor } from"@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from"vitest";
 
 import { STORAGE_KEYS } from"../../lib/constants/storage-keys";
 import { UI_DELAYS } from"../../lib/constants/timing";
@@ -46,6 +46,21 @@ function renderConfigScreen() {
  );
 }
 
+function enterTargetUrl(url: string): void {
+ fireEvent.change(screen.getByLabelText("Target URL input"), {
+ target: { value: url },
+ });
+}
+
+async function expectDomainProfileLookup(url: string, surface = "ecommerce_listing"): Promise<void> {
+ await waitFor(() => {
+ expect(getDomainRunProfileMock).toHaveBeenCalledWith({
+ url,
+ surface,
+ });
+ }, { timeout: UI_DELAYS.DEBOUNCE_MS * 6 });
+}
+
 describe("CrawlConfigScreen bulk prefill", () => {
  beforeEach(() => {
  vi.clearAllMocks();
@@ -58,11 +73,6 @@ describe("CrawlConfigScreen bulk prefill", () => {
  listSelectorsMock.mockResolvedValue([]);
  createCrawlMock.mockResolvedValue({ run_id: 321 });
  });
-
- afterEach(() => {
- cleanup();
- });
-
  it("restores the jobs domain from batch prefill storage", async () => {
  window.sessionStorage.setItem(
  STORAGE_KEYS.BULK_PREFILL,
@@ -105,17 +115,10 @@ describe("CrawlConfigScreen bulk prefill", () => {
 
  renderConfigScreen();
 
- fireEvent.change(screen.getByLabelText("Target URL input"), {
- target: { value: "https://example.com/collections/chairs" },
- });
+ enterTargetUrl("https://example.com/collections/chairs");
 
- await waitFor(() => {
- expect(getDomainRunProfileMock).toHaveBeenCalledWith({
- url: "https://example.com/collections/chairs",
- surface: "ecommerce_listing",
- });
+ await expectDomainProfileLookup("https://example.com/collections/chairs");
  expect(listSelectorsMock).toHaveBeenCalledWith({ domain: "example.com" });
- }, { timeout: UI_DELAYS.DEBOUNCE_MS * 6 });
 
  fireEvent.click(screen.getByRole("button", { name:"Advanced" }));
 
@@ -123,7 +126,7 @@ describe("CrawlConfigScreen bulk prefill", () => {
  expect(screen.queryByText("Loaded 1 saved selector from domain memory.")).not.toBeInTheDocument();
  });
 
- it("applies saved proxy defaults from the domain run profile", async () => {
+ it("does not apply proxy defaults from the saved domain run profile", async () => {
  getDomainRunProfileMock.mockResolvedValue({
  domain: "example.com",
  surface: "ecommerce_listing",
@@ -151,10 +154,6 @@ describe("CrawlConfigScreen bulk prefill", () => {
  capture_response_headers: true,
  capture_browser_diagnostics: true,
  },
- proxy_profile: {
- enabled: true,
- proxy_list: ["http://proxy-a", "http://proxy-b"],
- },
  source_run_id: 11,
  saved_at: "2026-04-23T00:00:00Z",
  },
@@ -162,30 +161,21 @@ describe("CrawlConfigScreen bulk prefill", () => {
 
  renderConfigScreen();
 
- fireEvent.change(screen.getByLabelText("Target URL input"), {
- target: { value: "https://example.com/collections/chairs" },
- });
+ enterTargetUrl("https://example.com/collections/chairs");
 
- await waitFor(() => {
- expect(getDomainRunProfileMock).toHaveBeenCalledWith({
- url: "https://example.com/collections/chairs",
- surface: "ecommerce_listing",
- });
- }, { timeout: UI_DELAYS.DEBOUNCE_MS * 6 });
+ await expectDomainProfileLookup("https://example.com/collections/chairs");
 
  fireEvent.click(screen.getByRole("button", { name:"Advanced" }));
 
  await waitFor(() => {
- expect(screen.getByLabelText("Proxy pool input")).toHaveValue("http://proxy-a\nhttp://proxy-b");
+ expect(screen.queryByLabelText("Proxy pool input")).not.toBeInTheDocument();
  });
  });
 
  it("refreshes the route after launching a crawl so the new run screen loads immediately", async () => {
  renderConfigScreen();
 
- fireEvent.change(screen.getByLabelText("Target URL input"), {
- target: { value: "https://example.com/collections/chairs" },
- });
+ enterTargetUrl("https://example.com/collections/chairs");
 
  fireEvent.click(screen.getByRole("button", { name: "Start Crawl" }));
 

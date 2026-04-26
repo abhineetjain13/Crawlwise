@@ -131,7 +131,7 @@ export default function DashboardPage() {
  <Button
  type="button"
  variant="primary"
- size="sm"
+ className="h-[var(--control-height)]"
  onClick={() => void handleRefresh()}
  disabled={isRefreshing || isLoading}
  >

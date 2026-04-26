@@ -106,9 +106,7 @@ Current UI settings behavior reflects the backend contract:
 - `advanced_enabled`
 - `advanced_mode`
 - `request_delay_ms`
-- `max_records`
-- `max_pages`
-- `max_scrolls`
+- `max_records` as a target count for stopping after a page, not a strict row cap
 - `respect_robots_txt`
 - proxy input
 - additional fields

@@ -7,6 +7,70 @@ def build_acquisition_profile(settings_view) -> dict[str, object]:
     return {}
 
 
+def _challenge_evidence_rows(diagnostics: dict[str, object]) -> list[str]:
+    raw_evidence = diagnostics.get("challenge_evidence")
+    evidence_items = raw_evidence if isinstance(raw_evidence, list) else []
+    return [
+        str(item or "").strip().lower()
+        for item in evidence_items
+        if str(item or "").strip()
+    ]
+
+
+def _readiness_probes(diagnostics: dict[str, object]) -> list[dict[str, object]]:
+    raw_probes = diagnostics.get("readiness_probes")
+    if not isinstance(raw_probes, list):
+        return []
+    return [dict(item) for item in raw_probes if isinstance(item, dict)]
+
+
+def _has_ready_readiness_probe(diagnostics: dict[str, object]) -> bool:
+    return any(bool(probe.get("is_ready")) for probe in _readiness_probes(diagnostics))
+
+
+def _has_strong_challenge_evidence(
+    diagnostics: dict[str, object],
+    evidence: list[str],
+) -> bool:
+    return any(
+        item.startswith(("title:", "strong:", "active_provider:"))
+        for item in evidence
+    )
+
+
+def diagnostics_indicate_block(diagnostics: dict[str, object] | object) -> bool:
+    payload = dict(diagnostics or {}) if isinstance(diagnostics, dict) else {}
+    browser_outcome = str(payload.get("browser_outcome") or "").strip().lower()
+    provider_hits_raw = payload.get("challenge_provider_hits")
+    provider_hits = provider_hits_raw if isinstance(provider_hits_raw, list) else []
+    evidence = _challenge_evidence_rows(payload)
+    if browser_outcome == "challenge_page":
+        return True
+    if _has_strong_challenge_evidence(payload, evidence):
+        return True
+    if browser_outcome == "usable_content" and _has_ready_readiness_probe(payload):
+        return False
+    provider_evidence = provider_hits or [
+        item for item in evidence if item.startswith("provider:")
+    ]
+    if provider_evidence:
+        return browser_outcome != "usable_content"
+    if browser_outcome == "usable_content":
+        return False
+    return False
+
+
+def is_effectively_blocked(acquisition_result) -> bool:
+    if bool(getattr(acquisition_result, "blocked", False)):
+        return True
+    diagnostics = (
+        dict(getattr(acquisition_result, "browser_diagnostics", {}) or {})
+        if isinstance(getattr(acquisition_result, "browser_diagnostics", {}), dict)
+        else {}
+    )
+    return diagnostics_indicate_block(diagnostics)
+
+
 def build_url_metrics(
     acquisition_result,
     *,
@@ -45,7 +109,7 @@ def build_url_metrics(
     return {
         "method": acquisition_result.method,
         "status_code": acquisition_result.status_code,
-        "blocked": bool(acquisition_result.blocked),
+        "blocked": is_effectively_blocked(acquisition_result),
         "final_url": acquisition_result.final_url,
         "requested_fields": list(requested_fields or []),
         "browser_used": acquisition_result.method == "browser",
@@ -57,6 +121,7 @@ def build_url_metrics(
         "network_payloads": len(list(acquisition_result.network_payloads or [])),
         "adapter_name": acquisition_result.adapter_name,
         "platform_family": getattr(acquisition_result, "platform_family", None),
+        "failure_reason": browser_diagnostics.get("failure_reason"),
         "browser_navigation_strategy": browser_diagnostics.get("navigation_strategy"),
         "network_payload_count": int(
             browser_diagnostics.get("network_payload_count", 0) or 0

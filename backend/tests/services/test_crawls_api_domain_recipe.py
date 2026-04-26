@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from sqlalchemy import select
 
+from app.api.crawls import _domain_run_profile_payload
+from app.schemas.crawl import DomainRunProfilePayload
 from app.core.dependencies import get_current_user, get_db
 from app.main import app
 from app.models.crawl import DomainFieldFeedback
@@ -12,6 +15,21 @@ from app.services.acquisition.cookie_store import persist_storage_state_for_doma
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.crawl_crud import create_crawl_run
 from app.services.domain_memory_service import save_domain_memory
+
+
+def test_domain_run_profile_payload_rejects_non_mapping() -> None:
+    with pytest.raises(ValidationError):
+        _domain_run_profile_payload("not-a-profile")
+
+
+def test_domain_run_profile_payload_accepts_pydantic_models() -> None:
+    payload = _domain_run_profile_payload(
+        DomainRunProfilePayload(
+            fetch_profile={"fetch_mode": "browser_only"},
+        )
+    )
+
+    assert payload.fetch_profile.fetch_mode == "browser_only"
 
 
 @pytest.fixture
@@ -170,10 +188,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert saved_profile["fetch_profile"]["fetch_mode"] == "http_then_browser"
     assert saved_profile["locality_profile"]["geo_country"] == "IN"
     assert saved_profile["source_run_id"] == run.id
-    assert saved_profile["proxy_profile"]["proxy_list"] == [
-        "http://***:***@example-proxy.local:8080",
-        "https://clean-proxy.example:8443",
-    ]
+    assert "proxy_profile" not in saved_profile
 
     lookup_after_save = await crawls_api_client.get(
         "/api/crawls/domain-run-profile",
@@ -184,10 +199,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
     )
     assert lookup_after_save.status_code == 200
     assert lookup_after_save.json()["saved_run_profile"]["fetch_profile"]["fetch_mode"] == "http_then_browser"
-    assert lookup_after_save.json()["saved_run_profile"]["proxy_profile"]["proxy_list"] == [
-        "http://***:***@example-proxy.local:8080",
-        "https://clean-proxy.example:8443",
-    ]
+    assert "proxy_profile" not in lookup_after_save.json()["saved_run_profile"]
 
     list_profiles_response = await crawls_api_client.get(
         "/api/crawls/domain-memory/run-profiles",
@@ -233,10 +245,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert recipe_after_save.status_code == 200
     saved_recipe = recipe_after_save.json()
     assert saved_recipe["saved_run_profile"]["fetch_profile"]["fetch_mode"] == "http_then_browser"
-    assert saved_recipe["saved_run_profile"]["proxy_profile"]["proxy_list"] == [
-        "http://***:***@example-proxy.local:8080",
-        "https://clean-proxy.example:8443",
-    ]
+    assert "proxy_profile" not in saved_recipe["saved_run_profile"]
     assert any(row["field_name"] == "price" for row in saved_recipe["saved_selectors"])
     promoted_candidate = next(
         row for row in saved_recipe["selector_candidates"] if row["field_name"] == "price"

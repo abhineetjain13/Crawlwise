@@ -28,8 +28,8 @@ Deterministic commerce test fixtures. No bot protection.
 | S19 | `https://sandbox.oxylabs.io/products/1` | Detail | Oxylabs PDP — specs, multi-source fields |
 | S20 | `https://scrapingcourse.com/ecommerce/` | Listing | Infinite scroll e-commerce, price/rating in DOM |
 | S21 | `https://scrapingcourse.com/ecommerce/products/chaz-kangeroo-hoodie` | Detail | PDP with size/color variant matrix |
-| S22 | `https://practicesoftwaretesting.com/#/` | SPA Listing | Angular SPA — full JS render required, faceted filters |
-| S23 | `https://practicesoftwaretesting.com/#/product/01HB` | SPA Detail | SPA product detail, tabbed specs, reviews |
+| S22 | `https://practicesoftwaretesting.com` | SPA Listing | Angular SPA — full JS render required, faceted filters |
+| S23 | `https://practicesoftwaretesting.com/product/01HB` | SPA Detail | SPA product detail, tabbed specs, reviews |
 
 ---
 
@@ -89,9 +89,7 @@ https://www.instahyre.com/search-jobs
 
 | # | URL | Engine | Complexity | What Makes It Interesting |
 |---|---|---|---|---|
-| DC01 | `https://www.thomann.de/gb/shure_sm58_lc.htm` | HTTP | Medium | Spec table, reviews, JSON-LD Product, multi-currency pricing |
 | DC02 | `https://www.thomann.de/gb/akg_k702.htm` | HTTP | Medium | Headphone FR data in DOM, tabbed specs, multi-warehouse stock |
-| DC03 | `https://www.discogs.com/release/1529440` | HTTP | Medium | Track listing, multi-edition, MusicBrainz-linked JSON-LD |
 | DC04 | `https://www.discogs.com/release/249504` | HTTP | Medium | Label / barcode / matrix / pressing data, multi-format |
 | DC10 | `https://www.ifixit.com/products/iphone-14-battery` | HTTP | Easy | Repair part — compatibility list, schema.org Product |
 | DC11 | `https://www.ifixit.com/products/macbook-pro-15-inch-retina-display-mid-2015-battery` | HTTP | Easy | Version compatibility matrix in DOM, conditional specs |
@@ -146,7 +144,6 @@ https://www.instahyre.com/search-jobs
 |---|---|---|---|
 | CE01 | `https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127` | Listing | Luxury fashion, JS-rendered cards |
 | CE02 | `https://31philliplim.com/collections` | Listing | Designer fashion, Shopify-like |
-| CE03 | `https://www.lafayette148ny.com/media/sitemap-products.xml` | Listing | XML sitemap product feed |
 | CE04 | `https://ar.puma.com/lo-mas-vendido` | Listing | Puma LATAM, Spanish locale |
 | CE05 | `https://www.karenmillen.com/eu/categories/womens-trousers` | Listing | Fashion retailer |
 | CE06 | `https://www.ganni.com/en-gb/trainers/` | Listing | Scandinavian fashion |

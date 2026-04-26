@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import errno
 import logging
 import sys
+import weakref
 from collections.abc import MutableMapping
 from contextvars import ContextVar, Token
 from typing import Any, cast
@@ -16,6 +19,9 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 
 _correlation_id_ctx: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 _LOGGING_CONFIGURED = False
+_ASYNCIO_EXCEPTION_FILTERS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, object]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _add_correlation_id(
@@ -85,6 +91,47 @@ def configure_logging() -> None:
         cache_logger_on_first_use=True,
     )
     _LOGGING_CONFIGURED = True
+
+
+def _is_known_windows_pipe_reset(
+    context: MutableMapping[str, Any],
+) -> bool:
+    exc = context.get("exception")
+    if not isinstance(exc, ConnectionResetError):
+        return False
+    winerror = getattr(exc, "winerror", None)
+    if winerror not in {None, 10054} and getattr(exc, "errno", None) != errno.ECONNRESET:
+        return False
+    message = str(context.get("message") or "")
+    handle = str(context.get("handle") or "")
+    probe = f"{message}\n{handle}".lower()
+    return "_proactorbasepipetransport._call_connection_lost" in probe
+
+
+def install_asyncio_exception_filter(
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> None:
+    target_loop = loop or asyncio.get_running_loop()
+    if target_loop in _ASYNCIO_EXCEPTION_FILTERS:
+        return
+    previous_handler = target_loop.get_exception_handler()
+
+    def _handler(
+        loop: asyncio.AbstractEventLoop,
+        context: MutableMapping[str, Any],
+    ) -> None:
+        if _is_known_windows_pipe_reset(context):
+            logging.getLogger("asyncio").debug(
+                "Suppressed benign Windows Proactor pipe reset during transport teardown"
+            )
+            return
+        if previous_handler is not None:
+            previous_handler(loop, context)
+            return
+        loop.default_exception_handler(context)
+
+    target_loop.set_exception_handler(_handler)
+    _ASYNCIO_EXCEPTION_FILTERS[target_loop] = _handler
 
 
 def generate_correlation_id() -> str:

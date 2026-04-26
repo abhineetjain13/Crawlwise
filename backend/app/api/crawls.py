@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Annotated, Any, NoReturn, cast
 
 from app.core.database import SessionLocal
@@ -20,13 +20,12 @@ from app.schemas.crawl import (
     DomainRecipePromoteSelectorsRequest,
     DomainRecipeResponse,
     DomainRunProfileLookupResponse,
+    DomainRunProfilePayload,
     DomainRunProfileRecordResponse,
     DomainRecipeSaveRunProfileRequest,
     CrawlRunResponse,
     FieldCommitRequest,
     FieldCommitResponse,
-    LLMCommitRequest,
-    LLMCommitResponse,
 )
 from app.services.acquisition.cookie_store import list_domain_cookie_memory
 from app.services.crawl_access_service import (
@@ -48,6 +47,7 @@ from app.services.crawl_ingestion_service import (
 )
 from app.services.crawl_service import kill_run, pause_run, resume_run
 from app.services.crawl_state import TERMINAL_STATUSES
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_run_profile_service import (
     list_domain_run_profiles,
     load_domain_run_profile,
@@ -73,6 +73,7 @@ from fastapi import (
     status,
 )
 from jose import JWTError
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
@@ -90,6 +91,31 @@ RUN_CONFLICT_RESPONSE: ResponseSpec = {
     **RUN_NOT_FOUND_RESPONSE,
     status.HTTP_409_CONFLICT: {"description": RUN_CONFLICT_DETAIL},
 }
+
+
+def _log_stream_sleep_seconds() -> float:
+    try:
+        return max(
+            0.001,
+            float(crawler_runtime_settings.cooperative_sleep_poll_ms) / 1000,
+        )
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid cooperative_sleep_poll_ms=%r; using 0.001s log stream poll interval",
+            crawler_runtime_settings.cooperative_sleep_poll_ms,
+        )
+        return 0.001
+
+
+def _domain_run_profile_payload(value: object) -> DomainRunProfilePayload:
+    payload = (
+        dict(value)
+        if isinstance(value, Mapping)
+        else value.model_dump()
+        if isinstance(value, BaseModel)
+        else value
+    )
+    return DomainRunProfilePayload.model_validate(payload)
 
 
 async def _resolve_websocket_user(websocket: WebSocket) -> User | None:
@@ -292,7 +318,9 @@ async def crawls_domain_run_profile_lookup(
         domain=normalized_domain,
         surface=normalized_surface,
         saved_run_profile=(
-            dict(saved_profile.profile or {}) if saved_profile is not None else None
+            _domain_run_profile_payload(saved_profile.profile)
+            if saved_profile is not None
+            else None
         ),
     )
 
@@ -327,7 +355,7 @@ async def _list_domain_run_profile_responses(
             id=row.id,
             domain=row.domain,
             surface=row.surface,
-            profile=dict(row.profile or {}),
+            profile=_domain_run_profile_payload(row.profile),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -453,17 +481,17 @@ async def crawls_pause(
 @router.post("/{run_id}/llm-commit", responses=RUN_NOT_FOUND_RESPONSE)
 async def crawls_llm_commit(
     run_id: int,
-    payload: LLMCommitRequest,
+    payload: FieldCommitRequest,
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
-) -> LLMCommitResponse:
+) -> FieldCommitResponse:
     run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
     updated_records, updated_fields = await commit_llm_suggestions(
         session,
         run=run,
         items=[item.model_dump() for item in payload.items],
     )
-    return LLMCommitResponse(
+    return FieldCommitResponse(
         run_id=run.id, updated_records=updated_records, updated_fields=updated_fields
     )
 
@@ -639,6 +667,7 @@ async def crawls_logs_ws(
 
         await websocket.accept()
         cursor = after_id
+        poll_interval_seconds = _log_stream_sleep_seconds()
         try:
             while True:
                 rows, next_run = await _load_log_stream_snapshot(
@@ -657,7 +686,7 @@ async def crawls_logs_ws(
                 if run.status_value in TERMINAL_STATUSES and not rows:
                     await websocket.close(code=1000, reason="Run completed")
                     return
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(poll_interval_seconds)
 
         except WebSocketDisconnect:
             return

@@ -6,6 +6,7 @@ import pytest
 
 from app.services._batch_runtime import process_run
 from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.crawl_crud import create_crawl_run, get_run_records
 from app.services.robots_policy import (
     ROBOTS_ALLOWED,
@@ -13,6 +14,7 @@ from app.services.robots_policy import (
     ROBOTS_MISSING,
     RobotsPolicyResult,
 )
+from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -114,6 +116,137 @@ async def test_process_run_marks_empty_listing_as_listing_detection_failed(
     assert run.result_summary["extraction_verdict"] == "listing_detection_failed"
     assert total == 0
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_process_run_tracks_failure_reason_counts(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "urls": [
+                    "https://example.com/search?q=widget",
+                    "https://example.com/products/widget-prime",
+                ],
+            },
+        },
+    )
+
+    async def _fake_process_single_url(*args, **kwargs):
+        url = str(kwargs.get("url") or "")
+        if "search" in url:
+            return (
+                [],
+                "empty",
+                {"record_count": 0, "failure_reason": "non_detail_seed"},
+            )
+        return (
+            [],
+            "blocked",
+            {"record_count": 0, "failure_reason": "challenge_shell"},
+        )
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.process_single_url",
+        _fake_process_single_url,
+    )
+
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
+
+    assert run.result_summary["acquisition_summary"]["failure_reasons"] == {
+        "non_detail_seed": 1,
+        "challenge_shell": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_process_run_aggregates_quality_summary_from_url_metrics(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "urls": [
+                    "https://example.com/products/widget-prime",
+                    "https://example.com/products/widget-lite",
+                ],
+            },
+        },
+    )
+
+    async def _fake_process_single_url(*args, **kwargs):
+        url = str(kwargs.get("url") or "")
+        if "lite" in url:
+            return (
+                [],
+                "partial",
+                {
+                    "record_count": 0,
+                    "quality_summary": {
+                        "score": 0.4,
+                        "level": "low",
+                        "requested_fields_total": 4,
+                        "requested_fields_found_best": 2,
+                        "variant_completeness": {
+                            "applicable": True,
+                            "complete": False,
+                        },
+                    },
+                },
+            )
+        return (
+            [],
+            "success",
+            {
+                "record_count": 0,
+                "quality_summary": {
+                    "score": 0.9,
+                    "level": "high",
+                    "requested_fields_total": 4,
+                    "requested_fields_found_best": 4,
+                    "variant_completeness": {
+                        "applicable": True,
+                        "complete": True,
+                    },
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.process_single_url",
+        _fake_process_single_url,
+    )
+
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
+
+    assert run.result_summary["quality_summary"] == {
+        "level": "medium",
+        "score": 0.65,
+        "scored_urls": 2,
+        "level_counts": {
+            "high": 1,
+            "low": 1,
+        },
+        "listing_incomplete_urls": 0,
+        "variant_incomplete_urls": 1,
+        "requested_fields_total": 4,
+        "requested_fields_found_best": 4,
+    }
 
 
 @pytest.mark.asyncio
@@ -296,6 +429,56 @@ async def test_process_run_enforces_url_timeout_from_settings(
 
 
 @pytest.mark.asyncio
+async def test_process_run_default_timeout_includes_acquisition_slack(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/slow-widget",
+            "surface": "ecommerce_detail",
+        },
+    )
+
+    original_url_timeout = crawler_runtime_settings.url_process_timeout_seconds
+    original_buffer = crawler_runtime_settings.url_process_timeout_buffer_seconds
+    original_acquisition_timeout = (
+        crawler_runtime_settings.acquisition_attempt_timeout_seconds
+    )
+    crawler_runtime_settings.url_process_timeout_seconds = 0.01
+    crawler_runtime_settings.url_process_timeout_buffer_seconds = 0.03
+    crawler_runtime_settings.acquisition_attempt_timeout_seconds = 0.02
+
+    async def _slow_process_single_url(*args, **kwargs):
+        del args, kwargs
+        await asyncio.sleep(0.025)
+        return [], "success", {"record_count": 0}
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.process_single_url",
+        _slow_process_single_url,
+    )
+
+    try:
+        await process_run(db_session, run.id)
+        await db_session.refresh(run)
+    finally:
+        crawler_runtime_settings.url_process_timeout_seconds = original_url_timeout
+        crawler_runtime_settings.url_process_timeout_buffer_seconds = original_buffer
+        crawler_runtime_settings.acquisition_attempt_timeout_seconds = (
+            original_acquisition_timeout
+        )
+
+    assert run.status == "completed"
+    assert run.result_summary["extraction_verdict"] == "success"
+    assert run.result_summary["url_verdicts"] == ["success"]
+
+
+@pytest.mark.asyncio
 async def test_process_batch_run_preserves_requested_fields_for_every_url(
     db_session: AsyncSession,
     test_user,
@@ -331,6 +514,54 @@ async def test_process_batch_run_preserves_requested_fields_for_every_url(
     await process_run(db_session, run.id)
 
     assert captured_requested_fields == [["materials"], ["materials"]]
+
+
+@pytest.mark.asyncio
+async def test_process_batch_run_preserves_proxy_list_for_every_url(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "urls": [
+                "https://example.com/products/widget-1",
+                "https://example.com/products/widget-2",
+            ],
+            "surface": "ecommerce_detail",
+            "settings": {
+                "proxy_enabled": True,
+                "proxy_list": ["http://proxy-a", "http://proxy-b"],
+                "proxy_profile": {
+                    "enabled": True,
+                    "proxy_list": ["http://proxy-a", "http://proxy-b"],
+                },
+            },
+        },
+    )
+    captured_proxy_lists: list[list[str]] = []
+
+    async def _fake_acquire(request):
+        captured_proxy_lists.append(list(request.proxy_list))
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+
+    await process_run(db_session, run.id)
+
+    assert captured_proxy_lists == [
+        ["http://proxy-a", "http://proxy-b"],
+        ["http://proxy-a", "http://proxy-b"],
+    ]
 
 
 @pytest.mark.asyncio
@@ -372,3 +603,38 @@ async def test_process_batch_run_preserves_exact_requested_section_labels_for_ev
         ["Features & Benefits"],
         ["Features & Benefits"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_process_run_marks_failed_on_sqlalchemy_session_error(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+        },
+    )
+
+    async def _poisoned_process_single_url(*args, **kwargs):
+        del args, kwargs
+        raise PendingRollbackError("flush failed earlier")
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.process_single_url",
+        _poisoned_process_single_url,
+    )
+
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
+
+    assert run.status == "failed"
+    assert "PendingRollbackError: flush failed earlier" in str(
+        run.get_summary("error") or ""
+    )
+    assert run.result_summary["extraction_verdict"] == "error"

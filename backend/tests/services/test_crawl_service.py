@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.core import database as database_module
 from app.core.config import settings
 from app.models.crawl import CrawlRecord, ReviewPromotion
 from app.models.crawl_domain import CONTROL_REQUEST_KILL, CONTROL_REQUEST_PAUSE
@@ -192,11 +193,11 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
     assert run.settings["fetch_profile"]["request_delay_ms"] == 900
     assert run.settings["locality_profile"]["geo_country"] == "IN"
     assert run.settings["diagnostics_profile"]["capture_network"] == "matched_only"
-    assert run.settings["proxy_enabled"] is True
-    assert run.settings["proxy_list"] == ["http://proxy-a", "http://proxy-b"]
+    assert run.settings["proxy_enabled"] is False
+    assert run.settings["proxy_list"] == []
     assert run.settings["proxy_profile"] == {
-        "enabled": True,
-        "proxy_list": ["http://proxy-a", "http://proxy-b"],
+        "enabled": False,
+        "proxy_list": [],
     }
 
 
@@ -520,6 +521,63 @@ async def test_recover_stale_local_runs_skips_fresh_active_runs(
     assert running_run.status == "running"
 
 
+@pytest.mark.asyncio
+async def test_dispatch_run_locally_recovers_stale_runs_before_launch(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "celery_dispatch_enabled", False)
+
+    stale_run = await _create_running_run(
+        db_session,
+        user_id=test_user.id,
+        url="https://example.com/jobs/stale-running",
+    )
+    stale_time = datetime.now(UTC) - timedelta(
+        seconds=crawl_service.crawler_runtime_settings.stalled_run_threshold_seconds
+        + 30
+    )
+    stale_run.last_heartbeat_at = stale_time
+    stale_run.updated_at = stale_time
+
+    new_run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/jobs/new-run",
+            "surface": "job_detail",
+        },
+    )
+    await db_session.commit()
+
+    created_tasks: list[int] = []
+
+    def _fake_track(run_id: int) -> asyncio.Task[None]:
+        created_tasks.append(run_id)
+        task = asyncio.create_task(asyncio.sleep(0))
+        crawl_service._local_run_tasks[run_id] = task
+        return task
+
+    monkeypatch.setattr(crawl_service, "_track_local_run_task", _fake_track)
+
+    dispatched = await crawl_service.dispatch_run(db_session, new_run)
+    await asyncio.sleep(0)
+    await db_session.refresh(stale_run)
+    await db_session.refresh(dispatched)
+
+    assert stale_run.status == "failed"
+    assert created_tasks == [new_run.id]
+    assert dispatched.status == "pending"
+    assert dispatched.get_summary(crawl_service.CELERY_TASK_ID_KEY) is not None
+
+    local_task = crawl_service._local_run_tasks.pop(new_run.id, None)
+    if local_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await local_task
+
+
 def test_log_background_task_exception_logs_failures(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -576,3 +634,36 @@ async def test_run_with_local_session_preserves_original_process_run_error(
     assert str(exc_info.value) == "process exploded"
     assert "Local crawl task failed for run 17" in caplog.text
     assert "Failed to persist failed status for run 17 after process_run error" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_session_rolls_back_when_consumer_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.rollback_calls = 0
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    session = _FakeSession()
+
+    class _FakeSessionLocal:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database_module, "SessionLocal", _FakeSessionLocal)
+
+    generator = database_module.get_session()
+    yielded = await anext(generator)
+
+    assert yielded is session
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await generator.athrow(RuntimeError("boom"))
+
+    assert session.rollback_calls == 1

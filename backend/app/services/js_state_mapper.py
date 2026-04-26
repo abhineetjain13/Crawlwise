@@ -4,7 +4,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
 import jmespath
-from glom import Coalesce, glom
+from glom import Coalesce, glom  # type: ignore[import-untyped]
 
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.extract.shared_variant_logic import (
@@ -30,6 +30,11 @@ from app.services.platform_policy import JSStateExtractorConfig, platform_js_sta
 
 _SKIP: tuple[object, ...] = ("", [], {})
 
+
+def _as_list(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 PRODUCT_FIELD_SPEC = {
     "title": Coalesce("title", "name", default=None, skip=_SKIP),
     "brand": Coalesce("brand.name", "brand", "vendor.name", "vendor", default=None, skip=_SKIP),
@@ -39,7 +44,7 @@ PRODUCT_FIELD_SPEC = {
     "product_id": Coalesce("id", "product_id", "productId", "legacyResourceId", default=None, skip=_SKIP),
     "category": Coalesce("category", default=None, skip=_SKIP),
     "product_type": Coalesce("product_type", "productType", "type", default=None, skip=_SKIP),
-    "sku": Coalesce("sku", default=None, skip=_SKIP),
+    "sku": Coalesce("sku", "productId", "product_id", default=None, skip=_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=_SKIP),
     "currency": Coalesce(
         "currency",
@@ -208,19 +213,189 @@ def _map_ecommerce_detail_state(
             if not base_record:
                 base_record = mapped
             elif _mapped_product_identity_matches(base_record, mapped, page_url=page_url):
-                for field_name in (
-                    "variants",
-                    "variant_axes",
-                    "selected_variant",
-                    "variant_count",
-                ):
-                    if base_record.get(field_name) in (None, "", [], {}):
-                        field_value = mapped.get(field_name)
-                        if field_value not in (None, "", [], {}):
-                            base_record[field_name] = field_value
-            if base_record.get("variants") not in (None, "", [], {}):
-                break
+                base_record = _merge_same_product_record(
+                    base_record,
+                    mapped,
+                    page_url=page_url,
+                )
     return base_record
+
+
+def _merge_same_product_record(
+    base_record: dict[str, Any],
+    incoming: dict[str, Any],
+    *,
+    page_url: str,
+) -> dict[str, Any]:
+    merged = dict(base_record)
+    for field_name, field_value in incoming.items():
+        if field_name in {"variants", "variant_axes", "selected_variant", "variant_count"}:
+            continue
+        if merged.get(field_name) in (None, "", [], {}) and field_value not in (
+            None,
+            "",
+            [],
+            {},
+        ):
+            merged[field_name] = field_value
+
+    merged_variants = _merge_variant_rows(
+        base_record.get("variants"),
+        incoming.get("variants"),
+    )
+    if merged_variants:
+        merged["variants"] = merged_variants
+        merged["variant_count"] = len(merged_variants)
+        selected_variant = select_variant(merged_variants, page_url=page_url)
+        if selected_variant is not None:
+            merged["selected_variant"] = selected_variant
+
+    merged_axes = _merge_variant_axes(
+        base_record.get("variant_axes"),
+        incoming.get("variant_axes"),
+    )
+    if not merged_axes and merged_variants:
+        merged_axes = variant_axes(merged_variants)
+    if merged_axes:
+        merged["variant_axes"] = merged_axes
+
+    if merged.get("selected_variant") in (None, "", [], {}):
+        selected_variant = incoming.get("selected_variant")
+        if isinstance(selected_variant, dict) and selected_variant:
+            merged["selected_variant"] = dict(selected_variant)
+
+    _refresh_record_from_selected_variant(merged)
+    return compact_dict(merged)
+
+
+def _merge_variant_rows(
+    existing_rows: Any,
+    incoming_rows: Any,
+) -> list[dict[str, Any]]:
+    merged_by_identity: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+
+    def _remember(row: dict[str, Any]) -> None:
+        identity = _variant_identity(row)
+        if not identity:
+            return
+        current = merged_by_identity.get(identity)
+        if current is None:
+            merged_by_identity[identity] = dict(row)
+            ordered_keys.append(identity)
+            return
+        richer, weaker = _variant_rows_by_richness(current, row)
+        merged_row = dict(richer)
+        for field_name, field_value in weaker.items():
+            if merged_row.get(field_name) in (None, "", [], {}) and field_value not in (
+                None,
+                "",
+                [],
+                {},
+            ):
+                merged_row[field_name] = field_value
+        merged_by_identity[identity] = merged_row
+
+    for rows in (existing_rows, incoming_rows):
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict):
+                _remember(row)
+
+    return [merged_by_identity[key] for key in ordered_keys]
+
+
+def _merge_variant_axes(existing_axes: Any, incoming_axes: Any) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for axes in (existing_axes, incoming_axes):
+        if not isinstance(axes, dict):
+            continue
+        for axis_name, axis_values in axes.items():
+            normalized_axis = text_or_none(axis_name)
+            if not normalized_axis or not isinstance(axis_values, list):
+                continue
+            bucket = merged.setdefault(normalized_axis, [])
+            seen = {value.lower() for value in bucket}
+            for axis_value in axis_values:
+                cleaned_value = text_or_none(axis_value)
+                if not cleaned_value or cleaned_value.lower() in seen:
+                    continue
+                seen.add(cleaned_value.lower())
+                bucket.append(cleaned_value)
+    return merged
+
+
+def _variant_identity(variant: dict[str, Any]) -> str | None:
+    variant_id = text_or_none(variant.get("variant_id"))
+    if variant_id:
+        return f"id:{variant_id}"
+    sku = text_or_none(variant.get("sku"))
+    if sku:
+        return f"sku:{sku}"
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict) and option_values:
+        normalized_pairs = [
+            (str(axis_name).strip(), text_or_none(axis_value) or "")
+            for axis_name, axis_value in option_values.items()
+            if str(axis_name).strip() and text_or_none(axis_value)
+        ]
+        if normalized_pairs:
+            normalized_pairs.sort()
+            return "options:" + "|".join(f"{axis}={value}" for axis, value in normalized_pairs)
+    variant_url = text_or_none(variant.get("url"))
+    if variant_url:
+        return f"url:{variant_url}"
+    return None
+
+
+def _variant_rows_by_richness(
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    left_score = _variant_row_richness(left)
+    right_score = _variant_row_richness(right)
+    if right_score > left_score:
+        return right, left
+    return left, right
+
+
+def _variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
+    populated_fields = sum(
+        1 for value in variant.values() if value not in (None, "", [], {})
+    )
+    option_values = variant.get("option_values")
+    option_value_count = (
+        len(option_values)
+        if isinstance(option_values, dict)
+        else 0
+    )
+    has_stock_signal = int(
+        variant.get("stock_quantity") not in (None, "", [], {})
+        or variant.get("original_price") not in (None, "", [], {})
+    )
+    return (populated_fields, option_value_count, has_stock_signal)
+
+
+def _refresh_record_from_selected_variant(record: dict[str, Any]) -> None:
+    selected_variant = record.get("selected_variant")
+    if not isinstance(selected_variant, dict):
+        return
+    for field_name in (
+        "price",
+        "original_price",
+        "currency",
+        "availability",
+        "stock_quantity",
+        "sku",
+        "barcode",
+        "image_url",
+        "color",
+        "size",
+    ):
+        field_value = selected_variant.get(field_name)
+        if field_value not in (None, "", [], {}):
+            record[field_name] = field_value
 
 
 def _mapped_product_identity_matches(
@@ -348,10 +523,10 @@ def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict
 
 
 def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
-    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
-    raw_options = product.get("options") if isinstance(product.get("options"), list) else []
-    raw_colors = product.get("colors") if isinstance(product.get("colors"), list) else []
-    raw_sizes = product.get("sizes") if isinstance(product.get("sizes"), list) else []
+    raw_variants = _as_list(product.get("variants"))
+    raw_options = _as_list(product.get("options"))
+    raw_colors = _as_list(product.get("colors"))
+    raw_sizes = _as_list(product.get("sizes"))
     product_keys = set(product)
     strong_product_keys = {
         "variants",
@@ -434,7 +609,8 @@ def _map_product_payload(
     images = _extract_product_images(product, page_url=page_url)
     shopify_like = _looks_like_shopify_product(product)
     option_names = _option_names(product.get("options"))
-    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
+    option_value_labels = _option_value_labels(product)
+    raw_variants = _as_list(product.get("variants"))
     normalized_variants = [
         normalized
         for variant in raw_variants
@@ -443,6 +619,7 @@ def _map_product_payload(
             normalized := _normalize_variant(
                 variant,
                 option_names=option_names,
+                option_value_labels=option_value_labels,
                 page_url=page_url,
                 interpret_integral_as_cents=shopify_like,
             )
@@ -639,7 +816,7 @@ def _extract_nested_image_urls(value: Any, *, page_url: str, depth: int = 0) -> 
 
 
 def _looks_like_shopify_product(product: dict[str, Any]) -> bool:
-    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
+    raw_variants = _as_list(product.get("variants"))
     return any(
         key in product
         for key in (
@@ -708,7 +885,7 @@ _VARIANT_FIELD_SPEC = {
         default=None,
         skip=_SKIP,
     ),
-    "sku": Coalesce("sku", default=None, skip=_SKIP),
+    "sku": Coalesce("sku", "productId", "product_id", default=None, skip=_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=_SKIP),
 }
 
@@ -717,11 +894,14 @@ def _normalize_variant(
     variant: dict[str, Any],
     *,
     option_names: list[str],
+    option_value_labels: dict[str, dict[str, str]] | None = None,
     page_url: str,
     interpret_integral_as_cents: bool,
 ) -> dict[str, Any] | None:
     row: dict[str, Any] = {}
-    variant_id = text_or_none(variant.get("id"))
+    variant_id = text_or_none(
+        variant.get("id") or variant.get("variantId") or variant.get("variant_id")
+    )
     if variant_id:
         row["variant_id"] = variant_id
         row["url"] = _variant_url(page_url, variant_id)
@@ -769,7 +949,11 @@ def _normalize_variant(
     )
     if image_url:
         row["image_url"] = image_url
-    option_values = _variant_option_values(variant, option_names=option_names)
+    option_values = _variant_option_values(
+        variant,
+        option_names=option_names,
+        option_value_labels=option_value_labels,
+    )
     if option_values:
         row["option_values"] = option_values
         if option_values.get("color"):
@@ -787,6 +971,7 @@ def _variant_option_values(
     variant: dict[str, Any],
     *,
     option_names: list[str],
+    option_value_labels: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, str]:
     option_values: dict[str, str] = {}
     selected_options = (
@@ -804,10 +989,40 @@ def _variant_option_values(
                 continue
             axis_key = normalized_variant_axis_key(axis_name)
             if axis_key:
-                option_values[axis_key] = axis_value
+                option_values[axis_key] = _display_option_value(
+                    axis_key,
+                    axis_value,
+                    option_value_labels=option_value_labels,
+                )
     if option_values:
         return option_values
-    raw_options = variant.get("options") if isinstance(variant.get("options"), list) else []
+    variation_values = variant.get("variationValues")
+    if not isinstance(variation_values, dict):
+        variation_values = variant.get("variation_values")
+    if isinstance(variation_values, dict):
+        direct_axis_keys = {
+            normalized_variant_axis_key(axis_name)
+            for axis_name in variation_values
+            if normalized_variant_axis_key(axis_name)
+            == str(axis_name or "").strip().lower().replace("-", "_")
+        }
+        for axis_name, raw_value in variation_values.items():
+            axis_key = normalized_variant_axis_key(axis_name)
+            cleaned = text_or_none(raw_value)
+            if not axis_key or not cleaned or not variant_axis_name_is_semantic(axis_name):
+                continue
+            if axis_key in direct_axis_keys and axis_key != str(axis_name).strip().lower():
+                continue
+            if axis_key in option_values:
+                continue
+            option_values[axis_key] = _display_option_value(
+                axis_key,
+                cleaned,
+                option_value_labels=option_value_labels,
+            )
+    if option_values:
+        return option_values
+    raw_options = _as_list(variant.get("options"))
     for index in range(1, 4):
         axis_name = (
             option_names[index - 1]
@@ -822,7 +1037,11 @@ def _variant_option_values(
             value = raw_options[index - 1]
         cleaned = text_or_none(value)
         if cleaned:
-            option_values[axis_key] = cleaned
+            option_values[axis_key] = _display_option_value(
+                axis_key,
+                cleaned,
+                option_value_labels=option_value_labels,
+            )
 
     # Fallback: non-Shopify sites use direct axis keys (Magento, SFCC, custom React, etc.)
     if not option_values:
@@ -834,9 +1053,71 @@ def _variant_option_values(
         ):
             val = variant.get(possible_axis)
             if val and isinstance(val, (str, int, float)):
-                option_values[possible_axis] = str(val).strip()
+                option_values[possible_axis] = _display_option_value(
+                    possible_axis,
+                    str(val).strip(),
+                    option_value_labels=option_value_labels,
+                )
 
     return option_values
+
+
+def _option_value_labels(product: dict[str, Any]) -> dict[str, dict[str, str]]:
+    labels: dict[str, dict[str, str]] = {}
+    raw_attributes = product.get("variationAttributes")
+    if not isinstance(raw_attributes, list):
+        raw_attributes = product.get("variation_attributes")
+    if not isinstance(raw_attributes, list):
+        return labels
+    direct_axis_keys = {
+        normalized_variant_axis_key(
+            text_or_none(attribute.get("id") or attribute.get("name") or attribute.get("label")) or ""
+        )
+        for attribute in raw_attributes
+        if isinstance(attribute, dict)
+        if normalized_variant_axis_key(
+            text_or_none(attribute.get("id") or attribute.get("name") or attribute.get("label")) or ""
+        )
+        == str(text_or_none(attribute.get("id") or "") or "").strip().lower().replace("-", "_")
+    }
+    for attribute in raw_attributes:
+        if not isinstance(attribute, dict):
+            continue
+        axis_name = text_or_none(attribute.get("id") or attribute.get("name") or attribute.get("label"))
+        axis_key = normalized_variant_axis_key(axis_name or "")
+        if not axis_key:
+            continue
+        if axis_key in direct_axis_keys and axis_key != str(axis_name or "").strip().lower():
+            continue
+        values = attribute.get("values")
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            raw_value = text_or_none(item.get("value") or item.get("id"))
+            display = text_or_none(
+                item.get("name")
+                or item.get("displayValue")
+                or item.get("display_value")
+                or item.get("label")
+            )
+            if not raw_value or not display:
+                continue
+            labels.setdefault(axis_key, {})[raw_value] = display
+    return labels
+
+
+def _display_option_value(
+    axis_key: str,
+    value: str,
+    *,
+    option_value_labels: dict[str, dict[str, str]] | None,
+) -> str:
+    cleaned = text_or_none(value)
+    if not cleaned:
+        return ""
+    return (option_value_labels or {}).get(axis_key, {}).get(cleaned, cleaned)
 
 
 def _variant_url(page_url: str, variant_id: str) -> str:

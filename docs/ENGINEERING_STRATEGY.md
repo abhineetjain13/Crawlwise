@@ -116,6 +116,8 @@ The actual cause of missing variants and missing prices is 3 specific bugs:
 
 **Bug 3 — Backfill calls not made after early exit.** `_backfill_detail_price_from_html` and variant backfill must be called before every return path in `build_detail_record`, not just after the full tier sequence.
 
+**Visible PDP price gaps stay upstream.** If a rendered product detail page has a visible display-price block but structured data omits price, add or tune selector config in `app/services/config/extraction_rules.py` and backfill in `detail_extractor.py`. Do not repair prices in persistence, export, or verdict code. Detail extraction must still reject category/collection URLs with product-tile prices instead of fabricating a PDP record.
+
 **Violation to avoid:** Adding browser interaction (click probes, Playwright variant walks) before verifying these 3 fixes. The probe is only justified for `stateful_dom` sites that still fail after all 3 bugs are fixed.
 
 ### AP-13: Config proliferation ← SECOND MOST COMMON

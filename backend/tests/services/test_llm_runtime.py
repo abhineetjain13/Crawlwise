@@ -201,6 +201,108 @@ async def test_run_prompt_task_validates_direct_record_extraction_array_payload(
     ]
 
 
+@pytest.mark.asyncio
+async def test_run_prompt_task_rejects_invalid_product_intelligence_enrichment(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_resolve_run_config(session, *, run_id, task_type):
+        del session, run_id, task_type
+        return {"provider": "groq", "model": "llama", "api_key_encrypted": ""}
+
+    def fake_get_prompt_task(task_type: str):
+        assert task_type == "product_intelligence_enrichment"
+        return {
+            "system_file": "system.txt",
+            "user_file": "user.txt",
+            "response_type": "object",
+        }
+
+    def fake_load_prompt_file(_path: str) -> str:
+        return "Return JSON."
+
+    async def fake_call_provider_with_retry(**_kwargs):
+        return '{"normalized_title":"Widget","suggested_score":1.4}', 12, 8
+
+    async def fake_load_cached_llm_result(_cache_key: str):
+        return None
+
+    async def fake_store_cached_llm_result(_cache_key: str, _result) -> None:
+        raise AssertionError("invalid payloads must not be cached")
+
+    monkeypatch.setattr("app.services.llm_tasks.resolve_run_config", fake_resolve_run_config)
+    monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
+    monkeypatch.setattr("app.services.llm_tasks.load_prompt_file", fake_load_prompt_file)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.call_provider_with_retry",
+        fake_call_provider_with_retry,
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_cached_llm_result",
+        fake_load_cached_llm_result,
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.store_cached_llm_result",
+        fake_store_cached_llm_result,
+    )
+
+    result = await llm_runtime.run_prompt_task(
+        db_session,
+        task_type="product_intelligence_enrichment",
+        run_id=None,
+        domain="example.com",
+        variables={},
+    )
+
+    assert result.payload is None
+    assert result.error_category == llm_runtime.LLMErrorCategory.VALIDATION_FAILURE
+    assert "product_intelligence_enrichment payload validation failed" in result.error_message
+
+
+@pytest.mark.asyncio
+async def test_run_prompt_task_rejects_unknown_product_intelligence_reason_keys(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_resolve_run_config(session, *, run_id, task_type):
+        del session, run_id, task_type
+        return {"provider": "groq", "model": "llama", "api_key_encrypted": ""}
+
+    def fake_get_prompt_task(_task_type: str):
+        return {
+            "system_file": "system.txt",
+            "user_file": "user.txt",
+            "response_type": "object",
+        }
+
+    async def fake_call_provider_with_retry(**_kwargs):
+        return '{"normalized_title":"Widget","reason_updates":[{"unknown":"x"}]}', 1, 1
+
+    async def fake_load_cached_llm_result(_cache_key: str):
+        return None
+
+    async def fake_store_cached_llm_result(_cache_key: str, _result) -> None:
+        raise AssertionError("invalid payloads must not be cached")
+
+    monkeypatch.setattr("app.services.llm_tasks.resolve_run_config", fake_resolve_run_config)
+    monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
+    monkeypatch.setattr("app.services.llm_tasks.load_prompt_file", lambda _path: "Return JSON.")
+    monkeypatch.setattr("app.services.llm_tasks.call_provider_with_retry", fake_call_provider_with_retry)
+    monkeypatch.setattr("app.services.llm_tasks.load_cached_llm_result", fake_load_cached_llm_result)
+    monkeypatch.setattr("app.services.llm_tasks.store_cached_llm_result", fake_store_cached_llm_result)
+
+    result = await llm_runtime.run_prompt_task(
+        db_session,
+        task_type="product_intelligence_enrichment",
+        run_id=None,
+        domain="example.com",
+        variables={},
+    )
+
+    assert result.payload is None
+    assert result.error_category == llm_runtime.LLMErrorCategory.VALIDATION_FAILURE
+
+
 def test_trim_prompt_section_body_skips_expensive_large_json_reparse() -> None:
     large_json = '{"items":[' + ",".join('"value"' for _ in range(5000)) + "]}"
 

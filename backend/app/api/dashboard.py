@@ -11,6 +11,7 @@ from app.services.dashboard_service import (
     build_operational_metrics,
     reset_crawl_data,
     reset_domain_memory,
+    reset_product_intelligence,
     reset_application_data,
 )
 from fastapi import APIRouter, Depends
@@ -56,6 +57,14 @@ async def dashboard_reset_domain_memory(
     _: Annotated[User, Depends(require_admin)],
 ) -> dict:
     return await reset_domain_memory(session)
+
+
+@router.post("/reset-product-intelligence")
+async def dashboard_reset_product_intelligence(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_admin)],
+) -> dict:
+    return await reset_product_intelligence(session)
 
 
 @router.get("/metrics")

@@ -128,6 +128,83 @@ def test_crawl_run_settings_preserves_extra_proxy_profile_fields() -> None:
     }
 
 
+def test_crawl_run_settings_acquisition_profile_preserves_proxy_profile() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "proxy_profile": {
+                "enabled": True,
+                "proxy_list": ["http://proxy-1"],
+                "rotation": "rotating",
+                "region": "in",
+            }
+        }
+    )
+
+    profile = settings.acquisition_profile()
+
+    assert profile["proxy_profile"] == {
+        "enabled": True,
+        "proxy_list": ["http://proxy-1"],
+        "rotation": "rotating",
+        "region": "in",
+    }
+
+
+def test_crawl_run_settings_acquisition_profile_keeps_disabled_proxy_profile() -> None:
+    settings = CrawlRunSettings.from_value({})
+
+    profile = settings.acquisition_profile()
+
+    assert profile["proxy_profile"] == {
+        "enabled": False,
+        "proxy_list": [],
+    }
+    assert profile["locality_profile"] == {
+        "geo_country": "auto",
+        "language_hint": None,
+        "currency_hint": None,
+    }
+
+
+def test_crawl_run_settings_infers_sticky_rotation_from_sessionized_proxy_username() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "proxy_profile": {
+                "enabled": True,
+                "proxy_list": [
+                    "http://user-session-autozone123:pass@rp.scrapegw.com:6060"
+                ],
+            }
+        }
+    )
+
+    profile = settings.proxy_profile()
+
+    assert profile["rotation"] == "sticky"
+
+
+def test_crawl_run_settings_does_not_store_inferred_proxy_rotation() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "proxy_profile": {
+                "enabled": True,
+                "proxy_list": [
+                    "http://user-session-autozone123:pass@rp.scrapegw.com:6060"
+                ],
+            }
+        }
+    )
+
+    normalized = settings.normalized_for_storage()
+
+    assert normalized["proxy_profile"] == {
+        "enabled": True,
+        "proxy_list": [
+            "http://user-session-autozone123:pass@rp.scrapegw.com:6060"
+        ],
+    }
+
+
 def test_platform_runtime_policy_does_not_force_browser_for_vendor_specific_domains() -> None:
     policy = resolve_platform_runtime_policy("https://www.autozone.com/")
 

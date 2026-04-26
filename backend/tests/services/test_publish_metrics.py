@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.services.publish.metadata import _stringify_value, refresh_record_commit_metadata
-from app.services.publish.metrics import build_url_metrics
+from app.services.publish.metrics import build_url_metrics, diagnostics_indicate_block
 
 
 def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
@@ -93,6 +93,59 @@ def test_build_url_metrics_keeps_platform_family_separate_from_adapter_name() ->
 
     assert metrics["adapter_name"] is None
     assert metrics["platform_family"] == "shopify"
+
+
+def test_diagnostics_indicate_block_preserves_ready_usable_content_despite_provider_evidence() -> None:
+    diagnostics = {
+        "browser_outcome": "usable_content",
+        "challenge_evidence": ["provider:cloudflare"],
+        "challenge_provider_hits": ["cloudflare"],
+        "readiness_probes": [{"is_ready": True}],
+    }
+
+    assert diagnostics_indicate_block(diagnostics) is False
+
+
+def test_diagnostics_indicate_block_preserves_ready_usable_content_despite_challenge_iframe() -> None:
+    diagnostics = {
+        "browser_outcome": "usable_content",
+        "challenge_evidence": [
+            "provider:akamai",
+            "challenge_element:captcha_titled_iframe",
+        ],
+        "challenge_provider_hits": ["akamai"],
+        "challenge_element_hits": ["captcha_titled_iframe"],
+        "readiness_probes": [{"is_ready": True}],
+    }
+
+    assert diagnostics_indicate_block(diagnostics) is False
+
+
+def test_diagnostics_indicate_block_flags_usable_content_with_strong_challenge_evidence() -> None:
+    diagnostics = {
+        "browser_outcome": "usable_content",
+        "challenge_evidence": [
+            "strong:captcha",
+            "provider:cloudflare",
+        ],
+        "challenge_provider_hits": ["cloudflare"],
+    }
+
+    assert diagnostics_indicate_block(diagnostics) is True
+
+
+def test_diagnostics_indicate_block_keeps_strong_challenge_over_ready_probe() -> None:
+    diagnostics = {
+        "browser_outcome": "usable_content",
+        "challenge_evidence": [
+            "strong:captcha",
+            "provider:cloudflare",
+        ],
+        "challenge_provider_hits": ["cloudflare"],
+        "readiness_probes": [{"is_ready": True}],
+    }
+
+    assert diagnostics_indicate_block(diagnostics) is True
 
 
 def test_stringify_value_preserves_falsy_scalars() -> None:

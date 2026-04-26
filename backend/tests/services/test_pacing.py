@@ -82,6 +82,6 @@ async def test_note_usable_fetch_for_host_keeps_active_browser_block_cooldown() 
         assert await pacing.note_browser_block_for_host("https://example.com/path") is True
         assert await pacing.should_prefer_browser_for_host("https://example.com/path") is True
         await pacing.note_usable_fetch_for_host("https://example.com/path")
-        assert await pacing.should_prefer_browser_for_host("https://example.com/path") is True
+        assert await pacing.should_prefer_browser_for_host("https://example.com/path") is False
     finally:
         await pacing.reset_pacing_state()

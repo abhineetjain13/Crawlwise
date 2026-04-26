@@ -101,6 +101,61 @@ def test_map_js_state_to_fields_recovers_next_data_shopify_product_fields() -> N
     )
 
 
+def test_map_js_state_to_fields_uses_variation_attribute_display_names() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "mobify-data": {
+                "product": {
+                    "id": "2078471",
+                    "name": "Terminal Roamer Pants",
+                    "brand": "Columbia",
+                    "currency": "USD",
+                    "price": 60,
+                    "variationAttributes": [
+                        {
+                            "id": "color",
+                            "name": "Color",
+                            "values": [
+                                {"value": "019", "name": "Cool Grey"},
+                                {"value": "023", "name": "City Grey"},
+                            ],
+                        },
+                        {
+                            "id": "size",
+                            "name": "Size",
+                            "values": [
+                                {"value": "S", "name": "S"},
+                                {"value": "M", "name": "M"},
+                            ],
+                        },
+                    ],
+                    "variants": [
+                        {
+                            "id": "195980349741",
+                            "sku": "195980349741",
+                            "variationValues": {"color": "019", "size": "S"},
+                        },
+                        {
+                            "id": "195980349888",
+                            "sku": "195980349888",
+                            "variationValues": {"color": "023", "size": "M"},
+                        },
+                    ],
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.columbia.com/p/mens-pfg-terminal-roamer-stretch-pants-2078471.html?color=019&size=S",
+    )
+
+    assert mapped["color"] == "Cool Grey"
+    assert mapped["variant_axes"]["color"] == ["Cool Grey", "City Grey"]
+    assert mapped["selected_variant"]["option_values"] == {
+        "color": "Cool Grey",
+        "size": "S",
+    }
+
+
 def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None:
     js_state_objects = {
         "__INITIAL_STATE__": {
@@ -414,6 +469,74 @@ def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_varian
         "storage": "128 GB",
         "condition": "Excellent",
     }
+
+
+def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_product_object() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__STATE_A__": {
+                "product": {
+                    "id": "prod-1",
+                    "name": "Dress",
+                    "price": "99.95",
+                    "currency": "USD",
+                    "variants": [
+                        {
+                            "id": "v1",
+                            "size": "2",
+                            "price": "99.95",
+                            "available": False,
+                        },
+                        {
+                            "id": "v2",
+                            "size": "4",
+                            "price": "99.95",
+                            "available": False,
+                        },
+                    ],
+                }
+            },
+            "__STATE_B__": {
+                "product": {
+                    "id": "prod-1",
+                    "name": "Dress",
+                    "variants": [
+                        {
+                            "id": "v1",
+                            "size": "2",
+                            "price": "99.95",
+                            "available": True,
+                            "inventory_quantity": 5,
+                            "compare_at_price": "119.95",
+                        },
+                        {
+                            "id": "v2",
+                            "size": "4",
+                            "price": "99.95",
+                            "available": True,
+                            "inventory_quantity": 6,
+                            "compare_at_price": "119.95",
+                        },
+                    ],
+                }
+            },
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/p/dress?variant=v1",
+    )
+
+    assert mapped["availability"] == "in_stock"
+    assert mapped["stock_quantity"] == 5
+    assert mapped["original_price"] == "119.95"
+    assert mapped["selected_variant"]["variant_id"] == "v1"
+    assert mapped["selected_variant"]["availability"] == "in_stock"
+    assert mapped["selected_variant"]["stock_quantity"] == 5
+    assert mapped["selected_variant"]["original_price"] == "119.95"
+    assert mapped["variants"][0]["availability"] == "in_stock"
+    assert mapped["variants"][0]["stock_quantity"] == 5
+    assert mapped["variants"][0]["original_price"] == "119.95"
+    assert mapped["variants"][1]["availability"] == "in_stock"
+    assert mapped["variants"][1]["stock_quantity"] == 6
 
 
 def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_payload() -> None:
@@ -826,6 +949,17 @@ def test_normalize_variant_tolerates_non_dict_glom_result(
         "variant_id": "sku-123",
         "url": "https://store.example.com/products/commuter-backpack?variant=sku-123",
     }
+
+
+def test_normalize_variant_does_not_use_product_id_as_variant_id() -> None:
+    mapped = js_state_mapper._normalize_variant(
+        {"productId": "prod-1"},
+        option_names=[],
+        page_url="https://store.example.com/products/commuter-backpack",
+        interpret_integral_as_cents=False,
+    )
+
+    assert mapped == {"sku": "prod-1"}
 
 
 def test_map_js_state_to_fields_uses_selected_options_and_skips_marketing_axis_names() -> None:

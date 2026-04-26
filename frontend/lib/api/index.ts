@@ -19,6 +19,11 @@ import type {
  LlmConfigCreatePayload,
  LoginResponse,
  Paginated,
+ ProductIntelligenceJob,
+ ProductIntelligenceDiscoveryPayload,
+ ProductIntelligenceDiscoveryResponse,
+ ProductIntelligenceJobCreatePayload,
+ ProductIntelligenceJobDetail,
  ReviewPayload,
  ReviewSelection,
  SelectorCreatePayload,
@@ -51,6 +56,7 @@ export const api = {
  resetApplicationData: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-data", {}),
  resetCrawlData: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-crawl-data", {}),
  resetDomainMemory: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-domain-memory", {}),
+ resetProductIntelligence: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-product-intelligence", {}),
  createCrawl: (payload: CrawlCreatePayload) => apiClient.post<{ run_id: number }>("/api/crawls", payload),
  createCsvCrawl: (payload: {
  file: File;
@@ -93,9 +99,25 @@ export const api = {
  getCrawlLogs: (runId: number, params?: { afterId?: number; limit?: number }) => {
  const query = new URLSearchParams();
  if (params?.afterId !== undefined) query.set("after_id", String(params.afterId));
- if (params?.limit !== undefined) query.set("limit", String(params.limit));
- return apiClient.get<CrawlLog[]>(withQuery(`/api/crawls/${runId}/logs`, query));
+  if (params?.limit !== undefined) query.set("limit", String(params.limit));
+  return apiClient.get<CrawlLog[]>(withQuery(`/api/crawls/${runId}/logs`, query));
  },
+ discoverProductIntelligence: (payload: ProductIntelligenceDiscoveryPayload) =>
+ apiClient.post<ProductIntelligenceDiscoveryResponse>("/api/product-intelligence/discover", payload),
+ createProductIntelligenceJob: (payload: ProductIntelligenceJobCreatePayload) =>
+ apiClient.post<ProductIntelligenceJob>("/api/product-intelligence/jobs", payload),
+ listProductIntelligenceJobs: (params?: { limit?: number }) => {
+ const query = new URLSearchParams();
+ if (params?.limit !== undefined) query.set("limit", String(params.limit));
+ return apiClient.get<ProductIntelligenceJob[]>(withQuery("/api/product-intelligence/jobs", query));
+ },
+ getProductIntelligenceJob: (jobId: number) =>
+ apiClient.get<ProductIntelligenceJobDetail>(`/api/product-intelligence/jobs/${jobId}`),
+ reviewProductIntelligenceMatch: (
+ jobId: number,
+ matchId: number,
+ payload: { action: "pending"|"accepted"|"rejected" },
+ ) => apiClient.post<{ match_id: number; review_status: string }>(`/api/product-intelligence/jobs/${jobId}/matches/${matchId}/review`, payload),
  getMarkdown: (runId: number) => apiClient.getText(`/api/crawls/${runId}/export/markdown`),
  downloadCsv: (runId: number) => apiClient.getBlob(`/api/crawls/${runId}/export/csv`),
  downloadJson: (runId: number) => apiClient.getBlob(`/api/crawls/${runId}/export/json`),

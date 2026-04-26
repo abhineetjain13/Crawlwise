@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TopBarProvider } from "../layout/top-bar-context";
 import DomainMemoryManagePage from "../../app/selectors/manage/page";
@@ -20,10 +20,6 @@ vi.mock("../../lib/api", () => ({
 }));
 
 describe("DomainMemoryManagePage", () => {
- afterEach(() => {
- cleanup();
- });
-
  beforeEach(() => {
  vi.clearAllMocks();
  apiMock.listSelectors.mockResolvedValue([
@@ -159,12 +155,23 @@ describe("DomainMemoryManagePage", () => {
  );
 
  expect(await screen.findByText("Selector Memory")).toBeInTheDocument();
- expect(screen.getByText("Run Profile Defaults")).toBeInTheDocument();
- expect(screen.getByText("Saved Domain Cookies")).toBeInTheDocument();
- expect(screen.getAllByText("Recent Learning").length).toBeGreaterThan(0);
  expect(screen.getAllByText("example.com").length).toBeGreaterThan(0);
  expect(screen.getAllByText("price").length).toBeGreaterThan(0);
- expect(screen.getAllByText("3 cookies").length).toBeGreaterThan(0);
+
+ expect(screen.getByRole("button", { name: "Selectors (1)" })).toBeInTheDocument();
+ expect(screen.getByRole("button", { name: "Profiles (1)" })).toBeInTheDocument();
+ expect(screen.getByRole("button", { name: "Cookies (3)" })).toBeInTheDocument();
+ expect(screen.getByRole("button", { name: "Learning (1)" })).toBeInTheDocument();
+
+ fireEvent.click(screen.getByRole("button", { name: "Profiles (1)" }));
+ expect(screen.getByText("Run Profile Defaults")).toBeInTheDocument();
+
+ fireEvent.click(screen.getByRole("button", { name: "Cookies (3)" }));
+ expect(screen.getByText("Saved Domain Cookies")).toBeInTheDocument();
+
+ fireEvent.click(screen.getByRole("button", { name: "Learning (1)" }));
+ expect(screen.getByText("Recent Learning")).toBeInTheDocument();
+
  expect(screen.queryByText("owned-session-test.example.com")).not.toBeInTheDocument();
  });
 
@@ -175,7 +182,7 @@ describe("DomainMemoryManagePage", () => {
  </TopBarProvider>,
  );
 
- const editButton = await screen.findByRole("button", { name: "Edit" });
+ const editButton = await screen.findByRole("button", { name: "Edit selector" });
  fireEvent.click(editButton);
  fireEvent.change(screen.getByDisplayValue(".price"), { target: { value: ".sale-price" } });
  fireEvent.click(screen.getByRole("button", { name: "Save" }));

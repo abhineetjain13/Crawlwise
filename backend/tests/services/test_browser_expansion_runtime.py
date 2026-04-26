@@ -19,6 +19,30 @@ from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
 
 
+def test_select_primary_browser_html_prefers_full_rendered_when_traversal_fragment_is_capped() -> None:
+    traversal_result = SimpleNamespace(
+        activated=True,
+        progress_events=1,
+        card_count=236,
+        stop_reason="target_records_reached",
+    )
+
+    html = browser_page_flow._select_primary_browser_html(
+        surface="ecommerce_listing",
+        traversal_result=traversal_result,
+        traversal_html="<html><body><a href='/products/a'>A</a></body></html>",
+        rendered_html=(
+            "<html><body>"
+            "<a href='/products/a'>A</a>"
+            "<a href='/products/b'>B</a>"
+            "</body></html>"
+        ),
+        listing_min_items=2,
+    )
+
+    assert "products/b" in html
+
+
 @dataclass
 class _FakeHandle:
     label: str
@@ -132,17 +156,26 @@ class _FakeLocator:
 
 
 class _FakeRoleLocator:
-    def __init__(self, page: "_FakeExpansionPage", role: str, name: str) -> None:
+    def __init__(self, page: "_FakeExpansionPage", role: str, name: object) -> None:
         self._page = page
         self._role = role
-        self._name = name.lower()
+        self._name = str(name or "").lower()
+        self._name_pattern = name if hasattr(name, "search") else None
 
     @property
     def first(self) -> "_FakeRoleLocator":
         return self
 
+    def nth(self, index: int) -> "_FakeRoleLocator":
+        del index
+        return self
+
     async def count(self) -> int:
-        return int((self._role, self._name) in self._page.role_targets)
+        return sum(
+            1
+            for role, name in self._page.role_targets
+            if role == self._role and self._matches_name(name)
+        )
 
     async def is_visible(self, timeout: int | None = None) -> bool:
         del timeout
@@ -153,8 +186,13 @@ class _FakeRoleLocator:
 
     async def click(self, timeout: int | None = None) -> None:
         del timeout
-        if (self._role, self._name) in self._page.role_targets:
+        if await self.count():
             self._page.expanded = True
+
+    def _matches_name(self, name: str) -> bool:
+        if self._name_pattern is not None:
+            return bool(self._name_pattern.search(name))
+        return name == self._name
 
 
 class _NoTimeoutRoleLocator(_FakeRoleLocator):
@@ -1764,6 +1802,46 @@ async def test_browser_fetch_uses_aom_expansion_when_dom_keyword_scan_misses() -
 
 
 @pytest.mark.asyncio
+async def test_dom_detail_expansion_stops_after_click_exceeds_time_budget() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1></body></html>",
+        labels=[
+            {"label": "Details", "attributes": {"aria-controls": "details"}},
+            {"label": "Materials", "attributes": {"aria-controls": "materials"}},
+        ],
+    )
+
+    async def _snapshot(handle: _FakeHandle) -> dict[str, object]:
+        return {
+            "probe": handle.label.lower(),
+            "label": handle.label.lower(),
+            "aria_expanded": "",
+            "href": "",
+            "aria_controls": handle.attributes.get("aria-controls", ""),
+            "data_qa_action": "",
+            "class_name": "",
+            "tag_name": handle.tag_name,
+            "visible": True,
+            "actionable": True,
+        }
+
+    diagnostics = await browser_detail.expand_all_interactive_elements_impl(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=None,
+        detail_expand_selectors=("button",),
+        detail_expansion_keywords=lambda *_args, **_kwargs: ("details", "materials"),
+        interactive_candidate_snapshot=_snapshot,
+        elapsed_ms=lambda _started_at: 999 if page.expanded else 0,
+        max_elapsed_ms=10,
+    )
+
+    assert diagnostics["status"] == "time_budget_reached"
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["details"]
+
+
+@pytest.mark.asyncio
 async def test_browser_fetch_aom_expansion_respects_interaction_cap() -> None:
     original_limit = crawler_runtime_settings.detail_aom_expand_max_interactions
     crawler_runtime_settings.detail_aom_expand_max_interactions = 1
@@ -2263,6 +2341,24 @@ def test_classify_browser_outcome_marks_empty_category_as_low_content_shell() ->
     ) == "empty_terminal_page"
 
 
+def test_classify_low_content_reason_ignores_empty_phrase_on_contentful_page() -> None:
+    html = """
+    <html><body>
+      <p>Filter summary: 0 results for XXL.</p>
+      <article><a href="/products/widget-1">Widget One</a><span>$10</span></article>
+      <article><a href="/products/widget-2">Widget Two</a><span>$20</span></article>
+      <article><a href="/products/widget-3">Widget Three</a><span>$30</span></article>
+      <article><a href="/products/widget-4">Widget Four</a><span>$40</span></article>
+      <article><a href="/products/widget-5">Widget Five</a><span>$50</span></article>
+    </body></html>
+    """
+
+    assert browser_runtime.classify_low_content_reason(
+        html,
+        html_bytes=len(html.encode("utf-8")),
+    ) is None
+
+
 def test_classify_browser_outcome_keeps_ready_listing_with_no_pagination_progress_usable() -> None:
     html = """
     <html><body>
@@ -2352,6 +2448,29 @@ def test_build_failed_browser_diagnostics_preserves_failure_stage() -> None:
     assert diagnostics["phase_timings_ms"] == {"navigation": 420}
 
 
+def test_build_failed_browser_diagnostics_marks_unsupported_proxy_explicitly() -> None:
+    diagnostics = browser_runtime.build_failed_browser_diagnostics(
+        browser_reason="http-escalation",
+        exc=RuntimeError("Browser does not support socks5 proxy authentication"),
+    )
+
+    assert diagnostics["browser_outcome"] == "navigation_failed"
+    assert diagnostics["failure_kind"] == "unsupported_proxy"
+
+
+def test_build_failed_browser_diagnostics_uses_exception_proxy_mode() -> None:
+    exc = RuntimeError("proxied page failed")
+    setattr(exc, "browser_proxy_mode", "page")
+
+    diagnostics = browser_runtime.build_failed_browser_diagnostics(
+        browser_reason="http-escalation",
+        exc=exc,
+        proxy="http://proxy.example:8080",
+    )
+
+    assert diagnostics["browser_proxy_mode"] == "page"
+
+
 @pytest.mark.asyncio
 async def test_browser_fetch_logs_non_usable_outcomes(caplog: pytest.LogCaptureFixture) -> None:
     page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
@@ -2364,11 +2483,40 @@ async def test_browser_fetch_logs_non_usable_outcomes(caplog: pytest.LogCaptureF
             "https://example.com/empty",
             5,
             surface="ecommerce_listing",
+            capture_screenshot=True,
             runtime_provider=_fake_runtime,
         )
 
     assert result.browser_diagnostics["browser_outcome"] == "low_content_shell"
     assert any(
+        "Browser acquisition outcome=low_content_shell url=https://example.com/empty"
+        in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_respects_disabled_screenshot_capture(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    with caplog.at_level("WARNING", logger=browser_page_flow.logger.name):
+        result = await browser_runtime.browser_fetch(
+            "https://example.com/empty",
+            5,
+            surface="ecommerce_listing",
+            capture_screenshot=False,
+            runtime_provider=_fake_runtime,
+        )
+
+    assert result.browser_diagnostics["browser_outcome"] == "low_content_shell"
+    assert result.browser_diagnostics["phase_timings_ms"]["screenshot_capture"] == 0
+    assert not result.artifacts.get("browser_screenshot_path")
+    assert not any(
         "Browser acquisition outcome=low_content_shell url=https://example.com/empty"
         in record.message
         for record in caplog.records
@@ -2542,6 +2690,227 @@ async def test_capture_rendered_listing_fragments_ignores_non_listing_surfaces()
 
 
 @pytest.mark.asyncio
+async def test_emit_challenge_activity_randomizes_mouse_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    move_calls: list[tuple[int, int]] = []
+    wheel_calls: list[tuple[int, int]] = []
+    wait_calls: list[int] = []
+
+    class _Mouse:
+        async def move(self, x: int, y: int) -> None:
+            move_calls.append((x, y))
+
+        async def wheel(self, delta_x: int, delta_y: int) -> None:
+            wheel_calls.append((delta_x, delta_y))
+
+    class _Page:
+        mouse = _Mouse()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            del script, arg
+            return {"width": 900, "height": 700}
+
+        async def wait_for_timeout(self, delay_ms: int) -> None:
+            wait_calls.append(delay_ms)
+
+    random_counter = {"value": 0}
+
+    def _fake_randbelow(limit: int) -> int:
+        random_counter["value"] += 1
+        return random_counter["value"] % max(1, int(limit))
+
+    monkeypatch.setattr(browser_recovery.secrets, "randbelow", _fake_randbelow)
+
+    await browser_recovery._emit_challenge_activity(_Page())
+
+    assert len(move_calls) == 1 + (
+        int(crawler_runtime_settings.challenge_activity_jitter_moves)
+        * int(crawler_runtime_settings.challenge_activity_mouse_steps)
+    )
+    assert all(len(call) == 2 for call in move_calls)
+    assert len(set(move_calls)) > 2
+    assert wait_calls
+    assert wheel_calls == [
+        (0, int(crawler_runtime_settings.challenge_activity_scroll_px))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emit_challenge_activity_ignores_negative_scroll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel_calls: list[tuple[int, int]] = []
+    original_scroll_px = crawler_runtime_settings.challenge_activity_scroll_px
+
+    class _Mouse:
+        async def move(self, x: int, y: int, *, steps: int) -> None:
+            del x, y, steps
+
+        async def wheel(self, delta_x: int, delta_y: int) -> None:
+            wheel_calls.append((delta_x, delta_y))
+
+    class _Page:
+        mouse = _Mouse()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            del script, arg
+            return {"width": 900, "height": 700}
+
+        async def wait_for_timeout(self, delay_ms: int) -> None:
+            del delay_ms
+
+    monkeypatch.setattr(browser_recovery.secrets, "randbelow", lambda limit: 0)
+    crawler_runtime_settings.challenge_activity_scroll_px = -120
+    try:
+        await browser_recovery._emit_challenge_activity(_Page())
+    finally:
+        crawler_runtime_settings.challenge_activity_scroll_px = original_scroll_px
+
+    assert wheel_calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_browser_challenge_keeps_original_response_when_retry_stays_blocked() -> None:
+    original_response = SimpleNamespace(status=403, name="original")
+    retried_response = SimpleNamespace(status=200, name="retried")
+
+    class _Page:
+        def __init__(self) -> None:
+            self.mouse = None
+            self.goto_calls = 0
+
+        async def goto(self, *_args, **_kwargs):
+            self.goto_calls += 1
+            return retried_response
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    page = _Page()
+
+    async def _get_page_html(_page: Any) -> str:
+        return "<html><body>blocked</body></html>"
+
+    async def _classify_blocked_page(_html: str, _status_code: int):
+        return SimpleNamespace(blocked=True, provider_hits=[])
+
+    result = await browser_recovery.recover_browser_challenge(
+        page,
+        url="https://example.com/products/widget",
+        response=original_response,
+        timeout_seconds=5,
+        phase_timings_ms={},
+        challenge_wait_max_seconds=1,
+        challenge_poll_interval_ms=100,
+        navigation_timeout_ms=1000,
+        elapsed_ms=lambda _started_at: 0,
+        classify_blocked_page=_classify_blocked_page,
+        get_page_html=_get_page_html,
+    )
+
+    assert result is original_response
+    assert page.goto_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_browser_challenge_drops_stale_block_status_after_wait_clear() -> None:
+    original_response = SimpleNamespace(status=403, headers={"content-type": "text/html"})
+    status_codes: list[int] = []
+
+    class _Page:
+        mouse = None
+
+        async def goto(self, *_args, **_kwargs):
+            raise AssertionError("retry should not run after challenge clears")
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    async def _get_page_html(_page: Any) -> str:
+        return "<html><body>product title $12.00 add to cart</body></html>"
+
+    async def _classify_blocked_page(_html: str, status_code: int):
+        status_codes.append(status_code)
+        return SimpleNamespace(blocked=len(status_codes) == 1, provider_hits=[])
+
+    result = await browser_recovery.recover_browser_challenge(
+        _Page(),
+        url="https://example.com/products/widget",
+        response=original_response,
+        timeout_seconds=5,
+        phase_timings_ms={},
+        challenge_wait_max_seconds=1,
+        challenge_poll_interval_ms=100,
+        navigation_timeout_ms=1000,
+        elapsed_ms=lambda _started_at: 0,
+        classify_blocked_page=_classify_blocked_page,
+        get_page_html=_get_page_html,
+    )
+
+    assert status_codes == [403, 200]
+    assert result is original_response
+    assert result.browser_recovered_status == 200
+    assert result.headers == original_response.headers
+
+
+@pytest.mark.asyncio
+async def test_recover_browser_challenge_marks_retry_response_without_wrapping() -> None:
+    retried_response = SimpleNamespace(
+        status=403,
+        headers={"content-type": "text/html"},
+        url="https://example.com/products/widget",
+        request=SimpleNamespace(method="GET"),
+        name="retried",
+    )
+
+    class _Page:
+        mouse = None
+
+        def __init__(self) -> None:
+            self.retried = False
+
+        async def goto(self, *_args, **_kwargs):
+            self.retried = True
+            return retried_response
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    async def _get_page_html(page: Any) -> str:
+        return (
+            "<html><body>product title $12.00 add to cart</body></html>"
+            if page.retried
+            else "<html><body>blocked</body></html>"
+        )
+
+    async def _classify_blocked_page(html: str, _status_code: int):
+        return SimpleNamespace(blocked="blocked" in html, provider_hits=[])
+
+    page = _Page()
+    result = await browser_recovery.recover_browser_challenge(
+        page,
+        url="https://example.com/products/widget",
+        response=SimpleNamespace(status=403, headers={"content-type": "text/html"}),
+        timeout_seconds=5,
+        phase_timings_ms={},
+        challenge_wait_max_seconds=1,
+        challenge_poll_interval_ms=100,
+        navigation_timeout_ms=1000,
+        elapsed_ms=lambda _started_at: 0,
+        classify_blocked_page=_classify_blocked_page,
+        get_page_html=_get_page_html,
+    )
+
+    assert result is retried_response
+    assert result.browser_recovered_status == 200
+    assert result.url == retried_response.url
+    assert result.request is retried_response.request
+    assert result.name == "retried"
+    assert result.browser_navigation_strategy == "domcontentloaded"
+
+
+@pytest.mark.asyncio
 async def test_wait_for_listing_readiness_treats_only_playwright_timeout_as_recoverable() -> None:
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
@@ -2623,6 +2992,7 @@ async def test_origin_warmup_uses_sibling_page_not_active_page() -> None:
         url="https://example.com/products/widget",
         surface="ecommerce_detail",
         browser_reason="http-escalation",
+        proxy_profile=None,
         timeout_seconds=5,
         phase_timings_ms={},
     )
@@ -2631,6 +3001,123 @@ async def test_origin_warmup_uses_sibling_page_not_active_page() -> None:
     assert len(page.spawned_pages) == 1
     assert page.spawned_pages[0].goto_calls == ["domcontentloaded"]
     assert page.spawned_pages[0].page_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_runs_for_job_detail() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Job</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/jobs/123",
+        surface="job_detail",
+        browser_reason="http-escalation",
+        proxy_profile=None,
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.goto_calls == []
+    assert len(page.spawned_pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_skips_for_listing_surface() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Products</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/category/widgets",
+        surface="ecommerce_listing",
+        browser_reason="http-escalation",
+        proxy_profile=None,
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.goto_calls == []
+    assert page.spawned_pages == []
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_skips_for_rotating_proxy_profile() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_reason="http-escalation",
+        proxy_profile={"rotation": "rotating"},
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.goto_calls == []
+    assert page.spawned_pages == []
+
+
+def test_browser_runtime_snapshot_uses_capacity_fallback_for_pooled_runtimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        def snapshot(self) -> dict[str, int | bool]:
+            return {
+                "ready": True,
+                "size": 1,
+                "active": 1,
+                "queued": 0,
+                "capacity": 3,
+            }
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(browser_runtime, "_DIRECT_BROWSER_RUNTIMES", {"direct": _FakeRuntime()})
+    monkeypatch.setattr(browser_runtime, "_PROXIED_BROWSER_RUNTIMES", {"proxy": _FakeRuntime()})
+
+    snapshot = browser_runtime.browser_runtime_snapshot()
+
+    assert snapshot["capacity"] == 6
+    assert snapshot["max_size"] == 6
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_disables_storage_reuse_for_rotating_proxy_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_allow_storage_state: list[bool] = []
+
+    class _StopFetch(Exception):
+        pass
+
+    @asynccontextmanager
+    async def _fake_page_context():
+        raise _StopFetch
+        yield
+
+    def _fake_resolve_proxied_page_factory(*args, **kwargs):
+        del args
+        captured_allow_storage_state.append(bool(kwargs["allow_storage_state"]))
+        return _fake_page_context()
+
+    monkeypatch.setattr(
+        browser_runtime,
+        "_resolve_proxied_page_factory",
+        _fake_resolve_proxied_page_factory,
+    )
+
+    with pytest.raises(_StopFetch):
+        await browser_runtime.browser_fetch(
+            "https://example.com/products/widget",
+            5,
+            proxy="http://proxy.example:8080",
+            proxy_profile={"rotation": "rotating"},
+            surface="ecommerce_detail",
+            proxied_page_factory=lambda **_: None,
+        )
+
+    assert captured_allow_storage_state == [False]
 
 
 @pytest.mark.asyncio
@@ -2822,9 +3309,9 @@ async def test_browser_fetch_keeps_full_rendered_html_when_traversal_makes_no_pr
             requested_mode="paginate",
             selected_mode="paginate",
             activated=True,
-            stop_reason="paginate_blocked",
+            stop_reason="next_page_not_found",
             progress_events=0,
-            card_count=0,
+            card_count=5,
             html_fragments=[
                 ("<div data-traversal-cards='true'><a href='/privacy'>Privacy notice</a></div>", False),
             ],
@@ -2902,6 +3389,7 @@ async def test_browser_fetch_prefers_rendered_html_when_progress_traversal_fragm
 
     assert "Widget Two" in result.html
     assert "traversal_composed_html" in result.artifacts
+    assert "Widget Two" in result.artifacts["full_rendered_html"]
 
 
 @pytest.mark.asyncio

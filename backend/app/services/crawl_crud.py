@@ -156,37 +156,6 @@ def _merge_saved_run_profile(
         },
         legacy_aliases={},
     )
-    saved_proxy_profile = (
-        dict(saved.get("proxy_profile") or {})
-        if isinstance(saved.get("proxy_profile"), dict)
-        else {}
-    )
-    merged["proxy_profile"] = {
-        "enabled": bool(
-            merged.get(
-                "proxy_enabled",
-                saved_proxy_profile.get(
-                    "enabled",
-                    saved.get("proxy_enabled", False),
-                ),
-            )
-        ),
-        "proxy_list": (
-            list(merged.get("proxy_list") or [])
-            if isinstance(merged.get("proxy_list"), list)
-            else list(
-                saved_proxy_profile.get(
-                    "proxy_list",
-                    saved.get("proxy_list") or [],
-                )
-                or []
-            )
-        ),
-    }
-    if "proxy_enabled" not in merged:
-        merged["proxy_enabled"] = bool(merged["proxy_profile"]["enabled"])
-    if "proxy_list" not in merged:
-        merged["proxy_list"] = list(merged["proxy_profile"]["proxy_list"])
     return merged
 
 

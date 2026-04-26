@@ -15,6 +15,7 @@ from app.api.crawls import router as crawls_router
 from app.api.dashboard import router as dashboard_router
 from app.api.jobs import router as jobs_router
 from app.api.llm import router as llm_router
+from app.api.product_intelligence import router as product_intelligence_router
 from app.api.records import router as records_router
 from app.api.review import router as review_router
 from app.api.selectors import router as selectors_router
@@ -31,6 +32,7 @@ from app.core.database import SessionLocal, dispose_engine
 from app.core.telemetry import (
     configure_logging,
     generate_correlation_id,
+    install_asyncio_exception_filter,
     reset_correlation_id,
     set_correlation_id,
 )
@@ -48,6 +50,10 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    try:
+        install_asyncio_exception_filter()
+    except RuntimeError:
+        logger.debug("Asyncio exception filter not installed; no running loop")
     validate_cookie_policy_config()
     async with SessionLocal() as session:
         await bootstrap_admin_user(session)
@@ -140,5 +146,6 @@ for router in [
     review_router,
     selectors_router,
     llm_router,
+    product_intelligence_router,
 ]:
     app.include_router(router)
