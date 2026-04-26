@@ -32,14 +32,8 @@ def _has_strong_challenge_evidence(
     diagnostics: dict[str, object],
     evidence: list[str],
 ) -> bool:
-    challenge_elements_raw = diagnostics.get("challenge_element_hits")
-    challenge_elements = challenge_elements_raw if isinstance(challenge_elements_raw, list) else []
-    if challenge_elements:
-        return True
     return any(
-        item.startswith(
-            ("title:", "strong:", "active_provider:", "challenge_element:")
-        )
+        item.startswith(("title:", "strong:", "active_provider:"))
         for item in evidence
     )
 
@@ -54,13 +48,13 @@ def diagnostics_indicate_block(diagnostics: dict[str, object] | object) -> bool:
         return True
     if _has_strong_challenge_evidence(payload, evidence):
         return True
+    if browser_outcome == "usable_content" and _has_ready_readiness_probe(payload):
+        return False
     provider_evidence = provider_hits or [
         item for item in evidence if item.startswith("provider:")
     ]
     if provider_evidence:
-        if browser_outcome != "usable_content":
-            return True
-        return not _has_ready_readiness_probe(payload)
+        return browser_outcome != "usable_content"
     if browser_outcome == "usable_content":
         return False
     return False

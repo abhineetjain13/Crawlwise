@@ -106,6 +106,21 @@ def test_diagnostics_indicate_block_preserves_ready_usable_content_despite_provi
     assert diagnostics_indicate_block(diagnostics) is False
 
 
+def test_diagnostics_indicate_block_preserves_ready_usable_content_despite_challenge_iframe() -> None:
+    diagnostics = {
+        "browser_outcome": "usable_content",
+        "challenge_evidence": [
+            "provider:akamai",
+            "challenge_element:captcha_titled_iframe",
+        ],
+        "challenge_provider_hits": ["akamai"],
+        "challenge_element_hits": ["captcha_titled_iframe"],
+        "readiness_probes": [{"is_ready": True}],
+    }
+
+    assert diagnostics_indicate_block(diagnostics) is False
+
+
 def test_diagnostics_indicate_block_flags_usable_content_with_strong_challenge_evidence() -> None:
     diagnostics = {
         "browser_outcome": "usable_content",
@@ -114,6 +129,20 @@ def test_diagnostics_indicate_block_flags_usable_content_with_strong_challenge_e
             "provider:cloudflare",
         ],
         "challenge_provider_hits": ["cloudflare"],
+    }
+
+    assert diagnostics_indicate_block(diagnostics) is True
+
+
+def test_diagnostics_indicate_block_keeps_strong_challenge_over_ready_probe() -> None:
+    diagnostics = {
+        "browser_outcome": "usable_content",
+        "challenge_evidence": [
+            "strong:captcha",
+            "provider:cloudflare",
+        ],
+        "challenge_provider_hits": ["cloudflare"],
+        "readiness_probes": [{"is_ready": True}],
     }
 
     assert diagnostics_indicate_block(diagnostics) is True

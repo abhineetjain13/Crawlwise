@@ -19,7 +19,9 @@ except ImportError:  # pragma: no cover
 
 from app.services.config.extraction_rules import (
     LISTING_FALLBACK_CONTAINER_SELECTOR,
+    LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_STRUCTURE_POSITIVE_HINTS,
+    LISTING_UTILITY_TITLE_TOKENS,
 )
 from app.services.platform_policy import (
     path_tenant_boundary_family,
@@ -423,6 +425,23 @@ async def _run_load_more_traversal(
             break
         locator = await _find_actionable_locator(page, "load_more")
         if locator is None:
+            settled = await _wait_for_load_more_card_gain(
+                page,
+                previous=previous,
+                surface=surface,
+                max_records=max_records,
+                deadline_at=deadline_at,
+            )
+            if settled is not None:
+                previous = settled
+                result.card_count = int(settled.get("card_count", result.card_count))
+                await _append_html_fragment(page, result, surface=surface)
+                if _target_record_limit_reached(
+                    max_records=max_records,
+                    current_count=result.card_count,
+                ):
+                    _set_stop_reason(result, "target_records_reached", surface=surface)
+                    break
             _set_stop_reason(result, "load_more_not_found", surface=surface)
             break
         result.iterations += 1
@@ -451,6 +470,16 @@ async def _run_load_more_traversal(
             timeout_ms=wait_ms,
         )
         current = await _page_snapshot(page, surface=surface)
+        if not _snapshot_progressed(previous, current):
+            progressed = await _wait_for_load_more_card_gain(
+                page,
+                previous=previous,
+                surface=surface,
+                max_records=max_records,
+                deadline_at=deadline_at,
+            )
+            if progressed is not None:
+                current = progressed
         current_count = int(current.get("card_count", 0))
         previous_count = int(previous.get("card_count", 0))
         card_gain = max(
@@ -501,6 +530,43 @@ async def _run_load_more_traversal(
     else:
         _set_stop_reason(result, "load_more_limit_reached", surface=surface)
     result.card_count = previous["card_count"]
+
+
+async def _wait_for_load_more_card_gain(
+    page,
+    *,
+    previous: dict[str, int],
+    surface: str,
+    max_records: int | None,
+    deadline_at: float | None,
+) -> dict[str, int] | None:
+    previous_count = int(previous.get("card_count", 0))
+    timeout_ms = _remaining_timeout_ms(
+        deadline_at,
+        int(crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms),
+    )
+    if timeout_ms <= 0:
+        return None
+    poll_ms = max(1, int(crawler_runtime_settings.pagination_post_click_poll_ms))
+    waited_ms = 0
+    best: dict[str, int] | None = None
+    while waited_ms < timeout_ms:
+        step_ms = min(poll_ms, max(1, timeout_ms - waited_ms))
+        await page.wait_for_timeout(step_ms)
+        waited_ms += step_ms
+        current = await _page_snapshot(page, surface=surface)
+        current_count = int(current.get("card_count", 0))
+        if current_count > previous_count and (
+            best is None
+            or current_count > int(best.get("card_count", 0))
+        ):
+            best = current
+            if _target_record_limit_reached(
+                max_records=max_records,
+                current_count=current_count,
+            ):
+                return best
+    return best
 
 
 async def _run_paginate_traversal(
@@ -1493,18 +1559,18 @@ async def count_listing_cards(page, *, surface: str, allow_heuristic: bool = Tru
     if not normalized_selectors:
         return await _heuristic_card_count(page, surface=surface) if allow_heuristic else 0
     try:
-        count = await page.evaluate(
+        selector_counts = await page.evaluate(
             """
             (selectors) => {
-              let highest = 0;
+              const counts = {};
               for (const selector of selectors) {
                 try {
-                  highest = Math.max(highest, document.querySelectorAll(selector).length);
+                  counts[selector] = document.querySelectorAll(selector).length;
                 } catch (error) {
                   continue;
                 }
               }
-              return highest;
+              return counts;
             }
             """,
             normalized_selectors,
@@ -1532,15 +1598,62 @@ async def count_listing_cards(page, *, surface: str, allow_heuristic: bool = Tru
                 )
                 continue
         return highest
-    try:
-        resolved = max(0, int(count or 0))
-    except (TypeError, ValueError):
-        resolved = 0
+    if isinstance(selector_counts, dict):
+        strong_count = 0
+        weak_count = 0
+        for selector, raw_count in selector_counts.items():
+            try:
+                count = max(0, int(raw_count or 0))
+            except (TypeError, ValueError):
+                count = 0
+            if _listing_selector_is_weak(str(selector or "")):
+                weak_count = max(weak_count, count)
+            else:
+                strong_count = max(strong_count, count)
+        if strong_count > 0:
+            if allow_heuristic and strong_count < max(
+                3,
+                int(crawler_runtime_settings.listing_min_items) + 1,
+            ):
+                heuristic_count = await _heuristic_card_count(page, surface=surface)
+                if heuristic_count <= 0:
+                    return 0
+                return max(strong_count, heuristic_count)
+            return strong_count
+        if weak_count > 0 and allow_heuristic:
+            return await _heuristic_card_count(page, surface=surface)
+        resolved = weak_count
+    else:
+        try:
+            resolved = max(0, int(selector_counts or 0))
+        except (TypeError, ValueError):
+            resolved = 0
     if resolved > 0:
         return resolved
     if allow_heuristic:
         return await _heuristic_card_count(page, surface=surface)
     return 0
+
+
+def _listing_selector_is_weak(selector: str) -> bool:
+    normalized = " ".join(str(selector or "").strip().lower().split())
+    return normalized == ".product" or any(
+        token in normalized
+        for token in (
+            "[class*='product' i]",
+            '[class*="product" i]',
+            "[class*='productcard' i]",
+            '[class*="productcard" i]',
+            "[data-testid*='product' i]",
+            '[data-testid*="product" i]',
+            "[data-test*='product' i]",
+            '[data-test*="product" i]',
+            "[data-component*='product' i]",
+            '[data-component*="product" i]',
+            "[data-automation*='product' i]",
+            '[data-automation*="product" i]',
+        )
+    )
 
 
 async def _card_count(page, *, surface: str) -> int:
@@ -1573,6 +1686,8 @@ async def _heuristic_card_count(page, *, surface: str) -> int:
 
 
 def _node_supports_listing_heuristic(node, *, surface: str) -> bool:
+    if _node_looks_like_listing_chrome(node):
+        return False
     signature = _listing_node_signature(node)
     has_positive_signature = any(
         token in signature for token in LISTING_STRUCTURE_POSITIVE_HINTS
@@ -1585,6 +1700,24 @@ def _node_supports_listing_heuristic(node, *, surface: str) -> bool:
     if has_price and (has_positive_signature or has_media):
         return True
     return has_positive_signature and has_media
+
+
+def _node_looks_like_listing_chrome(node) -> bool:
+    signature = _listing_node_signature(node)
+    if any(token in signature for token in LISTING_NON_LISTING_PATH_TOKENS):
+        return True
+    try:
+        text = str(node.text(separator=" ", strip=True) or "").strip().lower()[:800]
+    except Exception:
+        return False
+    return any(
+        token in text
+        for token in (
+            *LISTING_UTILITY_TITLE_TOKENS,
+            "newsletter",
+            "whatsapp",
+        )
+    )
 
 
 def _node_contains_nested_listing_candidates(node, *, surface: str) -> bool:
@@ -1641,9 +1774,37 @@ def _node_has_detail_like_link(node, *, surface: str) -> bool:
         href = str(attrs.get("href") or "").strip().lower()
         if not href or href.startswith(("#", "javascript:")):
             continue
+        if _listing_href_is_structural(href):
+            continue
         if any(token in href for token in href_tokens):
             return True
     return False
+
+
+def _listing_href_is_structural(href: str) -> bool:
+    try:
+        parsed = urlsplit(href)
+    except Exception:
+        return False
+    segments = [
+        segment.strip().lower()
+        for segment in str(parsed.path or "").split("/")
+        if segment.strip()
+    ]
+    if not segments:
+        return False
+    tokenized = [
+        {
+            token
+            for token in re.split(r"[\-\.]+", segment)
+            if token
+        }
+        for segment in segments
+    ]
+    if tokenized[-1] & set(LISTING_NON_LISTING_PATH_TOKENS):
+        return True
+    leading = tokenized[:-1] if len(tokenized) <= 2 else []
+    return any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading)
 
 
 def _snapshot_progressed(previous: dict[str, int], current: dict[str, int]) -> bool:

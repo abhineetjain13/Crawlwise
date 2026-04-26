@@ -3671,6 +3671,16 @@
       "collections"
     ]
   },
+  "LISTING_CLIENT_RENDERED_SHELL_HINTS": {
+    "__type__": "tuple",
+    "items": [
+      "catalog/category/view",
+      "product_list_order",
+      "layer-product-list",
+      "products-grid",
+      "data-container=\"product-grid\""
+    ]
+  },
   "LISTING_COLOR_ACTION_PREFIXES": {
     "__type__": "tuple",
     "items": [
@@ -4004,7 +4014,9 @@
       "contactus",
       "account",
       "store",
-      "login"
+      "login",
+      "accessories",
+      "research"
     ]
   },
   "LISTING_PRODUCT_DETAIL_IMAGE_SOURCE_KEYS": {
@@ -4077,6 +4089,16 @@
   "LISTING_STRUCTURED_SPEC_GROUP_LIMIT": 8,
   "LISTING_STRUCTURED_SPEC_ROW_LIMIT": 24,
   "LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH": 7,
+  "LISTING_CARD_URL_ATTRS": {
+    "__type__": "tuple",
+    "items": [
+      "data-url",
+      "data-href",
+      "data-product-url",
+      "data-target-url",
+      "data-link"
+    ]
+  },
   "LISTING_STRUCTURE_NEGATIVE_HINTS": {
     "__type__": "tuple",
     "items": [
@@ -4084,12 +4106,20 @@
       "menu",
       "header",
       "footer",
+      "foot",
       "breadcrumb",
       "toolbar",
       "filter",
       "sort",
       "sidebar",
-      "pagination"
+      "pagination",
+      "promo",
+      "search",
+      "support",
+      "hamburger",
+      "contact",
+      "newsletter",
+      "rich-content"
     ]
   },
   "LISTING_STRUCTURE_POSITIVE_HINTS": {
@@ -4184,7 +4214,17 @@
       "product help",
       "product tips",
       "tips & advice",
-      "tools & resources"
+      "tools & resources",
+      "explore accessories",
+      "register your machine",
+      "find the right part",
+      "expert support",
+      "owner support",
+      "most searched for",
+      "subscribe to dyson",
+      "whatsapp conversation",
+      "email us",
+      "call us"
     ]
   },
   "LISTING_UTILITY_URL_TOKENS": {

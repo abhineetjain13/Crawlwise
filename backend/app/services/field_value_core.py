@@ -272,7 +272,11 @@ def infer_brand_from_product_url(*, url: str, title: object) -> str | None:
             if path_tokens[start : start + len(title_parts)] != title_parts:
                 continue
             brand_tokens = path_tokens[:start]
-            if not brand_tokens or len(brand_tokens) > LISTING_BRAND_MAX_WORDS:
+            if (
+                not brand_tokens
+                or len(brand_tokens) > LISTING_BRAND_MAX_WORDS
+                or not any(re.search(r"[a-z]", token) for token in brand_tokens)
+            ):
                 continue
             return " ".join(token.capitalize() for token in brand_tokens)
     return None

@@ -19,6 +19,30 @@ from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
 
 
+def test_select_primary_browser_html_prefers_full_rendered_when_traversal_fragment_is_capped() -> None:
+    traversal_result = SimpleNamespace(
+        activated=True,
+        progress_events=1,
+        card_count=236,
+        stop_reason="target_records_reached",
+    )
+
+    html = browser_page_flow._select_primary_browser_html(
+        surface="ecommerce_listing",
+        traversal_result=traversal_result,
+        traversal_html="<html><body><a href='/products/a'>A</a></body></html>",
+        rendered_html=(
+            "<html><body>"
+            "<a href='/products/a'>A</a>"
+            "<a href='/products/b'>B</a>"
+            "</body></html>"
+        ),
+        listing_min_items=2,
+    )
+
+    assert "products/b" in html
+
+
 @dataclass
 class _FakeHandle:
     label: str

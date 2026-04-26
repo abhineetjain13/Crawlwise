@@ -12,7 +12,7 @@ If a file is not listed, assume it is a helper under a listed owner.
 | File | Purpose |
 |---|---|
 | `run_test_sites_acceptance.py` | Acceptance runner for curated test-site batches |
-| `harness_support.py` | Acceptance helpers, explicit-surface handling, audit shaping |
+| `harness_support.py` | Acceptance helpers, `TEST_SITES.md` parsing, explicit-surface handling, audit shaping |
 | `test_site_sets/commerce_browser_heavy.json` | Commerce acceptance manifest and quality expectations |
 
 ### `api/` — route handlers only
@@ -103,6 +103,12 @@ Flow:
 | `url_safety.py` | SSRF and public-target validation |
 
 Import rule: import `fetch_page` from `crawl_fetch_runtime.py` directly.
+
+Canonical config owner:
+
+| File | Purpose |
+|---|---|
+| `config/runtime_settings.py` | browser runtime tunables, launch args, and browser stealth/init-script payload builders |
 
 ---
 

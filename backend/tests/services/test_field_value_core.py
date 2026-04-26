@@ -181,3 +181,13 @@ def test_infer_brand_from_product_url_skips_overlong_slug_and_keeps_valid_match(
         )
         == "Acme"
     )
+
+
+def test_infer_brand_from_product_url_rejects_numeric_product_id_prefix() -> None:
+    assert (
+        infer_brand_from_product_url(
+            url="https://example.com/products/492216804-black-leather-belts-for-men",
+            title="Black Leather Belts for Men",
+        )
+        is None
+    )

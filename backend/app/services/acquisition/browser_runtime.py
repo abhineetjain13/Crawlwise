@@ -119,7 +119,7 @@ try:
         navigator_user_agent=False,
         navigator_user_agent_data=False,
         navigator_vendor=False,
-        iframe_content_window=False,
+        iframe_content_window=True,
         navigator_webdriver=True,
         sec_ch_ua=False,
         webgl_vendor=False,
@@ -175,16 +175,51 @@ def _real_chrome_candidate_paths() -> tuple[str, ...]:
     )
 
 
+def real_chrome_executable_path() -> str | None:
+    if not crawler_runtime_settings.browser_real_chrome_enabled:
+        return None
+    for candidate in _real_chrome_candidate_paths():
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def real_chrome_browser_available() -> bool:
+    return real_chrome_executable_path() is not None
+
+
+def _launch_headless_for_engine(engine: str) -> bool:
+    normalized_engine = _normalize_browser_engine(engine)
+    if (
+        normalized_engine == _REAL_CHROME_BROWSER_ENGINE
+        and crawler_runtime_settings.browser_real_chrome_force_headful
+    ):
+        return False
+    return bool(settings.playwright_headless)
+
+
+def _use_native_real_chrome_context(engine: str) -> bool:
+    return (
+        _normalize_browser_engine(engine) == _REAL_CHROME_BROWSER_ENGINE
+        and crawler_runtime_settings.browser_real_chrome_native_context
+    )
+
+
+def _apply_stealth_for_engine(engine: str) -> bool:
+    normalized_engine = _normalize_browser_engine(engine)
+    if normalized_engine != _REAL_CHROME_BROWSER_ENGINE:
+        return True
+    return bool(crawler_runtime_settings.browser_real_chrome_apply_stealth)
+
+
 def _resolve_browser_binary(engine: str) -> tuple[str | None, str]:
     normalized_engine = _normalize_browser_engine(engine)
     if normalized_engine != _REAL_CHROME_BROWSER_ENGINE:
         return None, _CHROMIUM_BROWSER_ENGINE
-    if not crawler_runtime_settings.browser_real_chrome_enabled:
+    executable_path = real_chrome_executable_path()
+    if executable_path is None:
         return None, _CHROMIUM_BROWSER_ENGINE
-    for candidate in _real_chrome_candidate_paths():
-        if Path(candidate).is_file():
-            return candidate, candidate
-    return None, _CHROMIUM_BROWSER_ENGINE
+    return executable_path, executable_path
 
 
 def _proxy_host_port(parsed) -> str:
@@ -316,7 +351,7 @@ class SharedBrowserRuntime:
                 for value in list(crawler_runtime_settings.browser_launch_args or ())
                 if str(value).strip()
             ]
-            launch_headless = bool(settings.playwright_headless)
+            launch_headless = _launch_headless_for_engine(self.browser_engine)
             if (
                 launch_headless
                 and bool(crawler_runtime_settings.browser_use_new_headless)
@@ -379,6 +414,14 @@ class SharedBrowserRuntime:
         locality_profile: dict[str, object] | None = None,
         inject_init_script: bool = False,
     ) -> PlaywrightContextSpec:
+        if (
+            _use_native_real_chrome_context(self.browser_engine)
+            and not inject_init_script
+        ):
+            return PlaywrightContextSpec(
+                context_options={},
+                init_script=None,
+            )
         browser_major_version = None
         if self._browser is not None:
             raw_version = str(getattr(self._browser, "version", "") or "")
@@ -472,7 +515,8 @@ class SharedBrowserRuntime:
             if init_script:
                 await context.add_init_script(init_script)
             await _configure_context_routes(context)
-            await _apply_stealth(context)
+            if _apply_stealth_for_engine(self.browser_engine):
+                await _apply_stealth(context)
             async with self._counter_lock:
                 self._total_contexts_created += 1
             page = await context.new_page()
@@ -2081,6 +2125,8 @@ __all__ = [
     "get_browser_runtime",
     "looks_like_low_content_shell",
     "read_network_payload_body",
+    "real_chrome_browser_available",
+    "real_chrome_executable_path",
     "should_capture_network_payload",
     "shutdown_browser_runtime",
     "shutdown_browser_runtime_sync",

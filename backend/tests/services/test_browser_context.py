@@ -82,6 +82,8 @@ def test_build_playwright_context_options_uses_generated_identity(
         ),
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
+        "sec-ch-ua-platform-version": '"15.0.0"',
+        "sec-ch-ua-bitness": '"64"',
     }
 
 
@@ -257,6 +259,8 @@ def test_create_browser_identity_aligns_platform_to_user_agent(
     assert identity.raw_fingerprint.navigator.platform == "Win32"
     assert identity.raw_fingerprint.navigator.userAgentData["platform"] == "Windows"
     assert identity.extra_http_headers["sec-ch-ua-platform"] == '"Windows"'
+    assert identity.extra_http_headers["sec-ch-ua-platform-version"] == '"15.0.0"'
+    assert identity.extra_http_headers["sec-ch-ua-bitness"] == '"64"'
 
 
 def test_build_playwright_context_options_prefers_available_screen_height(
@@ -414,6 +418,8 @@ def test_build_playwright_context_options_repairs_incoherent_client_hints_after_
     )
     assert options["extra_http_headers"]["sec-ch-ua-mobile"] == "?0"
     assert options["extra_http_headers"]["sec-ch-ua-platform"] == '"Windows"'
+    assert options["extra_http_headers"]["sec-ch-ua-platform-version"] == '"15.0.0"'
+    assert options["extra_http_headers"]["sec-ch-ua-bitness"] == '"64"'
 
 
 def test_build_playwright_context_options_replaces_malformed_client_hints_without_rejecting_fingerprint(
@@ -460,6 +466,8 @@ def test_build_playwright_context_options_replaces_malformed_client_hints_withou
     )
     assert options["extra_http_headers"]["sec-ch-ua-mobile"] == "?0"
     assert options["extra_http_headers"]["sec-ch-ua-platform"] == '"Windows"'
+    assert options["extra_http_headers"]["sec-ch-ua-platform-version"] == '"15.0.0"'
+    assert options["extra_http_headers"]["sec-ch-ua-bitness"] == '"64"'
 
 
 def test_build_playwright_context_options_uses_configured_min_chrome_version(
@@ -779,6 +787,101 @@ def test_build_playwright_context_spec_injects_runtime_hardware_values(
     assert "const deviceMemory = 8.0;" in spec.init_script
 
 
+def test_build_playwright_context_spec_injects_chrome_runtime_and_audio_masks() -> None:
+    spec = browser_identity.build_playwright_context_spec(
+        identity=browser_identity.BrowserIdentity(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            locale="en-US",
+            device_scale_factor=1.0,
+            has_touch=False,
+            is_mobile=False,
+            raw_fingerprint=SimpleNamespace(
+                navigator=SimpleNamespace(
+                    hardwareConcurrency=8,
+                    deviceMemory=8,
+                )
+            ),
+        )
+    )
+
+    assert spec.init_script is not None
+    assert "globalThis.chrome = globalThis.chrome || {};" in spec.init_script
+    assert "OnInstalledReason" in spec.init_script
+    assert "assignIfMissing('getManifest', () => undefined);" in spec.init_script
+    assert "const extensionId = typeof runtime.id === 'string' && runtime.id ? runtime.id : '';" in spec.init_script
+    assert "const audioSeed =" in spec.init_script
+    assert "getFloatFrequencyData" in spec.init_script
+    assert "getChannelData(channel)" in spec.init_script
+    assert "getFloatTimeDomainData" in spec.init_script
+    assert "getByteTimeDomainData" in spec.init_script
+    assert "globalThis.OfflineAudioContext" in spec.init_script
+    assert "const wrapContextConstructor = (globalKey) => {" in spec.init_script
+    assert "return patchAudioContextInstance(Reflect.construct(target, args, newTarget));" in spec.init_script
+    assert "getImageData" in spec.init_script
+    assert "toDataURL" in spec.init_script
+    assert "getParameter" in spec.init_script
+    assert "readPixels" in spec.init_script
+    assert "WEBGL_debug_renderer_info" in spec.init_script
+    assert "runtime.csi = runtime.csi ||" in spec.init_script
+    assert "runtime.loadTimes = runtime.loadTimes ||" in spec.init_script
+    assert "installDescriptor(Navigator.prototype, 'keyboard', () => keyboard);" in spec.init_script
+    assert "installDescriptor(Navigator.prototype, 'mediaCapabilities', () => mediaCapabilities);" in spec.init_script
+    assert "installDescriptor(Navigator.prototype, 'gpu', () => gpu);" in spec.init_script
+
+
+def test_playwright_identity_seed_is_stable_and_changes_with_identity() -> None:
+    base_identity = browser_identity.BrowserIdentity(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/145.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1366, "height": 768},
+        extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        locale="en-US",
+        device_scale_factor=1.0,
+        has_touch=False,
+        is_mobile=False,
+        raw_fingerprint=SimpleNamespace(
+            navigator=SimpleNamespace(
+                hardwareConcurrency=8,
+                deviceMemory=8,
+            )
+        ),
+    )
+    changed_identity = browser_identity.BrowserIdentity(
+        user_agent=base_identity.user_agent,
+        viewport={"width": 1440, "height": 900},
+        extra_http_headers=base_identity.extra_http_headers,
+        locale=base_identity.locale,
+        device_scale_factor=base_identity.device_scale_factor,
+        has_touch=base_identity.has_touch,
+        is_mobile=base_identity.is_mobile,
+        raw_fingerprint=base_identity.raw_fingerprint,
+    )
+
+    first_seed = browser_identity._playwright_identity_seed(base_identity)
+    second_seed = browser_identity._playwright_identity_seed(base_identity)
+    changed_seed = browser_identity._playwright_identity_seed(changed_identity)
+
+    assert first_seed == second_seed
+    assert first_seed != changed_seed
+
+
+def test_playwright_stealth_enables_iframe_content_window() -> None:
+    stealth = getattr(acquisition_browser_runtime, "_STEALTH", None)
+    if stealth is None:
+        pytest.skip("playwright_stealth not installed")
+
+    assert stealth.iframe_content_window is True
+
+
 def test_build_playwright_context_options_aligns_auto_locality_to_system_timezone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -910,6 +1013,68 @@ def test_build_playwright_context_spec_masks_platform_in_init_script() -> None:
     assert spec.init_script is not None
     assert "navigatorPlatform" in spec.init_script
     assert "uaPlatform" in spec.init_script
+
+
+def test_build_playwright_context_spec_injects_navigator_coherence_bundle() -> None:
+    spec = browser_identity.build_playwright_context_spec(
+        identity=browser_identity.BrowserIdentity(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            locale="en-US",
+            device_scale_factor=1.0,
+            has_touch=False,
+            is_mobile=False,
+            raw_fingerprint=None,
+        ),
+        locality_profile={"geo_country": "US", "language_hint": "en-US"},
+    )
+
+    assert spec.init_script is not None
+    assert "connectionProfile" in spec.init_script
+    assert "Navigator.prototype, 'connection'" in spec.init_script
+    assert "Navigator.prototype, 'maxTouchPoints'" in spec.init_script
+    assert "Screen.prototype, 'orientation'" in spec.init_script
+    assert "const buildOrientation = () => {" in spec.init_script
+    assert "nativeOrientation.lock ? nativeOrientation.lock(...args)" in spec.init_script
+    assert "FontFaceSet.prototype.check" in spec.init_script
+    assert "CSSStyleDeclaration.prototype.setProperty" in spec.init_script
+    assert "Element.prototype.setAttribute" in spec.init_script
+    assert "document.fonts, 'ready'" in spec.init_script
+    assert "patchIntlConstructor('NumberFormat'" in spec.init_script
+    assert "patchIntlConstructor('PluralRules'" in spec.init_script
+    assert "permissionStates" in spec.init_script
+    assert "enumerateDevices = async" in spec.init_script
+    assert "const maxTouchPoints = 0;" in spec.init_script
+    assert '"portrait-primary"' not in spec.init_script
+
+
+def test_build_playwright_context_spec_sets_mobile_touch_points_and_orientation() -> None:
+    spec = browser_identity.build_playwright_context_spec(
+        identity=browser_identity.BrowserIdentity(
+            user_agent=(
+                "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Mobile Safari/537.36"
+            ),
+            viewport={"width": 390, "height": 844},
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            locale="en-US",
+            device_scale_factor=3.0,
+            has_touch=True,
+            is_mobile=True,
+            raw_fingerprint=None,
+        ),
+        locality_profile={"geo_country": "US", "language_hint": "en-US"},
+    )
+
+    assert spec.init_script is not None
+    assert "const maxTouchPoints = 5;" in spec.init_script
+    assert 'const orientationType = "portrait-primary";' in spec.init_script
 
 
 def test_build_playwright_context_spec_masks_webrtc_candidates() -> None:
@@ -1100,6 +1265,8 @@ def test_coherent_sec_ch_headers_accepts_tuple_brand_entries() -> None:
             ),
             "mobile": False,
             "platform": "Windows",
+            "platformVersion": "15.0.0",
+            "bitness": "64",
         }
     )
 
@@ -1108,6 +1275,8 @@ def test_coherent_sec_ch_headers_accepts_tuple_brand_entries() -> None:
     )
     assert headers["sec-ch-ua-mobile"] == "?0"
     assert headers["sec-ch-ua-platform"] == '"Windows"'
+    assert headers["sec-ch-ua-platform-version"] == '"15.0.0"'
+    assert headers["sec-ch-ua-bitness"] == '"64"'
 
 
 @pytest.mark.asyncio
@@ -1292,6 +1461,68 @@ async def test_shared_browser_runtime_applies_playwright_stealth_with_browserfor
 
     assert init_scripts == ["window.__browserforge = true;"]
     assert len(stealth_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_uses_native_context_and_skips_stealth_for_real_chrome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: list[dict[str, object]] = []
+    stealth_calls: list[object] = []
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def new_page(self):
+            return SimpleNamespace(context=self)
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            captured_kwargs.append(kwargs)
+            return FakeContext()
+
+    async def _fake_stealth(target) -> None:
+        stealth_calls.append(target)
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "_resolve_browser_binary",
+        lambda _engine: ("C:/Chrome/chrome.exe", "C:/Chrome/chrome.exe"),
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec({"user_agent": "Mozilla/5.0 Runtime/145.0"}),
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_real_chrome_native_context",
+        True,
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_real_chrome_apply_stealth",
+        False,
+    )
+    monkeypatch.setattr(acquisition_browser_runtime, "_STEALTH_APPLIER", _fake_stealth)
+
+    runtime = acquisition_browser_runtime.SharedBrowserRuntime(
+        max_contexts=1,
+        browser_engine="real_chrome",
+    )
+    runtime._browser = FakeBrowser()
+    runtime._playwright = object()
+
+    async with runtime.page():
+        pass
+
+    assert captured_kwargs == [{}]
+    assert stealth_calls == []
 
 
 @pytest.mark.asyncio
@@ -1500,6 +1731,84 @@ async def test_shared_browser_runtime_launches_http_proxy_directly(
                 "username": "user-name",
                 "password": "pass-word",
             },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_launches_real_chrome_headful_for_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_launch_kwargs: list[dict[str, object]] = []
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def new_page(self):
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            del kwargs
+            return FakeContext()
+
+    class FakePlaywrightInstance:
+        def __init__(self) -> None:
+            self.chromium = SimpleNamespace(launch=self._launch)
+
+        async def _launch(self, **kwargs):
+            captured_launch_kwargs.append(kwargs)
+            return FakeBrowser()
+
+        async def stop(self) -> None:
+            return None
+
+    class FakePlaywrightManager:
+        async def start(self) -> FakePlaywrightInstance:
+            return FakePlaywrightInstance()
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "_resolve_browser_binary",
+        lambda _engine: ("C:/Chrome/chrome.exe", "C:/Chrome/chrome.exe"),
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_real_chrome_force_headful",
+        True,
+    )
+    monkeypatch.setattr(
+        "playwright.async_api.async_playwright",
+        lambda: FakePlaywrightManager(),
+    )
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(
+        max_contexts=1,
+        browser_engine="real_chrome",
+    )
+
+    async with runtime.page():
+        pass
+
+    assert captured_launch_kwargs == [
+        {
+            "headless": False,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            ],
+            "executable_path": "C:/Chrome/chrome.exe",
         }
     ]
 
@@ -1938,7 +2247,10 @@ async def test_shared_browser_runtime_bounds_hung_context_cleanup(
         for record in caplog.records
     )
     assert any(
-        "Timed out closing browser context" in record.message
+        (
+            "Timed out closing browser context" in record.message
+            or "Browser context close was cancelled" in record.message
+        )
         for record in caplog.records
     )
 
@@ -2255,6 +2567,18 @@ def test_real_chrome_candidate_paths_include_common_platform_defaults(
     assert "/usr/bin/google-chrome" in candidates
     assert "/opt/google/chrome/chrome" in candidates
     assert "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" in candidates
+
+
+def test_real_chrome_browser_available_requires_enabled_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        acquisition_browser_runtime.crawler_runtime_settings,
+        "browser_real_chrome_enabled",
+        False,
+    )
+
+    assert acquisition_browser_runtime.real_chrome_browser_available() is False
 
 
 @pytest.mark.asyncio

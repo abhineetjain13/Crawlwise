@@ -928,13 +928,13 @@ def _select_primary_browser_html(
     stop_reason = str(getattr(traversal_result, "stop_reason", "") or "").strip()
     rendered_signal_count = _listing_html_detail_anchor_count(rendered_html)
     traversal_signal_count = _listing_html_detail_anchor_count(traversal_html)
+    if rendered_signal_count > traversal_signal_count:
+        return rendered_html
     if progress_events > 0 and (
         card_count >= max(1, int(listing_min_items))
         or traversal_signal_count >= max(2, rendered_signal_count)
     ):
         return traversal_html
-    if rendered_signal_count > traversal_signal_count:
-        return rendered_html
     if card_count >= max(1, int(listing_min_items)):
         return rendered_html
     if stop_reason.endswith("_blocked") and traversal_signal_count >= max(

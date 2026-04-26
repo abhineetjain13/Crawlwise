@@ -26,6 +26,7 @@ from app.services.acquisition.browser_runtime import (
     expand_all_interactive_elements,
     get_browser_runtime,
     read_network_payload_body,
+    real_chrome_browser_available,
     should_capture_network_payload,
     shutdown_browser_runtime,
     temporary_browser_page,
@@ -397,6 +398,7 @@ async def fetch_page(
             type(context.last_error).__name__,
         )
         try:
+            browser_host_policy = await load_host_protection_policy(context.url)
             return await _invoke_run_browser_attempts(
                 context,
                 reason=browser_reason or "http-escalation",
@@ -405,7 +407,7 @@ async def fetch_page(
                 capture_page_markdown=bool(capture_page_markdown),
                 capture_screenshot=context.capture_screenshot,
                 proxies=context.proxies,
-                host_policy=learned_host_policy,
+                host_policy=browser_host_policy,
             )
         except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
             _attach_exception_browser_diagnostics(
@@ -580,7 +582,12 @@ async def _run_browser_attempts(
             host_policy=active_host_policy,
             proxy=proxy,
         )
-        for engine_index, browser_engine in enumerate(engine_attempts, start=1):
+        attempted_engines_for_proxy: set[str] = set()
+        engine_index = 0
+        while engine_index < len(engine_attempts):
+            browser_engine = engine_attempts[engine_index]
+            engine_index += 1
+            attempted_engines_for_proxy.add(browser_engine)
             host_policy_snapshot = _host_policy_snapshot(active_host_policy)
             try:
                 await wait_for_host_slot(context.url)
@@ -623,6 +630,12 @@ async def _run_browser_attempts(
                     )
                     active_host_policy = await load_host_protection_policy(
                         result.final_url or result.url or context.url
+                    )
+                    engine_attempts = _extend_browser_engine_attempts_after_block(
+                        engine_attempts=engine_attempts,
+                        attempted_engines=attempted_engines_for_proxy,
+                        context=context,
+                        host_policy=active_host_policy,
                     )
                     if engine_index < len(engine_attempts):
                         cooldown_ms = max(
@@ -963,6 +976,8 @@ def _browser_engine_attempts(
         return engines
     if not bool(crawler_runtime_settings.browser_real_chrome_enabled):
         return engines
+    if not real_chrome_browser_available():
+        return engines
     if host_policy.chromium_blocked and not host_policy.real_chrome_success:
         return ["real_chrome", "chromium"]
     if host_policy.real_chrome_blocked and not host_policy.chromium_blocked:
@@ -970,6 +985,25 @@ def _browser_engine_attempts(
     if host_policy.request_blocked or host_policy.prefer_browser or host_policy.last_block_vendor:
         return ["chromium", "real_chrome"]
     return engines
+
+
+def _extend_browser_engine_attempts_after_block(
+    *,
+    engine_attempts: list[str],
+    attempted_engines: set[str],
+    context: _FetchRuntimeContext,
+    host_policy: HostProtectionPolicy,
+) -> list[str]:
+    refreshed_attempts = _browser_engine_attempts(
+        context=context,
+        host_policy=host_policy,
+    )
+    appended = list(engine_attempts)
+    for engine in refreshed_attempts:
+        if engine in attempted_engines or engine in appended:
+            continue
+        appended.append(engine)
+    return appended
 
 
 def _browser_escalation_proxies(

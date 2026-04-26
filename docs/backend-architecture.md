@@ -208,7 +208,9 @@ Current live behavior:
 - fetch results carry headers, blocked state, browser diagnostics, transient browser artifacts, and network payload metadata
 - browser runtime is pooled and exposes runtime snapshots
 - `browserforge`-backed context identity is active
+- browser fetch now has a separate `real_chrome` fallback lane for protected ecommerce targets. When `C:\Program Files\Google\Chrome\Application\chrome.exe` (or `CRAWLER_RUNTIME_BROWSER_REAL_CHROME_EXECUTABLE_PATH`) is available, the fallback can launch native local Chrome headful and use a native context with stealth disabled by default, while probe-mode runs can still inject the full fingerprint scripts
 - `run_browser_surface_probe.py` is the canonical browser-surface verification harness for acquisition changes. It runs through the same shared browser runtime as crawls and writes timestamped `browser_surface_probe` artifacts with direct JS baseline, Sannysoft/Pixelscan/CreepJS extracted values, consensus drift, connection source metadata, and normalized findings.
+- the browser-surface probe treats `window.chrome.runtime` as healthy when its type is `object`, and its `isTrusted` behavioral smoke now uses real Playwright mouse input against a temporary overlay target instead of JS-dispatched synthetic events, so probe findings reflect actual runtime leaks instead of expected DOM-event semantics
 - browser contexts now reload the per-run temp Playwright storage state first and then fall back to domain-scoped `DomainCookieMemory`, so future runs can reuse learned cookies/localStorage/consent state for the same domain without rewriting unchanged state on every context close
 - domain cookie memory is intentionally filtered acquisition memory, not a verbatim storage-state cache: challenge-only bot-defense state (for example PerimeterX `_px*`, `pxcts`, PX localStorage) is dropped on load/save, and blocked browser runs do not persist domain memory
 - blocked browser runs also do not rewrite per-run Playwright storage snapshots, so one challenged detail page does not poison later URLs in the same batch run
@@ -245,6 +247,7 @@ Current live behavior:
 - browser contexts apply `playwright-stealth` when installed and accept a per-fetch `proxy` for rotated-proxy traversal; `temporary_browser_page` is a thin wrapper over `SharedBrowserRuntime.page(proxy=...)`
 - `browser_identity` is host-OS-locked via `browserforge`, with a small regeneration loop to reject fingerprints whose UA tokens disagree with the OS
 - browser identity also normalizes exposed runtime hardware upstream: `hardwareConcurrency` is clamped to host-consistent values, `deviceMemory` is bucketed like Chrome, and page JS sees the same values as the generated context identity.
+- browser identity init scripts now patch `window.chrome.runtime` with a Chrome-like runtime stub, mask Audio/OfflineAudio analyser/channel APIs with deterministic per-identity noise, and apply deterministic canvas/WebGL spoofing (canvas image-data/export noise plus profile-consistent WebGL vendor/renderer/readPixels overrides); the browser-surface probe now emits flattened canvas hash/data-url and WebGL vendor/renderer baseline fields for quick verification, and the shared `playwright-stealth` runtime leaves `iframe_content_window` enabled to close the iframe leak noted by the browser-surface probe
 - blocked-page escalation is now two-pronged: vendor-specific response headers (DataDome, Cloudflare, Akamai, PerimeterX, Sucuri, ...) classified via `classify_block_from_headers` short-circuit into the browser and mark the host vendor-blocked so sibling fetchers skip further HTTP attempts; HTML heuristics continue to catch vendor-silent blocks
 - `is_non_retryable_http_status` keeps `401` out of browser escalation (auth walls) while still escalating `403`/`429` challenges, and `classify_blocked_page` emits typed `BlockPageClassification` outcomes (`auth_wall`, `rate_limited`, `challenge_page`, ...) distinct from network failures
 - `classify_blocked_page` must keep provider/body evidence even on forced `403` / `429` outcomes; status-only early returns are not enough because recovery, diagnostics, and regression triage need the concrete blocker family
@@ -482,6 +485,10 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe run_extraction_smoke.py
 .\.venv\Scripts\python.exe run_test_sites_acceptance.py
 ```
+
+Acceptance harness note:
+
+- `harness_support.parse_test_sites_markdown()` consumes literal URLs from `TEST_SITES.md` lines and markdown tables without rewriting them; when a table `Surface` cell says `Listing`, `Detail`, `AJAX listing`, `Infinite scroll`, or `SPA Detail`, that label only steers surface inference (`ecommerce_listing` vs `ecommerce_detail`) while the source URL remains unchanged
 
 Companion docs:
 

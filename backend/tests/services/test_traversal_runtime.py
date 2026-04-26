@@ -10,6 +10,7 @@ from app.services.acquisition.traversal import (
     TraversalResult,
     _click_with_retry,
     _locator_still_resolves,
+    _wait_for_load_more_card_gain,
     count_listing_cards,
     dismiss_overlays_if_needed,
     execute_listing_traversal,
@@ -1298,6 +1299,105 @@ async def test_count_listing_cards_falls_back_to_heuristics_when_selectors_miss(
     count = await count_listing_cards(_SelectorPage(), surface="ecommerce_listing")
 
     assert count == 7
+
+
+@pytest.mark.asyncio
+async def test_count_listing_cards_ignores_weak_product_selector_chrome() -> None:
+    class _WeakProductChromePage:
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            assert "querySelectorAll(selector).length" in script
+            return {
+                selector: (
+                    2
+                    if traversal_module._listing_selector_is_weak(str(selector))
+                    else 0
+                )
+                for selector in list(arg or [])
+            }
+
+        async def content(self) -> str:
+            return """
+            <html>
+              <body>
+                <div class="product newsletter-card">
+                  <a href="/products/hair-care/hair-care-accessories">Explore accessories</a>
+                  <p>Subscribe to Dyson and get ₹2,000 off.</p>
+                </div>
+                <div class="product contact-card">
+                  <a href="/contact">Contact us</a>
+                  <p>You can call us 1-800-258-6688</p>
+                </div>
+              </body>
+            </html>
+            """
+
+    count = await count_listing_cards(
+        _WeakProductChromePage(),
+        surface="ecommerce_listing",
+    )
+
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_count_listing_cards_prefers_product_anchor_count_over_productcard_substring() -> None:
+    class _DesertcartCountPage:
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            assert "querySelectorAll(selector).length" in script
+            return {
+                selector: (
+                    10
+                    if "productcard" in str(selector).lower()
+                    else 4
+                    if str(selector) == "a[href*='/products/']"
+                    else 0
+                )
+                for selector in list(arg or [])
+            }
+
+    count = await count_listing_cards(
+        _DesertcartCountPage(),
+        surface="ecommerce_listing",
+    )
+
+    assert count == 4
+
+
+@pytest.mark.asyncio
+async def test_load_more_wait_keeps_best_delayed_card_gain() -> None:
+    class _DelayedGainPage:
+        def __init__(self) -> None:
+            self.elapsed_ms = 0
+
+        async def wait_for_timeout(self, timeout_ms: int) -> None:
+            self.elapsed_ms += int(timeout_ms)
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> Any:
+            if "querySelectorAll(selector).length" in script:
+                count = 236 if self.elapsed_ms >= 3000 else 144
+                return {
+                    selector: (
+                        count if str(selector) == "a[href*='/products/']" else 0
+                    )
+                    for selector in list(arg or [])
+                }
+            return {
+                "scroll_height": 2000,
+                "client_height": 600,
+                "overflow_containers": 0,
+                "content_signature_source": f"cards-{self.elapsed_ms}",
+            }
+
+    snapshot = await _wait_for_load_more_card_gain(
+        _DelayedGainPage(),
+        previous={"card_count": 144},
+        surface="ecommerce_listing",
+        max_records=200,
+        deadline_at=None,
+    )
+
+    assert snapshot is not None
+    assert snapshot["card_count"] == 236
 
 
 @pytest.mark.asyncio

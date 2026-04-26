@@ -92,7 +92,7 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
     <input
       {...normalizedProps}
       className={cn(
-        "input focus-ring",
+        "input focus-ring px-3",
         normalizedProps.className,
       )}
     />
@@ -110,7 +110,7 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
     <textarea
       {...normalizedProps}
       className={cn(
-        "textarea focus-ring",
+        "textarea focus-ring px-3",
         normalizedProps.className,
       )}
     />

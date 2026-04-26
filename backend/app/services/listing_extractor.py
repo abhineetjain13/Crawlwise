@@ -13,6 +13,7 @@ from app.services.config.extraction_rules import (
     JOB_UTILITY_URL_TOKENS,
     LISTING_BRAND_MAX_WORDS,
     LISTING_BRAND_SELECTORS,
+    LISTING_CARD_URL_ATTRS,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_LABEL_NOISE_TOKENS,
     LISTING_NAVIGATION_TITLE_HINTS,
@@ -532,13 +533,20 @@ def _listing_title_contains_token_phrase(title: str, token: str) -> bool:
 
 
 def _listing_card_html_fragments(
-    dom_parser: LexborHTMLParser, *, is_job: bool
+    dom_parser: LexborHTMLParser,
+    *,
+    is_job: bool,
+    limit: int | None = None,
 ) -> list[object]:
+    fragment_limit = max(
+        int(crawler_runtime_settings.listing_fallback_fragment_limit),
+        int(limit or 0),
+    )
     return select_listing_fragment_nodes(
         dom_parser,
         surface="job_listing" if is_job else "ecommerce_listing",
         score_node=lambda node: _listing_fragment_score(node, is_job=is_job),
-        limit=max(1, int(crawler_runtime_settings.listing_fallback_fragment_limit)),
+        limit=max(1, fragment_limit),
     )
 
 
@@ -823,7 +831,11 @@ def _select_primary_anchor(
         if card_html and title_html:
             title_index = card_html.find(title_html)
     best: tuple[int, object, str, str] | None = None
-    for anchor in listing_node_css(card, "a[href]"):
+    anchors = []
+    if listing_node_attr(card, "href"):
+        anchors.append(card)
+    anchors.extend(listing_node_css(card, "a[href]"))
+    for anchor in anchors:
         url = absolute_url(page_url, listing_node_attr(anchor, "href"))
         if not url or (not same_host(page_url, url) and not same_site(page_url, url)):
             continue
@@ -860,6 +872,20 @@ def _select_primary_anchor(
         return None
     score, anchor, url, text = best
     return anchor, url, text, score
+
+
+def _select_primary_card_url(
+    card,
+    page_url: str,
+) -> str:
+    selectors = ",".join(f"[{attr}]" for attr in LISTING_CARD_URL_ATTRS)
+    candidates = [card, *listing_node_css(card, selectors)]
+    for candidate in candidates:
+        for attr_name in LISTING_CARD_URL_ATTRS:
+            url = absolute_url(page_url, listing_node_attr(candidate, attr_name))
+            if url and not _url_is_structural(url, page_url):
+                return url
+    return ""
 
 
 def _detail_like_path(url: str, *, is_job: bool) -> bool:
@@ -1129,7 +1155,15 @@ def _listing_record_from_card(
         title_node=title_node,
     )
     if primary_anchor is None:
-        return None
+        fallback_url = _select_primary_card_url(card, page_url)
+        if not fallback_url or title_node is None:
+            return None
+        primary_anchor = (
+            title_node,
+            fallback_url,
+            clean_text(listing_node_text(title_node)),
+            max(10, _card_title_score(title_node) + 4),
+        )
     anchor_node, url, anchor_text, anchor_score = primary_anchor
     title_node = title_node or anchor_node
     title_score = _card_title_score(title_node)
@@ -1341,9 +1375,17 @@ def extract_listing_records(
     context = prepare_extraction_context(html)
     dom_parser = context.dom_parser
     is_job_surface = surface.startswith("job_")
-    if not _listing_card_html_fragments(dom_parser, is_job=is_job_surface):
+    if not _listing_card_html_fragments(
+        dom_parser,
+        is_job=is_job_surface,
+        limit=max_records,
+    ):
         original_parser = LexborHTMLParser(context.original_html)
-        if _listing_card_html_fragments(original_parser, is_job=is_job_surface):
+        if _listing_card_html_fragments(
+            original_parser,
+            is_job=is_job_surface,
+            limit=max_records,
+        ):
             logger.debug("Using original listing DOM after cleaned DOM lost card fragments for %s", page_url)
             dom_parser = original_parser
 
@@ -1376,8 +1418,12 @@ def extract_listing_records(
         seed_urls: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        seen_urls: set[str] = set(seed_urls or ())
-        for card in _listing_card_html_fragments(parser, is_job=is_job_surface):
+        skipped_urls: set[str] = set(seed_urls or ())
+        for card in _listing_card_html_fragments(
+            parser,
+            is_job=is_job_surface,
+            limit=max_records,
+        ):
             record = _listing_record_from_card(
                 card,
                 page_url,
@@ -1387,9 +1433,8 @@ def extract_listing_records(
             if record is None:
                 continue
             url = str(record.get("url") or "")
-            if not url or url in seen_urls:
+            if not url or url in skipped_urls:
                 continue
-            seen_urls.add(url)
             records.append(record)
         return records
 

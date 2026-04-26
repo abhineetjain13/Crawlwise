@@ -797,7 +797,19 @@ def _detail_redirect_identity_is_mismatched(
         requested_codes,
         record_field_codes,
     ):
-        return True
+        candidate_url = text_or_none(record.get("url")) or current
+        if not (
+            candidate_url
+            and _detail_url_matches_requested_identity(
+                candidate_url,
+                requested_page_url=requested,
+            )
+            and _record_matches_requested_detail_identity(
+                record,
+                requested_page_url=requested,
+            )
+        ):
+            return True
     candidate_url = text_or_none(record.get("url")) or current
     if candidate_url and candidate_url != requested and same_site(requested, candidate_url):
         if not _detail_url_matches_requested_identity(

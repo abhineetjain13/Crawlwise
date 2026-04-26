@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging as _logging
 import copy as _copy
 import ctypes as _ctypes
+import hashlib as _hashlib
 import json as _json
 import os as _os
 import platform as _platform
@@ -24,7 +25,18 @@ except Exception:  # pragma: no cover - optional dependency contract
 _BrowserforgeFingerprint: Any | None = _BrowserforgeFingerprintType
 from cachetools import TTLCache
 
-from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.runtime_settings import (
+    build_audio_fingerprint_init_script,
+    build_canvas_fingerprint_init_script,
+    build_chrome_runtime_init_script,
+    build_font_surface_init_script,
+    build_intl_coherence_init_script,
+    build_navigator_coherence_init_script,
+    build_permissions_coherence_init_script,
+    build_performance_coherence_init_script,
+    build_webgl_fingerprint_init_script,
+    crawler_runtime_settings,
+)
 from app.services.network_resolution import _accept_language_for_locale
 
 try:
@@ -264,6 +276,21 @@ def _navigator_platform_from_user_agent(
     platform_label = _platform_label_from_user_agent(user_agent)
     fallback_value = str(fallback or "").strip()
     return _NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL.get(platform_label) or fallback_value or "Win32"
+
+
+def _platform_version_for_platform_label(platform_label: str) -> str:
+    if platform_label == "Windows":
+        return "15.0.0"
+    if platform_label == "macOS":
+        return "14.0.0"
+    return "6.0.0"
+
+
+def _ua_bitness_from_user_agent(user_agent: str) -> str:
+    lowered = str(user_agent or "").lower()
+    if "x86_64" in lowered or "win64" in lowered or "x64" in lowered or "amd64" in lowered:
+        return "64"
+    return "32"
 
 
 def _align_raw_fingerprint_to_user_agent_platform(raw_fingerprint: Any | None) -> Any | None:
@@ -675,6 +702,7 @@ def _coherent_client_hints_from_user_agent(
         return None
     resolved_mobile = bool(mobile) if mobile is not None else bool(_MOBILE_UA_RE.search(user_agent))
     full_version = f"{major_version}.0.0.0"
+    platform_label = _platform_label_from_user_agent(user_agent)
     return {
         "brands": [
             {"brand": "Not:A-Brand", "version": "99"},
@@ -687,7 +715,9 @@ def _coherent_client_hints_from_user_agent(
             {"brand": "Chromium", "version": full_version},
         ],
         "mobile": resolved_mobile,
-        "platform": _HOST_OS_PLATFORM_LABELS[_HOST_OS],
+        "platform": platform_label,
+        "platformVersion": _platform_version_for_platform_label(platform_label),
+        "bitness": _ua_bitness_from_user_agent(user_agent),
         "uaFullVersion": full_version,
     }
 
@@ -707,11 +737,20 @@ def _coherent_sec_ch_headers(user_agent_data: dict[str, object]) -> dict[str, st
     )
     if not sec_ch_ua:
         return {}
-    return {
+    headers = {
         "sec-ch-ua": sec_ch_ua,
         "sec-ch-ua-mobile": "?1" if bool(user_agent_data.get("mobile")) else "?0",
         "sec-ch-ua-platform": f'"{user_agent_data.get("platform") or _HOST_OS_PLATFORM_LABELS[_HOST_OS]}"',
     }
+    platform_version = str(user_agent_data.get("platformVersion") or "").strip()
+    if platform_version:
+        headers["sec-ch-ua-platform-version"] = (
+            f'"{platform_version.replace("\"", "")}"'
+        )
+    bitness = str(user_agent_data.get("bitness") or "").strip()
+    if bitness:
+        headers["sec-ch-ua-bitness"] = f'"{bitness.replace("\"", "")}"'
+    return headers
 
 
 def _should_replace_client_hint_headers(
@@ -1177,90 +1216,68 @@ def _playwright_masking_init_script() -> str:
     return "\n".join(lines)
 
 
+def _playwright_identity_seed(
+    identity: BrowserIdentity,
+    *,
+    timezone_id: str | None = None,
+) -> int:
+    raw_fingerprint = identity.raw_fingerprint
+    navigator = getattr(raw_fingerprint, "navigator", None)
+    seed_payload = _json.dumps(
+        {
+            "user_agent": identity.user_agent,
+            "viewport": dict(identity.viewport),
+            "locale": identity.locale,
+            "timezone_id": timezone_id or "",
+            "device_scale_factor": identity.device_scale_factor,
+            "has_touch": identity.has_touch,
+            "is_mobile": identity.is_mobile,
+            "hardware_concurrency": _resolved_hardware_concurrency(
+                getattr(navigator, "hardwareConcurrency", None)
+            ),
+            "device_memory_gb": _resolved_device_memory_gb(
+                getattr(navigator, "deviceMemory", None)
+            ),
+        },
+        sort_keys=True,
+    )
+    return int(
+        _hashlib.sha256(seed_payload.encode("utf-8")).hexdigest()[:8],
+        16,
+    )
+
+
 def _playwright_init_script_from_identity(
     identity: BrowserIdentity,
     *,
     timezone_id: str | None = None,
 ) -> str | None:
+    def _bundle_init_scripts(*parts: str) -> str:
+        return "\n;\n".join(
+            part for part in parts if str(part or "").strip()
+        )
+
     masking_script = _playwright_masking_init_script()
     raw_fingerprint = identity.raw_fingerprint
+    identity_seed = _playwright_identity_seed(
+        identity,
+        timezone_id=timezone_id,
+    )
+    user_agent_version_match = _UA_VERSION_RE.search(identity.user_agent)
+    chrome_runtime_version = (
+        f"{int(user_agent_version_match.group(1))}.0.0.0"
+        if user_agent_version_match is not None
+        else "145.0.0.0"
+    )
     color_scheme = str(
         crawler_runtime_settings.fingerprint_color_scheme or ""
     ).strip().lower()
-    permissions_script = "\n".join(
-        [
-            "(() => {",
-            "  const installDescriptor = (target, key, getter) => {",
-            "    if (!target) {",
-            "      return;",
-            "    }",
-            "    try {",
-            "      Object.defineProperty(target, key, {",
-            "        get: getter,",
-            "        enumerable: false,",
-            "        configurable: true,",
-            "      });",
-            "    } catch (_) {}",
-            "  };",
-            "  try {",
-            "    if (typeof Notification !== 'undefined') {",
-            "      installDescriptor(Notification, 'permission', () => 'default');",
-            "    }",
-            "  } catch (_) {}",
-            "  try {",
-            "    const nativeQuery = Navigator.prototype.permissions?.query || navigator.permissions?.query?.bind(navigator.permissions);",
-            "    if (nativeQuery) {",
-            "      const buildPermissionStatus = (state) => ({",
-            "        state,",
-            "        onchange: null,",
-            "        addEventListener() {},",
-            "        removeEventListener() {},",
-            "        dispatchEvent() { return true; },",
-            "      });",
-            "      const wrappedQuery = async function query(permissionDesc) {",
-            "        const name = String(permissionDesc && permissionDesc.name || '').toLowerCase();",
-            "        if (name === 'notifications') {",
-            "          return buildPermissionStatus('prompt');",
-            "        }",
-            "        return nativeQuery.call(this, permissionDesc);",
-            "      };",
-            "      if (navigator.permissions) {",
-            "        navigator.permissions.query = wrappedQuery.bind(navigator.permissions);",
-            "      }",
-            "      try {",
-            "        installDescriptor(Permissions.prototype, 'query', () => wrappedQuery);",
-            "      } catch (_) {}",
-            "    }",
-            "  } catch (_) {}",
-            "  try {",
-            "    if (typeof NetworkInformation !== 'undefined') {",
-            "      installDescriptor(NetworkInformation.prototype, 'downlinkMax', () => 10);",
-            "    }",
-            "  } catch (_) {}",
-            "  try {",
-            "    if (typeof ContentIndex === 'undefined') {",
-            "      globalThis.ContentIndex = class ContentIndex {",
-            "        async add() { return undefined; }",
-            "        async delete() { return undefined; }",
-            "        async getAll() { return []; }",
-            "      };",
-            "    }",
-            "    if (typeof ServiceWorkerRegistration === 'undefined') {",
-            "      globalThis.ServiceWorkerRegistration = class ServiceWorkerRegistration {};",
-            "    }",
-            "    installDescriptor(ServiceWorkerRegistration.prototype, 'contentIndex', () => new ContentIndex());",
-            "  } catch (_) {}",
-            "  try {",
-            "    if (typeof ContactsManager === 'undefined') {",
-            "      globalThis.ContactsManager = class ContactsManager {",
-            "        async getProperties() { return ['name', 'email', 'tel', 'address', 'icon']; }",
-            "        async select() { return []; }",
-            "      };",
-            "    }",
-            "    installDescriptor(Navigator.prototype, 'contacts', () => new ContactsManager());",
-            "  } catch (_) {}",
-            "})();",
-        ]
+    permissions_script = build_permissions_coherence_init_script(
+        granted_permissions=tuple(
+            str(value).strip().lower()
+            for value in tuple(crawler_runtime_settings.browser_context_permissions or ())
+            if str(value).strip()
+        ),
     )
     runtime_hardware_script = "\n".join(
         [
@@ -1283,6 +1300,37 @@ def _playwright_init_script_from_identity(
             "  installNavigatorValue('deviceMemory', deviceMemory);",
             "})();",
         ]
+    )
+    chrome_runtime_script = build_chrome_runtime_init_script(
+        chrome_runtime_version=chrome_runtime_version,
+    )
+    audio_fingerprint_script = build_audio_fingerprint_init_script(
+        audio_seed=identity_seed,
+    )
+    performance_coherence_script = build_performance_coherence_init_script()
+    platform_label = _platform_label_from_user_agent(identity.user_agent)
+    # Builder injects getImageData/toDataURL and getParameter/readPixels patches.
+    canvas_fingerprint_script = build_canvas_fingerprint_init_script(
+        canvas_seed=identity_seed,
+    )
+    webgl_fingerprint_script = build_webgl_fingerprint_init_script(
+        platform_label=platform_label,
+        is_mobile=identity.is_mobile,
+        webgl_seed=identity_seed,
+    )
+    navigator_coherence_script = build_navigator_coherence_init_script(
+        platform_label=platform_label,
+        is_mobile=identity.is_mobile,
+        viewport_width=int(identity.viewport.get("width", 0) or 0),
+        viewport_height=int(identity.viewport.get("height", 0) or 0),
+    )
+    font_surface_script = build_font_surface_init_script(
+        platform_label=platform_label,
+        is_mobile=identity.is_mobile,
+    )
+    intl_coherence_script = build_intl_coherence_init_script(
+        locale=identity.locale,
+        timezone_id=timezone_id,
     )
     color_scheme_script = "\n".join(
         [
@@ -1448,7 +1496,6 @@ def _playwright_init_script_from_identity(
             "(() => {",
             f"  const locale = {_json.dumps(identity.locale)};",
             f"  const languages = {_json.dumps(_locale_languages(identity.locale))};",
-            f"  const timezoneId = {_json.dumps(timezone_id)};",
             f"  const navigatorPlatform = {_json.dumps(_navigator_platform_from_user_agent(identity.user_agent))};",
             f"  const uaPlatform = {_json.dumps(_platform_label_from_user_agent(identity.user_agent))};",
             "  try {",
@@ -1483,7 +1530,7 @@ def _playwright_init_script_from_identity(
             "          if (prop === 'getHighEntropyValues') {",
             "            return async (hints) => {",
             "              const result = await target.getHighEntropyValues(hints);",
-            "              return { ...result, platform: uaPlatform };",
+            "              return { ...result, platform: uaPlatform, platformVersion: target.platformVersion || result.platformVersion, bitness: target.bitness || result.bitness, uaFullVersion: target.uaFullVersion || result.uaFullVersion, fullVersionList: target.fullVersionList || result.fullVersionList };",
             "            };",
             "          }",
             "          return Reflect.get(target, prop, receiver);",
@@ -1496,80 +1543,42 @@ def _playwright_init_script_from_identity(
             "      });",
             "    }",
             "  } catch (_) {}",
-            "  if (!timezoneId) {",
-            "    return;",
-            "  }",
-            "  const NativeDateTimeFormat = Intl.DateTimeFormat;",
-            "  const nativeResolvedOptions = NativeDateTimeFormat.prototype.resolvedOptions;",
-            "  const PatchedDateTimeFormat = function DateTimeFormat(...args) {",
-            "    const formatter = new NativeDateTimeFormat(...args);",
-            "    return new Proxy(formatter, {",
-            "      get(target, prop, receiver) {",
-            "        if (prop === 'resolvedOptions') {",
-            "          return () => ({ ...nativeResolvedOptions.call(target), timeZone: timezoneId });",
-            "        }",
-            "        return Reflect.get(target, prop, receiver);",
-            "      },",
-            "    });",
-            "  };",
-            "  for (const key of [...Object.getOwnPropertyNames(NativeDateTimeFormat), ...Object.getOwnPropertySymbols(NativeDateTimeFormat)]) {",
-            "    if (key === 'prototype') continue;",
-            "    try {",
-            "      const descriptor = Object.getOwnPropertyDescriptor(NativeDateTimeFormat, key);",
-            "      if (!descriptor) continue;",
-            "      if (typeof descriptor.value === 'function') {",
-            "        descriptor.value = descriptor.value.bind(NativeDateTimeFormat);",
-            "      }",
-            "      Object.defineProperty(PatchedDateTimeFormat, key, descriptor);",
-            "    } catch (_) {}",
-            "  }",
-            "  try {",
-            "    Object.defineProperty(PatchedDateTimeFormat, 'prototype', { value: NativeDateTimeFormat.prototype });",
-            "  } catch (_) {",
-            "    PatchedDateTimeFormat.prototype = NativeDateTimeFormat.prototype;",
-            "  }",
-            "  try {",
-            "    Object.defineProperty(PatchedDateTimeFormat, 'toString', {",
-            "      value: NativeDateTimeFormat.toString.bind(NativeDateTimeFormat),",
-            "      configurable: true,",
-            "    });",
-            "  } catch (_) {}",
-            "  Intl.DateTimeFormat = PatchedDateTimeFormat;",
             "})();",
         ]
     )
+    base_scripts = [
+        masking_script,
+        permissions_script,
+        color_scheme_script,
+        webrtc_mask_script,
+        locality_script,
+        intl_coherence_script,
+    ]
+    tail_scripts = [
+        runtime_hardware_script,
+        chrome_runtime_script,
+        audio_fingerprint_script,
+        performance_coherence_script,
+        canvas_fingerprint_script,
+        webgl_fingerprint_script,
+        navigator_coherence_script,
+        font_surface_script,
+    ]
     if raw_fingerprint is None or _BrowserforgeInjectFunction is None:
-        return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
-            f"{locality_script}\n{runtime_hardware_script}"
-        )
+        return _bundle_init_scripts(*base_scripts, *tail_scripts)
     if (
         _BrowserforgeFingerprint is not None
         and not isinstance(raw_fingerprint, _BrowserforgeFingerprint)
     ):
-        return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
-            f"{locality_script}\n{runtime_hardware_script}"
-        )
+        return _bundle_init_scripts(*base_scripts, *tail_scripts)
     if not callable(getattr(raw_fingerprint, "dumps", None)):
-        return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
-            f"{locality_script}\n{runtime_hardware_script}"
-        )
+        return _bundle_init_scripts(*base_scripts, *tail_scripts)
     try:
         browserforge_script = str(_BrowserforgeInjectFunction(raw_fingerprint))
-        return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
-            f"{locality_script}\n"
-            f"{browserforge_script}\n"
-            f"{runtime_hardware_script}"
-        )
+        return _bundle_init_scripts(*base_scripts, browserforge_script, *tail_scripts)
     except Exception:
         _logger.debug("Failed to build browserforge init script", exc_info=True)
-        return (
-            f"{masking_script}\n{permissions_script}\n{color_scheme_script}\n{webrtc_mask_script}\n"
-            f"{locality_script}\n{runtime_hardware_script}"
-        )
+        return _bundle_init_scripts(*base_scripts, *tail_scripts)
 
 
 def build_playwright_context_spec(

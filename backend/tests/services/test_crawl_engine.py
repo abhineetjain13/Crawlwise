@@ -227,6 +227,98 @@ def test_extract_records_visual_listing_backfills_brand_from_brand_node_and_url(
     assert rows[1]["brand"] == "Dv Dolce Vita"
 
 
+def test_extract_records_visual_listing_rejects_numeric_product_id_brand_prefix() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.desertcart.in/category/fashion/men/accessories",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "href": "/products/492216804-black-leather-belts-for-men?source=category",
+                    "x": 20,
+                    "y": 40,
+                    "width": 180,
+                    "height": 180,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Black Leather Belts for Men",
+                    "x": 24,
+                    "y": 190,
+                    "width": 170,
+                    "height": 24,
+                },
+                {
+                    "tag": "div",
+                    "text": "Rs. 2,791",
+                    "x": 24,
+                    "y": 220,
+                    "width": 80,
+                    "height": 24,
+                },
+            ]
+        },
+    )
+
+    assert rows[0]["title"] == "Black Leather Belts for Men"
+    assert "brand" not in rows[0]
+
+
+def test_extract_records_reads_desertcart_style_product_anchor_cards() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <a class="SearchResultsContainer_cardWrapper__0mkW_"
+             href="/products/492216804-black-leather-belts-for-men?source=category">
+            <div class="ProductCard_productCardContainer__svsD_">
+              <img src="/belt.jpg" alt="Black Leather Belts for Men">
+              <h3 class="ProductCoreDetails_title__m_0uZ">Black Leather Belts for Men</h3>
+              <span>Rs. 2,791</span>
+            </div>
+          </a>
+        </body></html>
+        """,
+        "https://www.desertcart.in/category/fashion/men/accessories",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows[0]["title"] == "Black Leather Belts for Men"
+    assert rows[0]["url"] == (
+        "https://www.desertcart.in/products/"
+        "492216804-black-leather-belts-for-men?source=category"
+    )
+    assert "brand" not in rows[0]
+
+
+def test_extract_records_honors_listing_max_records_above_fragment_default() -> None:
+    cards = "\n".join(
+        f"""
+        <a class="SearchResultsContainer_cardWrapper__0mkW_"
+           href="/products/{index}-widget-{index}?source=category">
+          <div class="ProductCard_productCardContainer__svsD_">
+            <h3 class="ProductCoreDetails_title__m_0uZ">Widget {index}</h3>
+            <span>Rs. {1000 + index}</span>
+          </div>
+        </a>
+        """
+        for index in range(1, 206)
+    )
+
+    rows = extract_records(
+        f"<html><body>{cards}</body></html>",
+        "https://www.desertcart.in/category/fashion/men/accessories",
+        "ecommerce_listing",
+        max_records=205,
+    )
+
+    assert len(rows) == 205
+
+
 def test_extract_records_visual_listing_orders_top_grid_before_lower_recommendations() -> None:
     rows = extract_records(
         "<html><body></body></html>",
@@ -305,6 +397,31 @@ def test_detail_identity_codes_require_exact_match() -> None:
         {"ABC12345"},
         {"ABC12345"},
     ) is True
+
+
+def test_detail_identity_allows_canonical_product_url_with_variant_sku_suffix() -> None:
+    requested_url = (
+        "https://savannahs.com/collections/all-boots/products/"
+        "shadow-ban-30-soft-leather-black-boots-hl28112s"
+    )
+    record = {
+        "title": "Shadow Ban 30 soft leather black boots - 36",
+        "url": (
+            "https://savannahs.com/products/"
+            "shadow-ban-30-soft-leather-black-boots-hl28112s?variant=43633735827522"
+        ),
+        "sku": "HL28112S360",
+        "description": "Black leather ankle boots from Herbert Levine.",
+    }
+
+    assert (
+        detail_extractor.detail_record_rejection_reason(
+            record,
+            page_url=requested_url,
+            requested_page_url=requested_url,
+        )
+        is None
+    )
 
 
 def test_extract_records_rejects_visual_artifact_cta_and_footer_clusters() -> None:
@@ -433,6 +550,52 @@ def test_extract_records_keeps_visual_artifact_product_without_price_when_title_
             "url": "https://www.dyson.in/airwrap-id-multi-styler-dryer-vinca-blue-topaz",
         }
     ]
+
+
+def test_extract_records_reads_listing_card_data_url_and_rejects_chrome_rows() -> None:
+    rows = extract_records(
+        """
+        <html><body>
+          <div class="promos__item promos_title_content">
+            <a href="/products/hair-care/hair-care-accessories">Explore accessories</a>
+          </div>
+          <ul class="products-grid">
+            <li class="item product product-item">
+              <div class="product-item-link" data-url="/hair-care/hair-straighteners/airstrait-blue-copper">
+                <img src="/airstrait-blue.png" alt="">
+                <h3 class="card_product_name">
+                  <a class="product name product-item-name">Dyson Airstrait dryer and straightener Blue Copper</a>
+                </h3>
+                <span class="price">₹34,900.00</span>
+                <a href="javascript:void(0)">Add to cart</a>
+              </div>
+            </li>
+            <li class="item product product-item">
+              <div class="product-item-link" data-url="/hair-care/hair-straighteners/corrale-copper-nickel">
+                <img src="/corrale.png" alt="">
+                <h3 class="card_product_name">
+                  <a class="product name product-item-name">Dyson Corrale straightener Copper Nickel</a>
+                </h3>
+                <span class="price">₹29,900.00</span>
+                <a href="javascript:void(0)">Add to cart</a>
+              </div>
+            </li>
+          </ul>
+        </body></html>
+        """,
+        "https://www.dyson.in/hair-care/hair-straighteners",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Dyson Airstrait dryer and straightener Blue Copper",
+        "Dyson Corrale straightener Copper Nickel",
+    ]
+    assert rows[0]["url"] == (
+        "https://www.dyson.in/hair-care/hair-straighteners/airstrait-blue-copper"
+    )
+    assert rows[0]["price"] == "34900.00"
 
 
 def test_extract_records_keeps_adjacent_visual_product_cards_separate() -> None:

@@ -66,13 +66,19 @@ def base_listing_fragment_score(node) -> int:
             str(attrs.get("aria-label") or ""),
         ]
     ).lower()
-    if any(token in signature for token in LISTING_STRUCTURE_NEGATIVE_HINTS):
+    has_positive_signature = any(
+        token in signature for token in LISTING_STRUCTURE_POSITIVE_HINTS
+    )
+    if (
+        any(token in signature for token in LISTING_STRUCTURE_NEGATIVE_HINTS)
+        and not has_positive_signature
+    ):
         return -10
     score = 0
-    if any(token in signature for token in LISTING_STRUCTURE_POSITIVE_HINTS):
+    if has_positive_signature:
         score += 6
     try:
-        links = node.css("a[href]")
+        links = _node_listing_links(node)
     except Exception:
         return -100
     link_count = len(links)
@@ -99,6 +105,14 @@ def base_listing_fragment_score(node) -> int:
     if tag_name in {"article", "li", "tr", "section"}:
         score += 2
     return score
+
+
+def _node_listing_links(node) -> list[object]:
+    links = []
+    if listing_node_attr(node, "href"):
+        links.append(node)
+    links.extend(node.css("a[href]"))
+    return links
 
 
 def select_listing_fragment_nodes(

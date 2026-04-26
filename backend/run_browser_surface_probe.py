@@ -515,24 +515,125 @@ async def _collect_page_snapshot(page) -> dict[str, object]:
     }
 
 
-async def _collect_baseline(page) -> dict[str, object]:
+async def _collect_behavioral_smoke(page) -> dict[str, object]:
+    try:
+        setup = await page.evaluate(
+            """() => {
+                const body = document.body;
+                if (!body) {
+                    return { ready: false, mouse_isTrusted: null, click_isTrusted: null };
+                }
+                const state = globalThis.__crawlerProbeBehavioralSmoke = {
+                    mouse_isTrusted: null,
+                    click_isTrusted: null,
+                };
+                let target = document.getElementById('__crawler_probe_mouse_target__');
+                if (!target) {
+                    target = document.createElement('div');
+                    target.id = '__crawler_probe_mouse_target__';
+                    target.setAttribute('aria-hidden', 'true');
+                    target.style.cssText = [
+                        'position:fixed',
+                        'left:8px',
+                        'top:8px',
+                        'width:32px',
+                        'height:32px',
+                        'opacity:0.001',
+                        'background:#000',
+                        'pointer-events:auto',
+                        'z-index:2147483647',
+                    ].join(';');
+                    body.appendChild(target);
+                }
+                target.addEventListener('mousemove', (event) => {
+                    state.mouse_isTrusted = event.isTrusted;
+                }, { once: true });
+                target.addEventListener('click', (event) => {
+                    state.click_isTrusted = event.isTrusted;
+                }, { once: true });
+                return { ready: true, x: 24, y: 24 };
+            }"""
+        )
+    except Exception:
+        return {"mouse_isTrusted": None, "click_isTrusted": None}
+    if not _object_dict(setup).get("ready"):
+        return {
+            "mouse_isTrusted": _object_dict(setup).get("mouse_isTrusted"),
+            "click_isTrusted": _object_dict(setup).get("click_isTrusted"),
+        }
+    try:
+        await page.mouse.move(24, 24, steps=6)
+        await page.wait_for_timeout(50)
+        await page.mouse.click(24, 24, delay=50)
+        await page.wait_for_timeout(50)
+    except Exception:
+        pass
+    try:
+        return _object_dict(
+            await page.evaluate(
+                """() => {
+                    const state = globalThis.__crawlerProbeBehavioralSmoke || {};
+                    const target = document.getElementById('__crawler_probe_mouse_target__');
+                    if (target && target.parentNode) {
+                        target.parentNode.removeChild(target);
+                    }
+                    try {
+                        delete globalThis.__crawlerProbeBehavioralSmoke;
+                    } catch (_error) {}
+                    return {
+                        mouse_isTrusted: state.mouse_isTrusted ?? null,
+                        click_isTrusted: state.click_isTrusted ?? null,
+                    };
+                }"""
+            )
+        )
+    except Exception:
+        return {"mouse_isTrusted": None, "click_isTrusted": None}
+
+
+async def _collect_baseline(
+    page,
+    *,
+    behavioral_smoke: dict[str, object] | None = None,
+) -> dict[str, object]:
     return await page.evaluate(
         """async (input) => {
             const normalize = (value) => (value == null ? '' : String(value)).replace(/\\s+/g, ' ').trim();
+            const hashBytes = (bytes) => {
+                if (!bytes || typeof bytes.length !== 'number') {
+                    return null;
+                }
+                let hash = 2166136261;
+                for (let index = 0; index < bytes.length; index += 1) {
+                    hash ^= Number(bytes[index]) & 255;
+                    hash = Math.imul(hash, 16777619);
+                }
+                return `fnv1a:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+            };
             const collectWebGL = () => {
                 try {
                     const canvas = document.createElement('canvas');
                     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
                     if (!gl) {
-                        return { vendor: null, renderer: null };
+                        return { vendor: null, renderer: null, version: null, shading_language_version: null, supported_extensions: [], read_pixels_hash: null };
                     }
                     const extension = gl.getExtension('WEBGL_debug_renderer_info');
+                    const pixels = new Uint8Array(16);
+                    try {
+                        gl.clearColor(0.25, 0.5, 0.75, 1);
+                        gl.clear(gl.COLOR_BUFFER_BIT);
+                        gl.readPixels(0, 0, 2, 2, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                    } catch (_pixelError) {}
                     return {
                         vendor: extension ? gl.getParameter(extension.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
                         renderer: extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+                        version: gl.getParameter(gl.VERSION),
+                        shading_language_version: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+                        supported_extensions: gl.getSupportedExtensions() || [],
+                        read_pixels_hash: hashBytes(pixels),
                     };
                 } catch (_error) {
-                    return { vendor: null, renderer: null };
+                    return { vendor: null, renderer: null, version: null, shading_language_version: null, supported_extensions: [], read_pixels_hash: null };
                 }
             };
             const collectWebRTCIps = async () => {
@@ -584,11 +685,17 @@ async def _collect_baseline(page) -> dict[str, object]:
                     ctx.fillText('Browser fingerprint probe', 2, 15);
                     ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
                     ctx.fillText('Browser fingerprint probe', 4, 17);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     const dataUrl = canvas.toDataURL();
                     const textMeasure = ctx.measureText('Browser fingerprint probe').width;
-                    return { fingerprint: dataUrl.slice(0, 200), text_measure: textMeasure };
+                    return {
+                        fingerprint: dataUrl.slice(0, 200),
+                        image_data_hash: hashBytes(imageData && imageData.data),
+                        data_url_prefix: dataUrl.slice(0, 64),
+                        text_measure: textMeasure,
+                    };
                 } catch (_e) {
-                    return { fingerprint: null, text_measure: null, error: _e.message };
+                    return { fingerprint: null, image_data_hash: null, data_url_prefix: null, text_measure: null, error: _e.message };
                 }
             };
             const collectAudio = () => {
@@ -657,8 +764,11 @@ async def _collect_baseline(page) -> dict[str, object]:
                 if (typeof window.cdc_adoQpoasnfa76pfcZLmcfl_Array !== 'undefined') markers.push('cdc_array');
                 if (typeof window.cdc_adoQpoasnfa76pfcZLmcfl_Promise !== 'undefined') markers.push('cdc_promise');
                 if (document.documentElement && document.documentElement.getAttribute('__playwright_testid_attribute__')) markers.push('__playwright_testid_attribute__');
-                const chromeRuntime = typeof window.chrome !== 'undefined' ? window.chrome.runtime : undefined;
-                markers.push(`chrome.runtime.typeof=${typeof chromeRuntime}`);
+                const chromeRoot = typeof window.chrome !== 'undefined' ? window.chrome : undefined;
+                const chromeRuntime = chromeRoot ? chromeRoot.runtime : undefined;
+                if (typeof chromeRuntime !== 'object') {
+                    markers.push(`chrome.runtime.typeof=${typeof chromeRuntime}`);
+                }
                 return markers;
             };
             const collectTimingJitter = () => {
@@ -697,25 +807,6 @@ async def _collect_baseline(page) -> dict[str, object]:
                 }
                 return results;
             };
-            const collectBehavioralSmoke = async () => {
-                const body = document.body;
-                if (!body) return { mouse_isTrusted: null, click_isTrusted: null };
-                let mouseTrusted = null;
-                let clickTrusted = null;
-                const mouseHandler = (e) => { mouseTrusted = e.isTrusted; };
-                const clickHandler = (e) => { clickTrusted = e.isTrusted; };
-                body.addEventListener('mousemove', mouseHandler, { once: true });
-                body.addEventListener('click', clickHandler, { once: true });
-                await new Promise((r) => setTimeout(r, 50));
-                try {
-                    const evt = new MouseEvent('mousemove', { bubbles: true });
-                    body.dispatchEvent(evt);
-                } catch (_e) {}
-                await new Promise((r) => setTimeout(r, 50));
-                body.removeEventListener('mousemove', mouseHandler);
-                body.removeEventListener('click', clickHandler);
-                return { mouse_isTrusted: mouseTrusted, click_isTrusted: clickTrusted };
-            };
             const uaData = navigator.userAgentData
                 ? await navigator.userAgentData
                     .getHighEntropyValues(input.highEntropyHints)
@@ -731,7 +822,9 @@ async def _collect_baseline(page) -> dict[str, object]:
             const timing_jitter = collectTimingJitter();
             const iframe_leak = collectIframeLeak();
             const permissions = await collectPermissions();
-            const behavioral = await collectBehavioralSmoke();
+            const behavioral = input.behavioralSmoke && typeof input.behavioralSmoke === 'object'
+                ? input.behavioralSmoke
+                : null;
             return {
                 user_agent: normalize(navigator.userAgent),
                 user_agent_data: uaData,
@@ -780,6 +873,7 @@ async def _collect_baseline(page) -> dict[str, object]:
             };
         }""",
         {
+            "behavioralSmoke": dict(behavioral_smoke or {}),
             "highEntropyHints": list(BROWSER_SURFACE_PROBE_HIGH_ENTROPY_HINTS),
             "webrtcTimeoutMs": int(BROWSER_SURFACE_PROBE_WEBRTC_GATHER_TIMEOUT_MS),
             "fontTestStrings": list(BROWSER_SURFACE_PROBE_FONT_TEST_STRINGS),
@@ -1140,6 +1234,7 @@ def _target_root_cause(
 
 def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
+    metadata = _object_dict(report.get("metadata"))
     baseline = _object_dict(report.get("baseline"))
     consensus = _object_dict(baseline.get("consensus"))
     drift = _object_dict(baseline.get("drift"))
@@ -1360,7 +1455,11 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
             }
         )
 
-    automation_globals = _object_list(consensus.get("automation_globals"))
+    automation_globals = [
+        value
+        for value in _string_list(consensus.get("automation_globals"))
+        if value != "chrome.runtime.typeof=object"
+    ]
     if automation_globals:
         findings.append(
             {
@@ -1403,13 +1502,31 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
         )
 
     behavioral = _object_dict(consensus.get("behavioral_smoke"))
-    if behavioral and behavioral.get("mouse_isTrusted") is False:
+    if (
+        behavioral
+        and (
+            behavioral.get("mouse_isTrusted") is False
+            or behavioral.get("click_isTrusted") is False
+        )
+    ):
         findings.append(
             {
                 "severity": "warn",
                 "category": "synthetic_event_detection",
-                "message": "Synthetic mouse events detected; isTrusted flag is false.",
+                "message": "Playwright input did not produce trusted DOM events.",
                 "evidence": behavioral,
+            }
+        )
+
+    if str(metadata.get("browser_engine") or "").strip().lower() == "chromium":
+        findings.append(
+            {
+                "severity": "info",
+                "category": "chromium_ja3_limitation",
+                "message": "Chromium engine still uses a Playwright Chromium TLS fingerprint; use real_chrome for native Chrome JA3 parity.",
+                "evidence": {
+                    "browser_engine": metadata.get("browser_engine"),
+                },
             }
         )
 
@@ -1821,7 +1938,8 @@ async def _target_browser_payload(
         await page.wait_for_timeout(int(BROWSER_SURFACE_PROBE_POST_NAVIGATION_WAIT_MS))
         html = await page.content()
         snapshot = await _collect_page_snapshot(page)
-        baseline = await _collect_baseline(page)
+        behavioral_smoke = await _collect_behavioral_smoke(page)
+        baseline = await _collect_baseline(page, behavioral_smoke=behavioral_smoke)
         await page.screenshot(path=str(artifacts["screenshot"]), full_page=True)
         artifacts["html"].write_text(html, encoding="utf-8")
         _write_target_body_artifact(artifacts["body"], html)
@@ -2009,7 +2127,8 @@ async def _probe_site(
             ) as page:
                 try:
                     await _navigate_probe_target(page, url)
-                    baseline = await _collect_baseline(page)
+                    behavioral_smoke = await _collect_behavioral_smoke(page)
+                    baseline = await _collect_baseline(page, behavioral_smoke=behavioral_smoke)
                     snapshot = await _collect_page_snapshot(page)
                     html = await page.content()
                     await page.screenshot(path=str(artifacts["screenshot"]), full_page=True)
@@ -2163,7 +2282,11 @@ def _build_agent_summary(report: dict[str, object]) -> dict[str, object]:
             "automation_globals_count": len(_object_list(consensus.get("automation_globals"))),
             "iframe_leak": _object_dict(consensus.get("iframe_leak")).get("content_window_array_leak"),
             "canvas_text_measure": _object_dict(consensus.get("canvas")).get("text_measure"),
+            "canvas_image_data_hash": _object_dict(consensus.get("canvas")).get("image_data_hash"),
+            "canvas_data_url_prefix": _object_dict(consensus.get("canvas")).get("data_url_prefix"),
             "audio_fingerprint": _object_dict(consensus.get("audio")).get("fingerprint"),
+            "webgl_vendor": _object_dict(consensus.get("webgl")).get("vendor"),
+            "webgl_renderer": _object_dict(consensus.get("webgl")).get("renderer"),
             "fonts_count": len(_object_list(consensus.get("fonts"))),
             "max_touch_points": consensus.get("max_touch_points"),
             "pdf_viewer_enabled": consensus.get("pdf_viewer_enabled"),
@@ -2201,7 +2324,11 @@ def _render_markdown(report: dict[str, object]) -> str:
         f"- Automation globals count: {baseline.get('automation_globals_count')}",
         f"- Iframe leak: {baseline.get('iframe_leak')}",
         f"- Canvas text measure: {baseline.get('canvas_text_measure')}",
+        f"- Canvas image-data hash: {baseline.get('canvas_image_data_hash')}",
+        f"- Canvas data-url prefix: {baseline.get('canvas_data_url_prefix')}",
         f"- Audio fingerprint: {baseline.get('audio_fingerprint')}",
+        f"- WebGL vendor: {baseline.get('webgl_vendor')}",
+        f"- WebGL renderer: {baseline.get('webgl_renderer')}",
         f"- Fonts count: {baseline.get('fonts_count')}",
         f"- Max touch points: {baseline.get('max_touch_points')}",
         f"- PDF viewer enabled: {baseline.get('pdf_viewer_enabled')}",

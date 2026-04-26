@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronUp, Code2, Download, ExternalLink, ImageOff, Info, Layers, Loader2, Play, Search, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Code2, Download, ExternalLink, ImageOff, Info, Layers, Loader2, Play, Search, Settings, X } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import React, { useEffect, useMemo, useState } from "react";
@@ -94,17 +94,9 @@ export default function ProductIntelligencePage() {
   const [activeUrl, setActiveUrl] = useState("");
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"urls" | "intelligence">("urls");
-  const [configExpanded, setConfigExpanded] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [confidenceFilter, setConfidenceFilter] = useState<"all" | "high" | "medium" | "low">("all");
-  const toggleConfigExpanded = () => setConfigExpanded((current) => !current);
-  const handleConfigHeaderKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-    event.preventDefault();
-    toggleConfigExpanded();
-  };
 
   const jobsQuery = useQuery({
     queryKey: ["product-intelligence-jobs"],
@@ -277,7 +269,13 @@ export default function ProductIntelligencePage() {
     <div className="page-stack gap-4">
       <PageHeader
         title="Product Intelligence"
-        description=""
+        description={
+          [
+            visibleSourceRecords.length > 0 ? `${visibleSourceRecords.length} sources` : null,
+            discovery ? `${discovery.candidate_count} discovered` : null,
+            uniqueSelectedUrls.length > 0 ? `${uniqueSelectedUrls.length} selected` : null,
+          ].filter(Boolean).join(" · ") || "Discover matching product URLs from source records"
+        }
         actions={
           <div className="flex w-full flex-wrap items-center justify-end gap-2">
             <Button
@@ -313,216 +311,86 @@ export default function ProductIntelligencePage() {
        />
       ) : null}
 
-      {/* Flow Stepper */}
-      <div className="flex items-center gap-0 text-[11px]">
-       <FlowStep step={1} label="Sources" active={visibleSourceRecords.length > 0} />
-       <FlowConnector active={visibleSourceRecords.length > 0} />
-       <FlowStep step={2} label="Configure" active={configExpanded} />
-       <FlowConnector active={configExpanded} />
-       <FlowStep step={3} label="Discover" active={!!discovery} />
-       <FlowConnector active={!!discovery} />
-       <FlowStep step={4} label="Crawl" active={uniqueSelectedUrls.length > 0} />
-      </div>
-
       {/* ── Split Panel: Card Grid + Inspector ── */}
       <div className="pi-split">
-   {/* Left Column: Config + Card Grid */}
+   {/* Left Column: Card Grid */}
    <div className="space-y-4">
-    {/* Configuration Card */}
-    <section className="panel panel-raised overflow-hidden">
-     <header
-       className="flex h-10 cursor-pointer items-center justify-between border-b border-[var(--divider)] px-4 transition-colors hover:bg-[var(--bg-alt)]"
-       role="button"
-       tabIndex={0}
-       aria-expanded={configExpanded}
-       onClick={toggleConfigExpanded}
-       onKeyDown={handleConfigHeaderKeyDown}
-      >
-      <div className="flex items-center gap-2">
-        {configExpanded ? <ChevronUp className="size-3.5 text-muted" /> : <ChevronDown className="size-3.5 text-muted" />}
-        <h2 className="text-xs font-bold tracking-wider text-foreground/70">Configuration</h2>
-       </div>
-      <div className="flex gap-2">
-       {prefill.source_run_id ? <Badge tone="info" className="h-5 px-1.5 text-[10px]">Run #{prefill.source_run_id}</Badge> : null}
-       <Badge tone="neutral" className="h-5 px-1.5 text-[10px]">{visibleSourceRecords.length} rows</Badge>
-      </div>
-     </header>
-     {configExpanded && (
-      <div className="p-4 animate-fade-in">
-      <div className="grid gap-4 md:grid-cols-3">
-       <div className="grid gap-4 md:col-span-2 md:grid-cols-2 content-start">
-        <Field label="Provider">
-         <Dropdown
-          value={options.search_provider}
-          onChange={(value) => setOptions((current) => ({ ...current, search_provider: value }))}
-          options={[
-           { value: "serpapi", label: "SerpAPI" },
-           { value: "duckduckgo", label: "DuckDuckGo" },
-          ]}
-         />
-        </Field>
-        <Field label="Max Sources">
-         <Input
-          type="number"
-          min={1}
-          max={MAX_SOURCE_PRODUCTS_LIMIT}
-          value={options.max_source_products}
-          onChange={(event) => setOptions((current) => ({ ...current, max_source_products: clampInt(event.target.value, 1, MAX_SOURCE_PRODUCTS_LIMIT, DEFAULT_OPTIONS.max_source_products) }))}
-         />
-        </Field>
-        <Field label="Max URLs">
-         <Input
-          type="number"
-          min={1}
-          max={MAX_CANDIDATES_PER_PRODUCT_LIMIT}
-          value={options.max_candidates_per_product}
-          onChange={(event) => setOptions((current) => ({ ...current, max_candidates_per_product: clampInt(event.target.value, 1, MAX_CANDIDATES_PER_PRODUCT_LIMIT, DEFAULT_OPTIONS.max_candidates_per_product) }))}
-         />
-        </Field>
-        <Field label="Private Label">
-         <Dropdown
-          value={options.private_label_mode}
-          onChange={(value) => setOptions((current) => ({ ...current, private_label_mode: value as ProductIntelligenceOptions["private_label_mode"] }))}
-          options={[
-           { value: "flag", label: "Flag" },
-           { value: "exclude", label: "Exclude" },
-           { value: "include", label: "Include" },
-          ]}
-         />
-        </Field>
-        <Field label="LLM Cleanup">
-         <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 shadow-sm">
-          <span className="text-[11px] font-medium text-muted">Enable Enrichment</span>
-          <input
-           type="checkbox"
-           checked={options.llm_enrichment_enabled}
-           onChange={(event) => setOptions((current) => ({ ...current, llm_enrichment_enabled: event.target.checked }))}
-           className="h-3.5 w-3.5 rounded border-[var(--divider)] text-accent focus:ring-accent"
-          />
-         </div>
-        </Field>
-       </div>
-       <div className="grid gap-4 content-start">
-        <Field label="Allowed Domains">
-         <Textarea
-          value={allowedDomainsText}
-          onChange={(event) => setAllowedDomainsText(event.target.value)}
-          className="min-h-[76px] text-xs"
-          placeholder="ralphlauren.com"
-         />
-        </Field>
-        <Field label="Excluded Domains">
-         <Textarea
-          value={excludedDomainsText}
-          onChange={(event) => setExcludedDomainsText(event.target.value)}
-          className="min-h-[76px] text-xs"
-          placeholder="amazon.com"
-         />
-        </Field>
-       </div>
-      </div>
-     </div>
-    )}
-   </section>
-
     {/* ── Discovery Results ── */}
     <section className="panel panel-raised overflow-hidden">
-     <header className="flex h-12 items-center justify-between border-b border-[var(--divider)] px-4">
-      <div className="flex items-center gap-4">
-       <TabBar
-        value={activeTab}
-        onChange={(v) => setActiveTab(v as "urls" | "intelligence")}
-        options={[
-         { value: "urls", label: "Discovered URLs" },
-         { value: "intelligence", label: "Data Intelligence" },
-        ]}
-        compact
-       />
-       <div className="hidden items-center gap-2 sm:flex">
-        <Badge tone="neutral" className="h-5 px-1.5 text-[10px]">{discovery?.candidate_count ?? 0} total</Badge>
-        <Badge tone="success" className="h-5 px-1.5 text-[10px]">{uniqueSelectedUrls.length} selected</Badge>
-       </div>
-      </div>
-      <div className="flex items-center gap-2">
-       <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        onClick={() => downloadRows(activeTab, "csv", discovery)}
-        disabled={!discovery?.candidates.length}
-        className="h-7 px-2"
-       >
-        <Download className="size-3" /> CSV
-       </Button>
-       <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        onClick={() => downloadRows(activeTab, "json", discovery)}
-        disabled={!discovery?.candidates.length}
-        className="h-7 px-2"
-       >
-        <Download className="size-3" /> JSON
-       </Button>
-      </div>
-     </header>
-
-     {/* Search / Filter Bar + Confidence Strip */}
-     {discovery?.candidates.length ? (
-      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--divider)] bg-[var(--bg-alt)] px-4 py-2">
-       <div className="relative flex-1 min-w-[180px]">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted" />
+     {/* Merged Toolbar */}
+     <header className="flex flex-wrap items-center gap-2 border-b border-[var(--divider)] px-3 py-2">
+      <TabBar
+       value={activeTab}
+       onChange={(v) => setActiveTab(v as "urls" | "intelligence")}
+       options={[
+        { value: "urls", label: "URLs" },
+        { value: "intelligence", label: "Intelligence" },
+       ]}
+       compact
+      />
+      {discovery?.candidates.length ? (
+       <>
+        <div className="relative min-w-[140px] flex-1">
          <Input
           type="text"
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
-          placeholder="Search title, brand, domain..."
-          className="h-7 !pl-12 text-xs"
+          placeholder="Search..."
+          className="h-7 text-xs"
          />
-       </div>
-       <Dropdown
-        value={confidenceFilter}
-        onChange={(v) => setConfidenceFilter(v as "all" | "high" | "medium" | "low")}
-        options={[
-         { value: "all", label: "All Confidence" },
-         { value: "high", label: `High (≥60%) — ${confidenceDistribution.high}` },
-         { value: "medium", label: `Medium (40-59%) — ${confidenceDistribution.medium}` },
-         { value: "low", label: `Low (<40%) — ${confidenceDistribution.low}` },
-        ]}
-        ariaLabel="Filter by confidence"
-        className="w-[200px]"
-       />
-       {/* Confidence distribution strip */}
-       <div className="pi-confidence-strip w-24">
-        {confidenceDistribution.high > 0 && (
-         <span style={{ flex: confidenceDistribution.high, background: "var(--accent)" }} />
-        )}
-        {confidenceDistribution.medium > 0 && (
-         <span style={{ flex: confidenceDistribution.medium, background: "var(--warning)" }} />
-        )}
-        {confidenceDistribution.low > 0 && (
-         <span style={{ flex: confidenceDistribution.low, background: "var(--border-strong)" }} />
-        )}
-       </div>
-       <div className="hidden items-center gap-2 text-[10px] text-muted sm:flex">
-        <span className="inline-block size-2 rounded-full bg-[var(--accent)]" />{confidenceDistribution.high} high
-        <span className="inline-block size-2 rounded-full bg-[var(--warning)]" />{confidenceDistribution.medium} med
-        <span className="inline-block size-2 rounded-full bg-[var(--border-strong)]" />{confidenceDistribution.low} low
-       </div>
+        </div>
+        <Dropdown
+         value={confidenceFilter}
+         onChange={(v) => setConfidenceFilter(v as "all" | "high" | "medium" | "low")}
+         options={[
+          { value: "all", label: "All" },
+          { value: "high", label: `High — ${confidenceDistribution.high}` },
+          { value: "medium", label: `Med — ${confidenceDistribution.medium}` },
+          { value: "low", label: `Low — ${confidenceDistribution.low}` },
+         ]}
+         ariaLabel="Filter by confidence"
+         className="w-[140px]"
+        />
+       </>
+      ) : null}
+      <div className="ml-auto flex items-center gap-1.5">
+       {selectedDomainSummary ? (
+        <Badge tone="accent" className="h-5 px-1.5 text-[10px]">{selectedDomainSummary.count} selected</Badge>
+       ) : null}
+       <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => setConfigOpen(true)}
+        aria-label="Settings"
+        className="h-7 w-7"
+       >
+        <Settings className="size-3.5" />
+       </Button>
+       <Button
+        type="button"
+        variant="secondary"
+        size="icon"
+        onClick={() => downloadRows(activeTab, "csv", discovery)}
+        disabled={!discovery?.candidates.length}
+        className="h-7 w-7"
+        aria-label="Download CSV"
+       >
+        <Download className="size-3" />
+       </Button>
+       <Button
+        type="button"
+        variant="secondary"
+        size="icon"
+        onClick={() => downloadRows(activeTab, "json", discovery)}
+        disabled={!discovery?.candidates.length}
+        className="h-7 w-7"
+        aria-label="Download JSON"
+       >
+        <Code2 className="size-3" />
+       </Button>
       </div>
-     ) : null}
-
-     {/* Batch Crawl Preview */}
-     {selectedDomainSummary ? (
-      <div className="flex items-center gap-2 border-b border-[var(--divider)] bg-[var(--accent-subtle)] px-4 py-1.5 text-xs text-accent">
-       <Layers className="size-3.5 shrink-0" />
-       <span className="font-medium">{selectedDomainSummary.count} URLs selected</span>
-       <span className="text-muted">from {selectedDomainSummary.domains.length} domain{selectedDomainSummary.domains.length !== 1 ? "s" : ""}</span>
-       {selectedDomainSummary.domains.length <= 3 && (
-        <span className="text-muted">({selectedDomainSummary.domains.join(", ")})</span>
-       )}
-      </div>
-     ) : null}
+     </header>
 
      {/* ── Card Grid (URLs tab) ── */}
      {activeTab === "urls" ? (
@@ -819,6 +687,93 @@ export default function ProductIntelligencePage() {
     </section>
    </div>
   </div>
+
+      {/* Settings Drawer */}
+      {configOpen && (
+       <>
+        <div
+         className="fixed inset-0 z-40 bg-black/20"
+         onClick={() => setConfigOpen(false)}
+         aria-hidden="true"
+        />
+        <div className="fixed right-0 top-0 z-50 h-full w-[380px] max-w-full overflow-y-auto border-l border-[var(--divider)] bg-[var(--bg-elevated)] p-5 shadow-[var(--shadow-xl)] animate-in slide-in-from-right-4 duration-200">
+         <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-foreground">Configuration</h2>
+          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setConfigOpen(false)} aria-label="Close settings">
+           <X className="size-3.5" />
+          </Button>
+         </div>
+         <div className="mt-4 space-y-4">
+          <Field label="Provider">
+           <Dropdown
+            value={options.search_provider}
+            onChange={(value) => setOptions((current) => ({ ...current, search_provider: value }))}
+            options={[
+             { value: "serpapi", label: "SerpAPI" },
+             { value: "duckduckgo", label: "DuckDuckGo" },
+            ]}
+           />
+          </Field>
+          <Field label="Max Sources">
+           <Input
+            type="number"
+            min={1}
+            max={MAX_SOURCE_PRODUCTS_LIMIT}
+            value={options.max_source_products}
+            onChange={(event) => setOptions((current) => ({ ...current, max_source_products: clampInt(event.target.value, 1, MAX_SOURCE_PRODUCTS_LIMIT, DEFAULT_OPTIONS.max_source_products) }))}
+           />
+          </Field>
+          <Field label="Max URLs">
+           <Input
+            type="number"
+            min={1}
+            max={MAX_CANDIDATES_PER_PRODUCT_LIMIT}
+            value={options.max_candidates_per_product}
+            onChange={(event) => setOptions((current) => ({ ...current, max_candidates_per_product: clampInt(event.target.value, 1, MAX_CANDIDATES_PER_PRODUCT_LIMIT, DEFAULT_OPTIONS.max_candidates_per_product) }))}
+           />
+          </Field>
+          <Field label="Private Label">
+           <Dropdown
+            value={options.private_label_mode}
+            onChange={(value) => setOptions((current) => ({ ...current, private_label_mode: value as ProductIntelligenceOptions["private_label_mode"] }))}
+            options={[
+             { value: "flag", label: "Flag" },
+             { value: "exclude", label: "Exclude" },
+             { value: "include", label: "Include" },
+            ]}
+           />
+          </Field>
+          <Field label="LLM Cleanup">
+           <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 shadow-sm">
+            <span className="text-[11px] font-medium text-muted">Enable Enrichment</span>
+            <input
+             type="checkbox"
+             checked={options.llm_enrichment_enabled}
+             onChange={(event) => setOptions((current) => ({ ...current, llm_enrichment_enabled: event.target.checked }))}
+             className="h-3.5 w-3.5 rounded border-[var(--divider)] text-accent focus:ring-accent"
+            />
+           </div>
+          </Field>
+          <Field label="Allowed Domains">
+           <Textarea
+            value={allowedDomainsText}
+            onChange={(event) => setAllowedDomainsText(event.target.value)}
+            className="min-h-[76px] text-xs"
+            placeholder="ralphlauren.com"
+           />
+          </Field>
+          <Field label="Excluded Domains">
+           <Textarea
+            value={excludedDomainsText}
+            onChange={(event) => setExcludedDomainsText(event.target.value)}
+            className="min-h-[76px] text-xs"
+            placeholder="amazon.com"
+           />
+          </Field>
+         </div>
+        </div>
+       </>
+      )}
       </div>
   );
 }
@@ -1029,33 +984,6 @@ function stringArray(value: unknown) {
  return Array.isArray(value)
   ? value.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)
   : [];
-}
-
-function FlowStep({ step, label, active }: Readonly<{ step: number; label: string; active: boolean }>) {
- return (
-  <span className={cn(
-   "inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-all",
-   active
-    ? "bg-[var(--accent-subtle)] text-accent"
-    : "text-muted",
-  )}>
-   <span className={cn(
-    "inline-flex size-4 items-center justify-center rounded-full text-[9px] font-bold",
-    active
-     ? "bg-[var(--accent)] text-[var(--accent-fg)]"
-     : "bg-[var(--border)] text-muted",
-   )}>
-    {active ? <Check className="size-2.5" /> : step}
-   </span>
-   {label}
-  </span>
- );
-}
-
-function FlowConnector({ active }: Readonly<{ active: boolean }>) {
- return (
-  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-[var(--border)]")} />
- );
 }
 
 function DiscoveryStatus({

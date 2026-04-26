@@ -88,7 +88,7 @@ def test_parse_test_sites_markdown_reads_urls_from_markdown_tables() -> None:
         for row in rows
     )
     assert any(
-        row["url"] == "https://practicesoftwaretesting.com/#/product/01HB"
+        row["url"] == "https://practicesoftwaretesting.com/product/01HB"
         and row["surface"] == "ecommerce_detail"
         for row in rows
     )

@@ -7,10 +7,6 @@ import {
  Search,
  Trash2,
  X,
- Database,
- SlidersHorizontal,
- Cookie,
- Activity,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
@@ -21,13 +17,14 @@ import {
   EmptyPanel,
   InlineAlert,
   KVTile,
-  MetricGrid,
   MutedPanelMessage,
   NavList,
   PageHeader,
+  SurfacePanel,
   SurfaceSection,
+  TabBar,
 } from "../../../components/ui/patterns";
-import { Badge, Button, Dropdown, Input, StatCard } from "../../../components/ui/primitives";
+import { Badge, Button, Dropdown, Input, Toggle } from "../../../components/ui/primitives";
 import { api } from "../../../lib/api";
 import type {
  CrawlRun,
@@ -158,6 +155,7 @@ export default function DomainMemoryManagePage() {
  const [draft, setDraft] = useState<EditDraft | null>(null);
  const [searchQuery, setSearchQuery] = useState("");
  const [surfaceFilter, setSurfaceFilter] = useState("all");
+ const [activeTab, setActiveTab] = useState("selectors");
  const deferredSearchQuery = useDeferredValue(searchQuery);
 
  async function loadWorkspace() {
@@ -396,29 +394,6 @@ export default function DomainMemoryManagePage() {
  [groupedWorkspaces, selectedDomain],
  );
 
- const summary = useMemo(() => {
- const visibleDomains = groupedWorkspaces.length;
- const visibleSurfaces = groupedWorkspaces.reduce((count, entry) => count + entry.surfaces.length, 0);
- const visibleSelectors = groupedWorkspaces.reduce(
- (count, entry) => count + entry.surfaces.reduce((surfaceCount, surface) => surfaceCount + surface.selectors.length, 0),
- 0,
- );
- const visibleProfiles = groupedWorkspaces.reduce(
- (count, entry) => count + entry.surfaces.filter((surface) => surface.profile).length,
- 0,
- );
- const visibleLearning = groupedWorkspaces.reduce((count, entry) => count + entry.learning.length, 0);
- const visibleCookieDomains = groupedWorkspaces.filter((entry) => entry.cookieMemory).length;
- return {
- domains: visibleDomains,
- surfaces: visibleSurfaces,
- selectors: visibleSelectors,
- profiles: visibleProfiles,
- learning: visibleLearning,
- cookies: visibleCookieDomains,
- };
- }, [groupedWorkspaces]);
-
  function startEdit(record: LocalRecord) {
  setEditingId(record._uid);
  setDraft({
@@ -497,7 +472,6 @@ export default function DomainMemoryManagePage() {
  setError(nextError instanceof Error ? nextError.message : "Unable to clear domain selectors.");
  }
  }
-
  return (
  <div className="page-stack-lg">
  <PageHeader
@@ -511,24 +485,15 @@ export default function DomainMemoryManagePage() {
  }
  />
 
- {/* ── Search + filter bar ── */}
- <SurfaceSection title="Memory Workspace" description="Search across selector memory, saved defaults, cookies, and field feedback, then inspect one domain at a time." bodyClassName="space-y-4">
- {error ? <InlineAlert message={error} /> : null}
- <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_220px]">
- <label className="grid gap-1.5">
- <span className="field-label">Search domains, selectors, run defaults, or learning</span>
- <div className="relative">
+ {/* ── Toolbar ── */}
+ <div className="flex flex-wrap items-end gap-3">
+ <div className="min-w-0 flex-1 relative">
  <Input
  value={searchQuery}
  onChange={(event) => setSearchQuery(event.target.value)}
  placeholder="Search domain, field, selector text, fetch mode, or feedback"
- className="pl-12 pr-3"
  />
- <Search aria-hidden className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted" />
  </div>
- </label>
- <label className="grid gap-1.5">
- <span className="field-label">Surface</span>
  <Dropdown<string>
  value={surfaceFilter}
  onChange={setSurfaceFilter}
@@ -537,16 +502,9 @@ export default function DomainMemoryManagePage() {
  ...availableSurfaces.map((surface) => ({ value: surface, label: surfaceLabel(surface) })),
  ]}
  />
- </label>
  </div>
 
- <MetricGrid>
- <StatCard label="Domains" value={summary.domains} icon={<Database className="size-3.5" />} stripeColor="var(--metric-domains-color)" />
- <StatCard label="Surfaces" value={summary.surfaces} stripeColor="var(--accent)" />
- <StatCard label="Selectors" value={summary.selectors} stripeColor="var(--metric-active-color)" />
- <StatCard label="Saved Profiles" value={summary.profiles} stripeColor="var(--metric-runs-color)" />
- </MetricGrid>
- </SurfaceSection>
+ {error ? <InlineAlert message={error} /> : null}
 
  {loading ? (
  <DataRegionLoading count={4} />
@@ -556,67 +514,79 @@ export default function DomainMemoryManagePage() {
  description="Run a crawl, save selectors, or keep learning signals to populate this workspace."
  />
  ) : (
- <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+ <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
  {/* ── Domain sidebar ── */}
- <SurfaceSection title="Domains" description="Choose a domain to inspect persisted memory and recent learning." bodyClassName="p-3">
+ <SurfacePanel className="p-3 space-y-3">
+ <div className="flex items-center justify-between px-1">
+ <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Domains</h3>
+ <span className="text-xs text-muted">{groupedWorkspaces.length}</span>
+ </div>
  <NavList
  items={groupedWorkspaces}
  selectedKey={selectedWorkspace?.domain ?? ""}
  onSelect={setSelectedDomain}
  getKey={(ws) => ws.domain}
  renderLabel={(ws) => ws.domain}
- renderMeta={(ws) => (
- <>
- <span>{ws.completedRunCount} runs</span>
- <span>{ws.surfaces.reduce((c, s) => c + s.selectors.length, 0)} selectors</span>
- <span>{ws.surfaces.filter((s) => s.profile).length} profiles</span>
- <span>{ws.learning.length} learning</span>
- </>
- )}
- renderBadge={(ws) => ws.cookieMemory ? <Badge tone="accent">{ws.cookieMemory.cookie_count} cookies</Badge> : null}
+ renderMeta={(ws) => {
+ const selectorCount = ws.surfaces.reduce((c, s) => c + s.selectors.length, 0);
+ const profileCount = ws.surfaces.filter((s) => s.profile).length;
+ const meta = [
+ selectorCount ? `${selectorCount} selectors` : null,
+ profileCount ? `${profileCount} profiles` : null,
+ ws.learning.length ? `${ws.learning.length} learned` : null,
+ ws.completedRunCount ? `${ws.completedRunCount} runs` : null,
+ ].filter(Boolean).join(" · ");
+ return meta ? <span className="text-xs text-muted">{meta}</span> : null;
+ }}
+ renderBadge={(ws) => ws.cookieMemory ? <Badge tone="accent">{ws.cookieMemory.cookie_count}</Badge> : null}
  />
- </SurfaceSection>
+ </SurfacePanel>
 
  {/* ── Domain detail ── */}
  <div className="space-y-4">
  {selectedWorkspace ? (
  <>
- <SurfaceSection
- title={selectedWorkspace.domain}
- description="Surface-scoped selectors and run defaults live together here, while cookie memory remains domain-scoped because acquisition reuse is host-level."
- action={
+ <div className="flex flex-wrap items-center justify-between gap-3">
+ <h2 className="text-lg font-semibold text-foreground">{selectedWorkspace.domain}</h2>
+ {selectedWorkspace.surfaces.some((surface) => surface.selectors.length) ? (
  <Button
  type="button"
  variant="danger"
+ size="sm"
  onClick={() => void deleteDomainSelectors(selectedWorkspace.domain)}
- disabled={!selectedWorkspace.surfaces.some((surface) => surface.selectors.length)}
  >
  <Trash2 className="size-3.5" />
  Clear Selectors
  </Button>
- }
- bodyClassName="space-y-2"
- >
- <div className="flex flex-wrap gap-2">
- <Badge tone="neutral">
- {selectedWorkspace.surfaces.reduce((count, surface) => count + surface.selectors.length, 0)} selectors
- </Badge>
- <Badge tone="info">
- {selectedWorkspace.surfaces.filter((surface) => surface.profile).length} profiles
- </Badge>
- <Badge tone="success">{selectedWorkspace.learning.length} learning events</Badge>
- {selectedWorkspace.cookieMemory ? <Badge tone="accent">{selectedWorkspace.cookieMemory.cookie_count} cookies</Badge> : null}
+ ) : null}
  </div>
- </SurfaceSection>
 
- <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.9fr)]">
- {/* ── Selector Memory ── */}
- <SurfaceSection
- title="Selector Memory"
- description="Review and edit the selectors currently saved for this domain."
- icon={Database}
- bodyClassName="space-y-4"
- >
+ <TabBar
+ value={activeTab}
+ onChange={setActiveTab}
+ options={[
+ {
+ value: "selectors",
+ label: `Selectors (${selectedWorkspace.surfaces.reduce((c, s) => c + s.selectors.length, 0)})`,
+ },
+ {
+ value: "profiles",
+ label: `Profiles (${selectedWorkspace.surfaces.filter((s) => s.profile).length})`,
+ },
+ {
+ value: "cookies",
+ label: `Cookies${selectedWorkspace.cookieMemory ? ` (${selectedWorkspace.cookieMemory.cookie_count})` : ""}`,
+ },
+ {
+ value: "learning",
+ label: `Learning (${selectedWorkspace.learning.length})`,
+ },
+ ]}
+ />
+
+ {/* ── Selectors tab ── */}
+ {activeTab === "selectors" && (
+ <SurfaceSection title="Selector Memory" description="Review and edit the selectors currently saved for this domain." bodyClassName="space-y-4">
  {selectedWorkspace.surfaces.length ? (
  selectedWorkspace.surfaces.map((surfaceWorkspace) => (
  <div
@@ -630,7 +600,7 @@ export default function DomainMemoryManagePage() {
  {surfaceWorkspace.selectors.length} selector{surfaceWorkspace.selectors.length === 1 ? "" : "s"}
  </div>
  </div>
- {surfaceWorkspace.profile ? <Badge tone="info">profile saved</Badge> : <Badge tone="neutral">no saved profile</Badge>}
+ {surfaceWorkspace.profile ? <Badge tone="info">profile saved</Badge> : null}
  </div>
 
  {surfaceWorkspace.selectors.length ? (
@@ -638,7 +608,7 @@ export default function DomainMemoryManagePage() {
  {surfaceWorkspace.selectors.map((record) => {
  const isEditing = editingId === record._uid && draft !== null;
  return (
- <DetailRow key={record._uid}>
+ <DetailRow key={record._uid} className={isEditing ? "bg-[var(--subtle-panel-bg)]" : undefined}>
  {isEditing ? (
  <div className="space-y-3">
  <div className="grid gap-3 md:grid-cols-2">
@@ -706,27 +676,24 @@ export default function DomainMemoryManagePage() {
  ) : (
  <div className="flex flex-wrap items-start justify-between gap-3">
  <div className="min-w-0 flex-1">
- <div className="flex flex-wrap items-center gap-2">
+ <div className="flex flex-wrap items-center gap-3">
  <span className="font-medium text-foreground">{record.field_name}</span>
- <Badge tone={record.is_active ? "success" : "warning"}>
- {record.is_active ? "active" : "inactive"}
- </Badge>
- <Badge tone="neutral">{titleCaseToken(record.source)}</Badge>
+ <Toggle
+ checked={record.is_active}
+ onChange={() => void toggleActive(record)}
+ ariaLabel={record.is_active ? "Disable selector" : "Enable selector"}
+ />
+ <span className="text-xs text-muted">{titleCaseToken(record.source)}</span>
  </div>
  <code className="mt-2 block break-all text-xs text-secondary">{selectorValue(record)}</code>
  {record.sample_value ? <div className="mt-2 text-xs text-muted">Sample: {record.sample_value}</div> : null}
  </div>
- <div className="flex flex-wrap gap-2">
- <Button type="button" variant="ghost" onClick={() => startEdit(record)}>
+ <div className="flex items-center gap-1">
+ <Button type="button" variant="ghost" size="icon" onClick={() => startEdit(record)} aria-label="Edit selector">
  <Pencil className="size-3.5" />
- Edit
  </Button>
- <Button type="button" variant="ghost" onClick={() => void toggleActive(record)}>
- {record.is_active ? "Disable" : "Enable"}
- </Button>
- <Button type="button" variant="danger" onClick={() => void deleteRecord(record)}>
+ <Button type="button" variant="danger" size="icon" onClick={() => void deleteRecord(record)} aria-label="Delete selector">
  <Trash2 className="size-3.5" />
- Delete
  </Button>
  </div>
  </div>
@@ -744,13 +711,13 @@ export default function DomainMemoryManagePage() {
  <DataRegionEmpty title="No saved selector memory" description="Selectors promoted from completed runs will appear here once they are saved." />
  )}
  </SurfaceSection>
+ )}
 
- {/* ── Right column: profiles, cookies, learning ── */}
- <div className="space-y-4">
+ {/* ── Profiles tab ── */}
+ {activeTab === "profiles" && (
  <SurfaceSection
  title="Run Profile Defaults"
  description="Saved fetch and diagnostics defaults that will be reused for future runs on this domain."
- icon={SlidersHorizontal}
  bodyClassName="space-y-3"
  >
  {selectedWorkspace.surfaces.some((surface) => surface.profile) ? (
@@ -776,11 +743,13 @@ export default function DomainMemoryManagePage() {
  <DataRegionEmpty title="No saved run profiles" description="Use the Run Config tab on a completed crawl to save reusable defaults for this domain." />
  )}
  </SurfaceSection>
+ )}
 
+ {/* ── Cookies tab ── */}
+ {activeTab === "cookies" && (
  <SurfaceSection
  title="Saved Domain Cookies"
  description="Cookie memory is stored at the domain level so acquisition can reuse known session context."
- icon={Cookie}
  bodyClassName="space-y-3"
  >
  {selectedWorkspace.cookieMemory ? (
@@ -795,11 +764,13 @@ export default function DomainMemoryManagePage() {
  <DataRegionEmpty title="No cookie memory saved" description="A successful authenticated or protected acquisition run will populate cookie memory here." />
  )}
  </SurfaceSection>
+ )}
 
+ {/* ── Learning tab ── */}
+ {activeTab === "learning" && (
  <SurfaceSection
  title="Recent Learning"
  description="Latest keep and reject decisions captured for this domain across all surfaces."
- icon={Activity}
  bodyClassName="space-y-2"
  >
  {selectedWorkspace.learning.length ? (
@@ -822,8 +793,7 @@ export default function DomainMemoryManagePage() {
  <DataRegionEmpty title="No recent learning" description="Use the Learning tab on a completed run to keep or reject field evidence and populate this history." />
  )}
  </SurfaceSection>
- </div>
- </div>
+ )}
  </>
  ) : null}
  </div>

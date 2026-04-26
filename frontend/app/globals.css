@@ -904,7 +904,8 @@ select:focus-visible:not(.focus-ring) {
 .control-select {
   width: 100%;
   height: var(--control-height);
-  padding: 0 12px;
+  padding-top: 0;
+  padding-bottom: 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
@@ -921,18 +922,6 @@ select:focus-visible:not(.focus-ring) {
   color: var(--text-muted);
 }
 
-select.control-select {
-  appearance: none;
-  padding-right: 30px;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
-    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
-  background-position:
-    calc(100% - 14px) calc(50% - 2px),
-    calc(100% - 10px) calc(50% - 2px);
-  background-size: 4px 4px, 4px 4px;
-  background-repeat: no-repeat;
-}
 
 textarea.textarea {
   min-height: 96px;

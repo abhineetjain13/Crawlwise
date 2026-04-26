@@ -183,6 +183,81 @@ def test_build_findings_surfaces_webdriver_headless_and_webrtc() -> None:
     assert "webrtc_leakage" in categories
 
 
+def test_build_findings_ignores_expected_chrome_runtime_object_marker() -> None:
+    report = _report()
+    report["baseline"]["consensus"]["automation_globals"] = ["chrome.runtime.typeof=object"]
+
+    categories = _finding_categories(report)
+
+    assert "automation_globals_exposure" not in categories
+
+
+def test_build_findings_flags_real_automation_globals() -> None:
+    report = _report()
+    report["baseline"]["consensus"]["automation_globals"] = ["window.playwright"]
+
+    categories = _finding_categories(report)
+
+    assert "automation_globals_exposure" in categories
+
+
+def test_build_findings_adds_chromium_ja3_info_for_chromium_only() -> None:
+    chromium_report = _report()
+    chromium_report["metadata"] = {"browser_engine": "chromium"}
+    real_chrome_report = _report()
+    real_chrome_report["metadata"] = {"browser_engine": "real_chrome"}
+
+    chromium_categories = _finding_categories(chromium_report)
+    real_chrome_categories = _finding_categories(real_chrome_report)
+
+    assert "chromium_ja3_limitation" in chromium_categories
+    assert "chromium_ja3_limitation" not in real_chrome_categories
+
+
+def test_build_agent_summary_surfaces_canvas_hash_and_webgl_renderer() -> None:
+    report = {
+        "metadata": {
+            "generated_at": "2026-04-26T00:00:00Z",
+            "browser_engine": "chromium",
+            "source_kind": "direct",
+            "degraded": False,
+            "selected_proxy_mask": "direct",
+        },
+        "baseline": {
+            "consensus": {
+                "user_agent": "Mozilla/5.0 Chrome/145.0.0.0 Safari/537.36",
+                "locale": "en-US",
+                "timezone": "UTC",
+                "webdriver": False,
+                "webrtc_ips": [],
+                "automation_globals": [],
+                "iframe_leak": {"content_window_array_leak": False},
+                "canvas": {
+                    "text_measure": 157.18,
+                    "image_data_hash": "fnv1a:deadbeef",
+                    "data_url_prefix": "data:image/png;base64,abc",
+                },
+                "audio": {"fingerprint": "-25.10"},
+                "webgl": {"vendor": "Google Inc.", "renderer": "ANGLE (Intel, Demo)"},
+                "fonts": ["Arial", "Verdana"],
+                "max_touch_points": 0,
+                "pdf_viewer_enabled": True,
+                "cookie_enabled": True,
+            },
+            "drift": {},
+        },
+        "findings": [],
+        "sites": {},
+        "target_diagnostics": [],
+    }
+
+    summary = probe._build_agent_summary(report)
+
+    assert summary["baseline"]["canvas_image_data_hash"] == "fnv1a:deadbeef"
+    assert summary["baseline"]["canvas_data_url_prefix"] == "data:image/png;base64,abc"
+    assert summary["baseline"]["webgl_renderer"] == "ANGLE (Intel, Demo)"
+
+
 def test_build_findings_flags_screen_and_viewport_drift() -> None:
     categories = _finding_categories(_report(screen_drift=True))
     assert "screen_viewport_drift" in categories
@@ -239,8 +314,32 @@ async def test_build_report_uses_runtime_page_init_script_path(
     class FakePage:
         def __init__(self) -> None:
             self.url = "https://bot.sannysoft.com/"
-            self._evaluate_payloads = [
-                {
+            self.mouse = self.FakeMouse()
+
+        class FakeMouse:
+            async def move(self, *_args, **_kwargs) -> None:
+                return None
+
+            async def click(self, *_args, **_kwargs) -> None:
+                return None
+
+        async def goto(self, *_args, **_kwargs) -> None:
+            return None
+
+        async def wait_for_load_state(self, *_args, **_kwargs) -> None:
+            return None
+
+        async def wait_for_timeout(self, *_args, **_kwargs) -> None:
+            return None
+
+        async def evaluate(self, script, *_args, **_kwargs):
+            script_text = str(script)
+            if "__crawlerProbeBehavioralSmoke" in script_text and "ready: true" in script_text:
+                return {"ready": True, "x": 24, "y": 24}
+            if "__crawlerProbeBehavioralSmoke" in script_text and "mouse_isTrusted" in script_text:
+                return {"mouse_isTrusted": True, "click_isTrusted": True}
+            if "getHighEntropyValues" in script_text:
+                return {
                     "user_agent": "Mozilla/5.0 Chrome/145.0.0.0 Safari/537.36",
                     "user_agent_data": None,
                     "webdriver": False,
@@ -256,29 +355,18 @@ async def test_build_report_uses_runtime_page_init_script_path(
                     "screen": {"width": 1920, "height": 1080},
                     "viewport": {"width": 1280, "height": 720},
                     "webgl": {"vendor": "Google", "renderer": "ANGLE"},
+                    "automation_globals": [],
+                    "behavioral_smoke": {"mouse_isTrusted": True, "click_isTrusted": True},
                     "webrtc_ips": [],
                     "timestamp": "2026-04-24T00:00:00Z",
-                },
-                {
-                    "line_count": 1,
-                    "lines": ["WebDriver passed"],
-                    "rows": [{"label": "WebDriver (New)", "value": "missing"}],
-                    "has_creep_object": False,
-                    "has_fingerprint_object": False,
-                },
-            ]
-
-        async def goto(self, *_args, **_kwargs) -> None:
-            return None
-
-        async def wait_for_load_state(self, *_args, **_kwargs) -> None:
-            return None
-
-        async def wait_for_timeout(self, *_args, **_kwargs) -> None:
-            return None
-
-        async def evaluate(self, *_args, **_kwargs):
-            return self._evaluate_payloads.pop(0)
+                }
+            return {
+                "line_count": 1,
+                "lines": ["WebDriver passed"],
+                "rows": [{"label": "WebDriver (New)", "value": "missing"}],
+                "has_creep_object": False,
+                "has_fingerprint_object": False,
+            }
 
         async def content(self) -> str:
             return "<html><body>ok</body></html>"

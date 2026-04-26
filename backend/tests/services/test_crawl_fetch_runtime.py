@@ -726,6 +726,11 @@ async def test_fetch_page_browser_only_prefers_real_chrome_lane_after_chromium_b
     )
     monkeypatch.setattr(
         crawl_fetch_runtime,
+        "real_chrome_browser_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
         "load_host_protection_policy",
         AsyncMock(
             return_value=HostProtectionPolicy(
@@ -746,6 +751,79 @@ async def test_fetch_page_browser_only_prefers_real_chrome_lane_after_chromium_b
     assert result.browser_diagnostics["browser_engine"] == "real_chrome"
     assert result.browser_diagnostics["escalation_lane"] == "browser_only"
     assert result.browser_diagnostics["host_policy_snapshot"]["chromium_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_browser_attempts_replans_to_real_chrome_after_same_proxy_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted_engines: list[str] = []
+    context = crawl_fetch_runtime._FetchRuntimeContext(
+        url="https://example.com/products/widget",
+        resolved_timeout=5.0,
+        run_id=None,
+        surface="ecommerce_detail",
+        traversal_mode=None,
+        max_pages=1,
+        max_scrolls=1,
+        max_records=None,
+        on_event=None,
+        browser_reason=None,
+        requested_fields=[],
+        listing_recovery_mode=None,
+        proxies=[None],
+        proxy_profile={},
+        traversal_required=False,
+        fetch_mode="browser_only",
+        runtime_policy={},
+    )
+
+    async def _fake_browser_fetch(url: str, timeout: float, **kwargs):
+        del url, timeout
+        browser_engine = str(kwargs.get("browser_engine"))
+        attempted_engines.append(browser_engine)
+        return PageFetchResult(
+            url="https://example.com/products/widget",
+            final_url="https://example.com/products/widget",
+            html="<html><body><h1>Rendered</h1></body></html>",
+            status_code=200,
+            method="browser",
+            blocked=browser_engine == "chromium",
+            browser_diagnostics={"browser_engine": browser_engine},
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser_fetch)
+    monkeypatch.setattr(
+        crawl_fetch_runtime.crawler_runtime_settings,
+        "browser_real_chrome_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "real_chrome_browser_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(crawl_fetch_runtime, "wait_for_host_slot", AsyncMock())
+    monkeypatch.setattr(crawl_fetch_runtime, "_update_host_result_memory", AsyncMock())
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        AsyncMock(
+            side_effect=[
+                HostProtectionPolicy(host="example.com", chromium_blocked=True),
+            ]
+        ),
+    )
+
+    result = await crawl_fetch_runtime._run_browser_attempts(
+        context,
+        reason="browser-only",
+        host_policy=HostProtectionPolicy(host="example.com"),
+    )
+
+    assert attempted_engines == ["chromium", "real_chrome"]
+    assert result.blocked is False
+    assert result.browser_diagnostics["browser_engine"] == "real_chrome"
 
 
 @pytest.mark.asyncio
@@ -843,6 +921,7 @@ async def test_run_browser_attempts_treats_none_cooldown_as_zero(
         traversal_mode=None,
         max_pages=1,
         max_scrolls=1,
+        max_records=None,
         on_event=None,
         browser_reason=None,
         requested_fields=[],
@@ -911,6 +990,7 @@ async def test_invoke_run_browser_attempts_skips_host_policy_for_legacy_signatur
         traversal_mode=None,
         max_pages=1,
         max_scrolls=1,
+        max_records=None,
         on_event=None,
         browser_reason=None,
         requested_fields=[],
@@ -1244,6 +1324,29 @@ async def test_listing_202_shell_escalates_to_browser() -> None:
             "</body></html>"
         ),
         status_code=202,
+        method="httpx",
+        blocked=False,
+    )
+
+    assert await should_escalate_to_browser_async(result, surface="ecommerce_listing") is True
+
+
+@pytest.mark.asyncio
+async def test_listing_single_product_json_ld_shell_escalates_to_browser() -> None:
+    result = PageFetchResult(
+        url="https://shop.example.com/hair-care/hair-straighteners",
+        final_url="https://shop.example.com/hair-care/hair-straighteners",
+        html=(
+            "<html><body><h1>Hair straighteners</h1>"
+            "<script type='application/ld+json'>"
+            '{"@context":"https://schema.org","@type":"Product","name":"SEO Product"}'
+            "</script>"
+            "<script>window.dataLayer=[{pageInfo:{pageType:'catalog/category/view'}}]</script>"
+            "<div id='layer-product-list'></div>"
+            "<p>" + ("Category copy. " * 80) + "</p>"
+            "</body></html>"
+        ),
+        status_code=200,
         method="httpx",
         blocked=False,
     )

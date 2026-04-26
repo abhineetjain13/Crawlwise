@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from app.services.acquisition.browser_readiness import HtmlAnalysis, analyze_html
 from app.core.config import settings
 from app.services.config.block_signatures import BLOCK_SIGNATURES
+from app.services.config.extraction_rules import LISTING_CLIENT_RENDERED_SHELL_HINTS
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.db_utils import mapping_or_empty
 from app.services.field_value_core import clean_text
@@ -517,6 +518,7 @@ def _has_extractable_listing_signals(
     parsed = analysis or analyze_html(html)
     if not parsed.html:
         return False
+    typed_listing_count = 0
     for payload in parse_json_ld(parsed.soup):
         if not isinstance(payload, dict):
             continue
@@ -524,8 +526,12 @@ def _has_extractable_listing_signals(
         normalized_type = (
             " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
         ).lower()
-        if any(token in normalized_type for token in ("itemlist", "product", "jobposting")):
+        if "itemlist" in normalized_type:
             return True
+        if any(token in normalized_type for token in ("product", "jobposting")):
+            typed_listing_count += 1
+    if typed_listing_count >= max(2, int(crawler_runtime_settings.listing_min_items)):
+        return True
     detail_like_anchor_count = 0
     for anchor in parsed.soup.find_all("a", href=True):
         href = str(anchor.get("href") or "").strip().lower()
@@ -566,7 +572,7 @@ def _looks_like_listing_shell(
     root = parsed.soup.find(id=re.compile(r"root|app|__next", re.I))
     script_count = len(parsed.soup.find_all("script"))
     if len(parsed.visible_text) > 400:
-        return False
+        return any(token in lowered_html for token in LISTING_CLIENT_RENDERED_SHELL_HINTS)
     if root is None and script_count < 3:
         return False
     return any(

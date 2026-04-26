@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from app.services.config.extraction_rules import LISTING_BRAND_MAX_WORDS
 from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_UTILITY_TITLE_TOKENS,
@@ -377,7 +376,6 @@ def _visual_cluster_brand(
     return (
         infer_brand_from_title_marker(title)
         or infer_brand_from_product_url(url=href, title=title)
-        or _visual_brand_from_slug_prefix(href, title=title)
         or ""
     )
 
@@ -417,29 +415,6 @@ def _visual_horizontal_overlap(left: dict[str, Any], right: dict[str, Any]) -> i
     right_start = int(right.get("x") or 0)
     right_end = right_start + int(right.get("width") or 0)
     return max(0, min(left_end, right_end) - max(left_start, right_start))
-
-
-def _visual_brand_from_slug_prefix(url: str, *, title: str) -> str:
-    path_parts = [part for part in str(url or "").split("/") if part]
-    slug = ""
-    for index, part in enumerate(path_parts):
-        if part == "p" and index + 1 < len(path_parts):
-            slug = path_parts[index + 1]
-            break
-    if not slug and path_parts:
-        slug = path_parts[-1]
-    tokens = [token for token in re.split(r"[^a-z0-9]+", slug.casefold()) if token]
-    title_tokens = [token for token in re.split(r"[^a-z0-9]+", title.casefold()) if token]
-    if len(tokens) < 2 or not title_tokens:
-        return ""
-    for start in range(1, len(tokens) - len(title_tokens) + 1):
-        if tokens[start : start + len(title_tokens)] != title_tokens:
-            continue
-        brand_tokens = tokens[:start]
-        if not brand_tokens or len(brand_tokens) > LISTING_BRAND_MAX_WORDS:
-            continue
-        return " ".join(token.capitalize() for token in brand_tokens)
-    return ""
 
 
 def _visual_title_matches_url(title: str, href: str) -> bool:
