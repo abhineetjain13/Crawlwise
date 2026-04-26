@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.field_value_core import (
+    clean_text,
     extract_currency_code,
     extract_urls,
     infer_brand_from_product_url,
@@ -126,6 +127,13 @@ def test_extract_currency_code_supports_rs_price_prefixes() -> None:
 
 def test_extract_currency_code_ignores_non_currency_uppercase_acronyms() -> None:
     assert extract_currency_code("SKU 499") is None
+
+
+def test_clean_text_strips_leading_css_in_js_noise() -> None:
+    assert (
+        clean_text(".css-7u5e79{margin:0.5rem 0rem;} The Legend of Zelda")
+        == "The Legend of Zelda"
+    )
 
 
 def test_is_title_noise_keeps_short_non_numeric_product_titles() -> None:

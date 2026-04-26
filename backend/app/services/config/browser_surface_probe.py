@@ -36,6 +36,21 @@ BROWSER_SURFACE_PROBE_TARGETS = (
         "label": "FingerprintJS Demo",
         "url": "https://fingerprintjs.github.io/fingerprintjs/",
     },
+    {
+        "id": "browserleaks_canvas",
+        "label": "BrowserLeaks Canvas",
+        "url": "https://browserleaks.com/canvas",
+    },
+    {
+        "id": "browserleaks_webgl",
+        "label": "BrowserLeaks WebGL",
+        "url": "https://browserleaks.com/webgl",
+    },
+    {
+        "id": "browserleaks_fonts",
+        "label": "BrowserLeaks Fonts",
+        "url": "https://browserleaks.com/fonts",
+    },
 )
 
 BROWSER_SURFACE_PROBE_POST_NAVIGATION_WAIT_MS = 4000
@@ -51,6 +66,29 @@ BROWSER_SURFACE_PROBE_TARGET_NAVIGATION_TIMEOUT_MS = 30000
 BROWSER_SURFACE_PROBE_TARGET_VISIBLE_TEXT_SNIPPET_LIMIT = 240
 BROWSER_SURFACE_PROBE_TARGET_COOKIE_NAME_LIMIT = 20
 BROWSER_SURFACE_PROBE_TARGET_BODY_ARTIFACT_LIMIT = 200000
+BROWSER_SURFACE_PROBE_FONT_TEST_STRINGS = (
+    "Arial",
+    "Arial Black",
+    "Courier New",
+    "Georgia",
+    "Helvetica",
+    "Impact",
+    "Times New Roman",
+    "Verdana",
+    "Comic Sans MS",
+    "Trebuchet MS",
+    "Palatino Linotype",
+    "Segoe UI",
+    "Tahoma",
+    "Roboto",
+    "Open Sans",
+    "Lato",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Cantarell",
+)
+
 BROWSER_SURFACE_PROBE_TARGET_GEO_ENDPOINTS = (
     {
         "id": "ipinfo",

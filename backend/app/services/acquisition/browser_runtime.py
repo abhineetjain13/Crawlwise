@@ -1010,7 +1010,7 @@ def _proxy_requires_fresh_browser_state(proxy_profile: dict[str, object] | None)
 
 def _surface_supports_origin_warmup(surface: str) -> bool:
     normalized_surface = _normalize_surface(surface)
-    return normalized_surface.startswith("ecommerce_") or "detail" in normalized_surface
+    return "detail" in normalized_surface
 
 
 def _browser_proxy_mode(

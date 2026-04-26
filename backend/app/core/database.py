@@ -41,4 +41,11 @@ async def dispose_engine() -> None:
 
 async def get_session() -> AsyncIterator[AsyncSession]:
     async with SessionLocal() as session:
-        yield session
+        try:
+            yield session
+        except Exception:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            raise

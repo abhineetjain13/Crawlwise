@@ -71,8 +71,6 @@ function defaultDomainRunProfile(): DomainRunProfile {
  include_iframes: false,
  traversal_mode: null,
  request_delay_ms: 500,
- max_pages: 10,
- max_scrolls: 10,
  },
  locality_profile: {
  geo_country:"auto",

@@ -1281,7 +1281,11 @@
     "__type__": "tuple",
     "items": [
       "[data-component-id='display-price'] [aria-label*='current price' i]",
-      "[data-component-id='display-price'] [class*='price' i]"
+      "[data-component-id='display-price'] [class*='price' i]",
+      "[class*='price' i]",
+      "[data-testid*='price' i]",
+      "[data-test*='price' i]",
+      "[aria-label*='price' i]"
     ]
   },
   "DETAIL_EXPAND_KEYWORD_EXTENSIONS": {
@@ -4230,6 +4234,7 @@
       "featured",
       "best seller",
       "items",
+      "item",
       "great deals",
       "top seller",
       "purchases",
@@ -5863,6 +5868,14 @@
     "__next_data__": "__NEXT_DATA__",
     "__nuxt_data__": "__NUXT_DATA__",
     "mobify-data": "__MOBIFY_DATA__"
+  },
+  "VARIANT_OPTION_VALUE_NOISE_TOKENS": {
+    "__type__": "frozenset",
+    "items": [
+      "myinfo",
+      "optout",
+      "removeme"
+    ]
   },
   "VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS": {
     "__type__": "tuple",

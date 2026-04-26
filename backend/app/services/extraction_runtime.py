@@ -91,7 +91,7 @@ def extract_records(
         content_type=content_type,
     )
     if xml_records:
-        return xml_records[:max_records]
+        return xml_records
     json_records = _extract_raw_json_records(
         html,
         page_url,
@@ -104,7 +104,7 @@ def extract_records(
         if "listing" in surface:
             return [
                 _finalize_listing_price_fields(dict(row))
-                for row in json_records[:max_records]
+                for row in json_records
                 if isinstance(row, dict)
             ]
         return _postprocess_detail_records(json_records[:max_records], html=html)
@@ -113,7 +113,7 @@ def extract_records(
     if "listing" in surface:
         adapter_rows: list[dict[str, Any]] = []
         if adapter_records:
-            for record in list(adapter_records or [])[: max(1, int(max_records)) * 4]:
+            for record in list(adapter_records or []):
                 if not isinstance(record, dict):
                     continue
                 shaped = direct_record_to_surface_fields(
@@ -176,11 +176,11 @@ def extract_records(
                     is_job=str(surface or "").startswith("job_"),
                 ),
             )
-            return candidate_rows[:max_records]
+            return candidate_rows
         if listing_rows:
-            return listing_rows[:max_records]
+            return listing_rows
         if adapter_rows:
-            return adapter_rows[:max_records]
+            return adapter_rows
         return []
     return _postprocess_detail_records(
         extract_detail_records(
@@ -594,8 +594,6 @@ def _extract_xml_sitemap_records(
                 surface=surface,
             )
         )
-        if len(records) >= max_records:
-            break
     return records
 
 
@@ -678,8 +676,6 @@ def _extract_raw_json_records(
             continue
         seen_keys.add(dedupe_key)
         records.append(record)
-        if len(records) >= max_records:
-            break
     return records
 
 

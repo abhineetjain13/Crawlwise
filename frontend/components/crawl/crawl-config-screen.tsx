@@ -129,8 +129,6 @@ function defaultRunProfile(): DomainRunProfile {
  include_iframes: false,
  traversal_mode: null,
  request_delay_ms: CRAWL_DEFAULTS.REQUEST_DELAY_MS,
- max_pages: CRAWL_DEFAULTS.MAX_PAGES,
- max_scrolls: CRAWL_DEFAULTS.MAX_SCROLLS,
  },
  locality_profile: {
  geo_country: "auto",
@@ -1300,60 +1298,8 @@ export function CrawlConfigScreen({
  }
  />
  <SliderRow
- label="Max Pages"
- description="Upper bound for paginated listing traversal."
- value={String(runProfile.fetch_profile.max_pages)}
- min={CRAWL_LIMITS.MIN_PAGES}
- max={CRAWL_LIMITS.MAX_PAGES}
- step={1}
- onChange={(next) =>
- markProfileDirty((current) => ({
- ...current,
- fetch_profile: {
- ...current.fetch_profile,
- max_pages: clampNumber(next, CRAWL_LIMITS.MIN_PAGES, CRAWL_LIMITS.MAX_PAGES, CRAWL_DEFAULTS.MAX_PAGES),
- },
- }))
- }
- onReset={() =>
- markProfileDirty((current) => ({
- ...current,
- fetch_profile: {
- ...current.fetch_profile,
- max_pages: CRAWL_DEFAULTS.MAX_PAGES,
- },
- }))
- }
- />
- <SliderRow
- label="Max Scrolls"
- description="Upper bound for scroll-driven loading before the run stops expanding the page."
- value={String(runProfile.fetch_profile.max_scrolls)}
- min={CRAWL_LIMITS.MIN_SCROLLS}
- max={CRAWL_LIMITS.MAX_SCROLLS}
- step={1}
- onChange={(next) =>
- markProfileDirty((current) => ({
- ...current,
- fetch_profile: {
- ...current.fetch_profile,
- max_scrolls: clampNumber(next, CRAWL_LIMITS.MIN_SCROLLS, CRAWL_LIMITS.MAX_SCROLLS, CRAWL_DEFAULTS.MAX_SCROLLS),
- },
- }))
- }
- onReset={() =>
- markProfileDirty((current) => ({
- ...current,
- fetch_profile: {
- ...current.fetch_profile,
- max_scrolls: CRAWL_DEFAULTS.MAX_SCROLLS,
- },
- }))
- }
- />
- <SliderRow
  label="Max Records"
- description="Cap the number of extracted rows persisted for this run."
+ description="Target record count. The crawler stops after a page reaches this target; it does not trim extra rows from that page."
  value={maxRecords}
  min={CRAWL_LIMITS.MIN_RECORDS}
  max={CRAWL_LIMITS.MAX_RECORDS}
@@ -1615,18 +1561,6 @@ export function buildDispatch(
  CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
  CRAWL_LIMITS.MAX_REQUEST_DELAY_MS,
  CRAWL_DEFAULTS.REQUEST_DELAY_MS,
- ),
- max_pages: clampNumber(
- runProfile.fetch_profile.max_pages,
- CRAWL_LIMITS.MIN_PAGES,
- CRAWL_LIMITS.MAX_PAGES,
- CRAWL_DEFAULTS.MAX_PAGES,
- ),
- max_scrolls: clampNumber(
- runProfile.fetch_profile.max_scrolls,
- CRAWL_LIMITS.MIN_SCROLLS,
- CRAWL_LIMITS.MAX_SCROLLS,
- CRAWL_DEFAULTS.MAX_SCROLLS,
  ),
  },
  locality_profile: { ...runProfile.locality_profile },

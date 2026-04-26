@@ -31,6 +31,7 @@ from app.services.acquisition.browser_runtime import (
 )
 from app.services.config.browser_surface_probe import (
     BROWSER_SURFACE_PROBE_CREEPJS_LABELS,
+    BROWSER_SURFACE_PROBE_FONT_TEST_STRINGS,
     BROWSER_SURFACE_PROBE_HIGH_ENTROPY_HINTS,
     BROWSER_SURFACE_PROBE_KEYWORD_GROUPS,
     BROWSER_SURFACE_PROBE_NEIGHBOR_LINE_WINDOW,
@@ -568,12 +569,169 @@ async def _collect_baseline(page) -> dict[str, object]:
                 }
                 return Array.from(discovered);
             };
+            const collectCanvas = () => {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 200;
+                    canvas.height = 50;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) return { fingerprint: null, text_measure: null };
+                    ctx.textBaseline = 'top';
+                    ctx.font = '14px Arial';
+                    ctx.fillStyle = '#f60';
+                    ctx.fillRect(0, 0, 200, 50);
+                    ctx.fillStyle = '#069';
+                    ctx.fillText('Browser fingerprint probe', 2, 15);
+                    ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+                    ctx.fillText('Browser fingerprint probe', 4, 17);
+                    const dataUrl = canvas.toDataURL();
+                    const textMeasure = ctx.measureText('Browser fingerprint probe').width;
+                    return { fingerprint: dataUrl.slice(0, 200), text_measure: textMeasure };
+                } catch (_e) {
+                    return { fingerprint: null, text_measure: null, error: _e.message };
+                }
+            };
+            const collectAudio = () => {
+                try {
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    const osc = ctx.createOscillator();
+                    const analyser = ctx.createAnalyser();
+                    const gain = ctx.createGain();
+                    gain.gain.value = 0;
+                    osc.connect(analyser);
+                    analyser.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(0);
+                    const buffer = new Float32Array(analyser.frequencyBinCount);
+                    analyser.getFloatFrequencyData(buffer);
+                    osc.stop(0);
+                    const sum = buffer.reduce((a, b) => a + b, 0);
+                    return { fingerprint: sum.toFixed(2), sample_rate: ctx.sampleRate, channel_count: ctx.destination.channelCount };
+                } catch (_e) {
+                    return { fingerprint: null, sample_rate: null, channel_count: null, error: _e.message };
+                }
+            };
+            const collectFonts = () => {
+                const testStrings = input.fontTestStrings || [];
+                const baseFonts = ['monospace', 'sans-serif', 'serif'];
+                const detected = [];
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return [];
+                const getWidth = (font) => {
+                    ctx.font = `72px ${font}, monospace`;
+                    return ctx.measureText('mmmmmmmmmmlli').width;
+                };
+                for (const testFont of testStrings) {
+                    const baseWidths = baseFonts.map(getWidth);
+                    const testWidth = getWidth(testFont);
+                    if (!baseWidths.includes(testWidth)) {
+                        detected.push(testFont);
+                    }
+                }
+                return detected.slice(0, 50);
+            };
+            const collectConnection = () => {
+                const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+                if (!conn) return null;
+                return {
+                    effective_type: conn.effectiveType || null,
+                    downlink: conn.downlink || null,
+                    rtt: conn.rtt || null,
+                    save_data: conn.saveData || false,
+                };
+            };
+            const collectScreenOrientation = () => {
+                const orient = window.screen.orientation;
+                if (!orient) return null;
+                return {
+                    angle: orient.angle,
+                    type: orient.type,
+                };
+            };
+            const collectAutomationGlobals = () => {
+                const markers = [];
+                if (typeof window.playwright !== 'undefined') markers.push('window.playwright');
+                if (typeof window.__pw_scripts !== 'undefined') markers.push('window.__pw_scripts');
+                if (typeof window.__pw_init !== 'undefined') markers.push('window.__pw_init');
+                if (typeof window.cdc_adoQpoasnfa76pfcZLmcfl_Array !== 'undefined') markers.push('cdc_array');
+                if (typeof window.cdc_adoQpoasnfa76pfcZLmcfl_Promise !== 'undefined') markers.push('cdc_promise');
+                if (document.documentElement && document.documentElement.getAttribute('__playwright_testid_attribute__')) markers.push('__playwright_testid_attribute__');
+                const chromeRuntime = typeof window.chrome !== 'undefined' ? window.chrome.runtime : undefined;
+                markers.push(`chrome.runtime.typeof=${typeof chromeRuntime}`);
+                return markers;
+            };
+            const collectTimingJitter = () => {
+                const deltas = [];
+                let last = performance.now();
+                for (let i = 0; i < 10; i++) {
+                    const now = performance.now();
+                    deltas.push(parseFloat((now - last).toFixed(4)));
+                    last = now;
+                }
+                return deltas;
+            };
+            const collectIframeLeak = () => {
+                try {
+                    const iframe = document.createElement('iframe');
+                    document.body.appendChild(iframe);
+                    const cw = iframe.contentWindow;
+                    const leak = cw[0] === null && cw.length === 0;
+                    document.body.removeChild(iframe);
+                    return { content_window_array_leak: leak };
+                } catch (_e) {
+                    return { content_window_array_leak: null, error: _e.message };
+                }
+            };
+            const collectPermissions = async () => {
+                const results = {};
+                if (!navigator.permissions || !navigator.permissions.query) return results;
+                const names = ['notifications', 'camera', 'microphone', 'geolocation'];
+                for (const name of names) {
+                    try {
+                        const status = await navigator.permissions.query({ name });
+                        results[name] = status.state;
+                    } catch (_e) {
+                        results[name] = `error:${_e.name}`;
+                    }
+                }
+                return results;
+            };
+            const collectBehavioralSmoke = async () => {
+                const body = document.body;
+                if (!body) return { mouse_isTrusted: null, click_isTrusted: null };
+                let mouseTrusted = null;
+                let clickTrusted = null;
+                const mouseHandler = (e) => { mouseTrusted = e.isTrusted; };
+                const clickHandler = (e) => { clickTrusted = e.isTrusted; };
+                body.addEventListener('mousemove', mouseHandler, { once: true });
+                body.addEventListener('click', clickHandler, { once: true });
+                await new Promise((r) => setTimeout(r, 50));
+                try {
+                    const evt = new MouseEvent('mousemove', { bubbles: true });
+                    body.dispatchEvent(evt);
+                } catch (_e) {}
+                await new Promise((r) => setTimeout(r, 50));
+                body.removeEventListener('mousemove', mouseHandler);
+                body.removeEventListener('click', clickHandler);
+                return { mouse_isTrusted: mouseTrusted, click_isTrusted: clickTrusted };
+            };
             const uaData = navigator.userAgentData
                 ? await navigator.userAgentData
                     .getHighEntropyValues(input.highEntropyHints)
                     .catch(() => null)
                 : null;
             const webgl = collectWebGL();
+            const canvas = collectCanvas();
+            const audio = collectAudio();
+            const fonts = collectFonts();
+            const connection = collectConnection();
+            const screen_orientation = collectScreenOrientation();
+            const automation_globals = collectAutomationGlobals();
+            const timing_jitter = collectTimingJitter();
+            const iframe_leak = collectIframeLeak();
+            const permissions = await collectPermissions();
+            const behavioral = await collectBehavioralSmoke();
             return {
                 user_agent: normalize(navigator.userAgent),
                 user_agent_data: uaData,
@@ -603,6 +761,20 @@ async def _collect_baseline(page) -> dict[str, object]:
                     outer_height: window.outerHeight,
                 },
                 webgl,
+                canvas,
+                audio,
+                fonts,
+                connection,
+                screen_orientation,
+                max_touch_points: navigator.maxTouchPoints ?? null,
+                pdf_viewer_enabled: navigator.pdfViewerEnabled ?? null,
+                cookie_enabled: navigator.cookieEnabled ?? null,
+                do_not_track: navigator.doNotTrack ?? null,
+                automation_globals,
+                timing_jitter,
+                iframe_leak,
+                permissions,
+                behavioral_smoke: behavioral,
                 webrtc_ips: await collectWebRTCIps(),
                 timestamp: new Date().toISOString(),
             };
@@ -610,6 +782,7 @@ async def _collect_baseline(page) -> dict[str, object]:
         {
             "highEntropyHints": list(BROWSER_SURFACE_PROBE_HIGH_ENTROPY_HINTS),
             "webrtcTimeoutMs": int(BROWSER_SURFACE_PROBE_WEBRTC_GATHER_TIMEOUT_MS),
+            "fontTestStrings": list(BROWSER_SURFACE_PROBE_FONT_TEST_STRINGS),
         },
     )
 
@@ -777,6 +950,20 @@ def _consensus_baseline(per_site: dict[str, dict[str, object]]) -> dict[str, obj
         "screen",
         "viewport",
         "webgl",
+        "canvas",
+        "audio",
+        "fonts",
+        "connection",
+        "screen_orientation",
+        "max_touch_points",
+        "pdf_viewer_enabled",
+        "cookie_enabled",
+        "do_not_track",
+        "automation_globals",
+        "timing_jitter",
+        "iframe_leak",
+        "permissions",
+        "behavioral_smoke",
         "webrtc_ips",
     )
     consensus: dict[str, object] = {}
@@ -1170,6 +1357,59 @@ def build_findings(report: dict[str, object]) -> list[dict[str, object]]:
                     "screen": drift.get("screen"),
                     "viewport": drift.get("viewport"),
                 },
+            }
+        )
+
+    automation_globals = _object_list(consensus.get("automation_globals"))
+    if automation_globals:
+        findings.append(
+            {
+                "severity": "fail",
+                "category": "automation_globals_exposure",
+                "message": "Automation framework globals are visible in the page context.",
+                "evidence": automation_globals[:10],
+            }
+        )
+
+    iframe_leak = _object_dict(consensus.get("iframe_leak"))
+    if iframe_leak and iframe_leak.get("content_window_array_leak") is True:
+        findings.append(
+            {
+                "severity": "fail",
+                "category": "iframe_content_window_leak",
+                "message": "Iframe contentWindow array leak detected (automation marker).",
+                "evidence": iframe_leak,
+            }
+        )
+
+    if "canvas" in drift:
+        findings.append(
+            {
+                "severity": "warn",
+                "category": "canvas_fingerprint_drift",
+                "message": "Canvas fingerprint values differ across probe sites.",
+                "evidence": drift.get("canvas"),
+            }
+        )
+
+    if "audio" in drift:
+        findings.append(
+            {
+                "severity": "warn",
+                "category": "audio_fingerprint_drift",
+                "message": "AudioContext fingerprint values differ across probe sites.",
+                "evidence": drift.get("audio"),
+            }
+        )
+
+    behavioral = _object_dict(consensus.get("behavioral_smoke"))
+    if behavioral and behavioral.get("mouse_isTrusted") is False:
+        findings.append(
+            {
+                "severity": "warn",
+                "category": "synthetic_event_detection",
+                "message": "Synthetic mouse events detected; isTrusted flag is false.",
+                "evidence": behavioral,
             }
         )
 
@@ -1920,6 +2160,14 @@ def _build_agent_summary(report: dict[str, object]) -> dict[str, object]:
             "timezone": consensus.get("timezone"),
             "webdriver": consensus.get("webdriver"),
             "webrtc_ip_count": len(_object_list(consensus.get("webrtc_ips"))),
+            "automation_globals_count": len(_object_list(consensus.get("automation_globals"))),
+            "iframe_leak": _object_dict(consensus.get("iframe_leak")).get("content_window_array_leak"),
+            "canvas_text_measure": _object_dict(consensus.get("canvas")).get("text_measure"),
+            "audio_fingerprint": _object_dict(consensus.get("audio")).get("fingerprint"),
+            "fonts_count": len(_object_list(consensus.get("fonts"))),
+            "max_touch_points": consensus.get("max_touch_points"),
+            "pdf_viewer_enabled": consensus.get("pdf_viewer_enabled"),
+            "cookie_enabled": consensus.get("cookie_enabled"),
             "drift_keys": sorted(list(_object_dict(baseline.get("drift")).keys())),
         },
         "sites": site_rows,
@@ -1950,6 +2198,14 @@ def _render_markdown(report: dict[str, object]) -> str:
         f"- Timezone: {baseline.get('timezone')}",
         f"- Webdriver: {baseline.get('webdriver')}",
         f"- WebRTC IP count: {baseline.get('webrtc_ip_count')}",
+        f"- Automation globals count: {baseline.get('automation_globals_count')}",
+        f"- Iframe leak: {baseline.get('iframe_leak')}",
+        f"- Canvas text measure: {baseline.get('canvas_text_measure')}",
+        f"- Audio fingerprint: {baseline.get('audio_fingerprint')}",
+        f"- Fonts count: {baseline.get('fonts_count')}",
+        f"- Max touch points: {baseline.get('max_touch_points')}",
+        f"- PDF viewer enabled: {baseline.get('pdf_viewer_enabled')}",
+        f"- Cookie enabled: {baseline.get('cookie_enabled')}",
         f"- Drift keys: {', '.join(_string_list(baseline.get('drift_keys'))) or 'none'}",
         "",
         "## Findings",

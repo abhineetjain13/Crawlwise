@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 
 from app.services.extract.shared_variant_logic import (
     iter_variant_select_groups,
+    normalized_variant_axis_key,
     resolve_variant_group_name,
     resolve_variants,
     variant_axis_name_is_semantic,
@@ -253,6 +254,28 @@ def test_resolve_variant_group_name_rejects_report_reason_select() -> None:
     )
 
     assert resolve_variant_group_name(soup.select_one("select")) == ""
+
+
+def test_variant_select_groups_reject_cookie_consent_token_selects() -> None:
+    soup = BeautifulSoup(
+        """
+        <select id="privacy-type" name="type">
+          <option>OptOut</option>
+          <option>RemoveMe</option>
+          <option>MyInfo</option>
+        </select>
+        <label for="size">Size</label>
+        <select id="size">
+          <option>100 Softgels</option>
+          <option>200 Softgels</option>
+        </select>
+        """,
+        "html.parser",
+    )
+
+    groups = list(iter_variant_select_groups(soup))
+
+    assert [normalized_variant_axis_key(resolve_variant_group_name(group)) for group in groups] == ["size"]
 
 
 def test_variant_select_groups_reject_style_control_selects() -> None:

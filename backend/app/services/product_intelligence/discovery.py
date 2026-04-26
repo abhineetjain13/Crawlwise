@@ -34,6 +34,7 @@ from app.services.config.product_intelligence import (
     SERPAPI_ORGANIC_RESULTS_FIELD,
     SERPAPI_POSITION_FIELD,
     SERPAPI_QUERY_PARAM,
+    SERPAPI_RESULT_COUNT_PARAM,
     SERPAPI_SEARCH_URL,
     SERPAPI_SNIPPET_FIELD,
     SERPAPI_TITLE_FIELD,
@@ -118,7 +119,7 @@ async def discover_candidates(
         max_candidates * product_intelligence_settings.discovery_pool_multiplier,
     )
     for query_order, query in enumerate(queries):
-        results = await _search_results(provider_name, query)
+        results = await _search_results(provider_name, query, limit=pool_limit)
         for rank, result in enumerate(results, start=1):
             normalized_url = _clean_result_url(result.url)
             if not normalized_url or normalized_url in seen:
@@ -179,23 +180,25 @@ def _rank_discovered_candidates(
     )
 
 
-async def _search_results(provider: str, query: str) -> list[SearchResult]:
+async def _search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
     if provider == SEARCH_PROVIDER_SERPAPI:
         if not product_intelligence_settings.serpapi_key:
             logger.warning("Product intelligence SerpAPI discovery skipped: missing API key")
             return []
-        return await _search_serpapi(query)
+        return await _search_serpapi(query, limit=limit)
     if provider == SEARCH_PROVIDER_DUCKDUCKGO:
         return await _search_duckduckgo(query)
     return []
 
 
-async def _search_serpapi(query: str) -> list[SearchResult]:
+async def _search_serpapi(query: str, *, limit: int | None = None) -> list[SearchResult]:
     params = {
         SERPAPI_ENGINE_PARAM: SERPAPI_ENGINE,
         SERPAPI_QUERY_PARAM: query,
         SERPAPI_KEY_PARAM: product_intelligence_settings.serpapi_key,
     }
+    if limit is not None:
+        params[SERPAPI_RESULT_COUNT_PARAM] = str(max(1, int(limit)))
     try:
         async with httpx.AsyncClient(timeout=product_intelligence_settings.search_timeout_seconds) as client:
             response = await client.get(SERPAPI_SEARCH_URL, params=params)

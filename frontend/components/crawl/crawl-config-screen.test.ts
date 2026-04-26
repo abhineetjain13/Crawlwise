@@ -41,8 +41,6 @@ function baseProfile(overrides: DomainRunProfileOverrides = {}): DomainRunProfil
  include_iframes: false,
  traversal_mode: null,
  request_delay_ms: 2000,
- max_pages: 5,
- max_scrolls: 10,
  ...overrides.fetch_profile,
  },
  locality_profile: {
@@ -111,8 +109,6 @@ describe("buildDispatch", () => {
  js_mode: "enabled",
  traversal_mode: "paginate",
  request_delay_ms: 1500,
- max_pages: 8,
- max_scrolls: 12,
  include_iframes: true,
  },
  locality_profile: {
@@ -140,8 +136,6 @@ describe("buildDispatch", () => {
  include_iframes: true,
  traversal_mode: "paginate",
  request_delay_ms: 1500,
- max_pages: 8,
- max_scrolls: 12,
  });
  expect(dispatch.settings.locality_profile).toEqual({
  geo_country: "IN",

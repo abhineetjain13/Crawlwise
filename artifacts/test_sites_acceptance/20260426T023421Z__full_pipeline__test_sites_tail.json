@@ -1,0 +1,1495 @@
+{
+  "timestamp_utc": "2026-04-26T02:34:21.120903+00:00",
+  "source_path": "C:\\Projects\\pre_poc_ai_crawler\\TEST_SITES.md",
+  "start_line": 198,
+  "mode": "full_pipeline",
+  "timeout_owner": "batch_runtime",
+  "summary": {
+    "ok": 10,
+    "failed": 0,
+    "tracked_issues": 0,
+    "total": 10,
+    "mode": "full_pipeline",
+    "timeout_owner": "batch_runtime",
+    "failure_modes": {
+      "success": 10
+    },
+    "quality_verdicts": {
+      "good": 10
+    },
+    "observed_failure_modes": {
+      "control_good": 10
+    },
+    "buckets": {
+      "must_pass": 10
+    }
+  },
+  "results": [
+    {
+      "name": "CE01 zadig-et-voltaire listing",
+      "url": "https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 87,
+      "status": "completed",
+      "requested_url": "https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127",
+      "verdict": "success",
+      "method": "curl_cffi",
+      "platform_family": null,
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {},
+      "records": 50,
+      "sample_title": "Monsatir Henley T-shirt",
+      "sample_url": "https://zadig-et-voltaire.com/eu/uk/p/JMTN01660009/mens-carbon-grey-tunisian-t-shirt",
+      "sample_record_data": {
+        "url": "https://zadig-et-voltaire.com/eu/uk/p/JMTN01660009/mens-carbon-grey-tunisian-t-shirt",
+        "price": "100",
+        "title": "Monsatir Henley T-shirt",
+        "currency": "GBP",
+        "image_url": "https://media.zadig-et-voltaire.com/product/J/M/JMTN01660_CARBONE_SHOOTING_69ca76856e54a.jpg?ixlib=js-3.3.0&auto=format%2Ccompress&q=auto&fit=crop&w=640",
+        "description": "Monsatir Henley T-shirt GBP 100"
+      },
+      "sample_records": [
+        {
+          "title": "Monsatir Henley T-shirt",
+          "url": "https://zadig-et-voltaire.com/eu/uk/p/JMTN01660009/mens-carbon-grey-tunisian-t-shirt",
+          "populated_fields": 6,
+          "price_present": true
+        },
+        {
+          "title": "Monsatir Henley T-shirt",
+          "url": "https://zadig-et-voltaire.com/eu/uk/p/JMTN01663009/mens-carbon-grey-tunisian-t-shirt",
+          "populated_fields": 6,
+          "price_present": true
+        },
+        {
+          "title": "Monsatir Henley T-shirt",
+          "url": "https://zadig-et-voltaire.com/eu/uk/p/JMTN01645324/mens-green-linden-tunisian-t-shirt",
+          "populated_fields": 6,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 50,
+        "detail_url_count": 50,
+        "detail_urls_present": true,
+        "price_present_count": 48,
+        "price_numeric_count": 48
+      },
+      "populated_fields": 6,
+      "sample_field_coverage": {
+        "avg_populated_fields": 6.0,
+        "max_populated_fields": 6,
+        "min_populated_fields": 6
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 10.44,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE05 karenmillen listing",
+      "url": "https://www.karenmillen.com/eu/categories/womens-trousers",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 88,
+      "status": "completed",
+      "requested_url": "https://www.karenmillen.com/eu/categories/womens-trousers",
+      "verdict": "success",
+      "method": "browser",
+      "platform_family": null,
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {
+        "html_bytes": 482039,
+        "bridge_used": false,
+        "proxy_scheme": null,
+        "artifact_paths": {
+          "html": "C:\\Projects\\pre_poc_ai_crawler\\backend\\artifacts\\runs\\88\\pages\\b1c15ef21f4b7b2d.html",
+          "screenshot": null,
+          "diagnostics": "C:\\Projects\\pre_poc_ai_crawler\\backend\\artifacts\\runs\\88\\pages\\b1c15ef21f4b7b2d.browser.json"
+        },
+        "browser_binary": "chromium",
+        "browser_engine": "chromium",
+        "browser_reason": "empty-extraction retry",
+        "browser_outcome": "usable_content",
+        "escalation_lane": "http_escalation",
+        "detail_expansion": {
+          "aom": {},
+          "dom": {},
+          "reason": "non_detail_surface",
+          "status": "skipped",
+          "clicked_count": 0,
+          "expanded_elements": [],
+          "interaction_failures": []
+        },
+        "listing_recovery": {
+          "reason": "not_requested",
+          "status": "skipped",
+          "actions_taken": [],
+          "clicked_count": 0
+        },
+        "phase_timings_ms": {
+          "total": 8532,
+          "expansion": 0,
+          "traversal": 0,
+          "navigation": 1016,
+          "page_markdown": 0,
+          "challenge_wait": 0,
+          "readiness_wait": 0,
+          "challenge_retry": 0,
+          "optimistic_wait": 3017,
+          "payload_capture": 20,
+          "listing_recovery": 0,
+          "networkidle_wait": 0,
+          "screenshot_capture": 0,
+          "content_serialization": 43,
+          "listing_visual_capture": 61,
+          "rendered_listing_fragment_capture": 40
+        },
+        "readiness_probes": [
+          {
+            "url": "https://www.karenmillen.com/eu/categories/womens-trousers",
+            "stage": "after_navigation",
+            "surface": "ecommerce_listing",
+            "is_ready": false,
+            "h1_present": true,
+            "detail_like": true,
+            "detail_hint_count": 2,
+            "listing_card_count": 1,
+            "visible_text_length": 4008,
+            "structured_data_present": true,
+            "matched_listing_selectors": 0
+          },
+          {
+            "url": "https://www.karenmillen.com/eu/categories/womens-trousers",
+            "stage": "after_optimistic_wait",
+            "surface": "ecommerce_listing",
+            "is_ready": true,
+            "h1_present": true,
+            "detail_like": true,
+            "detail_hint_count": 3,
+            "listing_card_count": 40,
+            "visible_text_length": 8670,
+            "structured_data_present": true,
+            "matched_listing_selectors": 0
+          }
+        ],
+        "response_missing": false,
+        "browser_attempted": true,
+        "listing_readiness": {
+          "reason": "fast_path_ready",
+          "status": "skipped"
+        },
+        "browser_proxy_mode": "direct",
+        "challenge_evidence": [],
+        "low_content_reason": null,
+        "proxy_url_redacted": "direct",
+        "navigation_strategy": "domcontentloaded",
+        "proxy_attempt_index": 1,
+        "proxy_rotation_mode": null,
+        "engine_attempt_index": 1,
+        "host_policy_snapshot": {
+          "prefer_browser": false,
+          "request_blocked": false,
+          "chromium_blocked": false,
+          "hard_block_count": 0,
+          "last_block_method": null,
+          "last_block_vendor": null,
+          "real_chrome_blocked": false,
+          "real_chrome_success": false
+        },
+        "network_payload_count": 8,
+        "networkidle_timed_out": false,
+        "challenge_element_hits": [],
+        "challenge_provider_hits": [],
+        "closed_network_payloads": 0,
+        "networkidle_skip_reason": "fast_path_ready",
+        "networkidle_wait_reason": null,
+        "listing_artifact_capture": {
+          "listing_visual_capture": {
+            "status": "ok"
+          },
+          "rendered_listing_fragment_capture": {
+            "status": "ok"
+          }
+        },
+        "malformed_network_payloads": 1,
+        "browser_state_reuse_allowed": true,
+        "extractable_listing_evidence": {
+          "listing_visual_elements": 175,
+          "rendered_listing_fragments": 48
+        },
+        "listing_visual_element_count": 175,
+        "network_payload_read_failures": 0,
+        "network_payload_read_timeouts": 0,
+        "dropped_network_payload_events": 0,
+        "rendered_listing_fragment_count": 48,
+        "skipped_oversized_network_payloads": 0
+      },
+      "records": 29,
+      "sample_title": "Tailored Linen Wide Leg Trouser.",
+      "sample_url": "https://www.karenmillen.com/eu/product/karen-millen-tailored-linen-wide-leg-trouser_bkk28016?colour=chocolate",
+      "sample_record_data": {
+        "url": "https://www.karenmillen.com/eu/product/karen-millen-tailored-linen-wide-leg-trouser_bkk28016?colour=chocolate",
+        "brand": "KarenMillen",
+        "price": "181.00",
+        "title": "Tailored Linen Wide Leg Trouser.",
+        "currency": "EUR",
+        "image_url": "https://mediahub.karenmillen.com/bkk28016_chocolate_xl?qlt=70&w=480&h=720&dpr=1&fit=ctn"
+      },
+      "sample_records": [
+        {
+          "title": "Tailored Linen Wide Leg Trouser.",
+          "url": "https://www.karenmillen.com/eu/product/karen-millen-tailored-linen-wide-leg-trouser_bkk28016?colour=chocolate",
+          "populated_fields": 6,
+          "price_present": true
+        },
+        {
+          "title": "Cotton Utility Button Detail Barrel Leg Trouser",
+          "url": "https://www.karenmillen.com/eu/product/karen-millen-cotton-utility-button-detail-barrel-leg-trouser_bkk28382?colour=ivory",
+          "populated_fields": 6,
+          "price_present": true
+        },
+        {
+          "title": "Tailored Military Cotton Stripe Straight Leg Trouser",
+          "url": "https://www.karenmillen.com/eu/product/karen-millen-tailored-military-cotton-stripe-straight-leg-trouser_bkk28450?colour=rust",
+          "populated_fields": 6,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 29,
+        "detail_url_count": 29,
+        "detail_urls_present": true,
+        "price_present_count": 29,
+        "price_numeric_count": 29
+      },
+      "populated_fields": 6,
+      "sample_field_coverage": {
+        "avg_populated_fields": 6.0,
+        "max_populated_fields": 6,
+        "min_populated_fields": 6
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 38.09,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE06 ganni listing",
+      "url": "https://www.ganni.com/en-gb/trainers/",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 89,
+      "status": "completed",
+      "requested_url": "https://www.ganni.com/en-gb/trainers/",
+      "verdict": "success",
+      "method": "curl_cffi",
+      "platform_family": null,
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {},
+      "records": 12,
+      "sample_title": "GANNI x New Balance T500 Sneakers",
+      "sample_url": "https://www.ganni.com/en-gb/ganni-x-new-balance-t500-sneakers-S2900.html",
+      "sample_record_data": {
+        "url": "https://www.ganni.com/en-gb/ganni-x-new-balance-t500-sneakers-S2900.html",
+        "price": "135",
+        "title": "GANNI x New Balance T500 Sneakers",
+        "currency": "GBP",
+        "image_url": "https://www.ganni.com/dw/image/v2/AAWT_PRD/on/demandware.static/-/Sites-ganni-master-catalogue/default/dw47540b5e/images/images/packshots/S2900_4908_135_1.jpg?sh=1000"
+      },
+      "sample_records": [
+        {
+          "title": "GANNI x New Balance T500 Sneakers",
+          "url": "https://www.ganni.com/en-gb/ganni-x-new-balance-t500-sneakers-S2900.html",
+          "populated_fields": 5,
+          "price_present": true
+        },
+        {
+          "title": "Sporty Ballerina in White Mesh",
+          "url": "https://www.ganni.com/en-gb/sporty-ballerina-in-white-mesh-D1020025.html",
+          "populated_fields": 5,
+          "price_present": true
+        },
+        {
+          "title": "Sporty Ballerina in Black Mesh",
+          "url": "https://www.ganni.com/en-gb/sporty-ballerina-in-black-mesh-D1020024.html",
+          "populated_fields": 5,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 12,
+        "detail_url_count": 12,
+        "detail_urls_present": true,
+        "price_present_count": 12,
+        "price_numeric_count": 12
+      },
+      "populated_fields": 5,
+      "sample_field_coverage": {
+        "avg_populated_fields": 5.0,
+        "max_populated_fields": 5,
+        "min_populated_fields": 5
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 7.76,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE08 toddsnyder listing",
+      "url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 90,
+      "status": "completed",
+      "requested_url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos",
+      "verdict": "success",
+      "method": "curl_cffi",
+      "platform_family": "generic_commerce",
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {},
+      "records": 24,
+      "sample_title": "Italian Gabardine Sutton Suit",
+      "sample_url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-gaberdine-sutton-trouser",
+      "sample_record_data": {
+        "url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-gaberdine-sutton-trouser",
+        "brand": "Todd Snyder",
+        "price": "996",
+        "title": "Italian Gabardine Sutton Suit",
+        "rating": "5.0",
+        "currency": "USD",
+        "image_url": "https://www.toddsnyder.com/cdn/shop/files/BL054262_NAVY_028_R.jpg?v=1772478763&width=800",
+        "review_count": 9
+      },
+      "sample_records": [
+        {
+          "title": "Italian Gabardine Sutton Suit",
+          "url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-gaberdine-sutton-trouser",
+          "populated_fields": 8,
+          "price_present": true
+        },
+        {
+          "title": "Italian Tropical Wool Sutton Suit",
+          "url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/suit-template-foundation-sutton-suit-in-charcoal",
+          "populated_fields": 8,
+          "price_present": true
+        },
+        {
+          "title": "Italian Tropical Wool Sutton Suit",
+          "url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/suit-template-foundation-sutton-in-navy",
+          "populated_fields": 8,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 24,
+        "detail_url_count": 24,
+        "detail_urls_present": true,
+        "price_present_count": 23,
+        "price_numeric_count": 23
+      },
+      "populated_fields": 8,
+      "sample_field_coverage": {
+        "avg_populated_fields": 8.0,
+        "max_populated_fields": 8,
+        "min_populated_fields": 8
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 6.95,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE09 savannahs listing",
+      "url": "https://savannahs.com/collections/all-boots",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 91,
+      "status": "completed",
+      "requested_url": "https://savannahs.com/collections/all-boots",
+      "verdict": "success",
+      "method": "curl_cffi",
+      "platform_family": "generic_commerce",
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {},
+      "records": 59,
+      "sample_title": "Shadow Ban 30 soft leather black boots",
+      "sample_url": "https://savannahs.com/collections/all-boots/products/shadow-ban-30-soft-leather-black-boots-hl28112s",
+      "sample_record_data": {
+        "url": "https://savannahs.com/collections/all-boots/products/shadow-ban-30-soft-leather-black-boots-hl28112s",
+        "brand": "Herbert Levine",
+        "price": "1255.00",
+        "title": "Shadow Ban 30 soft leather black boots",
+        "currency": "USD",
+        "image_url": "https://savannahs.com/cdn/shop/files/HL28112S-Herbert-Levine-Shadow-Ban-30-soft-leather-black-boots-01_0282d682-c95d-4e8f-8572-bd90138607f7.jpg?crop=center&height=1707&v=1776255783&width=1366",
+        "description": "36 37 37.5 38 38.5 39 39.5 40 41"
+      },
+      "sample_records": [
+        {
+          "title": "Shadow Ban 30 soft leather black boots",
+          "url": "https://savannahs.com/collections/all-boots/products/shadow-ban-30-soft-leather-black-boots-hl28112s",
+          "populated_fields": 7,
+          "price_present": true
+        },
+        {
+          "title": "Phoenix dark brown leather boots",
+          "url": "https://savannahs.com/collections/all-boots/products/phoenix-dark-brown-leather-boots-ch28105s",
+          "populated_fields": 7,
+          "price_present": true
+        },
+        {
+          "title": "Zipped 1 leather ankle boots",
+          "url": "https://savannahs.com/collections/all-boots/products/zipped-1-leather-ankle-boots-tr18119s",
+          "populated_fields": 7,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 59,
+        "detail_url_count": 59,
+        "detail_urls_present": true,
+        "price_present_count": 53,
+        "price_numeric_count": 53
+      },
+      "populated_fields": 7,
+      "sample_field_coverage": {
+        "avg_populated_fields": 7.0,
+        "max_populated_fields": 7,
+        "min_populated_fields": 7
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 6.96,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE10 kitchenaid listing",
+      "url": "https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 92,
+      "status": "completed",
+      "requested_url": "https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products",
+      "verdict": "partial",
+      "method": "browser",
+      "platform_family": null,
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {
+        "html_bytes": 1123062,
+        "bridge_used": false,
+        "proxy_scheme": null,
+        "artifact_paths": {
+          "html": "C:\\Projects\\pre_poc_ai_crawler\\backend\\artifacts\\runs\\92\\pages\\3e9f8d19fcfe911b.html",
+          "screenshot": null,
+          "diagnostics": "C:\\Projects\\pre_poc_ai_crawler\\backend\\artifacts\\runs\\92\\pages\\3e9f8d19fcfe911b.browser.json"
+        },
+        "browser_binary": "chromium",
+        "browser_engine": "chromium",
+        "browser_reason": "vendor-block:akamai",
+        "browser_outcome": "usable_content",
+        "escalation_lane": "vendor_block",
+        "detail_expansion": {
+          "aom": {},
+          "dom": {},
+          "reason": "non_detail_surface",
+          "status": "skipped",
+          "clicked_count": 0,
+          "expanded_elements": [],
+          "interaction_failures": []
+        },
+        "listing_recovery": {
+          "reason": "not_requested",
+          "status": "skipped",
+          "actions_taken": [],
+          "clicked_count": 0
+        },
+        "phase_timings_ms": {
+          "total": 9357,
+          "expansion": 0,
+          "traversal": 0,
+          "navigation": 3455,
+          "page_markdown": 0,
+          "challenge_wait": 0,
+          "readiness_wait": 0,
+          "challenge_retry": 0,
+          "optimistic_wait": 0,
+          "payload_capture": 4,
+          "listing_recovery": 0,
+          "networkidle_wait": 0,
+          "screenshot_capture": 0,
+          "content_serialization": 142,
+          "listing_visual_capture": 36,
+          "rendered_listing_fragment_capture": 40
+        },
+        "readiness_probes": [
+          {
+            "url": "https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products",
+            "stage": "after_navigation",
+            "surface": "ecommerce_listing",
+            "is_ready": true,
+            "h1_present": false,
+            "detail_like": true,
+            "detail_hint_count": 4,
+            "listing_card_count": 2,
+            "visible_text_length": 5005,
+            "structured_data_present": true,
+            "matched_listing_selectors": 0
+          }
+        ],
+        "response_missing": false,
+        "browser_attempted": true,
+        "listing_readiness": {
+          "reason": "fast_path_ready",
+          "status": "skipped"
+        },
+        "browser_proxy_mode": "direct",
+        "challenge_evidence": [
+          "provider:akamai",
+          "provider:g-recaptcha",
+          "provider:recaptcha",
+          "challenge_element:captcha_titled_iframe"
+        ],
+        "low_content_reason": null,
+        "proxy_url_redacted": "direct",
+        "navigation_strategy": "domcontentloaded",
+        "proxy_attempt_index": 1,
+        "proxy_rotation_mode": null,
+        "engine_attempt_index": 1,
+        "host_policy_snapshot": {
+          "prefer_browser": true,
+          "request_blocked": true,
+          "chromium_blocked": false,
+          "hard_block_count": 1,
+          "last_block_method": "curl_cffi",
+          "last_block_vendor": "akamai",
+          "real_chrome_blocked": false,
+          "real_chrome_success": false
+        },
+        "network_payload_count": 17,
+        "networkidle_timed_out": false,
+        "challenge_element_hits": [
+          "captcha_titled_iframe"
+        ],
+        "challenge_provider_hits": [
+          "akamai",
+          "g-recaptcha",
+          "recaptcha"
+        ],
+        "closed_network_payloads": 0,
+        "networkidle_skip_reason": "fast_path_ready",
+        "networkidle_wait_reason": null,
+        "listing_artifact_capture": {
+          "listing_visual_capture": {
+            "status": "ok"
+          },
+          "rendered_listing_fragment_capture": {
+            "status": "ok"
+          }
+        },
+        "malformed_network_payloads": 0,
+        "browser_state_reuse_allowed": true,
+        "extractable_listing_evidence": {
+          "listing_visual_elements": 45,
+          "rendered_listing_fragments": 48
+        },
+        "listing_visual_element_count": 45,
+        "network_payload_read_failures": 0,
+        "network_payload_read_timeouts": 0,
+        "dropped_network_payload_events": 0,
+        "rendered_listing_fragment_count": 48,
+        "skipped_oversized_network_payloads": 0
+      },
+      "records": 12,
+      "sample_title": "KitchenAid Go\u00ae Cordless Food Chopper - battery included",
+      "sample_url": "https://www.kitchenaid.com/countertop-appliances/food-processors/choppers/p.kitchenaid-go-cordless-food-chopper-battery-included.KFCR531BM.html",
+      "sample_record_data": {
+        "url": "https://www.kitchenaid.com/countertop-appliances/food-processors/choppers/p.kitchenaid-go-cordless-food-chopper-battery-included.KFCR531BM.html",
+        "price": "129.99",
+        "title": "KitchenAid Go\u00ae Cordless Food Chopper - battery included",
+        "currency": "USD",
+        "image_url": "https://www.kitchenaid.com/is/image/content/dam/global/kitchenaid/countertop-appliance/portable/images/hero-KFCR531BM.tif?wid=1000&hei=1000&fit=constrain,1&fmt=jpg&color=ffffff"
+      },
+      "sample_records": [
+        {
+          "title": "KitchenAid Go\u00ae Cordless Food Chopper - battery included",
+          "url": "https://www.kitchenaid.com/countertop-appliances/food-processors/choppers/p.kitchenaid-go-cordless-food-chopper-battery-included.KFCR531BM.html",
+          "populated_fields": 5,
+          "price_present": true
+        },
+        {
+          "title": "9 Cup Food Processor Plus",
+          "url": "https://www.kitchenaid.com/countertop-appliances/food-processors/processors/p.9-cup-food-processor-plus.KFP0919CU.html",
+          "populated_fields": 5,
+          "price_present": true
+        },
+        {
+          "title": "5 Cup Food Chopper with Extra Work Bowl and Lid",
+          "url": "https://www.kitchenaid.com/countertop-appliances/food-processors/choppers/p.5-cup-food-chopper-with-extra-work-bowl-and-lid.KFC0516CCU.html",
+          "populated_fields": 5,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 12,
+        "detail_url_count": 12,
+        "detail_urls_present": true,
+        "price_present_count": 11,
+        "price_numeric_count": 11
+      },
+      "populated_fields": 5,
+      "sample_field_coverage": {
+        "avg_populated_fields": 5.0,
+        "max_populated_fields": 5,
+        "min_populated_fields": 5
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": {
+        "browser_outcome": "usable_content",
+        "provider": "akamai",
+        "providers": [
+          "akamai",
+          "g-recaptcha",
+          "recaptcha"
+        ],
+        "elements": [
+          "captcha_titled_iframe"
+        ],
+        "evidence": [
+          "provider:akamai",
+          "provider:g-recaptcha",
+          "provider:recaptcha",
+          "challenge_element:captcha_titled_iframe"
+        ]
+      },
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 19.78,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE11 dyson.in listing",
+      "url": "https://www.dyson.in/vacuum-cleaners/cord-free",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 93,
+      "status": "completed",
+      "requested_url": "https://www.dyson.in/vacuum-cleaners/cord-free",
+      "verdict": "success",
+      "method": "curl_cffi",
+      "platform_family": null,
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {},
+      "records": 5,
+      "sample_title": "Dyson V12s Detect Slim Submarine (Yellow/Nickel)",
+      "sample_url": "https://www.dyson.in/vacuum-cleaners/cord-free/dyson-v12s-detect-slim-submarine-yellow-nickel",
+      "sample_record_data": {
+        "url": "https://www.dyson.in/vacuum-cleaners/cord-free/dyson-v12s-detect-slim-submarine-yellow-nickel",
+        "price": "55900",
+        "title": "Dyson V12s Detect Slim Submarine (Yellow/Nickel)",
+        "currency": "INR",
+        "availability": "in_stock"
+      },
+      "sample_records": [
+        {
+          "title": "Dyson V12s Detect Slim Submarine (Yellow/Nickel)",
+          "url": "https://www.dyson.in/vacuum-cleaners/cord-free/dyson-v12s-detect-slim-submarine-yellow-nickel",
+          "populated_fields": 5,
+          "price_present": true
+        },
+        {
+          "title": "Dyson V8 Absolute vacuum",
+          "url": "https://www.dyson.in/vacuum-cleaners/cord-free/dyson-v8-absolute-vacuum",
+          "populated_fields": 5,
+          "price_present": true
+        },
+        {
+          "title": "Dyson V15 Detect vacuum cleaner",
+          "url": "https://www.dyson.in/vacuum-cleaners/cord-free/dyson-v15-detect-vacuum-cleaner",
+          "populated_fields": 5,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 5,
+        "detail_url_count": 5,
+        "detail_urls_present": true,
+        "price_present_count": 5,
+        "price_numeric_count": 5
+      },
+      "populated_fields": 5,
+      "sample_field_coverage": {
+        "avg_populated_fields": 5.0,
+        "max_populated_fields": 5,
+        "min_populated_fields": 5
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 1.71,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE12 grailed listing",
+      "url": "https://www.grailed.com/categories/womenswear/blazers",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 94,
+      "status": "completed",
+      "requested_url": "https://www.grailed.com/categories/womenswear/blazers",
+      "verdict": "success",
+      "method": "browser",
+      "platform_family": null,
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {
+        "html_bytes": 627773,
+        "bridge_used": false,
+        "proxy_scheme": null,
+        "artifact_paths": {
+          "html": "C:\\Projects\\pre_poc_ai_crawler\\backend\\artifacts\\runs\\94\\pages\\bcc202e106076424.html",
+          "screenshot": null,
+          "diagnostics": "C:\\Projects\\pre_poc_ai_crawler\\backend\\artifacts\\runs\\94\\pages\\bcc202e106076424.browser.json"
+        },
+        "browser_binary": "chromium",
+        "browser_engine": "chromium",
+        "browser_reason": "http-escalation",
+        "browser_outcome": "usable_content",
+        "escalation_lane": "http_escalation",
+        "detail_expansion": {
+          "aom": {},
+          "dom": {},
+          "reason": "non_detail_surface",
+          "status": "skipped",
+          "clicked_count": 0,
+          "expanded_elements": [],
+          "interaction_failures": []
+        },
+        "listing_recovery": {
+          "reason": "not_requested",
+          "status": "skipped",
+          "actions_taken": [],
+          "clicked_count": 0
+        },
+        "phase_timings_ms": {
+          "total": 6498,
+          "expansion": 0,
+          "traversal": 0,
+          "navigation": 1734,
+          "page_markdown": 0,
+          "challenge_wait": 0,
+          "readiness_wait": 0,
+          "challenge_retry": 0,
+          "optimistic_wait": 3010,
+          "payload_capture": 62,
+          "listing_recovery": 0,
+          "networkidle_wait": 0,
+          "screenshot_capture": 0,
+          "content_serialization": 27,
+          "listing_visual_capture": 160,
+          "rendered_listing_fragment_capture": 28
+        },
+        "readiness_probes": [
+          {
+            "url": "https://www.grailed.com/categories/womenswear/blazers",
+            "stage": "after_navigation",
+            "surface": "ecommerce_listing",
+            "is_ready": false,
+            "h1_present": false,
+            "detail_like": false,
+            "detail_hint_count": 0,
+            "listing_card_count": 1,
+            "visible_text_length": 3572,
+            "structured_data_present": false,
+            "matched_listing_selectors": 0
+          },
+          {
+            "url": "https://www.grailed.com/categories/womenswear/blazers",
+            "stage": "after_optimistic_wait",
+            "surface": "ecommerce_listing",
+            "is_ready": true,
+            "h1_present": true,
+            "detail_like": true,
+            "detail_hint_count": 2,
+            "listing_card_count": 41,
+            "visible_text_length": 14319,
+            "structured_data_present": false,
+            "matched_listing_selectors": 0
+          }
+        ],
+        "response_missing": false,
+        "browser_attempted": true,
+        "listing_readiness": {
+          "reason": "fast_path_ready",
+          "status": "skipped"
+        },
+        "browser_proxy_mode": "direct",
+        "challenge_evidence": [
+          "provider:recaptcha"
+        ],
+        "low_content_reason": null,
+        "proxy_url_redacted": "direct",
+        "navigation_strategy": "domcontentloaded",
+        "proxy_attempt_index": 1,
+        "proxy_rotation_mode": null,
+        "engine_attempt_index": 1,
+        "host_policy_snapshot": {
+          "prefer_browser": false,
+          "request_blocked": false,
+          "chromium_blocked": false,
+          "hard_block_count": 0,
+          "last_block_method": null,
+          "last_block_vendor": null,
+          "real_chrome_blocked": false,
+          "real_chrome_success": false
+        },
+        "network_payload_count": 25,
+        "networkidle_timed_out": false,
+        "challenge_element_hits": [],
+        "challenge_provider_hits": [
+          "recaptcha"
+        ],
+        "closed_network_payloads": 0,
+        "networkidle_skip_reason": "fast_path_ready",
+        "networkidle_wait_reason": null,
+        "listing_artifact_capture": {
+          "listing_visual_capture": {
+            "status": "ok"
+          },
+          "rendered_listing_fragment_capture": {
+            "status": "ok"
+          }
+        },
+        "malformed_network_payloads": 0,
+        "browser_state_reuse_allowed": true,
+        "extractable_listing_evidence": {
+          "listing_visual_elements": 300,
+          "rendered_listing_fragments": 48
+        },
+        "listing_visual_element_count": 300,
+        "network_payload_read_failures": 0,
+        "network_payload_read_timeouts": 0,
+        "dropped_network_payload_events": 0,
+        "rendered_listing_fragment_count": 48,
+        "skipped_oversized_network_payloads": 0
+      },
+      "records": 73,
+      "sample_title": "Peter Do Velcro Strap Set-up Blazer / Pants",
+      "sample_url": "https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants?g_aidx=Listing_by_listing_quality_production&g_aqid=f62699bda35da697f47dc48cdcee281a",
+      "sample_record_data": {
+        "url": "https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants?g_aidx=Listing_by_listing_quality_production&g_aqid=f62699bda35da697f47dc48cdcee281a",
+        "brand": "92502018",
+        "price": "115",
+        "title": "Peter Do Velcro Strap Set-up Blazer / Pants",
+        "currency": "USD",
+        "image_url": "https://media-assets.grailed.com/prd/listing/46751774/3fa70b7220824307bb07d283f56e851e?"
+      },
+      "sample_records": [
+        {
+          "title": "Peter Do Velcro Strap Set-up Blazer / Pants",
+          "url": "https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants?g_aidx=Listing_by_listing_quality_production&g_aqid=f62699bda35da697f47dc48cdcee281a",
+          "populated_fields": 6,
+          "price_present": true
+        },
+        {
+          "title": "Off-White OFF WHITE PAINTERS BLAZER",
+          "url": "https://www.grailed.com/listings/93034448-off-white-off-white-painters-blazer?g_aidx=Listing_by_listing_quality_production&g_aqid=f62699bda35da697f47dc48cdcee281a",
+          "populated_fields": 6,
+          "price_present": true
+        },
+        {
+          "title": "Saint Laurent Paris LAST DROP \u203c\ufe0f Saint Laurent Paris Blazzer Uniform Black",
+          "url": "https://www.grailed.com/listings/94874155-saint-laurent-paris-last-drop-saint-laurent-paris-blazzer-uniform-black?g_aidx=Listing_by_listing_quality_production&g_aqid=f62699bda35da697f47dc48cdcee281a",
+          "populated_fields": 6,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 73,
+        "detail_url_count": 73,
+        "detail_urls_present": true,
+        "price_present_count": 49,
+        "price_numeric_count": 49
+      },
+      "populated_fields": 6,
+      "sample_field_coverage": {
+        "avg_populated_fields": 6.0,
+        "max_populated_fields": 6,
+        "min_populated_fields": 6
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 11.81,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE13 desertcart listing",
+      "url": "https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 95,
+      "status": "completed",
+      "requested_url": "https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating",
+      "verdict": "success",
+      "method": "browser",
+      "platform_family": null,
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {
+        "html_bytes": 1287982,
+        "bridge_used": false,
+        "proxy_scheme": null,
+        "artifact_paths": {
+          "html": "C:\\Projects\\pre_poc_ai_crawler\\backend\\artifacts\\runs\\95\\pages\\7b6e3a4a5145daf0.html",
+          "screenshot": null,
+          "diagnostics": "C:\\Projects\\pre_poc_ai_crawler\\backend\\artifacts\\runs\\95\\pages\\7b6e3a4a5145daf0.browser.json"
+        },
+        "browser_binary": "chromium",
+        "browser_engine": "chromium",
+        "browser_reason": "empty-extraction retry",
+        "browser_outcome": "usable_content",
+        "escalation_lane": "http_escalation",
+        "detail_expansion": {
+          "aom": {},
+          "dom": {},
+          "reason": "non_detail_surface",
+          "status": "skipped",
+          "clicked_count": 0,
+          "expanded_elements": [],
+          "interaction_failures": []
+        },
+        "listing_recovery": {
+          "reason": "not_requested",
+          "status": "skipped",
+          "actions_taken": [],
+          "clicked_count": 0
+        },
+        "phase_timings_ms": {
+          "total": 13701,
+          "expansion": 0,
+          "traversal": 0,
+          "navigation": 1961,
+          "page_markdown": 0,
+          "challenge_wait": 0,
+          "readiness_wait": 0,
+          "challenge_retry": 0,
+          "optimistic_wait": 3013,
+          "payload_capture": 0,
+          "listing_recovery": 0,
+          "networkidle_wait": 6038,
+          "screenshot_capture": 0,
+          "content_serialization": 54,
+          "listing_visual_capture": 59,
+          "rendered_listing_fragment_capture": 22
+        },
+        "readiness_probes": [
+          {
+            "url": "https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating",
+            "stage": "after_navigation",
+            "surface": "ecommerce_listing",
+            "is_ready": false,
+            "h1_present": false,
+            "detail_like": true,
+            "detail_hint_count": 1,
+            "listing_card_count": 1,
+            "visible_text_length": 2581,
+            "structured_data_present": false,
+            "matched_listing_selectors": 0
+          },
+          {
+            "url": "https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating",
+            "stage": "after_optimistic_wait",
+            "surface": "ecommerce_listing",
+            "is_ready": false,
+            "h1_present": false,
+            "detail_like": true,
+            "detail_hint_count": 2,
+            "listing_card_count": 1,
+            "visible_text_length": 2529,
+            "structured_data_present": false,
+            "matched_listing_selectors": 0
+          },
+          {
+            "url": "https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating",
+            "stage": "after_networkidle",
+            "surface": "ecommerce_listing",
+            "is_ready": true,
+            "h1_present": false,
+            "detail_like": true,
+            "detail_hint_count": 2,
+            "listing_card_count": 511,
+            "visible_text_length": 16990,
+            "structured_data_present": false,
+            "matched_listing_selectors": 0
+          }
+        ],
+        "response_missing": false,
+        "browser_attempted": true,
+        "listing_readiness": {
+          "reason": "fast_path_ready",
+          "status": "skipped"
+        },
+        "browser_proxy_mode": "direct",
+        "challenge_evidence": [
+          "provider:cloudflare",
+          "provider:recaptcha"
+        ],
+        "low_content_reason": null,
+        "proxy_url_redacted": "direct",
+        "navigation_strategy": "domcontentloaded",
+        "proxy_attempt_index": 1,
+        "proxy_rotation_mode": null,
+        "engine_attempt_index": 1,
+        "host_policy_snapshot": {
+          "prefer_browser": false,
+          "request_blocked": false,
+          "chromium_blocked": false,
+          "hard_block_count": 0,
+          "last_block_method": null,
+          "last_block_vendor": null,
+          "real_chrome_blocked": false,
+          "real_chrome_success": false
+        },
+        "network_payload_count": 5,
+        "networkidle_timed_out": true,
+        "challenge_element_hits": [],
+        "challenge_provider_hits": [
+          "cloudflare",
+          "recaptcha"
+        ],
+        "closed_network_payloads": 0,
+        "networkidle_skip_reason": null,
+        "networkidle_wait_reason": null,
+        "listing_artifact_capture": {
+          "listing_visual_capture": {
+            "status": "ok"
+          },
+          "rendered_listing_fragment_capture": {
+            "status": "ok"
+          }
+        },
+        "malformed_network_payloads": 0,
+        "browser_state_reuse_allowed": true,
+        "extractable_listing_evidence": {
+          "listing_visual_elements": 300,
+          "rendered_listing_fragments": 22
+        },
+        "listing_visual_element_count": 300,
+        "network_payload_read_failures": 0,
+        "network_payload_read_timeouts": 0,
+        "dropped_network_payload_events": 0,
+        "rendered_listing_fragment_count": 22,
+        "skipped_oversized_network_payloads": 0
+      },
+      "records": 46,
+      "sample_title": "Eat Yourself Healthy: Food to Change Your Life [American Measurements]",
+      "sample_url": "https://www.desertcart.in/products/727923336-eat-yourself-healthy-food-to-change-your-life-american-measurements?source=search",
+      "sample_record_data": {
+        "url": "https://www.desertcart.in/products/727923336-eat-yourself-healthy-food-to-change-your-life-american-measurements?source=search",
+        "brand": "727923336",
+        "price": "4861",
+        "title": "Eat Yourself Healthy: Food to Change Your Life [American Measurements]",
+        "currency": "INR",
+        "image_url": "https://m.media-amazon.com/images/I/81yxT+Dy8eL._AC_SL3840_.jpg"
+      },
+      "sample_records": [
+        {
+          "title": "Eat Yourself Healthy: Food to Change Your Life [American Measurements]",
+          "url": "https://www.desertcart.in/products/727923336-eat-yourself-healthy-food-to-change-your-life-american-measurements?source=search",
+          "populated_fields": 6,
+          "price_present": true
+        },
+        {
+          "title": "Are You What You Eat?",
+          "url": "https://www.desertcart.in/products/72973007-are-you-what-you-eat?source=search",
+          "populated_fields": 6,
+          "price_present": true
+        },
+        {
+          "title": "Run Fast. Eat Slow.: Nourishing Recipes for Athletes: A Cookbook",
+          "url": "https://www.desertcart.in/products/32232058-run-fast-eat-slow-nourishing-recipes-for-athletes-a-cookbook?source=search",
+          "populated_fields": 6,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": true,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 46,
+        "detail_url_count": 46,
+        "detail_urls_present": true,
+        "price_present_count": 46,
+        "price_numeric_count": 46
+      },
+      "populated_fields": 6,
+      "sample_field_coverage": {
+        "avg_populated_fields": 6.0,
+        "max_populated_fields": 6,
+        "min_populated_fields": 6
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 18.98,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    },
+    {
+      "name": "CE15 stadiumgoods listing",
+      "url": "https://www.stadiumgoods.com/collections/adidas-shoes",
+      "surface": "ecommerce_listing",
+      "mode": "full_pipeline",
+      "timeout_owner": "batch_runtime",
+      "bucket": "must_pass",
+      "gate": "soft",
+      "expected_failure_modes": [],
+      "run_id": 96,
+      "status": "completed",
+      "requested_url": "https://www.stadiumgoods.com/collections/adidas-shoes",
+      "verdict": "success",
+      "method": "curl_cffi",
+      "platform_family": "generic_commerce",
+      "status_code": 200,
+      "blocked": false,
+      "browser_diagnostics": {},
+      "records": 500,
+      "sample_title": "ADIDAS Samba OG Wmns \"Cow Print - Pink\" Rs. 13,600",
+      "sample_url": "https://www.stadiumgoods.com/products/samba-og-wmns-cow-print-pink-177881",
+      "sample_record_data": {
+        "sku": "177881|KK2239|5.5W",
+        "url": "https://www.stadiumgoods.com/products/samba-og-wmns-cow-print-pink-177881",
+        "size": "5.5W",
+        "brand": "ADIDAS",
+        "price": "13600",
+        "title": "ADIDAS Samba OG Wmns \"Cow Print - Pink\" Rs. 13,600",
+        "image_url": "https://cdn.shopify.com/s/files/1/0659/1168/5316/files/8ytru3p5luz8uydjai7ro9dme3ps.png?v=1761689727",
+        "description": "ADIDAS Samba OG Wmns \"Cow Print - Pink\"",
+        "availability": "in_stock",
+        "original_price": "13600.00"
+      },
+      "sample_records": [
+        {
+          "title": "ADIDAS Samba OG Wmns \"Cow Print - Pink\" Rs. 13,600",
+          "url": "https://www.stadiumgoods.com/products/samba-og-wmns-cow-print-pink-177881",
+          "populated_fields": 10,
+          "price_present": true
+        },
+        {
+          "title": "ADIDAS Samba OG WMNS \"Leopard / Cream Orange\" Rs. 8,900",
+          "url": "https://www.stadiumgoods.com/products/samba-og-wmns-leopard-cream-orange-139278",
+          "populated_fields": 10,
+          "price_present": true
+        },
+        {
+          "title": "ADIDAS Samba OG WMNS \"Rhinestone Black Silver\" Rs. 14,100",
+          "url": "https://www.stadiumgoods.com/products/samba-og-wmns-rhinestone-black-silver-187322",
+          "populated_fields": 10,
+          "price_present": true
+        }
+      ],
+      "sample_semantics": {
+        "price_present": true,
+        "currency_present": false,
+        "variant_count": 0,
+        "variant_axes_keys": [],
+        "variant_axes_semantic": false,
+        "selected_variant_present": false,
+        "selected_variant_has_price": false,
+        "selected_variant_has_option_values": false
+      },
+      "listing_contract": {
+        "sampled_records": 100,
+        "detail_url_count": 100,
+        "detail_urls_present": true,
+        "price_present_count": 100,
+        "price_numeric_count": 100
+      },
+      "populated_fields": 10,
+      "sample_field_coverage": {
+        "avg_populated_fields": 10.0,
+        "max_populated_fields": 10,
+        "min_populated_fields": 10
+      },
+      "sample_utility_noise_hits": [],
+      "sample_looks_like_utility_chrome": false,
+      "challenge_summary": null,
+      "run_source": "live_run",
+      "error": null,
+      "elapsed_s": 9.79,
+      "failure_mode": "success",
+      "quality_verdict": "good",
+      "observed_failure_mode": "control_good",
+      "quality_checks": {
+        "identity_ok": true,
+        "listing_noise_ok": true,
+        "variant_presence_ok": true,
+        "variant_labels_ok": true,
+        "selected_variant_price_ok": true
+      },
+      "expectation_met": true,
+      "tracked_issue": false,
+      "ok": true
+    }
+  ]
+}

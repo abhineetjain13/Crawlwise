@@ -49,8 +49,6 @@ def visual_listing_records(
             continue
         seen_urls.add(url)
         records.append(record)
-        if len(records) >= max_records:
-            break
     return records
 
 

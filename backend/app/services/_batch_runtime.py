@@ -22,6 +22,7 @@ from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE, log_event, set_
 from app.services.pipeline.types import URLProcessingConfig, URLProcessingResult
 from app.services.publish import VERDICT_ERROR, _aggregate_verdict
 from app.services.run_summary import as_int
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,13 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                         "error": f"TimeoutError: url exceeded timeout_seconds={url_timeout_seconds}",
                     },
                 )
+            except SQLAlchemyError:
+                logger.exception(
+                    "URL processing hit database error for run=%s url=%s",
+                    run.id,
+                    url,
+                )
+                raise
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 logger.warning("URL processing failed for run=%s url=%s", run.id, url, exc_info=True)
                 await log_event(
@@ -260,5 +268,5 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             f"Pipeline finished. {record_count} records. verdict={aggregate_verdict}",
         )
         await session.commit()
-    except (RuntimeError, ValueError, TypeError) as exc:
+    except (RuntimeError, ValueError, TypeError, SQLAlchemyError) as exc:
         await _mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")

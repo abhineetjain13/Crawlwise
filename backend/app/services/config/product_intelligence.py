@@ -87,6 +87,7 @@ SERPAPI_ENGINE = "google"
 SERPAPI_QUERY_PARAM = "q"
 SERPAPI_KEY_PARAM = "api_key"
 SERPAPI_ENGINE_PARAM = "engine"
+SERPAPI_RESULT_COUNT_PARAM = "num"
 SERPAPI_ORGANIC_RESULTS_FIELD = "organic_results"
 SERPAPI_LINK_FIELD = "link"
 SERPAPI_TITLE_FIELD = "title"
@@ -101,10 +102,15 @@ PRODUCT_INTELLIGENCE_LLM_TASK = "product_intelligence_enrichment"
 SEARCH_PHRASE_BUY = "buy"
 
 BRAND_ALIAS_MAP = {
+    "collection by michael strahan": "collection by michael strahan",
+    "collection by michael strahan tm": "collection by michael strahan",
+    "izod": "izod",
+    "kenneth cole reaction": "kenneth cole",
     "levi s": "levi's",
     "levis": "levi's",
     "levi's": "levi's",
     "lee": "lee",
+    "michael strahan": "collection by michael strahan",
     "polo ralph lauren": "ralph lauren",
     "ralph lauren childrenswear": "ralph lauren",
     "rare too": "rare editions",
@@ -112,6 +118,8 @@ BRAND_ALIAS_MAP = {
     "skechers men s slip ins": "skechers",
     "skechers men s max cushioning": "skechers",
     "skechers go run consistent": "skechers",
+    "tommy bahama": "tommy bahama",
+    "tommy bahama r": "tommy bahama",
 }
 
 BRAND_DOMAIN_MAP = {
@@ -120,12 +128,15 @@ BRAND_DOMAIN_MAP = {
     "calvin klein": "calvinklein.com",
     "coach": "coach.com",
     "columbia": "columbia.com",
+    "izod": "izod.com",
+    "kenneth cole": "kennethcole.com",
     "lee": "lee.com",
     "levi's": "levi.com",
     "michael kors": "michaelkors.com",
     "nike": "nike.com",
     "rare editions": "therareeditions.com",
     "ralph lauren": "ralphlauren.com",
+    "tommy bahama": "tommybahama.com",
     "tommy hilfiger": "tommy.com",
     "under armour": "underarmour.com",
 }
@@ -142,8 +153,10 @@ RETAILER_DOMAINS = {
     "belk.com",
     "bloomingdales.com",
     "dillards.com",
+    "jcpenney.com",
     "kohls.com",
     "macys.com",
+    "menswearhouse.com",
     "nordstrom.com",
     "saksfifthavenue.com",
     "target.com",

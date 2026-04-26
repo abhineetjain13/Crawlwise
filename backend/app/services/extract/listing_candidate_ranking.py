@@ -63,7 +63,7 @@ def best_listing_candidate_set(
     for _name, records in candidate_sets:
         limited = [
             record
-            for record in list(records or [])[:max_records]
+            for record in list(records or [])
             if isinstance(record, dict)
         ]
         prepared = _prepare_listing_candidate_set(

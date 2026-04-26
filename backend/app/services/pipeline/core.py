@@ -5,6 +5,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from bs4 import BeautifulSoup
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRun
 from app.services.acquisition.acquirer import AcquisitionRequest
@@ -23,6 +24,10 @@ from app.services.db_utils import mapping_or_empty
 from app.services.domain_utils import normalize_domain
 from app.services.confidence import score_record_confidence
 from app.services.config.llm_runtime import llm_runtime_settings
+from app.services.config.extraction_rules import (
+    DETAIL_CURRENT_PRICE_SELECTORS,
+    PRICE_FIELDS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.detail_extractor import (
     detail_record_rejection_reason,
@@ -40,6 +45,7 @@ from app.services.field_value_core import (
     strip_html_tags,
     validate_record_for_surface,
 )
+from app.services.field_value_dom import requested_content_extractability
 from app.services.field_policy import (
     canonical_requested_fields,
     field_allowed_for_surface,
@@ -162,36 +168,9 @@ def _resolved_url_processing_config(
             if config.traversal_mode is not None
             else traversal_mode
         )
-        plan_max_pages = plan.max_pages
-        config_max_pages = config.max_pages
-        resolved_plan_max_pages = (
-            int(plan_max_pages) if plan_max_pages is not None else None
-        )
-        resolved_config_max_pages = (
-            int(config_max_pages) if config_max_pages is not None else None
-        )
-        resolved_max_pages = (
-            resolved_plan_max_pages
-            if resolved_plan_max_pages is not None and resolved_plan_max_pages > 0
-            else resolved_config_max_pages
-            if resolved_config_max_pages is not None and resolved_config_max_pages > 0
-            else int(max_pages)
-        )
-        plan_max_scrolls = plan.max_scrolls
-        config_max_scrolls = config.max_scrolls
-        resolved_plan_max_scrolls = (
-            int(plan_max_scrolls) if plan_max_scrolls is not None else None
-        )
-        resolved_config_max_scrolls = (
-            int(config_max_scrolls) if config_max_scrolls is not None else None
-        )
-        resolved_max_scrolls = (
-            resolved_plan_max_scrolls
-            if resolved_plan_max_scrolls is not None and resolved_plan_max_scrolls > 0
-            else resolved_config_max_scrolls
-            if resolved_config_max_scrolls is not None and resolved_config_max_scrolls > 0
-            else int(max_scrolls)
-        )
+        safety_iteration_cap = int(crawler_runtime_settings.traversal_max_iterations_cap)
+        resolved_max_pages = safety_iteration_cap
+        resolved_max_scrolls = safety_iteration_cap
         plan_max_records = plan.max_records
         config_max_records = config.max_records
         resolved_plan_max_records = (
@@ -786,7 +765,13 @@ async def _retry_empty_extraction_with_browser(
     selector_rules: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     acquisition_result = fetched.acquisition_result
-    retry_decision = _empty_extraction_browser_retry_decision(acquisition_result, records)
+    retry_decision = _empty_extraction_browser_retry_decision(
+        acquisition_result,
+        records,
+        surface=context.surface,
+        requested_fields=list(context.requested_fields),
+        selector_rules=selector_rules,
+    )
     if not retry_decision["should_retry"]:
         return records, selector_rules
     await _log_extraction_outcome(context, acquisition_result, records)
@@ -1118,6 +1103,10 @@ async def _extract_records_from_preserved_browser_html(
 def _empty_extraction_browser_retry_decision(
     acquisition_result: AcquisitionResult,
     records: list[dict[str, object]],
+    *,
+    surface: str = "",
+    requested_fields: list[str] | None = None,
+    selector_rules: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     if records:
         return {"should_retry": False, "reason": "records_present"}
@@ -1134,7 +1123,61 @@ def _empty_extraction_browser_retry_decision(
     content_type = str(getattr(acquisition_result, "content_type", "") or "").lower()
     if "json" in content_type:
         return {"should_retry": False, "reason": "json_response"}
+    if _empty_detail_extraction_has_static_evidence(
+        acquisition_result,
+        surface=surface,
+        requested_fields=requested_fields,
+        selector_rules=selector_rules,
+    ):
+        return {"should_retry": False, "reason": "static_detail_extractable"}
     return {"should_retry": True, "reason": "empty_non_browser_html"}
+
+
+def _empty_detail_extraction_has_static_evidence(
+    acquisition_result: AcquisitionResult,
+    *,
+    surface: str,
+    requested_fields: list[str] | None,
+    selector_rules: list[dict[str, object]] | None,
+) -> bool:
+    if "detail" not in str(surface or "").strip().lower():
+        return False
+    html = str(getattr(acquisition_result, "html", "") or "")
+    if not html.strip():
+        return False
+    soup = BeautifulSoup(html, "html.parser")
+    extractability = requested_content_extractability(
+        soup,
+        surface=surface,
+        requested_fields=requested_fields,
+        selector_rules=selector_rules,
+    )
+    extractable_fields = {
+        str(field_name).strip()
+        for field_name in list(extractability.get("extractable_fields") or [])
+        if str(field_name).strip()
+    }
+    matched_requested_fields = {
+        str(field_name).strip()
+        for field_name in list(extractability.get("matched_requested_fields") or [])
+        if str(field_name).strip()
+    }
+    return bool(
+        matched_requested_fields
+        or extractable_fields & set(PRICE_FIELDS)
+        or _html_has_configured_detail_price(soup)
+    )
+
+
+def _html_has_configured_detail_price(soup: BeautifulSoup) -> bool:
+    for selector in DETAIL_CURRENT_PRICE_SELECTORS:
+        for node in soup.select(str(selector or "")):
+            aria_label = node.get("aria-label") if hasattr(node, "get") else ""
+            if str(aria_label or "").strip():
+                return True
+            if str(node.get_text(" ", strip=True) or "").strip():
+                return True
+    return False
 
 async def _load_selector_rules(
     context: _URLProcessingContext,
@@ -1165,7 +1208,7 @@ async def _run_persistence_stage(
     persisted_count = await persist_extracted_records(
         context.session,
         context.run,
-        extracted.records[: context.config.max_records],
+        extracted.records,
         acquisition_result=acquisition_result,
         raw_html_path=raw_html_path,
     )
@@ -1176,7 +1219,7 @@ async def _run_persistence_stage(
     )
     if not _suppress_empty_downstream_record_logs(
         acquisition_result,
-        extracted.records[: context.config.max_records],
+        extracted.records,
     ):
         await _log_pipeline_event(
             context,
@@ -1187,7 +1230,7 @@ async def _run_persistence_stage(
     if verdict == VERDICT_EMPTY and "listing" in context.surface and persisted_count == 0:
         verdict = VERDICT_LISTING_FAILED
     return URLProcessingResult(
-        records=extracted.records[: context.config.max_records],
+        records=extracted.records,
         verdict=verdict,
         url_metrics=finalize_url_metrics(
             extracted.fetched.url_metrics,

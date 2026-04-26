@@ -791,6 +791,67 @@ async def test_load_more_traversal_stops_at_user_max_records() -> None:
 
 
 @pytest.mark.asyncio
+async def test_paginate_uses_max_records_as_page_stop_not_page_limit() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=80,
+            scroll_height=1200,
+            controls={"next_page"},
+            next_href="https://example.com/listing?page=2",
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=80,
+                scroll_height=1200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=2",
+            ),
+            _State(
+                html="<div>page-2</div>",
+                card_count=80,
+                scroll_height=2200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=3",
+            ),
+            _State(
+                html="<div>page-3</div>",
+                card_count=80,
+                scroll_height=3200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=4",
+            ),
+            _State(
+                html="<div>page-4</div>",
+                card_count=80,
+                scroll_height=4200,
+                controls=set(),
+            ),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=1,
+        max_scrolls=1,
+        max_records=200,
+    )
+
+    assert result.stop_reason == "target_records_reached"
+    assert result.pages_advanced == 2
+    assert result.card_count == 240
+    assert [f for f, _ in result.html_fragments] == [
+        "<div>page-1</div>",
+        "<div>page-2</div>",
+        "<div>page-3</div>",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     page = _FakePage(
         surface="job_listing",
@@ -1009,8 +1070,8 @@ async def test_scroll_traversal_emits_live_events() -> None:
     )
 
     assert emitted[:2] == [
-        ("info", "Detected listing layout, traversal=scroll, max_steps=3"),
-        ("info", "Scroll 1/3 - page_cards=6 (prev_page_cards=2)"),
+        ("info", "Detected listing layout, traversal=scroll, safety_cap=50"),
+        ("info", "Scroll 1 - page_cards=6 (prev_page_cards=2)"),
     ]
 
 

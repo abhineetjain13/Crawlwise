@@ -85,9 +85,7 @@ Current live behavior:
 - `diagnostics_profile`
 - `advanced_enabled` / `advanced_mode` as UI-mode compatibility fields
 - resolved traversal mode derived from `fetch_profile.traversal_mode`
-- `max_pages`
-- `max_scrolls`
-- `max_records`
+- `max_records` as a traversal stop target, not a persisted-row hard cap
 - `sleep_ms`
 - `respect_robots_txt`
 - `url_batch_concurrency`

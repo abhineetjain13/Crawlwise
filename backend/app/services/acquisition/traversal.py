@@ -133,7 +133,8 @@ def _format_traversal_detection_message(
     max_records: int | None,
 ) -> str:
     target_suffix = f", target_records={int(max_records)}" if max_records is not None else ""
-    return f"Detected listing layout, traversal={mode}, max_steps={max_iterations}{target_suffix}"
+    safety_suffix = f", safety_cap={max_iterations}"
+    return f"Detected listing layout, traversal={mode}{target_suffix}{safety_suffix}"
 
 
 def _format_traversal_progress_message(
@@ -147,7 +148,7 @@ def _format_traversal_progress_message(
 ) -> str:
     target_suffix = f", target_records={int(max_records)}" if max_records is not None else ""
     return (
-        f"{label} {step}/{step_limit} - "
+        f"{label} {step} - "
         f"page_cards={current_count} (prev_page_cards={previous_count})"
         f"{target_suffix}"
     )
@@ -297,15 +298,13 @@ async def _run_scroll_traversal(
     deadline_at: float | None,
     on_event,
 ) -> None:
-    max_iterations = min(
-        max(1, int(max_scrolls)),
-        int(crawler_runtime_settings.traversal_max_iterations_cap),
-    )
+    max_iterations = int(crawler_runtime_settings.traversal_max_iterations_cap)
     weak_progress_streak = 0
     best_card_gain = 0
     marginal_gain_streak = 0
     await _append_html_fragment(page, result, surface=surface)
     previous = await _page_snapshot(page, surface=surface)
+    result.card_count = int(previous.get("card_count", 0))
     await _emit_event(
         on_event,
         "info",
@@ -315,6 +314,9 @@ async def _run_scroll_traversal(
             max_records=max_records,
         ),
     )
+    if _target_record_limit_reached(max_records=max_records, current_count=result.card_count):
+        _set_stop_reason(result, "target_records_reached", surface=surface)
+        return
     for _ in range(max_iterations):
         if _deadline_reached(deadline_at):
             _set_stop_reason(result, "budget_exceeded", surface=surface)
@@ -397,14 +399,12 @@ async def _run_load_more_traversal(
     deadline_at: float | None,
     on_event,
 ) -> None:
-    max_iterations = min(
-        max(1, int(max_clicks)),
-        int(crawler_runtime_settings.traversal_max_iterations_cap),
-    )
+    max_iterations = int(crawler_runtime_settings.traversal_max_iterations_cap)
     best_card_gain = 0
     marginal_gain_streak = 0
     await _append_html_fragment(page, result, surface=surface)
     previous = await _page_snapshot(page, surface=surface)
+    result.card_count = int(previous.get("card_count", 0))
     await _emit_event(
         on_event,
         "info",
@@ -414,6 +414,9 @@ async def _run_load_more_traversal(
             max_records=max_records,
         ),
     )
+    if _target_record_limit_reached(max_records=max_records, current_count=result.card_count):
+        _set_stop_reason(result, "target_records_reached", surface=surface)
+        return
     for _ in range(max_iterations):
         if _deadline_reached(deadline_at):
             _set_stop_reason(result, "budget_exceeded", surface=surface)
@@ -513,8 +516,8 @@ async def _run_paginate_traversal(
     previous = await _page_snapshot(page, surface=surface)
     best_card_gain = 0
     marginal_gain_streak = 0
-    page_limit = max(1, int(max_pages))
-    result.card_count = previous["card_count"]
+    page_limit = int(crawler_runtime_settings.traversal_max_iterations_cap)
+    result.card_count = int(previous["card_count"])
     await _append_html_fragment(page, result, surface=surface)
     await _emit_event(
         on_event,
@@ -545,6 +548,7 @@ async def _run_paginate_traversal(
             )
             if settled:
                 previous = settled
+                result.card_count = int(settled.get("card_count", result.card_count))
                 continue
             _set_stop_reason(result, "next_page_not_found", surface=surface)
             break
@@ -643,11 +647,14 @@ async def _run_paginate_traversal(
             else:
                 marginal_gain_streak = 0
             previous = current
-            result.card_count = current_count
+            result.card_count += current_count
+            if _target_record_limit_reached(max_records=max_records, current_count=result.card_count):
+                _set_stop_reason(result, "target_records_reached", surface=surface)
+                break
             if _paginate_fragment_budget_reached(
                 result,
                 target_records=max_records,
-                current_count=current_count,
+                current_count=result.card_count,
             ):
                 _set_stop_reason(
                     result,
@@ -663,7 +670,6 @@ async def _run_paginate_traversal(
         break
     else:
         _set_stop_reason(result, "paginate_limit_reached", surface=surface)
-    result.card_count = previous["card_count"]
 
 async def _settle_thin_initial_listing(
     page,

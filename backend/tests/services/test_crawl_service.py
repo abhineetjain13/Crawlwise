@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.core import database as database_module
 from app.core.config import settings
 from app.models.crawl import CrawlRecord, ReviewPromotion
 from app.models.crawl_domain import CONTROL_REQUEST_KILL, CONTROL_REQUEST_PAUSE
@@ -633,3 +634,36 @@ async def test_run_with_local_session_preserves_original_process_run_error(
     assert str(exc_info.value) == "process exploded"
     assert "Local crawl task failed for run 17" in caplog.text
     assert "Failed to persist failed status for run 17 after process_run error" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_session_rolls_back_when_consumer_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.rollback_calls = 0
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    session = _FakeSession()
+
+    class _FakeSessionLocal:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(database_module, "SessionLocal", _FakeSessionLocal)
+
+    generator = database_module.get_session()
+    yielded = await anext(generator)
+
+    assert yielded is session
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await generator.athrow(RuntimeError("boom"))
+
+    assert session.rollback_calls == 1

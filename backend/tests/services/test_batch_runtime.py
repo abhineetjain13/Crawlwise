@@ -14,6 +14,7 @@ from app.services.robots_policy import (
     ROBOTS_MISSING,
     RobotsPolicyResult,
 )
+from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -602,3 +603,38 @@ async def test_process_batch_run_preserves_exact_requested_section_labels_for_ev
         ["Features & Benefits"],
         ["Features & Benefits"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_process_run_marks_failed_on_sqlalchemy_session_error(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+        },
+    )
+
+    async def _poisoned_process_single_url(*args, **kwargs):
+        del args, kwargs
+        raise PendingRollbackError("flush failed earlier")
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.process_single_url",
+        _poisoned_process_single_url,
+    )
+
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
+
+    assert run.status == "failed"
+    assert "PendingRollbackError: flush failed earlier" in str(
+        run.get_summary("error") or ""
+    )
+    assert run.result_summary["extraction_verdict"] == "error"

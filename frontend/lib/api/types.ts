@@ -322,8 +322,8 @@ export type DomainRunProfile = {
  include_iframes: boolean;
  traversal_mode: "auto"|"scroll"|"load_more"|"view_all"|"paginate"| null;
  request_delay_ms: number;
- max_pages: number;
- max_scrolls: number;
+ max_pages?: number;
+ max_scrolls?: number;
  };
  locality_profile: {
  geo_country: string;

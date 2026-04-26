@@ -15,12 +15,14 @@ from app.services.adapters.base import AdapterResult
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
 from app.services.pipeline.core import (
     _best_adapter_result,
+    _empty_extraction_browser_retry_decision,
     _resolved_url_processing_config,
     apply_llm_fallback,
     process_single_url,
 )
 from app.services.pipeline.persistence import persist_acquisition_artifacts
 from app.services.pipeline.types import URLProcessingConfig
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.robots_policy import RobotsPolicyResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +53,43 @@ def test_best_adapter_result_deduplicates_unsourced_records() -> None:
 
     assert result is not None
     assert result.records == [{"title": "Widget", "price": "$10"}]
+
+
+def test_empty_extraction_retry_skips_static_detail_price_html() -> None:
+    request = AcquisitionRequest(
+        run_id=1,
+        url="https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+        plan=AcquisitionPlan(surface="ecommerce_detail"),
+    )
+    acquisition_result = AcquisitionResult(
+        request=request,
+        final_url=request.url,
+        html="""
+        <html>
+          <body>
+            <article class="product_page">
+              <h1>A Light in the Attic</h1>
+              <p class="price_color">£51.77</p>
+            </article>
+          </body>
+        </html>
+        """,
+        method="curl_cffi",
+        status_code=200,
+    )
+
+    decision = _empty_extraction_browser_retry_decision(
+        acquisition_result,
+        [],
+        surface="ecommerce_detail",
+        requested_fields=[],
+        selector_rules=[],
+    )
+
+    assert decision == {
+        "should_retry": False,
+        "reason": "static_detail_extractable",
+    }
 
 
 @pytest.mark.asyncio
@@ -333,8 +372,8 @@ def test_resolved_url_processing_config_handles_none_plan_limits() -> None:
         persist_logs=True,
     )
 
-    assert resolved.max_pages == 4
-    assert resolved.max_scrolls == 5
+    assert resolved.max_pages == crawler_runtime_settings.traversal_max_iterations_cap
+    assert resolved.max_scrolls == crawler_runtime_settings.traversal_max_iterations_cap
     assert resolved.max_records == 6
     assert resolved.sleep_ms == 7
 

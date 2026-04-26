@@ -13,6 +13,7 @@ from app.services.config.extraction_rules import (
     VARIANT_COLOR_HINT_WORDS,
     VARIANT_GROUP_ATTR_NOISE_PATTERNS,
     VARIANT_GROUP_ATTR_NOISE_TOKENS,
+    VARIANT_OPTION_VALUE_NOISE_TOKENS,
     VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SELECT_GROUP_SELECTOR,
 )
@@ -51,6 +52,11 @@ _VARIANT_SIZE_VALUE_PATTERNS = tuple(
     re.compile(str(pattern), re.I)
     for pattern in VARIANT_SIZE_VALUE_PATTERNS
     if str(pattern).strip()
+)
+_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
+    str(token).strip().lower()
+    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
+    if str(token).strip()
 )
 _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
     {
@@ -376,6 +382,18 @@ def _select_option_texts(node: Any) -> list[str]:
     return values
 
 
+def _select_option_values_are_noise(node: Any) -> bool:
+    values = _select_option_texts(node)
+    if not values:
+        return False
+    normalized = {
+        re.sub(r"[^a-z0-9]+", "", value.lower())
+        for value in values
+        if value.strip()
+    }
+    return bool(normalized) and normalized <= _VARIANT_OPTION_VALUE_NOISE_TOKENS
+
+
 def _value_looks_like_color(value: object) -> bool:
     tokens = [
         token
@@ -445,6 +463,8 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
     groups: list[Any] = []
     seen_ids: set[int] = set()
     for select in soup.select(VARIANT_SELECT_GROUP_SELECTOR):
+        if _select_option_values_are_noise(select):
+            continue
         if resolve_variant_group_name(select):
             groups.append(select)
             seen_ids.add(id(select))
@@ -454,6 +474,8 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
         return groups
     for select in soup.select("select"):
         if id(select) in seen_ids:
+            continue
+        if _select_option_values_are_noise(select):
             continue
         if resolve_variant_group_name(select):
             groups.append(select)

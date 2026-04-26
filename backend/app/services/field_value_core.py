@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from w3lib.url import url_query_cleaner
 
 from app.services.config.extraction_rules import (
+    CSS_NOISE_PATTERN,
     CURRENCY_ALIAS_PATTERNS,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
@@ -23,6 +24,7 @@ from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_WEAK_TITLES,
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
+    PAGE_URL_CURRENCY_HINTS_RAW,
 )
 from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
 from app.services.config.surface_hints import detail_path_hints
@@ -155,10 +157,14 @@ _REVIEW_TITLE_RE = re.compile(r"^\s*\d[\d,\s]*\s+reviews?\s*$", re.I)
 _LISTING_UTILITY_TITLE_REGEXES = tuple(
     re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
 )
+_CSS_NOISE_RE = re.compile(str(CSS_NOISE_PATTERN), re.I)
+_LEADING_CSS_BLOCK_RE = re.compile(r"^(?:\s*\.[a-z0-9_-]+\{[^{}]*\})+", re.I)
 
 
 def clean_text(value: object) -> str:
     text = unescape(str(value or "")).strip()
+    if text.startswith(".") and _CSS_NOISE_RE.search(text[:256]):
+        text = _LEADING_CSS_BLOCK_RE.sub("", text).strip()
     return WHITESPACE_RE.sub(" ", text)
 
 
@@ -559,6 +565,16 @@ def extract_currency_code(value: object) -> str | None:
     code_match = _CURRENCY_CODE_RE.search(text.upper())
     if code_match:
         return code_match.group(1)
+    return None
+
+
+def infer_currency_from_page_url(page_url: object) -> str | None:
+    lowered_url = str(page_url or "").strip().lower()
+    if not lowered_url:
+        return None
+    for token, code in dict(PAGE_URL_CURRENCY_HINTS_RAW or {}).items():
+        if str(token).lower() in lowered_url:
+            return str(code)
     return None
 
 

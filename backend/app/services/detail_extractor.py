@@ -40,6 +40,7 @@ from app.services.config.extraction_rules import (
     TITLE_PROMOTION_SEPARATOR,
     TITLE_PROMOTION_SUBSTRINGS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
+    VARIANT_OPTION_VALUE_NOISE_TOKENS,
     VARIANT_SIZE_VALUE_PATTERNS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -117,6 +118,11 @@ _VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
     for pattern in VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS
     if str(pattern).strip()
 )
+_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
+    str(token).strip().lower()
+    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
+    if str(token).strip()
+)
 _LOW_SIGNAL_ZERO_PRICE_SOURCES = frozenset(
     {
         "dom_selector",
@@ -176,6 +182,7 @@ _LONG_TEXT_SOURCE_RANKS = {
 }
 _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(r"^404$"),
+    re.compile(r"^(?:error\s*)?404\b", re.I),
     re.compile(r"^oops!? the page you(?:'|’)re looking for can(?:'|’)t be found\.?$", re.I),
     re.compile(r"\bpage not found\b", re.I),
     re.compile(r"\bnot found\b", re.I),
@@ -1577,6 +1584,18 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         record.get(field_name) not in (None, "", [], {})
         for field_name in generic_detail_fields
     )
+    if _detail_title_looks_like_placeholder(title) and not any(
+        record.get(field_name) not in (None, "", [], {})
+        for field_name in (
+            "price",
+            "original_price",
+            "image_url",
+            "sku",
+            "part_number",
+            "barcode",
+        )
+    ):
+        return True
     if (
         "url_slug" in title_sources
         and float((record.get("_confidence") or {}).get("score") or 0.0) < 0.5
@@ -1788,6 +1807,7 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
     lowered = value.lower()
     return (
         not value
+        or re.sub(r"[^a-z0-9]+", "", lowered) in _VARIANT_OPTION_VALUE_NOISE_TOKENS
         or lowered in {"select", "choose", "option", "size guide"}
         or re.fullmatch(r"[-\s]*(?:click\s+to\s+)?(?:choose|select)\b.*", lowered) is not None
         or re.fullmatch(r"[-\s]+.+[-\s]+", lowered) is not None
@@ -3103,6 +3123,14 @@ def _detail_currency_from_html(soup: BeautifulSoup) -> str | None:
         match = re.search(r'"priceCurrency"\s*:\s*"(?P<currency>[A-Z]{3})"', script_text)
         if match is not None:
             return text_or_none(match.group("currency"))
+    for selector in (*DETAIL_CURRENT_PRICE_SELECTORS, *DETAIL_ORIGINAL_PRICE_SELECTORS):
+        for node in soup.select(selector):
+            raw_value = node.get("aria-label") if hasattr(node, "get") else None
+            if raw_value in (None, "", [], {}):
+                raw_value = node.get_text(" ", strip=True)
+            currency = extract_currency_code(raw_value)
+            if currency:
+                return currency
     return None
 
 def _normalize_detail_price_candidate(

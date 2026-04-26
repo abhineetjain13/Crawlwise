@@ -39,8 +39,8 @@ type PrefillPayload = {
 };
 
 const DEFAULT_OPTIONS: ProductIntelligenceOptions = {
-  max_source_products: 5,
-  max_candidates_per_product: 3,
+  max_source_products: 50,
+  max_candidates_per_product: 5,
   search_provider: "serpapi",
   private_label_mode: "flag",
   confidence_threshold: 0.4,
@@ -48,6 +48,9 @@ const DEFAULT_OPTIONS: ProductIntelligenceOptions = {
   excluded_domains: [],
   llm_enrichment_enabled: false,
 };
+
+const MAX_SOURCE_PRODUCTS_LIMIT = 500;
+const MAX_CANDIDATES_PER_PRODUCT_LIMIT = 25;
 
 const MATCH_SCORE_TOOLTIP =
   "Match score = title similarity x 0.34 + brand match x 0.24 + identifier match x 0.25 + price band x 0.05 + source authority up to 0.12. Title similarity is token overlap/sequence match. Brand, identifier, and price add only when they match. Brand DTC, retailer, and marketplace domains add authority. High is 60%+, medium is 40-59%, low is below 40%.";
@@ -362,18 +365,18 @@ export default function ProductIntelligencePage() {
          <Input
           type="number"
           min={1}
-          max={25}
+          max={MAX_SOURCE_PRODUCTS_LIMIT}
           value={options.max_source_products}
-          onChange={(event) => setOptions((current) => ({ ...current, max_source_products: clampInt(event.target.value, 1, 25, 5) }))}
+          onChange={(event) => setOptions((current) => ({ ...current, max_source_products: clampInt(event.target.value, 1, MAX_SOURCE_PRODUCTS_LIMIT, DEFAULT_OPTIONS.max_source_products) }))}
          />
         </Field>
         <Field label="Max URLs">
          <Input
           type="number"
           min={1}
-          max={10}
+          max={MAX_CANDIDATES_PER_PRODUCT_LIMIT}
           value={options.max_candidates_per_product}
-          onChange={(event) => setOptions((current) => ({ ...current, max_candidates_per_product: clampInt(event.target.value, 1, 10, 3) }))}
+          onChange={(event) => setOptions((current) => ({ ...current, max_candidates_per_product: clampInt(event.target.value, 1, MAX_CANDIDATES_PER_PRODUCT_LIMIT, DEFAULT_OPTIONS.max_candidates_per_product) }))}
          />
         </Field>
         <Field label="Private Label">
@@ -965,8 +968,8 @@ function detailOptions(value: Record<string, unknown> | null | undefined): Produ
  const raw = isRecord(value) ? value : {};
  return {
   ...DEFAULT_OPTIONS,
-  max_source_products: clampInt(raw.max_source_products, 1, 25, DEFAULT_OPTIONS.max_source_products),
-  max_candidates_per_product: clampInt(raw.max_candidates_per_product, 1, 10, DEFAULT_OPTIONS.max_candidates_per_product),
+  max_source_products: clampInt(raw.max_source_products, 1, MAX_SOURCE_PRODUCTS_LIMIT, DEFAULT_OPTIONS.max_source_products),
+  max_candidates_per_product: clampInt(raw.max_candidates_per_product, 1, MAX_CANDIDATES_PER_PRODUCT_LIMIT, DEFAULT_OPTIONS.max_candidates_per_product),
   search_provider: String(raw.search_provider || DEFAULT_OPTIONS.search_provider),
   private_label_mode: privateLabelMode(raw.private_label_mode),
   confidence_threshold: clampFloat(raw.confidence_threshold, 0, 1, DEFAULT_OPTIONS.confidence_threshold),

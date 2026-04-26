@@ -132,17 +132,26 @@ class _FakeLocator:
 
 
 class _FakeRoleLocator:
-    def __init__(self, page: "_FakeExpansionPage", role: str, name: str) -> None:
+    def __init__(self, page: "_FakeExpansionPage", role: str, name: object) -> None:
         self._page = page
         self._role = role
-        self._name = name.lower()
+        self._name = str(name or "").lower()
+        self._name_pattern = name if hasattr(name, "search") else None
 
     @property
     def first(self) -> "_FakeRoleLocator":
         return self
 
+    def nth(self, index: int) -> "_FakeRoleLocator":
+        del index
+        return self
+
     async def count(self) -> int:
-        return int((self._role, self._name) in self._page.role_targets)
+        return sum(
+            1
+            for role, name in self._page.role_targets
+            if role == self._role and self._matches_name(name)
+        )
 
     async def is_visible(self, timeout: int | None = None) -> bool:
         del timeout
@@ -153,8 +162,13 @@ class _FakeRoleLocator:
 
     async def click(self, timeout: int | None = None) -> None:
         del timeout
-        if (self._role, self._name) in self._page.role_targets:
+        if await self.count():
             self._page.expanded = True
+
+    def _matches_name(self, name: str) -> bool:
+        if self._name_pattern is not None:
+            return bool(self._name_pattern.search(name))
+        return name == self._name
 
 
 class _NoTimeoutRoleLocator(_FakeRoleLocator):
@@ -2981,6 +2995,24 @@ async def test_origin_warmup_runs_for_job_detail() -> None:
 
     assert page.goto_calls == []
     assert len(page.spawned_pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_skips_for_listing_surface() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Products</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/category/widgets",
+        surface="ecommerce_listing",
+        browser_reason="http-escalation",
+        proxy_profile=None,
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.goto_calls == []
+    assert page.spawned_pages == []
 
 
 @pytest.mark.asyncio

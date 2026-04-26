@@ -226,9 +226,14 @@ def _infer_brand(
 def _infer_known_brand(*values: object) -> str:
     haystack = " ".join(str(value or "") for value in values).casefold().replace("-", " ")
     normalized = re.sub(r"[^a-z0-9]+", " ", haystack)
+    compact = re.sub(r"[^a-z0-9]+", "", haystack)
     known_brands = {*BRAND_ALIAS_MAP.values(), *BRAND_ALIAS_MAP.keys(), *BRAND_DOMAIN_MAP.keys()}
     for brand in sorted(known_brands, key=len, reverse=True):
-        if re.search(rf"\b{re.escape(brand.replace('-', ' '))}\b", normalized):
+        normalized_brand = brand.replace("-", " ")
+        compact_brand = re.sub(r"[^a-z0-9]+", "", normalized_brand)
+        if re.search(rf"\b{re.escape(normalized_brand)}\b", normalized) or (
+            len(compact_brand) >= 5 and compact_brand in compact
+        ):
             return BRAND_ALIAS_MAP.get(brand, brand)
     return ""
 

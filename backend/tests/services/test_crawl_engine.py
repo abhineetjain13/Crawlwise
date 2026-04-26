@@ -12,6 +12,33 @@ from app.services.detail_extractor import _normalize_variant_record
 from app.services.extraction_runtime import extract_records
 
 
+def test_listing_raw_json_max_records_does_not_trim_page_overshoot() -> None:
+    html = (
+        "["
+        + ",".join(
+            f'{{"title":"Product {index}","url":"https://example.com/p/{index}","price":"${index}.00"}}'
+            for index in range(1, 6)
+        )
+        + "]"
+    )
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/all",
+        "ecommerce_listing",
+        max_records=3,
+        content_type="application/json",
+    )
+
+    assert [row["title"] for row in rows] == [
+        "Product 1",
+        "Product 2",
+        "Product 3",
+        "Product 4",
+        "Product 5",
+    ]
+
+
 def _js_shell_html() -> str:
     return """
     <html>
@@ -200,7 +227,7 @@ def test_extract_records_visual_listing_backfills_brand_from_brand_node_and_url(
     assert rows[1]["brand"] == "Dv Dolce Vita"
 
 
-def test_extract_records_visual_listing_prefers_top_grid_before_lower_recommendations() -> None:
+def test_extract_records_visual_listing_orders_top_grid_before_lower_recommendations() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
@@ -253,17 +280,19 @@ def test_extract_records_visual_listing_prefers_top_grid_before_lower_recommenda
         },
     )
 
-    assert rows == [
-        {
-            "source_url": "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
-            "_source": "visual_listing",
-            "title": "Men's Chambray Sport Coat",
-            "brand": "Crown Ivy",
-            "price": "99.99",
-            "currency": "USD",
-            "image_url": "https://www.belk.com/images/sport-coat.jpg",
-            "url": "https://www.belk.com/p/crown-ivy-men-s-chambray-sport-coat/3203855BL1962J.html",
-        }
+    assert rows[0] == {
+        "source_url": "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
+        "_source": "visual_listing",
+        "title": "Men's Chambray Sport Coat",
+        "brand": "Crown Ivy",
+        "price": "99.99",
+        "currency": "USD",
+        "image_url": "https://www.belk.com/images/sport-coat.jpg",
+        "url": "https://www.belk.com/p/crown-ivy-men-s-chambray-sport-coat/3203855BL1962J.html",
+    }
+    assert [row["title"] for row in rows] == [
+        "Men's Chambray Sport Coat",
+        "Men's Advantage Performance Polo Shirt Classic Fit",
     ]
 
 
@@ -1947,6 +1976,57 @@ def test_extract_records_recovers_listing_price_when_card_uses_currency_code_tex
             "image_url": "https://cdn.example.com/teddy.jpg",
         }
     ]
+
+
+def test_extract_records_replaces_generic_item_listing_title_with_product_text() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="thumbnail">
+          <h4 class="title">item</h4>
+          <a href="/test-sites/e-commerce/allinone/product/1">
+            Lenovo ThinkPad X1 Carbon
+          </a>
+          <p class="description">Lenovo ThinkPad X1 Carbon business laptop</p>
+          <h4 class="price">$1,299.00</h4>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Lenovo ThinkPad X1 Carbon"
+
+
+def test_extract_records_infers_listing_currency_from_locale_path_for_bare_price() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="/gb/products/widget"><h2>Widget Prime</h2></a>
+          <span class="price">24.99</span>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/gb/products",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["price"] == "24.99"
+    assert rows[0]["currency"] == "GBP"
 
 
 def test_extract_records_ignores_discount_badge_images_inside_listing_cards() -> None:
@@ -4289,6 +4369,63 @@ def test_extract_ecommerce_detail_does_not_infer_price_from_404_body_text() -> N
     assert record["title"] == "MacBook Pro 15-inch Retina Display Mid 2015 Battery"
     assert "price" not in record
     assert "currency" not in record
+
+
+def test_extract_ecommerce_detail_rejects_404_record_with_filter_variants() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Error 404 .</h1>
+          <label for="search-type">Type</label>
+          <select id="search-type" name="type">
+            <option>all</option>
+            <option>release</option>
+            <option>artist</option>
+            <option>label</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.discogs.com/release/stale",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_detail_reads_books_table_price_currency() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product_page">
+          <h1>A Light in the Attic</h1>
+          <table>
+            <tr><th>Price (excl. tax)</th><td>£51.77</td></tr>
+            <tr><th>Availability</th><td>In stock</td></tr>
+          </table>
+          <p class="price_color">£51.77</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["price"] == "51.77"
+    assert record["currency"] == "GBP"
 
 
 def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents() -> None:

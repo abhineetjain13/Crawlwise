@@ -10,6 +10,7 @@ from app.models.crawl import (
     ProductIntelligenceJob,
     ProductIntelligenceSourceProduct,
 )
+from app.schemas.product_intelligence import ProductIntelligenceDiscoveryRequest
 from app.services.crawl_crud import create_crawl_run
 from app.services.config.product_intelligence import (
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_CRAWL_QUEUED,
@@ -104,6 +105,12 @@ def test_product_intelligence_normalizes_childrenswear_brand_alias() -> None:
     assert normalize_brand("Ralph Lauren Childrenswear") == "ralph lauren"
 
 
+def test_product_intelligence_normalizes_common_brand_aliases() -> None:
+    assert normalize_brand("Kenneth Cole Reaction") == "kenneth cole"
+    assert normalize_brand("Tommy Bahama®") == "tommy bahama"
+    assert normalize_brand("Collection by Michael Strahan ™") == "collection by michael strahan"
+
+
 def test_product_intelligence_infers_brand_from_source_url() -> None:
     snapshot = extract_product_snapshot(
         {
@@ -133,6 +140,27 @@ def test_product_intelligence_query_uses_brand_and_currency_inferred_from_belk_s
     assert '"modern southern home"' in queries[0]
 
 
+def test_product_intelligence_request_accepts_max_sources_and_url_aliases() -> None:
+    request = ProductIntelligenceDiscoveryRequest.model_validate(
+        {
+            "source_records": [
+                {
+                    "source_url": "https://www.belk.com/p/1.html",
+                    "data": {"title": "Wallet"},
+                }
+            ],
+            "options": {
+                "max_sources": 17,
+                "max_urls": 1,
+                "search_provider": "duckduckgo",
+            },
+        }
+    )
+
+    assert request.options.max_source_products == 17
+    assert request.options.max_candidates_per_product == 1
+
+
 def test_product_intelligence_serpapi_snapshot_keeps_description() -> None:
     snapshot = extract_serpapi_snapshot(
         {
@@ -147,6 +175,17 @@ def test_product_intelligence_serpapi_snapshot_keeps_description() -> None:
     assert snapshot["description"] == "Garment-dyed denim with a slim straight fit."
     assert snapshot["price"] == 125.0
     assert snapshot["currency"] == "USD"
+
+
+def test_product_intelligence_serpapi_snapshot_infers_known_brand_from_compact_domain() -> None:
+    snapshot = extract_serpapi_snapshot(
+        {"title": "Bifold RFID Wallet", "snippet": "Leather wallet."},
+        url="https://www.kennethcole.com/collections/kenneth-cole-reaction",
+        domain="kennethcole.com",
+    )
+
+    assert snapshot["brand"] == "kenneth cole"
+    assert snapshot["normalized_brand"] == "kenneth cole"
 
 
 def test_product_intelligence_serpapi_snapshot_tries_brand_from_title_marker() -> None:
@@ -191,7 +230,7 @@ def test_product_intelligence_llm_prompt_registered() -> None:
 
 @pytest.mark.asyncio
 async def test_product_intelligence_discovery_preserves_serpapi_payload(monkeypatch) -> None:
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         return [
             SearchResult(
                 url="https://www.levi.com/p/04511.html",
@@ -226,8 +265,37 @@ async def test_product_intelligence_discovery_preserves_serpapi_payload(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_product_intelligence_discovery_passes_pool_limit_to_search(monkeypatch) -> None:
+    limits: list[int | None] = []
+
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
+        limits.append(limit)
+        return [
+            SearchResult(url="https://www.levi.com/p/04511.html", payload={"title": "Levi 511"}),
+        ]
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery._search_results",
+        fake_search_results,
+    )
+    monkeypatch.setattr(product_intelligence_settings, "discovery_pool_multiplier", 4)
+
+    await discover_candidates(
+        {"brand": "Levis", "title": "Men 511 Slim Fit Jeans", "sku": "04511"},
+        source_domain_value="belk.com",
+        provider="serpapi",
+        allowed_domains=[],
+        excluded_domains=[],
+        max_candidates=5,
+    )
+
+    assert limits
+    assert set(limits) == {20}
+
+
+@pytest.mark.asyncio
 async def test_product_intelligence_discovery_spreads_result_domains(monkeypatch) -> None:
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         return [
             SearchResult(url="https://www.levi.com/p/1.html", payload={"title": "Levi 511"}),
             SearchResult(url="https://www.levi.com/p/2.html", payload={"title": "Levi 511 sale"}),
@@ -257,7 +325,7 @@ async def test_product_intelligence_discovery_spreads_result_domains(monkeypatch
 
 @pytest.mark.asyncio
 async def test_product_intelligence_discovery_prioritizes_brand_site_over_aggregator_pool(monkeypatch) -> None:
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         if "site:levi.com" in query:
             return [
                 SearchResult(url="https://thesummitbirmingham.com/buy/product/511", payload={"title": "Levi 511"}),
@@ -292,7 +360,7 @@ async def test_product_intelligence_discovery_prioritizes_brand_site_over_aggreg
 
 @pytest.mark.asyncio
 async def test_product_intelligence_discovery_skips_duckduckgo_ads(monkeypatch) -> None:
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         return [
             SearchResult(
                 url="https://duckduckgo.com/y.js?u3=https%3A%2F%2Fad.example%2Fp",
@@ -326,7 +394,7 @@ async def test_product_intelligence_discovery_skips_duckduckgo_ads(monkeypatch) 
 async def test_product_intelligence_discovery_keeps_search_delay_while_filling_pool(monkeypatch) -> None:
     recorded_delays: list[float] = []
 
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         if query == "query one":
             return [
                 SearchResult(url="https://www.levi.com/p/04511.html", payload={"title": "Levi 511"}),
@@ -453,7 +521,7 @@ async def test_product_intelligence_discovery_preview_returns_source_and_payload
     await db_session.commit()
     await db_session.refresh(record)
 
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         return [
             SearchResult(
                 url="https://www.ralphlauren.com/men-clothing-jeans/varick/123.html",
@@ -495,7 +563,7 @@ async def test_product_intelligence_discovery_returns_max_urls_per_input_source(
     test_user,
     monkeypatch,
 ) -> None:
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         quoted = query.split('"')
         title_source = quoted[3] if len(quoted) > 3 else quoted[1] if len(quoted) > 1 else quoted[0]
         title_token = title_source.split()[0]
@@ -544,7 +612,7 @@ async def test_product_intelligence_discovery_source_count_excludes_private_labe
     test_user,
     monkeypatch,
 ) -> None:
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         del query
         return [
             SearchResult(
@@ -600,7 +668,7 @@ async def test_product_intelligence_discovery_searches_title_only_sources(
     test_user,
     monkeypatch,
 ) -> None:
-    async def fake_search_results(provider: str, query: str) -> list[SearchResult]:
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         title_token = query.split('"')[1].split()[0]
         return [
             SearchResult(url=f"https://www.example-retailer.com/p/{title_token}-1.html", payload={"provider": provider, "title": title_token}),

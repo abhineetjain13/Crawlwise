@@ -53,6 +53,7 @@ from app.services.field_value_core import (
     extract_currency_code,
     extract_price_text,
     finalize_record,
+    infer_currency_from_page_url,
     is_title_noise,
     same_host,
     same_site,
@@ -218,8 +219,6 @@ def _extract_structured_listing(
                 continue
             seen_urls.add(url)
             records.append(record)
-            if len(records) >= max_records:
-                return records
     return records
 
 
@@ -1236,6 +1235,10 @@ def _listing_record_from_card(
             if currency_code:
                 add_candidate(candidates, "currency", currency_code)
                 break
+        else:
+            inferred_currency = infer_currency_from_page_url(page_url)
+            if inferred_currency and candidates.get("price"):
+                add_candidate(candidates, "currency", inferred_currency)
     if is_job and not candidates.get("salary"):
         salary_match = PRICE_RE.search(card_text)
         if salary_match:
@@ -1371,11 +1374,9 @@ def extract_listing_records(
         parser: LexborHTMLParser,
         *,
         seed_urls: set[str] | None = None,
-        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         seen_urls: set[str] = set(seed_urls or ())
-        target_limit = max(1, int(limit if limit is not None else max_records))
         for card in _listing_card_html_fragments(parser, is_job=is_job_surface):
             record = _listing_record_from_card(
                 card,
@@ -1390,15 +1391,11 @@ def extract_listing_records(
                 continue
             seen_urls.add(url)
             records.append(record)
-            if len(records) >= target_limit:
-                break
         return records
 
     structured_records = _structured_stage()
-    candidate_limit = max(1, int(max_records))
     dom_records = _dom_stage(
         dom_parser,
-        limit=candidate_limit,
     )
     original_dom_records: list[dict[str, Any]] = []
     if context.original_html and context.original_html != context.cleaned_html:
@@ -1416,7 +1413,6 @@ def extract_listing_records(
         if original_detail_anchor_count >= max(3, cleaned_detail_anchor_count + 2):
             original_dom_records = _dom_stage(
                 original_parser,
-                limit=candidate_limit,
             )
             logger.debug(
                 "Using original listing DOM after cleaned DOM lost detail-link evidence for %s",
@@ -1440,7 +1436,6 @@ def extract_listing_records(
             )
             rendered_dom_records = _dom_stage(
                 rendered_parser,
-                limit=candidate_limit,
             )
     listing_visual_elements = (
         artifacts.get("listing_visual_elements") if isinstance(artifacts, dict) else None
@@ -1486,5 +1481,5 @@ def extract_listing_records(
         ),
     )
     if best_records:
-        return best_records[:max_records]
+        return best_records
     return []
