@@ -678,7 +678,7 @@ def _record_matches_requested_detail_identity(
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     record_codes = _detail_identity_codes_from_record(record)
-    if _detail_identity_codes_match(requested_codes, record_codes):
+    if detail_identity_codes_match(requested_codes, record_codes):
         return True
     requested_title = _detail_title_from_url(requested_page_url) or requested_page_url
     requested_tokens = _detail_identity_tokens(requested_title)
@@ -701,7 +701,7 @@ def _detail_url_matches_requested_identity(
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     candidate_codes = _detail_identity_codes_from_url(candidate_url)
-    if _detail_identity_codes_match(requested_codes, candidate_codes):
+    if detail_identity_codes_match(requested_codes, candidate_codes):
         return True
     requested_title = _detail_title_from_url(requested_page_url) or requested_page_url
     requested_tokens = _detail_identity_tokens(requested_title)
@@ -774,7 +774,7 @@ def _normalized_detail_identity_code(value: object) -> str | None:
     return text
 
 
-def _detail_identity_codes_match(
+def detail_identity_codes_match(
     expected_codes: set[str],
     candidate_codes: set[str],
 ) -> bool:
@@ -796,7 +796,7 @@ def _detail_redirect_identity_is_mismatched(
         return False
     requested_codes = _detail_identity_codes_from_url(requested)
     record_field_codes = _detail_identity_codes_from_record_fields(record)
-    if requested_codes and record_field_codes and not _detail_identity_codes_match(
+    if requested_codes and record_field_codes and not detail_identity_codes_match(
         requested_codes,
         record_field_codes,
     ):
@@ -1434,7 +1434,7 @@ def _node_attr_is_truthy(node: Any, *attr_names: str) -> bool:
         return True
     return False
 
-def _variant_option_availability(*, node: Any, label_node: Any | None) -> tuple[str | None, int | None]:
+def variant_option_availability(*, node: Any, label_node: Any | None) -> tuple[str | None, int | None]:
     attr_probe_parts: list[str] = []
     text_probe_parts: list[str] = []
     for candidate in (
@@ -1541,7 +1541,7 @@ def _merge_variant_option_state(
     )
     if selected:
         entry["selected"] = True
-    availability, stock_quantity = _variant_option_availability(node=node, label_node=label_node)
+    availability, stock_quantity = variant_option_availability(node=node, label_node=label_node)
     if availability and entry.get("availability") in (None, "", [], {}):
         entry["availability"] = availability
     if stock_quantity is not None:

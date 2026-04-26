@@ -6,7 +6,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from app.services.adapters.myntra import MyntraAdapter
-from app.services.detail_extractor import _variant_option_availability
+from app.services.detail_extractor import variant_option_availability
 from app.services.extraction_runtime import extract_records
 
 
@@ -1793,7 +1793,7 @@ def test_variant_option_availability_does_not_treat_disabled_control_as_out_of_s
     label = soup.select_one("label")
 
     assert node is not None
-    availability, stock_quantity = _variant_option_availability(
+    availability, stock_quantity = variant_option_availability(
         node=node,
         label_node=label,
     )

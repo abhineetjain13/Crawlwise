@@ -83,7 +83,7 @@ Known remaining skips:
 - one structured-source optional dependency skip
 - one selectolax migration optional dependency skip
 
-## Remaining Slice 2: Public Contracts, No Private Imports
+## Completed Slice 2: Public Contracts, No Private Imports
 
 Problem:
 
@@ -92,9 +92,10 @@ Problem:
 
 Implementation:
 
-- add public test helpers or module-level public APIs for variant normalization and listing card evidence
-- migrate tests from `_normalize_variant_record`, `_listing_selector_is_weak`, and private traversal helpers
-- delete temporary compatibility aliases after tests move
+- added public names for tested traversal contracts: `click_with_retry`, `locator_still_resolves`, `wait_for_load_more_card_gain`, `looks_like_paginate_control`, and `is_same_origin`
+- added public names for tested detail contracts: `variant_option_availability` and `detail_identity_codes_match`
+- migrated tests away from private detail/traversal imports
+- deleted temporary compatibility aliases for variant normalization and weak listing selector checks
 
 Verify:
 
@@ -104,10 +105,10 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_engine.py tests/services/test_traversal_runtime.py -q
 ```
 
-Done when:
+Result:
 
-- no tests import private extractor/traversal names unless explicitly testing private compatibility
-- behavior coverage is unchanged
+- `rg "from app\.services\.acquisition\.traversal import _|from app\.services\.detail_extractor import _|traversal_module\._|detail_extractor\._" backend/tests -n` returns no matches
+- focused verify passed: `39 passed, 11 warnings`
 
 ## Remaining Slice 3: Acquisition Policy Boundary
 

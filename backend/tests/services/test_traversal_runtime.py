@@ -8,9 +8,9 @@ import app.services.acquisition.traversal as traversal_module
 
 from app.services.acquisition.traversal import (
     TraversalResult,
-    _click_with_retry,
-    _locator_still_resolves,
-    _wait_for_load_more_card_gain,
+    click_with_retry,
+    locator_still_resolves,
+    wait_for_load_more_card_gain,
     count_listing_cards,
     dismiss_overlays_if_needed,
     execute_listing_traversal,
@@ -650,7 +650,7 @@ async def test_auto_traversal_prefers_paginate_for_numeric_arrow_button() -> Non
 
 
 @pytest.mark.asyncio
-async def test_looks_like_paginate_control_rejects_plain_href_without_pagination_signals() -> None:
+async def testlooks_like_paginate_control_rejects_plain_href_without_pagination_signals() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
         initial_state=_State(
@@ -674,7 +674,7 @@ async def test_looks_like_paginate_control_rejects_plain_href_without_pagination
 
     locator = page.locator(PAGINATION_SELECTORS["next_page"][0]).first
 
-    assert await traversal_module._looks_like_paginate_control(locator) is False
+    assert await traversal_module.looks_like_paginate_control(locator) is False
 
 
 @pytest.mark.asyncio
@@ -1130,53 +1130,53 @@ async def test_paginate_traversal_detects_cycle_on_redirect_loop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_is_same_origin_blocks_cross_tenant_paths() -> None:
+async def testis_same_origin_blocks_cross_tenant_paths() -> None:
     """Pagination must not bleed across path-based multi-tenant boundaries."""
-    from app.services.acquisition.traversal import _is_same_origin
+    from app.services.acquisition.traversal import is_same_origin
 
-    assert _is_same_origin(
+    assert is_same_origin(
         "https://myworkdayjobs.com/TenantA/jobs?page=1",
         "https://myworkdayjobs.com/TenantA/jobs?page=2",
     )
-    assert not _is_same_origin(
+    assert not is_same_origin(
         "https://myworkdayjobs.com/TenantA/jobs?page=1",
         "https://myworkdayjobs.com/TenantB/jobs?page=1",
     )
 
 
 @pytest.mark.asyncio
-async def test_is_same_origin_blocks_cross_tenant_paths_for_workday_subdomains() -> None:
-    from app.services.acquisition.traversal import _is_same_origin
+async def testis_same_origin_blocks_cross_tenant_paths_for_workday_subdomains() -> None:
+    from app.services.acquisition.traversal import is_same_origin
 
-    assert _is_same_origin(
+    assert is_same_origin(
         "https://smithnephew.wd5.myworkdayjobs.com/TenantA/jobs?page=1",
         "https://smithnephew.wd5.myworkdayjobs.com/TenantA/jobs?page=2",
     )
-    assert not _is_same_origin(
+    assert not is_same_origin(
         "https://smithnephew.wd5.myworkdayjobs.com/TenantA/jobs?page=1",
         "https://smithnephew.wd5.myworkdayjobs.com/TenantB/jobs?page=1",
     )
 
 
 @pytest.mark.asyncio
-async def test_is_same_origin_allows_same_tenant_different_pages() -> None:
-    from app.services.acquisition.traversal import _is_same_origin
+async def testis_same_origin_allows_same_tenant_different_pages() -> None:
+    from app.services.acquisition.traversal import is_same_origin
 
-    assert _is_same_origin(
+    assert is_same_origin(
         "https://example.com/listing?page=1",
         "https://example.com/listing?page=2",
     )
-    assert not _is_same_origin(
+    assert not is_same_origin(
         "https://example.com/listing?page=1",
         "https://other.com/listing?page=2",
     )
 
 
 @pytest.mark.asyncio
-async def test_is_same_origin_allows_same_host_path_changes_outside_tenant_hosts() -> None:
-    from app.services.acquisition.traversal import _is_same_origin
+async def testis_same_origin_allows_same_host_path_changes_outside_tenant_hosts() -> None:
+    from app.services.acquisition.traversal import is_same_origin
 
-    assert _is_same_origin(
+    assert is_same_origin(
         "https://example.com/careers?page=1",
         "https://example.com/jobs?page=2",
     )
@@ -1389,7 +1389,7 @@ async def test_load_more_wait_keeps_best_delayed_card_gain() -> None:
                 "content_signature_source": f"cards-{self.elapsed_ms}",
             }
 
-    snapshot = await _wait_for_load_more_card_gain(
+    snapshot = await wait_for_load_more_card_gain(
         _DelayedGainPage(),
         previous={"card_count": 144},
         surface="ecommerce_listing",
@@ -1456,7 +1456,7 @@ async def test_count_listing_cards_heuristic_rejects_detail_sections_with_suppor
 
 
 @pytest.mark.asyncio
-async def test_click_with_retry_uses_mutation_settle_after_js_fallback() -> None:
+async def testclick_with_retry_uses_mutation_settle_after_js_fallback() -> None:
     class _ClickPage:
         def __init__(self) -> None:
             self.load_state_calls: list[str] = []
@@ -1504,7 +1504,7 @@ async def test_click_with_retry_uses_mutation_settle_after_js_fallback() -> None
     locator = _ClickLocator()
     result = TraversalResult(requested_mode="load_more")
 
-    clicked = await _click_with_retry(page, locator, result=result)
+    clicked = await click_with_retry(page, locator, result=result)
 
     assert clicked is True
     assert result.click_retries == 2
@@ -1513,7 +1513,7 @@ async def test_click_with_retry_uses_mutation_settle_after_js_fallback() -> None
 
 
 @pytest.mark.asyncio
-async def test_click_with_retry_stops_when_locator_no_longer_resolves() -> None:
+async def testclick_with_retry_stops_when_locator_no_longer_resolves() -> None:
     class _ClickPage:
         url = "https://example.com/listing"
 
@@ -1560,7 +1560,7 @@ async def test_click_with_retry_stops_when_locator_no_longer_resolves() -> None:
     locator = _StaleLocator()
     result = TraversalResult(requested_mode="load_more")
 
-    clicked = await _click_with_retry(page, locator, result=result)
+    clicked = await click_with_retry(page, locator, result=result)
 
     assert clicked is False
     assert locator.click_calls == 0
@@ -1568,7 +1568,7 @@ async def test_click_with_retry_stops_when_locator_no_longer_resolves() -> None:
 
 
 @pytest.mark.asyncio
-async def test_click_with_retry_tolerates_transient_locator_resolution_loss() -> None:
+async def testclick_with_retry_tolerates_transient_locator_resolution_loss() -> None:
     class _ClickPage:
         url = "https://example.com/listing"
 
@@ -1615,23 +1615,23 @@ async def test_click_with_retry_tolerates_transient_locator_resolution_loss() ->
     locator = _TransientLocator()
     result = TraversalResult(requested_mode="load_more")
 
-    clicked = await _click_with_retry(page, locator, result=result)
+    clicked = await click_with_retry(page, locator, result=result)
 
     assert clicked is True
     assert locator.click_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_locator_still_resolves_returns_false_after_probe_errors() -> None:
+async def testlocator_still_resolves_returns_false_after_probe_errors() -> None:
     class _ProbeErrorLocator:
         async def count(self) -> int:
-            raise traversal_module._PlaywrightError("transient probe failure")
+            raise traversal_module.PlaywrightError("transient probe failure")
 
-    assert await _locator_still_resolves(_ProbeErrorLocator()) is False
+    assert await locator_still_resolves(_ProbeErrorLocator()) is False
 
 
 @pytest.mark.asyncio
-async def test_click_with_retry_tolerates_locator_probe_errors() -> None:
+async def testclick_with_retry_tolerates_locator_probe_errors() -> None:
     class _ClickPage:
         url = "https://example.com/listing"
 
@@ -1665,7 +1665,7 @@ async def test_click_with_retry_tolerates_locator_probe_errors() -> None:
             return None
 
         async def count(self) -> int:
-            raise traversal_module._PlaywrightError("transient probe failure")
+            raise traversal_module.PlaywrightError("transient probe failure")
 
         async def click(self, timeout: int | None = None, force: bool = False) -> None:
             del timeout, force
@@ -1676,7 +1676,7 @@ async def test_click_with_retry_tolerates_locator_probe_errors() -> None:
     locator = _ProbeErrorLocator()
     result = TraversalResult(requested_mode="load_more")
 
-    clicked = await _click_with_retry(page, locator, result=result)
+    clicked = await click_with_retry(page, locator, result=result)
 
     assert clicked is True
     assert locator.click_calls == 1

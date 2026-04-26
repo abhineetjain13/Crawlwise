@@ -12,9 +12,9 @@ from app.services.acquisition.dom_runtime import get_page_html, wait_for_dom_mut
 from app.services.acquisition.runtime import classify_blocked_page_async
 
 try:
-    from playwright.async_api import Error as _PlaywrightError
+    from playwright.async_api import Error as PlaywrightError
 except ImportError:  # pragma: no cover
-    class _PlaywrightError(Exception):  # type: ignore[no-redef]
+    class PlaywrightError(Exception):  # type: ignore[no-redef]
         pass
 
 from app.services.config.extraction_rules import (
@@ -283,7 +283,7 @@ async def _detect_auto_mode(page, *, surface: str) -> str | None:
     if load_more_locator is not None:
         return "load_more"
     if next_page_locator is not None:
-        if await _looks_like_paginate_control(next_page_locator) or await _looks_like_next_page_control(next_page_locator):
+        if await looks_like_paginate_control(next_page_locator) or await _looks_like_next_page_control(next_page_locator):
             return "paginate"
         if not scroll_signals:
             return "paginate"
@@ -427,7 +427,7 @@ async def _run_load_more_traversal(
             break
         locator = await _find_actionable_locator(page, "load_more")
         if locator is None:
-            settled = await _wait_for_load_more_card_gain(
+            settled = await wait_for_load_more_card_gain(
                 page,
                 previous=previous,
                 surface=surface,
@@ -449,7 +449,7 @@ async def _run_load_more_traversal(
         result.iterations += 1
         result.load_more_clicks += 1
         current_url = page.url
-        clicked = await _click_with_retry(
+        clicked = await click_with_retry(
             page,
             locator,
             result=result,
@@ -473,7 +473,7 @@ async def _run_load_more_traversal(
         )
         current = await _page_snapshot(page, surface=surface)
         if not _snapshot_progressed(previous, current):
-            progressed = await _wait_for_load_more_card_gain(
+            progressed = await wait_for_load_more_card_gain(
                 page,
                 previous=previous,
                 surface=surface,
@@ -534,7 +534,7 @@ async def _run_load_more_traversal(
     result.card_count = previous["card_count"]
 
 
-async def _wait_for_load_more_card_gain(
+async def wait_for_load_more_card_gain(
     page,
     *,
     previous: dict[str, int],
@@ -627,7 +627,7 @@ async def _run_paginate_traversal(
         normalized_href = str(href or "").strip().lower()
         if href and not normalized_href.startswith(("#", "javascript:")):
             next_url = urljoin(current_url, href)
-            if not _is_same_origin(current_url, next_url):
+            if not is_same_origin(current_url, next_url):
                 _set_stop_reason(result, "paginate_off_domain", surface=surface)
                 break
             if next_url in visited_urls:
@@ -654,7 +654,7 @@ async def _run_paginate_traversal(
                 deadline_at=deadline_at,
             )
         else:
-            clicked = await _click_with_retry(
+            clicked = await click_with_retry(
                 page,
                 locator,
                 result=result,
@@ -841,7 +841,7 @@ async def _find_generic_next_page_locator(page):
             if await locator.is_disabled():
                 continue
             if not (
-                await _looks_like_paginate_control(locator)
+                await looks_like_paginate_control(locator)
                 or await _looks_like_next_page_control(locator)
             ):
                 continue
@@ -894,7 +894,7 @@ async def recover_listing_page_content(
         if locator is None:
             continue
         await _emit_event(on_event, "info", f"{message}...")
-        if not await _click_with_retry(page, locator, result=helper_result):
+        if not await click_with_retry(page, locator, result=helper_result):
             continue
         clicked_count += 1
         actions_taken.append(action_name)
@@ -977,7 +977,7 @@ async def _find_aom_actionable_locator(
 
 
 
-async def _click_with_retry(
+async def click_with_retry(
     page,
     locator,
     *,
@@ -1005,7 +1005,7 @@ async def _click_with_retry(
         )
     except Exception:
         logger.debug("Traversal scroll_into_view failed", exc_info=True)
-        if not await _locator_still_resolves(locator):
+        if not await locator_still_resolves(locator):
             return False
     try:
         await locator.evaluate(
@@ -1021,7 +1021,7 @@ async def _click_with_retry(
             page.url,
             exc_info=True,
         )
-        if not await _locator_still_resolves(locator):
+        if not await locator_still_resolves(locator):
             return False
 
     # Step 2: Normal click
@@ -1031,7 +1031,7 @@ async def _click_with_retry(
         return True
     except Exception as exc:
         first_exc = exc
-        if not await _locator_still_resolves(locator):
+        if not await locator_still_resolves(locator):
             return False
         logger.debug(
             "Traversal normal click failed (%s); trying overlay dismissal + force",
@@ -1048,7 +1048,7 @@ async def _click_with_retry(
         return True
     except Exception as exc:
         force_exc = exc
-        if not await _locator_still_resolves(locator):
+        if not await locator_still_resolves(locator):
             return False
         logger.debug(
             "Traversal force click failed (%s); trying JS click",
@@ -1078,7 +1078,7 @@ async def _click_with_retry(
         return False
 
 
-async def _locator_still_resolves(locator) -> bool:
+async def locator_still_resolves(locator) -> bool:
     counter = getattr(locator, "count", None)
     if not callable(counter):
         return True
@@ -1088,7 +1088,7 @@ async def _locator_still_resolves(locator) -> bool:
                 return True
         except asyncio.CancelledError:
             raise
-        except _PlaywrightError:
+        except PlaywrightError:
             logger.debug(
                 "Traversal locator resolution probe failed",
                 exc_info=True,
@@ -1279,7 +1279,7 @@ async def _append_html_fragment(
     result.html_fragments.append((value, is_fallback))
 
 
-async def _looks_like_paginate_control(locator) -> bool:
+async def looks_like_paginate_control(locator) -> bool:
     try:
         inspection = await locator.evaluate(
             """
@@ -1577,7 +1577,7 @@ async def count_listing_cards(page, *, surface: str, allow_heuristic: bool = Tru
             """,
             normalized_selectors,
         )
-    except _PlaywrightError:
+    except PlaywrightError:
         raise
     except Exception:
         logger.debug(
@@ -1589,7 +1589,7 @@ async def count_listing_cards(page, *, surface: str, allow_heuristic: bool = Tru
         for selector in normalized_selectors:
             try:
                 highest = max(highest, await page.locator(selector).count())
-            except _PlaywrightError:
+            except PlaywrightError:
                 raise
             except Exception:
                 logger.debug(
@@ -1851,7 +1851,7 @@ async def _emit_event(on_event, level: str, message: str) -> None:
         logger.debug("Traversal event callback failed", exc_info=True)
 
 
-def _is_same_origin(current_url: str, next_url: str) -> bool:
+def is_same_origin(current_url: str, next_url: str) -> bool:
     current = urlsplit(str(current_url or ""))
     next_value = urlsplit(str(next_url or ""))
     if (
