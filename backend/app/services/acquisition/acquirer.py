@@ -77,6 +77,93 @@ class AcquisitionResult:
     page_markdown: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class PageEvidence:
+    blocked: bool
+    method: str
+    diagnostics: dict[str, object]
+
+    @classmethod
+    def from_acquisition_result(cls, acquisition_result) -> "PageEvidence":
+        diagnostics = getattr(acquisition_result, "browser_diagnostics", {})
+        return cls(
+            blocked=bool(getattr(acquisition_result, "blocked", False)),
+            method=str(getattr(acquisition_result, "method", "") or ""),
+            diagnostics=dict(diagnostics or {}) if isinstance(diagnostics, dict) else {},
+        )
+
+    @classmethod
+    def from_browser_diagnostics(cls, diagnostics: dict[str, object] | object) -> "PageEvidence":
+        payload = dict(diagnostics or {}) if isinstance(diagnostics, dict) else {}
+        return cls(blocked=False, method="", diagnostics=payload)
+
+    @property
+    def browser_attempted(self) -> bool:
+        return bool(self.diagnostics.get("browser_attempted")) or self.method == "browser"
+
+    @property
+    def browser_outcome(self) -> str:
+        return str(self.diagnostics.get("browser_outcome") or "").strip().lower()
+
+    @property
+    def browser_reason(self) -> str:
+        return str(self.diagnostics.get("browser_reason") or "").strip().lower()
+
+    @property
+    def challenge_evidence(self) -> list[str]:
+        return [
+            str(item or "").strip().lower()
+            for item in _list_or_empty(self.diagnostics.get("challenge_evidence"))
+            if str(item or "").strip()
+        ]
+
+    @property
+    def has_ready_readiness_probe(self) -> bool:
+        return any(
+            isinstance(probe, dict) and bool(probe.get("is_ready"))
+            for probe in _list_or_empty(self.diagnostics.get("readiness_probes"))
+        )
+
+    @property
+    def indicates_block(self) -> bool:
+        if self.blocked or self.browser_outcome == "challenge_page":
+            return True
+        if any(
+            item.startswith(("title:", "strong:"))
+            for item in self.challenge_evidence
+        ):
+            return True
+        if self.browser_outcome == "usable_content" and self.has_ready_readiness_probe:
+            return False
+        # INVARIANTS.md Rule 6: usable content beats provider noise.
+        if self.browser_outcome == "usable_content":
+            return False
+        provider_evidence = _list_or_empty(
+            self.diagnostics.get("challenge_provider_hits")
+        ) or [
+            item
+            for item in self.challenge_evidence
+            if item.startswith(("provider:", "active_provider:"))
+        ]
+        return bool(provider_evidence and self.browser_outcome != "usable_content")
+
+    @property
+    def challenge_shell_reason(self) -> str | None:
+        challenge_shell = (
+            self.browser_outcome in {"challenge_page", "low_content_shell"}
+            or self.indicates_block
+            or (
+                self.browser_reason.startswith("vendor-block:")
+                and not self.has_ready_readiness_probe
+            )
+        )
+        return "challenge_shell" if challenge_shell else None
+
+
+def _list_or_empty(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
 ProxyPoolExhausted = ProxyPoolExhaustedError
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
@@ -14,6 +15,39 @@ from app.services.platform_policy import detect_platform_family
 from .types import AdapterRecords
 
 logger = logging.getLogger(__name__)
+
+
+def selectolax_node_text(node: object, *, separator: str = "") -> str:
+    if node is None:
+        return ""
+    text_fn = getattr(node, "text", None)
+    if not callable(text_fn):
+        return ""
+    try:
+        if separator:
+            return str(text_fn(separator=separator, strip=True) or "")
+        return str(text_fn(strip=True) or "")
+    except Exception:
+        return ""
+
+
+def selectolax_node_attr(node: object, name: str) -> str | None:
+    if node is None:
+        return None
+    raw_attrs = getattr(node, "attributes", {}) or {}
+    attrs = raw_attrs if isinstance(raw_attrs, Mapping) else {}
+    value = attrs.get(name)
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
+def adapter_host_matches(host: str, expected: str) -> bool:
+    normalized_host = str(host or "").strip().lower()
+    normalized_expected = str(expected or "").strip().lower()
+    return normalized_host == normalized_expected or normalized_host.endswith(
+        f".{normalized_expected}"
+    )
 
 
 @dataclass
@@ -109,7 +143,9 @@ class BaseAdapter(ABC):
         )
         if response.status_code != 200:
             return None
-        return response.json_data if isinstance(response.json_data, (dict, list)) else None
+        return (
+            response.json_data if isinstance(response.json_data, (dict, list)) else None
+        )
 
     async def _request_text(
         self,

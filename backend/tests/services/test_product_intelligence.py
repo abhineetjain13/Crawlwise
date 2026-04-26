@@ -19,15 +19,27 @@ from app.services.config.product_intelligence import (
     product_intelligence_settings,
 )
 from app.services.llm_config_service import get_prompt_task
-from app.services.product_intelligence.discovery import SearchResult, build_search_queries, classify_source_type, discover_candidates
+from app.services.product_intelligence.discovery import (
+    SearchResult,
+    _google_native_session,
+    _parse_google_native_results,
+    build_search_queries,
+    classify_source_type,
+    discover_candidates,
+)
 from app.services.product_intelligence.matching import (
+    build_search_result_intelligence,
     extract_product_snapshot,
-    extract_serpapi_snapshot,
+    extract_search_result_snapshot,
     normalize_brand,
     score_candidate,
 )
+from app.services.llm_circuit_breaker import LLMErrorCategory
+from app.services.llm_types import LLMTaskResult
 from app.services.product_intelligence.service import (
+    _backfill_candidate_brand,
     _poll_candidate_and_score,
+    _resolve_source_snapshot,
     create_product_intelligence_job,
     discover_product_intelligence_candidates,
 )
@@ -152,7 +164,7 @@ def test_product_intelligence_request_accepts_max_sources_and_url_aliases() -> N
             "options": {
                 "max_sources": 17,
                 "max_urls": 1,
-                "search_provider": "duckduckgo",
+                "search_provider": "serpapi",
             },
         }
     )
@@ -161,8 +173,8 @@ def test_product_intelligence_request_accepts_max_sources_and_url_aliases() -> N
     assert request.options.max_candidates_per_product == 1
 
 
-def test_product_intelligence_serpapi_snapshot_keeps_description() -> None:
-    snapshot = extract_serpapi_snapshot(
+def test_product_intelligence_search_result_snapshot_keeps_description() -> None:
+    snapshot = extract_search_result_snapshot(
         {
             "title": "Varick Slim Straight Jean",
             "snippet": "Garment-dyed denim with a slim straight fit.",
@@ -177,8 +189,8 @@ def test_product_intelligence_serpapi_snapshot_keeps_description() -> None:
     assert snapshot["currency"] == "USD"
 
 
-def test_product_intelligence_serpapi_snapshot_infers_known_brand_from_compact_domain() -> None:
-    snapshot = extract_serpapi_snapshot(
+def test_product_intelligence_search_result_snapshot_infers_known_brand_from_compact_domain() -> None:
+    snapshot = extract_search_result_snapshot(
         {"title": "Bifold RFID Wallet", "snippet": "Leather wallet."},
         url="https://www.kennethcole.com/collections/kenneth-cole-reaction",
         domain="kennethcole.com",
@@ -188,8 +200,8 @@ def test_product_intelligence_serpapi_snapshot_infers_known_brand_from_compact_d
     assert snapshot["normalized_brand"] == "kenneth cole"
 
 
-def test_product_intelligence_serpapi_snapshot_tries_brand_from_title_marker() -> None:
-    snapshot = extract_serpapi_snapshot(
+def test_product_intelligence_search_result_snapshot_tries_brand_from_title_marker() -> None:
+    snapshot = extract_search_result_snapshot(
         {
             "title": "Crown & Ivy™ Hydrangea Vase",
             "snippet": "Ceramic vase for spring decor.",
@@ -210,10 +222,19 @@ def test_product_intelligence_settings_accepts_serp_api_key_alias() -> None:
     assert settings.serpapi_key == "serp-secret"
 
 
-def test_product_intelligence_settings_falls_back_without_serpapi_key() -> None:
+def test_product_intelligence_settings_default_provider_is_serpapi() -> None:
     settings = ProductIntelligenceSettings(_env_file=None)
 
-    assert settings.default_search_provider == "duckduckgo"
+    assert settings.default_search_provider == "serpapi"
+
+
+def test_product_intelligence_settings_accepts_google_native_provider() -> None:
+    settings = ProductIntelligenceSettings(
+        _env_file=None,
+        default_search_provider="google_native",
+    )
+
+    assert settings.default_search_provider == "google_native"
 
 
 def test_product_intelligence_settings_rejects_unknown_provider() -> None:
@@ -221,11 +242,481 @@ def test_product_intelligence_settings_rejects_unknown_provider() -> None:
         ProductIntelligenceSettings(_env_file=None, default_search_provider="bogus")
 
 
+def test_product_intelligence_settings_rejects_legacy_duckduckgo_provider() -> None:
+    with pytest.raises(ValueError):
+        ProductIntelligenceSettings(_env_file=None, default_search_provider="duckduckgo")
+
+
+def test_parse_google_native_results_extracts_redirect_targets() -> None:
+    html = """
+    <html><body>
+      <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fwidget&sa=U"><h3>Widget</h3></a>
+      <a href="https://www.google.com/preferences"><h3>Settings</h3></a>
+    </body></html>
+    """
+
+    results = _parse_google_native_results(html, limit=5)
+
+    assert results[0].url == "https://shop.example.com/p/widget"
+    assert results[0].payload["provider"] == "google_native"
+
+
+def test_parse_google_native_results_skips_anchors_without_h3() -> None:
+    """Non-organic anchors (shopping carousel, PAA, ads, knowledge panels)
+    have anchor text but no inner h3; they must be ignored."""
+    html = """
+    <html><body>
+      <a href="https://www.amazon.com/sponsored">Sponsored amazon link</a>
+      <a href="https://en.wikipedia.org/wiki/Widget">People also ask: what is a widget?</a>
+      <div class="result">
+        <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fwidget&sa=U">
+          <h3>Widget Pro Edition</h3>
+        </a>
+      </div>
+    </body></html>
+    """
+
+    results = _parse_google_native_results(html, limit=5)
+
+    assert len(results) == 1
+    assert results[0].url == "https://shop.example.com/p/widget"
+
+
+def test_parse_google_native_results_prefers_h3_over_anchor_text() -> None:
+    html = """
+    <html><body>
+      <div class="result">
+        <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fwidget&sa=U">
+          <h3>Widget Pro Edition</h3>
+          <span>shop.example.com &rsaquo; p &rsaquo; widget</span>
+        </a>
+      </div>
+    </body></html>
+    """
+
+    results = _parse_google_native_results(html, limit=5)
+
+    assert results[0].payload["title"] == "Widget Pro Edition"
+
+
+def test_parse_google_native_results_extracts_thumbnail_from_result_container() -> None:
+    html = """
+    <html><body>
+      <div class="result-block">
+        <img src="https://example.com/thumb.jpg" alt="thumb">
+        <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fwidget&sa=U">
+          <h3>Widget</h3>
+        </a>
+      </div>
+    </body></html>
+    """
+
+    results = _parse_google_native_results(html, limit=5)
+
+    assert results[0].payload["thumbnail"] == "https://example.com/thumb.jpg"
+
+
+def test_google_native_thumbnail_flows_into_snapshot_image_url() -> None:
+    snapshot = extract_search_result_snapshot(
+        {
+            "provider": "google_native",
+            "title": "Widget",
+            "thumbnail": "https://example.com/thumb.jpg",
+        },
+        url="https://shop.example.com/p/widget",
+        domain="example.com",
+    )
+
+    assert snapshot["image_url"] == "https://example.com/thumb.jpg"
+
+
+def test_google_native_intelligence_keeps_provider_label() -> None:
+    intelligence = build_search_result_intelligence(
+        source={"title": "Nike Air Max", "brand": "Nike"},
+        candidate_payload={"provider": "google_native", "title": "Nike Air Max"},
+        candidate_url="https://www.nike.com/in/w/air-max",
+        candidate_domain="nike.com",
+        source_type="brand_dtc",
+    )
+
+    assert intelligence["cleanup_source"] == "deterministic_google_native"
+
+
+@pytest.mark.asyncio
+async def test_google_native_session_reuses_single_page_across_queries(monkeypatch) -> None:
+    actions: list[str] = []
+
+    class _Page:
+        async def goto(self, url: str, *, wait_until: str, timeout: int):
+            actions.append(f"goto:{url}")
+
+        async def wait_for_timeout(self, timeout_ms: int) -> None:
+            actions.append(f"wait:{timeout_ms}")
+
+    class _Runtime:
+        def page(self, **kwargs):
+            actions.append(f"page-acquired:{kwargs.get('domain')}")
+
+            class _Context:
+                async def __aenter__(self):
+                    return _Page()
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    actions.append("page-released")
+                    return None
+
+            return _Context()
+
+    async def _fake_runtime(*, browser_engine: str):
+        actions.append(f"engine:{browser_engine}")
+        return _Runtime()
+
+    async def _fake_behavior(_page):
+        actions.append("behavior")
+        return {"enabled": True}
+
+    async def _fake_html(_page):
+        return """
+        <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fwidget"><h3>Widget</h3></a>
+        """
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery.get_browser_runtime",
+        _fake_runtime,
+    )
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery.emit_browser_behavior_activity",
+        _fake_behavior,
+    )
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery.get_page_html",
+        _fake_html,
+    )
+
+    async with _google_native_session() as run_query:
+        first = await run_query("blue shoe", 3)
+        second = await run_query("red shoe", 3)
+        third = await run_query("green shoe", 3)
+
+    # One real-chrome runtime acquisition, ONE page acquired, then released exactly once.
+    assert actions.count("page-acquired:google.com") == 1
+    assert actions.count("page-released") == 1
+    # Three search navigations within the single page session, no extra page() calls.
+    search_navs = [action for action in actions if action.startswith("goto:") and "/search" in action]
+    assert len(search_navs) == 3
+    assert first[0].url == "https://shop.example.com/p/widget"
+    assert second and third
+
+
 def test_product_intelligence_llm_prompt_registered() -> None:
     task = get_prompt_task("product_intelligence_enrichment")
 
     assert task is not None
     assert task["system_file"] == "product_intelligence_enrichment.system.txt"
+
+
+def test_product_intelligence_brand_inference_prompt_registered() -> None:
+    task = get_prompt_task("product_intelligence_brand_inference")
+
+    assert task is not None
+    assert task["system_file"] == "product_intelligence_brand_inference.system.txt"
+    assert task["user_file"] == "product_intelligence_brand_inference.user.txt"
+
+
+@pytest.mark.asyncio
+async def test_resolve_source_snapshot_skips_llm_when_brand_present(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_run_prompt_task(*args, **kwargs):
+        calls.append(kwargs.get("task_type", ""))
+        raise AssertionError("LLM must not be called when brand already resolved")
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    snapshot = await _resolve_source_snapshot(
+        session=None,  # never used because LLM path is gated off
+        raw={"brand": "Levis", "title": "Men 511 Slim Fit Jeans", "url": "https://www.belk.com/p/1.html"},
+        llm_enabled=True,
+    )
+
+    assert snapshot["brand"] == "Levis"
+    assert snapshot["normalized_brand"] == "levi's"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_source_snapshot_skips_llm_when_disabled(monkeypatch) -> None:
+    async def fake_run_prompt_task(*args, **kwargs):
+        raise AssertionError("LLM must not be called when llm_enabled is False")
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    snapshot = await _resolve_source_snapshot(
+        session=None,
+        raw={"title": "Wundermost Bodysuit", "url": "https://shop.example.com/products/wundermost.html"},
+        llm_enabled=False,
+    )
+
+    assert snapshot["brand"] == ""
+    assert snapshot["normalized_brand"] == ""
+
+
+@pytest.mark.asyncio
+async def test_resolve_source_snapshot_uses_llm_brand_when_confident(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
+        captured["task_type"] = task_type
+        captured["domain"] = domain
+        captured["variables"] = variables
+        return LLMTaskResult(
+            payload={"brand": "Lululemon", "confidence": 0.92, "rationale": "DTC URL match"},
+            provider="groq",
+            model="llama",
+        )
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    snapshot = await _resolve_source_snapshot(
+        session=None,
+        raw={
+            "title": "Wundermost Bodysuit",
+            "url": "https://www.lululemon.com/products/p/wundermost-bodysuit.html",
+        },
+        llm_enabled=True,
+    )
+
+    assert snapshot["brand"] == "Lululemon"
+    assert snapshot["normalized_brand"] == "lululemon"
+    assert captured["task_type"] == "product_intelligence_brand_inference"
+    assert captured["domain"] == "lululemon.com"
+    assert captured["variables"]["product_title"] == "Wundermost Bodysuit"
+    assert captured["variables"]["source_domain"] == "lululemon.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_source_snapshot_drops_low_confidence_llm_brand(monkeypatch) -> None:
+    async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
+        return LLMTaskResult(
+            payload={"brand": "MaybeBrand", "confidence": 0.2, "rationale": "weak signal"},
+            provider="groq",
+            model="llama",
+        )
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    snapshot = await _resolve_source_snapshot(
+        session=None,
+        raw={"title": "Random Title", "url": "https://retailer.example.com/p/123.html"},
+        llm_enabled=True,
+    )
+
+    assert snapshot["brand"] == ""
+    assert snapshot["normalized_brand"] == ""
+
+
+@pytest.mark.asyncio
+async def test_resolve_source_snapshot_swallows_llm_error(monkeypatch) -> None:
+    async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
+        return LLMTaskResult(
+            payload=None,
+            error_message="provider unavailable",
+            error_category=LLMErrorCategory.PROVIDER_ERROR,
+        )
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    snapshot = await _resolve_source_snapshot(
+        session=None,
+        raw={"title": "Random Title", "url": "https://retailer.example.com/p/123.html"},
+        llm_enabled=True,
+    )
+
+    assert snapshot["brand"] == ""
+    assert snapshot["normalized_brand"] == ""
+
+
+@pytest.mark.asyncio
+async def test_resolve_source_snapshot_skips_llm_when_no_inputs(monkeypatch) -> None:
+    async def fake_run_prompt_task(*args, **kwargs):
+        raise AssertionError("LLM must not be called without title or url")
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    snapshot = await _resolve_source_snapshot(
+        session=None,
+        raw={},
+        llm_enabled=True,
+    )
+
+    assert snapshot["brand"] == ""
+
+
+def _build_candidate_intelligence(*, brand: str = "", title: str = "Wundermost Bodysuit") -> dict[str, object]:
+    return {
+        "canonical_record": {
+            "title": title,
+            "brand": brand,
+            "normalized_brand": normalize_brand(brand),
+            "url": "https://www.lululemon.com/products/p/wundermost-bodysuit/1.html",
+            "snippet": "",
+            "description": "",
+        },
+        "confidence_score": 0.30,
+        "confidence_label": "uncertain",
+        "score_reasons": {"brand_match": False},
+        "cleanup_source": "deterministic_google_native",
+        "llm_enrichment": {"requested": False, "applied": False},
+    }
+
+
+@pytest.mark.asyncio
+async def test_backfill_candidate_brand_skips_when_disabled(monkeypatch) -> None:
+    async def fake_run_prompt_task(*args, **kwargs):
+        raise AssertionError("LLM must not be called when llm_enabled is False")
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    intelligence = _build_candidate_intelligence()
+    result = await _backfill_candidate_brand(
+        session=None,
+        source={"title": "Lululemon Wundermost Bodysuit", "brand": "Lululemon"},
+        intelligence=intelligence,
+        source_type="brand_dtc",
+        llm_enabled=False,
+    )
+
+    assert result is intelligence
+
+
+@pytest.mark.asyncio
+async def test_backfill_candidate_brand_skips_when_brand_present(monkeypatch) -> None:
+    async def fake_run_prompt_task(*args, **kwargs):
+        raise AssertionError("LLM must not be called when candidate brand is set")
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    intelligence = _build_candidate_intelligence(brand="Lululemon")
+    result = await _backfill_candidate_brand(
+        session=None,
+        source={"title": "Lululemon Wundermost Bodysuit", "brand": "Lululemon"},
+        intelligence=intelligence,
+        source_type="brand_dtc",
+        llm_enabled=True,
+    )
+
+    assert result is intelligence
+
+
+@pytest.mark.asyncio
+async def test_backfill_candidate_brand_applies_llm_brand_and_rescores(monkeypatch) -> None:
+    async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
+        return LLMTaskResult(
+            payload={"brand": "Lululemon", "confidence": 0.91, "rationale": "DTC URL match"},
+            provider="groq",
+            model="llama",
+        )
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    intelligence = _build_candidate_intelligence()
+    source = {
+        "title": "Lululemon Wundermost Bodysuit",
+        "brand": "Lululemon",
+        "normalized_brand": "lululemon",
+    }
+    result = await _backfill_candidate_brand(
+        session=None,
+        source=source,
+        intelligence=intelligence,
+        source_type="brand_dtc",
+        llm_enabled=True,
+    )
+
+    canonical = result["canonical_record"]
+    assert canonical["brand"] == "Lululemon"
+    assert canonical["normalized_brand"] == "lululemon"
+    assert result["score_reasons"]["brand_match"] is True
+    assert result["confidence_score"] > intelligence["confidence_score"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_candidate_brand_drops_low_confidence(monkeypatch) -> None:
+    async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
+        return LLMTaskResult(
+            payload={"brand": "Maybe", "confidence": 0.1, "rationale": "weak"},
+            provider="groq",
+            model="llama",
+        )
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    intelligence = _build_candidate_intelligence()
+    result = await _backfill_candidate_brand(
+        session=None,
+        source={"title": "Wundermost Bodysuit", "brand": ""},
+        intelligence=intelligence,
+        source_type="unknown",
+        llm_enabled=True,
+    )
+
+    assert result is intelligence
+
+
+@pytest.mark.asyncio
+async def test_backfill_candidate_brand_handles_llm_error(monkeypatch) -> None:
+    async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
+        return LLMTaskResult(
+            payload=None,
+            error_message="provider down",
+            error_category=LLMErrorCategory.PROVIDER_ERROR,
+        )
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+
+    intelligence = _build_candidate_intelligence()
+    result = await _backfill_candidate_brand(
+        session=None,
+        source={"title": "Anything", "brand": ""},
+        intelligence=intelligence,
+        source_type="retailer",
+        llm_enabled=True,
+    )
+
+    assert result is intelligence
 
 
 @pytest.mark.asyncio
@@ -341,6 +832,7 @@ async def test_product_intelligence_discovery_prioritizes_brand_site_over_aggreg
         "app.services.product_intelligence.discovery._search_results",
         fake_search_results,
     )
+    monkeypatch.setattr(product_intelligence_settings, "discovery_pool_multiplier", 4)
 
     candidates = await discover_candidates(
         {
@@ -359,12 +851,16 @@ async def test_product_intelligence_discovery_prioritizes_brand_site_over_aggreg
 
 
 @pytest.mark.asyncio
-async def test_product_intelligence_discovery_skips_duckduckgo_ads(monkeypatch) -> None:
+async def test_product_intelligence_discovery_skips_invalid_result_urls(monkeypatch) -> None:
     async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
         return [
             SearchResult(
-                url="https://duckduckgo.com/y.js?u3=https%3A%2F%2Fad.example%2Fp",
-                payload={"provider": provider, "title": "Ad"},
+                url="javascript:void(0)",
+                payload={"provider": provider, "title": "Bad scheme"},
+            ),
+            SearchResult(
+                url="",
+                payload={"provider": provider, "title": "Empty"},
             ),
             SearchResult(
                 url="https://www.levi.com/p/04511.html",
@@ -380,7 +876,7 @@ async def test_product_intelligence_discovery_skips_duckduckgo_ads(monkeypatch) 
     candidates = await discover_candidates(
         {"brand": "Levis", "title": "Men 511 Slim Fit Jeans", "sku": "04511"},
         source_domain_value="belk.com",
-        provider="duckduckgo",
+        provider="serpapi",
         allowed_domains=[],
         excluded_domains=[],
         max_candidates=1,

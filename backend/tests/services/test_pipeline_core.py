@@ -214,7 +214,8 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
                 "browser_attempted": True,
                 "browser_engine": forced_engine,
                 "browser_outcome": "usable_content",
-                "challenge_evidence": ["active_provider:akamai"] if challenge else [],
+                "challenge_evidence": ["strong:captcha", "provider:akamai"] if challenge else [],
+                "challenge_provider_hits": ["akamai"] if challenge else [],
             },
         )
 
@@ -258,6 +259,73 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
 
 
 @pytest.mark.asyncio
+async def test_usable_detail_with_active_provider_evidence_does_not_retry_real_chrome(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://www.nike.com/t/widget",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    attempted_engines: list[str] = []
+
+    async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
+        forced_engine = str(
+            request.acquisition_profile.get("forced_browser_engine") or "chromium"
+        )
+        attempted_engines.append(forced_engine)
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>Nike Widget</body></html>",
+            method="browser",
+            status_code=200,
+            blocked=False,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_engine": forced_engine,
+                "browser_outcome": "usable_content",
+                "challenge_evidence": ["active_provider:akamai"],
+                "challenge_provider_hits": ["akamai"],
+            },
+        )
+
+    async def _no_adapter(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *_args, **_kwargs: [
+            {
+                "title": "Nike Widget",
+                "url": "https://www.nike.com/t/widget",
+                "price": "$50",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.real_chrome_browser_available",
+        lambda: True,
+    )
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+
+    result = await process_single_url(db_session, run, run.url)
+
+    assert attempted_engines == ["chromium"]
+    assert result.verdict == "success"
+    assert result.url_metrics["blocked"] is False
+    assert result.url_metrics.get("failure_reason") is None
+
+
+@pytest.mark.asyncio
 async def test_chromium_challenge_shell_updates_host_memory(
     db_session: AsyncSession,
     test_user,
@@ -287,7 +355,8 @@ async def test_chromium_challenge_shell_updates_host_memory(
                 "browser_attempted": True,
                 "browser_engine": "chromium",
                 "browser_outcome": "usable_content",
-                "challenge_evidence": ["active_provider:akamai"],
+                "challenge_evidence": ["strong:captcha", "provider:akamai"],
+                "challenge_provider_hits": ["akamai"],
             },
         )
 

@@ -28,10 +28,14 @@ class Settings(BaseSettings):
     backend_port: int = 8000
     frontend_url: str = "http://127.0.0.1:3000"
     frontend_origins: str = ""
-    jwt_secret_key: str = "change-me"
+    jwt_secret_key: str = Field(
+        validation_alias=AliasChoices("JWT_SECRET_KEY", "jwt_secret_key"),
+    )
     jwt_algorithm: str = "HS256"
     jwt_expire_hours: int = 24
-    encryption_key: str = "change-me-32-bytes-minimum-change-me"
+    encryption_key: str = Field(
+        validation_alias=AliasChoices("ENCRYPTION_KEY", "encryption_key"),
+    )
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/crawl_db"
     redis_url: str = "redis://localhost:6379/0"
     redis_state_enabled: bool = False
@@ -60,7 +64,7 @@ class Settings(BaseSettings):
     system_max_concurrent_urls: int = 8
     llm_cache_ttl_seconds: int = 86400
     default_admin_email: str = Field(
-        default="admin@example.invalid",
+        default="",
         validation_alias=AliasChoices("DEFAULT_ADMIN_EMAIL", "default_admin_email"),
     )
     default_admin_password: str | None = Field(
@@ -102,7 +106,12 @@ settings = Settings()
 # ---------------------------------------------------------------------------
 # Security guard: reject default secrets in non-dev environments
 # ---------------------------------------------------------------------------
-_INSECURE_DEFAULTS = {"change-me", "change-me-32-bytes-minimum-change-me"}
+_INSECURE_DEFAULTS = {
+    "change-me",
+    "change-me-32-bytes-minimum-change-me",
+    "replace-with-64-byte-random-secret",
+    "replace-with-32-byte-minimum-secret",
+}
 _INSECURE_ADMIN_PASSWORD_DEFAULTS = {"YourSecurePassword123!"}
 _INSECURE_ADMIN_EMAIL_DEFAULTS = {"admin@admin.com", "admin@example.invalid"}
 

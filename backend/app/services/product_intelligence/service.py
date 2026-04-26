@@ -22,6 +22,7 @@ from app.services.config.product_intelligence import (
     PRIVATE_LABEL_EXCLUDE,
     PRIVATE_LABEL_FLAG,
     PRIVATE_LABEL_INCLUDE,
+    PRODUCT_INTELLIGENCE_BRAND_INFERENCE_LLM_TASK,
     PRODUCT_INTELLIGENCE_LLM_TASK,
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_CRAWL_COMPLETE,
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_CRAWL_QUEUED,
@@ -46,10 +47,11 @@ from app.services.domain_utils import normalize_domain
 from app.services.llm_runtime import run_prompt_task
 from app.services.product_intelligence.discovery import discover_candidates
 from app.services.product_intelligence.matching import (
-    build_serpapi_intelligence,
+    build_search_result_intelligence,
     extract_product_snapshot,
-    extract_serpapi_snapshot,
+    extract_search_result_snapshot,
     is_private_label,
+    normalize_brand,
     score_candidate,
     source_domain,
 )
@@ -85,8 +87,9 @@ async def create_product_intelligence_job(
     session.add(job)
     await session.flush()
 
+    llm_enabled = bool(options.get("llm_enrichment_enabled"))
     for row in source_rows[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]:
-        snapshot = extract_product_snapshot(row["data"])
+        snapshot = await _resolve_source_snapshot(session, raw=row["data"], llm_enabled=llm_enabled)
         source_url = str(snapshot.get("url") or row.get("source_url") or "")
         private_label = is_private_label(snapshot.get("brand"))
         session.add(
@@ -257,8 +260,11 @@ async def discover_product_intelligence_candidates(
         default=product_intelligence_settings.max_source_products,
     )
     processed_source_count = 0
+    resolved_snapshots: dict[int, dict[str, object]] = {}
+    llm_enabled = bool(options.get("llm_enrichment_enabled"))
     for index, row in enumerate(source_rows[:max_source_products]):
-        snapshot = extract_product_snapshot(row["data"])
+        snapshot = await _resolve_source_snapshot(session, raw=row["data"], llm_enabled=llm_enabled)
+        resolved_snapshots[index] = snapshot
         if is_private_label(snapshot.get("brand")) and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
             continue
         processed_source_count += 1
@@ -276,14 +282,21 @@ async def discover_product_intelligence_candidates(
             ),
         )
         for candidate in discovered:
-            intelligence = build_serpapi_intelligence(
+            intelligence = build_search_result_intelligence(
                 source=snapshot,
                 candidate_payload=dict(candidate.payload or {}),
                 candidate_url=candidate.url,
                 candidate_domain=candidate.domain,
                 source_type=candidate.source_type,
             )
-            intelligence = await _enrich_serpapi_intelligence(
+            intelligence = await _backfill_candidate_brand(
+                session,
+                source=snapshot,
+                intelligence=intelligence,
+                source_type=candidate.source_type,
+                llm_enabled=llm_enabled,
+            )
+            intelligence = await _enrich_search_result_intelligence(
                 session,
                 options=options,
                 source_snapshot=snapshot,
@@ -320,12 +333,14 @@ async def discover_product_intelligence_candidates(
         processed_source_count=processed_source_count,
         options=options,
         discovered_payloads=discovered_payloads,
+        resolved_snapshots=resolved_snapshots,
     )
     return {
         "job_id": job.id,
         "options": options,
         "source_count": min(processed_source_count, max_source_products),
         "candidate_count": len(discovered_payloads),
+        "search_provider": str(options.get("search_provider") or ""),
         "candidates": discovered_payloads,
     }
 
@@ -339,6 +354,7 @@ async def _persist_discovery_job(
     processed_source_count: int,
     options: dict[str, object],
     discovered_payloads: list[dict[str, object]],
+    resolved_snapshots: dict[int, dict[str, object]] | None = None,
 ) -> ProductIntelligenceJob:
     job = ProductIntelligenceJob(
         user_id=user.id,
@@ -356,6 +372,7 @@ async def _persist_discovery_job(
                 ),
             ),
             "candidate_count": len(discovered_payloads),
+            "search_provider": str(options.get("search_provider") or ""),
             "match_count": len(discovered_payloads),
             "updated_at": datetime.now(UTC).isoformat(),
         },
@@ -365,8 +382,12 @@ async def _persist_discovery_job(
     await session.flush()
 
     source_product_ids_by_index: dict[int, int] = {}
+    snapshots_lookup = resolved_snapshots or {}
+    llm_enabled = bool(options.get("llm_enrichment_enabled"))
     for index, row in enumerate(source_rows[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]):
-        snapshot = extract_product_snapshot(row["data"])
+        snapshot = snapshots_lookup.get(index) or await _resolve_source_snapshot(
+            session, raw=row["data"], llm_enabled=llm_enabled
+        )
         source_url = str(snapshot.get("url") or row.get("source_url") or "")
         source = ProductIntelligenceSourceProduct(
             job_id=job.id,
@@ -639,6 +660,89 @@ async def _score_candidate_if_ready(
     return True
 
 
+async def _resolve_source_snapshot(
+    session: AsyncSession,
+    *,
+    raw: dict[str, object],
+    llm_enabled: bool,
+) -> dict[str, object]:
+    snapshot = extract_product_snapshot(raw)
+    if snapshot.get("brand") or not llm_enabled:
+        return snapshot
+    brand = await _brand_inference_llm(
+        session,
+        title=str(snapshot.get("title") or ""),
+        url=str(snapshot.get("url") or ""),
+        snippet=str(snapshot.get("description") or ""),
+    )
+    if not brand:
+        return snapshot
+    return {**snapshot, "brand": brand, "normalized_brand": normalize_brand(brand)}
+
+
+async def _backfill_candidate_brand(
+    session: AsyncSession,
+    *,
+    source: dict[str, object],
+    intelligence: dict[str, object],
+    source_type: str,
+    llm_enabled: bool,
+) -> dict[str, object]:
+    if not llm_enabled:
+        return intelligence
+    canonical = intelligence.get("canonical_record")
+    if not isinstance(canonical, dict) or str(canonical.get("brand") or "").strip():
+        return intelligence
+    brand = await _brand_inference_llm(
+        session,
+        title=str(canonical.get("title") or ""),
+        url=str(canonical.get("url") or ""),
+        snippet=str(canonical.get("snippet") or canonical.get("description") or ""),
+    )
+    if not brand:
+        return intelligence
+    updated = {**canonical, "brand": brand, "normalized_brand": normalize_brand(brand)}
+    rescored = score_candidate(source=source, candidate=updated, source_type=source_type)
+    return {
+        **intelligence,
+        "canonical_record": updated,
+        "confidence_score": rescored["score"],
+        "confidence_label": rescored["label"],
+        "score_reasons": rescored["reasons"],
+    }
+
+
+async def _brand_inference_llm(
+    session: AsyncSession, *, title: str, url: str, snippet: str
+) -> str:
+    if not title and not url:
+        return ""
+    domain = source_domain(url)
+    result = await run_prompt_task(
+        session,
+        task_type=PRODUCT_INTELLIGENCE_BRAND_INFERENCE_LLM_TASK,
+        run_id=None,
+        domain=domain,
+        variables={
+            "product_title": title,
+            "product_url": url,
+            "source_domain": domain,
+            "product_snippet": snippet,
+        },
+    )
+    if result.error_message or not isinstance(result.payload, dict):
+        return ""
+    brand = str(result.payload.get("brand") or "").strip()
+    if not brand:
+        return ""
+    try:
+        confidence = float(result.payload.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    threshold = product_intelligence_settings.brand_inference_confidence_threshold
+    return brand if confidence >= threshold else ""
+
+
 async def _build_llm_enrichment(
     session: AsyncSession,
     *,
@@ -682,7 +786,7 @@ async def _build_llm_enrichment(
     }
 
 
-async def _enrich_serpapi_intelligence(
+async def _enrich_search_result_intelligence(
     session: AsyncSession,
     *,
     options: dict[str, object],
@@ -696,7 +800,7 @@ async def _enrich_serpapi_intelligence(
     requested = bool(options.get("llm_enrichment_enabled"))
     if not requested:
         return intelligence
-    canonical = extract_serpapi_snapshot(candidate_payload, url=candidate_url, domain=candidate_domain)
+    canonical = extract_search_result_snapshot(candidate_payload, url=candidate_url, domain=candidate_domain)
     deterministic = {
         "score": intelligence.get("confidence_score"),
         "label": intelligence.get("confidence_label"),
@@ -712,6 +816,7 @@ async def _enrich_serpapi_intelligence(
             "source_product_json": source_snapshot,
             "candidate_product_json": canonical,
             "serpapi_result_json": candidate_payload,
+            "search_result_json": candidate_payload,
             "deterministic_match_json": deterministic,
         },
     )
@@ -739,7 +844,7 @@ async def _enrich_serpapi_intelligence(
             candidate=cleaned,
             source_type=source_type,
         )["label"],
-        "cleanup_source": "llm_serpapi",
+        "cleanup_source": f"llm_{_candidate_payload_provider(candidate_payload)}",
         "llm_enrichment": {
             "requested": True,
             "applied": bool(payload),
@@ -764,6 +869,7 @@ async def _update_job_summary(session: AsyncSession, job: ProductIntelligenceJob
         **dict(job.summary or {}),
         "source_count": int(source_count or 0),
         "candidate_count": int(candidate_count or 0),
+        "search_provider": str((job.options or {}).get("search_provider") or ""),
         "match_count": int(match_count or 0),
         "updated_at": datetime.now(UTC).isoformat(),
     }
@@ -855,6 +961,11 @@ def _normalized_options(value: object) -> dict[str, object]:
         "excluded_domains": _string_list(raw.get("excluded_domains")),
         "llm_enrichment_enabled": bool(raw.get("llm_enrichment_enabled")),
     }
+
+
+def _candidate_payload_provider(payload: dict[str, object]) -> str:
+    provider = str(payload.get("provider") or "").strip().lower()
+    return provider or "search"
 
 
 def _private_label_mode(value: object) -> str:

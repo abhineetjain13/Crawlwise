@@ -31,8 +31,8 @@ PRIVATE_LABEL_INCLUDE = "include"
 PRIVATE_LABEL_FLAG = "flag"
 PRIVATE_LABEL_EXCLUDE = "exclude"
 
-SEARCH_PROVIDER_DUCKDUCKGO = "duckduckgo"
 SEARCH_PROVIDER_SERPAPI = "serpapi"
+SEARCH_PROVIDER_GOOGLE_NATIVE = "google_native"
 
 DEFAULT_SCORE_LABEL_HIGH = "high"
 DEFAULT_SCORE_LABEL_MEDIUM = "medium"
@@ -66,22 +66,6 @@ SEARCH_STOP_WORDS = {
 }
 SEARCH_EXCLUDED_DOMAIN_PREFIX = "-site:"
 SEARCH_SITE_PREFIX = "site:"
-DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/"
-DUCKDUCKGO_BASE_URL = "https://duckduckgo.com"
-DUCKDUCKGO_QUERY_PARAM = "q"
-DUCKDUCKGO_RESULT_LINK_SELECTORS = (
-    "a.result__a",
-    "a.result__url",
-)
-DUCKDUCKGO_REDIRECT_QUERY_KEY = "uddg"
-DUCKDUCKGO_REQUEST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-}
 SERPAPI_SEARCH_URL = "https://serpapi.com/search.json"
 SERPAPI_ENGINE = "google"
 SERPAPI_QUERY_PARAM = "q"
@@ -97,7 +81,25 @@ SERPAPI_SOURCE_FIELD = "source"
 SERPAPI_DISPLAYED_LINK_FIELD = "displayed_link"
 SERPAPI_PRICE_FIELDS = ("extracted_price", "price")
 SERPAPI_THUMBNAIL_FIELDS = ("thumbnail", "image", "favicon")
+GOOGLE_NATIVE_HOME_URL = "https://www.google.com/"
+GOOGLE_NATIVE_SEARCH_URL = "https://www.google.com/search"
+GOOGLE_NATIVE_QUERY_PARAM = "q"
+GOOGLE_NATIVE_RESULT_COUNT_PARAM = "num"
+GOOGLE_NATIVE_SEARCH_INPUT_SELECTOR = "textarea[name='q'], input[name='q']"
+GOOGLE_NATIVE_RESULT_LINK_SELECTOR = "a[href]"
+GOOGLE_NATIVE_TITLE_SELECTOR = "h3"
+GOOGLE_NATIVE_THUMBNAIL_ANCESTOR_DEPTH = 6
+GOOGLE_NATIVE_THUMBNAIL_MIN_SRC_LENGTH = 20
+GOOGLE_NATIVE_REDIRECT_PATH = "/url"
+GOOGLE_NATIVE_REDIRECT_TARGET_PARAM = "q"
+GOOGLE_NATIVE_IGNORED_DOMAINS = ("google.com", "webcache.googleusercontent.com")
+GOOGLE_NATIVE_PROVIDER_PAYLOAD = "google_native"
+GOOGLE_NATIVE_BROWSER_ENGINE = "real_chrome"
+GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS = 20000
+GOOGLE_NATIVE_RESULT_WAIT_MS = 2500
+GOOGLE_NATIVE_SUBMIT_KEY = "Enter"
 PRODUCT_INTELLIGENCE_LLM_TASK = "product_intelligence_enrichment"
+PRODUCT_INTELLIGENCE_BRAND_INFERENCE_LLM_TASK = "product_intelligence_brand_inference"
 
 SEARCH_PHRASE_BUY = "buy"
 
@@ -128,14 +130,19 @@ BRAND_DOMAIN_MAP = {
     "calvin klein": "calvinklein.com",
     "coach": "coach.com",
     "columbia": "columbia.com",
+    "haggar": "haggar.com",
     "izod": "izod.com",
     "kenneth cole": "kennethcole.com",
     "lee": "lee.com",
     "levi's": "levi.com",
     "michael kors": "michaelkors.com",
+    "nautica": "nautica.com",
     "nike": "nike.com",
+    "puma": "puma.com",
     "rare editions": "therareeditions.com",
     "ralph lauren": "ralphlauren.com",
+    "reebok": "reebok.com",
+    "skechers": "skechers.com",
     "tommy bahama": "tommybahama.com",
     "tommy hilfiger": "tommy.com",
     "under armour": "underarmour.com",
@@ -166,7 +173,24 @@ RETAILER_DOMAINS = {
 
 MARKETPLACE_DOMAINS = {
     "amazon.com",
+    "amazon.ca",
+    "amazon.co.uk",
+    "amazon.com.au",
+    "amazon.com.mx",
+    "amazon.de",
+    "amazon.fr",
+    "amazon.in",
+    "amazon.it",
+    "amazon.jp",
     "ebay.com",
+    "ebay.ca",
+    "ebay.co.uk",
+    "ebay.com.au",
+    "ebay.de",
+    "ebay.fr",
+    "ebay.in",
+    "ebay.it",
+    "etsy.com",
 }
 
 AGGREGATOR_DOMAINS = {
@@ -208,6 +232,11 @@ PRODUCT_INTELLIGENCE_PROMPT_REGISTRY = {
         "system_file": "product_intelligence_enrichment.system.txt",
         "user_file": "product_intelligence_enrichment.user.txt",
     },
+    PRODUCT_INTELLIGENCE_BRAND_INFERENCE_LLM_TASK: {
+        "response_type": "object",
+        "system_file": "product_intelligence_brand_inference.system.txt",
+        "user_file": "product_intelligence_brand_inference.user.txt",
+    },
 }
 
 
@@ -225,39 +254,37 @@ class ProductIntelligenceSettings(BaseSettings):
             "serp_api_key",
         ),
     )
-    max_source_products: int = 50
-    max_candidates_per_product: int = 5
-    discovery_pool_multiplier: int = 4
+    max_source_products: int = 10
+    max_candidates_per_product: int = 2
+    discovery_pool_multiplier: int = 1
     max_urls_per_result_domain: int = 1
     search_timeout_seconds: float = 20.0
     search_delay_ms: int = 800
+    google_native_max_results: int = 10
     candidate_poll_seconds: float = 30.0
     candidate_poll_interval_seconds: float = 2.0
     confidence_threshold: float = 0.4
     title_token_limit: int = 6
     price_band_ratio: float = 0.25
+    brand_inference_confidence_threshold: float = 0.6
 
     @model_validator(mode="after")
     def _validate(self) -> "ProductIntelligenceSettings":
         self.default_search_provider = str(self.default_search_provider or "").strip().lower()
         if self.default_search_provider not in {
-            SEARCH_PROVIDER_DUCKDUCKGO,
             SEARCH_PROVIDER_SERPAPI,
+            SEARCH_PROVIDER_GOOGLE_NATIVE,
         }:
             raise ValueError(
-                "default_search_provider must be 'duckduckgo' or 'serpapi'"
+                "default_search_provider must be 'serpapi' or 'google_native'"
             )
-        if (
-            self.default_search_provider == SEARCH_PROVIDER_SERPAPI
-            and not str(self.serpapi_key or "").strip()
-        ):
-            self.default_search_provider = SEARCH_PROVIDER_DUCKDUCKGO
         self.max_source_products = max(1, int(self.max_source_products))
         self.max_candidates_per_product = max(1, int(self.max_candidates_per_product))
         self.discovery_pool_multiplier = max(1, int(self.discovery_pool_multiplier))
         self.max_urls_per_result_domain = max(1, int(self.max_urls_per_result_domain))
         self.search_timeout_seconds = max(1.0, float(self.search_timeout_seconds))
         self.search_delay_ms = max(0, int(self.search_delay_ms))
+        self.google_native_max_results = max(1, int(self.google_native_max_results))
         self.candidate_poll_seconds = max(0.0, float(self.candidate_poll_seconds))
         self.candidate_poll_interval_seconds = max(
             0.5,
@@ -266,6 +293,9 @@ class ProductIntelligenceSettings(BaseSettings):
         self.confidence_threshold = min(max(float(self.confidence_threshold), 0.0), 1.0)
         self.title_token_limit = max(1, int(self.title_token_limit))
         self.price_band_ratio = min(max(float(self.price_band_ratio), 0.0), 1.0)
+        self.brand_inference_confidence_threshold = min(
+            max(float(self.brand_inference_confidence_threshold), 0.0), 1.0
+        )
         return self
 
 

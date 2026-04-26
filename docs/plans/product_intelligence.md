@@ -49,26 +49,11 @@ LLM is allowed when explicit and useful. It must stay gated by run settings/conf
   - aggregator vs brand
   - aggregator vs aggregator
   - source recrawl vs previous source crawl
-- Candidate discovery becomes provider-backed and domain-aware:
-  - SerpAPI if configured
-  - DuckDuckGo fallback for local/demo
+- Candidate discovery is provider-backed and domain-aware:
+  - SerpAPI when configured (sole provider)
   - no Google Custom Search dependency
+  - native-Chrome SERP scraping was evaluated and rejected: Google walls direct SERP fetches even through the hardened browser stack (probe redirected every query to `/sorry/index` with `recaptcha` markers); making it work requires residential proxies plus warmup plus behavioral entropy plus a CAPTCHA path, which is out of scope for this slice
 - Add user controls for source-type priority, domain allow/deny lists, stale recrawl threshold, and confidence bands.
-
-## Phase 3: Image Matching
-
-Decision open, but document path now.
-
-- pHash option:
-  - use Pillow + ImageHash
-  - good for same or near-same product images
-  - cheap and local
-- CLIP/OpenCLIP option:
-  - better for alternate angles and lifestyle images
-  - heavier dependency and model/runtime cost
-  - config-gated only
-- Store image signal as one part of score breakdown, not sole match proof.
-- Use `pgvector` only if CLIP embeddings become large enough to need vector search.
 
 ## Backend Changes
 
@@ -94,6 +79,8 @@ Allowed Phase 1 uses:
 - infer likely model/style names from title text
 - explain low-confidence mismatch reason
 - enrich score reasons when deterministic signals conflict
+- backfill source-product brand when deterministic inference returns empty (via `product_intelligence_brand_inference` task; gated by `llm_enrichment_enabled`; result accepted only when payload `confidence >= brand_inference_confidence_threshold`)
+- backfill candidate-product brand the same way; when applied, the candidate is re-scored deterministically so `brand_match` weights take effect before any heavy enrichment LLM call
 
 Not allowed:
 - replacing deterministic extraction
@@ -102,6 +89,8 @@ Not allowed:
 
 LLM output must be stored as diagnostic/enrichment metadata and degrade cleanly.
 Product Intelligence enrichment prompt output is a strict object. Missing fields use deterministic defaults, score/confidence stay in the 0-1 range, and invalid payloads fail validation instead of being applied.
+Brand-inference prompt output is a strict object `{brand: string, confidence: 0..1, rationale: string}`; an empty brand or sub-threshold confidence leaves the deterministic empty result intact, and any LLM error category is swallowed without raising. The same task and threshold apply to source and candidate paths.
+Provider-agnostic naming: `extract_search_result_snapshot` and `build_search_result_intelligence` serve every search provider, and `cleanup_source` carries the provider tag (`deterministic_<provider>` or `llm_<provider>`).
 Candidate crawl polling must end in an explicit candidate status. If the crawl result is not scoreable before the poll deadline, the candidate is marked `crawl_timeout`.
 
 ## Frontend Changes
@@ -130,6 +119,7 @@ Candidate crawl polling must end in an explicit candidate status. If the crawl r
 - Candidate crawl creates normal ecommerce detail crawl jobs.
 - Match scorer returns score plus reason breakdown.
 - LLM toggle is respected and never runs unless explicitly enabled.
+- Brand-inference LLM fallback runs only when deterministic brand is empty AND `llm_enrichment_enabled` is true; sub-threshold or errored payloads do not mutate the snapshot. Source-side and candidate-side both invoke the same task; candidate-side re-scores after a successful backfill.
 - Price comparison renders source vs candidate prices.
 - No config constants added outside `app/services/config/*`.
 
@@ -142,4 +132,3 @@ Verify:
 - Phase 1 starts with Belk as seeded config and demo path, but code remains generic.
 - External search APIs discover URLs only. Matching decision is internal and auditable.
 - User examples are illustrative, not fixed acceptance numbers.
-- Image matching is Phase 3, not Phase 1.

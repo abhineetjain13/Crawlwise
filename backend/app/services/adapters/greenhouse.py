@@ -11,7 +11,7 @@ from decimal import Decimal
 from html import unescape
 from urllib.parse import parse_qs, urljoin, urlparse
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import AdapterResult, BaseAdapter, adapter_host_matches
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.domain_utils import normalize_domain
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
@@ -64,17 +64,16 @@ class GreenhouseAdapter(BaseAdapter):
         host = normalize_domain(url)
 
         # boards.greenhouse.io/embed/job_board?for=<company>
-        if (
-            _host_matches(host, normalize_domain(f"https://{self.greenhouse_board_host}"))
-            and parsed.path.startswith("/embed/job_board")
-        ):
+        if adapter_host_matches(
+            host, normalize_domain(f"https://{self.greenhouse_board_host}")
+        ) and parsed.path.startswith("/embed/job_board"):
             company = parse_qs(parsed.query).get("for", [""])[0].strip()
             if company:
                 return company
 
         # boards.greenhouse.io/<company>
         if any(
-            _host_matches(host, candidate)
+            adapter_host_matches(host, candidate)
             for candidate in (
                 normalize_domain(f"https://{self.greenhouse_board_host}"),
                 normalize_domain(f"https://{self.greenhouse_job_board_host}"),
@@ -85,7 +84,7 @@ class GreenhouseAdapter(BaseAdapter):
                 return parts[0]
 
         # boards-api.greenhouse.io/v1/boards/<company>/jobs
-        if _host_matches(host, _GREENHOUSE_API_HOST):
+        if adapter_host_matches(host, _GREENHOUSE_API_HOST):
             match = re.search(r"/boards/([^/]+)/", parsed.path)
             if match:
                 return match.group(1)
@@ -143,7 +142,8 @@ class GreenhouseAdapter(BaseAdapter):
                 "location": location,
                 "category": dept_name,
                 "company": company_slug.replace("-", " ").title(),
-                "posted_date": job.get("first_published", "") or job.get("updated_at", ""),
+                "posted_date": job.get("first_published", "")
+                or job.get("updated_at", ""),
             }
             records.append(record)
         return records
@@ -191,9 +191,7 @@ class GreenhouseAdapter(BaseAdapter):
             href = raw_href if isinstance(raw_href, str) else ""
             if href and not href.startswith("http"):
                 href = urljoin(url, href)
-            title = clean_text(
-                title_el.get_text(" ", strip=True) if title_el else ""
-            )
+            title = clean_text(title_el.get_text(" ", strip=True) if title_el else "")
             if not title and anchor:
                 title = clean_text(anchor.get_text(" ", strip=True))
             if not title:
@@ -304,11 +302,3 @@ class GreenhouseAdapter(BaseAdapter):
         match = re.search(r"/jobs/(\d+)", urlparse(str(url or "")).path)
         query_id = parse_qs(urlparse(str(url or "")).query).get("gh_jid", [""])[0]
         return clean_text(match.group(1) if match else query_id)
-
-
-def _host_matches(host: str, expected: str) -> bool:
-    normalized_host = str(host or "").strip().lower()
-    normalized_expected = str(expected or "").strip().lower()
-    return normalized_host == normalized_expected or normalized_host.endswith(
-        f".{normalized_expected}"
-    )

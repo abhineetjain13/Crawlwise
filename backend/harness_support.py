@@ -1005,9 +1005,9 @@ async def _ensure_harness_user_id(session) -> int:
     harness_password = str(os.getenv("HARNESS_PASSWORD") or "").strip()
     harness_role = str(os.getenv("HARNESS_ROLE") or "harness").strip().lower() or "harness"
     if not harness_email:
-        harness_email = "harness@local.invalid"
+        raise RuntimeError("HARNESS_EMAIL is required for harness user bootstrap.")
     if not harness_password:
-        harness_password = "HarnessLocalOnly123!"
+        raise RuntimeError("HARNESS_PASSWORD is required for harness user bootstrap.")
     user = (
         await session.execute(select(User).where(User.email == harness_email).limit(1))
     ).scalar_one_or_none()

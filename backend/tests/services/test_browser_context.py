@@ -2311,7 +2311,11 @@ async def test_shared_browser_runtime_bounds_hung_context_cleanup(
 
     with caplog.at_level("WARNING", logger=acquisition_browser_runtime.logger.name):
         async with asyncio.timeout(0.5):
-            async with runtime.page(run_id=77, domain="example.com"):
+            async with runtime.page(
+                run_id=77,
+                domain="example.com",
+                allow_storage_state=False,
+            ):
                 pass
 
     assert any(

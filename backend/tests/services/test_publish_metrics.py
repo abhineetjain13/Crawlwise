@@ -119,6 +119,16 @@ def test_diagnostics_indicate_block_preserves_ready_usable_content_despite_provi
     assert diagnostics_indicate_block(diagnostics) is False
 
 
+def test_diagnostics_indicate_block_preserves_usable_content_despite_active_provider_evidence() -> None:
+    diagnostics = {
+        "browser_outcome": "usable_content",
+        "challenge_evidence": ["active_provider:akamai"],
+        "challenge_provider_hits": ["akamai"],
+    }
+
+    assert diagnostics_indicate_block(diagnostics) is False
+
+
 def test_diagnostics_indicate_block_preserves_ready_usable_content_despite_challenge_iframe() -> None:
     diagnostics = {
         "browser_outcome": "usable_content",

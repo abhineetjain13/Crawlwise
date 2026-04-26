@@ -8,7 +8,6 @@ from sqlalchemy import select
 
 import harness_support
 import run_test_sites_acceptance
-from app.schemas.user import UserResponse
 from app.services.acquisition_plan import AcquisitionPlan
 from harness_support import (
     build_explicit_sites,
@@ -778,7 +777,7 @@ async def test_ensure_harness_user_id_reuses_user_by_configured_email(
 
 
 @pytest.mark.asyncio
-async def test_ensure_harness_user_id_bootstraps_local_defaults_without_env(
+async def test_ensure_harness_user_id_requires_email_without_env(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -787,40 +786,28 @@ async def test_ensure_harness_user_id_bootstraps_local_defaults_without_env(
     monkeypatch.delenv("HARNESS_PASSWORD", raising=False)
     monkeypatch.delenv("HARNESS_ROLE", raising=False)
 
-    user_id = await harness_support._ensure_harness_user_id(db_session)
-    user = (
-        await db_session.execute(
-            select(harness_support.User).where(
-                harness_support.User.email == "harness@local.invalid"
-            )
-        )
-    ).scalar_one()
-
-    assert user_id == user.id
-    assert user.role == "harness"
-    assert bool(user.hashed_password)
+    with pytest.raises(
+        RuntimeError,
+        match="HARNESS_EMAIL is required for harness user bootstrap.",
+    ):
+        await harness_support._ensure_harness_user_id(db_session)
 
 
 @pytest.mark.asyncio
-async def test_harness_default_user_serializes_through_user_response(
+async def test_ensure_harness_user_id_requires_password_without_env(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "development")
-    monkeypatch.delenv("HARNESS_EMAIL", raising=False)
+    monkeypatch.setenv("HARNESS_EMAIL", "harness@example.invalid")
     monkeypatch.delenv("HARNESS_PASSWORD", raising=False)
     monkeypatch.delenv("HARNESS_ROLE", raising=False)
 
-    user_id = await harness_support._ensure_harness_user_id(db_session)
-    user = (
-        await db_session.execute(
-            select(harness_support.User).where(harness_support.User.id == user_id)
-        )
-    ).scalar_one()
-
-    response = UserResponse.model_validate(user, from_attributes=True)
-
-    assert response.email == "harness@local.invalid"
+    with pytest.raises(
+        RuntimeError,
+        match="HARNESS_PASSWORD is required for harness user bootstrap.",
+    ):
+        await harness_support._ensure_harness_user_id(db_session)
 
 
 @pytest.mark.asyncio

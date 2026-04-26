@@ -43,11 +43,7 @@ from app.services.acquisition.http_client import (
 )
 from app.services.acquisition.pacing import (
     apply_protected_host_backoff,
-    mark_browser_first_host,
-    note_browser_block_for_host,
-    note_usable_fetch_for_host,
     reset_pacing_state,
-    should_prefer_browser_for_host,
     wait_for_host_slot,
 )
 from app.services.acquisition.runtime import (
@@ -358,9 +354,7 @@ async def fetch_page(
         forced_browser_engine=str(forced_browser_engine or "").strip().lower() or None,
     )
     learned_host_policy = await load_host_protection_policy(url)
-    host_preference_enabled = bool(
-        await should_prefer_browser_for_host(url) or learned_host_policy.prefer_browser
-    )
+    host_preference_enabled = bool(learned_host_policy.prefer_browser)
     browser_first = _browser_first_decision(
         context=context,
         prefer_browser=prefer_browser,
@@ -823,9 +817,6 @@ async def _handle_http_result(
     vendor = _vendor_confirmed_block(result)
     if vendor or bool(result.blocked):
         await apply_protected_host_backoff(result.final_url or result.url or context.url)
-    if vendor:
-        await note_browser_block_for_host(result.final_url or result.url or context.url)
-        await mark_browser_first_host(result.final_url or result.url or context.url)
     result_runtime_policy = resolve_platform_runtime_policy(
         result.final_url or result.url,
         result.html,
@@ -1098,7 +1089,6 @@ async def _update_host_result_memory(
     proxy_used = bool(browser_diagnostics.get("proxy_scheme"))
     if bool(result.blocked):
         await apply_protected_host_backoff(target_url)
-        await note_browser_block_for_host(target_url)
         await note_host_hard_block(
             target_url,
             method=method_label or result.method,
@@ -1107,7 +1097,6 @@ async def _update_host_result_memory(
             proxy_used=proxy_used,
         )
         return
-    await note_usable_fetch_for_host(target_url)
     await note_host_usable_fetch(
         target_url,
         method=method_label or result.method,

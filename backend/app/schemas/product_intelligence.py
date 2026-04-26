@@ -10,13 +10,13 @@ class ProductIntelligenceOptions(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     max_source_products: int = Field(
-        default=50,
+        default=10,
         ge=1,
         le=500,
         validation_alias=AliasChoices("max_source_products", "max_sources", "max_source"),
     )
     max_candidates_per_product: int = Field(
-        default=5,
+        default=2,
         ge=1,
         le=25,
         validation_alias=AliasChoices(
@@ -26,7 +26,7 @@ class ProductIntelligenceOptions(BaseModel):
             "max_candidates",
         ),
     )
-    search_provider: str = "duckduckgo"
+    search_provider: Literal["serpapi", "google_native"] = "serpapi"
     private_label_mode: Literal["include", "flag", "exclude"] = "flag"
     confidence_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
     allowed_domains: list[str] = Field(default_factory=list)
@@ -166,4 +166,5 @@ class ProductIntelligenceDiscoveryResponse(BaseModel):
     options: dict
     source_count: int
     candidate_count: int
+    search_provider: str = ""
     candidates: list[ProductIntelligenceDiscoveredCandidateResponse] = Field(default_factory=list)

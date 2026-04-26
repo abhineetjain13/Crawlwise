@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
+from app.services.acquisition.acquirer import AcquisitionResult, PageEvidence
 from app.services.config.extraction_rules import DETAIL_CURRENT_PRICE_SELECTORS, PRICE_FIELDS
 from app.services.field_value_dom import requested_content_extractability
-from app.services.pipeline.runtime_helpers import (
-    browser_attempted,
-    browser_outcome,
-    effective_blocked,
-)
+from app.services.pipeline.runtime_helpers import effective_blocked
 
 
 def empty_extraction_browser_retry_decision(
@@ -21,13 +18,12 @@ def empty_extraction_browser_retry_decision(
 ) -> dict[str, object]:
     if records:
         return {"should_retry": False, "reason": "records_present"}
-    attempted = browser_attempted(acquisition_result)
-    outcome = browser_outcome(acquisition_result)
-    if attempted:
+    evidence = PageEvidence.from_acquisition_result(acquisition_result)
+    if evidence.browser_attempted:
         return {
             "should_retry": False,
             "reason": "browser_already_attempted",
-            "browser_outcome": outcome or None,
+            "browser_outcome": evidence.browser_outcome or None,
         }
     if effective_blocked(acquisition_result):
         return {"should_retry": False, "reason": "blocked"}

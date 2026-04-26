@@ -11,30 +11,12 @@ from urllib.parse import urlparse
 
 from selectolax.lexbor import LexborHTMLParser
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
-
-
-def _text(node: object) -> str:
-    if node is None:
-        return ""
-    text_fn = getattr(node, "text", None)
-    if not callable(text_fn):
-        return ""
-    try:
-        return str(text_fn(strip=True) or "")
-    except Exception:
-        return ""
-
-
-def _attr(node: object, name: str) -> str | None:
-    if node is None:
-        return None
-    raw_attrs = getattr(node, "attributes", {}) or {}
-    attrs = raw_attrs if isinstance(raw_attrs, Mapping) else {}
-    value = attrs.get(name)
-    if value is None:
-        return None
-    return str(value).strip() or None
+from app.services.adapters.base import (
+    AdapterResult,
+    BaseAdapter,
+    selectolax_node_attr,
+    selectolax_node_text,
+)
 
 
 def _clean_brand(value: str) -> str:
@@ -63,9 +45,11 @@ def _availability(value: object) -> str | None:
     return None
 
 
-def _iter_json_state_payloads(parser: LexborHTMLParser) -> Iterable[Mapping[str, object]]:
+def _iter_json_state_payloads(
+    parser: LexborHTMLParser,
+) -> Iterable[Mapping[str, object]]:
     for script in parser.css("script[type='a-state']"):
-        raw = _text(script)
+        raw = selectolax_node_text(script)
         if not raw:
             continue
         try:
@@ -123,23 +107,24 @@ class AmazonAdapter(BaseAdapter):
         avail_el = parser.css_first("#availability span")
         if not title_el:
             return None
-        rating_text = _text(rating_el)
+        rating_text = selectolax_node_text(rating_el)
         rating_match = re.search(r"(\d+\.?\d*)", rating_text)
-        review_text = _text(review_el)
+        review_text = selectolax_node_text(review_el)
         review_match = re.search(r"([\d,]+)", review_text)
         record = {
-            "title": _text(title_el) or None,
-            "price": _text(price_el) or None,
-            "brand": _clean_brand(_text(brand_el)) if brand_el else None,
+            "title": selectolax_node_text(title_el) or None,
+            "price": selectolax_node_text(price_el) or None,
+            "brand": _clean_brand(selectolax_node_text(brand_el)) if brand_el else None,
             "rating": float(rating_match.group(1)) if rating_match else None,
             "review_count": int(review_match.group(1).replace(",", ""))
             if review_match
             else None,
-            "image_url": _attr(image_el, "src") or _attr(image_el, "data-old-hires")
+            "image_url": selectolax_node_attr(image_el, "src")
+            or selectolax_node_attr(image_el, "data-old-hires")
             if image_el
             else None,
             "description": desc_el.text(separator=" ", strip=True) if desc_el else None,
-            "availability": _text(avail_el) or None,
+            "availability": selectolax_node_text(avail_el) or None,
             "url": url,
         }
         record.update(self._extract_detail_variants(parser, url))
@@ -184,7 +169,10 @@ class AmazonAdapter(BaseAdapter):
                 entries.append(entry_map)
                 if value not in values:
                     values.append(value)
-                if str(entry.get("dimensionValueState") or "").strip().upper() == "SELECTED":
+                if (
+                    str(entry.get("dimensionValueState") or "").strip().upper()
+                    == "SELECTED"
+                ):
                     selected_values[axis_name] = value
             if not values:
                 continue
@@ -235,7 +223,7 @@ class AmazonAdapter(BaseAdapter):
         dim_keys = [str(key) for key in raw_dims.keys()]
         ordered: list[str] = []
         for node in parser.css("[id^='inline-twister-row-']"):
-            raw_id = _attr(node, "id") or ""
+            raw_id = selectolax_node_attr(node, "id") or ""
             dim = raw_id.removeprefix("inline-twister-row-")
             if dim in raw_dims and dim not in ordered:
                 ordered.append(dim)
@@ -265,9 +253,13 @@ class AmazonAdapter(BaseAdapter):
                 entries = axis_entries.get(axis_name) or []
                 if index < 0 or index >= len(entries):
                     continue
-                self._merge_twister_entry(option_values, metadata, axis_name, entries[index], page_url)
+                self._merge_twister_entry(
+                    option_values, metadata, axis_name, entries[index], page_url
+                )
             if option_values:
-                variants.append({"option_values": option_values, **option_values, **metadata})
+                variants.append(
+                    {"option_values": option_values, **option_values, **metadata}
+                )
         return variants
 
     def _twister_variants_from_product(
@@ -286,9 +278,13 @@ class AmazonAdapter(BaseAdapter):
             option_values: dict[str, str] = {}
             metadata: dict[str, object] = {}
             for axis_name, entry in zip(axis_names, combo, strict=False):
-                self._merge_twister_entry(option_values, metadata, axis_name, entry, page_url)
+                self._merge_twister_entry(
+                    option_values, metadata, axis_name, entry, page_url
+                )
             if option_values:
-                variants.append({"option_values": option_values, **option_values, **metadata})
+                variants.append(
+                    {"option_values": option_values, **option_values, **metadata}
+                )
         return variants
 
     def _merge_twister_entry(
@@ -324,21 +320,21 @@ class AmazonAdapter(BaseAdapter):
             rating_el = card.css_first(".a-icon-star-small span")
             price = None
             if price_whole:
-                whole = _text(price_whole).rstrip(".")
-                frac = _text(price_frac) if price_frac else "00"
+                whole = selectolax_node_text(price_whole).rstrip(".")
+                frac = selectolax_node_text(price_frac) if price_frac else "00"
                 price = f"{whole}.{frac}"
-            rating_text = _text(rating_el)
+            rating_text = selectolax_node_text(rating_el)
             rating_match = re.search(r"(\d+\.?\d*)", rating_text)
-            href = _attr(link_el, "href") or ""
+            href = selectolax_node_attr(link_el, "href") or ""
             if href and not href.startswith("http"):
                 parsed = urlparse(url)
                 href = f"{parsed.scheme}://{parsed.netloc}{href}"
             if title_el:
                 records.append(
                     {
-                        "title": _text(title_el),
+                        "title": selectolax_node_text(title_el),
                         "price": price,
-                        "image_url": _attr(image_el, "src"),
+                        "image_url": selectolax_node_attr(image_el, "src"),
                         "url": href,
                         "rating": float(rating_match.group(1))
                         if rating_match

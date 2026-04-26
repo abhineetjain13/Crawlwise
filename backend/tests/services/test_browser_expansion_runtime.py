@@ -2771,6 +2771,83 @@ async def test_emit_challenge_activity_ignores_negative_scroll(
 
 
 @pytest.mark.asyncio
+async def test_emit_browser_behavior_activity_adds_scroll_physics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    move_calls: list[tuple[int, int]] = []
+    wheel_calls: list[tuple[int, int]] = []
+    wait_calls: list[int] = []
+
+    class _Mouse:
+        async def move(self, x: int, y: int) -> None:
+            move_calls.append((x, y))
+
+        async def wheel(self, delta_x: int, delta_y: int) -> None:
+            wheel_calls.append((delta_x, delta_y))
+
+    class _Page:
+        mouse = _Mouse()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> dict[str, int]:
+            del script, arg
+            return {"width": 900, "height": 700}
+
+        async def wait_for_timeout(self, delay_ms: int) -> None:
+            wait_calls.append(delay_ms)
+
+    monkeypatch.setattr(browser_recovery.secrets, "randbelow", lambda limit: 0)
+    diagnostics = await browser_recovery.emit_browser_behavior_activity(_Page())
+
+    assert diagnostics["enabled"] is True
+    assert int(diagnostics["pointer_moves"]) == len(move_calls)
+    assert int(diagnostics["scroll_steps"]) == int(
+        crawler_runtime_settings.browser_behavior_scroll_steps
+    )
+    assert len(wheel_calls) == 1 + int(
+        crawler_runtime_settings.browser_behavior_scroll_steps
+    )
+    assert wait_calls
+
+
+@pytest.mark.asyncio
+async def test_type_text_like_human_types_one_character_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    typed: list[str] = []
+    clicks: list[int] = []
+
+    class _Locator:
+        async def click(self, *, timeout: int) -> None:
+            clicks.append(timeout)
+
+    class _Keyboard:
+        async def type(self, value: str) -> None:
+            typed.append(value)
+
+    class _Page:
+        keyboard = _Keyboard()
+
+        def locator(self, selector: str) -> _Locator:
+            assert selector == "input[name=q]"
+            return _Locator()
+
+        async def wait_for_timeout(self, delay_ms: int) -> None:
+            assert delay_ms >= 0
+
+    monkeypatch.setattr(browser_recovery.secrets, "randbelow", lambda limit: 0)
+
+    diagnostics = await browser_recovery.type_text_like_human(
+        _Page(),
+        "input[name=q]",
+        "shoe",
+    )
+
+    assert diagnostics == {"typed_chars": 4}
+    assert typed == ["s", "h", "o", "e"]
+    assert clicks == [int(crawler_runtime_settings.traversal_click_timeout_ms)]
+
+
+@pytest.mark.asyncio
 async def test_recover_browser_challenge_keeps_original_response_when_retry_stays_blocked() -> None:
     original_response = SimpleNamespace(status=403, name="original")
     retried_response = SimpleNamespace(status=200, name="retried")

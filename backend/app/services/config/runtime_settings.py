@@ -153,6 +153,15 @@ class CrawlerRuntimeSettings(BaseSettings):
     challenge_activity_pause_min_ms: int = 50
     challenge_activity_pause_jitter_ms: int = 150
     challenge_activity_scroll_px: int = 120
+    browser_behavior_realism_enabled: bool = True
+    browser_behavior_real_chrome_only: bool = True
+    browser_behavior_scroll_steps: int = 3
+    browser_behavior_scroll_min_px: int = 90
+    browser_behavior_scroll_max_px: int = 260
+    browser_behavior_pause_min_ms: int = 80
+    browser_behavior_pause_jitter_ms: int = 220
+    browser_behavior_typing_min_delay_ms: int = 35
+    browser_behavior_typing_jitter_ms: int = 95
     surface_readiness_max_wait_ms: int | None = 6000
     surface_readiness_poll_ms: int = 250
     origin_warm_pause_ms: int | None = 500
@@ -360,6 +369,28 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("browser_post_block_cooldown_ms must be >= 0")
         if self.browser_first_nav_pause_ms < 0:
             raise ValueError("browser_first_nav_pause_ms must be >= 0")
+        self.browser_behavior_scroll_steps = max(
+            0, int(self.browser_behavior_scroll_steps)
+        )
+        self.browser_behavior_scroll_min_px = max(
+            0, int(self.browser_behavior_scroll_min_px)
+        )
+        self.browser_behavior_scroll_max_px = max(
+            self.browser_behavior_scroll_min_px,
+            int(self.browser_behavior_scroll_max_px),
+        )
+        self.browser_behavior_pause_min_ms = max(
+            0, int(self.browser_behavior_pause_min_ms)
+        )
+        self.browser_behavior_pause_jitter_ms = max(
+            0, int(self.browser_behavior_pause_jitter_ms)
+        )
+        self.browser_behavior_typing_min_delay_ms = max(
+            0, int(self.browser_behavior_typing_min_delay_ms)
+        )
+        self.browser_behavior_typing_jitter_ms = max(
+            0, int(self.browser_behavior_typing_jitter_ms)
+        )
         if self.platform_detection_html_search_limit <= 0:
             raise ValueError("platform_detection_html_search_limit must be > 0")
         if self.browser_runtime_pool_max_entries <= 0:

@@ -57,3 +57,13 @@ tmp_*.json
 
 # Old knowledge dir
 knowledge/
+
+# Docs subfolders (keep root docs/*.md tracked)
+docs/agent/
+docs/archive/
+docs/audits/
+docs/plans/
+docs/prompts/
+
+# HTML test fixture folder
+backend/tests/fixtures/artifact_html/

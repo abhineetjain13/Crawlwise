@@ -187,7 +187,7 @@ export type SelectorRecord = {
 export type ProductIntelligenceOptions = {
  max_source_products: number;
  max_candidates_per_product: number;
- search_provider: string;
+ search_provider: "serpapi"|"google_native";
  private_label_mode: "include"|"flag"|"exclude";
  confidence_threshold: number;
  allowed_domains: string[];
@@ -310,6 +310,7 @@ export type ProductIntelligenceDiscoveryResponse = {
  options: Record<string, unknown>;
  source_count: number;
  candidate_count: number;
+ search_provider?: string;
  candidates: ProductIntelligenceDiscoveryCandidate[];
 };
 
@@ -417,6 +418,7 @@ export type DomainRunProfileRecord = {
 export type DomainCookieMemoryRecord = {
  id: number;
  domain: string;
+ browser_engine?: string | null;
  cookie_count: number;
  origin_count: number;
  updated_at: string;

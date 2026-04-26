@@ -1,35 +1,16 @@
 # Indeed job board adapter.
 from __future__ import annotations
 
-from collections.abc import Mapping
 from urllib.parse import urlsplit
 
 from selectolax.lexbor import LexborHTMLParser
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
-
-
-def _text(node: object, *, separator: str = "") -> str:
-    if node is None:
-        return ""
-    text_fn = getattr(node, "text", None)
-    if not callable(text_fn):
-        return ""
-    try:
-        return str(text_fn(separator=separator, strip=True) or "")
-    except Exception:
-        return ""
-
-
-def _attr(node: object, name: str) -> str | None:
-    if node is None:
-        return None
-    raw_attrs = getattr(node, "attributes", {}) or {}
-    attrs = raw_attrs if isinstance(raw_attrs, Mapping) else {}
-    value = attrs.get(name)
-    if value is None:
-        return None
-    return str(value).strip() or None
+from app.services.adapters.base import (
+    AdapterResult,
+    BaseAdapter,
+    selectolax_node_attr,
+    selectolax_node_text,
+)
 
 
 class IndeedAdapter(BaseAdapter):
@@ -69,11 +50,11 @@ class IndeedAdapter(BaseAdapter):
         if not title_el:
             return None
         return {
-            "title": _text(title_el),
-            "company": _text(company_el) or None,
-            "location": _text(location_el) or None,
-            "salary": _text(salary_el) or None,
-            "description": _text(desc_el, separator=" ") or None,
+            "title": selectolax_node_text(title_el),
+            "company": selectolax_node_text(company_el) or None,
+            "location": selectolax_node_text(location_el) or None,
+            "salary": selectolax_node_text(salary_el) or None,
+            "description": selectolax_node_text(desc_el, separator=" ") or None,
             "apply_url": url,
             "url": url,
         }
@@ -99,7 +80,7 @@ class IndeedAdapter(BaseAdapter):
             link_el = card.css_first("h2 a, a.jcs-JobTitle")
             if not title_el:
                 continue
-            href = _attr(link_el, "href") or ""
+            href = selectolax_node_attr(link_el, "href") or ""
             if href and not href.startswith("http"):
                 href = (
                     f"{base_origin}{href}"
@@ -108,10 +89,10 @@ class IndeedAdapter(BaseAdapter):
                 )
             records.append(
                 {
-                    "title": _text(title_el),
-                    "company": _text(company_el) or None,
-                    "location": _text(location_el) or None,
-                    "salary": _text(salary_el) or None,
+                    "title": selectolax_node_text(title_el),
+                    "company": selectolax_node_text(company_el) or None,
+                    "location": selectolax_node_text(location_el) or None,
+                    "salary": selectolax_node_text(salary_el) or None,
                     "apply_url": href,
                 }
             )

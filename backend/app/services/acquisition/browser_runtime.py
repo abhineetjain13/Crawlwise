@@ -60,7 +60,10 @@ from app.services.acquisition.browser_readiness import (
     probe_browser_readiness_impl,
     wait_for_listing_readiness_impl,
 )
-from app.services.acquisition.browser_recovery import recover_browser_challenge
+from app.services.acquisition.browser_recovery import (
+    emit_browser_behavior_activity,
+    recover_browser_challenge,
+)
 from app.services.acquisition.dom_runtime import get_page_html
 from app.services.acquisition.runtime import (
     BlockPageClassification,
@@ -239,6 +242,16 @@ def _browser_profile_diagnostics(engine: str) -> dict[str, object]:
             and _apply_stealth_for_engine(normalized_engine)
         ),
     }
+
+
+def _should_run_behavior_realism(engine: str) -> bool:
+    if not bool(crawler_runtime_settings.browser_behavior_realism_enabled):
+        return False
+    normalized_engine = _normalize_browser_engine(engine)
+    return (
+        normalized_engine == _REAL_CHROME_BROWSER_ENGINE
+        or not bool(crawler_runtime_settings.browser_behavior_real_chrome_only)
+    )
 
 
 def _resolve_browser_binary(engine: str) -> tuple[str | None, str]:
@@ -1189,20 +1202,6 @@ def _network_payload_rows(value: object) -> list[dict[str, object]]:
     return [dict(item) for item in value if isinstance(item, dict)]
 
 
-def _resolve_browser_fetch_policy(
-    *,
-    url: str,
-    surface: str,
-    traversal_mode: str | None,
-) -> tuple[bool, dict[str, object], dict[str, object] | None]:
-    return resolve_browser_fetch_policy_impl(
-        url=url,
-        surface=surface,
-        traversal_mode=traversal_mode,
-        should_run_traversal=should_run_traversal,
-    )
-
-
 async def _resolve_runtime_provider(
     runtime_provider,
     *,
@@ -1371,10 +1370,11 @@ async def browser_fetch(
             normalized_surface = _normalize_surface(surface)
             payload_capture = _build_payload_capture(surface=normalized_surface)
             payload_capture.attach(page)
-            traversal_active, readiness_policy, readiness_override = _resolve_browser_fetch_policy(
+            traversal_active, readiness_policy, readiness_override = resolve_browser_fetch_policy_impl(
                 url=url,
                 surface=normalized_surface,
                 traversal_mode=traversal_mode,
+                should_run_traversal=should_run_traversal,
             )
             try:
                 pre_nav_pause_ms = max(
@@ -1418,6 +1418,13 @@ async def browser_fetch(
                         + (f' - title="{page_title}"' if page_title else "")
                     ),
                 )
+                behavior_diagnostics: dict[str, object] = {}
+                if _should_run_behavior_realism(runtime_engine):
+                    behavior_started_at = time.perf_counter()
+                    behavior_diagnostics = await emit_browser_behavior_activity(page)
+                    phase_timings_ms["behavior_realism"] = _elapsed_ms(
+                        behavior_started_at
+                    )
                 (
                     current_probe,
                     readiness_probes,
@@ -1527,6 +1534,7 @@ async def browser_fetch(
                     "host_policy_snapshot": dict(host_policy_snapshot or {}),
                     "proxy_rotation_mode": proxy_rotation_mode,
                     "browser_state_reuse_allowed": allow_storage_state,
+                    "behavior_realism": dict(behavior_diagnostics),
                 }
                 _mark_storage_state_persist_policy(
                     page,
@@ -1637,6 +1645,12 @@ async def _maybe_warm_origin_before_navigation(
             classify_blocked_page=classify_blocked_page_async,
             get_page_html=get_page_html,
         )
+        if _should_run_behavior_realism(browser_engine):
+            warm_behavior_started_at = time.perf_counter()
+            await emit_browser_behavior_activity(warm_page)
+            phase_timings_ms["origin_warmup_behavior"] = _elapsed_ms(
+                warm_behavior_started_at
+            )
         await warm_page.wait_for_timeout(min(warm_pause_ms, warm_budget_ms))
         if warm_phase_timings_ms.get("challenge_wait"):
             phase_timings_ms["origin_warmup_challenge_wait"] = int(

@@ -6,9 +6,14 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import AdapterResult, BaseAdapter, adapter_host_matches
 from app.services.extract.shared_variant_logic import split_variant_axes
-from app.services.field_value_core import absolute_url, clean_text, finalize_record, text_or_none
+from app.services.field_value_core import (
+    absolute_url,
+    clean_text,
+    finalize_record,
+    text_or_none,
+)
 from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
@@ -20,6 +25,23 @@ from app.services.js_state_helpers import (
 )
 
 
+_NIKE_CURRENCY_BY_HOST = {
+    "nike.com": "USD",
+    "nike.in": "INR",
+    "nike.co.in": "INR",
+    "nike.co.uk": "GBP",
+    "nike.com.au": "AUD",
+    "nike.ca": "CAD",
+}
+
+
+def _currency_for(page_url: str) -> str:
+    host = (urlparse(str(page_url or "")).hostname or "").lower().lstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return _NIKE_CURRENCY_BY_HOST.get(host, "USD")
+
+
 class NikeAdapter(BaseAdapter):
     name = "nike"
     platform_family = "nike"
@@ -28,12 +50,12 @@ class NikeAdapter(BaseAdapter):
         host = (urlparse(str(url or "")).hostname or "").lower()
         raw_html = str(html or "")
         return (
-            _host_matches(host, "nike.com")
-            or _host_matches(host, "nike.in")
-            or _host_matches(host, "nike.co.in")
-            or _host_matches(host, "nike.co.uk")
-            or _host_matches(host, "nike.com.au")
-            or _host_matches(host, "nike.ca")
+            adapter_host_matches(host, "nike.com")
+            or adapter_host_matches(host, "nike.in")
+            or adapter_host_matches(host, "nike.co.in")
+            or adapter_host_matches(host, "nike.co.uk")
+            or adapter_host_matches(host, "nike.com.au")
+            or adapter_host_matches(host, "nike.ca")
             or ("__PRELOADED_STATE__" in raw_html and "skuData" in raw_html)
         )
 
@@ -43,7 +65,9 @@ class NikeAdapter(BaseAdapter):
             record = _extract_detail_record(url, html)
             if record:
                 records.append(record)
-        return AdapterResult(records=records, source_type="nike_adapter", adapter_name=self.name)
+        return AdapterResult(
+            records=records, source_type="nike_adapter", adapter_name=self.name
+        )
 
 
 def _extract_detail_record(page_url: str, html: str) -> dict[str, Any] | None:
@@ -55,10 +79,6 @@ def _extract_detail_record(page_url: str, html: str) -> dict[str, Any] | None:
         return None
     record["_source"] = "nike_adapter"
     return finalize_record(record, surface="ecommerce_detail")
-
-
-def _host_matches(host: str, domain: str) -> bool:
-    return host == domain or host.endswith(f".{domain}")
 
 
 def _preloaded_product(html: str) -> dict[str, Any] | None:
@@ -87,7 +107,9 @@ def _map_product(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
         axes,
         always_selectable_axes=frozenset({"size"}),
     )
-    size_values = selectable_axes.get("size") if isinstance(selectable_axes, dict) else None
+    size_values = (
+        selectable_axes.get("size") if isinstance(selectable_axes, dict) else None
+    )
     ordered = ordered_axes(["size", "color"], selectable_axes)
     images = _images(product)
     color = variant_attribute(selected_variant, "color") or _color_name(product)
@@ -98,10 +120,16 @@ def _map_product(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
             "product_id": product.get("id"),
             "sku": product.get("sku"),
             "part_number": product.get("sku"),
-            "price": normalize_price(product.get("discountedPrice"), interpret_integral_as_cents=False),
-            "original_price": normalize_price(product.get("price"), interpret_integral_as_cents=False),
-            "currency": "INR",
-            "availability": "out_of_stock" if product.get("isOutOfStock") else "in_stock",
+            "price": normalize_price(
+                product.get("discountedPrice"), interpret_integral_as_cents=False
+            ),
+            "original_price": normalize_price(
+                product.get("price"), interpret_integral_as_cents=False
+            ),
+            "currency": _currency_for(page_url),
+            "availability": "out_of_stock"
+            if product.get("isOutOfStock")
+            else "in_stock",
             "description": _description(product),
             "product_details": _product_details(product),
             "color": color,
@@ -181,7 +209,9 @@ def _variants(product: dict[str, Any], *, page_url: str) -> list[dict[str, Any]]
     for option in list(options or []):
         if not isinstance(option, dict):
             continue
-        size = text_or_none(option.get("sizeName") or option.get("label") or option.get("size"))
+        size = text_or_none(
+            option.get("sizeName") or option.get("label") or option.get("size")
+        )
         if not size:
             continue
         row = compact_dict(
@@ -190,10 +220,16 @@ def _variants(product: dict[str, Any], *, page_url: str) -> list[dict[str, Any]]
                 "sku": option.get("sku"),
                 "size": size,
                 "color": color,
-                "price": normalize_price(option.get("discountedPrice"), interpret_integral_as_cents=False),
-                "original_price": normalize_price(option.get("price"), interpret_integral_as_cents=False),
-                "currency": "INR",
-                "availability": "out_of_stock" if option.get("isOutOfStock") else "in_stock",
+                "price": normalize_price(
+                    option.get("discountedPrice"), interpret_integral_as_cents=False
+                ),
+                "original_price": normalize_price(
+                    option.get("price"), interpret_integral_as_cents=False
+                ),
+                "currency": _currency_for(page_url),
+                "availability": "out_of_stock"
+                if option.get("isOutOfStock")
+                else "in_stock",
                 "url": absolute_url(page_url, option.get("action_url")) or page_url,
                 "option_values": compact_dict({"size": size, "color": color}),
             }
@@ -211,11 +247,19 @@ def _variants(product: dict[str, Any], *, page_url: str) -> list[dict[str, Any]]
                     "sku": product.get("sku"),
                     "size": size,
                     "color": color,
-                    "price": normalize_price(product.get("discountedPrice"), interpret_integral_as_cents=False),
-                    "original_price": normalize_price(product.get("price"), interpret_integral_as_cents=False),
-                    "currency": "INR",
-                    "availability": availability_value({"available": not product.get("isOutOfStock")}),
-                    "url": absolute_url(page_url, product.get("action_url")) or page_url,
+                    "price": normalize_price(
+                        product.get("discountedPrice"),
+                        interpret_integral_as_cents=False,
+                    ),
+                    "original_price": normalize_price(
+                        product.get("price"), interpret_integral_as_cents=False
+                    ),
+                    "currency": _currency_for(page_url),
+                    "availability": availability_value(
+                        {"available": not product.get("isOutOfStock")}
+                    ),
+                    "url": absolute_url(page_url, product.get("action_url"))
+                    or page_url,
                     "option_values": compact_dict({"size": size, "color": color}),
                 }
             )

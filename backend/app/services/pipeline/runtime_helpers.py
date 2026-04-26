@@ -4,6 +4,7 @@ import logging
 
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlLog, CrawlRun
+from app.services.acquisition.acquirer import PageEvidence
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
 from app.services.db_utils import mapping_or_empty
 from app.services.publish import VERDICT_ERROR, is_effectively_blocked
@@ -47,16 +48,10 @@ async def set_stage(
 logger = logging.getLogger(__name__)
 
 def browser_attempted(acquisition_result: AcquisitionResult) -> bool:
-    diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
-    return bool(diagnostics.get("browser_attempted")) or getattr(
-        acquisition_result,
-        "method",
-        "",
-    ) == "browser"
+    return PageEvidence.from_acquisition_result(acquisition_result).browser_attempted
 
 def browser_outcome(acquisition_result: AcquisitionResult) -> str:
-    diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
-    return str(diagnostics.get("browser_outcome") or "").strip().lower()
+    return PageEvidence.from_acquisition_result(acquisition_result).browser_outcome
 
 
 def browser_launch_log_message(acquisition_result: AcquisitionResult) -> str:

@@ -1,0 +1,20 @@
+Product title: $product_title
+Product URL: $product_url
+Source domain: $source_domain
+Snippet: $product_snippet
+
+Return brand-inference JSON only. Return exactly the schema below, with no markdown or extra keys.
+
+Output schema:
+{
+  "brand": "string",
+  "confidence": 0.0,
+  "rationale": "string"
+}
+
+Rules:
+- brand: the canonical brand or manufacturer name (e.g. "Levi's", "Patagonia"). Empty string if unknown.
+- confidence: decimal in [0.0, 1.0]. Use 0.0 when no evidence, near 1.0 when multiple signals agree.
+- rationale: one short sentence describing which signals supported the answer.
+- Never return a retailer name, marketplace name, or generic adjective as brand.
+- Prefer empty brand with low confidence over guessing.

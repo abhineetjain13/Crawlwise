@@ -144,9 +144,28 @@ When structured data lacks price but the rendered detail DOM exposes a product d
 
 Diagnostics controls are user controls. If `diagnostics_profile.capture_screenshot` is `False`, browser acquisition must not capture any screenshots, regardless of outcome.
 
+**Usable content beats provider noise. This is a hard contract.**
+If browser diagnostics report `browser_outcome == "usable_content"`, provider telemetry such as `provider:*`,
+`active_provider:*`, `challenge_provider_hits`, vendor headers, Akamai/DataDome/Cloudflare script markers,
+or challenge iframe markers is diagnostic evidence only. It must not by itself set `blocked=True`,
+`failure_reason=challenge_shell`, host hard-block memory, or real-Chrome retry.
+
+Only these can override `usable_content`:
+- explicit blocked outcome (`challenge_page`, `low_content_shell`)
+- challenge-title evidence (`title:*`)
+- strong visible blocker text evidence (`strong:*`, for example real CAPTCHA/access-denied copy)
+- HTTP-forced hard block status where no usable browser content was recovered
+
+This rule exists because modern commerce pages often load normal PDP content while bot-defense scripts,
+cookies, iframes, or Akamai/DataDome/Cloudflare markers remain present. Treating those markers as a block
+is a crawler bug, not stricter security detection.
+
 **VIOLATION signatures:**
 - Block detection classifies a page as blocked based on a vendor header alone when useful content is present and extractable
 - Block detection classifies a page as blocked from generic `captcha` text or `recaptcha` / `hcaptcha` provider markers alone when the page still has real extractable listing/detail content and no stronger challenge evidence such as challenge-title hits, active challenge markers, or challenge elements
+- `browser_outcome == "usable_content"` plus only `provider:*`, `active_provider:*`, `challenge_provider_hits`, vendor headers, or challenge iframe markers becomes `challenge_shell`
+- A usable detail page retries from Chromium to real Chrome solely because Akamai/DataDome/Cloudflare provider markers are present
+- Host protection memory records a hard block from a usable browser page with provider markers but no title/strong blocked evidence
 - A retry happens that is not logged and visible in diagnostics
 - Browser escalation triggers for a URL that returned 200 with extractable content
 - Browser acquisition captures a screenshot when `capture_screenshot=False`

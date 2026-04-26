@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -26,6 +27,7 @@ from app.services.product_intelligence.service import (
 )
 
 router = APIRouter(prefix="/api/product-intelligence", tags=["product-intelligence"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/discover")
@@ -34,6 +36,10 @@ async def product_intelligence_discover(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> ProductIntelligenceDiscoveryResponse:
+    logger.info(
+        "Product Intelligence discover provider=%s",
+        payload.options.search_provider,
+    )
     try:
         response = await discover_product_intelligence_candidates(
             session,

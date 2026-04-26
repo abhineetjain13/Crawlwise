@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from app.models.crawl import CrawlRun
 from app.services.acquisition.acquirer import AcquisitionRequest
 from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.acquisition.acquirer import PageEvidence
 from app.services.acquisition.acquirer import acquire as _acquire
 from app.services.acquisition.host_protection_memory import note_host_hard_block
 from app.services.acquisition_plan import AcquisitionPlan
@@ -50,7 +51,6 @@ from app.services.publish import (
     build_acquisition_profile,
     build_url_metrics,
     compute_verdict,
-    diagnostics_indicate_block,
     finalize_url_metrics,
     is_effectively_blocked,
 )
@@ -587,33 +587,8 @@ async def _retry_detail_challenge_shell_with_real_chrome(
     return _ExtractedURLStage(fetched=fetched, records=retry_records)
 
 
-def _ready_readiness_probe_present(browser_diagnostics: dict[str, object]) -> bool:
-    readiness_probes = browser_diagnostics.get("readiness_probes")
-    if not isinstance(readiness_probes, list):
-        return False
-    return any(
-        isinstance(probe, dict) and bool(probe.get("is_ready"))
-        for probe in readiness_probes
-    )
-
-
 def _challenge_shell_reason(acquisition_result: AcquisitionResult) -> str | None:
-    browser_diagnostics = mapping_or_empty(
-        getattr(acquisition_result, "browser_diagnostics", {})
-    )
-    browser_outcome = str(browser_diagnostics.get("browser_outcome") or "").strip().lower()
-    browser_reason = str(browser_diagnostics.get("browser_reason") or "").strip().lower()
-    if browser_outcome == "challenge_page":
-        return "challenge_shell"
-    if diagnostics_indicate_block(browser_diagnostics):
-        return "challenge_shell"
-    if browser_outcome == "low_content_shell":
-        return "challenge_shell"
-    if browser_reason.startswith("vendor-block:") and not _ready_readiness_probe_present(
-        browser_diagnostics
-    ):
-        return "challenge_shell"
-    return None
+    return PageEvidence.from_acquisition_result(acquisition_result).challenge_shell_reason
 
 
 def _apply_detail_rejection_guard(

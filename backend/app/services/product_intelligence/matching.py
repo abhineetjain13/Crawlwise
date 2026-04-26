@@ -118,7 +118,7 @@ def score_candidate(
     }
 
 
-def extract_serpapi_snapshot(
+def extract_search_result_snapshot(
     payload: dict[str, object] | None,
     *,
     url: str,
@@ -156,7 +156,7 @@ def extract_serpapi_snapshot(
     }
 
 
-def build_serpapi_intelligence(
+def build_search_result_intelligence(
     *,
     source: dict[str, object],
     candidate_payload: dict[str, object] | None,
@@ -164,22 +164,19 @@ def build_serpapi_intelligence(
     candidate_domain: str,
     source_type: str,
 ) -> dict[str, object]:
-    canonical = extract_serpapi_snapshot(
+    canonical = extract_search_result_snapshot(
         candidate_payload,
         url=candidate_url,
         domain=candidate_domain,
     )
-    deterministic = score_candidate(
-        source=source,
-        candidate=canonical,
-        source_type=source_type,
-    )
+    deterministic = score_candidate(source=source, candidate=canonical, source_type=source_type)
+    provider = str((candidate_payload or {}).get("provider") or "search").strip().lower() or "search"
     return {
         "canonical_record": canonical,
         "confidence_score": deterministic["score"],
         "confidence_label": deterministic["label"],
         "score_reasons": deterministic["reasons"],
-        "cleanup_source": "deterministic_serpapi",
+        "cleanup_source": f"deterministic_{provider}",
         "llm_enrichment": {"requested": False, "applied": False},
     }
 

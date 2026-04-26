@@ -1,34 +1,14 @@
 # LinkedIn Jobs adapter.
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from selectolax.lexbor import LexborHTMLParser
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
-
-
-def _text(node: object, *, separator: str = "") -> str:
-    if node is None:
-        return ""
-    text_fn = getattr(node, "text", None)
-    if not callable(text_fn):
-        return ""
-    try:
-        return str(text_fn(separator=separator, strip=True) or "")
-    except Exception:
-        return ""
-
-
-def _attr(node: object, name: str) -> str | None:
-    if node is None:
-        return None
-    raw_attrs = getattr(node, "attributes", {}) or {}
-    attrs = raw_attrs if isinstance(raw_attrs, Mapping) else {}
-    value = attrs.get(name)
-    if value is None:
-        return None
-    return str(value).strip() or None
+from app.services.adapters.base import (
+    AdapterResult,
+    BaseAdapter,
+    selectolax_node_attr,
+    selectolax_node_text,
+)
 
 
 class LinkedInAdapter(BaseAdapter):
@@ -71,18 +51,18 @@ class LinkedInAdapter(BaseAdapter):
             header = item.css_first(".description__job-criteria-subheader")
             value = item.css_first(".description__job-criteria-text")
             if header and value:
-                h = _text(header).lower()
-                v = _text(value)
+                h = selectolax_node_text(header).lower()
+                v = selectolax_node_text(value)
                 if "employment type" in h:
                     job_type = v
         if not title_el:
             return None
         return {
-            "title": _text(title_el),
-            "company": _text(company_el) or None,
-            "location": _text(location_el) or None,
+            "title": selectolax_node_text(title_el),
+            "company": selectolax_node_text(company_el) or None,
+            "location": selectolax_node_text(location_el) or None,
             "job_type": job_type,
-            "description": _text(desc_el, separator=" ") or None,
+            "description": selectolax_node_text(desc_el, separator=" ") or None,
             "apply_url": url,
             "url": url,
         }
@@ -102,11 +82,11 @@ class LinkedInAdapter(BaseAdapter):
                 continue
             records.append(
                 {
-                    "title": _text(title_el),
-                    "company": _text(company_el) or None,
-                    "location": _text(location_el) or None,
-                    "posted_date": _attr(date_el, "datetime"),
-                    "apply_url": _attr(link_el, "href") or "",
+                    "title": selectolax_node_text(title_el),
+                    "company": selectolax_node_text(company_el) or None,
+                    "location": selectolax_node_text(location_el) or None,
+                    "posted_date": selectolax_node_attr(date_el, "datetime"),
+                    "apply_url": selectolax_node_attr(link_el, "href") or "",
                 }
             )
         return records

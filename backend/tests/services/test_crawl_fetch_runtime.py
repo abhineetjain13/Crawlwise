@@ -58,17 +58,9 @@ async def test_real_chrome_success_updates_host_memory(
 ) -> None:
     usable_fetches: list[dict[str, object]] = []
 
-    async def _fake_note_usable_fetch_for_host(_url: str) -> bool:
-        return True
-
     async def _fake_note_host_usable_fetch(value: str | None, **kwargs):
         usable_fetches.append({"value": value, **kwargs})
 
-    monkeypatch.setattr(
-        crawl_fetch_runtime,
-        "note_usable_fetch_for_host",
-        _fake_note_usable_fetch_for_host,
-    )
     monkeypatch.setattr(
         crawl_fetch_runtime,
         "note_host_usable_fetch",
@@ -582,10 +574,6 @@ async def test_fetch_page_prefers_browser_from_learned_host_memory(
         del session
         return HostProtectionPolicy(host="example.com", prefer_browser=True)
 
-    async def _fake_should_prefer_browser_for_host(url: str) -> bool:
-        del url
-        return False
-
     async def _fake_browser(url, timeout, **kwargs):
         del timeout, kwargs
         return PageFetchResult(
@@ -601,11 +589,6 @@ async def test_fetch_page_prefers_browser_from_learned_host_memory(
         crawl_fetch_runtime,
         "load_host_protection_policy",
         _fake_load_policy,
-    )
-    monkeypatch.setattr(
-        crawl_fetch_runtime,
-        "should_prefer_browser_for_host",
-        _fake_should_prefer_browser_for_host,
     )
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
 
@@ -1780,6 +1763,7 @@ async def test_fetch_page_learns_browser_first_after_vendor_blocked_http_recover
     url = "https://wellfound.com/location/united-states"
     curl_calls: list[str] = []
     browser_reasons: list[str | None] = []
+    learned_policy = HostProtectionPolicy(host="wellfound.com")
 
     async def _vendor_blocked_curl(
         request_url: str,
@@ -1811,8 +1795,28 @@ async def test_fetch_page_learns_browser_first_after_vendor_blocked_http_recover
             blocked=False,
         )
 
+    async def _fake_load_policy(url: str, *, session=None):
+        del url, session
+        return learned_policy
+
+    async def _fake_note_host_hard_block(value: str | None, **kwargs):
+        del value, kwargs
+        nonlocal learned_policy
+        learned_policy = HostProtectionPolicy(host="wellfound.com", prefer_browser=True)
+        return learned_policy
+
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _vendor_blocked_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _browser_ok)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        _fake_load_policy,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "note_host_hard_block",
+        _fake_note_host_hard_block,
+    )
     try:
         first = await crawl_fetch_runtime.fetch_page(url, surface="job_listing")
         second = await crawl_fetch_runtime.fetch_page(url, surface="job_listing")
@@ -1833,6 +1837,7 @@ async def test_fetch_page_prefers_browser_after_hard_blocked_fetch(
     url = "https://wellfound.com/location/united-states"
     curl_calls: list[str] = []
     browser_reasons: list[str | None] = []
+    learned_policy = HostProtectionPolicy(host="wellfound.com")
 
     async def _vendor_blocked_curl(
         request_url: str,
@@ -1864,8 +1869,28 @@ async def test_fetch_page_prefers_browser_after_hard_blocked_fetch(
             blocked=True,
         )
 
+    async def _fake_load_policy(url: str, *, session=None):
+        del url, session
+        return learned_policy
+
+    async def _fake_note_host_hard_block(value: str | None, **kwargs):
+        del value, kwargs
+        nonlocal learned_policy
+        learned_policy = HostProtectionPolicy(host="wellfound.com", prefer_browser=True)
+        return learned_policy
+
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _vendor_blocked_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _browser_blocked)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        _fake_load_policy,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "note_host_hard_block",
+        _fake_note_host_hard_block,
+    )
     try:
         first = await crawl_fetch_runtime.fetch_page(url, surface="job_listing")
         second = await crawl_fetch_runtime.fetch_page(url, surface="job_listing")

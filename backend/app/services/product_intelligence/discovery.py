@@ -1,29 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from dataclasses import dataclass
-from urllib.parse import parse_qs, urlsplit
+from typing import Awaitable, Callable
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
-import httpx
 from bs4 import BeautifulSoup
+import httpx
 
+from app.services.acquisition.browser_recovery import emit_browser_behavior_activity
+from app.services.acquisition.browser_runtime import get_browser_runtime, real_chrome_browser_available
+from app.services.acquisition.dom_runtime import get_page_html
 from app.services.config.product_intelligence import (
     AGGREGATOR_DOMAINS,
     BRAND_DOMAIN_MAP,
     DISCOVERY_SOURCE_TYPE_PRIORITY,
-    DUCKDUCKGO_BASE_URL,
-    DUCKDUCKGO_HTML_URL,
-    DUCKDUCKGO_QUERY_PARAM,
-    DUCKDUCKGO_REDIRECT_QUERY_KEY,
-    DUCKDUCKGO_REQUEST_HEADERS,
-    DUCKDUCKGO_RESULT_LINK_SELECTORS,
     MARKETPLACE_DOMAINS,
     RETAILER_DOMAINS,
     SEARCH_EXCLUDED_DOMAIN_PREFIX,
     SEARCH_PHRASE_BUY,
-    SEARCH_PROVIDER_DUCKDUCKGO,
+    SEARCH_PROVIDER_GOOGLE_NATIVE,
     SEARCH_PROVIDER_SERPAPI,
     SEARCH_SITE_PREFIX,
     SEARCH_STOP_WORDS,
@@ -43,8 +42,24 @@ from app.services.config.product_intelligence import (
     SOURCE_TYPE_MARKETPLACE,
     SOURCE_TYPE_RETAILER,
     SOURCE_TYPE_UNKNOWN,
+    GOOGLE_NATIVE_BROWSER_ENGINE,
+    GOOGLE_NATIVE_HOME_URL,
+    GOOGLE_NATIVE_IGNORED_DOMAINS,
+    GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS,
+    GOOGLE_NATIVE_PROVIDER_PAYLOAD,
+    GOOGLE_NATIVE_QUERY_PARAM,
+    GOOGLE_NATIVE_REDIRECT_PATH,
+    GOOGLE_NATIVE_REDIRECT_TARGET_PARAM,
+    GOOGLE_NATIVE_RESULT_COUNT_PARAM,
+    GOOGLE_NATIVE_RESULT_LINK_SELECTOR,
+    GOOGLE_NATIVE_RESULT_WAIT_MS,
+    GOOGLE_NATIVE_SEARCH_URL,
+    GOOGLE_NATIVE_THUMBNAIL_ANCESTOR_DEPTH,
+    GOOGLE_NATIVE_THUMBNAIL_MIN_SRC_LENGTH,
+    GOOGLE_NATIVE_TITLE_SELECTOR,
     product_intelligence_settings,
 )
+from app.services.field_value_core import clean_text
 from app.services.product_intelligence.matching import normalize_brand, source_domain
 
 logger = logging.getLogger(__name__)
@@ -110,16 +125,42 @@ async def discover_candidates(
     queries = build_search_queries(product, source_domain_value=source_domain_value)
     if not queries:
         return []
-    candidates: list[DiscoveredCandidate] = []
-    seen: set[str] = set()
-    domain_counts: dict[str, int] = {}
     provider_name = str(provider or product_intelligence_settings.default_search_provider).strip().lower()
     pool_limit = max(
         max_candidates,
         max_candidates * product_intelligence_settings.discovery_pool_multiplier,
     )
+    async with _query_runner(provider_name) as run_query:
+        if run_query is None:
+            return []
+        return await _collect_candidates(
+            queries=queries,
+            run_query=run_query,
+            product=product,
+            source_domain_value=source_domain_value,
+            allowed_domains=allowed_domains,
+            excluded_domains=excluded_domains,
+            max_candidates=max_candidates,
+            pool_limit=pool_limit,
+        )
+
+
+async def _collect_candidates(
+    *,
+    queries: list[str],
+    run_query: Callable[[str, int], Awaitable[list[SearchResult]]],
+    product: dict[str, object],
+    source_domain_value: str,
+    allowed_domains: list[str],
+    excluded_domains: list[str],
+    max_candidates: int,
+    pool_limit: int,
+) -> list[DiscoveredCandidate]:
+    candidates: list[DiscoveredCandidate] = []
+    seen: set[str] = set()
+    domain_counts: dict[str, int] = {}
     for query_order, query in enumerate(queries):
-        results = await _search_results(provider_name, query, limit=pool_limit)
+        results = await run_query(query, pool_limit)
         for rank, result in enumerate(results, start=1):
             normalized_url = _clean_result_url(result.url)
             if not normalized_url or normalized_url in seen:
@@ -153,6 +194,25 @@ async def discover_candidates(
     return _rank_discovered_candidates(candidates)[:max_candidates]
 
 
+@contextlib.asynccontextmanager
+async def _query_runner(provider: str):
+    if provider == SEARCH_PROVIDER_GOOGLE_NATIVE:
+        if not real_chrome_browser_available():
+            logger.error(
+                "Product intelligence google_native discovery requires real Chrome (BROWSER_REAL_CHROME_ENABLED + executable path); refusing to silently downgrade to chromium"
+            )
+            yield None
+            return
+        async with _google_native_session() as run:
+            yield run
+        return
+
+    async def _http_run(query: str, limit: int) -> list[SearchResult]:
+        return await _search_results(provider, query, limit=limit)
+
+    yield _http_run
+
+
 def classify_source_type(domain: str, product: dict[str, object]) -> str:
     normalized_domain = str(domain or "").removeprefix("www.").lower()
     brand_domain = BRAND_DOMAIN_MAP.get(normalize_brand(product.get("brand")))
@@ -181,13 +241,13 @@ def _rank_discovered_candidates(
 
 
 async def _search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
+    logger.info("Product intelligence search dispatch provider=%r query=%r limit=%s", provider, query, limit)
     if provider == SEARCH_PROVIDER_SERPAPI:
         if not product_intelligence_settings.serpapi_key:
             logger.warning("Product intelligence SerpAPI discovery skipped: missing API key")
             return []
         return await _search_serpapi(query, limit=limit)
-    if provider == SEARCH_PROVIDER_DUCKDUCKGO:
-        return await _search_duckduckgo(query)
+    logger.warning("Product intelligence discovery received unknown provider: %r", provider)
     return []
 
 
@@ -226,35 +286,135 @@ async def _search_serpapi(query: str, *, limit: int | None = None) -> list[Searc
     ]
 
 
-async def _search_duckduckgo(query: str) -> list[SearchResult]:
-    try:
-        async with httpx.AsyncClient(timeout=product_intelligence_settings.search_timeout_seconds) as client:
-            response = await client.get(
-                DUCKDUCKGO_HTML_URL,
-                params={DUCKDUCKGO_QUERY_PARAM: query},
-                headers=DUCKDUCKGO_REQUEST_HEADERS,
-                follow_redirects=True,
+@contextlib.asynccontextmanager
+async def _google_native_session():
+    """Open one real-Chrome page on google.com and reuse it across multiple queries.
+
+    Each query then runs as a single ``page.goto('/search?q=...')`` navigation on
+    the existing page, instead of opening a fresh browser context per query.
+    """
+    runtime = await get_browser_runtime(browser_engine=GOOGLE_NATIVE_BROWSER_ENGINE)
+    async with runtime.page(domain=source_domain(GOOGLE_NATIVE_HOME_URL)) as page:
+        try:
+            await page.goto(
+                GOOGLE_NATIVE_HOME_URL,
+                wait_until="domcontentloaded",
+                timeout=int(GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS),
             )
-            response.raise_for_status()
-    except (httpx.HTTPError, OSError) as exc:
-        logger.warning("Product intelligence DuckDuckGo discovery failed: %s", exc)
-        return []
-    soup = BeautifulSoup(response.text, "html.parser")
-    results: list[SearchResult] = []
-    for selector in DUCKDUCKGO_RESULT_LINK_SELECTORS:
-        for link in soup.select(selector):
-            href = str(link.get("href") or link.get_text(" ", strip=True) or "")
-            if href:
-                results.append(
-                    SearchResult(
-                        url=href,
-                        payload={
-                            "provider": SEARCH_PROVIDER_DUCKDUCKGO,
-                            "title": link.get_text(" ", strip=True),
-                        },
-                    )
+            await emit_browser_behavior_activity(page)
+        except Exception as exc:
+            logger.warning("Product intelligence native Google session setup failed: %s", exc)
+
+        async def _run(query: str, limit: int) -> list[SearchResult]:
+            normalized_query = str(query or "").strip()
+            if not normalized_query:
+                return []
+            result_limit = min(
+                max(1, int(limit or product_intelligence_settings.google_native_max_results)),
+                int(product_intelligence_settings.google_native_max_results),
+            )
+            logger.info("Product intelligence search dispatch provider='google_native' query=%r limit=%s", normalized_query, limit)
+            try:
+                await page.goto(
+                    _google_native_search_url(normalized_query, result_limit),
+                    wait_until="domcontentloaded",
+                    timeout=int(GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS),
                 )
+                await page.wait_for_timeout(int(GOOGLE_NATIVE_RESULT_WAIT_MS))
+                html = await get_page_html(page)
+            except Exception as exc:
+                logger.warning("Product intelligence native Google query failed: %s", exc)
+                return []
+            return _parse_google_native_results(html, limit=result_limit)
+
+        yield _run
+
+
+def _google_native_search_url(query: str, limit: int) -> str:
+    return (
+        f"{GOOGLE_NATIVE_SEARCH_URL}?"
+        f"{urlencode({GOOGLE_NATIVE_QUERY_PARAM: query, GOOGLE_NATIVE_RESULT_COUNT_PARAM: str(limit)})}"
+    )
+
+
+def _parse_google_native_results(html: str, *, limit: int) -> list[SearchResult]:
+    soup = BeautifulSoup(str(html or ""), "html.parser")
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+    for anchor in soup.select(GOOGLE_NATIVE_RESULT_LINK_SELECTOR):
+        href = str(anchor.get("href") or "").strip()
+        url = _google_native_result_url(href)
+        if not url or url in seen:
+            continue
+        domain = source_domain(url).removeprefix("www.").lower()
+        if any(_domain_matches(domain, item) for item in GOOGLE_NATIVE_IGNORED_DOMAINS):
+            continue
+        title = _google_native_anchor_title(anchor)
+        if not title:
+            continue
+        thumbnail = _google_native_anchor_thumbnail(anchor)
+        seen.add(url)
+        results.append(
+            SearchResult(
+                url=url,
+                payload={
+                    "provider": GOOGLE_NATIVE_PROVIDER_PAYLOAD,
+                    "title": title,
+                    "snippet": "",
+                    "thumbnail": thumbnail,
+                    "position": len(results) + 1,
+                    "raw": {"href": href, "thumbnail": thumbnail},
+                },
+            )
+        )
+        if len(results) >= max(1, int(limit)):
+            break
     return results
+
+
+def _google_native_anchor_title(anchor) -> str:
+    """Return the title text only when the anchor wraps an organic-result h3.
+
+    Google's SERP contains many non-organic anchors (shopping carousels,
+    People-also-ask, knowledge-panel cards, ads). Those anchors have text but
+    no inner ``<h3>``. Requiring an h3 keeps only the organic blue-link
+    results that the user actually wants.
+    """
+    heading = anchor.select_one(GOOGLE_NATIVE_TITLE_SELECTOR)
+    if heading is None:
+        return ""
+    return clean_text(heading.get_text(" ", strip=True))
+
+
+def _google_native_anchor_thumbnail(anchor) -> str:
+    parent = anchor
+    for _ in range(int(GOOGLE_NATIVE_THUMBNAIL_ANCESTOR_DEPTH)):
+        parent = getattr(parent, "parent", None)
+        if parent is None:
+            break
+        for img in parent.find_all("img"):
+            src = str(img.get("src") or img.get("data-src") or "").strip()
+            if len(src) >= int(GOOGLE_NATIVE_THUMBNAIL_MIN_SRC_LENGTH):
+                return src
+    return ""
+
+
+def _google_native_result_url(href: str) -> str:
+    raw = str(href or "").strip()
+    if not raw:
+        return ""
+    parsed = urlsplit(raw)
+    if parsed.scheme in {"http", "https"}:
+        if parsed.netloc.endswith("google.com") and parsed.path == GOOGLE_NATIVE_REDIRECT_PATH:
+            target = parse_qs(parsed.query).get(GOOGLE_NATIVE_REDIRECT_TARGET_PARAM, [""])[0]
+            return _clean_result_url(target)
+        return _clean_result_url(raw)
+    if raw.startswith(GOOGLE_NATIVE_REDIRECT_PATH):
+        target = parse_qs(urlsplit(raw).query).get(GOOGLE_NATIVE_REDIRECT_TARGET_PARAM, [""])[0]
+        return _clean_result_url(target)
+    if raw.startswith("/"):
+        return _clean_result_url(urljoin(GOOGLE_NATIVE_HOME_URL, raw))
+    return ""
 
 
 def _clean_result_url(value: object) -> str:
@@ -263,21 +423,9 @@ def _clean_result_url(value: object) -> str:
         return ""
     if text.startswith("//"):
         text = f"https:{text}"
-    elif text.startswith("/"):
-        text = f"{DUCKDUCKGO_BASE_URL}{text}"
     try:
         parsed = urlsplit(text)
     except ValueError:
-        return ""
-    if parsed.query:
-        redirected = parse_qs(parsed.query).get(DUCKDUCKGO_REDIRECT_QUERY_KEY)
-        if redirected:
-            text = redirected[0]
-            try:
-                parsed = urlsplit(text)
-            except ValueError:
-                return ""
-    if (parsed.hostname or "").removeprefix("www.").lower() == "duckduckgo.com" and parsed.path == "/y.js":
         return ""
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""

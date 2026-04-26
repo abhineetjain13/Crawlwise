@@ -7,29 +7,13 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from selectolax.lexbor import LexborHTMLParser
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import (
+    AdapterResult,
+    BaseAdapter,
+    selectolax_node_attr,
+    selectolax_node_text,
+)
 from app.services.field_value_core import clean_text
-
-
-def _text(node: Any, *, separator: str = "") -> str:
-    if node is None:
-        return ""
-    text_fn = getattr(node, "text", None)
-    if not callable(text_fn):
-        return ""
-    return text_fn(separator=separator, strip=True)
-
-
-def _attr(node: Any, name: str) -> str | None:
-    if node is None:
-        return None
-    attrs = getattr(node, "attributes", None)
-    if not isinstance(attrs, dict):
-        return None
-    value = attrs.get(name)
-    if value is None:
-        return None
-    return str(value).strip() or None
 
 
 class ADPAdapter(BaseAdapter):
@@ -85,9 +69,7 @@ class ADPAdapter(BaseAdapter):
         seen_keys: set[str] = set()
         for card in parser.css(".current-openings-item"):
             title_node = card.css_first("[id^='lblTitle_'], sdf-link, a")
-            title = clean_text(
-                _text(title_node, separator=" ")
-            )
+            title = clean_text(selectolax_node_text(title_node, separator=" "))
             if len(title) < 3:
                 continue
 
@@ -109,17 +91,15 @@ class ADPAdapter(BaseAdapter):
             for node in card.css(
                 ".current-opening-location-item span, .current-opening-location-item"
             ):
-                value = clean_text(_text(node, separator=" "))
+                value = clean_text(selectolax_node_text(node, separator=" "))
                 if value and value not in location_values:
                     location_values.append(value)
             location = " | ".join(location_values)
             post_elem = card.css_first(".current-opening-post-date")
-            posted = clean_text(
-                _text(post_elem, separator=" ")
-            )
+            posted = clean_text(selectolax_node_text(post_elem, separator=" "))
             more_locations = clean_text(
                 " ".join(
-                    _text(node, separator=" ")
+                    selectolax_node_text(node, separator=" ")
                     for node in card.css(
                         "[id^='job_item_location_'], .mdf-overlay-popover sdf-button"
                     )
@@ -142,13 +122,11 @@ class ADPAdapter(BaseAdapter):
     def _extract_detail(self, url: str, html: str) -> dict | None:
         parser = LexborHTMLParser(html)
         title_node = parser.css_first("h1, .job-details-title, .job-description-title")
-        title = clean_text(
-            _text(title_node, separator=" ")
-        )
+        title = clean_text(selectolax_node_text(title_node, separator=" "))
         if len(title) < 3:
             return None
 
-        body_text = clean_text(_text(parser.body, separator=" "))
+        body_text = clean_text(selectolax_node_text(parser.body, separator=" "))
         record: dict[str, str] = {
             "title": title,
             "url": url,
@@ -195,7 +173,7 @@ class ADPAdapter(BaseAdapter):
         for node in parser.css(
             ".current-opening-location-item span, .current-opening-location-item"
         ):
-            value = clean_text(_text(node, separator=" "))
+            value = clean_text(selectolax_node_text(node, separator=" "))
             if value and value not in details:
                 details.append(value)
         return " | ".join(details[:4])
@@ -228,10 +206,10 @@ class ADPAdapter(BaseAdapter):
 
     def _extract_job_dom_id(self, card: Any) -> str | None:
         candidates = [
-            _attr(card, "id") or "",
+            selectolax_node_attr(card, "id") or "",
         ]
         for node in card.css("[id]"):
-            candidates.append(_attr(node, "id") or "")
+            candidates.append(selectolax_node_attr(node, "id") or "")
         for candidate in candidates:
             if not candidate:
                 continue

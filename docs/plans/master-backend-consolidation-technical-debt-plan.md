@@ -1,7 +1,7 @@
 # Master Backend Consolidation and Technical Debt Reduction Plan
 
 **Date:** 2026-04-26
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Scope:** backend maintainability, duplicate removal, architecture boundaries, test hardening
 **ACTIVE policy:** promoted to `docs/plans/ACTIVE.md` after fingerprint/schema remediation completed.
 
@@ -108,9 +108,9 @@ $env:PYTHONPATH='.'
 Result:
 
 - `rg "from app\.services\.acquisition\.traversal import _|from app\.services\.detail_extractor import _|traversal_module\._|detail_extractor\._" backend/tests -n` returns no matches
-- focused verify passed: `39 passed, 11 warnings`
+- focused verify passed: `151 passed, 6 skipped, 11 warnings`
 
-## Remaining Slice 3: Acquisition Policy Boundary
+## Completed Slice 3: Acquisition Policy Boundary
 
 Problem:
 
@@ -119,13 +119,16 @@ Problem:
 
 Implementation:
 
-- create or extend existing policy helpers only after grep confirms no owner exists
-- split into:
-  - host protection memory
-  - retry budget and lane sequencing
-  - browser escalation decision
-  - acquisition result diagnostics assembly
-- keep browser runtime focused on page execution only
+- removed duplicate in-memory browser-first host policy from `acquisition/pacing.py`
+- kept browser-first learning in the existing persistent owner, `acquisition/host_protection_memory.py`
+- removed `mark_browser_first_host`, `note_browser_block_for_host`, `note_usable_fetch_for_host`, and `should_prefer_browser_for_host`
+- simplified `crawl_fetch_runtime.py` to read `HostProtectionPolicy.prefer_browser` only
+- deleted pacing tests that froze the duplicate cache behavior
+
+LOC movement:
+
+- `backend/app/services/acquisition/pacing.py`: -111 lines
+- slice implementation/tests: net -153 lines
 
 Verify:
 
@@ -135,12 +138,13 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_fetch_runtime.py tests/services/test_browser_context.py -q
 ```
 
-Done when:
+Result:
 
-- `crawl_fetch_runtime.py` is orchestration, not policy storage
-- no domain-specific protected-site force rules are added
+- focused slice verify passed: `135 passed, 11 warnings`
+- expanded focused verify passed: `137 passed, 11 warnings`
+- touched crawl-engine local test passed: `1 passed, 11 warnings`
 
-## Remaining Slice 4: Page Evidence Object
+## Completed Slice 4: Page Evidence Object
 
 Problem:
 
@@ -149,10 +153,15 @@ Problem:
 
 Implementation:
 
-- introduce a typed `PageEvidence` object near acquisition/extraction boundary
-- populate it once from HTML, browser diagnostics, network payloads, and blocker classification
-- make retry/extractability decisions consume this object
-- do not move persistence/export behavior into this object
+- added `PageEvidence` next to `AcquisitionResult` in `acquisition/acquirer.py`
+- routed browser attempted/outcome, block detection, and challenge-shell checks through `PageEvidence`
+- removed duplicate challenge/readiness parsing helpers from `publish/metrics.py`
+- removed duplicate readiness-probe parsing from `pipeline/core.py`
+- kept persistence/export behavior out of `PageEvidence`
+
+LOC movement:
+
+- slice implementation: net -8 lines
 
 Verify:
 
@@ -162,12 +171,12 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_fetch_runtime.py tests/services/test_pipeline_core.py -q
 ```
 
-Done when:
+Result:
 
-- retry/challenge decisions stop re-parsing the same loose dictionaries
-- diagnostics remain serializable and stable
+- focused slice verify passed: `99 passed, 11 warnings`
+- extra metrics verify passed: `108 passed, 11 warnings`
 
-## Remaining Slice 5: Fixture Corpus, No Silent Skips
+## Completed Slice 5: Fixture Corpus, No Silent Skips
 
 Problem:
 
@@ -176,9 +185,10 @@ Problem:
 
 Implementation:
 
-- commit small sanitized fixtures under `backend/tests/fixtures/`
-- rewrite artifact tests to use fixtures first
-- keep live artifact replay optional, not required for CI determinism
+- added sanitized artifact fixtures under `backend/tests/fixtures/artifact_html/`
+- rewired `test_crawl_engine.py` artifact tests to use fixtures first
+- changed missing crawl-engine fixture behavior from skip to assertion failure
+- kept fixture payloads small while preserving listing cleanup, blocked detail, redirect identity mismatch, and variant-axis coverage
 
 Verify:
 
@@ -188,12 +198,12 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services/test_crawl_engine.py -q
 ```
 
-Done when:
+Result:
 
-- no core regression test skips because `backend/artifacts/*` is absent
-- fixture payloads are small and reviewable
+- focused slice verify passed: `120 passed, 11 warnings`
+- no crawl-engine artifact skips remain when `backend/artifacts/*` is absent
 
-## Remaining Slice 6: Config Guardrails
+## Completed Slice 6: Config Guardrails
 
 Problem:
 
@@ -201,9 +211,9 @@ Problem:
 
 Implementation:
 
-- extend structure tests to flag obvious inline selector/token/path-marker additions in service files
-- allow exceptions only for parser-local regexes whose owner is documented
-- require new config constants under `app/services/config/*`
+- extended `test_structure.py` to block new `config.py`, `settings.py`, `constants.py`, and `*_constants.py` modules outside `app/services/config/*`
+- added an explicit snapshot of existing service-level config-like constants
+- new uppercase selector/token/threshold/timeout/limit/retry/path-marker constants outside config now fail structure tests unless deliberately added to the allowlist
 
 Verify:
 
@@ -213,11 +223,11 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services/test_structure.py -q
 ```
 
-Done when:
+Result:
 
-- structure tests fail on new service-level config debt
+- focused slice verify passed: `6 passed, 11 warnings`
 
-## Remaining Slice 7: Browser Runtime Phase Split
+## Completed Slice 7: Browser Runtime Phase Split
 
 Problem:
 
@@ -225,13 +235,10 @@ Problem:
 
 Implementation:
 
-- split low-level phase helpers only where file-size or duplication demands it
-- candidate owners:
-  - navigation phase
-  - settle/readiness phase
-  - serialization phase
-  - artifact/finalize phase
-- keep `SharedBrowserRuntime` as the public facade
+- confirmed navigation, settle/readiness, serialization, diagnostics, and fetch-policy helpers already live in `acquisition/browser_page_flow.py`
+- removed the remaining runtime-local browser fetch policy wrapper and call the page-flow owner directly
+- kept `SharedBrowserRuntime` public API stable
+- hardened one browser runtime timeout test so it does not block on DB storage-state preload before exercising hung context cleanup
 
 Verify:
 
@@ -241,12 +248,11 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services/test_browser_context.py tests/test_browser_surface_probe.py -q
 ```
 
-Done when:
+Result:
 
-- public runtime API stays stable
-- phase code is testable without adding duplicate browser policy
+- focused slice verify passed: `90 passed, 11 warnings`
 
-## Remaining Slice 8: Adapter Shared Utilities
+## Completed Slice 8: Adapter Shared Utilities
 
 Problem:
 
@@ -254,9 +260,15 @@ Problem:
 
 Implementation:
 
-- grep adapters before adding any helper
-- move truly shared adapter utilities into one existing helper owner or a single new owner if no owner exists
-- keep platform-specific behavior in adapters
+- grepped adapters before adding helpers
+- moved shared selectolax text/attribute access into `adapters/base.py`
+- moved shared adapter host/domain matching into `adapters/base.py`
+- removed duplicated helpers from Amazon, eBay, LinkedIn, Indeed, ADP, Greenhouse, and Nike adapters
+- kept platform-specific parsing and variant mapping in adapters
+
+LOC movement:
+
+- adapter slice implementation: net -32 lines
 
 Verify:
 
@@ -266,9 +278,14 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services -q
 ```
 
-Done when:
+Result:
 
-- no shared helper is copy-pasted across adapters
+- focused adapter verify passed: `35 passed, 11 warnings`
+- plan verify passed: `883 passed, 4 skipped, 11 warnings`
+
+Remaining known skips:
+
+- artifact-backed structured-source/selectolax migration tests with missing local `backend/artifacts/*` fixture files
 
 ## Guardrails For All Slices
 

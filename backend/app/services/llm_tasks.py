@@ -139,6 +139,14 @@ class _ProductIntelligenceEnrichmentPayload(BaseModel):
         return value
 
 
+class _ProductIntelligenceBrandInferencePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    brand: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str = ""
+
+
 _PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "direct_record_extraction": TypeAdapter(list[dict[_FieldKey, Any]]),
     "xpath_discovery": TypeAdapter(list[_XPathSelector]),
@@ -147,6 +155,7 @@ _PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "page_classification": TypeAdapter(_PageClassificationPayload),
     "schema_inference": TypeAdapter(_SchemaInferencePayload),
     "product_intelligence_enrichment": TypeAdapter(_ProductIntelligenceEnrichmentPayload),
+    "product_intelligence_brand_inference": TypeAdapter(_ProductIntelligenceBrandInferencePayload),
 }
 
 

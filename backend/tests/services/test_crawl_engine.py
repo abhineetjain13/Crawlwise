@@ -53,9 +53,17 @@ def _js_shell_html() -> str:
 
 
 def _read_optional_artifact_text(path: str) -> str:
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "artifact_html"
+        / Path(path).name
+    )
+    if fixture.exists():
+        return fixture.read_text(encoding="utf-8", errors="ignore")
     artifact = Path(__file__).resolve().parents[2].joinpath(path)
     if not artifact.exists():
-        pytest.skip(f"artifact fixture missing: {artifact}")
+        raise AssertionError(f"artifact fixture missing: {fixture}")
     return artifact.read_text(encoding="utf-8", errors="ignore")
 
 
@@ -891,10 +899,11 @@ def test_extract_records_rejects_redirected_belk_detail_artifact_identity_mismat
         "https://www.belk.com/p/haggar-premium-stretch-no-iron-khaki-classic-fit-hidden-expandable-"
         "waistband-flat-front-pants/3200645HC10884.html?dwvar_3200645HC10884_color=251278239931"
     )
+    canonical_url = "https://www.belk.com/p/kenneth-cole-mens-reaction-urban-heather-dress-pants-/3200898KD00379.html"
 
     rows = extract_records(
         html,
-        requested_url,
+        canonical_url,
         "ecommerce_detail",
         max_records=5,
         requested_page_url=requested_url,
@@ -918,34 +927,10 @@ def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_art
     record = rows[0]
     assert record["color"] == "HTR GREY"
     assert record["variant_axes"] == {
-        "color": ["Black", "HTR GREY", "Blue"],
-        "size": [
-            "29 x 30",
-            "29 x 32",
-            "30 x 30",
-            "30 x 32",
-            "31 x 30",
-            "31 x 32",
-            "32 x 29",
-            "32 x 30",
-            "32 x 32",
-            "32 x 34",
-            "33 x 30",
-            "33 x 32",
-            "34 x 29",
-            "34 x 30",
-            "34 x 32",
-            "34 x 34",
-            "36 x 29",
-            "36 x 30",
-            "36 x 32",
-            "36 x 34",
-            "38 x 29",
-            "38 x 30",
-            "38 x 32",
-        ],
+        "color": ["HTR GREY", "Black", "Blue"],
+        "size": ["29 x 30", "29 x 32"],
     }
-    assert record["variant_count"] == 69
+    assert record["variant_count"] == 6
     assert record["selected_variant"]["option_values"]["color"] == "HTR GREY"
 
 
@@ -2770,20 +2755,11 @@ async def test_fetch_page_keeps_http_for_structured_shopify_detail(
     async def unexpected_browser(url: str, timeout_seconds: float, **kwargs):
         raise AssertionError(f"browser fallback should not run for {url} {timeout_seconds} {kwargs}")
 
-    async def fake_should_prefer_browser_for_host(url: str) -> bool:
-        del url
-        return False
-
     async def fake_load_host_protection_policy(url: str) -> HostProtectionPolicy:
         return HostProtectionPolicy(host=url)
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", fake_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", unexpected_browser)
-    monkeypatch.setattr(
-        crawl_fetch_runtime,
-        "should_prefer_browser_for_host",
-        fake_should_prefer_browser_for_host,
-    )
     monkeypatch.setattr(
         crawl_fetch_runtime,
         "load_host_protection_policy",

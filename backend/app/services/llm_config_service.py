@@ -86,6 +86,7 @@ async def snapshot_active_configs(
         "page_classification",
         "schema_inference",
         "product_intelligence_enrichment",
+        "product_intelligence_brand_inference",
     ]:
         config = await resolve_active_config(session, task_type)
         if config is not None:

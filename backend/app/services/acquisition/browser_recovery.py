@@ -181,6 +181,7 @@ async def _emit_challenge_activity(page: Any) -> None:
                 edge_padding,
             )
             await move(current_x, current_y)
+            _mark_mouse_move(mouse)
             for _ in range(jitter_moves):
                 target_x = _clamp_mouse_coordinate(
                     current_x + secrets.randbelow(jitter_delta_px * 2) - jitter_delta_px,
@@ -207,6 +208,7 @@ async def _emit_challenge_activity(page: Any) -> None:
                         edge_padding,
                     )
                     await move(inter_x, inter_y)
+                    _mark_mouse_move(mouse)
                     await page.wait_for_timeout(secrets.randbelow(15) + 5)
                 current_x = target_x
                 current_y = target_y
@@ -225,12 +227,112 @@ async def _emit_challenge_activity(page: Any) -> None:
             return
 
 
+async def emit_browser_behavior_activity(page: Any) -> dict[str, object]:
+    if not bool(crawler_runtime_settings.browser_behavior_realism_enabled):
+        return {"enabled": False}
+    mouse = getattr(page, "mouse", None)
+    if mouse is None:
+        return {"enabled": True, "pointer_moves": 0, "scroll_steps": 0}
+    pointer_moves = 0
+    scroll_steps = 0
+    try:
+        before = getattr(mouse, "_crawler_move_count", 0)
+        await _emit_challenge_activity(page)
+        after = getattr(mouse, "_crawler_move_count", before)
+        pointer_moves += max(0, int(after or 0) - int(before or 0))
+    except Exception:
+        pass
+    scroll_steps += await _emit_scroll_physics(page)
+    return {
+        "enabled": True,
+        "pointer_moves": pointer_moves,
+        "scroll_steps": scroll_steps,
+    }
+
+
+async def type_text_like_human(page: Any, selector: str, text: str) -> dict[str, object]:
+    target_selector = str(selector or "").strip()
+    target_text = str(text or "")
+    if not target_selector or not target_text:
+        return {"typed_chars": 0}
+    locator_factory = getattr(page, "locator", None)
+    keyboard = getattr(page, "keyboard", None)
+    if not callable(locator_factory) or keyboard is None:
+        return {"typed_chars": 0}
+    typed_chars = 0
+    try:
+        locator = locator_factory(target_selector)
+        click = getattr(locator, "click", None)
+        if callable(click):
+            await click(timeout=int(crawler_runtime_settings.traversal_click_timeout_ms))
+        for character in target_text:
+            type_fn = getattr(keyboard, "type", None)
+            if not callable(type_fn):
+                break
+            await type_fn(character)
+            typed_chars += 1
+            await page.wait_for_timeout(_typing_delay_ms())
+    except Exception:
+        # Preserve the partial typed_chars count so callers can detect partial
+        # input and recover (e.g., clear the field or fall back to direct nav)
+        # instead of treating the form as untouched.
+        pass
+    return {"typed_chars": typed_chars}
+
+
+async def _emit_scroll_physics(page: Any) -> int:
+    mouse = getattr(page, "mouse", None)
+    wheel = getattr(mouse, "wheel", None)
+    if not callable(wheel):
+        return 0
+    steps = max(0, int(crawler_runtime_settings.browser_behavior_scroll_steps or 0))
+    min_px = max(0, int(crawler_runtime_settings.browser_behavior_scroll_min_px or 0))
+    max_px = max(min_px, int(crawler_runtime_settings.browser_behavior_scroll_max_px or 0))
+    if steps <= 0 or max_px <= 0:
+        return 0
+    emitted = 0
+    for step_index in range(steps):
+        span = max(1, max_px - min_px + 1)
+        delta = min_px + secrets.randbelow(span)
+        if step_index == steps - 1 and secrets.randbelow(2) == 0:
+            delta = -max(1, delta // 2)
+        try:
+            await wheel(0, delta)
+            emitted += 1
+            await page.wait_for_timeout(_behavior_pause_ms())
+        except Exception:
+            break
+    return emitted
+
+
+def _behavior_pause_ms() -> int:
+    pause_ms = max(0, int(crawler_runtime_settings.browser_behavior_pause_min_ms or 0))
+    jitter_ms = max(0, int(crawler_runtime_settings.browser_behavior_pause_jitter_ms or 0))
+    if jitter_ms:
+        pause_ms += secrets.randbelow(jitter_ms)
+    return pause_ms
+
+
+def _typing_delay_ms() -> int:
+    delay_ms = max(0, int(crawler_runtime_settings.browser_behavior_typing_min_delay_ms or 0))
+    jitter_ms = max(0, int(crawler_runtime_settings.browser_behavior_typing_jitter_ms or 0))
+    if jitter_ms:
+        delay_ms += secrets.randbelow(jitter_ms)
+    return delay_ms
+
+
 def _clamp_mouse_coordinate(value: int, limit: int, padding: int) -> int:
     upper_bound = max(0, int(limit) - 1)
     effective_padding = min(max(0, int(padding)), upper_bound)
     lower_bound = min(upper_bound, effective_padding)
     max_value = max(lower_bound, upper_bound - effective_padding)
     return max(lower_bound, min(int(value), max_value))
+
+
+def _mark_mouse_move(mouse: Any) -> None:
+    with suppress(Exception):
+        current = int(getattr(mouse, "_crawler_move_count", 0) or 0)
+        setattr(mouse, "_crawler_move_count", current + 1)
 
 
 async def capture_rendered_listing_fragments(
