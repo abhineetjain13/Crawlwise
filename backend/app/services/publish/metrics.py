@@ -106,14 +106,27 @@ def build_url_metrics(
     browser_attempted = bool(browser_diagnostics.get("browser_attempted")) or (
         acquisition_result.method == "browser"
     )
+    browser_engine = str(browser_diagnostics.get("browser_engine") or "").strip().lower() or None
+    browser_fetch_method = (
+        f"browser:{browser_engine}"
+        if acquisition_result.method == "browser" and browser_engine
+        else None
+    )
     return {
         "method": acquisition_result.method,
+        "browser_fetch_method": browser_fetch_method,
         "status_code": acquisition_result.status_code,
         "blocked": is_effectively_blocked(acquisition_result),
         "final_url": acquisition_result.final_url,
         "requested_fields": list(requested_fields or []),
         "browser_used": acquisition_result.method == "browser",
         "browser_attempted": browser_attempted,
+        "browser_engine": browser_engine,
+        "browser_profile": browser_diagnostics.get("browser_profile"),
+        "browser_launch_mode": browser_diagnostics.get("browser_launch_mode"),
+        "browser_headless": browser_diagnostics.get("browser_headless"),
+        "browser_native_context": browser_diagnostics.get("browser_native_context"),
+        "browser_stealth_enabled": browser_diagnostics.get("browser_stealth_enabled"),
         "browser_reason": browser_diagnostics.get("browser_reason"),
         "browser_outcome": browser_diagnostics.get("browser_outcome"),
         "html_bytes": int(browser_diagnostics.get("html_bytes", 0) or 0),

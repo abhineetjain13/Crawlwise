@@ -1,19 +1,76 @@
 from __future__ import annotations
 
+import json
 from typing import Awaitable, Callable
 
 from app.models.crawl import CrawlRun
 from app.services.confidence import score_record_confidence
+from app.services.config.llm_runtime import llm_runtime_settings
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import canonical_requested_fields, field_allowed_for_surface
-from app.services.field_value_core import coerce_field_value, finalize_record
+from app.services.db_utils import mapping_or_empty
+from app.services.field_value_core import (
+    IMAGE_FIELDS,
+    LONG_TEXT_FIELDS,
+    STRUCTURED_MULTI_FIELDS,
+    STRUCTURED_OBJECT_FIELDS,
+    STRUCTURED_OBJECT_LIST_FIELDS,
+    URL_FIELDS,
+    coerce_field_value,
+    finalize_record,
+    strip_html_tags,
+)
+from app.services.llm_runtime import extract_missing_fields
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 ResolveRunConfigFn = Callable[..., Awaitable[dict[str, object] | None]]
 ExtractRecordsFn = Callable[..., Awaitable[tuple[list[dict[str, object]] | None, str | None]]]
 
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+def _sanitize_llm_existing_values(record: dict[str, object]) -> dict[str, object]:
+    sanitized: dict[str, object] = {}
+    max_chars = max(1, int(llm_runtime_settings.existing_values_max_chars or 1))
+    for key, value in record.items():
+        if str(key).startswith("_"):
+            continue
+        if isinstance(value, str):
+            truncated = value
+            if "<" in truncated and ">" in truncated:
+                truncated = strip_html_tags(truncated)
+            truncated = truncated[:max_chars]
+            sanitized[key] = truncated
+        elif isinstance(value, (list, dict)):
+            serialized = json.dumps(value, default=str)
+            if len(serialized) > max_chars:
+                serialized = serialized[:max_chars]
+            sanitized[key] = serialized
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+_STRING_FIELDS = URL_FIELDS | IMAGE_FIELDS | LONG_TEXT_FIELDS
+_LIST_FIELDS = STRUCTURED_MULTI_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS
+_DICT_FIELDS = STRUCTURED_OBJECT_FIELDS
+
+def _validate_llm_field_type(field_name: str, value: object) -> bool:
+    if value in (None, "", [], {}):
+        return True
+    normalized = str(field_name or "").strip().lower()
+    if normalized in _STRING_FIELDS:
+        return isinstance(value, str)
+    if normalized in _LIST_FIELDS:
+        return isinstance(value, list)
+    if normalized in _DICT_FIELDS:
+        return isinstance(value, dict)
+    return True
 
 async def apply_direct_record_llm_fallback(
     session: AsyncSession,
@@ -206,3 +263,104 @@ def _normalize_direct_llm_records(
         }
         normalized_records.append(canonical_record)
     return normalized_records
+
+
+async def apply_llm_fallback(
+    session: AsyncSession,
+    *,
+    run: CrawlRun,
+    page_url: str,
+    html: str,
+    records: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    updated_records: list[dict[str, object]] = []
+    domain = normalize_domain(page_url)
+    requested_fields = canonical_requested_fields(run.requested_fields or [])
+    for record in records:
+        next_record = dict(record)
+        confidence = mapping_or_empty(next_record.get("_confidence"))
+        self_heal = mapping_or_empty(next_record.get("_self_heal"))
+        missing_fields = [
+            field_name
+            for field_name in requested_fields
+            if field_allowed_for_surface(run.surface, field_name)
+            and next_record.get(field_name) in (None, "", [], {})
+        ]
+        raw_score = confidence.get("score", 1.0)
+        try:
+            float_score = float(str(raw_score)) if raw_score is not None else 1.0
+        except (TypeError, ValueError):
+            float_score = 1.0
+        low_confidence = (
+            float_score < crawler_runtime_settings.llm_confidence_threshold
+        )
+        selector_heal_rerun = str(self_heal.get("mode") or "").strip().lower() == "selector_synthesis"
+        should_run = bool(missing_fields) or (
+            low_confidence and not selector_heal_rerun
+        )
+        if not should_run:
+            updated_records.append(next_record)
+            continue
+        sanitized_existing = _sanitize_llm_existing_values(next_record)
+        payload, error_message = await extract_missing_fields(
+            session,
+            run_id=run.id,
+            domain=domain,
+            url=page_url,
+            html_text=html,
+            missing_fields=missing_fields or requested_fields,
+            existing_values=sanitized_existing,
+        )
+        field_sources = mapping_or_empty(next_record.get("_field_sources"))
+        applied_llm_fields: list[str] = []
+        llm_rejected_fields: list[str] = []
+        if isinstance(payload, dict):
+            for field_name, value in payload.items():
+                normalized_field = str(field_name or "").strip().lower()
+                if (
+                    not normalized_field
+                    or not field_allowed_for_surface(run.surface, normalized_field)
+                    or next_record.get(normalized_field) not in (None, "", [], {})
+                ):
+                    continue
+                coerced = coerce_field_value(
+                    normalized_field,
+                    value,
+                    page_url,
+                )
+                if not _validate_llm_field_type(normalized_field, coerced):
+                    llm_rejected_fields.append(normalized_field)
+                    continue
+                if coerced in (None, "", [], {}):
+                    continue
+                next_record[normalized_field] = coerced
+                applied_llm_fields.append(normalized_field)
+                current_sources = _string_list(field_sources.get(normalized_field))
+                if "llm_missing_field_extraction" not in current_sources:
+                    current_sources.append("llm_missing_field_extraction")
+                field_sources[normalized_field] = current_sources
+        if applied_llm_fields:
+            canonical_record = {
+                key: value
+                for key, value in next_record.items()
+                if not str(key).startswith("_")
+            }
+            next_record.update(finalize_record(canonical_record, surface=run.surface))
+        next_record["_field_sources"] = field_sources
+        next_record["_confidence"] = score_record_confidence(
+            next_record,
+            surface=run.surface,
+            requested_fields=requested_fields,
+        )
+        if applied_llm_fields and not str(next_record.get("_source") or "").strip():
+            next_record["_source"] = "llm_missing_field_extraction"
+        next_record["_self_heal"] = {
+            "enabled": True,
+            "triggered": True,
+            "threshold": crawler_runtime_settings.llm_confidence_threshold,
+            "mode": "missing_field_extraction",
+            "error": error_message or None,
+            "rejected_fields": llm_rejected_fields or None,
+        }
+        updated_records.append(next_record)
+    return updated_records

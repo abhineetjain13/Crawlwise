@@ -1285,6 +1285,78 @@ async def test_load_storage_state_for_run_ignores_invalid_run_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_storage_state_for_run_scopes_by_browser_engine(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(cookie_store.settings, "cookie_store_dir", tmp_path)
+    await cookie_store.clear_cookie_store_cache()
+
+    await cookie_store.persist_storage_state_for_run(
+        77,
+        {
+            "cookies": [
+                {
+                    "name": "chromium-session",
+                    "value": "1",
+                    "domain": ".example.com",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        browser_engine="chromium",
+    )
+    await cookie_store.persist_storage_state_for_run(
+        77,
+        {
+            "cookies": [
+                {
+                    "name": "real-chrome-session",
+                    "value": "2",
+                    "domain": ".example.com",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        browser_engine="real_chrome",
+    )
+
+    chromium_state = await cookie_store.load_storage_state_for_run(
+        77,
+        browser_engine="chromium",
+    )
+    real_chrome_state = await cookie_store.load_storage_state_for_run(
+        77,
+        browser_engine="real_chrome",
+    )
+
+    assert chromium_state == {
+        "cookies": [
+            {
+                "name": "chromium-session",
+                "value": "1",
+                "domain": ".example.com",
+                "path": "/",
+            }
+        ],
+        "origins": [],
+    }
+    assert real_chrome_state == {
+        "cookies": [
+            {
+                "name": "real-chrome-session",
+                "value": "2",
+                "domain": ".example.com",
+                "path": "/",
+            }
+        ],
+        "origins": [],
+    }
+
+
+@pytest.mark.asyncio
 async def test_persist_storage_state_for_run_replaces_existing_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -2759,6 +2831,83 @@ async def test_persist_storage_state_for_domain_persists_test_domains(db_session
     assert len(rows) == 1
     assert rows[0]["domain"] == domain
     assert loaded is not None
+
+
+@pytest.mark.asyncio
+async def test_persist_storage_state_for_domain_keeps_engine_specific_rows(db_session) -> None:
+    domain = f"engine-scoped-{uuid4().hex}.example.com"
+
+    chromium_saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "chromium-session",
+                    "value": "1",
+                    "domain": f".{domain}",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        session=db_session,
+        browser_engine="chromium",
+    )
+    real_chrome_saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "real-chrome-session",
+                    "value": "2",
+                    "domain": f".{domain}",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        session=db_session,
+        browser_engine="real_chrome",
+    )
+
+    rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
+    chromium_state = await cookie_store.load_storage_state_for_domain(
+        domain,
+        session=db_session,
+        browser_engine="chromium",
+    )
+    real_chrome_state = await cookie_store.load_storage_state_for_domain(
+        domain,
+        session=db_session,
+        browser_engine="real_chrome",
+    )
+
+    assert chromium_saved is True
+    assert real_chrome_saved is True
+    assert len(rows) == 2
+    assert {str(row["browser_engine"]) for row in rows} == {"chromium", "real_chrome"}
+    assert chromium_state == {
+        "cookies": [
+            {
+                "name": "chromium-session",
+                "value": "1",
+                "domain": f".{domain}",
+                "path": "/",
+            }
+        ],
+        "origins": [],
+    }
+    assert real_chrome_state == {
+        "cookies": [
+            {
+                "name": "real-chrome-session",
+                "value": "2",
+                "domain": f".{domain}",
+                "path": "/",
+            }
+        ],
+        "origins": [],
+    }
 
 
 @pytest.mark.asyncio

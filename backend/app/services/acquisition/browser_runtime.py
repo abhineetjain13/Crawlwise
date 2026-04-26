@@ -212,6 +212,35 @@ def _apply_stealth_for_engine(engine: str) -> bool:
     return bool(crawler_runtime_settings.browser_real_chrome_apply_stealth)
 
 
+def _browser_launch_mode(engine: str) -> str:
+    return "headless" if _launch_headless_for_engine(engine) else "headful"
+
+
+def _browser_profile(engine: str) -> str:
+    normalized_engine = _normalize_browser_engine(engine)
+    if normalized_engine == _REAL_CHROME_BROWSER_ENGINE:
+        if _use_native_real_chrome_context(normalized_engine):
+            return "real_chrome_native"
+        return "real_chrome_shaped"
+    return "chromium_shaped"
+
+
+def _browser_profile_diagnostics(engine: str) -> dict[str, object]:
+    normalized_engine = _normalize_browser_engine(engine)
+    return {
+        "browser_profile": _browser_profile(normalized_engine),
+        "browser_launch_mode": _browser_launch_mode(normalized_engine),
+        "browser_headless": _launch_headless_for_engine(normalized_engine),
+        "browser_native_context": _use_native_real_chrome_context(
+            normalized_engine
+        ),
+        "browser_stealth_enabled": bool(
+            _STEALTH_APPLIER is not None
+            and _apply_stealth_for_engine(normalized_engine)
+        ),
+    }
+
+
 def _resolve_browser_binary(engine: str) -> tuple[str | None, str]:
     normalized_engine = _normalize_browser_engine(engine)
     if normalized_engine != _REAL_CHROME_BROWSER_ENGINE:
@@ -504,9 +533,15 @@ class SharedBrowserRuntime:
                 )
             )
             if allow_storage_state:
-                storage_state = await load_storage_state_for_run(run_id)
+                storage_state = await _load_storage_state_for_run(
+                    run_id,
+                    browser_engine=self.browser_engine,
+                )
                 if not storage_state and allow_domain_storage_state:
-                    storage_state = await load_storage_state_for_domain(domain)
+                    storage_state = await _load_storage_state_for_domain(
+                        domain,
+                        browser_engine=self.browser_engine,
+                    )
                 if storage_state:
                     context_options["storage_state"] = storage_state
             context = await self._browser.new_context(**cast(Any, context_options))
@@ -528,6 +563,7 @@ class SharedBrowserRuntime:
                     context,
                     run_id=run_id,
                     domain=domain,
+                    browser_engine=self.browser_engine,
                     persist_run_storage_state=bool(
                         getattr(context, _RUN_STORAGE_PERSIST_ATTR, True)
                     ),
@@ -614,6 +650,7 @@ class SharedBrowserRuntime:
             if self._browser_launched_at
             else 0,
             "browser_engine": self.browser_engine,
+            **_browser_profile_diagnostics(self.browser_engine),
             "bridge_used": self.bridge_used(),
         }
 
@@ -894,6 +931,7 @@ async def _persist_context_storage_state(
     *,
     run_id: int | None,
     domain: str | None,
+    browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
     persist_run_storage_state: bool = True,
     persist_domain_storage_state: bool = True,
     timeout_seconds: float | None = None,
@@ -930,7 +968,11 @@ async def _persist_context_storage_state(
         return
     if run_id is not None and persist_run_storage_state:
         try:
-            await persist_storage_state_for_run(run_id, storage_state)
+            await _persist_storage_state_for_run(
+                run_id,
+                storage_state,
+                browser_engine=browser_engine,
+            )
         except Exception:
             logger.error(
                 "Failed to persist browser storage state for run_id=%s",
@@ -939,13 +981,85 @@ async def _persist_context_storage_state(
             )
     if normalized_domain and persist_domain_storage_state:
         try:
-            await persist_storage_state_for_domain(normalized_domain, storage_state)
+            await _persist_storage_state_for_domain(
+                normalized_domain,
+                storage_state,
+                browser_engine=browser_engine,
+            )
         except Exception:
             logger.error(
                 "Failed to persist browser storage state for domain=%s",
                 normalized_domain,
                 exc_info=True,
             )
+
+
+async def _load_storage_state_for_run(
+    run_id: int | None,
+    *,
+    browser_engine: str,
+) -> dict[str, object] | None:
+    try:
+        return await load_storage_state_for_run(
+            run_id,
+            browser_engine=browser_engine,
+        )
+    except TypeError as exc:
+        if "browser_engine" not in str(exc):
+            raise
+        return await load_storage_state_for_run(run_id)
+
+
+async def _load_storage_state_for_domain(
+    domain: str | None,
+    *,
+    browser_engine: str,
+) -> dict[str, object] | None:
+    try:
+        return await load_storage_state_for_domain(
+            domain,
+            browser_engine=browser_engine,
+        )
+    except TypeError as exc:
+        if "browser_engine" not in str(exc):
+            raise
+        return await load_storage_state_for_domain(domain)
+
+
+async def _persist_storage_state_for_run(
+    run_id: int | None,
+    storage_state,
+    *,
+    browser_engine: str,
+) -> None:
+    try:
+        await persist_storage_state_for_run(
+            run_id,
+            storage_state,
+            browser_engine=browser_engine,
+        )
+    except TypeError as exc:
+        if "browser_engine" not in str(exc):
+            raise
+        await persist_storage_state_for_run(run_id, storage_state)
+
+
+async def _persist_storage_state_for_domain(
+    domain: str | None,
+    storage_state,
+    *,
+    browser_engine: str,
+) -> bool:
+    try:
+        return await persist_storage_state_for_domain(
+            domain,
+            storage_state,
+            browser_engine=browser_engine,
+        )
+    except TypeError as exc:
+        if "browser_engine" not in str(exc):
+            raise
+        return await persist_storage_state_for_domain(domain, storage_state)
 
 
 def _mark_storage_state_persist_policy(
@@ -1240,8 +1354,9 @@ async def browser_fetch(
                 on_event,
                 "info",
                 (
-                    "Launched headless browser "
-                    f"({runtime_engine}, proxy: {_display_proxy(proxy)}, binary: {runtime_binary})"
+                    f"Launched {_browser_launch_mode(runtime_engine)} browser "
+                    f"({runtime_engine}, profile: {_browser_profile(runtime_engine)}, "
+                    f"proxy: {_display_proxy(proxy)}, binary: {runtime_binary})"
                 ),
             )
             if proxy_rotation_mode == "rotating":
@@ -1271,6 +1386,7 @@ async def browser_fetch(
                     page,
                     url=url,
                     surface=normalized_surface,
+                    browser_engine=runtime_engine,
                     browser_reason=browser_reason,
                     proxy_profile=proxy_profile,
                     timeout_seconds=_remaining(),
@@ -1404,6 +1520,7 @@ async def browser_fetch(
                     **_mapping_value(finalized.get("diagnostics")),
                     "browser_engine": runtime_engine,
                     "browser_binary": runtime_binary,
+                    **_browser_profile_diagnostics(runtime_engine),
                     "bridge_used": runtime_bridge_used,
                     "browser_proxy_mode": browser_proxy_mode,
                     "escalation_lane": str(escalation_lane or "").strip().lower() or None,
@@ -1445,6 +1562,7 @@ async def _maybe_warm_origin_before_navigation(
     *,
     url: str,
     surface: str,
+    browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
     browser_reason: str | None,
     proxy_profile: dict[str, object] | None,
     timeout_seconds: float,
@@ -1493,7 +1611,8 @@ async def _maybe_warm_origin_before_navigation(
     warm_page = None
     try:
         warm_page = await new_page()
-        await _apply_stealth(warm_page)
+        if _apply_stealth_for_engine(browser_engine):
+            await _apply_stealth(warm_page)
         warm_response = await warm_page.goto(
             warm_url,
             wait_until="domcontentloaded",
@@ -1913,6 +2032,7 @@ def build_failed_browser_diagnostics(
         "proxy_attempt_index": proxy_attempt_index,
         "browser_engine": normalized_engine,
         "browser_binary": str(browser_binary or normalized_engine),
+        **_browser_profile_diagnostics(normalized_engine),
         "bridge_used": bool(bridge_used),
         "escalation_lane": str(escalation_lane or "").strip().lower() or None,
         "host_policy_snapshot": dict(host_policy_snapshot or {}),

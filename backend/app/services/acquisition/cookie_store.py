@@ -28,8 +28,16 @@ def validate_cookie_policy_config() -> None:
         )
 
 
-_RUN_STORAGE_STATE_CACHE: dict[int, dict[str, object]] = {}
+_RUN_STORAGE_STATE_CACHE: dict[str, dict[str, object]] = {}
 _RUN_STORAGE_STATE_LOCK = asyncio.Lock()
+_STORAGE_STATE_META_KEY = "_crawler"
+_STORAGE_STATE_BROWSER_ENGINE_KEY = "browser_engine"
+_DEFAULT_STORAGE_STATE_ENGINE = "chromium"
+_DOMAIN_STORAGE_SCOPE_SEPARATOR = "::"
+_SUPPORTED_STORAGE_STATE_ENGINES = {
+    "chromium",
+    "real_chrome",
+}
 _COOKIE_FIELDS = (
     "name",
     "value",
@@ -79,68 +87,110 @@ async def clear_cookie_store_cache() -> None:
         _RUN_STORAGE_STATE_CACHE.clear()
 
 
-async def load_storage_state_for_run(run_id: int | None) -> dict[str, object] | None:
+async def load_storage_state_for_run(
+    run_id: int | None,
+    *,
+    browser_engine: str | None = None,
+) -> dict[str, object] | None:
     normalized_run_id = _normalized_run_id(run_id)
     if normalized_run_id is None:
         return None
     validate_cookie_policy_config()
-    async with _RUN_STORAGE_STATE_LOCK:
-        state = _RUN_STORAGE_STATE_CACHE.get(normalized_run_id)
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    for path in _storage_state_candidate_paths(
+        normalized_run_id,
+        browser_engine=normalized_engine,
+    ):
+        cache_key = str(path)
+        async with _RUN_STORAGE_STATE_LOCK:
+            state = _RUN_STORAGE_STATE_CACHE.get(cache_key)
+            if state is None:
+                state = await asyncio.to_thread(
+                    _read_storage_state_file,
+                    path,
+                )
+                if state is not None:
+                    _RUN_STORAGE_STATE_CACHE[cache_key] = state
         if state is None:
-            state = await asyncio.to_thread(
-                _read_storage_state_file,
-                _storage_state_path(normalized_run_id),
-            )
-            if state is not None:
-                _RUN_STORAGE_STATE_CACHE[normalized_run_id] = state
-    return _clone_storage_state(state)
+            continue
+        if not _storage_state_matches_browser_engine(
+            state,
+            browser_engine=normalized_engine,
+        ):
+            continue
+        return _clone_storage_state(_normalize_storage_state(state))
+    return None
 
 
 async def load_storage_state_for_domain(
     domain: str | None,
     *,
     session: AsyncSession | None = None,
+    browser_engine: str | None = None,
 ) -> dict[str, object] | None:
     normalized_domain = normalize_domain(domain or "")
     if not normalized_domain:
         return None
+    normalized_engine = _normalized_browser_engine(browser_engine)
     if session is None:
         async with SessionLocal() as owned_session:
             return await load_storage_state_for_domain(
                 normalized_domain,
                 session=owned_session,
+                browser_engine=normalized_engine,
             )
     result = await session.execute(
             select(DomainCookieMemory)
-            .where(DomainCookieMemory.domain == normalized_domain)
+            .where(
+                DomainCookieMemory.domain.in_(
+                    _domain_storage_lookup_keys(
+                        normalized_domain,
+                        browser_engine=normalized_engine,
+                    )
+                )
+            )
             .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
-            .limit(1)
     )
-    row = result.scalar_one_or_none()
-    if row is None or not isinstance(row.storage_state, Mapping):
-        return None
-    normalized_state = _normalize_storage_state(row.storage_state)
-    if not _has_reusable_storage_state(normalized_state):
-        return None
-    return _clone_storage_state(normalized_state)
+    rows = list(result.scalars().all())
+    for row in rows:
+        raw_state = row.storage_state
+        if not isinstance(raw_state, Mapping):
+            continue
+        if not _storage_state_matches_browser_engine(
+            raw_state,
+            browser_engine=normalized_engine,
+        ):
+            continue
+        normalized_state = _normalize_storage_state(raw_state)
+        if not _has_reusable_storage_state(normalized_state):
+            continue
+        return _clone_storage_state(normalized_state)
+    return None
 
 
 async def persist_storage_state_for_run(
     run_id: int | None,
     storage_state: Mapping[str, object] | object,
+    *,
+    browser_engine: str | None = None,
 ) -> None:
     normalized_run_id = _normalized_run_id(run_id)
     if normalized_run_id is None or not isinstance(storage_state, Mapping):
         return
     validate_cookie_policy_config()
-    normalized_state = _normalize_storage_state(storage_state)
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    normalized_state = _normalize_storage_state_payload(
+        storage_state,
+        browser_engine=normalized_engine,
+    )
     if not _has_reusable_storage_state(normalized_state):
         return
+    path = _storage_state_path(normalized_run_id, browser_engine=normalized_engine)
     async with _RUN_STORAGE_STATE_LOCK:
-        _RUN_STORAGE_STATE_CACHE[normalized_run_id] = normalized_state
+        _RUN_STORAGE_STATE_CACHE[str(path)] = normalized_state
         await asyncio.to_thread(
             _write_storage_state_file,
-            _storage_state_path(normalized_run_id),
+            path,
             normalized_state,
         )
 
@@ -150,28 +200,46 @@ async def persist_storage_state_for_domain(
     storage_state: Mapping[str, object] | object,
     *,
     session: AsyncSession | None = None,
+    browser_engine: str | None = None,
 ) -> bool:
     normalized_domain = normalize_domain(domain or "")
     if not normalized_domain or not isinstance(storage_state, Mapping):
         return False
-    normalized_state = _normalize_storage_state(storage_state)
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    storage_key = _domain_storage_key(
+        normalized_domain,
+        browser_engine=normalized_engine,
+    )
+    normalized_state = _normalize_storage_state_payload(
+        storage_state,
+        browser_engine=normalized_engine,
+    )
     if not _has_reusable_storage_state(normalized_state):
         return False
-    fingerprint = _storage_state_fingerprint(normalized_state)
+    fingerprint = _storage_state_fingerprint(
+        normalized_state,
+        browser_engine=normalized_engine,
+    )
     if session is None:
         async with SessionLocal() as owned_session:
             result = await owned_session.execute(
                 select(DomainCookieMemory)
-                .where(DomainCookieMemory.domain == normalized_domain)
+                .where(DomainCookieMemory.domain == storage_key)
                 .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
-                .limit(1)
             )
-            row = result.scalar_one_or_none()
+            rows = list(result.scalars().all())
+            row = next(
+                (
+                    candidate
+                    for candidate in rows
+                ),
+                None,
+            )
             if row is not None and str(row.state_fingerprint or "") == fingerprint:
                 return False
             if row is None:
                 row = DomainCookieMemory(
-                    domain=normalized_domain,
+                    domain=storage_key,
                     storage_state=normalized_state,
                     state_fingerprint=fingerprint,
                 )
@@ -183,16 +251,22 @@ async def persist_storage_state_for_domain(
             return True
     result = await session.execute(
             select(DomainCookieMemory)
-            .where(DomainCookieMemory.domain == normalized_domain)
+            .where(DomainCookieMemory.domain == storage_key)
             .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
-            .limit(1)
     )
-    row = result.scalar_one_or_none()
+    rows = list(result.scalars().all())
+    row = next(
+        (
+            candidate
+            for candidate in rows
+        ),
+        None,
+    )
     if row is not None and str(row.state_fingerprint or "") == fingerprint:
         return False
     if row is None:
         row = DomainCookieMemory(
-            domain=normalized_domain,
+            domain=storage_key,
             storage_state=normalized_state,
             state_fingerprint=fingerprint,
         )
@@ -222,7 +296,11 @@ async def list_domain_cookie_memory(
             DomainCookieMemory.id.desc(),
     )
     if normalized_domain:
-        statement = statement.where(DomainCookieMemory.domain == normalized_domain)
+        statement = statement.where(
+            DomainCookieMemory.domain.in_(
+                _domain_storage_lookup_keys(normalized_domain)
+            )
+        )
     rows = list((await session.execute(statement)).scalars().all())
     payload: list[dict[str, object]] = []
     for row in rows:
@@ -232,7 +310,8 @@ async def list_domain_cookie_memory(
         payload.append(
             {
                 "id": row.id,
-                "domain": row.domain,
+                "domain": _domain_from_storage_key(row.domain),
+                "browser_engine": _storage_row_browser_engine(row),
                 "cookie_count": len(cookie_rows),
                 "origin_count": len(origin_rows),
                 "updated_at": row.updated_at,
@@ -250,17 +329,88 @@ def _normalized_run_id(run_id: int | None) -> int | None:
         return None
 
 
-def _storage_state_fingerprint(storage_state: Mapping[str, object]) -> str:
+def _storage_state_fingerprint(
+    storage_state: Mapping[str, object],
+    *,
+    browser_engine: str | None = None,
+) -> str:
     payload = json.dumps(
-        _normalize_storage_state(storage_state),
+        _normalize_storage_state_payload(
+            storage_state,
+            browser_engine=browser_engine
+            or _storage_state_browser_engine(storage_state),
+        ),
         sort_keys=True,
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _storage_state_path(run_id: int) -> Path:
+def _storage_state_path(
+    run_id: int,
+    *,
+    browser_engine: str | None = None,
+) -> Path:
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    if normalized_engine:
+        return settings.cookie_store_dir / f"run_{run_id}__{normalized_engine}.json"
     return settings.cookie_store_dir / f"run_{run_id}.json"
+
+
+def _domain_storage_key(
+    domain: str,
+    *,
+    browser_engine: str | None = None,
+) -> str:
+    normalized_domain = normalize_domain(domain or "")
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    if not normalized_domain:
+        return ""
+    if normalized_engine and normalized_engine != _DEFAULT_STORAGE_STATE_ENGINE:
+        return (
+            f"{normalized_engine}{_DOMAIN_STORAGE_SCOPE_SEPARATOR}"
+            f"{normalized_domain}"
+        )
+    return normalized_domain
+
+
+def _domain_storage_lookup_keys(
+    domain: str,
+    *,
+    browser_engine: str | None = None,
+) -> tuple[str, ...]:
+    normalized_domain = normalize_domain(domain or "")
+    if not normalized_domain:
+        return ()
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    if normalized_engine == _DEFAULT_STORAGE_STATE_ENGINE:
+        return (normalized_domain,)
+    if normalized_engine:
+        return (_domain_storage_key(normalized_domain, browser_engine=normalized_engine),)
+    return (
+        normalized_domain,
+        *(
+            _domain_storage_key(normalized_domain, browser_engine=engine)
+            for engine in sorted(_SUPPORTED_STORAGE_STATE_ENGINES)
+            if engine != _DEFAULT_STORAGE_STATE_ENGINE
+        ),
+    )
+
+
+def _storage_state_candidate_paths(
+    run_id: int,
+    *,
+    browser_engine: str | None = None,
+) -> tuple[Path, ...]:
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    if normalized_engine == _DEFAULT_STORAGE_STATE_ENGINE:
+        return (
+            _storage_state_path(run_id, browser_engine=normalized_engine),
+            _storage_state_path(run_id),
+        )
+    if normalized_engine:
+        return (_storage_state_path(run_id, browser_engine=normalized_engine),)
+    return (_storage_state_path(run_id),)
 
 
 def _read_storage_state_file(path: Path) -> dict[str, object] | None:
@@ -272,7 +422,10 @@ def _read_storage_state_file(path: Path) -> dict[str, object] | None:
         return None
     if not isinstance(payload, dict):
         return None
-    return _normalize_storage_state(payload)
+    return _normalize_storage_state_payload(
+        payload,
+        browser_engine=_storage_state_browser_engine(payload),
+    )
 
 
 def _write_storage_state_file(path: Path, storage_state: Mapping[str, object]) -> None:
@@ -288,6 +441,22 @@ def _normalize_storage_state(storage_state: Mapping[str, object]) -> dict[str, o
         "cookies": _normalize_cookies(storage_state.get("cookies")),
         "origins": _normalize_origins(storage_state.get("origins")),
     }
+
+
+def _normalize_storage_state_payload(
+    storage_state: Mapping[str, object],
+    *,
+    browser_engine: str | None = None,
+) -> dict[str, object]:
+    payload = _normalize_storage_state(storage_state)
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    if normalized_engine is None:
+        normalized_engine = _storage_state_browser_engine(storage_state)
+    if normalized_engine is not None:
+        payload[_STORAGE_STATE_META_KEY] = {
+            _STORAGE_STATE_BROWSER_ENGINE_KEY: normalized_engine,
+        }
+    return payload
 
 
 def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
@@ -328,6 +497,62 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
             continue
         cookies.append(cookie)
     return cookies
+
+
+def _normalized_browser_engine(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized in _SUPPORTED_STORAGE_STATE_ENGINES:
+        return normalized
+    return None
+
+
+def _storage_state_browser_engine(storage_state: Mapping[str, object] | object) -> str | None:
+    if not isinstance(storage_state, Mapping):
+        return None
+    metadata = storage_state.get(_STORAGE_STATE_META_KEY)
+    if not isinstance(metadata, Mapping):
+        return None
+    return _normalized_browser_engine(metadata.get(_STORAGE_STATE_BROWSER_ENGINE_KEY))
+
+
+def _storage_state_matches_browser_engine(
+    storage_state: Mapping[str, object] | object,
+    *,
+    browser_engine: str | None,
+) -> bool:
+    normalized_engine = _normalized_browser_engine(browser_engine)
+    if normalized_engine is None:
+        return True
+    stored_engine = _storage_state_browser_engine(storage_state)
+    if stored_engine is None:
+        return normalized_engine == _DEFAULT_STORAGE_STATE_ENGINE
+    return stored_engine == normalized_engine
+
+
+def _domain_from_storage_key(value: object) -> str:
+    normalized = str(value or "").strip()
+    if _DOMAIN_STORAGE_SCOPE_SEPARATOR not in normalized:
+        return normalized
+    engine, domain = normalized.split(_DOMAIN_STORAGE_SCOPE_SEPARATOR, 1)
+    if _normalized_browser_engine(engine) is None:
+        return normalized
+    return domain
+
+
+def _storage_key_browser_engine(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    if _DOMAIN_STORAGE_SCOPE_SEPARATOR not in normalized:
+        return None
+    engine, _domain = normalized.split(_DOMAIN_STORAGE_SCOPE_SEPARATOR, 1)
+    return _normalized_browser_engine(engine)
+
+
+def _storage_row_browser_engine(row: DomainCookieMemory) -> str:
+    return (
+        _storage_state_browser_engine(row.storage_state)
+        or _storage_key_browser_engine(row.domain)
+        or _DEFAULT_STORAGE_STATE_ENGINE
+    )
 
 
 def _normalize_origins(value: object) -> list[dict[str, object]]:

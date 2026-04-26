@@ -143,6 +143,9 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             capture_screenshot=bool(
                 acquisition_profile.get("capture_screenshot", False)
             ),
+            forced_browser_engine=str(
+                acquisition_profile.get("forced_browser_engine") or ""
+            ).strip() or None,
             on_event=request.on_event,
         )
     except (httpx.HTTPError, TimeoutError, OSError) as exc:

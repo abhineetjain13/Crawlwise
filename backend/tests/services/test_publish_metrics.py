@@ -31,6 +31,12 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
             "traversal_fallback_used": True,
             "traversal_fallback_recovered": True,
             "traversal_fallback_record_count": 58,
+            "browser_engine": "real_chrome",
+            "browser_profile": "real_chrome_native",
+            "browser_launch_mode": "headful",
+            "browser_headless": False,
+            "browser_native_context": True,
+            "browser_stealth_enabled": False,
         },
     )
 
@@ -47,6 +53,13 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
     assert metrics["pages_scrolled"] == 1
     assert metrics["network_payload_count"] == 1
     assert metrics["platform_family"] == "shopify"
+    assert metrics["browser_fetch_method"] == "browser:real_chrome"
+    assert metrics["browser_engine"] == "real_chrome"
+    assert metrics["browser_profile"] == "real_chrome_native"
+    assert metrics["browser_launch_mode"] == "headful"
+    assert metrics["browser_headless"] is False
+    assert metrics["browser_native_context"] is True
+    assert metrics["browser_stealth_enabled"] is False
 
 
 def test_build_url_metrics_keeps_failed_browser_attempts_when_final_method_is_http() -> None:

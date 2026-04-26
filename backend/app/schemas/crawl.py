@@ -276,6 +276,7 @@ class DomainCookieMemoryRecordResponse(BaseModel):
 
     id: int
     domain: str
+    browser_engine: str | None = None
     cookie_count: int
     origin_count: int
     updated_at: datetime

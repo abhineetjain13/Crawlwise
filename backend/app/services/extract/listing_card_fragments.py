@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from urllib.parse import urlsplit
 from typing import Callable
 
 from selectolax.lexbor import LexborHTMLParser
@@ -8,8 +10,10 @@ from selectolax.lexbor import SelectolaxError
 
 from app.services.config.extraction_rules import (
     LISTING_FALLBACK_CONTAINER_SELECTOR,
+    LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_STRUCTURE_NEGATIVE_HINTS,
     LISTING_STRUCTURE_POSITIVE_HINTS,
+    LISTING_UTILITY_TITLE_TOKENS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
@@ -209,3 +213,175 @@ def _scored_listing_fragment_nodes(
         scored.append((score, order, node))
     scored.sort(key=lambda row: (-row[0], row[1]))
     return scored
+
+
+_PRICE_HINT_RE = re.compile(
+    r"(?:rs\.?|inr|\$|£|€)\s*\d|\b\d[\d,]{2,}\b",
+    re.I,
+)
+
+def listing_selector_is_weak(selector: str) -> bool:
+    normalized = " ".join(str(selector or "").strip().lower().split())
+    return normalized == ".product" or any(
+        token in normalized
+        for token in (
+            "[class*='product' i]",
+            '[class*="product" i]',
+            "[class*='productcard' i]",
+            '[class*="productcard" i]',
+            "[data-testid*='product' i]",
+            '[data-testid*="product" i]',
+            "[data-test*='product' i]",
+            '[data-test*="product" i]',
+            "[data-component*='product' i]",
+            '[data-component*="product" i]',
+            "[data-automation*='product' i]",
+            '[data-automation*="product" i]',
+        )
+    )
+
+
+def heuristic_listing_card_count_from_html(html: str, *, surface: str) -> int:
+    if not html:
+        return 0
+    parser = LexborHTMLParser(html)
+    seen: set[str] = set()
+    count = 0
+    try:
+        nodes = parser.css(LISTING_FALLBACK_CONTAINER_SELECTOR)
+    except Exception:
+        return 0
+    for node in nodes:
+        fragment = str(node.html or "").strip()
+        if not fragment or fragment in seen:
+            continue
+        seen.add(fragment)
+        if base_listing_fragment_score(node) <= 0:
+            continue
+        if _node_supports_listing_heuristic(node, surface=surface):
+            if _node_contains_nested_listing_candidates(node, surface=surface):
+                continue
+            count += 1
+    return count
+
+
+def _node_supports_listing_heuristic(node, *, surface: str) -> bool:
+    if _node_looks_like_listing_chrome(node):
+        return False
+    signature = _listing_node_signature(node)
+    has_positive_signature = any(
+        token in signature for token in LISTING_STRUCTURE_POSITIVE_HINTS
+    )
+    has_price = _node_text_has_price(node)
+    has_detail_link = _node_has_detail_like_link(node, surface=surface)
+    has_media = _node_has_listing_media(node)
+    if has_detail_link:
+        return True
+    if has_price and (has_positive_signature or has_media):
+        return True
+    return has_positive_signature and has_media
+
+
+def _node_looks_like_listing_chrome(node) -> bool:
+    signature = _listing_node_signature(node)
+    if any(token in signature for token in LISTING_NON_LISTING_PATH_TOKENS):
+        return True
+    try:
+        text = str(node.text(separator=" ", strip=True) or "").strip().lower()[:800]
+    except Exception:
+        return False
+    return any(
+        token in text
+        for token in (
+            *LISTING_UTILITY_TITLE_TOKENS,
+            "newsletter",
+            "whatsapp",
+        )
+    )
+
+
+def _node_contains_nested_listing_candidates(node, *, surface: str) -> bool:
+    node_fragment = str(node.html or "").strip()
+    try:
+        descendants = node.css(LISTING_FALLBACK_CONTAINER_SELECTOR)
+    except Exception:
+        return False
+    for descendant in descendants:
+        if str(descendant.html or "").strip() == node_fragment:
+            continue
+        if base_listing_fragment_score(descendant) <= 0:
+            continue
+        if _node_supports_listing_heuristic(descendant, surface=surface):
+            return True
+    return False
+
+
+def _listing_node_signature(node) -> str:
+    attrs = getattr(node, "attributes", {}) or {}
+    return " ".join(
+        [
+            str(attrs.get("class") or ""),
+            str(attrs.get("id") or ""),
+            str(attrs.get("role") or ""),
+            str(attrs.get("aria-label") or ""),
+        ]
+    ).lower()
+
+
+def _node_text_has_price(node) -> bool:
+    return bool(_PRICE_HINT_RE.search(str(node.text(strip=True) or "").strip()))
+
+
+def _node_has_listing_media(node) -> bool:
+    try:
+        return bool(node.css("img, picture img, picture source"))
+    except Exception:
+        return False
+
+
+def _node_has_detail_like_link(node, *, surface: str) -> bool:
+    href_tokens = (
+        ("/job/", "/jobs/", "/viewjob", "showjob=", "/careers/")
+        if str(surface or "").strip().lower().startswith("job_")
+        else ("/products/", "/product/", "/p/", "/dp/", "/item/")
+    )
+    try:
+        anchors = node.css("a[href]")
+    except Exception:
+        return False
+    for anchor in anchors[:6]:
+        attrs = getattr(anchor, "attributes", {}) or {}
+        href = str(attrs.get("href") or "").strip().lower()
+        if not href or href.startswith(("#", "javascript:")):
+            continue
+        if _listing_href_is_structural(href):
+            continue
+        if any(token in href for token in href_tokens):
+            return True
+    return False
+
+
+def _listing_href_is_structural(href: str) -> bool:
+    try:
+        parsed = urlsplit(href)
+    except Exception:
+        return False
+    segments = [
+        segment.strip().lower()
+        for segment in str(parsed.path or "").split("/")
+        if segment.strip()
+    ]
+    if not segments:
+        return False
+    tokenized = [
+        {
+            token
+            for token in re.split(r"[\-\.]+", segment)
+            if token
+        }
+        for segment in segments
+    ]
+    if tokenized[-1] & set(LISTING_NON_LISTING_PATH_TOKENS):
+        return True
+    leading = tokenized[:-1] if len(tokenized) <= 2 else []
+    return any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading)

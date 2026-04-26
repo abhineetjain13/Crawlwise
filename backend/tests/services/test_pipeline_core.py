@@ -179,6 +179,146 @@ async def test_process_single_url_prefetch_only_returns_metrics_without_persisti
 
 
 @pytest.mark.asyncio
+async def test_post_extraction_challenge_shell_retries_real_chrome(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://www.nike.com/t/widget",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    attempted_engines: list[str] = []
+    hard_blocks: list[dict[str, object]] = []
+
+    async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
+        forced_engine = str(
+            request.acquisition_profile.get("forced_browser_engine") or "chromium"
+        )
+        attempted_engines.append(forced_engine)
+        challenge = forced_engine == "chromium"
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=f"<html><body>{forced_engine}</body></html>",
+            method="browser",
+            status_code=200,
+            blocked=False,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_engine": forced_engine,
+                "browser_outcome": "usable_content",
+                "challenge_evidence": ["active_provider:akamai"] if challenge else [],
+            },
+        )
+
+    def _fake_extract_records(html: str, *_args, **_kwargs):
+        if "real_chrome" not in html:
+            return []
+        return [
+            {
+                "title": "Nike Widget",
+                "url": "https://www.nike.com/t/widget",
+                "price": "$50",
+            }
+        ]
+
+    async def _fake_note_host_hard_block(value: str | None, **kwargs):
+        hard_blocks.append({"value": value, **kwargs})
+
+    async def _no_adapter(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _fake_extract_records)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.real_chrome_browser_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.note_host_hard_block",
+        _fake_note_host_hard_block,
+    )
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+
+    result = await process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert attempted_engines == ["chromium", "real_chrome"]
+    assert hard_blocks[0]["method"] == "browser:chromium"
+    assert result.verdict == "success"
+    assert total == 1
+    assert rows[0].data["title"] == "Nike Widget"
+
+
+@pytest.mark.asyncio
+async def test_chromium_challenge_shell_updates_host_memory(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://www.nike.com/t/widget",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    hard_blocks: list[dict[str, object]] = []
+
+    async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>chromium</body></html>",
+            method="browser",
+            status_code=200,
+            blocked=False,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_engine": "chromium",
+                "browser_outcome": "usable_content",
+                "challenge_evidence": ["active_provider:akamai"],
+            },
+        )
+
+    async def _fake_note_host_hard_block(value: str | None, **kwargs):
+        hard_blocks.append({"value": value, **kwargs})
+
+    async def _no_adapter(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.real_chrome_browser_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.note_host_hard_block",
+        _fake_note_host_hard_block,
+    )
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+
+    await process_single_url(db_session, run, run.url)
+
+    assert hard_blocks
+    assert hard_blocks[0]["method"] == "browser:chromium"
+
+
+@pytest.mark.asyncio
 async def test_process_single_url_runs_adapter_against_browser_artifact_fragments(
     db_session: AsyncSession,
     test_user,
@@ -1169,7 +1309,7 @@ async def test_apply_llm_fallback_re_normalizes_llm_values_before_return(
         )
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_missing_fields",
+        "app.services.pipeline.direct_record_fallback.extract_missing_fields",
         _fake_extract_missing_fields,
     )
 
@@ -1240,7 +1380,7 @@ async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_missing_fields",
+        "app.services.pipeline.direct_record_fallback.extract_missing_fields",
         _fake_extract_missing_fields,
     )
     monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
@@ -1565,7 +1705,7 @@ async def test_process_single_url_skips_llm_on_low_content_browser_listing(
     monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
-    monkeypatch.setattr("app.services.pipeline.core._apply_direct_record_llm_fallback", _unexpected_direct_llm)
+    monkeypatch.setattr("app.services.pipeline.core.apply_direct_record_llm_fallback_impl", _unexpected_direct_llm)
     monkeypatch.setattr(
         "app.services.pipeline.core.persist_acquisition_artifacts",
         _persist_artifacts,
@@ -2097,7 +2237,12 @@ async def test_process_single_url_persists_live_acquisition_events(
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr(
         "app.services.pipeline.core.extract_records",
-        lambda *args, **kwargs: [{"title": "Widget Prime"}],
+        lambda *args, **kwargs: [
+            {
+                "title": "Widget Prime",
+                "url": "https://example.com/products/widget-prime",
+            }
+        ],
     )
     async def _persist_artifacts(**kwargs):
         del kwargs

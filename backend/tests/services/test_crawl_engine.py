@@ -8,7 +8,7 @@ from app.services import crawl_fetch_runtime
 from app.services.acquisition.host_protection_memory import HostProtectionPolicy
 from app.services import detail_extractor
 from app.services.adapters.belk import BelkAdapter
-from app.services.detail_extractor import _normalize_variant_record
+from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
 
 
@@ -4433,7 +4433,7 @@ def test_normalize_variant_record_tolerates_scalar_variant_axis_values() -> None
         }
     }
 
-    _normalize_variant_record(record)
+    normalize_variant_record(record)
 
     assert record["size"] == "M"
     assert record["stock"] == "5"
@@ -4465,10 +4465,41 @@ def test_normalize_variant_record_repairs_technical_option_labels_without_touchi
         },
     }
 
-    _normalize_variant_record(record)
+    normalize_variant_record(record)
 
     assert record["option1_name"] == "Flavour"
     assert record["option2_name"] == "type"
+
+
+def test_variant_axis_headers_do_not_pollute_size_or_available_sizes() -> None:
+    record = {
+        "size": "100",
+        "available_sizes": ["Sizes", "Sizes: Standard", "XS", "M"],
+        "variant_axes": {
+            "size": ["Sizes", "Sizes: Standard", "Sizes: Tall", "XS", "M"],
+        },
+        "variants": [
+            {"size": "Sizes", "option_values": {"size": "Sizes"}},
+            {"size": "Sizes: Standard", "option_values": {"size": "Sizes: Standard"}},
+            {"size": "XS", "option_values": {"size": "XS"}},
+            {"size": "M", "option_values": {"size": "M"}},
+        ],
+        "selected_variant": {
+            "size": "Sizes: Standard",
+            "option_values": {"size": "Sizes: Standard"},
+        },
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variant_axes"] == {"size": ["XS", "M"]}
+    assert [variant["option_values"]["size"] for variant in record["variants"]] == [
+        "XS",
+        "M",
+    ]
+    assert record["selected_variant"]["option_values"] == {"size": "XS"}
+    assert record["size"] == "XS"
+    assert record["available_sizes"] == ["XS", "M"]
 
 
 def test_extract_ecommerce_detail_does_not_infer_price_from_shell_chrome_text() -> None:

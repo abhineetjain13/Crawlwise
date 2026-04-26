@@ -3057,6 +3057,38 @@ async def test_origin_warmup_skips_for_rotating_proxy_profile() -> None:
     assert page.spawned_pages == []
 
 
+@pytest.mark.asyncio
+async def test_origin_warmup_skips_stealth_for_native_real_chrome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
+    stealth_calls: list[object] = []
+
+    async def _fake_stealth(target) -> None:
+        stealth_calls.append(target)
+
+    monkeypatch.setattr(browser_runtime, "_STEALTH_APPLIER", _fake_stealth)
+    monkeypatch.setattr(
+        browser_runtime.crawler_runtime_settings,
+        "browser_real_chrome_apply_stealth",
+        False,
+    )
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_engine="real_chrome",
+        browser_reason="http-escalation",
+        proxy_profile=None,
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.spawned_pages
+    assert stealth_calls == []
+
+
 def test_browser_runtime_snapshot_uses_capacity_fallback_for_pooled_runtimes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

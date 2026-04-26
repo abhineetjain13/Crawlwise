@@ -27,13 +27,10 @@ from app.services.js_state_helpers import (
 )
 from app.services.platform_policy import JSStateExtractorConfig, platform_js_state_extractors
 
-
 _SKIP: tuple[object, ...] = ("", [], {})
-
 
 def _as_list(value: object) -> list[Any]:
     return value if isinstance(value, list) else []
-
 
 PRODUCT_FIELD_SPEC = {
     "title": Coalesce("title", "name", default=None, skip=_SKIP),
@@ -108,7 +105,6 @@ def map_js_state_to_fields(
         return _map_ecommerce_detail_state(js_state_objects, page_url=page_url)
     return {}
 
-
 def _map_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
     mapped = _map_platform_job_detail_state(js_state_objects)
     if not mapped:
@@ -121,7 +117,6 @@ def _map_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
     if mapped.get("apply_url") and not mapped.get("url"):
         mapped["url"] = mapped["apply_url"]
     return mapped
-
 
 def _map_platform_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
     for state_key, payload in js_state_objects.items():
@@ -140,7 +135,6 @@ def _map_platform_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str
             if mapped:
                 return mapped
     return {}
-
 
 def _map_configured_state_payload(
     payload: dict[str, Any],
@@ -162,14 +156,12 @@ def _map_configured_state_payload(
             return mapped
     return {}
 
-
 def _first_path_value(payload: dict[str, Any], paths: list[list[str]]) -> Any:
     for path in paths:
         value = _path_value(payload, path)
         if value not in (None, "", [], {}):
             return value
     return None
-
 
 def _path_value(payload: Any, path: list[str]) -> Any:
     current = payload
@@ -185,7 +177,6 @@ def _path_value(payload: Any, path: list[str]) -> Any:
             continue
         return None
     return current
-
 
 def _map_ecommerce_detail_state(
     js_state_objects: dict[str, Any],
@@ -219,7 +210,6 @@ def _map_ecommerce_detail_state(
                     page_url=page_url,
                 )
     return base_record
-
 
 def _merge_same_product_record(
     base_record: dict[str, Any],
@@ -267,7 +257,6 @@ def _merge_same_product_record(
     _refresh_record_from_selected_variant(merged)
     return compact_dict(merged)
 
-
 def _merge_variant_rows(
     existing_rows: Any,
     incoming_rows: Any,
@@ -305,7 +294,6 @@ def _merge_variant_rows(
 
     return [merged_by_identity[key] for key in ordered_keys]
 
-
 def _merge_variant_axes(existing_axes: Any, incoming_axes: Any) -> dict[str, list[str]]:
     merged: dict[str, list[str]] = {}
     for axes in (existing_axes, incoming_axes):
@@ -324,7 +312,6 @@ def _merge_variant_axes(existing_axes: Any, incoming_axes: Any) -> dict[str, lis
                 seen.add(cleaned_value.lower())
                 bucket.append(cleaned_value)
     return merged
-
 
 def _variant_identity(variant: dict[str, Any]) -> str | None:
     variant_id = text_or_none(variant.get("variant_id"))
@@ -348,7 +335,6 @@ def _variant_identity(variant: dict[str, Any]) -> str | None:
         return f"url:{variant_url}"
     return None
 
-
 def _variant_rows_by_richness(
     left: dict[str, Any],
     right: dict[str, Any],
@@ -358,7 +344,6 @@ def _variant_rows_by_richness(
     if right_score > left_score:
         return right, left
     return left, right
-
 
 def _variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
     populated_fields = sum(
@@ -375,7 +360,6 @@ def _variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
         or variant.get("original_price") not in (None, "", [], {})
     )
     return (populated_fields, option_value_count, has_stock_signal)
-
 
 def _refresh_record_from_selected_variant(record: dict[str, Any]) -> None:
     selected_variant = record.get("selected_variant")
@@ -397,7 +381,6 @@ def _refresh_record_from_selected_variant(record: dict[str, Any]) -> None:
         if field_value not in (None, "", [], {}):
             record[field_name] = field_value
 
-
 def _mapped_product_identity_matches(
     base_record: dict[str, Any],
     mapped: dict[str, Any],
@@ -417,7 +400,6 @@ def _mapped_product_identity_matches(
     mapped_title = text_or_none(mapped.get("title"))
     return bool(base_title and mapped_title and base_title == mapped_title)
 
-
 def _extract_product_payload_from_normalized(
     state_key: str,
     normalized_payload: Any,
@@ -432,14 +414,12 @@ def _extract_product_payload_from_normalized(
                 return dict(candidate), extractor
     return _find_product_payload(normalized_payload), None
 
-
 def _normalized_state_payload(state_key: str, payload: Any) -> Any:
     if state_key == "__NUXT_DATA__":
         revived = _revive_nuxt_data_array(payload)
         if revived is not None:
             return revived
     return payload
-
 
 def _revive_nuxt_data_array(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, list):
@@ -461,7 +441,6 @@ def _revive_nuxt_data_array(payload: Any) -> dict[str, Any] | None:
     if state:
         revived["state"] = state
     return revived or None
-
 
 def _looks_like_product_payload(value: Any) -> bool:
     return isinstance(value, dict) and any(
@@ -492,7 +471,6 @@ def _looks_like_product_payload(value: Any) -> bool:
         )
     ) and any(key in value for key in ("title", "name"))
 
-
 def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict[str, Any] | None:
     if depth > limit:
         return None
@@ -520,7 +498,6 @@ def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict
                 best_payload = found
                 best_score = score
     return best_payload
-
 
 def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
     raw_variants = _as_list(product.get("variants"))
@@ -596,7 +573,6 @@ def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
         len(product_keys & strong_product_keys),
         len(product_keys),
     )
-
 
 def _map_product_payload(
     product: dict[str, Any],
@@ -724,7 +700,6 @@ def _map_product_payload(
         record["option2_values"] = ordered[1][1]
     return record
 
-
 def _product_base_fields(
     product: dict[str, Any],
     *,
@@ -740,7 +715,6 @@ def _product_base_fields(
             merged[field_name] = value
     return compact_dict(merged)
 
-
 def _glom_product_base_fields(product: dict[str, Any]) -> dict[str, Any]:
     try:
         base = glom(product, PRODUCT_FIELD_SPEC, default=None)
@@ -749,7 +723,6 @@ def _glom_product_base_fields(product: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(base, dict):
         return {}
     return compact_dict(base)
-
 
 def _map_jmespath_fields(
     product: dict[str, Any],
@@ -767,7 +740,6 @@ def _map_jmespath_fields(
             mapped[field_name] = value
     return compact_dict(mapped)
 
-
 def _first_non_empty_jmespath(
     payload: dict[str, Any],
     expressions: str | list[str],
@@ -783,7 +755,6 @@ def _first_non_empty_jmespath(
             return value
     return None
 
-
 def _extract_product_images(product: dict[str, Any], *, page_url: str) -> list[str]:
     values = extract_urls(product.get("images"), page_url)
     values.extend(extract_urls(_connection_nodes(product.get("images")), page_url))
@@ -793,7 +764,6 @@ def _extract_product_images(product: dict[str, Any], *, page_url: str) -> list[s
     values.extend(extract_urls(product.get("featured_image"), page_url))
     values.extend(extract_urls(_connection_nodes(product.get("media")), page_url))
     return dedupe_image_urls(values)
-
 
 def _extract_nested_image_urls(value: Any, *, page_url: str, depth: int = 0) -> list[str]:
     if depth > 6:
@@ -814,7 +784,6 @@ def _extract_nested_image_urls(value: Any, *, page_url: str, depth: int = 0) -> 
             )
     return dedupe_image_urls(nested)
 
-
 def _looks_like_shopify_product(product: dict[str, Any]) -> bool:
     raw_variants = _as_list(product.get("variants"))
     return any(
@@ -834,7 +803,6 @@ def _looks_like_shopify_product(product: dict[str, Any]) -> bool:
         for variant in raw_variants
     )
 
-
 def _option_names(raw_options: object) -> list[str]:
     names: list[str] = []
     if isinstance(raw_options, list):
@@ -846,7 +814,6 @@ def _option_names(raw_options: object) -> list[str]:
                 if label:
                     names.append(str(label))
     return names
-
 
 _VARIANT_FIELD_SPEC = {
     "price": Coalesce(
@@ -888,7 +855,6 @@ _VARIANT_FIELD_SPEC = {
     "sku": Coalesce("sku", "productId", "product_id", default=None, skip=_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=_SKIP),
 }
-
 
 def _normalize_variant(
     variant: dict[str, Any],
@@ -965,7 +931,6 @@ def _normalize_variant(
         if value and field_name not in row:
             row["title" if field_name == "name" else field_name] = value
     return row or None
-
 
 def _variant_option_values(
     variant: dict[str, Any],
@@ -1061,7 +1026,6 @@ def _variant_option_values(
 
     return option_values
 
-
 def _option_value_labels(product: dict[str, Any]) -> dict[str, dict[str, str]]:
     labels: dict[str, dict[str, str]] = {}
     raw_attributes = product.get("variationAttributes")
@@ -1107,7 +1071,6 @@ def _option_value_labels(product: dict[str, Any]) -> dict[str, dict[str, str]]:
             labels.setdefault(axis_key, {})[raw_value] = display
     return labels
 
-
 def _display_option_value(
     axis_key: str,
     value: str,
@@ -1119,7 +1082,6 @@ def _display_option_value(
         return ""
     return (option_value_labels or {}).get(axis_key, {}).get(cleaned, cleaned)
 
-
 def _variant_url(page_url: str, variant_id: str) -> str:
     parsed = urlsplit(str(page_url or "").strip())
     query_pairs = [
@@ -1129,7 +1091,6 @@ def _variant_url(page_url: str, variant_id: str) -> str:
     ]
     query_pairs.append(("variant", variant_id))
     return urlunsplit(parsed._replace(query=urlencode(query_pairs, doseq=True)))
-
 
 def _connection_nodes(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, dict):
@@ -1146,7 +1107,6 @@ def _connection_nodes(value: Any) -> list[dict[str, Any]]:
                 if isinstance(node, dict)
             ]
     return []
-
 
 def _name_or_value(value: Any) -> Any:
     if isinstance(value, dict):

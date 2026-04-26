@@ -11,6 +11,7 @@ from app.services.field_value_core import (
     validate_and_clean,
     validate_record_for_surface,
 )
+from app.services.public_record_firewall import public_record_data_for_surface
 
 
 def test_validate_and_clean_drops_fields_outside_surface_schema() -> None:
@@ -88,6 +89,56 @@ def test_validate_record_for_surface_drops_unknown_fields_but_keeps_canonical_fi
 
     assert cleaned == {"title": "Widget Prime"}
     assert len(errors) == 1
+
+
+def test_persistence_schema_firewall_drops_unknown_and_internal_fields() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Widget Prime",
+            "price": "19.99",
+            "_source": "llm_direct_record_extraction",
+            "debug_payload": {"raw": True},
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget-prime",
+    )
+
+    assert data == {"title": "Widget Prime", "price": "19.99"}
+    assert rejected == {"debug_payload": "field_not_allowed_for_surface"}
+
+
+def test_listing_url_firewall_rejects_api_event_click_urls() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Tracked card",
+            "url": "https://www.chewy.com/api/event/p/sar/click?adsOrigin=aspen1&id=opaque",
+            "price": "$12.50",
+        },
+        surface="ecommerce_listing",
+        page_url="https://www.chewy.com/b/dog-leashes-and-collars-344",
+    )
+
+    assert data == {"title": "Tracked card", "price": "12.50"}
+    assert rejected == {"url": "unsafe_navigation_url"}
+
+
+def test_llm_outputs_pass_same_schema_firewall() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "_source": "llm_missing_field_extraction",
+            "title": "LLM Widget",
+            "url": "javascript:alert(1)",
+            "unknown_llm_field": "do not persist",
+        },
+        surface="ecommerce_listing",
+        page_url="https://example.com/category/widgets",
+    )
+
+    assert data == {"title": "LLM Widget"}
+    assert rejected == {
+        "url": "unsafe_navigation_url",
+        "unknown_llm_field": "field_not_allowed_for_surface",
+    }
 
 
 def test_strip_tracking_query_params_removes_etsy_style_click_tracking_but_keeps_functional_values() -> None:

@@ -23,9 +23,11 @@ from app.services.config.extraction_rules import (
 )
 from app.services.detail_extractor import (
     _backfill_detail_price_from_html,
-    _normalize_variant_record,
     drop_low_signal_zero_detail_price,
     extract_detail_records,
+)
+from app.services.extract.variant_record_normalization import (
+    normalize_variant_record,
 )
 from app.services.field_value_core import (
     absolute_url,
@@ -256,7 +258,7 @@ def _postprocess_detail_records(
     for record in list(records or []):
         if not isinstance(record, dict):
             continue
-        _normalize_variant_record(record)
+        normalize_variant_record(record)
         _backfill_detail_price_from_html(record, html=html)
         drop_low_signal_zero_detail_price(record)
         rows.append(record)

@@ -99,6 +99,7 @@ class _FetchRuntimeContext:
     fetch_mode: str
     runtime_policy: dict[str, object]
     capture_screenshot: bool = False
+    forced_browser_engine: str | None = None
     locality_profile: dict[str, object] = field(default_factory=dict)
     last_browser_attempt_diagnostics: dict[str, object] = field(default_factory=dict)
     last_error: Exception | None = None
@@ -311,6 +312,7 @@ async def fetch_page(
     listing_recovery_mode: str | None = None,
     capture_page_markdown: bool = False,
     capture_screenshot: bool = False,
+    forced_browser_engine: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = 1,
     max_records: int | None = None,
@@ -353,6 +355,7 @@ async def fetch_page(
         traversal_required=should_run_traversal(surface, traversal_mode),
         fetch_mode=_normalize_fetch_mode(fetch_mode),
         runtime_policy=resolve_platform_runtime_policy(url, surface=surface),
+        forced_browser_engine=str(forced_browser_engine or "").strip().lower() or None,
     )
     learned_host_policy = await load_host_protection_policy(url)
     host_preference_enabled = bool(
@@ -971,6 +974,17 @@ def _browser_engine_attempts(
     context: _FetchRuntimeContext,
     host_policy: HostProtectionPolicy,
 ) -> list[str]:
+    forced_engine = str(context.forced_browser_engine or "").strip().lower()
+    if forced_engine:
+        if forced_engine == "real_chrome":
+            if (
+                bool(crawler_runtime_settings.browser_real_chrome_enabled)
+                and real_chrome_browser_available()
+            ):
+                return ["real_chrome"]
+            return ["chromium"]
+        if forced_engine == "chromium":
+            return ["chromium"]
     engines = ["chromium"]
     if not str(context.surface or "").startswith("ecommerce_"):
         return engines

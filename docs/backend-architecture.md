@@ -153,6 +153,8 @@ Primary files:
 - `crawl_events.py`
 - `_batch_runtime.py`
 - `pipeline/core.py`
+- `pipeline/direct_record_fallback.py`
+- `pipeline/extraction_retry_decision.py`
 - `pipeline/types.py`
 - `pipeline/runtime_helpers.py`
 
@@ -172,6 +174,7 @@ Current live behavior:
 - acceptance harness runs now support curated manifest-driven site sets with bucketed expectations, explicit acceptance surfaces remain authoritative instead of being silently re-inferred from URLs, and curated commerce rows can reuse artifact-backed run ids before falling back to live execution
 - acceptance reports now distinguish transport verdicts from output quality through `quality_verdict`, `observed_failure_mode`, and `quality_checks`, so runs that technically succeed but return shell pages, promo pages, chrome-heavy listings, or broken variant semantics no longer look healthy
 - reusable domain execution defaults are persisted separately from selector memory in `DomainRunProfile`, then merged into single-URL run creation before `CrawlRun.settings` is snapshotted
+- `pipeline/core.py` stays the per-URL orchestrator; direct-record LLM fallback, empty-extraction browser retry decisions, browser diagnostics merge, and failure-state persistence live in dedicated pipeline helper modules
 
 ### 6.3 Acquisition and browser runtime
 
@@ -187,6 +190,9 @@ Primary files:
 - `acquisition/pacing.py`
 - `acquisition/traversal.py`
 - `crawl_fetch_runtime.py`
+- `config/runtime_settings.py`
+- `config/browser_init_scripts.py`
+- `config/browser_fingerprint_profiles.py`
 - `robots_policy.py`
 - `url_safety.py`
 
@@ -211,9 +217,10 @@ Current live behavior:
 - browser fetch now has a separate `real_chrome` fallback lane for protected ecommerce targets. When `C:\Program Files\Google\Chrome\Application\chrome.exe` (or `CRAWLER_RUNTIME_BROWSER_REAL_CHROME_EXECUTABLE_PATH`) is available, the fallback can launch native local Chrome headful and use a native context with stealth disabled by default, while probe-mode runs can still inject the full fingerprint scripts
 - `run_browser_surface_probe.py` is the canonical browser-surface verification harness for acquisition changes. It runs through the same shared browser runtime as crawls and writes timestamped `browser_surface_probe` artifacts with direct JS baseline, Sannysoft/Pixelscan/CreepJS extracted values, consensus drift, connection source metadata, and normalized findings.
 - the browser-surface probe treats `window.chrome.runtime` as healthy when its type is `object`, and its `isTrusted` behavioral smoke now uses real Playwright mouse input against a temporary overlay target instead of JS-dispatched synthetic events, so probe findings reflect actual runtime leaks instead of expected DOM-event semantics
-- browser contexts now reload the per-run temp Playwright storage state first and then fall back to domain-scoped `DomainCookieMemory`, so future runs can reuse learned cookies/localStorage/consent state for the same domain without rewriting unchanged state on every context close
+- browser contexts now reload engine-scoped per-run Playwright storage state first and then fall back to engine-scoped domain cookie memory, so `chromium` and `real_chrome` do not replay each other's cookies/localStorage while still reusing learned state inside the same lane
 - domain cookie memory is intentionally filtered acquisition memory, not a verbatim storage-state cache: challenge-only bot-defense state (for example PerimeterX `_px*`, `pxcts`, PX localStorage) is dropped on load/save, and blocked browser runs do not persist domain memory
 - blocked browser runs also do not rewrite per-run Playwright storage snapshots, so one challenged detail page does not poison later URLs in the same batch run
+- browser diagnostics now persist explicit lane identity (`browser_engine`, `browser_profile`, launch mode, native-context flag, stealth-enabled flag) so metrics and audits can distinguish shaped Chromium from native real Chrome without inferring from free-form logs
 - traversal is explicit and separate from browser escalation
 - JSON-expected acquisition now stays in `acquisition/http_client.py`; adapters consume decoded payloads instead of compensating for transport quirks
 - browser network interception is bounded through a small response-queue worker pool with per-endpoint payload budgets instead of untracked background tasks
@@ -244,10 +251,12 @@ Current live behavior:
 - tracked detail URLs are normalized upstream before reuse: extracted and user-entered commerce/job targets now drop low-signal click/search context params (`utm_*`, `click_*`, `content_source`, `pf_from`, `sr_prefetch`, `qs`, and similar short replay flags) while preserving functional params such as `variant`, `q`, and `id`
 - hosts with repeated hard blocks can temporarily prefer browser-first acquisition within the pacing TTL, but one successful browser recovery clears that host memory so random PDP challenges do not taint the whole host
 - risky detail browser navigations can spend the configured `origin_warm_pause_ms` budget warming the site origin before the direct PDP navigation, which gives consent/session code a chance to settle before the high-risk page load
+- origin warmup now respects the active lane profile; native `real_chrome` warmup no longer re-applies stealth when that lane is configured to stay native
 - browser contexts apply `playwright-stealth` when installed and accept a per-fetch `proxy` for rotated-proxy traversal; `temporary_browser_page` is a thin wrapper over `SharedBrowserRuntime.page(proxy=...)`
 - `browser_identity` is host-OS-locked via `browserforge`, with a small regeneration loop to reject fingerprints whose UA tokens disagree with the OS
 - browser identity also normalizes exposed runtime hardware upstream: `hardwareConcurrency` is clamped to host-consistent values, `deviceMemory` is bucketed like Chrome, and page JS sees the same values as the generated context identity.
 - browser identity init scripts now patch `window.chrome.runtime` with a Chrome-like runtime stub, mask Audio/OfflineAudio analyser/channel APIs with deterministic per-identity noise, and apply deterministic canvas/WebGL spoofing (canvas image-data/export noise plus profile-consistent WebGL vendor/renderer/readPixels overrides); the browser-surface probe now emits flattened canvas hash/data-url and WebGL vendor/renderer baseline fields for quick verification, and the shared `playwright-stealth` runtime leaves `iframe_content_window` enabled to close the iframe leak noted by the browser-surface probe
+- browser runtime settings are split by concern: `runtime_settings.py` owns tunables/launch args, `browser_init_scripts.py` owns JS payload builders, and `browser_fingerprint_profiles.py` owns static profile data
 - blocked-page escalation is now two-pronged: vendor-specific response headers (DataDome, Cloudflare, Akamai, PerimeterX, Sucuri, ...) classified via `classify_block_from_headers` short-circuit into the browser and mark the host vendor-blocked so sibling fetchers skip further HTTP attempts; HTML heuristics continue to catch vendor-silent blocks
 - `is_non_retryable_http_status` keeps `401` out of browser escalation (auth walls) while still escalating `403`/`429` challenges, and `classify_blocked_page` emits typed `BlockPageClassification` outcomes (`auth_wall`, `rate_limited`, `challenge_page`, ...) distinct from network failures
 - `classify_blocked_page` must keep provider/body evidence even on forced `403` / `429` outcomes; status-only early returns are not enough because recovery, diagnostics, and regression triage need the concrete blocker family
@@ -267,6 +276,9 @@ Primary files:
 - `js_state_mapper.py`
 - `network_payload_mapper.py`
 - `field_value_*`
+- `field_url_normalization.py`
+- `public_record_firewall.py`
+- `extract/variant_record_normalization.py`
 - `extract/*`
 - `adapters/*`
 
@@ -286,12 +298,14 @@ Important implemented features:
 - network payload detail inference now keeps its signature/list-container config in `config/network_payload_specs.py`, recognizes normalized camel/Pascal-case commerce keys (`ProductName`, `DetailUrl`, `FieldValues`), and rejects product/detail payloads whose explicit URL anchor does not match the current detail page
 - generic ghost-route payload fallback now rejects multi-record listing envelopes for detail surfaces, so paginated product-list APIs cannot masquerade as a single detail payload just because one row happens to expose product-like keys
 - tracking-parameter stripping is live in field-value normalization via `w3lib`
+- tracking URL cleanup has its own owner in `field_url_normalization.py`; generic value coercion stays in `field_value_core.py`
 - platform registry config in `config/platforms.json` now owns adapter registration metadata, network signatures, JS-state mappings, and listing-readiness selectors/waits
 - extraction runtime now short-circuits raw XML sitemap/listing payloads into deterministic URL records before HTML DOM parsing, which keeps sitemap targets out of the expensive BeautifulSoup listing path
 - ecommerce detail title selection now ranks structured sources ahead of raw DOM headings, rejects noisy DOM `<h1>/<title>` values such as promo or generic-results text, and only promotes fallback titles when the replacement source is materially stronger
 - ecommerce detail extraction now drops low-signal site-shell records when the surviving title still resolves to site-brand chrome and no real product anchors survive, preventing stale SPA/detail misses from being persisted as false product successes
 - ecommerce-detail extraction now threads the originally requested PDP URL through materialization so same-site utility redirects can either preserve the requested product identity when the product metadata still matches or drop the row entirely when the utility page is carrying mismatched stale product data
 - detail extraction now has a DOM variant fallback for `ecommerce_detail` pages when structured data and JS state leave variant axes empty
+- variant record normalization has its own owner in `extract/variant_record_normalization.py`; `detail_extractor.py` extracts candidates and delegates final variant axis/value cleanup
 - DOM variant recovery now recognizes radio/checkbox-based size and color groups, associates labels via `for`/parent label structure, and carries stock-derived availability (`0 Left`, `17 Left`, etc.) into `variants` and `selected_variant`
 - JS-state ecommerce-detail mapping now scores candidate product payloads so richer nested PDP nodes beat shallow landing/navigation shells, and generic direct-axis variant keys such as `condition`, `grade`, `storage`, and `memory` are normalized without adapter-specific branches
 - DOM listing extraction no longer accepts the first non-empty candidate set; it now ranks structured, DOM, and browser-captured rendered-card candidates by record quality and keeps visual elements as a last-resort fallback only
@@ -315,6 +329,8 @@ Important implemented features:
 - DOM section intake now rejects very short non-prose tab/button label clusters before they can override a real product description or specifications body
 - ecommerce-detail JS-state product detection now requires real commerce cues instead of accepting arbitrary titled image blocks, and JS-state image harvesting filters payment, logo, bookmark, swatch, and video assets before they can outrank structured product media
 - output schema validation now applies to listing surfaces as well as detail surfaces before persistence, so type mismatches on listing records are nullified instead of silently bypassing validation
+- persistence now applies a final public-record firewall before `CrawlRecord.data`: unknown/internal fields, empty fields, invalid scalar/list/object shapes, non-navigation URLs, API/event/tracking URLs, and overlong opaque URLs are rejected into `source_trace.extraction.rejected_public_fields` instead of public data
+- the final persisted-data firewall is owned by `public_record_firewall.py`, not `pipeline/persistence.py`; persistence calls it before writing `CrawlRecord.data`
 - pipeline post-processing now has two bounded optional recovery layers: selector self-heal for detail pages, and a snapshot-backed `direct_record_extraction` LLM task that only replaces weak deterministic record sets when the LLM result scores better
 
 ### 6.5 Publish and persistence

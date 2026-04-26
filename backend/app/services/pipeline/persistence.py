@@ -6,6 +6,7 @@ import hashlib
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.services.db_utils import mapping_or_empty
 from app.services.field_value_core import _object_list
+from app.services.public_record_firewall import public_record_data_for_surface
 from app.services.artifact_store import (
     persist_html_artifact,
     persist_json_artifact,
@@ -42,6 +43,7 @@ def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[s
     field_discovery: dict[str, object] = {}
     field_sources = mapping_or_empty(record.get("_field_sources"))
     selector_traces = mapping_or_empty(record.get("_selector_traces"))
+    rejected_public_fields = mapping_or_empty(record.get("_rejected_public_fields"))
     for key, value in record.items():
         if str(key).startswith("_"):
             continue
@@ -77,6 +79,7 @@ def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[s
             "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
             "review_bucket": _object_list(record.get("_review_bucket")),
             "semantic": mapping_or_empty(record.get("_semantic")),
+            "rejected_public_fields": rejected_public_fields,
         },
         "field_discovery": field_discovery,
     }
@@ -185,12 +188,18 @@ async def persist_extracted_records(
         }
     seen_identities: set[str] = set(existing_identities)
     for record in records:
-        data = {
-            key: value
-            for key, value in dict(record).items()
-            if value not in (None, "", [], {}) and not str(key).startswith("_")
-        }
+        raw_record = dict(record)
+        preliminary_source_url = str(
+            raw_record.get("source_url") or acquisition_result.final_url
+        )
+        data, rejected_public_fields = public_record_data_for_surface(
+            raw_record,
+            surface=run.surface,
+            page_url=preliminary_source_url,
+        )
         if not data:
+            continue
+        if "listing" in str(run.surface or "") and not data.get("url"):
             continue
         record_source_url = str(
             data.get("source_url") or acquisition_result.final_url
@@ -201,7 +210,8 @@ async def persist_extracted_records(
             continue
         if identity_key is not None:
             seen_identities.add(identity_key)
-        raw_record = dict(record)
+        if rejected_public_fields:
+            raw_record["_rejected_public_fields"] = rejected_public_fields
         page_markdown = str(getattr(acquisition_result, "page_markdown", "") or "").strip()
         record_url = str(data.get("url") or "").strip()
         if (
@@ -226,7 +236,7 @@ async def persist_extracted_records(
                 }.items()
                 if value not in (None, "", [], {})
             },
-            source_trace=_build_source_trace(acquisition_result, record),
+            source_trace=_build_source_trace(acquisition_result, raw_record),
             raw_html_path=raw_html_path,
         )
         session.add(crawl_record)

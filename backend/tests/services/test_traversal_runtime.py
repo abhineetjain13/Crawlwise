@@ -16,6 +16,7 @@ from app.services.acquisition.traversal import (
     execute_listing_traversal,
 )
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
+from app.services.extract.listing_card_fragments import listing_selector_is_weak
 
 
 @dataclass
@@ -1309,7 +1310,7 @@ async def test_count_listing_cards_ignores_weak_product_selector_chrome() -> Non
             return {
                 selector: (
                     2
-                    if traversal_module._listing_selector_is_weak(str(selector))
+                    if listing_selector_is_weak(str(selector))
                     else 0
                 )
                 for selector in list(arg or [])

@@ -35,7 +35,6 @@ from app.services.extract.listing_candidate_ranking import (
     best_listing_candidate_set,
 )
 from app.services.extract.listing_card_fragments import (
-    base_listing_fragment_score,
     listing_node_attr,
     listing_node_css,
     listing_node_text,
@@ -545,71 +544,8 @@ def _listing_card_html_fragments(
     return select_listing_fragment_nodes(
         dom_parser,
         surface="job_listing" if is_job else "ecommerce_listing",
-        score_node=lambda node: _listing_fragment_score(node, is_job=is_job),
         limit=max(1, fragment_limit),
     )
-
-
-def _listing_fragment_score(node, *, is_job: bool = False) -> int:
-    score = base_listing_fragment_score(node)
-    if score <= 0:
-        return score
-    tag_name = str(getattr(node, "tag", "") or "").strip().lower()
-    try:
-        links = node.css("a[href]")
-    except Exception:
-        return score
-    link_count = len(links)
-    if _extract_price_signal_from_card(node):
-        score += 5
-    title_node = _card_title_node(node)
-    if title_node is not None:
-        title_text = listing_node_text(title_node)
-        if title_text and not is_title_noise(title_text):
-            score += 4
-            if tag_name == "tr":
-                score += 4
-        else:
-            score -= 6
-    anchor_texts = _meaningful_anchor_texts(node)
-    meaningful_anchor_text_count = sum(
-        len(re.findall(r"[a-z0-9]+", text, flags=re.I)) >= 3 and not PRICE_RE.search(text)
-        for text in anchor_texts
-    )
-    if meaningful_anchor_text_count:
-        score += 4
-    elif anchor_texts:
-        score -= 6
-    hrefs = [
-        str(getattr(link, "attributes", {}).get("href") or "").strip()
-        for link in links
-        if str(getattr(link, "attributes", {}).get("href") or "").strip()
-    ]
-    unique_hrefs = {href for href in hrefs if href}
-    detail_like_hrefs = {
-        href
-        for href in unique_hrefs
-        if _detail_like_path(href, is_job=is_job)
-    }
-    if detail_like_hrefs:
-        score += 4
-        if len(detail_like_hrefs) == 1:
-            score += 4
-            if link_count >= 2:
-                score += 4
-            if meaningful_anchor_text_count >= 2:
-                score += 8
-    elif len(unique_hrefs) > 3:
-        score -= 6
-    if len(unique_hrefs) > 8:
-        score -= 4
-    try:
-        images = node.css("img")
-    except Exception:
-        images = []
-    if images and detail_like_hrefs:
-        score += 2
-    return score
 
 
 def _node_html(node) -> str:

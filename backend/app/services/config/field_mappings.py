@@ -19,6 +19,17 @@ JOB_ONLY_FIELDS = _EXPORTS['JOB_ONLY_FIELDS']
 PROMPT_REGISTRY = _EXPORTS['PROMPT_REGISTRY']
 VARIANT_DOM_FIELD_NAMES = _EXPORTS['VARIANT_DOM_FIELD_NAMES']
 
+PUBLIC_RECORD_URL_BLOCKED_PATH_MARKERS = (
+    "/api/",
+    "/event/",
+    "/events/",
+    "/tracking/",
+    "/analytics/",
+    "/beacon/",
+    "/click",
+)
+PUBLIC_RECORD_URL_MAX_LENGTH = 2048
+
 __all__ = sorted(
     [
         'CANONICAL_SCHEMAS',
@@ -32,6 +43,8 @@ __all__ = sorted(
         'INTERNAL_ONLY_FIELDS',
         'JOB_ONLY_FIELDS',
         'PROMPT_REGISTRY',
+        'PUBLIC_RECORD_URL_BLOCKED_PATH_MARKERS',
+        'PUBLIC_RECORD_URL_MAX_LENGTH',
         'VARIANT_DOM_FIELD_NAMES',
     ]
 )

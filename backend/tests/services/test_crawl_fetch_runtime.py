@@ -52,6 +52,68 @@ class _FakeResponse:
         return self._body
 
 
+@pytest.mark.asyncio
+async def test_real_chrome_success_updates_host_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usable_fetches: list[dict[str, object]] = []
+
+    async def _fake_note_usable_fetch_for_host(_url: str) -> bool:
+        return True
+
+    async def _fake_note_host_usable_fetch(value: str | None, **kwargs):
+        usable_fetches.append({"value": value, **kwargs})
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "note_usable_fetch_for_host",
+        _fake_note_usable_fetch_for_host,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "note_host_usable_fetch",
+        _fake_note_host_usable_fetch,
+    )
+    context = crawl_fetch_runtime._FetchRuntimeContext(
+        url="https://example.com/products/widget",
+        resolved_timeout=5.0,
+        run_id=None,
+        surface="ecommerce_detail",
+        traversal_mode=None,
+        max_pages=1,
+        max_scrolls=1,
+        max_records=None,
+        on_event=None,
+        browser_reason=None,
+        requested_fields=[],
+        listing_recovery_mode=None,
+        proxies=[None],
+        proxy_profile={},
+        traversal_required=False,
+        fetch_mode="browser_only",
+        runtime_policy={},
+    )
+    result = PageFetchResult(
+        url="https://example.com/products/widget",
+        final_url="https://example.com/products/widget",
+        html="<html><body>Widget</body></html>",
+        status_code=200,
+        method="browser",
+        blocked=False,
+        browser_diagnostics={"browser_engine": "real_chrome"},
+    )
+
+    await crawl_fetch_runtime._update_host_result_memory(context, result=result)
+
+    assert usable_fetches == [
+        {
+            "value": "https://example.com/products/widget",
+            "method": "browser:real_chrome",
+            "proxy_used": False,
+        }
+    ]
+
+
 @pytest.fixture(autouse=True)
 async def _reset_fetch_runtime_state_between_tests(
     monkeypatch: pytest.MonkeyPatch,

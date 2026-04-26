@@ -75,7 +75,9 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `tasks.py` | Celery task entry |
 | `pipeline/core.py` | Per-URL orchestration: acquire -> extract -> normalize -> persist |
 | `pipeline/persistence.py` | `CrawlRecord` writes, dedupe, summaries |
-| `pipeline/runtime_helpers.py` | Typed stage helpers |
+| `pipeline/runtime_helpers.py` | Typed stage helpers, browser diagnostics merge, failure-state persistence |
+| `pipeline/direct_record_fallback.py` | Direct-record and explicit LLM gap-fill fallback |
+| `pipeline/extraction_retry_decision.py` | Empty-extraction browser retry decisions |
 | `pipeline/types.py` | Pipeline typed objects |
 
 Flow:
@@ -108,7 +110,9 @@ Canonical config owner:
 
 | File | Purpose |
 |---|---|
-| `config/runtime_settings.py` | browser runtime tunables, launch args, and browser stealth/init-script payload builders |
+| `config/runtime_settings.py` | browser runtime tunables and launch args |
+| `config/browser_init_scripts.py` | browser stealth/coherence init-script builders |
+| `config/browser_fingerprint_profiles.py` | static browser fingerprint profile data |
 
 ---
 
@@ -123,12 +127,15 @@ Canonical config owner:
 | `js_state_mapper.py` | JS state to field mapping |
 | `network_payload_mapper.py` | Network payload to field mapping |
 | `field_value_core.py` | Canonical field coercion |
+| `field_url_normalization.py` | Tracking URL cleanup and query stripping |
+| `public_record_firewall.py` | Final public persisted-data schema/value firewall |
 | `field_value_*.py` | Per-field normalization helpers |
 | `field_policy.py` | Field eligibility by surface |
 | `adapters/registry.py` | Adapter resolution |
 | `adapters/[platform].py` | Platform-specific extraction |
-| `extract/listing_card_fragments.py` | Canonical listing-fragment discovery shared by traversal, browser artifact capture, and listing extraction |
+| `extract/listing_card_fragments.py` | Canonical listing-fragment discovery, scoring, and listing-card heuristics shared by traversal, browser artifact capture, and listing extraction |
 | `extract/listing_candidate_ranking.py` | Shared candidate-set ranking and utility filtering for listing rows |
+| `extract/variant_record_normalization.py` | Variant axis/value normalization before record persistence |
 | `extract/*` | Other extraction helpers |
 
 Canonical config owners:

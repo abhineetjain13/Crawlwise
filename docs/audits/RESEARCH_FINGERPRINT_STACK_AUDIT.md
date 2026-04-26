@@ -19,6 +19,8 @@ Current state:
 - Real Chrome probe: **0 FAIL / 0 WARN / 1 INFO** (`no_risky_drift_detected`)
 - BrowserLeaks Fonts now reports a small masked inventory instead of the prior large real inventory
 - Desertcart detail now passes end to end in the full pipeline with **1 record**
+- Chromium and `real_chrome` storage state are now persisted in isolated lanes, so cookies/localStorage do not bleed across profiles
+- Browser diagnostics and URL metrics now persist explicit lane identity instead of relying on generic `browser` labels
 
 Important conclusion from live testing:
 
@@ -34,7 +36,7 @@ Real Chrome fallback now uses the local Chrome binary by default when available:
 
 Main remaining gaps:
 
-- Chromium transport still has Playwright JA3 / HTTP2 / TCP drift
+- Chromium transport still has Playwright JA3 / JA4 / HTTP2 / HTTP3 / TCP drift
 - behavioral realism is still basic
 - there is still no active challenge solver / CV flow
 
@@ -156,11 +158,12 @@ Status legend: **✅ Implemented** | **⚠️ Partial** | **❌ Missing**
 
 | Signal | Implementation | Status |
 |---|---|---|
-| TLS JA3 on Chromium lane | Raw Playwright Chromium TLS fingerprint | ❌ |
+| TLS JA3 / JA4 on Chromium lane | Raw Playwright Chromium transport fingerprint | ❌ |
 | TLS JA3 on browser fallback lane | `real_chrome` fallback available with native Chrome executable | ✅ |
+| HTTP/2 SETTINGS / pseudo-header order | Browser-owned for browser lanes; still a monitored transport residual on Chromium | ⚠️ |
+| HTTP/3 / QUIC upgrade behavior | Not explicitly tuned | ❌ |
 | Real Chrome launch mode | Headful fallback lane for protected detail parity | ✅ |
 | Real Chrome context policy | Native context by default for fetch path; probe can still inject scripts | ✅ |
-| HTTP/2 SETTINGS frame | Default | ❌ |
 | TCP/IP stack | Default OS | ❌ |
 | `curl_cffi` impersonation | Enabled on HTTP lane (`impersonate=chrome131`) | ✅ |
 | Proxy inventory exercise mode | Not implemented | ❌ |
@@ -255,6 +258,7 @@ Current implementation choice:
 - keep Chromium as the default cheap lane
 - escalate to `real_chrome` when ecommerce hosts are blocked / protected
 - run normal fetch-path `real_chrome` in a native context with stealth disabled by default
+- keep run/domain browser storage scoped per lane so native real Chrome does not inherit shaped Chromium state
 - keep probe runs able to inject scripts so fingerprint verification still works
 
 Real Chrome toggles:
@@ -271,11 +275,12 @@ Real Chrome toggles:
 
 | # | Gap | Layer | Severity | Notes |
 |---|---|---|---|---|
-| 1 | Chromium JA3 mismatch | Transport | **Critical** | Chromium lane only |
-| 2 | HTTP/2 SETTINGS frame not tuned | Transport | Medium | |
-| 3 | TCP/IP stack not tuned | Transport | Medium | |
-| 4 | Pointer / scroll / typing realism is still basic | Behavioral | Medium | evaluated; no low-risk patch landed in this pass |
-| 5 | No active challenge solver / CV flow | Challenge | Medium | wait-challenge only |
+| 1 | Chromium JA3 / JA4 mismatch | Transport | **Critical** | Chromium lane only |
+| 2 | HTTP/2 SETTINGS / pseudo-header / priority drift | Transport | Medium | |
+| 3 | HTTP/3 / QUIC upgrade behavior not tuned | Transport | Medium | |
+| 4 | TCP/IP stack not tuned | Transport | Medium | |
+| 5 | Pointer / scroll / typing realism is still basic | Behavioral | Medium | evaluated; no low-risk patch landed in this pass |
+| 6 | No active challenge solver / CV flow | Challenge | Medium | wait-challenge only |
 
 ---
 
@@ -288,6 +293,9 @@ Real Chrome toggles:
 - added same-run Chromium -> Real Chrome engine replan after browser blocks
 - reloaded host policy before browser escalation from exhausted HTTP attempts
 - switched normal fetch-path Real Chrome to native context mode with stealth off by default
+- isolated run-scoped and domain-scoped browser storage by engine so `chromium` and `real_chrome` no longer reuse each other's cookies/localStorage
+- persisted explicit lane diagnostics (`browser_profile`, launch mode, native-context flag, stealth-enabled flag) into browser diagnostics and URL metrics
+- fixed origin warmup so native `real_chrome` no longer re-applies stealth through the sibling warmup page
 - kept probe-mode Real Chrome able to inject scripts for surface verification
 - wrapped the `OfflineAudioContext` constructor path instead of masking only downstream audio reads
 - added stable `navigator.keyboard`, `navigator.mediaCapabilities`, and `navigator.gpu` stubs
@@ -332,6 +340,6 @@ Real Chrome toggles:
 ## 9. Next Actions
 
 1. Leave the Real Chrome fallback isolated. Do not fold full browser shaping back into that lane without retesting Desertcart-class targets.
-2. If Chromium-only coverage still matters, next transport work is JA3 / HTTP2, not more JS noise.
+2. If Chromium-only coverage still matters, next transport work is JA3 / JA4 / HTTP2 / HTTP3, not more JS noise.
 3. If future hard targets still block after Real Chrome native mode, move next to behavioral realism or active challenge solving.
 4. Treat behavioral realism as a separate pass with probe semantics tightened first, so trusted-input checks do not get blurred by the realism layer.
