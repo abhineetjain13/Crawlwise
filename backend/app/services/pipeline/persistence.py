@@ -5,6 +5,7 @@ import hashlib
 
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.services.db_utils import mapping_or_empty
+from app.services.field_value_core import _object_list
 from app.services.artifact_store import (
     persist_html_artifact,
     persist_json_artifact,
@@ -19,10 +20,6 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
-
-
-def _object_list(value: object) -> list[object]:
-    return list(value) if isinstance(value, list) else []
 
 
 def _merge_browser_diagnostics(

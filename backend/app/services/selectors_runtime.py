@@ -26,7 +26,7 @@ from app.services.domain_memory_service import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import normalize_field_key
-from app.services.field_value_core import PRICE_RE, clean_text
+from app.services.field_value_core import PRICE_RE, _coerce_int, clean_text
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.platform_policy import detect_platform_family, job_platform_families
 from app.services.xpath_service import (
@@ -35,13 +35,6 @@ from app.services.xpath_service import (
     validate_or_convert_xpath,
 )
 from app.services.url_safety import ensure_public_crawl_targets
-
-
-def _coerce_int(value: object, default: int = 0) -> int:
-    try:
-        return int(str(value if value is not None else "").strip())
-    except (TypeError, ValueError):
-        return default
 
 
 def infer_surface(*, url: str, expected_fields: Iterable[str] | None = None) -> str:
@@ -123,7 +116,7 @@ async def list_selector_records(
                 records.append(
                     {
                         **dict(row),
-                        "id": _coerce_int(row.get("id"), 0),
+                        "id": _coerce_int(row.get("id"), default=0),
                         "domain": memory.domain,
                         "surface": memory.surface,
                         "source_run_id": row.get("source_run_id"),
@@ -141,7 +134,7 @@ async def list_selector_records(
                 domain_records.append(
                     {
                         **dict(row),
-                        "id": _coerce_int(row.get("id"), 0),
+                        "id": _coerce_int(row.get("id"), default=0),
                         "domain": memory.domain,
                         "surface": memory.surface,
                         "source_run_id": row.get("source_run_id"),
@@ -158,7 +151,7 @@ async def list_selector_records(
     return [
         {
             **dict(row),
-            "id": _coerce_int(row.get("id"), 0),
+            "id": _coerce_int(row.get("id"), default=0),
             "domain": normalized_domain,
             "surface": normalized_surface,
             "source_run_id": row.get("source_run_id"),
@@ -199,7 +192,7 @@ async def create_selector_record(
         "source_run_id": payload.get("source_run_id"),
         "is_active": bool(payload.get("is_active", True)),
     }
-    rules = [row for row in rules if _coerce_int(row.get("id"), 0) != next_id]
+    rules = [row for row in rules if _coerce_int(row.get("id"), default=0) != next_id]
     rules.append(record)
     await save_domain_memory(
         session,
@@ -237,7 +230,7 @@ async def update_selector_record(
         rules = selector_rules_from_memory(memory)
         updated = False
         for row in rules:
-            if _coerce_int(row.get("id"), 0) != int(selector_id):
+            if _coerce_int(row.get("id"), default=0) != int(selector_id):
                 continue
             for key in (
                 "field_name",
@@ -282,7 +275,7 @@ async def update_selector_record(
             surface=memory.surface,
         )
         refreshed = next(
-            row for row in rules if _coerce_int(row.get("id"), 0) == int(selector_id)
+            row for row in rules if _coerce_int(row.get("id"), default=0) == int(selector_id)
         )
         return {
             "domain": memory.domain,
@@ -307,7 +300,7 @@ async def delete_selector_record(
     for memory in await _all_domain_memories(session):
         rules = selector_rules_from_memory(memory)
         next_rules = [
-            row for row in rules if _coerce_int(row.get("id"), 0) != int(selector_id)
+            row for row in rules if _coerce_int(row.get("id"), default=0) != int(selector_id)
         ]
         if len(next_rules) == len(rules):
             continue
@@ -500,7 +493,7 @@ async def _next_selector_id(session: AsyncSession) -> int:
     max_id = 0
     for memory in await _all_domain_memories(session):
         for row in selector_rules_from_memory(memory):
-            max_id = max(max_id, _coerce_int(row.get("id"), 0))
+            max_id = max(max_id, _coerce_int(row.get("id"), default=0))
     return max_id + 1
 
 
@@ -513,7 +506,7 @@ async def _ensure_unique_selector_ids(session: AsyncSession) -> None:
         rules = selector_rules_from_memory(memory)
         memory_changed = False
         for row in rules:
-            current_id = _coerce_int(row.get("id"), 0)
+            current_id = _coerce_int(row.get("id"), default=0)
             if current_id > 0 and current_id not in seen_ids:
                 seen_ids.add(current_id)
                 next_id = max(next_id, current_id + 1)

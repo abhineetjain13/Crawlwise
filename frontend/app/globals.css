@@ -1233,17 +1233,6 @@ html:not([data-theme="dark"]) .metric-card::before {
   background: var(--stat-accent, var(--accent));
 }
 
-.domain-memory-search .input {
-  padding-left: 3rem;
-}
-
-html:not([data-theme="dark"]) .domain-memory-stat {
-  border-width: 1px;
-  border-color: var(--border);
-  box-shadow: none;
-  background: var(--bg-elevated);
-}
-
 /* APP SHELL */
 .app-shell-root {
   min-height: 100vh;

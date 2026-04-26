@@ -19,6 +19,7 @@ from app.services.crawl_access_service import (
 )
 from app.services.crawl_crud import get_run_records
 from app.services.config.extraction_rules import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
+from app.services.field_value_core import _object_dict, _object_list
 from app.schemas.crawl import CrawlRecordProvenanceResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,14 +63,6 @@ _MARKDOWN_HIDDEN_FIELDS = frozenset(
 )
 
 ExportStreamer = Callable[[AsyncSession, int], AsyncIterator[str]]
-
-
-def _object_list(value: object) -> list[object]:
-    return list(value) if isinstance(value, list) else []
-
-
-def _object_dict(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 async def collect_export_rows(

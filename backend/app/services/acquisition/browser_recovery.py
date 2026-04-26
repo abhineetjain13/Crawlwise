@@ -6,6 +6,10 @@ from contextlib import suppress
 from typing import Any, Callable
 
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.selectors import (
+    ANCHOR_SELECTOR,
+    LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS,
+)
 from app.services.extract.listing_card_fragments import listing_capture_selectors
 
 
@@ -241,19 +245,11 @@ async def capture_rendered_listing_fragments(
         snapshot = await page.evaluate(
             """(args) => {
                 const limit = Number(args?.limit || 0);
+                const anchorSelector = String(args?.anchorSelector || '');
                 const selectors = Array.isArray(args?.selectors) ? args.selectors : [];
                 const seenFragments = new Set();
                 const fragments = [];
-                const structuralAncestorSelectors = [
-                    'header',
-                    'footer',
-                    'nav',
-                    '[role="navigation"]',
-                    '[role="banner"]',
-                    '[role="contentinfo"]',
-                    'dialog',
-                    '[role="dialog"]',
-                ];
+                const structuralAncestorSelectors = Array.isArray(args?.structuralAncestorSelectors) ? args.structuralAncestorSelectors : [];
                 const textOf = (node) =>
                     String(node?.innerText || node?.textContent || '')
                         .replace(/\\s+/g, ' ')
@@ -266,7 +262,9 @@ async def capture_rendered_listing_fragments(
                         const style = window.getComputedStyle(card);
                         if (style.display === 'none' || style.visibility === 'hidden') continue;
                         if (structuralAncestorSelectors.some((ancestor) => card.closest(ancestor))) continue;
-                        const anchors = card.matches('a[href]') ? [card] : Array.from(card.querySelectorAll('a[href]'));
+                        const anchors = !anchorSelector
+                            ? []
+                            : (card.matches(anchorSelector) ? [card] : Array.from(card.querySelectorAll(anchorSelector)));
                         if (!anchors.length) continue;
                         const anchorCount = anchors.length;
                         if (anchorCount > 12) continue;
@@ -283,7 +281,11 @@ async def capture_rendered_listing_fragments(
             }""",
             {
                 "limit": int(limit),
+                "anchorSelector": ANCHOR_SELECTOR,
                 "selectors": listing_capture_selectors(str(surface or "")),
+                "structuralAncestorSelectors": list(
+                    LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS
+                ),
             },
         )
     except Exception:

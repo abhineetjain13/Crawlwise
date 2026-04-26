@@ -226,11 +226,10 @@ export function SectionCard({
 }>) {
  return <Card className={cn("section-card", className)}><SectionHeader title={title} description={description} action={action} />{children}</Card>;
 }
-
-/* ─── SurfaceSection ─────────────────────────────────────────────────────── */
 export function SurfaceSection({
  title,
  description,
+ icon: Icon,
  action,
  children,
  className,
@@ -238,12 +237,13 @@ export function SurfaceSection({
 }: Readonly<{
  title: string;
  description?: ReactNode;
+ icon?: LucideIcon;
  action?: ReactNode;
  children: ReactNode;
  className?: string;
  bodyClassName?: string;
 }>) {
- return <SurfacePanel className={className}><div className="border-b border-[var(--divider)] px-4 py-3"><SectionHeader title={title} description={description} action={action} /></div><div className={cn("p-4", bodyClassName)}>{children}</div></SurfacePanel>;
+ return <SurfacePanel className={className}><div className="border-b border-[var(--divider)] px-4 py-3"><SectionHeader title={title} description={description} icon={Icon} action={action} /></div><div className={cn("p-4", bodyClassName)}>{children}</div></SurfacePanel>;
 }
 
 /* ─── MutedPanelMessage ──────────────────────────────────────────────────── */
@@ -447,6 +447,83 @@ export function DataRegionError({
  return (
  <div className={cn("p-4", className)}>
  <InlineAlert message={message} />
+ </div>
+ );
+}
+
+/* ─── NavList — selectable sidebar list ─────────────────────────────────── */
+export function NavList<T>({
+ items,
+ selectedKey,
+ onSelect,
+ getKey,
+ renderLabel,
+ renderMeta,
+ renderBadge,
+ className,
+}: Readonly<{
+ items: ReadonlyArray<T>;
+ selectedKey: string;
+ onSelect: (key: string) => void;
+ getKey: (item: T) => string;
+ renderLabel: (item: T) => ReactNode;
+ renderMeta?: (item: T) => ReactNode;
+ renderBadge?: (item: T) => ReactNode;
+ className?: string;
+}>) {
+ return (
+ <div className={cn("space-y-2", className)}>
+ {items.map((item) => {
+ const key = getKey(item);
+ const isActive = key === selectedKey;
+ return (
+ <button
+ key={key}
+ type="button"
+ aria-pressed={isActive}
+ onClick={() => onSelect(key)}
+ className={cn(
+ "w-full rounded-[var(--radius-xl)] border px-3 py-3 text-left transition-colors",
+ isActive
+ ? "border-[var(--accent)] bg-[var(--subtle-panel-bg)] shadow-card"
+ : "border-[var(--divider)] bg-background hover:bg-background-elevated",
+ )}
+ > <div className="flex items-center justify-between gap-3">
+ <div className="min-w-0">
+ <div className="truncate text-sm font-semibold text-foreground">{renderLabel(item)}</div>
+ {renderMeta ? <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">{renderMeta(item)}</div> : null}
+ </div>
+ {renderBadge ? renderBadge(item) : null}
+ </div>
+ </button>
+ );
+ })}
+ </div>
+ );
+}
+
+/* ─── DetailRow — bordered content row for lists ────────────────────────── */
+export function DetailRow({
+ children,
+ className,
+}: Readonly<{ children: ReactNode; className?: string }>) {
+ return (
+ <div className={cn("rounded-lg border border-[var(--divider)] bg-background px-3 py-3", className)}>
+ {children}
+ </div>
+ );
+}
+
+/* ─── KVTile — compact key-value mini-stat ──────────────────────────────── */
+export function KVTile({
+ label,
+ value,
+ className,
+}: Readonly<{ label: string; value: ReactNode; className?: string }>) {
+ return (
+ <div className={cn("rounded-[var(--radius-md)] bg-background-elevated px-2.5 py-2", className)}>
+ <div className="text-[11px] uppercase tracking-[0.08em] text-muted">{label}</div>
+ <div className="pt-1 text-sm font-medium text-foreground">{value}</div>
  </div>
  );
 }

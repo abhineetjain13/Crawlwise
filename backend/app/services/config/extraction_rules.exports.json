@@ -900,6 +900,23 @@
       "href"
     ]
   },
+  "CDN_IMAGE_QUERY_PARAMS": {
+    "__type__": "frozenset",
+    "items": [
+      "width",
+      "w",
+      "height",
+      "h",
+      "quality",
+      "q",
+      "dpr",
+      "fit",
+      "crop",
+      "format",
+      "fm",
+      "auto"
+    ]
+  },
   "COLOR_NOISE_TOKENS": {
     "__type__": "tuple",
     "items": [
@@ -1203,6 +1220,51 @@
       "official",
       "shop",
       "store"
+    ]
+  },
+  "DETAIL_MARKDOWN_LINE_NOISE": {
+    "__type__": "tuple",
+    "items": [
+      "add to cart",
+      "add",
+      "check in-store availability",
+      "coming soon",
+      "home",
+      "notify me",
+      "product measurements",
+      "put it in your basket",
+      "shipping, exchanges and returns",
+      "skip to main content",
+      "skip the navigation"
+    ]
+  },
+  "DETAIL_MARKDOWN_SECTION_NOISE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "affirm",
+      "amex",
+      "answer",
+      "answers",
+      "ask a question",
+      "filter reviews",
+      "helpful",
+      "klarna",
+      "mastercard",
+      "overall rating",
+      "payment",
+      "paypal",
+      "q&a",
+      "question",
+      "questions",
+      "rating snapshot",
+      "report this answer",
+      "report this review",
+      "review",
+      "reviews",
+      "secure payment",
+      "verified reviewer",
+      "visa",
+      "what are other people saying"
     ]
   },
   "DETAIL_COLLECTION_PATH_TOKENS": {
@@ -4339,6 +4401,50 @@
       ]
     },
     "section_min_chars": 12
+  },
+  "MARKDOWN_NOISE_SELECTORS": {
+    "__type__": "tuple",
+    "items": [
+      "nav",
+      "footer",
+      "header",
+      "script",
+      "style",
+      "noscript",
+      "svg",
+      "template",
+      "iframe",
+      "dialog",
+      "[role='dialog']",
+      "[aria-modal='true']",
+      "[hidden]",
+      "[aria-hidden='true']",
+      "[inert]",
+      "[role='navigation']",
+      "[role='banner']",
+      "[role='contentinfo']"
+    ]
+  },
+  "MARKDOWN_NOISE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "cookie",
+      "consent",
+      "modal",
+      "popup",
+      "banner"
+    ]
+  },
+  "MARKDOWN_ROOT_SELECTORS": {
+    "__type__": "tuple",
+    "items": [
+      "main",
+      "[role='main']",
+      "article",
+      ".product-detail-view__main-content",
+      ".product-detail-info",
+      "[data-qa-id='product-detail-info']"
+    ]
   },
   "MAX_SELECTOR_ROWS_PER_FIELD": 100,
   "NESTED_NON_PRODUCT_KEYS": {

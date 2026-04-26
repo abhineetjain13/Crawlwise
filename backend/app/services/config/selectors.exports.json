@@ -1,5 +1,53 @@
 {
   "ANCHOR_SELECTOR": "a[href]",
+  "DETAIL_MARKDOWN_HEADING_SELECTOR": "h1, h2, h3, h4, summary, button, [role='tab']",
+  "LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS": {
+    "__type__": "list",
+    "items": [
+      "header",
+      "footer",
+      "nav",
+      "[role=\"navigation\"]",
+      "[role=\"banner\"]",
+      "[role=\"contentinfo\"]",
+      "dialog",
+      "[role=\"dialog\"]",
+      "aside"
+    ]
+  },
+  "LISTING_VISUAL_CANDIDATE_CONTAINER_SELECTORS": {
+    "__type__": "list",
+    "items": [
+      "article",
+      "li",
+      "section",
+      "[role=\"listitem\"]",
+      "[data-testid*=\"product\" i]",
+      "[class*=\"product\" i]",
+      "[class*=\"card\" i]",
+      "[class*=\"tile\" i]",
+      "[class*=\"item\" i]",
+      "[class*=\"result\" i]"
+    ]
+  },
+  "LISTING_VISUAL_CAPTURE_SELECTORS": {
+    "__type__": "list",
+    "items": [
+      "a[href]",
+      "img[src]",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "[itemprop=\"name\"]",
+      "[class*=\"price\" i]",
+      "[data-testid*=\"price\" i]",
+      "[aria-label*=\"price\" i]",
+      "[class*=\"title\" i]",
+      "[data-testid*=\"title\" i]",
+      "[data-testid*=\"name\" i]"
+    ]
+  },
   "CARD_SELECTORS": {
     "__type__": "dict",
     "items": [

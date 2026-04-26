@@ -17,31 +17,13 @@ from app.services.field_policy import (
     NORMALIZED_REQUESTED_FIELD_ALIASES,
     normalize_requested_field,
 )
+from app.services.field_value_core import _coerce_int
 
 _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
     for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
 }
 _AOM_EXPAND_ROLES = {"button", "tab", "link", "menuitem"}
-
-
-def _coerce_int(value: object, *, fallback: int = 0) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, (str, bytes)):
-        text = value.decode() if isinstance(value, bytes) else value
-        text = text.strip()
-        if not text:
-            return fallback
-        try:
-            return int(text)
-        except ValueError:
-            return fallback
-    return fallback
 
 
 def _string_list(value: object) -> list[str]:
@@ -111,8 +93,8 @@ async def expand_detail_content_if_needed_impl(
         if dom.get("clicked_count", 0) or aom.get("clicked_count", 0)
         else "attempted",
         "reason": "missing_detail_content",
-        "clicked_count": _coerce_int(dom.get("clicked_count"), fallback=0)
-        + _coerce_int(aom.get("clicked_count"), fallback=0),
+        "clicked_count": _coerce_int(dom.get("clicked_count"), default=0)
+        + _coerce_int(aom.get("clicked_count"), default=0),
         "expanded_elements": [
             *_string_list(dom.get("expanded_elements")),
             *_string_list(aom.get("expanded_elements")),

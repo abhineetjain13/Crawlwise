@@ -64,11 +64,11 @@ async def wait_for_listing_readiness_impl(
     max_wait_value = override.get("max_wait_ms")
     safe_fallback = _coerce_int(
         crawler_runtime_settings.listing_readiness_max_wait_ms,
-        fallback=0,
+        default=0,
     )
     max_wait_ms = _coerce_int(
         max_wait_value,
-        fallback=safe_fallback,
+        default=safe_fallback,
     )
     if max_wait_ms <= 0:
         return {}

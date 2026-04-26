@@ -14,8 +14,20 @@ import {
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
-import { EmptyPanel, InlineAlert, PageHeader, SectionCard } from "../../../components/ui/patterns";
-import { Badge, Button, Card, Dropdown, Input } from "../../../components/ui/primitives";
+import {
+  DataRegionEmpty,
+  DataRegionLoading,
+  DetailRow,
+  EmptyPanel,
+  InlineAlert,
+  KVTile,
+  MetricGrid,
+  MutedPanelMessage,
+  NavList,
+  PageHeader,
+  SurfaceSection,
+} from "../../../components/ui/patterns";
+import { Badge, Button, Dropdown, Input, StatCard } from "../../../components/ui/primitives";
 import { api } from "../../../lib/api";
 import type {
  CrawlRun,
@@ -26,7 +38,6 @@ import type {
  SelectorUpdatePayload,
 } from "../../../lib/api/types";
 import { getNormalizedDomain, isSpecialUseDomain } from "../../../lib/format/domain";
-import { cn } from "../../../lib/utils";
 
 type LocalRecord = SelectorRecord & { _uid: string };
 
@@ -488,7 +499,7 @@ export default function DomainMemoryManagePage() {
  }
 
  return (
- <div className="page-stack">
+ <div className="page-stack-lg">
  <PageHeader
  title="Domain Memory"
  description="Manage learned selectors, run profiles, cookies, and recent learning by domain."
@@ -500,15 +511,13 @@ export default function DomainMemoryManagePage() {
  }
  />
 
- <SectionCard
- title="Memory Workspace"
- description="Search across selector memory, saved defaults, cookies, and field feedback, then inspect one domain at a time."
- >
+ {/* ── Search + filter bar ── */}
+ <SurfaceSection title="Memory Workspace" description="Search across selector memory, saved defaults, cookies, and field feedback, then inspect one domain at a time." bodyClassName="space-y-4">
  {error ? <InlineAlert message={error} /> : null}
- <div className="grid gap-3 pt-4 xl:grid-cols-[minmax(0,1.2fr)_220px]">
+ <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_220px]">
  <label className="grid gap-1.5">
  <span className="field-label">Search domains, selectors, run defaults, or learning</span>
- <div className="domain-memory-search relative">
+ <div className="relative">
  <Input
  value={searchQuery}
  onChange={(event) => setSearchQuery(event.target.value)}
@@ -531,30 +540,16 @@ export default function DomainMemoryManagePage() {
  </label>
  </div>
 
- <div className="grid gap-2 pt-4 sm:grid-cols-2 xl:grid-cols-6">
- {[
- { label: "Domains", value: summary.domains },
- { label: "Surfaces", value: summary.surfaces },
- { label: "Selectors", value: summary.selectors },
- { label: "Saved Profiles", value: summary.profiles },
- { label: "Recent Learning", value: summary.learning },
- { label: "Cookie Domains", value: summary.cookies },
- ].map((item) => (
- <div
- key={item.label}
- className="domain-memory-stat rounded-[var(--radius-lg)] border border-border bg-background-elevated px-3 py-2"
- >
- <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{item.label}</div>
- <div className="pt-1 text-lg font-semibold text-foreground">{item.value}</div>
- </div>
- ))}
- </div>
- </SectionCard>
+ <MetricGrid>
+ <StatCard label="Domains" value={summary.domains} icon={<Database className="size-3.5" />} stripeColor="var(--metric-domains-color)" />
+ <StatCard label="Surfaces" value={summary.surfaces} stripeColor="var(--accent)" />
+ <StatCard label="Selectors" value={summary.selectors} stripeColor="var(--metric-active-color)" />
+ <StatCard label="Saved Profiles" value={summary.profiles} stripeColor="var(--metric-runs-color)" />
+ </MetricGrid>
+ </SurfaceSection>
 
  {loading ? (
- <Card className="section-card">
- <p className="text-sm text-muted">Loading domain memory workspace…</p>
- </Card>
+ <DataRegionLoading count={4} />
  ) : !groupedWorkspaces.length ? (
  <EmptyPanel
  title="No domain memory found"
@@ -562,59 +557,46 @@ export default function DomainMemoryManagePage() {
  />
  ) : (
  <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
- <Card className="section-card">
- <div className="space-y-4">
- <div>
- <div className="text-sm font-semibold text-foreground">Domains</div>
- <p className="mt-1 text-sm leading-[1.5] text-secondary">Choose a domain to inspect persisted memory and recent learning.</p>
- </div>
- <div className="space-y-2">
- {groupedWorkspaces.map((workspace) => {
- const selectorCount = workspace.surfaces.reduce((count, surface) => count + surface.selectors.length, 0);
- const profileCount = workspace.surfaces.filter((surface) => surface.profile).length;
- const learningCount = workspace.learning.length;
- const isActive = workspace.domain === selectedWorkspace?.domain;
- return (
- <button
- key={workspace.domain}
- type="button"
- onClick={() => setSelectedDomain(workspace.domain)}
- className={cn(
- "w-full rounded-[var(--radius-xl)] border px-3 py-3 text-left transition-colors",
- isActive
- ? "border-[var(--accent)] bg-[var(--subtle-panel-bg)] shadow-card"
- : "border-[var(--divider)] bg-background hover:bg-background-elevated",
+ {/* ── Domain sidebar ── */}
+ <SurfaceSection title="Domains" description="Choose a domain to inspect persisted memory and recent learning." bodyClassName="p-3">
+ <NavList
+ items={groupedWorkspaces}
+ selectedKey={selectedWorkspace?.domain ?? ""}
+ onSelect={setSelectedDomain}
+ getKey={(ws) => ws.domain}
+ renderLabel={(ws) => ws.domain}
+ renderMeta={(ws) => (
+ <>
+ <span>{ws.completedRunCount} runs</span>
+ <span>{ws.surfaces.reduce((c, s) => c + s.selectors.length, 0)} selectors</span>
+ <span>{ws.surfaces.filter((s) => s.profile).length} profiles</span>
+ <span>{ws.learning.length} learning</span>
+ </>
  )}
- >
- <div className="flex items-center justify-between gap-3">
- <div className="min-w-0">
- <div className="truncate text-sm font-semibold text-foreground">{workspace.domain}</div>
- <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
- <span>{workspace.completedRunCount} runs</span>
- <span>{selectorCount} selectors</span>
- <span>{profileCount} profiles</span>
- <span>{learningCount} learning</span>
- </div>
- </div>
- {workspace.cookieMemory ? <Badge tone="accent">{workspace.cookieMemory.cookie_count} cookies</Badge> : null}
- </div>
- </button>
- );
- })}
- </div>
- </div>
- </Card>
+ renderBadge={(ws) => ws.cookieMemory ? <Badge tone="accent">{ws.cookieMemory.cookie_count} cookies</Badge> : null}
+ />
+ </SurfaceSection>
 
+ {/* ── Domain detail ── */}
  <div className="space-y-4">
  {selectedWorkspace ? (
  <>
- <Card className="section-card">
- <div className="flex flex-wrap items-start justify-between gap-3">
- <div className="space-y-2">
- <div className="text-lg font-semibold text-foreground">{selectedWorkspace.domain}</div>
- <p className="text-sm leading-[1.5] text-secondary">
- Surface-scoped selectors and run defaults live together here, while cookie memory remains domain-scoped because acquisition reuse is host-level.
- </p>
+ <SurfaceSection
+ title={selectedWorkspace.domain}
+ description="Surface-scoped selectors and run defaults live together here, while cookie memory remains domain-scoped because acquisition reuse is host-level."
+ action={
+ <Button
+ type="button"
+ variant="danger"
+ onClick={() => void deleteDomainSelectors(selectedWorkspace.domain)}
+ disabled={!selectedWorkspace.surfaces.some((surface) => surface.selectors.length)}
+ >
+ <Trash2 className="size-3.5" />
+ Clear Selectors
+ </Button>
+ }
+ bodyClassName="space-y-2"
+ >
  <div className="flex flex-wrap gap-2">
  <Badge tone="neutral">
  {selectedWorkspace.surfaces.reduce((count, surface) => count + surface.selectors.length, 0)} selectors
@@ -625,38 +607,23 @@ export default function DomainMemoryManagePage() {
  <Badge tone="success">{selectedWorkspace.learning.length} learning events</Badge>
  {selectedWorkspace.cookieMemory ? <Badge tone="accent">{selectedWorkspace.cookieMemory.cookie_count} cookies</Badge> : null}
  </div>
- </div>
- <Button
- type="button"
- variant="danger"
- onClick={() => void deleteDomainSelectors(selectedWorkspace.domain)}
- disabled={!selectedWorkspace.surfaces.some((surface) => surface.selectors.length)}
- >
- <Trash2 className="size-3.5" />
- Clear Selectors
- </Button>
- </div>
- </Card>
+ </SurfaceSection>
 
  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.9fr)]">
- <Card className="section-card">
- <div className="space-y-4">
- <div className="flex items-center gap-2">
- <Database className="size-4 text-muted" />
- <div>
- <div className="text-base font-semibold text-foreground">Selector Memory</div>
- <p className="text-sm leading-[1.5] text-secondary">Review and edit the selectors currently saved for this domain.</p>
- </div>
- </div>
-
+ {/* ── Selector Memory ── */}
+ <SurfaceSection
+ title="Selector Memory"
+ description="Review and edit the selectors currently saved for this domain."
+ icon={Database}
+ bodyClassName="space-y-4"
+ >
  {selectedWorkspace.surfaces.length ? (
- <div className="space-y-4">
- {selectedWorkspace.surfaces.map((surfaceWorkspace) => (
+ selectedWorkspace.surfaces.map((surfaceWorkspace) => (
  <div
  key={`${selectedWorkspace.domain}:${surfaceWorkspace.surface}`}
- className="rounded-[var(--radius-xl)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-4"
+ className="rounded-[var(--radius-xl)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-4 space-y-3"
  >
- <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+ <div className="flex flex-wrap items-center justify-between gap-2">
  <div>
  <div className="text-sm font-semibold text-foreground">{surfaceLabel(surfaceWorkspace.surface)}</div>
  <div className="text-xs text-muted">
@@ -671,7 +638,7 @@ export default function DomainMemoryManagePage() {
  {surfaceWorkspace.selectors.map((record) => {
  const isEditing = editingId === record._uid && draft !== null;
  return (
- <div key={record._uid} className="rounded-lg border border-[var(--divider)] bg-background px-3 py-3">
+ <DetailRow key={record._uid}>
  {isEditing ? (
  <div className="space-y-3">
  <div className="grid gap-3 md:grid-cols-2">
@@ -764,115 +731,80 @@ export default function DomainMemoryManagePage() {
  </div>
  </div>
  )}
- </div>
+ </DetailRow>
  );
  })}
  </div>
  ) : (
- <div className="rounded-lg border border-dashed border-[var(--divider)] px-3 py-3 text-sm text-muted">
- No selectors saved for this surface yet.
- </div>
+ <MutedPanelMessage title="No selectors" description="No selectors saved for this surface yet." />
  )}
  </div>
- ))}
- </div>
+ ))
  ) : (
- <EmptyPanel
- title="No saved selector memory"
- description="Selectors promoted from completed runs will appear here once they are saved."
- />
+ <DataRegionEmpty title="No saved selector memory" description="Selectors promoted from completed runs will appear here once they are saved." />
  )}
- </div>
- </Card>
+ </SurfaceSection>
 
+ {/* ── Right column: profiles, cookies, learning ── */}
  <div className="space-y-4">
- <Card className="section-card">
- <div className="space-y-4">
- <div className="flex items-center gap-2">
- <SlidersHorizontal className="size-4 text-muted" />
- <div>
- <div className="text-base font-semibold text-foreground">Run Profile Defaults</div>
- <p className="text-sm leading-[1.5] text-secondary">Saved fetch and diagnostics defaults that will be reused for future runs on this domain.</p>
- </div>
- </div>
+ <SurfaceSection
+ title="Run Profile Defaults"
+ description="Saved fetch and diagnostics defaults that will be reused for future runs on this domain."
+ icon={SlidersHorizontal}
+ bodyClassName="space-y-3"
+ >
  {selectedWorkspace.surfaces.some((surface) => surface.profile) ? (
- <div className="space-y-3">
- {selectedWorkspace.surfaces
+ selectedWorkspace.surfaces
  .filter((surface) => surface.profile)
  .map((surface) => (
- <div key={`${selectedWorkspace.domain}:${surface.surface}:profile`} className="rounded-lg border border-[var(--divider)] bg-background px-3 py-3">
+ <DetailRow key={`${selectedWorkspace.domain}:${surface.surface}:profile`}>
  <div className="flex items-center justify-between gap-2">
  <div className="text-sm font-semibold text-foreground">{surfaceLabel(surface.surface)}</div>
  <div className="text-xs text-muted">Saved {formatTimestamp(surface.profile?.updated_at ?? null)}</div>
  </div>
  <div className="mt-3 grid gap-2 sm:grid-cols-2">
  {runProfileSummary(surface.profile!).map((item) => (
- <div key={`${surface.surface}:${item.label}`} className="rounded-[var(--radius-md)] bg-background-elevated px-2.5 py-2">
- <div className="text-[11px] uppercase tracking-[0.08em] text-muted">{item.label}</div>
- <div className="pt-1 text-sm font-medium text-foreground">{item.value}</div>
- </div>
+ <KVTile key={`${surface.surface}:${item.label}`} label={item.label} value={item.value} />
  ))}
  </div>
  <div className="mt-3 text-xs text-muted">
  Geo: {surface.profile?.profile.locality_profile.geo_country || "auto"} · Language: {surface.profile?.profile.locality_profile.language_hint || "—"} · Currency: {surface.profile?.profile.locality_profile.currency_hint || "—"}
  </div>
- </div>
- ))}
- </div>
+ </DetailRow>
+ ))
  ) : (
- <EmptyPanel
- title="No saved run profiles"
- description="Use the Run Config tab on a completed crawl to save reusable defaults for this domain."
- />
+ <DataRegionEmpty title="No saved run profiles" description="Use the Run Config tab on a completed crawl to save reusable defaults for this domain." />
  )}
- </div>
- </Card>
+ </SurfaceSection>
 
- <Card className="section-card">
- <div className="space-y-4">
- <div className="flex items-center gap-2">
- <Cookie className="size-4 text-muted" />
- <div>
- <div className="text-base font-semibold text-foreground">Saved Domain Cookies</div>
- <p className="text-sm leading-[1.5] text-secondary">Cookie memory is stored at the domain level so acquisition can reuse known session context.</p>
- </div>
- </div>
+ <SurfaceSection
+ title="Saved Domain Cookies"
+ description="Cookie memory is stored at the domain level so acquisition can reuse known session context."
+ icon={Cookie}
+ bodyClassName="space-y-3"
+ >
  {selectedWorkspace.cookieMemory ? (
- <div className="rounded-lg border border-[var(--divider)] bg-background px-3 py-3">
+ <DetailRow>
  <div className="grid gap-3 sm:grid-cols-2">
- <div>
- <div className="text-[11px] uppercase tracking-[0.08em] text-muted">Cookies</div>
- <div className="pt-1 text-lg font-semibold text-foreground">{selectedWorkspace.cookieMemory.cookie_count}</div>
- </div>
- <div>
- <div className="text-[11px] uppercase tracking-[0.08em] text-muted">Origins</div>
- <div className="pt-1 text-lg font-semibold text-foreground">{selectedWorkspace.cookieMemory.origin_count}</div>
- </div>
+ <KVTile label="Cookies" value={selectedWorkspace.cookieMemory.cookie_count} />
+ <KVTile label="Origins" value={selectedWorkspace.cookieMemory.origin_count} />
  </div>
  <div className="mt-3 text-xs text-muted">Updated {formatTimestamp(selectedWorkspace.cookieMemory.updated_at)}</div>
- </div>
+ </DetailRow>
  ) : (
- <EmptyPanel
- title="No cookie memory saved"
- description="A successful authenticated or protected acquisition run will populate cookie memory here."
- />
+ <DataRegionEmpty title="No cookie memory saved" description="A successful authenticated or protected acquisition run will populate cookie memory here." />
  )}
- </div>
- </Card>
+ </SurfaceSection>
 
- <Card className="section-card">
- <div className="space-y-4">
- <div className="flex items-center gap-2">
- <Activity className="size-4 text-muted" />
- <div>
- <div className="text-base font-semibold text-foreground">Recent Learning</div>
- <p className="text-sm leading-[1.5] text-secondary">Latest keep and reject decisions captured for this domain across all surfaces.</p>
- </div>
- </div>
+ <SurfaceSection
+ title="Recent Learning"
+ description="Latest keep and reject decisions captured for this domain across all surfaces."
+ icon={Activity}
+ bodyClassName="space-y-2"
+ >
  {selectedWorkspace.learning.length ? (
- <div className="space-y-2">
- {selectedWorkspace.learning.slice(0, 8).map((row) => (
- <div key={row.id} className="rounded-lg border border-[var(--divider)] bg-background px-3 py-3">
+ selectedWorkspace.learning.slice(0, 8).map((row) => (
+ <DetailRow key={row.id}>
  <div className="flex flex-wrap items-center gap-2">
  <Badge tone={row.action === "reject" ? "warning" : "success"}>{row.action}</Badge>
  <span className="text-sm font-medium text-foreground">{row.field_name}</span>
@@ -884,17 +816,12 @@ export default function DomainMemoryManagePage() {
  </div>
  {row.selector_value ? <code className="mt-2 block break-all text-xs text-muted">{row.selector_value}</code> : null}
  <div className="mt-2 text-xs text-muted">{formatTimestamp(row.created_at)}</div>
- </div>
- ))}
- </div>
+ </DetailRow>
+ ))
  ) : (
- <EmptyPanel
- title="No recent learning"
- description="Use the Learning tab on a completed run to keep or reject field evidence and populate this history."
- />
+ <DataRegionEmpty title="No recent learning" description="Use the Learning tab on a completed run to keep or reject field evidence and populate this history." />
  )}
- </div>
- </Card>
+ </SurfaceSection>
  </div>
  </div>
  </>

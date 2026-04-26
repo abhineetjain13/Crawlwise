@@ -55,6 +55,8 @@ from app.services.field_value_core import (
     REVIEW_COUNT_RE,
     STRUCTURED_OBJECT_FIELDS,
     STRUCTURED_OBJECT_LIST_FIELDS,
+    _object_dict,
+    _object_list,
     clean_text,
     coerce_field_value,
     extract_currency_code,
@@ -186,14 +188,6 @@ _DETAIL_URL_PLACEHOLDER_SEGMENTS = frozenset(
         if str(value).strip()
     }
 )
-
-
-def _object_list(value: object) -> list[object]:
-    return value if isinstance(value, list) else []
-
-
-def _object_dict(value: object) -> dict[str, object]:
-    return value if isinstance(value, dict) else {}
 
 
 def _coerce_float(value: object, default: float = 0.0) -> float:
@@ -2376,7 +2370,10 @@ def _extract_variants_from_dom(
             merged["name"] = name
         existing_values = _object_list(merged.get("values"))
         merged["values"] = list(dict.fromkeys([*existing_values, *values]))
-        merged_entries = _object_dict(merged.setdefault("entries", {}))
+        merged_entries = merged.setdefault("entries", {})
+        if not isinstance(merged_entries, dict):
+            merged_entries = {}
+            merged["entries"] = merged_entries
         for group_entry in _object_list(group.get("entries")):
             if not isinstance(group_entry, dict):
                 continue
@@ -2832,6 +2829,13 @@ def build_detail_record(
             title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
             if "url_slug" not in title_sources:
                 title_sources.append("url_slug")
+    _backfill_detail_price_from_html(record, html=html)
+    _backfill_variants_from_dom_if_missing(
+        record,
+        soup=soup,
+        page_url=page_url,
+        js_state_objects=js_state_objects,
+    )
     record["_confidence"] = score_record_confidence(
         record,
         surface=surface,

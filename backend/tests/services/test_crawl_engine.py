@@ -125,6 +125,148 @@ def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts(
     ]
 
 
+def test_extract_records_visual_listing_backfills_brand_from_brand_node_and_url() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/shoes/womens-shoes/sandals/flat/",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "href": "/p/northside-dogwood-footbed-sandals/290092111811620.html",
+                    "x": 20,
+                    "y": 40,
+                    "width": 180,
+                    "height": 180,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Dogwood Footbed Sandals",
+                    "x": 24,
+                    "y": 190,
+                    "width": 170,
+                    "height": 24,
+                },
+                {
+                    "tag": "div",
+                    "text": "Northside",
+                    "ariaLabel": "brand",
+                    "x": 24,
+                    "y": 216,
+                    "width": 170,
+                    "height": 20,
+                },
+                {
+                    "tag": "div",
+                    "text": "$24.99",
+                    "x": 24,
+                    "y": 240,
+                    "width": 80,
+                    "height": 24,
+                },
+                {
+                    "tag": "a",
+                    "href": "/p/dv-dolce-vita-ubar-sandals/2900965UBAR.html",
+                    "x": 220,
+                    "y": 40,
+                    "width": 180,
+                    "height": 180,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Ubar Sandals",
+                    "x": 224,
+                    "y": 190,
+                    "width": 170,
+                    "height": 24,
+                },
+                {
+                    "tag": "div",
+                    "text": "$20.00",
+                    "x": 224,
+                    "y": 220,
+                    "width": 80,
+                    "height": 24,
+                },
+            ]
+        },
+    )
+
+    assert rows[0]["brand"] == "Northside"
+    assert rows[1]["brand"] == "Dv Dolce Vita"
+
+
+def test_extract_records_visual_listing_prefers_top_grid_before_lower_recommendations() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
+        "ecommerce_listing",
+        max_records=1,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "img",
+                    "href": "/p/crown-ivy-men-s-chambray-sport-coat/3203855BL1962J.html",
+                    "src": "/images/sport-coat.jpg",
+                    "alt": "Men's Chambray Sport Coat",
+                    "x": 907,
+                    "y": 582,
+                    "width": 349,
+                    "height": 499,
+                    "score": 30,
+                },
+                {
+                    "tag": "div",
+                    "text": "$99.99",
+                    "x": 907,
+                    "y": 1098,
+                    "width": 120,
+                    "height": 24,
+                    "score": 18,
+                },
+                {
+                    "tag": "img",
+                    "href": "/p/izod-advantage-performance-polo-shirt-classic-fit/3203960IZAGB24R.html",
+                    "src": "/images/polo.jpg",
+                    "alt": "Men's Advantage Performance Polo Shirt Classic Fit",
+                    "x": 395,
+                    "y": 13129,
+                    "width": 160,
+                    "height": 228,
+                    "score": 4,
+                },
+                {
+                    "tag": "a",
+                    "href": "/p/izod-advantage-performance-polo-shirt-classic-fit/3203960IZAGB24R.html",
+                    "text": "Quick Add IZOD Men's Advantage Performance Polo Shirt Classic Fit $20.00 after coupon $50.00",
+                    "x": 395,
+                    "y": 13129,
+                    "width": 160,
+                    "height": 343,
+                    "score": 4,
+                },
+            ]
+        },
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
+            "_source": "visual_listing",
+            "title": "Men's Chambray Sport Coat",
+            "brand": "Crown Ivy",
+            "price": "99.99",
+            "currency": "USD",
+            "image_url": "https://www.belk.com/images/sport-coat.jpg",
+            "url": "https://www.belk.com/p/crown-ivy-men-s-chambray-sport-coat/3203855BL1962J.html",
+        }
+    ]
+
+
 def test_detail_identity_codes_require_exact_match() -> None:
     assert detail_extractor._detail_identity_codes_match(
         {"ABC12345"},

@@ -11,6 +11,7 @@ from soupsieve import SelectorSyntaxError
 
 from app.services.config.extraction_rules import (
     CROSS_LINK_CONTAINER_HINTS,
+    CDN_IMAGE_QUERY_PARAMS,
     EXTRACTION_RULES,
     NON_PRODUCT_IMAGE_HINTS,
     NON_PRODUCT_PROVIDER_HINTS,
@@ -18,6 +19,7 @@ from app.services.config.extraction_rules import (
     SEMANTIC_SECTION_NOISE,
 )
 from app.services.config.surface_hints import detail_path_hints
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_policy import (
     exact_requested_field_key,
     normalize_field_key,
@@ -54,26 +56,25 @@ _NON_PRIMARY_IMAGE_SECTION_HINTS = tuple(
         or ()
     )
 )
-_CDN_IMAGE_QUERY_PARAMS = frozenset(
-    {
-        "width",
-        "w",
-        "height",
-        "h",
-        "quality",
-        "q",
-        "dpr",
-        "fit",
-        "crop",
-        "format",
-        "fm",
-        "auto",
-    }
-)
+_CDN_IMAGE_QUERY_PARAMS = frozenset(CDN_IMAGE_QUERY_PARAMS or ())
 _CDN_IMAGE_PATH_SUFFIX_RE = regex_lib.compile(
     r"_(?:\d+x\d+|pico|icon|thumb|small|compact|medium|large|grande|original)(?=\.[a-z0-9]+$)",
     regex_lib.I,
 )
+
+
+def _selector_regex_timeout_seconds() -> float | None:
+    try:
+        timeout = float(crawler_runtime_settings.selector_regex_timeout_seconds)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid selector_regex_timeout_seconds=%r; disabling selector regex timeout",
+            crawler_runtime_settings.selector_regex_timeout_seconds,
+        )
+        return None
+    return timeout if timeout > 0 else None
+
+
 _SECTION_LABEL_SKIP_TOKENS = tuple(
     sorted(
         {
@@ -511,8 +512,14 @@ def extract_regex_values(
 ) -> list[object]:
     html_text = str(root)
     values: list[object] = []
+    timeout = _selector_regex_timeout_seconds()
     try:
-        matches = regex_lib.finditer(pattern, html_text, regex_lib.DOTALL, timeout=0.05)
+        matches = regex_lib.finditer(
+            pattern,
+            html_text,
+            regex_lib.DOTALL,
+            timeout=timeout,
+        )
         for match in matches:
             raw_value = next((group for group in match.groups() if group), None)
             if raw_value is None:
@@ -537,13 +544,14 @@ def filter_values_by_regex(
     page_url: str,
 ) -> list[object]:
     filtered: list[object] = []
+    timeout = _selector_regex_timeout_seconds()
     try:
         for candidate in values:
             match = regex_lib.search(
                 pattern,
                 str(candidate),
                 regex_lib.DOTALL,
-                timeout=0.05,
+                timeout=timeout,
             )
             if not match:
                 continue

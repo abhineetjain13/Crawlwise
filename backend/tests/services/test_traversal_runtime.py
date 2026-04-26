@@ -759,6 +759,38 @@ async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_more_traversal_stops_at_user_max_records() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>before</div>",
+            card_count=2,
+            scroll_height=900,
+            controls={"load_more"},
+        ),
+        load_more_states=[
+            _State(html="<div>before</div>", card_count=2, scroll_height=900, controls={"load_more"}),
+            _State(html="<div>after</div>", card_count=5, scroll_height=1200, controls={"load_more"}),
+            _State(html="<div>too-far</div>", card_count=9, scroll_height=1500, controls=set()),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="load_more",
+        max_pages=3,
+        max_scrolls=2,
+        max_records=5,
+    )
+
+    assert result.stop_reason == "target_records_reached"
+    assert result.load_more_clicks == 1
+    assert result.card_count == 5
+    assert [f for f, _ in result.html_fragments] == ["<div>before</div>", "<div>after</div>"]
+
+
+@pytest.mark.asyncio
 async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     page = _FakePage(
         surface="job_listing",
@@ -787,6 +819,42 @@ async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     assert result.selected_mode == "scroll"
     assert result.scroll_iterations >= 1
     assert result.progress_events >= 1
+    assert result.card_count == 6
+    assert [f for f, _ in result.html_fragments][:2] == [
+        "<div>jobs</div>",
+        "<div>jobs more</div>",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scroll_traversal_stops_at_user_max_records() -> None:
+    page = _FakePage(
+        surface="job_listing",
+        initial_state=_State(
+            html="<div>jobs</div>",
+            card_count=2,
+            scroll_height=2500,
+            client_height=600,
+            controls=set(),
+        ),
+        scroll_states=[
+            _State(html="<div>jobs</div>", card_count=2, scroll_height=2500, client_height=600, controls=set()),
+            _State(html="<div>jobs more</div>", card_count=6, scroll_height=3400, client_height=600, controls=set()),
+            _State(html="<div>jobs too-far</div>", card_count=9, scroll_height=4200, client_height=600, controls=set()),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="job_listing",
+        traversal_mode="scroll",
+        max_pages=2,
+        max_scrolls=3,
+        max_records=6,
+    )
+
+    assert result.stop_reason == "target_records_reached"
+    assert result.scroll_iterations == 1
     assert result.card_count == 6
     assert [f for f, _ in result.html_fragments][:2] == [
         "<div>jobs</div>",
@@ -941,8 +1009,8 @@ async def test_scroll_traversal_emits_live_events() -> None:
     )
 
     assert emitted[:2] == [
-        ("info", "Detected listing layout, pagination: scroll"),
-        ("info", "Scroll 1/3 - 2 -> 6 records"),
+        ("info", "Detected listing layout, traversal=scroll, max_steps=3"),
+        ("info", "Scroll 1/3 - page_cards=6 (prev_page_cards=2)"),
     ]
 
 

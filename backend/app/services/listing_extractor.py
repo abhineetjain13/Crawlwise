@@ -35,6 +35,9 @@ from app.services.extract.listing_candidate_ranking import (
 )
 from app.services.extract.listing_card_fragments import (
     base_listing_fragment_score,
+    listing_node_attr,
+    listing_node_css,
+    listing_node_text,
     select_listing_fragment_nodes,
 )
 from app.services.extract.listing_visual import visual_listing_records
@@ -554,7 +557,7 @@ def _listing_fragment_score(node, *, is_job: bool = False) -> int:
         score += 5
     title_node = _card_title_node(node)
     if title_node is not None:
-        title_text = _node_text(title_node)
+        title_text = listing_node_text(title_node)
         if title_text and not is_title_noise(title_text):
             score += 4
             if tag_name == "tr":
@@ -602,13 +605,6 @@ def _listing_fragment_score(node, *, is_job: bool = False) -> int:
     return score
 
 
-def _node_text(node) -> str:
-    try:
-        return clean_text(str(node.text(separator=" ", strip=True) or ""))
-    except (AttributeError, TypeError, ValueError):
-        return ""
-
-
 def _node_html(node) -> str:
     try:
         return str(getattr(node, "html", "") or "").strip()
@@ -616,20 +612,14 @@ def _node_html(node) -> str:
         return ""
 
 
-def _node_attr(node, name: str) -> str:
-    raw_attrs = getattr(node, "attributes", {}) or {}
-    attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
-    return str(attrs.get(name) or "").strip()
-
-
 def _node_signature(node) -> str:
     return " ".join(
         [
-            _node_attr(node, "class"),
-            _node_attr(node, "id"),
-            _node_attr(node, "role"),
-            _node_attr(node, "aria-label"),
-            _node_attr(node, "title"),
+            listing_node_attr(node, "class"),
+            listing_node_attr(node, "id"),
+            listing_node_attr(node, "role"),
+            listing_node_attr(node, "aria-label"),
+            listing_node_attr(node, "title"),
         ]
     ).lower()
 
@@ -638,21 +628,11 @@ def _node_tag(node) -> str:
     return str(getattr(node, "tag", "") or "").strip().lower()
 
 
-def _node_css(node, selector: str) -> list[object]:
-    if not selector:
-        return []
-    try:
-        return list(node.css(selector))
-    except SelectolaxError:
-        logger.warning("Skipping invalid listing selector: %s", selector)
-        return []
-
-
 def _meaningful_anchor_texts(card) -> list[str]:
     texts: list[str] = []
     seen: set[str] = set()
-    for link in _node_css(card, "a[href]"):
-        text = clean_text(_node_attr(link, "title") or _node_text(link))
+    for link in listing_node_css(card, "a[href]"):
+        text = clean_text(listing_node_attr(link, "title") or listing_node_text(link))
         if not text or text in seen:
             continue
         seen.add(text)
@@ -665,11 +645,11 @@ def _same_url_anchor_text_candidates(card, url: str) -> list[str]:
         return []
     texts: list[str] = []
     seen: set[str] = set()
-    for link in _node_css(card, "a[href]"):
-        href = _node_attr(link, "href")
+    for link in listing_node_css(card, "a[href]"):
+        href = listing_node_attr(link, "href")
         if not href or absolute_url(url, href) != url:
             continue
-        text = clean_text(_node_attr(link, "title") or _node_text(link))
+        text = clean_text(listing_node_attr(link, "title") or listing_node_text(link))
         if not text or text in seen:
             continue
         seen.add(text)
@@ -681,13 +661,13 @@ def _extract_price_signal_from_card(card) -> str | None:
     candidates: list[tuple[int, int, str]] = []
     order = 0
     for selector in _PRICE_NODE_SELECTORS:
-        for node in _node_css(card, selector):
+        for node in listing_node_css(card, selector):
             order += 1
             raw_text = clean_text(
-                _node_attr(node, "content")
-                or _node_attr(node, "data-price")
-                or _node_attr(node, "aria-label")
-                or _node_text(node)
+                listing_node_attr(node, "content")
+                or listing_node_attr(node, "data-price")
+                or listing_node_attr(node, "aria-label")
+                or listing_node_text(node)
             )
             if not raw_text or len(raw_text) > 120:
                 continue
@@ -718,7 +698,7 @@ def _extract_price_signal_from_card(card) -> str | None:
     if candidates:
         candidates.sort(key=lambda row: (-row[0], row[1]))
         return candidates[0][2]
-    card_text = _node_text(card)
+    card_text = listing_node_text(card)
     fallback_price = extract_price_text(card_text, prefer_last=True)
     if not fallback_price:
         return None
@@ -739,45 +719,77 @@ def _card_title_node(card) -> object | None:
     selectors = listing_extraction_map.get("card_title_selectors")
     selector_values = selectors if isinstance(selectors, list) else []
     for selector in selector_values:
-        candidates.extend(_node_css(card, str(selector)))
+        candidates.extend(listing_node_css(card, str(selector)))
     if candidates:
-        best = max(candidates, key=lambda node: (_card_title_score(node), len(_node_text(node))))
+        best = max(candidates, key=lambda node: (_card_title_score(node), len(listing_node_text(node))))
         if _card_title_score(best) > 0:
             return best
     fallback_candidates = _fallback_card_title_candidates(card)
     if fallback_candidates:
         best = max(
             fallback_candidates,
-            key=lambda node: (_card_title_score(node), len(_node_text(node))),
+            key=lambda node: (_card_title_score(node), len(listing_node_text(node))),
         )
         if _card_title_score(best) > 0:
             return best
-    anchors = _node_css(card, "a[href]")
+    anchors = listing_node_css(card, "a[href]")
     if not anchors:
         return None
     best = max(anchors, key=_card_title_score)
     return best if _card_title_score(best) > 0 else None
 
 
-def _card_title_score(node) -> int:
-    text = _node_text(node)
+def _card_title_score(
+    node=None,
+    *,
+    text: str | None = None,
+    attrs: str | None = None,
+    tag_name: str | None = None,
+    href_present: bool | None = None,
+) -> int:
+    if node is not None:
+        text = listing_node_text(node)
+        attrs = _node_signature(node)
+        tag_name = _node_tag(node)
+        href_present = bool(listing_node_attr(node, "href"))
+    text = clean_text(text)
     if not text:
         return -100
-    return _card_title_score_parts(
-        text=text,
-        attrs=_node_signature(node),
-        tag_name=_node_tag(node),
-        href_present=bool(_node_attr(node, "href")),
-    )
+    attrs = str(attrs or "")
+    tag_name = str(tag_name or "")
+    href_present = bool(href_present)
+    score = 0
+    if any(token in attrs for token in ("title", "name", "product", "item", "listing", "result", "job", "record", "release")):
+        score += 6
+    if any(token in attrs for token in ("brand", "seller", "vendor", "rating", "price", "size", "wishlist")):
+        score -= 6
+    if tag_name in {"h1", "h2", "h3", "h4", "h5", "a", "strong", "b"}:
+        score += 2
+    if text.isdigit():
+        score -= 20
+    if re.search(r"[a-z]", text, flags=re.I):
+        score += 2
+    text_len = len(text)
+    if 8 <= text_len <= 180:
+        score += 3
+    elif text_len < 4:
+        score -= 6
+    elif text_len > 220:
+        score -= 2
+    if is_title_noise(text):
+        score -= 4
+    if href_present:
+        score += 2
+    return score
 
 
 def _fallback_card_title_candidates(card) -> list[object]:
     candidates: list[object] = []
-    for node in _node_css(card, "*"):
+    for node in listing_node_css(card, "*"):
         tag_name = _node_tag(node)
         if tag_name in {"a", "button"}:
             continue
-        text = _node_text(node)
+        text = listing_node_text(node)
         if not text or len(text) > 220:
             continue
         lowered_text = text.lower()
@@ -797,39 +809,6 @@ def _fallback_card_title_candidates(card) -> list[object]:
     return candidates
 
 
-def _card_title_score_parts(
-    *,
-    text: str,
-    attrs: str,
-    tag_name: str,
-    href_present: bool,
-) -> int:
-    score = 0
-    normalized_text = clean_text(text)
-    if any(token in attrs for token in ("title", "name", "product", "item", "listing", "result", "job", "record", "release")):
-        score += 6
-    if any(token in attrs for token in ("brand", "seller", "vendor", "rating", "price", "size", "wishlist")):
-        score -= 6
-    if tag_name in {"h1", "h2", "h3", "h4", "h5", "a", "strong", "b"}:
-        score += 2
-    if normalized_text.isdigit():
-        score -= 20
-    if re.search(r"[a-z]", normalized_text, flags=re.I):
-        score += 2
-    text_len = len(normalized_text)
-    if 8 <= text_len <= 180:
-        score += 3
-    elif text_len < 4:
-        score -= 6
-    elif text_len > 220:
-        score -= 2
-    if is_title_noise(normalized_text):
-        score -= 4
-    if href_present:
-        score += 2
-    return score
-
-
 def _select_primary_anchor(
     card,
     page_url: str,
@@ -845,8 +824,8 @@ def _select_primary_anchor(
         if card_html and title_html:
             title_index = card_html.find(title_html)
     best: tuple[int, object, str, str] | None = None
-    for anchor in _node_css(card, "a[href]"):
-        url = absolute_url(page_url, _node_attr(anchor, "href"))
+    for anchor in listing_node_css(card, "a[href]"):
+        url = absolute_url(page_url, listing_node_attr(anchor, "href"))
         if not url or (not same_host(page_url, url) and not same_site(page_url, url)):
             continue
         lowered_url = url.lower()
@@ -855,11 +834,11 @@ def _select_primary_anchor(
         if any(token in lowered_url for token in ("sort=", "filter=", "facet=", "#review", "#details")):
             continue
         text = clean_text(
-            _node_attr(anchor, "title")
-            or _node_attr(anchor, "aria-label")
-            or _node_text(anchor)
+            listing_node_attr(anchor, "title")
+            or listing_node_attr(anchor, "aria-label")
+            or listing_node_text(anchor)
         )
-        score = _card_title_score_parts(
+        score = _card_title_score(
             text=text,
             attrs=_node_signature(anchor),
             tag_name=_node_tag(anchor),
@@ -936,9 +915,9 @@ def _job_detail_like_path(url: str) -> bool:
 def _extract_page_images_from_node(root, page_url: str) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
-    for node in _node_css(root, "img"):
+    for node in listing_node_css(root, "img"):
         for attr_name in ("data-original", "data-src", "src"):
-            candidate = absolute_url(page_url, _node_attr(node, attr_name))
+            candidate = absolute_url(page_url, listing_node_attr(node, attr_name))
             if not candidate:
                 continue
             lowered = candidate.lower()
@@ -974,9 +953,9 @@ def _listing_image_candidate_is_noise(node, *, candidate_url: str = "") -> bool:
         for part in (
             str(candidate_url or "").strip().lower(),
             _node_signature(node),
-            _node_attr(node, "alt").lower(),
-            _node_attr(node, "title").lower(),
-            _node_attr(node, "aria-label").lower(),
+            listing_node_attr(node, "alt").lower(),
+            listing_node_attr(node, "title").lower(),
+            listing_node_attr(node, "aria-label").lower(),
         )
         if part
     )
@@ -984,17 +963,17 @@ def _listing_image_candidate_is_noise(node, *, candidate_url: str = "") -> bool:
 
 
 def _extract_image_title_hint(root, *, page_url: str) -> str | None:
-    for node in _node_css(root, "img"):
+    for node in listing_node_css(root, "img"):
         candidate_url = absolute_url(
             page_url,
-            _node_attr(node, "data-original")
-            or _node_attr(node, "data-src")
-            or _node_attr(node, "src"),
+            listing_node_attr(node, "data-original")
+            or listing_node_attr(node, "data-src")
+            or listing_node_attr(node, "src"),
         )
         if _listing_image_candidate_is_noise(node, candidate_url=candidate_url):
             continue
         for attr_name in ("alt", "title", "aria-label"):
-            candidate = _normalize_listing_title(clean_text(_node_attr(node, attr_name)))
+            candidate = _normalize_listing_title(clean_text(listing_node_attr(node, attr_name)))
             if not candidate or is_title_noise(candidate):
                 continue
             return candidate
@@ -1042,16 +1021,16 @@ def _should_replace_title_with_image_hint(title: str, image_title_hint: str | No
 
 def _extract_label_value_pairs_from_node(root) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
-    for tr in _node_css(root, "tr"):
-        cells = _node_css(tr, "th, td")
+    for tr in listing_node_css(root, "tr"):
+        cells = listing_node_css(tr, "th, td")
         if len(cells) < 2:
             continue
-        label = _node_text(cells[0])
-        value = _node_text(cells[1])
+        label = listing_node_text(cells[0])
+        value = listing_node_text(cells[1])
         if label and value and not _label_value_pair_is_noise(label):
             rows.append((label, value))
-    for node in _node_css(root, "li, p, div, span"):
-        text = _node_text(node)
+    for node in listing_node_css(root, "li, p, div, span"):
+        text = listing_node_text(node)
         if ":" not in text:
             continue
         label, value = text.split(":", 1)
@@ -1093,10 +1072,10 @@ def _extract_brand_signal_from_card(card, title: str) -> str | None:
             continue
         for node in matches:
             value = clean_text(
-                _node_attr(node, "content")
-                or _node_attr(node, "title")
-                or _node_attr(node, "aria-label")
-                or _node_text(node)
+                listing_node_attr(node, "content")
+                or listing_node_attr(node, "title")
+                or listing_node_attr(node, "aria-label")
+                or listing_node_text(node)
             )
             if not value:
                 continue
@@ -1157,9 +1136,9 @@ def _listing_record_from_card(
     title_score = _card_title_score(title_node)
     image_title_hint = _extract_image_title_hint(card, page_url=page_url)
     title = clean_text(
-        _node_attr(title_node, "title")
-        or _node_attr(title_node, "alt")
-        or _node_text(title_node)
+        listing_node_attr(title_node, "title")
+        or listing_node_attr(title_node, "alt")
+        or listing_node_text(title_node)
         or anchor_text
     )
     same_url_texts = _same_url_anchor_text_candidates(card, url)
@@ -1184,7 +1163,7 @@ def _listing_record_from_card(
         return None
     if anchor_score < 4 and title_score < 8:
         return None
-    card_text = _node_text(card)
+    card_text = listing_node_text(card)
     image_urls = _extract_page_images_from_node(card, page_url)
     has_supporting_listing_signals = bool(
         PRICE_RE.search(card_text)

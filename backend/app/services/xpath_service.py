@@ -9,6 +9,8 @@ from cssselect import GenericTranslator, SelectorError
 from lxml import etree
 from lxml import html as lxml_html
 
+from app.services.config.runtime_settings import crawler_runtime_settings
+
 logger = logging.getLogger(__name__)
 
 _XPATH_ALLOWED_FUNCTIONS = {
@@ -225,7 +227,12 @@ def _apply_regex_filter(pattern: str | None, values: list[str]) -> list[str]:
     filtered: list[str] = []
     for value in values:
         try:
-            match = regex_lib.search(pattern, value, regex_lib.DOTALL, timeout=0.05)
+            match = regex_lib.search(
+                pattern,
+                value,
+                regex_lib.DOTALL,
+                timeout=float(crawler_runtime_settings.selector_regex_timeout_seconds),
+            )
         except TimeoutError:
             logger.warning(
                 "Timed out while evaluating selector regex",

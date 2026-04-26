@@ -1111,7 +1111,7 @@ export function CrawlConfigScreen({
  </div>
 
  {studioMode === "advanced" ? (
- <Card className="section-card xl:col-span-2 overflow-hidden">
+ <Card className="section-card xl:col-span-2 overflow-visible">
  <header className="cs-panel-header">
  <span className="cs-panel-title flex items-center gap-1.5"><SlidersHorizontal className="size-3.5" /> Advanced Settings</span>
  <Tooltip content="Fine-tune fetch, limits, locality, and diagnostics for this exploratory run.">
@@ -1227,10 +1227,10 @@ export function CrawlConfigScreen({
  options={[
  { value: "off", label: "Off" },
  { value: "auto", label: "Auto" },
+ { value: "paginate", label: "Paginate" },
  { value: "scroll", label: "Scroll" },
  { value: "load_more", label: "Load More" },
  { value: "view_all", label: "View All" },
- { value: "paginate", label: "Paginate" },
  ]}
  />
  </div>
@@ -1274,7 +1274,7 @@ export function CrawlConfigScreen({
  min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS}
  max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
  step={100}
- suffix="ms"
+
  onChange={(next) =>
  markProfileDirty((current) => ({
  ...current,

@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.models.crawl import DomainCookieMemory
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.domain_utils import normalize_domain
+from app.services.field_value_core import _object_list
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -289,14 +290,6 @@ def _normalize_storage_state(storage_state: Mapping[str, object]) -> dict[str, o
     }
 
 
-def _object_list(value: object) -> list[object]:
-    if value is None or isinstance(value, (str, bytes, bytearray, Mapping)):
-        return []
-    if not isinstance(value, Iterable):
-        return []
-    return list(value)
-
-
 def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
     if _object_list(storage_state.get("cookies")):
         return True
@@ -311,7 +304,12 @@ def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
 def _normalize_cookies(value: object) -> list[dict[str, object]]:
     now = time.time()
     cookies: list[dict[str, object]] = []
-    for item in _object_list(value):
+    rows = (
+        list(value)
+        if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, Mapping))
+        else _object_list(value)
+    )
+    for item in rows:
         if not isinstance(item, Mapping):
             continue
         cookie: dict[str, object] = {}
@@ -334,14 +332,26 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
 
 def _normalize_origins(value: object) -> list[dict[str, object]]:
     origins: list[dict[str, object]] = []
-    for item in _object_list(value):
+    rows = (
+        list(value)
+        if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, Mapping))
+        else _object_list(value)
+    )
+    for item in rows:
         if not isinstance(item, Mapping):
             continue
         origin = str(item.get("origin") or "").strip()
         if not origin:
             continue
         local_storage_rows: list[dict[str, str]] = []
-        for entry in _object_list(item.get("localStorage")):
+        raw_entries = item.get("localStorage")
+        entries = (
+            list(raw_entries)
+            if isinstance(raw_entries, Iterable)
+            and not isinstance(raw_entries, (str, bytes, bytearray, Mapping))
+            else _object_list(raw_entries)
+        )
+        for entry in entries:
             if not isinstance(entry, Mapping):
                 continue
             name = str(entry.get("name") or "").strip()

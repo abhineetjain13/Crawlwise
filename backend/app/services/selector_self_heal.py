@@ -18,6 +18,7 @@ from app.services.domain_memory_service import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import canonical_requested_fields, field_allowed_for_surface
+from app.services.field_value_core import _safe_int
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import extract_selector_value, validate_or_convert_xpath
 
@@ -408,15 +409,6 @@ def _safe_float(value: object, *, default: float) -> float:
         if value is None:
             return default
         return float(str(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: object, *, default: int | None) -> int | None:
-    try:
-        if value is None or value == "":
-            return default
-        return int(str(value))
     except (TypeError, ValueError):
         return default
 

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import DomainMemory
+from app.services.field_value_core import _safe_int
 
 
 def _normalized_selector_rule(row: dict[str, object]) -> dict[str, object]:
@@ -29,15 +30,6 @@ def _selector_rule_signature(row: dict[str, object]) -> tuple[str, str, str, str
         str(normalized.get("xpath") or "").strip(),
         str(normalized.get("regex") or "").strip(),
     )
-
-
-def _safe_int(value: object, *, default: int | None) -> int | None:
-    try:
-        if value in (None, ""):
-            return default
-        return int(str(value))
-    except (TypeError, ValueError):
-        return default
 
 
 async def load_domain_memory(

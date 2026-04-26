@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 from selectolax.lexbor import LexborHTMLParser
+from selectolax.lexbor import SelectolaxError
 
 from app.services.config.extraction_rules import (
     LISTING_FALLBACK_CONTAINER_SELECTOR,
@@ -14,6 +16,7 @@ from app.services.config.selectors import CARD_SELECTORS
 from app.services.field_value_core import PRICE_RE, clean_text
 
 FragmentScoreFn = Callable[[object], int]
+logger = logging.getLogger(__name__)
 
 
 def listing_selector_group(surface: str) -> str:
@@ -25,6 +28,29 @@ def listing_capture_selectors(surface: str) -> list[str]:
         *list(CARD_SELECTORS.get(listing_selector_group(surface)) or []),
         LISTING_FALLBACK_CONTAINER_SELECTOR,
     ]
+
+
+def listing_node_text(node) -> str:
+    try:
+        return clean_text(str(node.text(separator=" ", strip=True) or ""))
+    except (AttributeError, TypeError, ValueError):
+        return ""
+
+
+def listing_node_attr(node, name: str) -> str:
+    raw_attrs = getattr(node, "attributes", {}) or {}
+    attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
+    return str(attrs.get(name) or "").strip()
+
+
+def listing_node_css(node, selector: str) -> list[object]:
+    if not selector:
+        return []
+    try:
+        return list(node.css(selector))
+    except SelectolaxError:
+        logger.warning("Skipping invalid listing selector: %s", selector)
+        return []
 
 
 def base_listing_fragment_score(node) -> int:

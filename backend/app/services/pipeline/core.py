@@ -789,6 +789,7 @@ async def _retry_empty_extraction_with_browser(
     retry_decision = _empty_extraction_browser_retry_decision(acquisition_result, records)
     if not retry_decision["should_retry"]:
         return records, selector_rules
+    await _log_extraction_outcome(context, acquisition_result, records)
     await _log_pipeline_event(context, "info", f"No records via {acquisition_result.method}; retrying browser render for {context.url}")
     browser_result = await _acquire_browser_retry_result(context, fetched, retry_reason="empty_extraction")
     fetched.acquisition_result = browser_result

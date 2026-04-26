@@ -1,7 +1,7 @@
 export type User = {
  id: number;
  email: string;
- role:"user"|"admin";
+ role:"user"|"admin"|"harness";
  is_active: boolean;
  created_at: string;
  updated_at: string;

@@ -52,6 +52,10 @@ class AcquisitionRequest:
     def max_scrolls(self) -> int:
         return self.plan.max_scrolls
 
+    @property
+    def max_records(self) -> int:
+        return self.plan.max_records
+
 @dataclass(slots=True)
 class AcquisitionResult:
     request: AcquisitionRequest
@@ -131,6 +135,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             ),
             max_pages=request.max_pages,
             max_scrolls=request.max_scrolls,
+            max_records=request.max_records,
             browser_reason=browser_reason,
             capture_page_markdown=bool(
                 acquisition_profile.get("capture_page_markdown", False)

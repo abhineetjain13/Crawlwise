@@ -36,7 +36,7 @@ from app.services.normalizers import normalize_record_fields
 
 PRODUCT_URL_HINTS = detail_path_hints("ecommerce_detail")
 JOB_URL_HINTS = detail_path_hints("job_detail")
-_FIELD_ALIASES = FIELD_ALIASES if isinstance(FIELD_ALIASES, dict) else {}
+_FIELD_ALIASES = FIELD_ALIASES
 _CURRENCY_SYMBOL_PATTERN = "|".join(
     re.escape(str(symbol))
     for symbol in sorted(
@@ -119,6 +119,34 @@ TRACKING_DETAIL_CONTEXT_EXACT_KEYS = {
     "qs",
     "sr_prefetch",
 }
+
+
+def _object_list(value: object) -> list:
+    return list(value) if isinstance(value, list) else []
+
+
+def _object_dict(value: object) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _safe_int(value: object, *, default: int | None = None) -> int | None:
+    if value is None or value == "":
+        return default
+    try:
+        return int(str(value))
+    except (ValueError, TypeError):
+        return default
+
+
+def _coerce_int(value: object, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return default
 TRACKING_PARAM_PREFIXES = ("utm_", "click_")
 TRACKING_STRIP_URL_FIELDS = {"apply_url", "source_url", "url"}
 _PRESERVED_SHORT_QUERY_KEYS = {"id", "ids", "p", "page", "pid", "q", "sku", "v"}

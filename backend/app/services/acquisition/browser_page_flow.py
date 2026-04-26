@@ -15,7 +15,22 @@ from app.services.acquisition.browser_recovery import (
     capture_rendered_listing_fragments,
     recover_browser_challenge,
 )
-from app.services.config.extraction_rules import LISTING_UTILITY_URL_TOKENS
+from app.services.config.extraction_rules import (
+    DETAIL_MARKDOWN_LINE_NOISE,
+    DETAIL_MARKDOWN_SECTION_NOISE_TOKENS,
+    LISTING_BRAND_SELECTORS,
+    LISTING_UTILITY_URL_TOKENS,
+    MARKDOWN_NOISE_SELECTORS,
+    MARKDOWN_NOISE_TOKENS,
+    MARKDOWN_ROOT_SELECTORS,
+)
+from app.services.config.selectors import (
+    ANCHOR_SELECTOR,
+    DETAIL_MARKDOWN_HEADING_SELECTOR,
+    LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS,
+    LISTING_VISUAL_CANDIDATE_CONTAINER_SELECTORS,
+    LISTING_VISUAL_CAPTURE_SELECTORS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.dom_runtime import get_page_html
 from app.services.config.surface_hints import detail_path_hints
@@ -24,74 +39,6 @@ from app.services.acquisition.runtime import classify_blocked_page_async, copy_h
 from app.services.platform_policy import resolve_browser_readiness_policy, resolve_platform_runtime_policy
 logger = logging.getLogger(__name__)
 _ACCESSIBILITY_SNAPSHOT_TIMEOUT_SECONDS = 0.5
-_MARKDOWN_ROOT_SELECTORS = (
-    "main",
-    "[role='main']",
-    "article",
-    ".product-detail-view__main-content",
-    ".product-detail-info",
-    "[data-qa-id='product-detail-info']",
-)
-_MARKDOWN_NOISE_SELECTORS = (
-    "nav",
-    "footer",
-    "header",
-    "script",
-    "style",
-    "noscript",
-    "svg",
-    "template",
-    "iframe",
-    "dialog",
-    "[role='dialog']",
-    "[aria-modal='true']",
-    "[hidden]",
-    "[aria-hidden='true']",
-    "[inert]",
-    "[role='navigation']",
-    "[role='banner']",
-    "[role='contentinfo']",
-)
-_MARKDOWN_NOISE_TOKENS = ("cookie", "consent", "modal", "popup", "banner")
-_DETAIL_MARKDOWN_SECTION_NOISE_TOKENS = (
-    "affirm",
-    "amex",
-    "answer",
-    "answers",
-    "ask a question",
-    "filter reviews",
-    "helpful",
-    "klarna",
-    "mastercard",
-    "overall rating",
-    "payment",
-    "paypal",
-    "q&a",
-    "question",
-    "questions",
-    "rating snapshot",
-    "report this answer",
-    "report this review",
-    "review",
-    "reviews",
-    "secure payment",
-    "verified reviewer",
-    "visa",
-    "what are other people saying",
-)
-_DETAIL_MARKDOWN_LINE_NOISE = (
-    "add to cart",
-    "add",
-    "check in-store availability",
-    "coming soon",
-    "home",
-    "notify me",
-    "product measurements",
-    "put it in your basket",
-    "shipping, exchanges and returns",
-    "skip to main content",
-    "skip the navigation",
-)
 @dataclass(slots=True)
 class BrowserFinalizeInput:
     page: Any
@@ -266,8 +213,12 @@ class BrowserAcquisitionResultBuilder:
                 payload.on_event,
                 "info",
                 (
-                    f"Traversal complete - {int(payload.traversal_result.card_count or 0)} records, "
-                    f"stop reason: {payload.traversal_result.stop_reason}"
+                    "Traversal complete - "
+                    f"mode={payload.traversal_result.selected_mode or payload.traversal_result.requested_mode}, "
+                    f"last_page_cards={int(payload.traversal_result.card_count or 0)}, "
+                    f"fragments={len(payload.traversal_result.html_fragments)}, "
+                    f"progress_events={int(payload.traversal_result.progress_events or 0)}, "
+                    f"stop_reason={payload.traversal_result.stop_reason}"
                 ),
             )
         if blocked:
@@ -784,6 +735,7 @@ async def serialize_browser_page_content_impl(
     timeout_seconds: float,
     max_pages: int,
     max_scrolls: int,
+    max_records: int | None = None,
     capture_page_markdown: bool,
     phase_timings_ms: dict[str, int],
     execute_listing_traversal,
@@ -826,6 +778,7 @@ async def serialize_browser_page_content_impl(
             traversal_mode=str(traversal_mode or ""),
             max_pages=max_pages,
             max_scrolls=max_scrolls,
+            max_records=max_records,
             timeout_seconds=timeout_seconds,
             on_event=on_event,
         )
@@ -1003,7 +956,7 @@ async def _generate_page_markdown(
     for node in list(soup.find_all(True)):
         if not isinstance(getattr(node, "attrs", None), dict):
             node.attrs = {}
-    for selector in _MARKDOWN_NOISE_SELECTORS:
+    for selector in MARKDOWN_NOISE_SELECTORS:
         for node in soup.select(selector):
             node.decompose()
     for node in list(soup.find_all(True)):
@@ -1019,7 +972,7 @@ async def _generate_page_markdown(
                 str(attrs.get("data-qa-action") or ""),
             ]
         ).lower()
-        if any(token in attr_text for token in _MARKDOWN_NOISE_TOKENS):
+        if any(token in attr_text for token in MARKDOWN_NOISE_TOKENS):
             node.decompose()
     if detail_surface:
         _prune_detail_markdown_noise(soup)
@@ -1069,7 +1022,7 @@ def _serialize_markdown_root(root: BeautifulSoup | Any) -> tuple[str, list[str]]
         if str(line or "").strip()
     ]
     link_lines: list[str] = []
-    for anchor in root.select("a[href]"):
+    for anchor in root.select(ANCHOR_SELECTOR):
         attrs = getattr(anchor, "attrs", None)
         if not isinstance(attrs, dict):
             continue
@@ -1093,7 +1046,7 @@ def _node_markdown_probe(node: Tag) -> str:
             ]
         )
     headings: list[str] = []
-    for candidate in node.select("h1, h2, h3, h4, summary, button, [role='tab']")[:4]:
+    for candidate in node.select(DETAIL_MARKDOWN_HEADING_SELECTOR)[:4]:
         headings.append(candidate.get_text(" ", strip=True))
     return " ".join([attr_text, *headings]).lower()
 def _prune_detail_markdown_noise(soup: BeautifulSoup) -> None:
@@ -1112,7 +1065,7 @@ def _detail_markdown_line_is_noise(line: str) -> bool:
         return True
     if lowered == ">":
         return True
-    if any(_detail_markdown_line_matches_noise_token(lowered, token) for token in _DETAIL_MARKDOWN_LINE_NOISE):
+    if any(_detail_markdown_line_matches_noise_token(lowered, token) for token in DETAIL_MARKDOWN_LINE_NOISE):
         return True
     if compact.isupper() and len(compact) <= 24:
         return True
@@ -1144,12 +1097,12 @@ def _detail_markdown_probe_is_noise(node: Tag) -> bool:
         return False
     attr_hits = {
         _detail_markdown_token_key(token)
-        for token in _DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
+        for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
         if _detail_markdown_contains_token(attr_probe, token)
     }
     heading_hits = {
         _detail_markdown_token_key(token)
-        for token in _DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
+        for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
         if _detail_markdown_contains_token(heading_probe, token)
     }
     if any(" " in token or "&" in token for token in attr_hits | heading_hits):
@@ -1190,7 +1143,7 @@ def _node_markdown_attr_text(node: Tag) -> str:
     ).lower()
 def _node_markdown_heading_text(node: Tag) -> str:
     headings: list[str] = []
-    for candidate in node.select("h1, h2, h3, h4, summary, button, [role='tab']")[:4]:
+    for candidate in node.select(DETAIL_MARKDOWN_HEADING_SELECTOR)[:4]:
         headings.append(candidate.get_text(" ", strip=True))
     return " ".join(headings).lower()
 def _filter_detail_markdown_payload(
@@ -1210,15 +1163,15 @@ def _detail_markdown_link_is_noise(line: str) -> bool:
         return True
     if "-> #main" in lowered or "-> #" in lowered:
         return True
-    if any(token in lowered for token in _DETAIL_MARKDOWN_SECTION_NOISE_TOKENS):
+    if any(token in lowered for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS):
         return True
-    return any(token in lowered for token in _DETAIL_MARKDOWN_LINE_NOISE)
+    return any(token in lowered for token in DETAIL_MARKDOWN_LINE_NOISE)
 def _select_markdown_root(soup: BeautifulSoup) -> BeautifulSoup | Any:
     body = soup.body
     body_text = ""
     if body is not None:
         body_text = " ".join(body.get_text(" ", strip=True).split()).strip()
-    for selector in _MARKDOWN_ROOT_SELECTORS:
+    for selector in MARKDOWN_ROOT_SELECTORS:
         candidate = soup.select_one(selector)
         if candidate is None:
             continue
@@ -1239,7 +1192,7 @@ def _serialize_accessibility_snapshot(
     lines: list[str] = []
     name = " ".join(str(node.get("name") or "").split()).strip()
     lowered_name = name.lower()
-    if any(token in lowered_name for token in _DETAIL_MARKDOWN_SECTION_NOISE_TOKENS):
+    if any(token in lowered_name for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS):
         return ""
     if name:
         role = " ".join(str(node.get("role") or "element").split()).strip() or "element"
@@ -1284,46 +1237,13 @@ async def _capture_listing_visual_elements(
     try:
         snapshot = await page.evaluate(
             """(args) => {
+                const anchorSelector = String(args?.anchorSelector || '');
                 const detailUrlHints = Array.isArray(args?.detailUrlHints) ? args.detailUrlHints : [];
                 const utilityUrlTokens = Array.isArray(args?.utilityUrlTokens) ? args.utilityUrlTokens : [];
-                const selectors = [
-                    'a[href]',
-                    'img[src]',
-                    'h1',
-                    'h2',
-                    'h3',
-                    'h4',
-                    '[itemprop="name"]',
-                    '[class*="price" i]',
-                    '[data-testid*="price" i]',
-                    '[aria-label*="price" i]',
-                    '[class*="title" i]',
-                    '[data-testid*="title" i]',
-                    '[data-testid*="name" i]',
-                ];
-                const structuralAncestorSelectors = [
-                    'header',
-                    'footer',
-                    'nav',
-                    '[role="navigation"]',
-                    '[role="banner"]',
-                    '[role="contentinfo"]',
-                    'dialog',
-                    '[role="dialog"]',
-                    'aside',
-                ];
-                const candidateContainerSelectors = [
-                    'article',
-                    'li',
-                    'section',
-                    '[role="listitem"]',
-                    '[data-testid*="product" i]',
-                    '[class*="product" i]',
-                    '[class*="card" i]',
-                    '[class*="tile" i]',
-                    '[class*="item" i]',
-                    '[class*="result" i]',
-                ];
+                const brandSelectors = Array.isArray(args?.brandSelectors) ? args.brandSelectors : [];
+                const selectors = [...(Array.isArray(args?.captureSelectors) ? args.captureSelectors : []), ...brandSelectors];
+                const structuralAncestorSelectors = Array.isArray(args?.structuralAncestorSelectors) ? args.structuralAncestorSelectors : [];
+                const candidateContainerSelectors = Array.isArray(args?.candidateContainerSelectors) ? args.candidateContainerSelectors : [];
                 const seenNodes = new Set();
                 const rows = [];
                 const priceRegex = /(?:₹|Rs\\.?|INR|\\$|€|£)\\s?[\\d,.]+/i;
@@ -1363,11 +1283,15 @@ async def _capture_listing_visual_elements(
                         const title = normalizedText(node.getAttribute('title') || '').slice(0, 240);
                         const src = toAbsolute(node.getAttribute('src') || '');
                         const directHref = toAbsolute(node.getAttribute('href') || '');
-                        const closestAnchor = node.closest('a[href]');
+                        const closestAnchor = anchorSelector ? node.closest(anchorSelector) : null;
                         let href = directHref || toAbsolute(closestAnchor?.getAttribute('href') || '');
                         if (!href) {
-                            const container = node.closest(candidateContainerSelectors.join(','));
-                            const hintedAnchor = container?.querySelector?.('a[href*="/product/"], a[href*="/products/"], a[href*="/p/"], a[href*="/dp/"], a[href*="/item/"]');
+                            const candidateContainerSelector = candidateContainerSelectors.join(',');
+                            const container = candidateContainerSelector ? node.closest(candidateContainerSelector) : node;
+                            const hintedAnchor = anchorSelector ? Array.from(container?.querySelectorAll?.(anchorSelector) || []).find((candidate) => {
+                                const candidateHref = String(candidate?.getAttribute?.('href') || '').toLowerCase();
+                                return detailUrlHints.some((hint) => candidateHref.includes(hint));
+                            }) : null;
                             href = toAbsolute(hintedAnchor?.getAttribute('href') || '');
                         }
                         const loweredHref = href.toLowerCase();
@@ -1443,6 +1367,15 @@ async def _capture_listing_visual_elements(
                 "utilityUrlTokens": [
                     token.lower() for token in LISTING_UTILITY_URL_TOKENS
                 ],
+                "brandSelectors": list(LISTING_BRAND_SELECTORS),
+                "anchorSelector": ANCHOR_SELECTOR,
+                "captureSelectors": list(LISTING_VISUAL_CAPTURE_SELECTORS),
+                "candidateContainerSelectors": list(
+                    LISTING_VISUAL_CANDIDATE_CONTAINER_SELECTORS
+                ),
+                "structuralAncestorSelectors": list(
+                    LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS
+                ),
             },
         )
     except asyncio.CancelledError:

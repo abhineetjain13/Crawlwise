@@ -782,7 +782,7 @@ def shutdown_browser_runtime_sync() -> None:
     if loop_thread_id is not None and loop_thread_id != threading.get_ident():
         future = asyncio.run_coroutine_threadsafe(shutdown_browser_runtime(), loop)
         try:
-            future.result(timeout=10)
+            future.result(timeout=_browser_shutdown_timeout_seconds())
         except concurrent.futures.TimeoutError:
             logger.warning(
                 "Timed out waiting for browser runtime shutdown to complete"
@@ -936,6 +936,17 @@ def _browser_close_timeout_seconds() -> float:
         0.1,
         float(crawler_runtime_settings.browser_close_timeout_ms) / 1000,
     )
+
+
+def _browser_shutdown_timeout_seconds() -> float:
+    try:
+        return max(0.1, float(crawler_runtime_settings.browser_shutdown_timeout_seconds))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid browser_shutdown_timeout_seconds=%r; using 10.0s",
+            crawler_runtime_settings.browser_shutdown_timeout_seconds,
+        )
+        return 10.0
 
 
 async def _close_browser_context_safely(context: Any) -> None:
@@ -1114,6 +1125,7 @@ async def browser_fetch(
     capture_screenshot: bool = False,
     max_pages: int = 1,
     max_scrolls: int = 1,
+    max_records: int | None = None,
     on_event=None,
     runtime_provider=get_browser_runtime,
     proxied_page_factory=temporary_browser_page,
@@ -1292,6 +1304,7 @@ async def browser_fetch(
                         timeout_seconds=_remaining(),
                         max_pages=max_pages,
                         max_scrolls=max_scrolls,
+                        max_records=max_records,
                         capture_page_markdown=capture_page_markdown,
                         phase_timings_ms=phase_timings_ms,
                         on_event=on_event,
@@ -1539,6 +1552,7 @@ async def _serialize_browser_page_content(
     timeout_seconds: float,
     max_pages: int,
     max_scrolls: int,
+    max_records: int | None,
     capture_page_markdown: bool,
     phase_timings_ms: dict[str, int],
     on_event=None,
@@ -1552,6 +1566,7 @@ async def _serialize_browser_page_content(
         timeout_seconds=timeout_seconds,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
+        max_records=max_records,
         capture_page_markdown=capture_page_markdown,
         phase_timings_ms=phase_timings_ms,
         execute_listing_traversal=execute_listing_traversal,

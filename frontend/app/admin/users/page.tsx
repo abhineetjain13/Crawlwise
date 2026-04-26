@@ -117,6 +117,7 @@ export default function AdminUsersPage() {
  options={[
  { value:"user", label:"user"},
  { value:"admin", label:"admin"},
+ { value:"harness", label:"harness"},
  ]}
  className="min-w-24"
  />

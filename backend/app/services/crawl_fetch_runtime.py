@@ -87,6 +87,7 @@ class _FetchRuntimeContext:
     traversal_mode: str | None
     max_pages: int
     max_scrolls: int
+    max_records: int | None
     on_event: object | None
     browser_reason: str | None
     requested_fields: list[str]
@@ -213,6 +214,7 @@ async def _browser_fetch(
     capture_screenshot: bool = True,
     max_pages: int = 1,
     max_scrolls: int = 1,
+    max_records: int | None = None,
     on_event=None,
 ) -> PageFetchResult:
     return await browser_fetch(
@@ -234,6 +236,7 @@ async def _browser_fetch(
         capture_screenshot=capture_screenshot,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
+        max_records=max_records,
         on_event=on_event,
         runtime_provider=get_browser_runtime,
         proxied_page_factory=temporary_browser_page,
@@ -309,6 +312,7 @@ async def fetch_page(
     capture_screenshot: bool = False,
     max_pages: int = 1,
     max_scrolls: int = 1,
+    max_records: int | None = None,
     on_event=None,
 ) -> PageFetchResult:
     url = _ensure_scheme(url)
@@ -330,6 +334,7 @@ async def fetch_page(
         traversal_mode=traversal_mode,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
+        max_records=max_records,
         on_event=on_event,
         browser_reason=browser_reason,
         requested_fields=list(requested_fields or []),
@@ -598,6 +603,7 @@ async def _run_browser_attempts(
                     capture_screenshot=capture_screenshot,
                     max_pages=context.max_pages,
                     max_scrolls=context.max_scrolls,
+                    max_records=context.max_records,
                     on_event=context.on_event,
                 )
                 result.browser_diagnostics = {

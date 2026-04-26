@@ -7,8 +7,7 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parents[3]
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]
-_ENV_FILES = (str(_PROJECT_ROOT / ".env"), str(_BACKEND_DIR / ".env"))
+_ENV_FILES = (str(_BACKEND_DIR.parent / ".env"), str(_BACKEND_DIR / ".env"))
 
 
 def _settings_config(*, env_prefix: str) -> SettingsConfigDict:
@@ -208,6 +207,12 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_readiness_visible_text_min: int = 120
     interruptible_wait_poll_ms: int = 250
     cooperative_sleep_poll_ms: int = 250
+    selector_regex_timeout_seconds: float = 0.05
+    browser_shutdown_timeout_seconds: float = 10.0
+    traversal_locator_visible_timeout_ms: int = 250
+    traversal_scroll_into_view_timeout_ms: int = 2000
+    traversal_cookie_consent_visible_timeout_ms: int = 200
+    traversal_cookie_consent_click_timeout_ms: int = 1000
     pagination_navigation_timeout_ms: int = 20000
     pagination_page_size_anomaly_ratio: int = 5
     pagination_post_click_timeout_ms: int = 1500
