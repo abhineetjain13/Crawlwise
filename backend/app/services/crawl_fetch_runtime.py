@@ -25,6 +25,7 @@ from app.services.acquisition.browser_runtime import (
     classify_network_endpoint,
     expand_all_interactive_elements,
     get_browser_runtime,
+    patchright_browser_available,
     read_network_payload_body,
     real_chrome_browser_available,
     should_capture_network_payload,
@@ -131,6 +132,7 @@ class SharedBrowserRuntime(_SharedBrowserRuntime):
         spec = build_playwright_context_spec(
             run_id=run_id,
             locality_profile=locality_profile,
+            browser_engine=self.browser_engine,
         )
         if inject_init_script:
             return spec
@@ -148,6 +150,7 @@ class SharedBrowserRuntime(_SharedBrowserRuntime):
         return build_playwright_context_options(
             run_id=run_id,
             locality_profile=locality_profile,
+            browser_engine=self.browser_engine,
         )
 
 
@@ -588,27 +591,30 @@ async def _run_browser_attempts(
             host_policy_snapshot = _host_policy_snapshot(active_host_policy)
             try:
                 await wait_for_host_slot(context.url)
-                result = await _browser_fetch(
-                    context.url,
-                    context.resolved_timeout,
-                    run_id=context.run_id,
-                    proxy=proxy,
-                    browser_engine=browser_engine,
-                    browser_reason=reason,
-                    escalation_lane=escalation_lane,
-                    host_policy_snapshot=host_policy_snapshot,
-                    proxy_profile=context.proxy_profile,
-                    locality_profile=context.locality_profile,
-                    surface=context.surface,
-                    traversal_mode=context.traversal_mode,
-                    requested_fields=browser_requested_fields,
-                    listing_recovery_mode=recovery_mode,
-                    capture_page_markdown=capture_page_markdown,
-                    capture_screenshot=capture_screenshot,
-                    max_pages=context.max_pages,
-                    max_scrolls=context.max_scrolls,
-                    max_records=context.max_records,
-                    on_event=context.on_event,
+                result = await asyncio.wait_for(
+                    _browser_fetch(
+                        context.url,
+                        context.resolved_timeout,
+                        run_id=context.run_id,
+                        proxy=proxy,
+                        browser_engine=browser_engine,
+                        browser_reason=reason,
+                        escalation_lane=escalation_lane,
+                        host_policy_snapshot=host_policy_snapshot,
+                        proxy_profile=context.proxy_profile,
+                        locality_profile=context.locality_profile,
+                        surface=context.surface,
+                        traversal_mode=context.traversal_mode,
+                        requested_fields=browser_requested_fields,
+                        listing_recovery_mode=recovery_mode,
+                        capture_page_markdown=capture_page_markdown,
+                        capture_screenshot=capture_screenshot,
+                        max_pages=context.max_pages,
+                        max_scrolls=context.max_scrolls,
+                        max_records=context.max_records,
+                        on_event=context.on_event,
+                    ),
+                    timeout=context.resolved_timeout,
                 )
                 result.browser_diagnostics = {
                     **dict(result.browser_diagnostics or {}),
@@ -932,10 +938,34 @@ def _host_policy_snapshot(policy: HostProtectionPolicy) -> dict[str, object]:
         "hard_block_count": int(policy.hard_block_count),
         "request_blocked": bool(policy.request_blocked),
         "chromium_blocked": bool(policy.chromium_blocked),
+        "patchright_blocked": bool(policy.patchright_blocked),
         "real_chrome_blocked": bool(policy.real_chrome_blocked),
+        "patchright_success": bool(policy.patchright_success),
         "real_chrome_success": bool(policy.real_chrome_success),
         "last_block_method": policy.last_block_method,
     }
+
+
+def _default_browser_engine_attempts() -> list[str]:
+    real_chrome_attempts = (
+        ["real_chrome"]
+        if bool(crawler_runtime_settings.browser_real_chrome_enabled)
+        and real_chrome_browser_available()
+        else []
+    )
+    if (
+        bool(crawler_runtime_settings.browser_patchright_enabled)
+        and bool(crawler_runtime_settings.browser_patchright_prefer)
+        and patchright_browser_available()
+    ):
+        return ["patchright", *real_chrome_attempts, "chromium"]
+    return ["chromium"]
+
+
+def _append_engine_once(engine_attempts: list[str], engine: str) -> list[str]:
+    if engine not in engine_attempts:
+        return [*engine_attempts, engine]
+    return list(engine_attempts)
 
 
 def _browser_escalation_lane(
@@ -967,16 +997,15 @@ def _browser_engine_attempts(
 ) -> list[str]:
     forced_engine = str(context.forced_browser_engine or "").strip().lower()
     if forced_engine:
+        if forced_engine == "patchright":
+            return ["patchright"]
         if forced_engine == "real_chrome":
-            if (
-                bool(crawler_runtime_settings.browser_real_chrome_enabled)
-                and real_chrome_browser_available()
-            ):
-                return ["real_chrome"]
-            return ["chromium"]
+            return ["real_chrome"]
         if forced_engine == "chromium":
             return ["chromium"]
-    engines = ["chromium"]
+    engines = _default_browser_engine_attempts()
+    if host_policy.patchright_blocked and "patchright" in engines:
+        engines = [engine for engine in engines if engine != "patchright"]
     if not str(context.surface or "").startswith("ecommerce_"):
         return engines
     if not bool(crawler_runtime_settings.browser_real_chrome_enabled):
@@ -984,11 +1013,22 @@ def _browser_engine_attempts(
     if not real_chrome_browser_available():
         return engines
     if host_policy.chromium_blocked and not host_policy.real_chrome_success:
-        return ["real_chrome", "chromium"]
-    if host_policy.real_chrome_blocked and not host_policy.chromium_blocked:
-        return ["chromium", "real_chrome"]
-    if host_policy.request_blocked or host_policy.prefer_browser or host_policy.last_block_vendor:
-        return ["chromium", "real_chrome"]
+        if "patchright" in engines and not host_policy.patchright_blocked:
+            return _append_engine_once(["patchright", "real_chrome", "chromium"], "chromium")
+        return _append_engine_once(["real_chrome", *engines], "chromium")
+    if host_policy.patchright_blocked and not host_policy.chromium_blocked:
+        return _append_engine_once(engines, "chromium")
+    if host_policy.real_chrome_blocked and not (
+        host_policy.chromium_blocked or host_policy.patchright_blocked
+    ):
+        return _append_engine_once(engines, "real_chrome")
+    if (
+        host_policy.request_blocked
+        or host_policy.prefer_browser
+        or host_policy.last_block_vendor
+        or host_policy.patchright_blocked
+    ):
+        return _append_engine_once(engines, "real_chrome")
     return engines
 
 

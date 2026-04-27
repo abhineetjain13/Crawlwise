@@ -6,7 +6,11 @@ import type { ReactNode } from"react";
 
 import { useTopBarStore } from"../layout/top-bar-context";
 import { cn } from"../../lib/utils";
-import { Card, Skeleton } from"./primitives";
+import { InlineAlert } from "./alert";
+import { Card } from "./card";
+import { Skeleton } from"./primitives";
+
+export { InlineAlert } from "./alert";
 
 function stableNodeSignature(value: ReactNode): string {
  if (value == null) {
@@ -81,11 +85,11 @@ export function SectionHeader({
  <div className="flex items-center justify-between gap-4">
  <div className="min-w-0 flex-1 space-y-2">
  <div className="flex items-center gap-2">
- {Icon && <Icon className="size-3.5 shrink-0 text-[var(--text-muted)]"/>}
- <h2 className="panel-title">{title}</h2>
+ {Icon && <Icon className="size-3.5 shrink-0 text-muted"/>}
+ <h2 className="m-0 text-md font-semibold leading-tight text-foreground">{title}</h2>
  </div>
  {description ? (
- <div className="panel-subtitle w-full"style={{ maxWidth:"none"}}>{description}</div>
+ <div className="w-full text-sm leading-[1.55] text-secondary">{description}</div>
  ) : null}
  </div>
  {action ? <div className="shrink-0">{action}</div> : null}
@@ -115,7 +119,7 @@ export function TabBar({
  return (
  <div
  className={cn(
-"flex h-[var(--control-height)] items-stretch border-b border-[var(--divider)] bg-transparent p-0",
+"flex h-[var(--control-height)] items-stretch border-b border-divider bg-transparent p-0",
  className,
  )}
  >
@@ -129,8 +133,8 @@ export function TabBar({
 "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-sm leading-[1.35] font-semibold transition-all",
  padX,
  value === option.value
- ?"border-b-[3px] border-[var(--accent)] text-accent"
- :"border-b-[3px] border-transparent text-secondary hover:text-primary hover:border-[var(--border)]",
+ ?"border-b-[3px] border-accent text-accent"
+ :"border-b-[3px] border-transparent text-secondary hover:text-foreground hover:border-border",
  )}
  >
  {option.label}
@@ -157,8 +161,8 @@ export function TabBar({
 "relative z-10 inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-[4px] py-0 text-sm leading-[1.35] font-semibold tracking-normal transition-all duration-200",
  padX,
  value === option.value
- ?"bg-[var(--accent)] text-[var(--tab-active-fg)] shadow-[0_1px_2px_rgba(15,23,42,0.12)]"
- :"text-secondary hover:text-primary",
+ ?"ui-on-accent-surface bg-accent shadow-[0_1px_2px_rgba(15,23,42,0.12)]"
+ :"text-secondary hover:text-foreground",
  )}
  >
  {option.label}
@@ -172,11 +176,11 @@ export function TabBar({
 export function ProgressBar({ percent }: Readonly<{ percent: number }>) {
  return (
  <div className="space-y-1">
- <div className="h-1 rounded-full bg-[var(--border)] overflow-hidden">
+ <div className="h-1 rounded-full bg-border overflow-hidden">
  <div
  className={cn(
-"h-full rounded-full bg-[var(--accent)] transition-[width] duration-500",
- percent >= 100 &&"bg-[var(--success)]",
+"h-full rounded-full bg-accent transition-[width] duration-500",
+ percent >= 100 &&"bg-success",
  )}
  style={{ width: `${Math.min(percent, 100)}%` }}
  />
@@ -201,10 +205,10 @@ export function EmptyPanel({
  description,
 }: Readonly<{ title: string; description: string }>) {
  return (
- <div className="empty-panel">
+ <div className="grid min-h-32 place-items-center rounded-[var(--radius-xl)] border border-dashed border-border-strong bg-subtle-panel px-6 py-8 text-center">
  <div className="space-y-1">
- <p className="text-sm font-medium leading-[1.55] text-[var(--text-primary)]">{title}</p>
- <p className="text-sm leading-[1.45] text-[var(--text-muted)]">{description}</p>
+ <p className="text-sm font-medium leading-[1.55] text-foreground">{title}</p>
+ <p className="text-sm leading-[1.45] text-muted">{description}</p>
  </div>
  </div>
  );
@@ -243,7 +247,7 @@ export function SurfaceSection({
  className?: string;
  bodyClassName?: string;
 }>) {
- return <SurfacePanel className={className}><div className="border-b border-[var(--divider)] px-4 py-3"><SectionHeader title={title} description={description} icon={Icon} action={action} /></div><div className={cn("p-4", bodyClassName)}>{children}</div></SurfacePanel>;
+ return <SurfacePanel className={className}><div className="border-b border-divider px-4 py-3"><SectionHeader title={title} description={description} icon={Icon} action={action} /></div><div className={cn("p-4", bodyClassName)}>{children}</div></SurfacePanel>;
 }
 
 /* ─── MutedPanelMessage ──────────────────────────────────────────────────── */
@@ -256,7 +260,7 @@ export function MutedPanelMessage({
  description: string;
  className?: string;
 }>) {
- return <div className={cn("surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[1.55] text-muted", className)}><p className="m-0 font-medium text-[var(--text-primary)]">{title}</p><p className="m-0 mt-1.5">{description}</p></div>;
+ return <div className={cn("surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[1.55] text-muted", className)}><p className="m-0 font-medium text-foreground">{title}</p><p className="m-0 mt-1.5">{description}</p></div>;
 }
 
 /* ─── SkeletonRows ───────────────────────────────────────────────────────── */
@@ -276,32 +280,12 @@ export function SkeletonRows({
 /* ─── MetricSkeleton ─────────────────────────────────────────────────────── */
 export function MetricSkeleton() {
  return (
- <div className="metric-card space-y-2">
+ <div className="relative space-y-2 overflow-hidden rounded-[var(--radius-xl)] border border-border bg-panel p-4 shadow-card">
  <Skeleton className="h-3 w-20"/>
  <Skeleton className="h-9 w-28"/>
  <Skeleton className="h-3 w-16"/>
  </div>
  );
-}
-
-/* ─── InlineAlert ────────────────────────────────────────────────────────── */
-export function InlineAlert({
- message,
- tone ="danger",
- className,
-}: Readonly<{
- message: ReactNode;
- tone?:"danger"|"warning"|"neutral";
- className?: string;
-}>) {
- if (!message) return null;
- const toneClass =
- tone ==="danger"
- ?"alert-surface alert-danger"
- : tone ==="warning"
- ?"alert-surface alert-warning"
- :"alert-surface alert-neutral";
- return <div className={cn(toneClass, className)}>{message}</div>;
 }
 
 /* ─── StatusDot ──────────────────────────────────────────────────────────── */
@@ -354,7 +338,7 @@ export function RunWorkspaceShell({
 }>) {
  return (
  <div className="page-stack">
- <div className="panel panel-raised flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+ <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-xl)] border border-border bg-panel px-4 py-3 shadow-card">
  <div className="min-w-0 flex-1">{header}</div>
  {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
  </div>
@@ -389,7 +373,7 @@ export function RunSummaryChips({
  {chips.map((chip) => (
  <span
  key={chip.label}
- className="inline-flex items-center gap-1.5 rounded-full border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-2.5 py-1 text-sm leading-[1.45] text-muted"
+ className="inline-flex items-center gap-1.5 rounded-full border border-subtle-panel-border bg-subtle-panel px-2.5 py-1 text-sm leading-[1.45] text-muted"
  >
  <span className="text-sm font-medium leading-[1.45] text-foreground">{chip.label}:</span>
  <span>{chip.value}</span>
@@ -485,8 +469,8 @@ export function NavList<T>({
  className={cn(
  "w-full rounded-[var(--radius-xl)] border px-3 py-3 text-left transition-colors",
  isActive
- ? "border-[var(--accent)] bg-[var(--subtle-panel-bg)] shadow-card"
- : "border-[var(--divider)] bg-background hover:bg-background-elevated",
+ ? "border-accent bg-subtle-panel shadow-card"
+ : "border-divider bg-background hover:bg-background-elevated",
  )}
  > <div className="flex items-center justify-between gap-3">
  <div className="min-w-0">
@@ -508,7 +492,7 @@ export function DetailRow({
  className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
  return (
- <div className={cn("rounded-lg border border-[var(--divider)] bg-background px-3 py-3", className)}>
+ <div className={cn("rounded-lg border border-divider bg-background px-3 py-3", className)}>
  {children}
  </div>
  );

@@ -11,6 +11,7 @@ from app.models.crawl import DomainCookieMemory
 from app.services.acquisition import browser_identity
 from app.services.acquisition import browser_proxy_bridge
 from app.services.acquisition import cookie_store
+from app.services.acquisition import host_protection_memory
 from app.services.acquisition import browser_runtime as acquisition_browser_runtime
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import is_special_use_domain
@@ -833,6 +834,67 @@ def test_build_playwright_context_spec_injects_chrome_runtime_and_audio_masks() 
     assert "installDescriptor(Navigator.prototype, 'keyboard', () => keyboard);" in spec.init_script
     assert "installDescriptor(Navigator.prototype, 'mediaCapabilities', () => mediaCapabilities);" in spec.init_script
     assert "installDescriptor(Navigator.prototype, 'gpu', () => gpu);" in spec.init_script
+
+
+def test_build_playwright_context_spec_skips_legacy_init_script_for_patchright_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        browser_identity.crawler_runtime_settings,
+        "browser_patchright_use_legacy_init_script",
+        False,
+    )
+
+    spec = browser_identity.build_playwright_context_spec(
+        identity=browser_identity.BrowserIdentity(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            locale="en-US",
+            device_scale_factor=1.0,
+            has_touch=False,
+            is_mobile=False,
+            raw_fingerprint=None,
+        ),
+        browser_engine="patchright",
+    )
+
+    assert spec.init_script is None
+
+
+def test_build_playwright_context_spec_allows_legacy_init_script_for_patchright_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        browser_identity.crawler_runtime_settings,
+        "browser_patchright_use_legacy_init_script",
+        True,
+    )
+
+    spec = browser_identity.build_playwright_context_spec(
+        identity=browser_identity.BrowserIdentity(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            locale="en-US",
+            device_scale_factor=1.0,
+            has_touch=False,
+            is_mobile=False,
+            raw_fingerprint=None,
+        ),
+        browser_engine="patchright",
+    )
+
+    assert spec.init_script is not None
+    assert "__pwInitScripts" in spec.init_script
 
 
 def test_playwright_identity_seed_is_stable_and_changes_with_identity() -> None:
@@ -2999,6 +3061,108 @@ async def test_persist_storage_state_for_domain_accepts_iterable_storage_rows(
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_persist_storage_state_for_domain_keeps_patchright_isolated(
+    db_session,
+) -> None:
+    domain = f"patchright-engine-{uuid4().hex}.example.com"
+
+    chromium_saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "chromium-session",
+                    "value": "1",
+                    "domain": f".{domain}",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        session=db_session,
+        browser_engine="chromium",
+    )
+    patchright_saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "patchright-session",
+                    "value": "2",
+                    "domain": f".{domain}",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        },
+        session=db_session,
+        browser_engine="patchright",
+    )
+
+    rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
+    chromium_state = await cookie_store.load_storage_state_for_domain(
+        domain,
+        session=db_session,
+        browser_engine="chromium",
+    )
+    patchright_state = await cookie_store.load_storage_state_for_domain(
+        domain,
+        session=db_session,
+        browser_engine="patchright",
+    )
+
+    assert chromium_saved is True
+    assert patchright_saved is True
+    assert len(rows) == 2
+    assert {str(row["browser_engine"]) for row in rows} == {"chromium", "patchright"}
+    assert chromium_state == {
+        "cookies": [
+            {
+                "name": "chromium-session",
+                "value": "1",
+                "domain": f".{domain}",
+                "path": "/",
+            }
+        ],
+        "origins": [],
+    }
+    assert patchright_state == {
+        "cookies": [
+            {
+                "name": "patchright-session",
+                "value": "2",
+                "domain": f".{domain}",
+                "path": "/",
+            }
+        ],
+        "origins": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_load_host_protection_policy_tracks_patchright_as_browser_lane(
+    db_session,
+) -> None:
+    url = f"https://patchright-policy-{uuid4().hex}.example.com/products/widget"
+
+    blocked_policy = await host_protection_memory.note_host_hard_block(
+        url,
+        method="browser:patchright",
+        session=db_session,
+    )
+    success_policy = await host_protection_memory.note_host_usable_fetch(
+        url,
+        method="browser:patchright",
+        session=db_session,
+    )
+
+    assert blocked_policy.request_blocked is False
+    assert blocked_policy.patchright_blocked is True
+    assert blocked_policy.last_block_method == "browser:patchright"
+    assert success_policy.patchright_success is True
 
 
 @pytest.mark.asyncio

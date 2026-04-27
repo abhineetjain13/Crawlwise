@@ -604,8 +604,8 @@ export function SettingSection({
               className={cn(
                 "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors",
                 checked
-                  ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--setting-icon-active-shadow)]"
-                  : "border-[var(--border)] bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
+                  ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-setting-icon-active-bg text-accent shadow-setting-icon-active"
+                  : "border-border bg-setting-icon-bg text-secondary",
               )}
             >
               {renderedIcon}
@@ -627,7 +627,7 @@ export function SettingSection({
             checked ? "max-h-[500px] overflow-visible" : "max-h-0 overflow-hidden",
           )}
         >
-          <div className="border-t border-[var(--divider)] bg-[var(--setting-body-bg)] px-5 py-4 space-y-3">{children}</div>
+          <div className="border-t border-divider bg-setting-body-bg px-5 py-4 space-y-3">{children}</div>
         </div>
       ) : null}
     </div>
@@ -767,7 +767,7 @@ export function AdditionalFieldInput({
  type="button"
  onClick={() => onRemove(field)}
  aria-label={`Remove ${field}`}
- className="inline-flex items-center gap-1 rounded-md border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-2 py-1 text-sm leading-[1.45] text-[var(--text-secondary)]"
+ className="inline-flex items-center gap-1 rounded-md border border-subtle-panel-border bg-subtle-panel px-2 py-1 text-sm leading-[1.45] text-secondary"
  >
  <X className="size-3.5 shrink-0"aria-hidden="true"/>
  <span className="truncate">{field}</span>
@@ -1091,7 +1091,7 @@ export const RecordsTable = memo(function RecordsTable({
    onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
    className="surface-muted max-h-[70vh] rounded-lg overflow-auto"
   >
-   <table className="commerce-table min-w-[960px]">
+   <table className="compact-data-table commerce-table min-w-[960px]">
     <thead>
      <tr>
       <th className="w-10">
@@ -1254,14 +1254,14 @@ function logTone(level: string) {
  const normalized = normalizeLogLevel(level);
  if (normalized ==="WARN" || normalized === "WARNING") return"border-transparent bg-transparent text-warning";
  if (normalized ==="ERROR") return"border-transparent bg-transparent text-danger";
- return"border-transparent bg-transparent text-[var(--terminal-fg)]";
+ return"border-transparent bg-transparent text-terminal-fg";
 }
 
 function logLineTone(level: string) {
  const normalized = normalizeLogLevel(level);
  if (normalized ==="WARN" || normalized === "WARNING") return"text-warning";
  if (normalized ==="ERROR") return"text-danger";
- return"text-[var(--terminal-fg)]";
+ return"text-terminal-fg";
 }
 
 function normalizeLogLevel(level: string) {

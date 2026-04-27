@@ -42,9 +42,9 @@ function DomainBar({
       >
         {domain}
       </span>
-      <div className="h-1.5 w-28 overflow-hidden rounded-full bg-[var(--border)]">
+      <div className="h-1.5 w-28 overflow-hidden rounded-full bg-border">
         <div
-          className="h-full rounded-full bg-[var(--metric-domains-color)] transition-[width] duration-700"
+          className="h-full rounded-full bg-metric-domains transition-[width] duration-700"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -79,7 +79,7 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
   return (
     <Link
       href={`/crawl?run_id=${run.id}` as Route}
-      className="no-underline group flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 transition-colors hover:bg-[var(--bg-elevated)]"
+      className="no-underline group flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 transition-colors hover:bg-background-elevated"
     >
       <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
       <span className="min-w-0 flex-1 truncate font-mono text-sm font-medium leading-[1.4] text-primary transition-colors group-hover:text-accent">
@@ -182,7 +182,7 @@ export default function DashboardPage() {
  {/* ── Status distribution bar ── */}
  {!isLoading && totalInDistribution > 0 ? (
  <div className="space-y-2.5">
- <div className="flex h-2 w-full overflow-hidden rounded-full bg-[var(--border)] gap-px">
+ <div className="flex h-2 w-full overflow-hidden rounded-full bg-border gap-px">
  {sortedStatusEntries.map(([status, count]) => (
  <StatusSegment key={status} status={status} count={count} total={totalInDistribution} />
  ))}

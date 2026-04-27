@@ -1,5 +1,7 @@
 "use client";
 
+import "./crawl.module.css";
+
 import { Check, Globe, Info, Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
@@ -859,7 +861,7 @@ export function CrawlConfigScreen({
  />
  <label
  htmlFor="csv-file-input"
- className="cursor-pointer rounded-[var(--radius-md)] bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-[var(--accent-hover)]"
+ className="ui-on-accent-surface cursor-pointer rounded-[var(--radius-md)] bg-accent px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent-hover"
  >
  Choose file
  </label>
@@ -887,7 +889,7 @@ export function CrawlConfigScreen({
  )}
 
  {savedProfileMessage ? (
- <div className="rounded-[var(--radius-md)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-3 py-2 text-sm leading-[1.5] text-secondary">
+ <div className="rounded-[var(--radius-md)] border border-subtle-panel-border bg-subtle-panel px-3 py-2 text-sm leading-[1.5] text-secondary">
  {savedProfileMessage}
  </div>
  ) : null}
@@ -1001,7 +1003,7 @@ export function CrawlConfigScreen({
  <div className="p-4 page-stack">
  <div className={RUN_SETUP_ROW_CLASS}>
  <div className={RUN_SETUP_LABEL_CLASS}>
- <Globe className="size-4 shrink-0 text-[var(--accent)]" />
+ <Globe className="size-4 shrink-0 text-accent" />
  <div className="field-label mb-0">Domain</div>
  </div>
  <TabBar
@@ -1022,7 +1024,7 @@ export function CrawlConfigScreen({
 
  <div className={RUN_SETUP_ROW_CLASS}>
  <div className={RUN_SETUP_LABEL_CLASS}>
- <SlidersHorizontal className="size-4 shrink-0 text-[var(--accent)]" />
+ <SlidersHorizontal className="size-4 shrink-0 text-accent" />
  <div className="flex items-center gap-1.5">
  <div className="field-label mb-0">Mode</div>
  <Tooltip content="Advanced Mode exposes the full fetch, locality, diagnostics, and selector controls.">
@@ -1048,7 +1050,7 @@ export function CrawlConfigScreen({
 
  <div className={RUN_SETUP_ROW_CLASS}>
  <div className={RUN_SETUP_LABEL_CLASS}>
- <Sparkles className="size-4 shrink-0 text-[var(--accent)]" />
+ <Sparkles className="size-4 shrink-0 text-accent" />
  <div className="flex items-center gap-1.5">
  <div className="field-label mb-0">LLM Enabled</div>
  <Tooltip content="Per-run enrichment only. This does not overwrite saved domain defaults.">
@@ -1064,7 +1066,7 @@ export function CrawlConfigScreen({
  <div className={RUN_SETUP_STACK_CLASS}>
  <div className={RUN_SETUP_ROW_CLASS}>
  <div className={RUN_SETUP_LABEL_CLASS}>
- <Globe className="size-4 shrink-0 text-[var(--accent)]" />
+ <Globe className="size-4 shrink-0 text-accent" />
  <div className="min-w-0">
  <div className="flex items-center gap-1.5">
  <div className="field-label mb-0">Proxy List</div>
@@ -1761,14 +1763,14 @@ function CsFlowStep({ step, label, active }: Readonly<{ step: number; label: str
   <span className={cn(
    "inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-all",
    active
-    ? "bg-[var(--accent-subtle)] text-accent"
+    ? "bg-accent-subtle text-accent"
     : "text-muted",
   )}>
    <span className={cn(
     "inline-flex size-4 items-center justify-center rounded-full text-[9px] font-bold",
     active
-     ? "bg-[var(--accent)] text-[var(--accent-fg)]"
-     : "bg-[var(--border)] text-muted",
+     ? "ui-on-accent-surface bg-accent"
+     : "bg-border text-muted",
    )}>
     {active ? <Check className="size-2.5" /> : step}
    </span>
@@ -1779,6 +1781,6 @@ function CsFlowStep({ step, label, active }: Readonly<{ step: number; label: str
 
 function CsFlowConnector({ active }: Readonly<{ active: boolean }>) {
  return (
-  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-[var(--border)]")} />
+  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-border")} />
  );
 }

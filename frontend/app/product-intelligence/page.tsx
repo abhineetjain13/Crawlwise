@@ -1,21 +1,18 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Code2, Copy, Download, ExternalLink, ImageOff, Info, Layers, Loader2, Play, Search, Settings, X } from "lucide-react";
+import { ChevronDown, Code2, Download, ExternalLink, ImageOff, Info, Layers, Play, Search, Settings, X } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { DataRegionEmpty, InlineAlert, PageHeader } from "../../components/ui/patterns";
 import {
  Badge,
  Button,
  Dropdown,
- Field,
  Input,
  TableBody,
- Textarea,
- Tooltip,
 } from "../../components/ui/primitives";
 import { cn } from "../../lib/utils";
 import { api } from "../../lib/api";
@@ -26,6 +23,16 @@ import type {
   ProductIntelligenceSourceRecordInput,
 } from "../../lib/api/types";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
+import {
+  DiscoveryStatus,
+  DiscoveryTableLoading,
+  ExternalCandidateImage,
+  JsonModal,
+  ProductIntelligenceJobRow,
+  SEARCH_PROVIDER_OPTIONS,
+  SettingsDrawer,
+  searchProviderLabel,
+} from "./product-intelligence-components";
 
 type PrefillPayload = {
   source_run_id?: number | null;
@@ -46,40 +53,6 @@ const DEFAULT_OPTIONS: ProductIntelligenceOptions = {
 
 const MAX_SOURCE_PRODUCTS_LIMIT = 500;
 const MAX_CANDIDATES_PER_PRODUCT_LIMIT = 25;
-const SEARCH_PROVIDER_OPTIONS: Array<{ value: ProductIntelligenceOptions["search_provider"]; label: string }> = [
-  { value: "serpapi", label: "SerpAPI" },
-  { value: "google_native", label: "Google Native" },
-];
-
-const MATCH_SCORE_TOOLTIP =
-  "Match score = title similarity x 0.34 + brand match x 0.24 + identifier match x 0.25 + price band x 0.05 + source authority up to 0.12. Title similarity is token overlap/sequence match. Brand, identifier, and price add only when they match. Brand DTC, retailer, and marketplace domains add authority. High is 60%+, medium is 40-59%, low is below 40%.";
-
-function hideBrokenImage(event: React.SyntheticEvent<HTMLImageElement>): void {
-  event.currentTarget.style.display = "none";
-}
-
-function ExternalCandidateImage({
-  src,
-  alt,
-  className,
-}: Readonly<{
-  src: string;
-  alt: string;
-  className: string;
-}>) {
-  return (
-    <>
-      {/* eslint-disable-next-line @next/next/no-img-element -- external candidate URLs are not known at build time */}
-      <img
-        src={src}
-        alt={alt}
-        className={className}
-        onError={hideBrokenImage}
-      />
-    </>
-  );
-}
-
 export default function ProductIntelligencePage() {
   const router = useRouter();
   const [prefill, setPrefill] = useState<PrefillPayload>({});
@@ -358,13 +331,13 @@ export default function ProductIntelligencePage() {
    {/* Left Column: Card Grid */}
    <div className="space-y-4">
     {/* ── Discovery Results ── */}
-    <section className="panel panel-raised overflow-hidden">
+    <section className="overflow-hidden rounded-[var(--radius-xl)] border border-border bg-panel shadow-card">
      {/* Merged Toolbar */}
-     <header className="flex flex-wrap items-center gap-2 border-b border-[var(--divider)] px-3 py-2">
+     <header className="flex flex-wrap items-center gap-2 border-b border-divider px-3 py-2">
       {discovery?.candidates.length ? (
        <input
         type="checkbox"
-        className="h-3.5 w-3.5 rounded border-[var(--divider)] text-accent focus:ring-accent cursor-pointer"
+        className="h-3.5 w-3.5 rounded border-divider text-accent focus:ring-accent cursor-pointer"
         checked={filteredCandidates.length > 0 && filteredCandidates.every((c) => selectedUrls.includes(c.url))}
         onChange={toggleAllUrls}
         aria-label="Select all filtered URLs"
@@ -443,7 +416,7 @@ export default function ProductIntelligencePage() {
        <div className="divide-y divide-[var(--divider)]">
         {groupedCandidates.map((group, groupIndex) => (
          <details key={group.sourceIndex} className="group" open={groupIndex === 0}>
-          <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2.5 hover:bg-[var(--bg-alt)] select-none">
+          <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2.5 hover:bg-background-alt select-none">
            <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-semibold text-foreground" title={group.sourceTitle}>
              {group.sourceTitle}
@@ -457,7 +430,7 @@ export default function ProductIntelligencePage() {
            <ChevronDown className="size-3.5 text-muted transition-transform group-open:rotate-180 shrink-0" />
           </summary>
 
-          <div className="flex gap-2.5 overflow-x-auto px-3 py-2.5 bg-[var(--bg-alt)]/50">
+          <div className="flex gap-2.5 overflow-x-auto px-3 py-2.5 bg-background-alt/50">
            {group.candidates.map((candidate) => {
             const selected = uniqueSelectedUrls.includes(candidate.url);
             const score = candidateConfidence(candidate);
@@ -468,12 +441,12 @@ export default function ProductIntelligencePage() {
             return (
              <div
               key={candidate.url}
-              className="flex w-[280px] shrink-0 flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-surface)] p-2.5 transition-shadow"
+              className="flex w-[280px] shrink-0 flex-col gap-2 rounded-[var(--radius-md)] border border-border bg-panel p-2.5 transition-shadow"
              >
               {/* Horizontal row: image left, text right */}
               <div className="flex gap-2.5">
                {/* Thumbnail */}
-               <div className="aspect-square w-[70px] shrink-0 overflow-hidden rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-alt)]">
+               <div className="aspect-square w-[70px] shrink-0 overflow-hidden rounded-[var(--radius-md)] border border-border bg-background-alt">
                 {hasImage ? (
                  <ExternalCandidateImage
                   src={imageUrl}
@@ -540,7 +513,7 @@ export default function ProductIntelligencePage() {
                  checked={selected}
                  onChange={(e) => { e.stopPropagation(); if (candidate.url) toggleUrl(candidate.url); }}
                  onClick={(e) => e.stopPropagation()}
-                 className="h-3.5 w-3.5 rounded border-[var(--divider)] text-accent focus:ring-accent cursor-pointer"
+                 className="h-3.5 w-3.5 rounded border-divider text-accent focus:ring-accent cursor-pointer"
                  title="Select for batch crawl"
                  aria-label="Select for batch crawl"
                 />
@@ -573,7 +546,7 @@ export default function ProductIntelligencePage() {
          return (
           <div
            key={`${record.id ?? "src"}-${index}`}
-           className="flex items-center gap-3 px-3 py-2.5 hover:bg-[var(--bg-alt)]"
+           className="flex items-center gap-3 px-3 py-2.5 hover:bg-background-alt"
           >
            <span className="font-mono text-xs text-muted w-6 shrink-0">{index + 1}</span>
            <div className="min-w-0 flex-1">
@@ -612,7 +585,7 @@ export default function ProductIntelligencePage() {
     {/* ── Bulk Action Bar (slides in when URLs selected) ── */}
     {uniqueSelectedUrls.length > 0 && (
      <div className="sticky bottom-4 z-20 animate-fade-in">
-      <div className="panel panel-raised flex items-center gap-3 px-4 py-2.5 shadow-[var(--shadow-lg)]">
+      <div className="flex items-center gap-3 rounded-[var(--radius-xl)] border border-border bg-panel px-4 py-2.5 shadow-lg">
        <Layers className="size-4 shrink-0 text-accent" />
        <span className="text-xs font-semibold text-foreground">{uniqueSelectedUrls.length} URLs selected</span>
        <span className="text-xs text-muted">from {selectedDomainSummary?.domains.length ?? 0} domain{(selectedDomainSummary?.domains.length ?? 0) !== 1 ? "s" : ""}</span>
@@ -643,13 +616,13 @@ export default function ProductIntelligencePage() {
   </div>
 
     {/* ── Session History (collapsible) ── */}
-    <section className="panel panel-raised overflow-hidden">
+    <section className="overflow-hidden rounded-[var(--radius-xl)] border border-border bg-panel shadow-card">
      <details className="group" open>
-      <summary className="flex cursor-pointer items-center justify-between px-4 py-2.5 text-xs font-semibold text-foreground hover:bg-[var(--bg-alt)] select-none">
+      <summary className="flex cursor-pointer items-center justify-between px-4 py-2.5 text-xs font-semibold text-foreground hover:bg-background-alt select-none">
        <span>Session History</span>
        <ChevronDown className="size-3.5 text-muted transition-transform group-open:rotate-180" />
       </summary>
-      <div className="max-h-[240px] overflow-auto border-t border-[var(--divider)]">
+      <div className="max-h-[240px] overflow-auto border-t border-divider">
        {(() => {
         if (jobsQuery.isError) return <div className="p-4 text-center text-xs text-danger">Error loading history</div>;
         if (jobsQuery.isLoading) return <div className="p-4 text-center text-xs text-muted">Loading history...</div>;
@@ -673,110 +646,28 @@ export default function ProductIntelligencePage() {
      </details>
     </section>
 
-      {/* Settings Drawer */}
-      {configOpen && (
-       <>
-        <div
-         className="fixed inset-0 z-40 bg-black/20"
-         onClick={() => setConfigOpen(false)}
-         aria-hidden="true"
-        />
-        <div className="fixed right-0 top-0 z-50 h-full w-[380px] max-w-full overflow-y-auto border-l border-[var(--divider)] bg-[var(--bg-elevated)] p-5 shadow-[var(--shadow-xl)] animate-in slide-in-from-right-4 duration-200">
-         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-foreground">Configuration</h2>
-          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setConfigOpen(false)} aria-label="Close settings">
-           <X className="size-3.5" />
-          </Button>
-         </div>
-         <div className="mt-4 space-y-4">
-          <Field label="Provider">
-           <Dropdown
-            value={options.search_provider}
-            onChange={(value) => {
-             setOptionsEdited(true);
-             setOptions((current) => ({ ...current, search_provider: searchProvider(value) }));
-            }}
-            options={SEARCH_PROVIDER_OPTIONS}
-           />
-          </Field>
-          <Field label="Max Sources">
-           <Input
-            type="number"
-            min={1}
-            max={MAX_SOURCE_PRODUCTS_LIMIT}
-            value={options.max_source_products}
-            onChange={(event) => {
-             setOptionsEdited(true);
-             setOptions((current) => ({ ...current, max_source_products: clampInt(event.target.value, 1, MAX_SOURCE_PRODUCTS_LIMIT, DEFAULT_OPTIONS.max_source_products) }));
-            }}
-           />
-          </Field>
-          <Field label="Max URLs">
-           <Input
-            type="number"
-            min={1}
-            max={MAX_CANDIDATES_PER_PRODUCT_LIMIT}
-            value={options.max_candidates_per_product}
-            onChange={(event) => {
-             setOptionsEdited(true);
-             setOptions((current) => ({ ...current, max_candidates_per_product: clampInt(event.target.value, 1, MAX_CANDIDATES_PER_PRODUCT_LIMIT, DEFAULT_OPTIONS.max_candidates_per_product) }));
-            }}
-           />
-          </Field>
-          <Field label="Private Label">
-           <Dropdown
-            value={options.private_label_mode}
-            onChange={(value) => {
-             setOptionsEdited(true);
-             setOptions((current) => ({ ...current, private_label_mode: value as ProductIntelligenceOptions["private_label_mode"] }));
-            }}
-            options={[
-             { value: "flag", label: "Flag" },
-             { value: "exclude", label: "Exclude" },
-             { value: "include", label: "Include" },
-            ]}
-           />
-          </Field>
-          <Field label="LLM Cleanup">
-           <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 shadow-sm">
-            <span className="text-xs font-medium text-muted">Enable Enrichment</span>
-            <input
-             type="checkbox"
-             checked={options.llm_enrichment_enabled}
-             onChange={(event) => {
-              setOptionsEdited(true);
-              setOptions((current) => ({ ...current, llm_enrichment_enabled: event.target.checked }));
-             }}
-             className="h-3.5 w-3.5 rounded border-[var(--divider)] text-accent focus:ring-accent"
-            />
-           </div>
-          </Field>
-          <Field label="Allowed Domains">
-           <Textarea
-            value={allowedDomainsText}
-            onChange={(event) => {
-             setOptionsEdited(true);
-             setAllowedDomainsText(event.target.value);
-            }}
-            className="min-h-[76px] text-xs"
-            placeholder="ralphlauren.com"
-           />
-          </Field>
-          <Field label="Excluded Domains">
-           <Textarea
-            value={excludedDomainsText}
-            onChange={(event) => {
-             setOptionsEdited(true);
-             setExcludedDomainsText(event.target.value);
-            }}
-            className="min-h-[76px] text-xs"
-            placeholder="amazon.com"
-           />
-          </Field>
-         </div>
-        </div>
-       </>
-      )}
+      <SettingsDrawer
+       open={configOpen}
+       onClose={() => setConfigOpen(false)}
+       options={options}
+       onOptionsChange={(patch) => {
+        setOptionsEdited(true);
+        setOptions((current) => ({ ...current, ...patch }));
+       }}
+       allowedDomainsText={allowedDomainsText}
+       onAllowedDomainsTextChange={(value) => {
+        setOptionsEdited(true);
+        setAllowedDomainsText(value);
+       }}
+       excludedDomainsText={excludedDomainsText}
+       onExcludedDomainsTextChange={(value) => {
+        setOptionsEdited(true);
+        setExcludedDomainsText(value);
+       }}
+       maxSourceProductsLimit={MAX_SOURCE_PRODUCTS_LIMIT}
+       maxCandidatesPerProductLimit={MAX_CANDIDATES_PER_PRODUCT_LIMIT}
+       defaultOptions={DEFAULT_OPTIONS}
+      />
 
       {/* JSON Modal */}
       {jsonModalCandidate && (
@@ -784,57 +675,6 @@ export default function ProductIntelligencePage() {
       )}
       </div>
   );
-}
-
-function JsonModal({
- candidate,
- onClose,
-}: Readonly<{
- candidate: ProductIntelligenceDiscoveryResponse["candidates"][number];
- onClose: () => void;
-}>) {
- const intelligence = isRecord(candidate.intelligence) ? candidate.intelligence : {};
- const hasIntelligence = Object.keys(intelligence).length > 0;
- const text = JSON.stringify(hasIntelligence ? intelligence : (candidate.payload ?? {}), null, 2);
-
- return (
-  <>
-   <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose} aria-hidden="true" />
-   <div className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[640px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-elevated)] shadow-[var(--shadow-xl)]">
-    <div className="flex items-center justify-between border-b border-[var(--divider)] px-4 py-3">
-     <h3 className="text-sm font-semibold text-foreground">Raw JSON</h3>
-     <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close">
-      <X className="size-3.5" />
-     </Button>
-    </div>
-    <div className="flex-1 overflow-auto p-4">
-     <pre className="crawl-terminal crawl-terminal-json text-xs leading-relaxed">{text}</pre>
-    </div>
-    <div className="flex items-center justify-end gap-2 border-t border-[var(--divider)] px-4 py-3">
-     <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => void navigator.clipboard.writeText(text)}>
-      <Copy className="mr-1 size-3" /> Copy
-     </Button>
-     <Button
-      type="button"
-      variant="accent"
-      size="sm"
-      className="h-7 text-xs"
-      onClick={() => {
-       const blob = new Blob([text], { type: "application/json" });
-       const url = URL.createObjectURL(blob);
-       const a = document.createElement("a");
-       a.href = url;
-       a.download = `candidate-${candidate.domain || "data"}.json`;
-       a.click();
-       URL.revokeObjectURL(url);
-      }}
-     >
-      <Download className="mr-1 size-3" /> Download
-     </Button>
-    </div>
-   </div>
-  </>
- );
 }
 
 function detailToDiscovery(detail: ProductIntelligenceJobDetail): ProductIntelligenceDiscoveryResponse {
@@ -904,41 +744,6 @@ function searchProvider(value: unknown): ProductIntelligenceOptions["search_prov
  return value === "google_native" || value === "serpapi" ? value : DEFAULT_OPTIONS.search_provider;
 }
 
-function ProductIntelligenceJobRow({
- job,
- active,
- onOpen,
-}: Readonly<{
- job: {
-  id: number;
-  status: string;
-  summary: Record<string, unknown>;
-  created_at: string;
- };
- active: boolean;
- onOpen: () => void;
-}>) {
- const candidateCount = Number(job.summary?.candidate_count ?? 0);
- return (
-  <tr className={cn("border-b border-[var(--divider)] last:border-0 hover:bg-[var(--bg-alt)] transition-colors", active && "bg-[var(--bg-alt)]")}>
-   <td className="p-0">
-    <button type="button" onClick={onOpen} className="flex w-full flex-col text-left gap-1.5 p-2.5 focus:outline-none">
-     <div className="flex w-full items-center justify-between">
-      <span className="font-mono text-sm font-medium text-accent hover:underline">#{job.id}</span>
-      <Badge tone={job.status === "complete" ? "success" : job.status === "failed" ? "danger" : "neutral"} className="scale-90 origin-right">
-       {job.status}
-      </Badge>
-     </div>
-     <div className="flex w-full items-center justify-between text-xs text-muted">
-      <span>{candidateCount} URLs found</span>
-      <span className="font-mono">{formatShortDate(job.created_at)}</span>
-     </div>
-    </button>
-   </td>
-  </tr>
- );
-}
-
 function parseDomainLines(value: string) {
  return value
  .split(/[\n,]+/)
@@ -950,88 +755,6 @@ function stringArray(value: unknown) {
  return Array.isArray(value)
   ? value.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)
   : [];
-}
-
-function DiscoveryStatus({
- provider,
- sourceCount,
- maxCandidates,
-}: Readonly<{
- provider: string;
- sourceCount: number;
- maxCandidates: number;
-}>) {
- const providerLabel = searchProviderLabel(provider);
- return (
-  <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-[var(--accent)]/30 bg-[var(--accent-subtle)] px-4 py-3 text-xs text-foreground">
-   <Loader2 className="size-4 animate-spin text-accent" aria-hidden="true" />
-   <div className="min-w-[180px] flex-1">
-    <div className="font-semibold">{providerLabel} discovery running</div>
-    <div className="mt-0.5 text-muted">
-     Searching {sourceCount} source product{sourceCount === 1 ? "" : "s"}, filtering source domains, ranking brand sites before aggregators.
-    </div>
-   </div>
-   <div className="flex items-center gap-2">
-    <Badge tone="info" className="h-5 px-1.5 text-xs">{providerLabel}</Badge>
-    <Badge tone="neutral" className="h-5 px-1.5 text-xs">Max {maxCandidates}/product</Badge>
-   </div>
-  </div>
- );
-}
-
-function DiscoveryTableLoading({ provider }: Readonly<{ provider: string }>) {
- const providerLabel = searchProviderLabel(provider);
- return (
-  <div className="flex min-h-[220px] flex-col items-center justify-center gap-4 px-6 py-10 text-center">
-   <div className="relative">
-    <div className="size-12 rounded-full border border-[var(--accent)]/25 bg-[var(--accent-subtle)]" />
-    <Loader2 className="absolute left-1/2 top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 animate-spin text-accent" aria-hidden="true" />
-   </div>
-   <div>
-    <div className="text-sm font-semibold text-foreground">{providerLabel} is searching product candidates</div>
-    <div className="mt-1 max-w-[520px] text-xs leading-5 text-muted">
-     Querying organic results, removing blocked/source domains, classifying domains, and scoring each result from title, brand, identifiers, price, and source authority.
-    </div>
-   </div>
-   <div className="grid w-full max-w-[560px] gap-2 text-left sm:grid-cols-3">
-    <DiscoveryLoadingStep label="Search" detail="Provider request active" />
-    <DiscoveryLoadingStep label="Filter" detail="Source domain excluded" />
-    <DiscoveryLoadingStep label="Rank" detail="Brand DTC first" />
-   </div>
-  </div>
- );
-}
-
-function searchProviderLabel(provider: string) {
- const option = SEARCH_PROVIDER_OPTIONS.find((item) => item.value === provider);
- return option?.label ?? provider;
-}
-
-function DiscoveryLoadingStep({ label, detail }: Readonly<{ label: string; detail: string }>) {
- return (
-  <div className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-[var(--bg-alt)] px-3 py-2">
-   <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
-    <span className="size-1.5 rounded-full bg-accent" />
-    {label}
-   </div>
-   <div className="mt-1 text-xs text-muted">{detail}</div>
-  </div>
- );
-}
-
-function MatchBadge({ score }: Readonly<{ score: number }>) {
- return (
-  <Tooltip content={MATCH_SCORE_TOOLTIP}>
-   <span className="inline-flex cursor-help">
-    <Badge
-     tone={score >= 0.6 ? "success" : score >= 0.4 ? "warning" : "neutral"}
-     className="h-5 px-1.5 text-xs"
-    >
-     {Math.round(score * 100)}%
-    </Badge>
-   </span>
-  </Tooltip>
- );
 }
 
 function candidateConfidence(candidate: ProductIntelligenceDiscoveryResponse["candidates"][number]) {
@@ -1223,18 +946,4 @@ function clampFloat(value: unknown, min: number, max: number, fallback: number) 
  return fallback;
  }
  return Math.min(Math.max(parsed, min), max);
-}
-
-function formatShortDate(value: string) {
- const parsed = new Date(value);
- if (Number.isNaN(parsed.getTime())) {
-  return "--";
- }
- return parsed.toLocaleString(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
- });
 }

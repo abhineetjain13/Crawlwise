@@ -447,8 +447,8 @@ describe("CrawlRunScreen", () => {
  .map((element) => element.closest("span"))
  .find((element) => element?.className.includes("rounded-[var(--radius-md)]"));
 
- expect(crawlStep).toHaveClass("bg-[var(--accent-subtle)]","text-accent");
- expect(completeStep).toHaveClass("bg-[var(--accent-subtle)]","text-accent");
+ expect(crawlStep).toHaveClass("bg-accent-subtle","text-accent");
+ expect(completeStep).toHaveClass("bg-accent-subtle","text-accent");
  });
 
  it("uses live table totals and current URL index for status-bar records/pages when summary counts are zero", async () => {

@@ -1,5 +1,7 @@
 "use client";
 
+import "./crawl.module.css";
+
 import { useQuery } from"@tanstack/react-query";
 import { ArrowRightCircle, Check, ChevronsDown, Copy, Download, Info, Plus, Search } from"lucide-react";
 import { useRouter } from"next/navigation";
@@ -14,6 +16,7 @@ import {
  InlineAlert,
  PageHeader,
  ProgressBar,
+ RunSummaryChips,
  RunWorkspaceShell,
  SectionHeader,
  TabBar,
@@ -849,15 +852,15 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <span className="cs-metric-label">Pages</span>
  </div>
  <div className="cs-metric">
- <span className="cs-metric-value">{summary.duration}</span>
+ <span className="cs-metric-value">{summary.duration.replace(/(\d+)(m|s)/g, "$1 $2")}</span>
  <span className="cs-metric-label">Elapsed</span>
  </div>
  <div className="cs-metric">
- <Badge tone={extractionVerdictTone(verdict)} className="text-[10px]">{humanizeVerdict(verdict)}</Badge>
+ <Badge tone={extractionVerdictTone(verdict)} className="text-[10px]">{humanizeVerdict(verdict).toLowerCase()}</Badge>
  <span className="cs-metric-label">Verdict</span>
  </div>
  <div className="cs-metric">
- <Badge tone={qualityTone(completedQualityLevel)} className="text-[10px]">{humanizeQuality(completedQualityLevel)} ({Math.round(quality.score * 100)}%)</Badge>
+ <Badge tone={qualityTone(completedQualityLevel)} className="text-[10px]">{humanizeQuality(completedQualityLevel).toLowerCase()} ({Math.round(quality.score * 100)}%)</Badge>
  <span className="cs-metric-label">Quality</span>
  </div>
  </div>
@@ -992,7 +995,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  ]}
  />
  }
- content={
+ summary={
+   <RunSummaryChips
+     duration={summary.duration.replace(/(\d+)(m|s)/g, "$1 $2")}
+     verdict={humanizeVerdict(verdict).toLowerCase()}
+     quality={humanizeQuality(completedQualityLevel).toLowerCase()}
+   />
+ } content={
  <>
  {outputTab ==="table"? (
  <div className="space-y-3 min-h-[55vh]">
@@ -1174,7 +1183,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  const keepPending = recipeActionPending === `field:${item.field_name}:keep`;
  const rejectPending = recipeActionPending === `field:${item.field_name}:reject`;
  return (
- <div key={`${item.field_name}:${item.selector_kind ?? "source"}:${item.selector_value ?? item.source_labels.join(",")}`} className="rounded-lg border border-[var(--divider)] bg-background px-3 py-3 text-sm">
+ <div key={`${item.field_name}:${item.selector_kind ?? "source"}:${item.selector_value ?? item.source_labels.join(",")}`} className="rounded-lg border border-divider bg-background px-3 py-3 text-sm">
  <div className="flex flex-wrap items-start justify-between gap-3">
  <div className="min-w-0 flex-1">
  <div className="flex flex-wrap items-center gap-2">
@@ -1495,14 +1504,14 @@ function CsFlowStep({ step, label, active }: Readonly<{ step: number; label: str
   <span className={cn(
    "inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-all",
    active
-    ? "bg-[var(--accent-subtle)] text-accent"
+    ? "bg-accent-subtle text-accent"
     : "text-muted",
   )}>
    <span className={cn(
     "inline-flex size-4 items-center justify-center rounded-full text-[9px] font-bold",
     active
-     ? "bg-[var(--accent)] text-[var(--accent-fg)]"
-     : "bg-[var(--border)] text-muted",
+     ? "ui-on-accent-surface bg-accent"
+     : "bg-border text-muted",
    )}>
     {active ? <Check className="size-2.5" /> : step}
    </span>
@@ -1513,6 +1522,6 @@ function CsFlowStep({ step, label, active }: Readonly<{ step: number; label: str
 
 function CsFlowConnector({ active }: Readonly<{ active: boolean }>) {
  return (
-  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-[var(--border)]")} />
+  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-border")} />
  );
 }

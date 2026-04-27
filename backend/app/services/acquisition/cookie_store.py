@@ -36,6 +36,7 @@ _DEFAULT_STORAGE_STATE_ENGINE = "chromium"
 _DOMAIN_STORAGE_SCOPE_SEPARATOR = "::"
 _SUPPORTED_STORAGE_STATE_ENGINES = {
     "chromium",
+    "patchright",
     "real_chrome",
 }
 _COOKIE_FIELDS = (

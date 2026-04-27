@@ -591,7 +591,7 @@ export default function DomainMemoryManagePage() {
  selectedWorkspace.surfaces.map((surfaceWorkspace) => (
  <div
  key={`${selectedWorkspace.domain}:${surfaceWorkspace.surface}`}
- className="rounded-[var(--radius-xl)] border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] p-4 space-y-3"
+ className="rounded-[var(--radius-xl)] border border-subtle-panel-border bg-subtle-panel p-4 space-y-3"
  >
  <div className="flex flex-wrap items-center justify-between gap-2">
  <div>
@@ -608,7 +608,7 @@ export default function DomainMemoryManagePage() {
  {surfaceWorkspace.selectors.map((record) => {
  const isEditing = editingId === record._uid && draft !== null;
  return (
- <DetailRow key={record._uid} className={isEditing ? "bg-[var(--subtle-panel-bg)]" : undefined}>
+ <DetailRow key={record._uid} className={isEditing ? "bg-subtle-panel" : undefined}>
  {isEditing ? (
  <div className="space-y-3">
  <div className="grid gap-3 md:grid-cols-2">
@@ -636,7 +636,7 @@ export default function DomainMemoryManagePage() {
  current ? { ...current, kind: event.target.value as EditDraft["kind"] } : current,
  )
  }
- className="rounded-[var(--radius-md)] border border-[var(--divider)] bg-background px-3 py-2 text-sm"
+ className="rounded-[var(--radius-md)] border border-divider bg-background px-3 py-2 text-sm"
  >
  <option value="css_selector">CSS Selector</option>
  <option value="xpath">XPath</option>

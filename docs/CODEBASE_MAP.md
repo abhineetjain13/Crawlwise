@@ -197,13 +197,20 @@ All selector memory is scoped by normalized `(domain, surface)`.
 | Path | Purpose |
 |---|---|
 | `app/` | Next.js App Router pages |
-| `components/layout/` | shell, auth, nav, theme |
+| `app/product-intelligence/product-intelligence-components.tsx` | Product Intelligence local UI pieces |
+| `components/layout/` | shell, auth, nav, theme, scoped shell CSS modules |
+| `components/ui/button.tsx`, `badge.tsx`, `input.tsx`, `card.tsx`, `metric.tsx`, `table.tsx`, `alert.tsx`, `dialog.tsx` | typed UI primitive owners |
+| `components/ui/primitives.tsx` | compatibility barrel plus dropdown, toggle, tooltip, skeleton, field helpers |
+| `components/ui/patterns.tsx` | shared operator-page UI patterns |
+| `components/ui/table.module.css` | compact and commerce table styling |
 | `components/crawl/crawl-config-screen.tsx` | Crawl Studio form and dispatch |
 | `components/crawl/crawl-run-screen.tsx` | Run workspace and Domain Recipe workflow |
+| `components/crawl/crawl.module.css` | Crawl Studio feature styling |
 | `components/crawl/use-run-polling.ts` | run polling |
 | `lib/api/client.ts` | auth-aware fetch wrapper |
 | `lib/api/index.ts` | only frontend backend-access layer |
 | `lib/api/types.ts` | frontend API types |
+| `scripts/check-token-escapes.mjs` | frontend guard against new raw CSS-var Tailwind token escapes |
 
 ---
 

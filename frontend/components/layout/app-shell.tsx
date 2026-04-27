@@ -30,9 +30,12 @@ import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { cn } from "../../lib/utils";
 import { getAuthSessionQueryOptions, isAuthRoute } from "./auth-session-query";
 import { Button, Dropdown } from "../ui/primitives";
+import { ConfirmDialog } from "../ui/dialog";
 import type { TopBarState } from "./top-bar-context";
 import { TopBarProvider, useTopBarHeader } from "./top-bar-context";
 import { ThemeToggle } from "../ui/theme-toggle";
+import "./app-shell.module.css";
+import "./auth-shell.module.css";
 
 const navGroups = [
     {
@@ -83,6 +86,29 @@ const authTickerRows = [
 
 const navItemCount = navGroups.reduce((total, group) => total + group.items.length, 0);
 
+type ResetMode = "crawl" | "memory" | "intelligence";
+
+const resetDialogCopy: Record<ResetMode, { title: string; description: string; confirmLabel: string }> = {
+    crawl: {
+        title: "Reset crawl data",
+        description: "Delete crawl runs, records, logs, artifacts, and runtime cookie files? Learned domain memory will be preserved.",
+        confirmLabel: "Reset Crawl Data",
+    },
+    memory: {
+        title: "Reset domain memory",
+        description: "Delete learned domain memory only? This clears saved selectors, saved run profiles, cookie memory, and field feedback without deleting crawl history.",
+        confirmLabel: "Reset Domain Memory",
+    },
+    intelligence: {
+        title: "Reset Product Intelligence",
+        description: "Delete Product Intelligence sessions, sources, discovered URLs, matches, and intelligence results? Crawl history and domain memory will be preserved.",
+        confirmLabel: "Reset Intelligence",
+    },
+};
+
+const resetForbiddenMessage =
+    "The API refused reset (admin-only on an older backend build, or a stale session). Stop and restart the FastAPI server so it loads the latest code, then try again, or sign out and sign back in.";
+
 export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
     const pathname = usePathname();
     const router = useRouter();
@@ -123,7 +149,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
                             <div className="app-page-inner page-stack-lg">
                                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                                     {Array.from({ length: 4 }, (_, index) => (
-                                        <div key={index} className="metric-card space-y-3">
+                                        <div key={index} className="space-y-3 rounded-[var(--radius-xl)] border border-border bg-panel p-4 shadow-card">
                                             <div className="skeleton h-3 w-20" />
                                             <div className="skeleton h-8 w-28" />
                                         </div>
@@ -141,9 +167,9 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
     if (authQuery.error && httpErrorStatus(authQuery.error) === 401) {
         return (
             <div className="app-shell-feedback">
-                <div className="panel panel-raised max-w-sm p-6 text-center">
-                    <p className="text-base font-semibold leading-snug text-[var(--text-primary)]">Session expired</p>
-                    <p className="panel-subtitle mt-1.5">Redirecting to login…</p>
+                <div className="max-w-sm rounded-[var(--radius-xl)] border border-border bg-panel p-6 text-center shadow-card">
+                    <p className="text-base font-semibold leading-snug text-foreground">Session expired</p>
+                    <p className="mt-1.5 text-sm leading-[1.55] text-secondary">Redirecting to login…</p>
                 </div>
             </div>
         );
@@ -152,9 +178,9 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
     if (authQuery.error) {
         return (
             <div className="app-shell-feedback">
-                <div className="panel panel-raised max-w-sm p-6 text-center">
-                    <p className="text-base font-semibold leading-snug text-[var(--text-primary)]">Unable to load session</p>
-                    <p className="panel-subtitle mt-1.5">
+                <div className="max-w-sm rounded-[var(--radius-xl)] border border-border bg-panel p-6 text-center shadow-card">
+                    <p className="text-base font-semibold leading-snug text-foreground">Unable to load session</p>
+                    <p className="mt-1.5 text-sm leading-[1.55] text-secondary">
                         Refresh to retry, or sign in again if the session expired.
                     </p>
                     <div className="mt-4 flex justify-center">
@@ -170,7 +196,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
             <div className="app-shell-root">
                 <a
                     href="#main-content"
-                    className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-sm focus:text-[var(--accent-fg)]"
+                    className="ui-on-accent-surface sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-accent focus:px-3 focus:py-2 focus:text-sm"
                 >
                     Skip to main content
                 </a>
@@ -199,8 +225,16 @@ function AuthShell({ children }: Readonly<{ children: ReactNode }>) {
                 </div>
             </section>
             <aside className="auth-shell-aside">
-                <div className="auth-shell-orb" aria-hidden="true" />
                 <div className="auth-shell-side-inner">
+                    <div className="auth-shell-trace" aria-hidden="true">
+                        {authTickerRows.map((row, index) => (
+                            <div key={`${row.domain}-trace`} className="auth-shell-trace-row">
+                                <span className="auth-shell-trace-dot" />
+                                <span className="auth-shell-trace-line" />
+                                <span className="auth-shell-trace-code">{index + 1}</span>
+                            </div>
+                        ))}
+                    </div>
                     <div className="auth-shell-ticker">
                         <div className="auth-shell-ticker-head">
                             <span className="auth-shell-pulse" aria-hidden="true" />
@@ -322,16 +356,22 @@ function ShellContent({
     const header = useTopBarHeader();
     const topBar = header ?? getFallbackHeader(pathname);
     const router = useRouter();
-    const [resetPending, setResetPending] = useState<"crawl" | "memory" | "intelligence" | null>(null);
-    const [resetMode, setResetMode] = useState<"crawl" | "memory" | "intelligence">("crawl");
+    const [resetPending, setResetPending] = useState<ResetMode | null>(null);
+    const [resetMode, setResetMode] = useState<ResetMode>("crawl");
+    const [resetDialogOpen, setResetDialogOpen] = useState(false);
+    const [resetError, setResetError] = useState("");
 
-    async function handleResetCrawlData() {
-        if (!confirm("Delete crawl runs, records, logs, artifacts, and runtime cookie files? Learned domain memory will be preserved.")) {
-            return;
-        }
-        setResetPending("crawl");
+    async function executeReset() {
+        setResetPending(resetMode);
+        setResetError("");
         try {
-            await api.resetCrawlData();
+            if (resetMode === "memory") {
+                await api.resetDomainMemory();
+            } else if (resetMode === "intelligence") {
+                await api.resetProductIntelligence();
+            } else {
+                await api.resetCrawlData();
+            }
             globalThis.location.reload();
         } catch (error) {
             const status = httpErrorStatus(error);
@@ -340,84 +380,21 @@ function ShellContent({
                 return;
             }
             if (status === 403) {
-                globalThis.alert(
-                    "The API refused reset (admin-only on an older backend build, or a stale session). Stop and restart the FastAPI server so it loads the latest code, then try again, or sign out and sign back in.",
-                );
+                setResetError(resetForbiddenMessage);
                 return;
             }
-            const message = error instanceof Error ? error.message : "Failed to reset crawl data.";
-            globalThis.alert(message);
-        } finally {
-            setResetPending(null);
-        }
-    }
-
-    async function handleResetDomainMemory() {
-        if (!confirm("Delete learned domain memory only? This clears saved selectors, saved run profiles, cookie memory, and field feedback without deleting crawl history.")) {
-            return;
-        }
-        setResetPending("memory");
-        try {
-            await api.resetDomainMemory();
-            globalThis.location.reload();
-        } catch (error) {
-            const status = httpErrorStatus(error);
-            if (status === 401) {
-                router.replace("/login");
-                return;
-            }
-            if (status === 403) {
-                globalThis.alert(
-                    "The API refused reset (admin-only on an older backend build, or a stale session). Stop and restart the FastAPI server so it loads the latest code, then try again, or sign out and sign back in.",
-                );
-                return;
-            }
-            const message = error instanceof Error ? error.message : "Failed to reset domain memory.";
-            globalThis.alert(message);
-        } finally {
-            setResetPending(null);
-        }
-    }
-
-    async function handleResetProductIntelligence() {
-        if (!confirm("Delete Product Intelligence sessions, sources, discovered URLs, matches, and intelligence results? Crawl history and domain memory will be preserved.")) {
-            return;
-        }
-        setResetPending("intelligence");
-        try {
-            await api.resetProductIntelligence();
-            globalThis.location.reload();
-        } catch (error) {
-            const status = httpErrorStatus(error);
-            if (status === 401) {
-                router.replace("/login");
-                return;
-            }
-            if (status === 403) {
-                globalThis.alert(
-                    "The API refused reset (admin-only on an older backend build, or a stale session). Stop and restart the FastAPI server so it loads the latest code, then try again, or sign out and sign back in.",
-                );
-                return;
-            }
-            const message = error instanceof Error ? error.message : "Failed to reset Product Intelligence.";
-            globalThis.alert(message);
+            setResetError(error instanceof Error ? error.message : "Failed to reset selected data.");
         } finally {
             setResetPending(null);
         }
     }
 
     function handleSelectedReset() {
-        if (resetMode === "memory") {
-            void handleResetDomainMemory();
-            return;
-        }
-        if (resetMode === "intelligence") {
-            void handleResetProductIntelligence();
-            return;
-        }
-        void handleResetCrawlData();
+        setResetError("");
+        setResetDialogOpen(true);
     }
 
+    const resetCopy = resetDialogCopy[resetMode];
     const resetLabel =
         resetPending === "crawl"
             ? "Resetting Crawl Data..."
@@ -475,6 +452,17 @@ function ShellContent({
             <main id="main-content" className="app-page-frame">
                 <div className="app-page-inner">{children}</div>
             </main>
+            <ConfirmDialog
+                open={resetDialogOpen}
+                onOpenChange={setResetDialogOpen}
+                title={resetCopy.title}
+                description={resetCopy.description}
+                confirmLabel={resetCopy.confirmLabel}
+                pending={resetPending !== null}
+                danger
+                error={resetError}
+                onConfirm={() => void executeReset()}
+            />
         </div>
     );
 }

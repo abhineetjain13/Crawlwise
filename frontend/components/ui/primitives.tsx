@@ -3,41 +3,19 @@
 import * as React from "react";
 import { useId } from "react";
 import { createPortal } from "react-dom";
-import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
-function colorWithAlpha(color: string | undefined, alphaPercent: number) {
-  const normalized = String(color ?? "").trim();
-  if (!normalized) {
-    return "var(--accent-subtle)";
-  }
-  return `color-mix(in srgb, ${normalized} ${alphaPercent}%, transparent)`;
-}
+export { Badge, badgeVariants } from "./badge";
+export { Button, buttonVariants } from "./button";
+export { Card, cardVariants } from "./card";
+export { Input, Textarea, inputVariants, textareaVariants } from "./input";
+export { Metric, StatCard } from "./metric";
+export { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./table";
 
 function sanitizeIdSegment(value: string) {
   const normalized = String(value).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   return normalized.replace(/^-+|-+$/g, "") || "option";
-}
-
-/* ─── Card ───────────────────────────────────────────────────────────────── */
-export function Card({
-  children,
-  className,
-  animate = false,
-  ...props
-}: Readonly<ComponentPropsWithoutRef<"section"> & { children: ReactNode; animate?: boolean }>) {
-  return (
-    <section
-      {...props}
-      className={cn(
-        "panel panel-raised relative p-5",
-        animate && "animate-fade-in",
-        className,
-      )}
-    >
-      {children}
-    </section>
-  );
 }
 
 /* ─── Title / Subtitle ───────────────────────────────────────────────────── */
@@ -49,11 +27,11 @@ export function Title({
   return (
     <div className={cn("space-y-1", className)}>
       {kicker ? (
-        <p className="page-kicker">
+        <p className="m-0 mb-1.5 text-sm font-semibold text-accent">
           {kicker}
         </p>
       ) : null}
-      <h1 className="page-title">
+      <h1 className="m-0 text-[clamp(1.75rem,1.45rem+0.8vw,2rem)] font-semibold leading-[1.08] text-foreground">
         {children}
       </h1>
     </div>
@@ -61,7 +39,7 @@ export function Title({
 }
 
 export function Subtitle({ children }: Readonly<{ children: ReactNode }>) {
-  return <p className="page-subtitle max-w-2xl">{children}</p>;
+  return <p className="mt-1.5 max-w-2xl text-sm leading-[1.55] text-secondary">{children}</p>;
 }
 
 /* ─── Field ──────────────────────────────────────────────────────────────── */
@@ -76,44 +54,6 @@ export function Field({
       {children}
       {hint ? <span className="field-hint">{hint}</span> : null}
     </label>
-  );
-}
-
-/* ─── Input ──────────────────────────────────────────────────────────────── */
-export function Input(props: ComponentPropsWithoutRef<"input">) {
-  const normalizedProps =
-    props.type === "file"
-      ? props
-      : "value" in props
-      ? { ...props, value: props.value ?? "" }
-      : props;
-
-  return (
-    <input
-      {...normalizedProps}
-      className={cn(
-        "input focus-ring px-3",
-        normalizedProps.className,
-      )}
-    />
-  );
-}
-
-/* ─── Textarea ───────────────────────────────────────────────────────────── */
-export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
-  const normalizedProps =
-    "value" in props
-      ? { ...props, value: props.value ?? "" }
-      : props;
-
-  return (
-    <textarea
-      {...normalizedProps}
-      className={cn(
-        "textarea focus-ring px-3",
-        normalizedProps.className,
-      )}
-    />
   );
 }
 
@@ -234,7 +174,7 @@ export function Dropdown<T extends string>({
         disabled={disabled}
         onKeyDown={handleKeyDown}
         className={cn(
-          "focus-ring flex h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-strong)] bg-[var(--bg-elevated)] text-sm font-medium leading-[1.4] text-[var(--text-primary)] transition-[border-color,box-shadow] hover:border-[var(--border-strong)] focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_var(--accent-subtle)]",
+          "focus-ring flex h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-background-elevated text-sm font-medium leading-[1.4] text-foreground transition-[border-color,box-shadow] hover:border-border-strong focus:border-accent focus:shadow-[0_0_0_3px_var(--accent-subtle)]",
           align === "center" ? "justify-center px-9 text-center" : "justify-between px-3 text-left",
         )}
       >
@@ -259,7 +199,7 @@ export function Dropdown<T extends string>({
         <div
           id={listboxId}
           role="listbox"
-          className="absolute left-0 z-50 mt-1 w-max min-w-full rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-[var(--shadow-lg)] animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)]"
+          className="absolute left-0 z-50 mt-1 w-max min-w-full rounded-[var(--radius-lg)] border border-border bg-background-elevated py-1 shadow-lg animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)]"
         >
           {options.map((option, index) => {
             const optionId = `${dropdownId}-option-${index}-${sanitizeIdSegment(option.value)}`;
@@ -278,8 +218,8 @@ export function Dropdown<T extends string>({
                   "flex w-full items-center py-2 text-sm leading-[1.35] transition-colors",
                   align === "center" ? "justify-center px-8" : "justify-start px-3",
                   option.value === value
-                    ? "bg-[var(--accent-subtle)] text-[var(--accent)] font-medium"
-                    : "text-[var(--text-primary)] hover:bg-[var(--bg-alt)]",
+                    ? "bg-accent-subtle text-accent font-medium"
+                    : "text-foreground hover:bg-background-alt",
                 )}
               >
                 {option.label}
@@ -289,79 +229,6 @@ export function Dropdown<T extends string>({
         </div>
       ) : null}
     </div>
-  );
-}
-
-/* ─── Button ─────────────────────────────────────────────────────────────── */
-export function Button({
-  className,
-  variant = "primary",
-  size = "md",
-  ...props
-}: Readonly<
-  ComponentPropsWithoutRef<"button"> & {
-    variant?: "primary" | "secondary" | "ghost" | "accent" | "danger";
-    size?: "sm" | "md" | "lg" | "icon";
-  }
->) {
-  const variants: Record<string, string> = {
-    primary: "btn-primary",
-    secondary: "btn-secondary",
-    ghost: "btn-ghost",
-    accent: "btn-primary",
-    danger: "btn-danger",
-  };
-  const sizes: Record<string, string> = {
-    sm: "btn-sm",
-    md: "",
-    lg: "btn-lg",
-    icon: "btn-icon",
-  };
-  return (
-    <button
-      {...props}
-      className={cn(
-        "btn focus-ring disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 disabled:grayscale",
-        variants[variant],
-        sizes[size],
-        className,
-      )}
-    />
-  );
-}
-
-/* ─── Badge ──────────────────────────────────────────────────────────────── */
-export function Badge({
-  children,
-  tone = "neutral",
-  className,
-}: Readonly<{
-  children: ReactNode;
-  tone?: "neutral" | "success" | "warning" | "danger" | "accent" | "info";
-  className?: string;
-}>) {
-  const tones: Record<string, string> = {
-    neutral: "badge-neutral",
-    success: "badge-success",
-    warning: "badge-warning",
-    danger: "badge-danger",
-    accent: "badge-accent",
-    info: "badge-info",
-  };
-  return (
-    <span
-      className={cn(
-        "badge",
-        tones[tone] ?? tones.neutral,
-        className,
-      )}
-    >
-      <span
-        className={cn("size-1 rounded-full bg-current", tone === "accent" && "animate-pulse")}
-        aria-hidden
-      />
-      {children}
-    </span>
   );
 }
 
@@ -380,7 +247,7 @@ export function Toggle({
       onClick={() => onChange(!checked)}
       className={cn(
         "focus-ring relative inline-flex h-[20px] w-[36px] shrink-0 cursor-pointer items-center rounded-full transition-colors",
-        checked ? "bg-[var(--accent)]" : "bg-[var(--border-strong)]",
+        checked ? "bg-accent" : "bg-border-strong",
       )}
     >
       <span
@@ -390,136 +257,6 @@ export function Toggle({
         )}
       />
     </button>
-  );
-}
-
-/* ─── Metric (simple inline, used in crawl page) ─────────────────────────── */
-export function Metric({
-  label,
-  value,
-  loading = false,
-}: Readonly<{ label: string; value: ReactNode; loading?: boolean }>) {
-  return (
-    <div className="metric-card space-y-1.5">
-      <p className="metric-label">{label}</p>
-      {loading ? (
-        <div className="skeleton h-7 w-20" aria-hidden />
-      ) : (
-        <div className="metric-value">
-          {value}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── StatCard — Dashboard KPI tile with colored top stripe ─────────────── */
-export function StatCard({
-  label,
-  value,
-  icon,
-  iconColor,
-  stripeColor,
-  sub,
-  loading = false,
-}: Readonly<{
-  label: string;
-  value: ReactNode;
-  icon?: ReactNode;
-  iconColor?: string;
-  stripeColor?: string;
-  sub?: ReactNode;
-  loading?: boolean;
-}>) {
-  return (
-    <div
-      className="metric-card"
-      style={{ "--stat-accent": stripeColor } as React.CSSProperties}
-    >
-      <div className="metric-head">
-        <p className="metric-label">{label}</p>
-        {icon && (
-          <div
-            className="metric-icon"
-            style={{ background: colorWithAlpha(stripeColor, 10), color: iconColor ?? stripeColor ?? "var(--accent)" }}
-          >
-            {icon}
-          </div>
-        )}
-      </div>
-      {loading ? (
-        <div className="mt-2.5 skeleton h-9 w-28" aria-hidden />
-      ) : (
-        <div className="metric-value mt-2">
-          {value}
-        </div>
-      )}
-      {sub && !loading && (
-        <div className="metric-sub mt-1.5">
-          {sub}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── Table primitives ───────────────────────────────────────────────────── */
-export function Table({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
-  return (
-    <div className="relative w-full overflow-auto">
-      <table className={cn("w-full caption-bottom text-sm leading-[1.55]", className)}>{children}</table>
-    </div>
-  );
-}
-
-export function TableHeader({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
-  return <thead className={cn("[&_tr]:border-b", className)}>{children}</thead>;
-}
-
-export function TableBody({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
-  return <tbody className={cn("[&_tr:last-child]:border-0", className)}>{children}</tbody>;
-}
-
-export function TableRow({
-  children,
-  className,
-  ...props
-}: Readonly<{ children: ReactNode; className?: string } & React.HTMLAttributes<HTMLTableRowElement>>) {
-  return (
-    <tr
-      {...props}
-      className={cn(
-        "border-b border-[var(--divider)] transition-colors hover:bg-[var(--bg-alt)]",
-        className,
-      )}
-    >
-      {children}
-    </tr>
-  );
-}
-
-export function TableHead({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
-  return (
-    <th
-      className={cn(
-        "h-9 px-4 text-left align-middle text-sm font-semibold text-[var(--text-muted)]",
-        className,
-      )}
-    >
-      {children}
-    </th>
-  );
-}
-
-export function TableCell({
-  children,
-  className,
-  colSpan,
-}: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
-  return (
-    <td className={cn("p-4 align-middle text-sm leading-[1.5] text-[var(--text-secondary)]", className)} colSpan={colSpan}>
-      {children}
-    </td>
   );
 }
 
@@ -604,14 +341,14 @@ export function Tooltip({
               role="tooltip"
               className={cn(
                 "pointer-events-none fixed w-max max-w-[min(420px,calc(100vw-24px))]",
-                "tooltip-surface rounded-[var(--radius-md)] bg-[var(--bg-panel)] px-2 py-1.5 shadow-[var(--shadow-lg)]",
-                "text-sm font-medium leading-normal text-[var(--text-primary)] z-[200] break-words",
+                "tooltip-surface rounded-[var(--radius-md)] bg-panel px-2 py-1.5 shadow-lg",
+                "text-sm font-medium leading-normal text-foreground z-[200] break-words",
               )}
               style={{ left: `${position.left}px`, top: `${position.top}px` }}
             >
               {content}
               <div
-                className="absolute -bottom-[6px] size-2.5 rotate-45 border-b border-r border-[var(--border-strong)] bg-[var(--bg-panel)]"
+                className="absolute -bottom-[6px] size-2.5 rotate-45 border-b border-r border-border-strong bg-panel"
                 style={{
                   left:
                     align === "start"

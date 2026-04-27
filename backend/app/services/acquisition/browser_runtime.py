@@ -105,9 +105,11 @@ _RUN_STORAGE_PERSIST_ATTR = "_crawler_persist_run_storage_state"
 _DOMAIN_STORAGE_PERSIST_ATTR = "_crawler_persist_domain_storage_state"
 _BROWSERFORGE_ACTIVE_ATTR = "_crawler_browserforge_active"
 _CHROMIUM_BROWSER_ENGINE = "chromium"
+_PATCHRIGHT_BROWSER_ENGINE = "patchright"
 _REAL_CHROME_BROWSER_ENGINE = "real_chrome"
 _SUPPORTED_BROWSER_ENGINES = {
     _CHROMIUM_BROWSER_ENGINE,
+    _PATCHRIGHT_BROWSER_ENGINE,
     _REAL_CHROME_BROWSER_ENGINE,
 }
 
@@ -162,6 +164,22 @@ def _normalize_browser_engine(value: object) -> str:
     return _CHROMIUM_BROWSER_ENGINE
 
 
+def _patchright_async_playwright_factory():
+    from patchright.async_api import async_playwright as patchright_async_playwright
+
+    return patchright_async_playwright
+
+
+def patchright_browser_available() -> bool:
+    if not bool(crawler_runtime_settings.browser_patchright_enabled):
+        return False
+    try:
+        _patchright_async_playwright_factory()
+    except Exception:
+        return False
+    return True
+
+
 def _real_chrome_candidate_paths() -> tuple[str, ...]:
     configured = str(
         crawler_runtime_settings.browser_real_chrome_executable_path or ""
@@ -210,6 +228,8 @@ def _use_native_real_chrome_context(engine: str) -> bool:
 
 def _apply_stealth_for_engine(engine: str) -> bool:
     normalized_engine = _normalize_browser_engine(engine)
+    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
+        return bool(crawler_runtime_settings.browser_patchright_apply_stealth)
     if normalized_engine != _REAL_CHROME_BROWSER_ENGINE:
         return True
     return bool(crawler_runtime_settings.browser_real_chrome_apply_stealth)
@@ -221,6 +241,8 @@ def _browser_launch_mode(engine: str) -> str:
 
 def _browser_profile(engine: str) -> str:
     normalized_engine = _normalize_browser_engine(engine)
+    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
+        return "patchright_shaped"
     if normalized_engine == _REAL_CHROME_BROWSER_ENGINE:
         if _use_native_real_chrome_context(normalized_engine):
             return "real_chrome_native"
@@ -256,12 +278,28 @@ def _should_run_behavior_realism(engine: str) -> bool:
 
 def _resolve_browser_binary(engine: str) -> tuple[str | None, str]:
     normalized_engine = _normalize_browser_engine(engine)
+    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
+        return None, _PATCHRIGHT_BROWSER_ENGINE
     if normalized_engine != _REAL_CHROME_BROWSER_ENGINE:
         return None, _CHROMIUM_BROWSER_ENGINE
     executable_path = real_chrome_executable_path()
     if executable_path is None:
         return None, _CHROMIUM_BROWSER_ENGINE
     return executable_path, executable_path
+
+
+def _async_playwright_manager_for_engine(engine: str):
+    normalized_engine = _normalize_browser_engine(engine)
+    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
+        try:
+            return _patchright_async_playwright_factory()
+        except Exception as exc:
+            raise RuntimeError(
+                "Patchright package is not available for browser runtime"
+            ) from exc
+    from playwright.async_api import async_playwright
+
+    return async_playwright
 
 
 def _proxy_host_port(parsed) -> str:
@@ -336,7 +374,12 @@ class SharedBrowserRuntime:
             self.browser_engine
         )
         self.engine_available = bool(
-            self.browser_engine == _CHROMIUM_BROWSER_ENGINE or self.executable_path
+            self.browser_engine == _CHROMIUM_BROWSER_ENGINE
+            or (
+                self.browser_engine == _PATCHRIGHT_BROWSER_ENGINE
+                and patchright_browser_available()
+            )
+            or self.executable_path
         )
         self.launch_proxy = _normalized_proxy_value(launch_proxy)
         self.launch_proxy_config = _build_browser_proxy_config(self.launch_proxy)
@@ -385,8 +428,9 @@ class SharedBrowserRuntime:
                 await self._close_locked()
             if self._browser is not None:
                 return
-            from playwright.async_api import async_playwright
-
+            async_playwright = _async_playwright_manager_for_engine(
+                self.browser_engine
+            )
             self._playwright = await async_playwright().start()
             launch_args = [
                 str(value).strip()
@@ -475,6 +519,7 @@ class SharedBrowserRuntime:
             run_id=run_id,
             browser_major_version=browser_major_version,
             locality_profile=locality_profile,
+            browser_engine=self.browser_engine,
         )
         if inject_init_script:
             return spec
@@ -2232,6 +2277,8 @@ def _browser_failure_kind(exc: Exception) -> str:
         return "page_closed"
     if "real chrome executable is not available" in message:
         return "engine_unavailable"
+    if "patchright package is not available" in message:
+        return "engine_unavailable"
     if (
         isinstance(exc, ValueError)
         and "browser proxy" in message
@@ -2258,6 +2305,7 @@ __all__ = [
     "expand_all_interactive_elements",
     "get_browser_runtime",
     "looks_like_low_content_shell",
+    "patchright_browser_available",
     "read_network_payload_body",
     "real_chrome_browser_available",
     "real_chrome_executable_path",

@@ -26,6 +26,7 @@ dependencies = [
   "jmespath>=1.0.1",
   "lxml>=6.0.0",
   "passlib[bcrypt]>=1.7.4",
+  "patchright>=1.58.2",
   "playwright>=1.54.0",
   "playwright-stealth>=2.0.0",
   "price-parser>=0.5.0",

@@ -2478,7 +2478,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--currency-hint", default=None)
     parser.add_argument(
         "--browser-engine",
-        choices=("chromium", "real_chrome"),
+        choices=("chromium", "real_chrome", "patchright"),
         default="chromium",
     )
     parser.add_argument("--report-dir", default=None)

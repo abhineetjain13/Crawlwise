@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
         pass
 
 from app.services.config.extraction_rules import (
+    LISTING_CARD_URL_ATTRS,
     LISTING_FALLBACK_CONTAINER_SELECTOR,
     LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_STRUCTURE_POSITIVE_HINTS,
@@ -34,7 +35,10 @@ from app.services.extract.listing_card_fragments import (
     base_listing_fragment_score,
     collect_listing_fragment_html,
     heuristic_listing_card_count_from_html,
+    listing_node_attr,
+    listing_node_css,
     listing_selector_is_weak,
+    select_listing_fragment_nodes,
 )
 from selectolax.lexbor import LexborHTMLParser
 
@@ -1545,11 +1549,72 @@ async def _page_snapshot(page, *, surface: str) -> dict[str, int]:
     )
     if not isinstance(snapshot, dict):
         snapshot = {}
+    raw_card_count = await _card_count(page, surface=surface)
+    try:
+        html = await get_page_html(page, flatten_shadow=False)
+    except AttributeError:
+        html = ""
+    unique_card_count = _unique_listing_card_identity_count_from_html(
+        html,
+        page_url=str(getattr(page, "url", "") or ""),
+        surface=surface,
+    )
+    card_count = (
+        unique_card_count
+        if unique_card_count >= int(crawler_runtime_settings.listing_min_items)
+        and unique_card_count < raw_card_count
+        else raw_card_count
+    )
     return {
-        "card_count": await _card_count(page, surface=surface),
+        "card_count": card_count,
         "content_signature": _content_signature(snapshot.pop("content_signature_source", "")),
         **snapshot,
     }
+
+
+def _unique_listing_card_identity_count_from_html(
+    html: str,
+    *,
+    page_url: str,
+    surface: str,
+) -> int:
+    if not html:
+        return 0
+    parser = LexborHTMLParser(html)
+    identities: set[str] = set()
+    for card in select_listing_fragment_nodes(
+        parser,
+        surface=surface,
+        limit=max(1, int(crawler_runtime_settings.listing_fallback_fragment_limit)),
+    ):
+        identity = _listing_card_identity(card, page_url=page_url)
+        if identity:
+            identities.add(identity)
+    return len(identities)
+
+
+def _listing_card_identity(card, *, page_url: str) -> str:
+    selectors = ",".join(f"[{attr_name}]" for attr_name in LISTING_CARD_URL_ATTRS)
+    candidates = [card, *listing_node_css(card, selectors)]
+    page_path = str(urlsplit(page_url).path or "").rstrip("/").lower()
+    for candidate in candidates:
+        for attr_name in LISTING_CARD_URL_ATTRS:
+            raw_value = listing_node_attr(candidate, str(attr_name))
+            if not raw_value:
+                continue
+            resolved = urljoin(page_url, raw_value)
+            parsed = urlsplit(resolved)
+            scheme = str(parsed.scheme or "").lower()
+            path = str(parsed.path or "").rstrip("/").lower()
+            if scheme not in {"http", "https"} or path in {"", "/"}:
+                continue
+            if page_path and path == page_path:
+                continue
+            host = str(parsed.hostname or "").lower()
+            if not host:
+                continue
+            return f"{host}{path}"
+    return ""
 
 
 async def count_listing_cards(page, *, surface: str, allow_heuristic: bool = True) -> int:

@@ -793,6 +793,49 @@ async def test_load_more_traversal_stops_at_user_max_records() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_more_target_uses_unique_card_identities_not_repeated_snapshots() -> None:
+    first_html = (
+        "<main>"
+        "<article class='product-card'><a href='/products/widget-1'>Widget 1</a><span>$10</span></article>"
+        "<article class='product-card'><a href='/products/widget-2'>Widget 2</a><span>$20</span></article>"
+        "</main>"
+    )
+    repeated_html = (
+        "<main>"
+        "<article class='product-card'><a href='/products/widget-1'>Widget 1</a><span>$10</span></article>"
+        "<article class='product-card'><a href='/products/widget-2'>Widget 2</a><span>$20</span></article>"
+        "<article class='product-card'><a href='/products/widget-1'>Widget 1</a><span>$10</span></article>"
+        "<article class='product-card'><a href='/products/widget-2'>Widget 2</a><span>$20</span></article>"
+        "</main>"
+    )
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html=first_html,
+            card_count=4,
+            scroll_height=900,
+            controls={"load_more"},
+        ),
+        load_more_states=[
+            _State(html=first_html, card_count=4, scroll_height=900, controls={"load_more"}),
+            _State(html=repeated_html, card_count=8, scroll_height=1200, controls=set()),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="load_more",
+        max_pages=3,
+        max_scrolls=2,
+        max_records=3,
+    )
+
+    assert result.stop_reason != "target_records_reached"
+    assert result.card_count == 2
+
+
+@pytest.mark.asyncio
 async def test_paginate_uses_max_records_as_page_stop_not_page_limit() -> None:
     page = _FakePage(
         surface="ecommerce_listing",

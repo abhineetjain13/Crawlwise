@@ -1,36 +1,32 @@
 These are comments left during a code review. Please review all issues and provide fixes.
 
-1. logic error: Browser diagnostics are misclassified because block state is discarded.
-   Path: backend/app/services/acquisition/acquirer.py
-   Lines: 95-95
+1. possible bug: Switching to a new browser engine can silently drop the init script and change the browser context contract.
+   Path: backend/app/services/acquisition/browser_identity.py
+   Lines: 157-157
 
-2. logic error: The new browser behavior telemetry misreports activity when only scrolling occurs.
-   Path: backend/app/services/acquisition/browser_recovery.py
-   Lines: 230-230
-
-3. possible bug: Swallowing typing errors hides partial input and can leave forms in a corrupted state.
-   Path: backend/app/services/acquisition/browser_recovery.py
-   Lines: 253-253
-
-4. possible bug: Behavior realism failures are ignored and do not affect the fetch flow.
+2. possible bug: Engine availability is reported as true even when the runtime cannot actually start.
    Path: backend/app/services/acquisition/browser_runtime.py
-   Lines: 1421-1421
+   Lines: 173-173
 
-5. logic error: Overly broad detail-page detection can misclassify listing pages and skip valid listing extraction.
-   Path: backend/app/services/adapters/adp.py
-   Lines: 226-226
+3. possible bug: Patchright is selected but still launched through the generic Chromium path, which can break runtime startup.
+   Path: backend/app/services/acquisition/browser_runtime.py
+   Lines: 291-291
 
-6. logic error: Image extraction can drop the fallback URL even when an alternate image attribute exists.
-   Path: backend/app/services/adapters/amazon.py
-   Lines: 122-122
+4. possible bug: Adding `patchright` to supported storage-state engines may be incomplete if the rest of the codebase never emits that engine metadata.
+   Path: backend/app/services/acquisition/cookie_store.py
+   Lines: 37-37
 
-7. security: Loose suffix host matching can route unrelated domains to the wrong adapter.
-   Path: backend/app/services/adapters/base.py
-   Lines: 45-45
+5. logic error: Patchright blocks are classified inconsistently, so blocked hosts can be reported as usable.
+   Path: backend/app/services/acquisition/host_protection_memory.py
+   Lines: 112-112
 
-8. possible bug: Overly broad text extraction handling can silently drop valid node content.
-   Path: backend/app/services/adapters/base.py
-   Lines: 20-20
+6. possible bug: Forcing real Chrome can now fail outright when Chrome is unavailable.
+   Path: backend/app/services/crawl_fetch_runtime.py
+   Lines: 999-999
+
+7. race condition: Wrapping `_browser_fetch(...)` in `asyncio.wait_for` changes timeout/cancellation behavior.
+   Path: backend/app/services/crawl_fetch_runtime.py
+   Lines: 594-594
 
 Validate the correctness of each issue sequentially. For each issue that is correct, implement a fix. Please make the fixes concise and address all issues comprehensively and don't impact anything else.
 
@@ -38,24 +34,40 @@ Fix the following issues. The issues can be from different files or can overlap 
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/schemas/product_intelligence.py at line 29, The new Literal restriction on the search_provider field in product_intelligence.py will break existing "duckduckgo" values; add a Pydantic pre-validator on the search_provider field (e.g., @validator('search_provider', pre=True) def _map_duckduckgo(cls, v): ...) that maps the string "duckduckgo" → "serpapi" and returns other values unchanged so existing persisted jobs keep validating against the Literal["serpapi","google_native"] type; alternatively, if you want to keep the option live, include "duckduckgo" in the Literal options instead.
+In @backend/pyproject.toml around lines 29 - 31, Decide whether you are migrating to patchright or retaining playwright and update the dependency list accordingly: if migrating, remove "playwright>=1.54.0" and "playwright-stealth>=2.0.0" from pyproject and keep "patchright>=1.58.2" (and verify patchright provides the needed stealth features); if keeping playwright, remove "patchright>=1.58.2" and keep "playwright" and "playwright-stealth"; additionally verify compatibility between the chosen package versions (search for patchright v1.58.2 docs regarding compatibility with playwright and whether both can coexist) and update any import statements or code paths that reference patchright, playwright, or playwright-stealth to match the chosen dependency.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/adapters/base.py around lines 45 - 50, The function adapter_host_matches currently treats inputs as possibly None but types them as str; update its signature to accept Optional[str] (or union str | None) so the type hints match the defensive checks in adapter_host_matches, keep the existing str(host or "")/str(expected or "") normalization, and add a concise docstring to adapter_host_matches explaining it normalizes inputs (trim/lower) and returns true for exact host matches or when the host is a subdomain of expected (i.e., endswith ".expected"); alternatively, if you guarantee non-None callers, remove the "or ''" guards and keep the parameters as str, still adding the same docstring to document subdomain matching behavior.
+In @frontend/app/runs/page.tsx around lines 282 - 296, The ConfirmDialog usage leaves the dialog open on delete failure and may allow closing while a pending mutation is in flight; update the delete flow so errors are surfaced inside the dialog or the dialog is closed on error and it cannot be dismissed while pending. Concretely: in the deleteMutation error handler (deleteMutation.onError) either call setDeleteTarget(null) after setting actionError, or set a local error state and pass it into ConfirmDialog (e.g., an error or errorMessage prop) so the dialog renders the error inline; also ensure the dialog cannot be dismissed while pending by making onOpenChange ignore close requests when pendingDeleteIds.has(deleteTarget?.id) or by passing a prop to ConfirmDialog to disable backdrop/escape during pending, and keep pending={deleteTarget ? pendingDeleteIds.has(deleteTarget.id) : false} as-is.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/adapters/nike.py at line 112, Replace the hardcoded "INR" currency literal in the product payload with a dynamic value: first try to read product.get("currency") from the parsed product data (use that if present), otherwise derive the currency from the request domain (map nike.com→USD, nike.co.uk→GBP, nike.com.au→AUD, nike.ca→CAD) and use a sensible default fallback (e.g., USD). Update the code location that builds the product dict (the place containing the "currency": "INR" entry) to perform this lookup so downstream consumers receive correct currency per domain or page data.
+In @frontend/next-env.d.ts at line 3, The file next-env.d.ts (which currently contains the import "./.next/types/routes.d.ts") is auto-generated by Next.js and should not be manually edited or tracked; update the repository by adding next-env.d.ts to .gitignore, remove any committed copy from version control (e.g., git rm --cached next-env.d.ts) so Next.js can regenerate it without causing persistent diffs, and revert any manual edits to next-env.d.ts so the import line is managed only by the framework.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/pipeline/extraction_retry_decision.py around lines 5 - 8, The file references AcquisitionResult as a type on lines ~12 and ~44 but doesn't import it; add an import for AcquisitionResult (e.g., alongside PageEvidence) from the module that defines it (for example, import AcquisitionResult from app.services.acquisition.acquirer) so static type checkers and runtime typing utilities (typing.get_type_hints) can resolve the symbol used in the functions/methods that reference AcquisitionResult.
+In @frontend/next-env.d.ts around lines 5 - 6, Add the auto-generated file "next-env.d.ts" to version control ignore by updating your .gitignore: open the repository's .gitignore and add a line that ignores next-env.d.ts so the file is not committed; this targets the auto-generated file referenced by the frontend/next-env.d.ts review and prevents unnecessary VCS noise from development vs production changes.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/product_intelligence/discovery.py around lines 267 - 279, When typed_chars > 0 the code attempts to call page.keyboard.press but if keyboard.press is missing it currently falls through and never triggers navigation; update the block handling typed (the branch using typed.get("typed_chars")) to add a fallback that calls page.goto(_google_native_search_url(normalized_query, result_limit), wait_until="domcontentloaded", timeout=int(GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS)) and then awaits page.wait_for_timeout(int(GOOGLE_NATIVE_RESULT_WAIT_MS)) when press is not callable (or catch exceptions from await press and perform the same fallback), ensuring the behavior matches the existing else branch; you can also factor out the shared navigation+wait logic into a helper to avoid duplication.
+In @frontend/app/product-intelligence/product-intelligence-components.tsx around lines 57 - 92, The modal markup currently rendered in product-intelligence-components.tsx doesn't include ARIA dialog attributes or keyboard handling: add role="dialog" and aria-modal="true" to the main content container div (the one with className starting "fixed left-1/2...") and wire a keydown handler that listens for Escape and calls the existing onClose callback; additionally implement a focus-trap on mount/unmount for the modal (using a small utility or library like focus-trap/react) so Tab/Shift+Tab cycle focus within the modal and set initial focus to the first focusable element (e.g., the Close Button that calls onClose) and restore focus to the previously focused element when the modal closes.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/data/prompts/product_intelligence_brand_inference.system.txt at line 11, Update the rule that currently reads "Do not return a retailer or marketplace name as the brand..." to explicitly handle retailer-owned private-label brands: add a sentence stating that retailer-owned private-label brand names (e.g., "Amazon Basics", "Great Value", "Kirkland Signature", "Up & Up") should be returned as the brand when the product is labeled/marketed under that private-label name, while excluding only the retailer/corporate name when it is not the product's brand; include both positive and negative examples to make the decision deterministic for the brand inference logic.
+In @frontend/components/crawl/crawl.module.css around lines 42 - 48, The live-dot styles (.cs-live-dot.is-error and .cs-live-dot.is-success) currently convey status by color only; update the implementation to add a non-color visual cue and proper accessibility attributes: adjust the CSS for .cs-live-dot.is-error and .cs-live-dot.is-success to include distinct shapes or patterns (e.g., border, outline, or pseudo-element icon) and ensure the HTML markup for the live dot includes an accessible label (aria-label or visually-hidden text) that describes the state (e.g., "Error" or "Success"); keep the color changes but add the additional visual indicator and ARIA text so color-blind users and screen readers receive the same status information.
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @frontend/components/layout/auth-shell.module.css around lines 123 - 130, The pulse animation for .auth-shell-pulse (and the other pulse rule around lines 171-181) should respect users' motion preferences: add a prefers-reduced-motion media query that disables or significantly reduces the animation (set animation: none and remove or minimize animated box-shadow) for users who prefer reduced motion, leaving the static styling (size, background) intact; apply the same change for the other pulse class that uses the auth-pulse-ring animation so both animated elements are suppressed under @media (prefers-reduced-motion: reduce).
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @frontend/components/ui/input.tsx around lines 8 - 14, Hover currently has no effect because inputVariants and textareaVariants both use border-border-strong for default and hover; update the hover token so the border changes on hover (e.g., replace "hover:border-border-strong" with a stronger token like "hover:border-border-stronger" or an accent such as "hover:border-accent") inside the cva calls for inputVariants and textareaVariants to provide visible hover feedback.
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @frontend/components/ui/input.tsx around lines 27 - 31, The Textarea component doesn't forward refs which breaks integration with form libraries and focus control; update the exported Textarea (function Textarea) to use React.forwardRef so it accepts a ref parameter and passes it to the underlying <textarea> element (alongside existing normalizedProps and className computed with cn(textareaVariants(), normalizedProps.className)); ensure the prop normalization logic (const normalizedProps = ...) remains and that the forwarded ref is attached to the rendered textarea element.
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @frontend/components/ui/input.tsx around lines 16 - 25, The Input component currently doesn't forward refs, preventing consumers from accessing the native input; wrap and export it using React.forwardRef: change the function Input(...) to a forwardRef call (e.g., const Input = forwardRef<HTMLInputElement, ComponentPropsWithoutRef<"input">>(function Input(props, ref) { ... })), accept the ref parameter and pass it to the rendered <input ref={ref} ... />, and keep the existing normalization logic (props.type === "file" etc.) and usage of cn(inputVariants(), normalizedProps.className); ensure you export the forwardRef-wrapped Input as the component.

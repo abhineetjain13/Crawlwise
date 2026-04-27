@@ -181,7 +181,7 @@ MARKETPLACE_DOMAINS = {
     "amazon.fr",
     "amazon.in",
     "amazon.it",
-    "amazon.jp",
+    "amazon.co.jp",
     "ebay.com",
     "ebay.ca",
     "ebay.co.uk",

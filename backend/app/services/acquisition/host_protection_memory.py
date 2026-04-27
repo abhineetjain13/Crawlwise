@@ -20,7 +20,9 @@ class HostProtectionPolicy:
     hard_block_count: int = 0
     request_blocked: bool = False
     chromium_blocked: bool = False
+    patchright_blocked: bool = False
     real_chrome_blocked: bool = False
+    patchright_success: bool = False
     real_chrome_success: bool = False
     last_block_method: str | None = None
 
@@ -108,10 +110,19 @@ async def load_host_protection_policy(
         last_block_vendor=str(row.last_block_vendor or "").strip() or None,
         hard_block_count=int(row.hard_block_count or 0),
         request_blocked=bool(
-            last_block_method not in {None, "browser", "browser:chromium", "browser:real_chrome"}
+            last_block_method
+            not in {
+                None,
+                "browser",
+                "browser:chromium",
+                "browser:patchright",
+                "browser:real_chrome",
+            }
         ),
         chromium_blocked=last_block_method == "browser:chromium",
+        patchright_blocked=last_block_method == "browser:patchright",
         real_chrome_blocked=last_block_method == "browser:real_chrome",
+        patchright_success=last_success_method == "browser:patchright",
         real_chrome_success=last_success_method == "browser:real_chrome",
         last_block_method=last_block_method,
     )

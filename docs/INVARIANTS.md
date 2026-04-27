@@ -210,7 +210,7 @@ Detail extraction must also reject collection/category URLs that expose product-
 - Domain cookie memory is acquisition memory, not a raw browser-state dump.
 - Challenge-state cookies/localStorage from bot-defense pages must never be persisted or replayed as reusable domain memory.
 - A blocked browser run must not promote its storage state into domain memory or run-scoped browser storage.
-- Run-scoped and domain-scoped browser storage must stay engine-scoped; `chromium` state must not bleed into `real_chrome`, and `real_chrome` state must not bleed back into `chromium`.
+- Run-scoped and domain-scoped browser storage must stay engine-scoped; `chromium`, `patchright`, and `real_chrome` state must not bleed across engines.
 - Host browser-first memory is for repeated hard blocks, not one noisy challenge hit.
 - Risky detail browser fetches may warm the site origin before direct PDP navigation; that warmup happens before the target nav, not after a challenge page already landed.
 

@@ -1,0 +1,83 @@
+:global(.cs-status-bar) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+:global(.cs-metric) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface-card);
+  font-size: var(--text-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+:global(.cs-metric:hover) {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+  box-shadow: var(--shadow-sm);
+}
+
+:global(.cs-metric-value) {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+:global(.cs-metric-label) {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+:global(.cs-live-dot) {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: cs-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(.cs-live-dot) {
+    animation: none;
+  }
+}
+
+:global(.cs-live-dot.is-error) {
+  background: var(--color-danger, #ef4444);
+}
+
+:global(.cs-live-dot.is-success) {
+  background: var(--color-success, #22c55e);
+}
+
+:global(.cs-panel-header) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--divider, var(--border));
+  background: var(--bg-alt);
+}
+
+:global(.cs-panel-title) {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+  opacity: 0.75;
+}
+
+@keyframes cs-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}

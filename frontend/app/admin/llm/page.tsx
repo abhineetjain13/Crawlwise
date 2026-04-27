@@ -192,7 +192,7 @@ export default function AdminLlmPage() {
  <div className="flex items-center gap-2">
  <div className="text-sm font-semibold text-foreground">{config.task_type}</div>
  {config.is_active ? (
- <div className="inline-flex items-center gap-1 rounded-full bg-[var(--success-soft)] px-2 py-1 text-sm font-semibold text-[var(--success)]">
+ <div className="inline-flex items-center gap-1 rounded-full bg-success-bg px-2 py-1 text-sm font-semibold text-success">
  <CheckCircle2 className="size-3.5"/>
  active
  </div>

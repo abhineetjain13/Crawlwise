@@ -4096,7 +4096,8 @@
       "data-href",
       "data-product-url",
       "data-target-url",
-      "data-link"
+      "data-link",
+      "href"
     ]
   },
   "LISTING_STRUCTURE_NEGATIVE_HINTS": {

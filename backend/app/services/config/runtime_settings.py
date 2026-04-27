@@ -188,6 +188,10 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_real_chrome_force_headful: bool = True
     browser_real_chrome_native_context: bool = True
     browser_real_chrome_apply_stealth: bool = False
+    browser_patchright_enabled: bool = True
+    browser_patchright_prefer: bool = True
+    browser_patchright_apply_stealth: bool = False
+    browser_patchright_use_legacy_init_script: bool = False
     browser_launch_args: tuple[str, ...] = (
         "--disable-blink-features=AutomationControlled",
         "--disable-features=IsolateOrigins,site-per-process",

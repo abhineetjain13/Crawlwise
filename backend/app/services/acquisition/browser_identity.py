@@ -102,6 +102,14 @@ _TIMEZONE_TO_COUNTRY = {
     for timezone_name in timezone_names
 }
 _logger = _logging.getLogger(__name__)
+_CHROMIUM_BROWSER_ENGINE = "chromium"
+_PATCHRIGHT_BROWSER_ENGINE = "patchright"
+_REAL_CHROME_BROWSER_ENGINE = "real_chrome"
+_SUPPORTED_BROWSER_ENGINES = {
+    _CHROMIUM_BROWSER_ENGINE,
+    _PATCHRIGHT_BROWSER_ENGINE,
+    _REAL_CHROME_BROWSER_ENGINE,
+}
 MAX_BROWSER_IDENTITIES = 1024
 BROWSER_IDENTITY_TTL_SECONDS = 60 * 60
 # Bound per-run identities so stale run IDs age out and the cache cannot grow forever.
@@ -128,6 +136,31 @@ class BrowserIdentity:
 class PlaywrightContextSpec:
     context_options: dict[str, Any]
     init_script: str | None = None
+
+
+def _normalize_browser_engine_label(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in _SUPPORTED_BROWSER_ENGINES:
+        return normalized
+    return _CHROMIUM_BROWSER_ENGINE
+
+
+def _context_color_scheme() -> str | None:
+    normalized = str(
+        crawler_runtime_settings.fingerprint_color_scheme or ""
+    ).strip().lower()
+    if normalized in {"light", "dark", "no-preference"}:
+        return normalized
+    return None
+
+
+def _should_use_legacy_init_script(browser_engine: str) -> bool:
+    normalized_engine = _normalize_browser_engine_label(browser_engine)
+    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
+        return bool(
+            crawler_runtime_settings.browser_patchright_use_legacy_init_script
+        )
+    return True
 
 
 def _viewport_from_screen(
@@ -1156,6 +1189,9 @@ def _playwright_context_options_from_identity(
         "service_workers": "block",
         "bypass_csp": False,
     }
+    color_scheme = _context_color_scheme()
+    if color_scheme is not None:
+        options["color_scheme"] = color_scheme
     permissions = [
         str(value or "").strip()
         for value in tuple(crawler_runtime_settings.browser_context_permissions or ())
@@ -1251,7 +1287,11 @@ def _playwright_init_script_from_identity(
     identity: BrowserIdentity,
     *,
     timezone_id: str | None = None,
+    browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
 ) -> str | None:
+    if not _should_use_legacy_init_script(browser_engine):
+        return None
+
     def _bundle_init_scripts(*parts: str) -> str:
         return "\n;\n".join(
             part for part in parts if str(part or "").strip()
@@ -1587,6 +1627,7 @@ def build_playwright_context_spec(
     run_id: int | None = None,
     browser_major_version: int | None = None,
     locality_profile: Mapping[str, object] | None = None,
+    browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
 ) -> PlaywrightContextSpec:
     identity = identity or browser_identity_for_run(run_id)
     identity = _align_identity_to_browser_major(
@@ -1605,6 +1646,7 @@ def build_playwright_context_spec(
         init_script=_playwright_init_script_from_identity(
             identity,
             timezone_id=timezone_id,
+            browser_engine=browser_engine,
         ),
     )
 
@@ -1615,10 +1657,12 @@ def build_playwright_context_options(
     run_id: int | None = None,
     browser_major_version: int | None = None,
     locality_profile: Mapping[str, object] | None = None,
+    browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
 ) -> dict[str, Any]:
     return build_playwright_context_spec(
         identity=identity,
         run_id=run_id,
         browser_major_version=browser_major_version,
         locality_profile=locality_profile,
+        browser_engine=browser_engine,
     ).context_options

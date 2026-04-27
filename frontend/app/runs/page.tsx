@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from"@tanstack/react-query";
 import { ArrowUpRight, Copy, ExternalLink, Plus, Trash2 } from"lucide-react";
 
 import { Badge, Button, Dropdown, Input, Tooltip } from"../../components/ui/primitives";
+import { ConfirmDialog } from"../../components/ui/dialog";
 import {
  DataRegionEmpty,
  DataRegionError,
@@ -81,7 +82,7 @@ function RunRow({
 
  {/* Mode */}
  <td>
- <span className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-sm leading-[1.45] font-mono text-muted">
+ <span className="rounded-[3px] bg-background-elevated px-1.5 py-0.5 text-sm leading-[1.45] font-mono text-muted">
  {formatRunType(run.run_type)}
  </span>
  </td>
@@ -110,7 +111,7 @@ function RunRow({
  <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 group-hover:opacity-100 transition-opacity">
  <Link
  href={`/crawl?run_id=${run.id}`}
- className="btn-link btn-link-primary btn-link-sm focus-ring"
+ className="ui-on-accent-surface focus-ring inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-[var(--radius-md)] border border-accent bg-accent px-[9px] text-sm font-semibold leading-none no-underline shadow-xs transition-[background-color,color,border-color,box-shadow,opacity,transform] hover:-translate-y-px hover:border-accent-hover hover:bg-accent-hover"
  >
  Open <ArrowUpRight className="size-3"/>
  </Link>
@@ -139,6 +140,7 @@ export default function RunsPage() {
  const [appliedStatusFilter, setAppliedStatusFilter] = useState<StatusFilter>("");
  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<number>>(() => new Set());
  const [actionError, setActionError] = useState("");
+ const [deleteTarget, setDeleteTarget] = useState<CrawlRun | null>(null);
 
  const query = useQuery({
  queryKey: ["runs", appliedDomainFilter, appliedStatusFilter],
@@ -160,6 +162,7 @@ export default function RunsPage() {
  await queryClient.invalidateQueries({ queryKey: ["runs"] });
  await queryClient.invalidateQueries({ queryKey: ["memory-runs"] });
  setActionError("");
+ setDeleteTarget(null);
  },
  onError: (error) => {
  setActionError(error instanceof Error ? error.message :"Unable to delete run.");
@@ -247,12 +250,12 @@ export default function RunsPage() {
  <table className="compact-data-table">
  <thead>
  <tr>
- <th className="min-w-[200px] text-left font-semibold text-[var(--text-secondary)]">Run</th>
- <th className="text-left font-semibold text-[var(--text-secondary)]">Type</th>
- <th className="text-left font-semibold text-[var(--text-secondary)]">Status</th>
- <th className="w-[110px] text-right font-semibold text-[var(--text-secondary)]">Records</th>
- <th className="w-[180px] whitespace-nowrap text-right font-semibold text-[var(--text-secondary)]">Started</th>
- <th className="w-[170px] text-right font-semibold text-[var(--text-secondary)]">Actions</th>
+ <th className="min-w-[200px] text-left font-semibold text-secondary">Run</th>
+ <th className="text-left font-semibold text-secondary">Type</th>
+ <th className="text-left font-semibold text-secondary">Status</th>
+ <th className="w-[110px] text-right font-semibold text-secondary">Records</th>
+ <th className="w-[180px] whitespace-nowrap text-right font-semibold text-secondary">Started</th>
+ <th className="w-[170px] text-right font-semibold text-secondary">Actions</th>
  </tr>
  </thead>
  <tbody>
@@ -261,10 +264,7 @@ export default function RunsPage() {
  key={run.id}
  run={run}
  pendingDelete={pendingDeleteIds.has(run.id)}
- onDelete={() => {
- if (!globalThis.confirm(`Delete run ${run.id}? This cannot be undone.`)) return;
- deleteMutation.mutate(run.id);
- }}
+ onDelete={() => setDeleteTarget(run)}
  />
  ))}
  </tbody>
@@ -279,6 +279,21 @@ export default function RunsPage() {
  Showing {visibleRuns.length} of {query.data?.meta?.total ?? visibleRuns.length} runs
  </p>
  )}
+ <ConfirmDialog
+ open={deleteTarget !== null}
+ onOpenChange={(open) => {
+ if (!open) setDeleteTarget(null);
+ }}
+ title="Delete run"
+ description={deleteTarget ? `Delete run ${deleteTarget.id}? This cannot be undone.` : ""}
+ confirmLabel="Delete Run"
+ pending={deleteTarget ? pendingDeleteIds.has(deleteTarget.id) : false}
+ danger
+ onConfirm={() => {
+ if (!deleteTarget) return;
+ deleteMutation.mutate(deleteTarget.id);
+ }}
+ />
  </div>
  );
 }
