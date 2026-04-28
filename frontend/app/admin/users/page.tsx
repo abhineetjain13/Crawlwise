@@ -113,6 +113,7 @@ export default function AdminUsersPage() {
                                 {users.map((user) => (
                                     <tr key={user.id}>
                                         <td className="text-sm font-normal leading-[var(--leading-normal)] text-foreground">{user.email}</td>
+                                        <td>
                                             <Dropdown<User["role"]>
                                                 value={user.role}
                                                 onChange={(role) => {
@@ -124,7 +125,6 @@ export default function AdminUsersPage() {
                                                     { value: "admin", label: "admin" },
                                                 ]}
                                                 className="min-w-24"
-                                            />
                                             />
                                         </td>
                                         <td>

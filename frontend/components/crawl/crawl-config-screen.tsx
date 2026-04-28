@@ -752,239 +752,151 @@ export function CrawlConfigScreen({
 
 
       <form className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_380px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
-        <div className="page-stack">
-          <Card className="section-card overflow-hidden">
-            <header className="cs-panel-header">
-              <span className="cs-panel-title">Target URL</span>
-              <Badge tone="accent" className="h-5 px-1.5 text-2xs">{crawlTab === "category" ? "Category" : "PDP"}</Badge>
-            </header>
-            <div className="p-4 space-y-4">
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-                <div className="flex flex-wrap items-center gap-2">
+        <Card className="section-card overflow-hidden">
+          <header className="cs-panel-header">
+            <span className="cs-panel-title">Target URL</span>
+            <Badge tone="accent" className="h-5 px-1.5 text-2xs">{crawlTab === "category" ? "Category" : "PDP"}</Badge>
+          </header>
+          <div className="p-4 space-y-4">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+              <div className="flex flex-wrap items-center gap-2">
+                <TabBar
+                  value={crawlTab}
+                  onChange={(value) => {
+                    const parsed = parseRequestedCrawlTab(value);
+                    if (parsed) {
+                      setCrawlTab(parsed);
+                    }
+                  }}
+                  options={[
+                    { value: "category", label: "Category Crawl" },
+                    { value: "pdp", label: "PDP Crawl" },
+                  ]}
+                />
+                {crawlTab === "category" ? (
                   <TabBar
-                    value={crawlTab}
+                    value={categoryMode}
+                    compact
                     onChange={(value) => {
-                      const parsed = parseRequestedCrawlTab(value);
+                      const parsed = parseRequestedCategoryMode(value);
                       if (parsed) {
-                        setCrawlTab(parsed);
+                        setCategoryMode(parsed);
                       }
                     }}
                     options={[
-                      { value: "category", label: "Category Crawl" },
-                      { value: "pdp", label: "PDP Crawl" },
+                      { value: "single", label: "Single" },
+                      { value: "sitemap", label: "Sitemap" },
+                      { value: "bulk", label: "Bulk" },
                     ]}
                   />
-                  {crawlTab === "category" ? (
-                    <TabBar
-                      value={categoryMode}
-                      compact
-                      onChange={(value) => {
-                        const parsed = parseRequestedCategoryMode(value);
-                        if (parsed) {
-                          setCategoryMode(parsed);
-                        }
-                      }}
-                      options={[
-                        { value: "single", label: "Single" },
-                        { value: "sitemap", label: "Sitemap" },
-                        { value: "bulk", label: "Bulk" },
-                      ]}
-                    />
-                  ) : (
-                    <TabBar
-                      value={pdpMode}
-                      compact
-                      onChange={(value) => {
-                        const parsed = parseRequestedPdpMode(value);
-                        if (parsed) {
-                          setPdpMode(parsed);
-                        }
-                      }}
-                      options={[
-                        { value: "single", label: "Single" },
-                        { value: "batch", label: "Batch" },
-                        { value: "csv", label: "CSV Upload" },
-                      ]}
-                    />
-                  )}
-                </div>
-                <Button
-                  variant="accent"
-                  size="lg"
-                  type="submit"
-                  disabled={!canSubmit}
-                  className="min-w-[140px] justify-self-start lg:justify-self-end shadow-[0_8px_24px_color-mix(in_srgb,var(--accent)_20%,transparent)]"
-                >
-                  {isSubmitting ? <><span className="cs-live-dot mr-1.5" />Starting...</> : "Start Crawl"}
-                </Button>
-              </div>
-
-              {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
-                <label className="grid gap-1.5">
-                  <span className="field-label">URLs (one per line)</span>
-                  <div className="relative">
-                    <Textarea
-                      value={bulkUrls}
-                      onChange={(event) => setBulkUrls(event.target.value)}
-                      placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
-                      className="min-h-[420px]"
-                      aria-label="Bulk URLs input"
-                    />
-                    {bulkUrls.trim() ? (
-                      <div className="absolute bottom-2 right-2 rounded bg-background/80 px-2 py-1 text-sm text-muted backdrop-blur-sm">
-                        {parseLines(bulkUrls).length} URLs
-                      </div>
-                    ) : null}
-                  </div>
-                </label>
-              ) : crawlTab === "pdp" && pdpMode === "csv" ? (
-                <label className="grid gap-1.5">
-                  <span className="field-label">CSV File</span>
-                  <div className="flex items-center gap-3">
-                    <input
-                      key="csv-file-input"
-                      id="csv-file-input"
-                      type="file"
-                      accept=".csv,text/csv"
-                      onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)}
-                      className="sr-only"
-                      aria-label="CSV file input"
-                    />
-                    <label
-                      htmlFor="csv-file-input"
-                      className="ui-on-accent-surface cursor-pointer rounded-[var(--radius-md)] bg-accent px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent-hover"
-                    >
-                      Choose file
-                    </label>
-                    <span className="text-sm text-muted">
-                      {csvFile ? csvFile.name : "No file chosen"}
-                    </span>
-                  </div>
-                </label>
-              ) : (
-                <label className="grid gap-1.5">
-                  <span className="field-label">Target URL</span>
-                  <Input
-                    key="target-url-input"
-                    value={targetUrl}
-                    onChange={(event) => setTargetUrl(event.target.value)}
-                    placeholder={
-                      crawlTab === "category"
-                        ? "https://example.com/collections/chairs"
-                        : "https://example.com/products/oak-chair"
-                    }
-                    aria-label="Target URL input"
+                ) : (
+                  <TabBar
+                    value={pdpMode}
+                    compact
+                    onChange={(value) => {
+                      const parsed = parseRequestedPdpMode(value);
+                      if (parsed) {
+                        setPdpMode(parsed);
+                      }
+                    }}
+                    options={[
+                      { value: "single", label: "Single" },
+                      { value: "batch", label: "Batch" },
+                      { value: "csv", label: "CSV Upload" },
+                    ]}
                   />
-                </label>
-              )}
-
-              {savedProfileMessage ? (
-                <div className="rounded-[var(--radius-md)] border border-subtle-panel-border bg-subtle-panel px-3 py-2 text-sm leading-[var(--leading-relaxed)] text-secondary">
-                  {savedProfileMessage}
-                </div>
-              ) : null}
-
-              <AdditionalFieldInput
-                value={additionalDraft}
-                fields={additionalFields}
-                onChange={setAdditionalDraft}
-                onCommit={(value) => setAdditionalFields((current) => uniqueRequestedFields([...current, value]))}
-                onRemove={(value) => setAdditionalFields((current) => current.filter((field) => field !== value))}
-              />
-            </div>
-          </Card>
-
-          {studioMode === "advanced" ? (
-            <Card className="section-card overflow-hidden">
-              <header className="cs-panel-header">
-                <span className="cs-panel-title">Field Configuration</span>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    type="button"
-                    size="sm"
-                    onClick={() => void generateFieldSelectors()}
-                    disabled={generatingSelectors}
-                    className="h-7 rounded-lg px-2.5 text-xs" >
-                    <Sparkles className="size-3" />
-                    {generatingSelectors ? "Generating..." : "Generate"}
-                  </Button>
-                  <Button variant="ghost" type="button" size="sm" onClick={addManualField} className="h-7 rounded-lg px-2.5 text-xs">
-                    <Plus className="size-3" />
-                    New Field
-                  </Button>
-                  <Button
-                    variant="accent"
-                    type="button"
-                    size="sm"
-                    onClick={() => void saveToDomainMemory()}
-                    disabled={savingDomainMemory || !fieldRows.some((row) => normalizeField(row.fieldName) && (row.cssSelector.trim() || row.xpath.trim() || row.regex.trim()))}
-                    className="h-7 rounded-lg px-3 text-xs shadow-[0_6px_16px_color-mix(in_srgb,var(--accent)_20%,transparent)]"
-                  >
-                    {savingDomainMemory ? "Saving..." : "Save to Memory"}
-                  </Button>
-                </div>
-              </header>
-              <div className="p-4 space-y-3">
-                {fieldConfigMessage ? <p className="text-sm leading-[var(--leading-relaxed)] text-success">{fieldConfigMessage}</p> : null}
-                {fieldConfigError ? <InlineAlert message={fieldConfigError} /> : null}
-                <div className="flex flex-col gap-3">
-                  {fieldRows.length ? (
-                    <>
-                      <FieldEditorHeader />
-                      {fieldRows.map((row) => (
-                        <ManualFieldEditor
-                          key={row.id}
-                          row={row}
-                          showLabels={false}
-                          message={fieldRowMessages[row.id]?.message}
-                          messageTone={fieldRowMessages[row.id]?.tone}
-                          onChange={(patch) => {
-                            setFieldRows((current) =>
-                              current.map((entry) => (entry.id === row.id ? { ...entry, ...patch } : entry)),
-                            );
-                            setFieldRowMessages((current) => {
-                              if (!current[row.id]) {
-                                return current;
-                              }
-                              const next = { ...current };
-                              delete next[row.id];
-                              return next;
-                            });
-                          }}
-                          onDelete={() => {
-                            setFieldRows((current) => current.filter((entry) => entry.id !== row.id));
-                            setFieldRowMessages((current) => {
-                              if (!current[row.id]) {
-                                return current;
-                              }
-                              const next = { ...current };
-                              delete next[row.id];
-                              return next;
-                            });
-                          }}
-                          onTest={() => void testFieldRow(row)}
-                          testing={activeFieldTestId === row.id}
-                          testDisabled={!targetUrl.trim() || (!row.cssSelector.trim() && !row.xpath.trim() && !row.regex.trim())}
-                        />
-                      ))}
-                    </>
-                  ) : (
-                    <div className="surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[var(--leading-relaxed)] text-secondary">
-                      No selector rows yet.
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
-            </Card>
-          ) : null}
+              <Button
+                variant="accent"
+                size="lg"
+                type="submit"
+                disabled={!canSubmit}
+                className="min-w-[140px] justify-self-start lg:justify-self-end shadow-[0_8px_24px_color-mix(in_srgb,var(--accent)_20%,transparent)]"
+              >
+                {isSubmitting ? <><span className="cs-live-dot mr-1.5" />Starting...</> : "Start Crawl"}
+              </Button>
+            </div>
 
-          {configError ? <InlineAlert message={configError} /> : null}
-        </div>
+            {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
+              <label className="grid gap-1.5">
+                <span className="field-label">URLs (one per line)</span>
+                <div className="relative">
+                  <Textarea
+                    value={bulkUrls}
+                    onChange={(event) => setBulkUrls(event.target.value)}
+                    placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
+                    className="min-h-[420px] font-mono"
+                    aria-label="Bulk URLs input"
+                  />
+                  {bulkUrls.trim() ? (
+                    <div className="absolute bottom-2 right-2 rounded bg-background/80 px-2 py-1 text-sm text-muted backdrop-blur-sm">
+                      {parseLines(bulkUrls).length} URLs
+                    </div>
+                  ) : null}
+                </div>
+              </label>
+            ) : crawlTab === "pdp" && pdpMode === "csv" ? (
+              <label className="grid gap-1.5">
+                <span className="field-label">CSV File</span>
+                <div className="flex items-center gap-3">
+                  <input
+                    key="csv-file-input"
+                    id="csv-file-input"
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)}
+                    className="sr-only"
+                    aria-label="CSV file input"
+                  />
+                  <label
+                    htmlFor="csv-file-input"
+                    className="ui-on-accent-surface cursor-pointer rounded-[var(--radius-md)] bg-accent px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent-hover"
+                  >
+                    Choose file
+                  </label>
+                  <span className="text-sm text-muted">
+                    {csvFile ? csvFile.name : "No file chosen"}
+                  </span>
+                </div>
+              </label>
+            ) : (
+              <label className="grid gap-1.5">
+                <span className="field-label">Target URL</span>
+                <Input
+                  key="target-url-input"
+                  value={targetUrl}
+                  onChange={(event) => setTargetUrl(event.target.value)}
+                  className="font-mono"
+                  placeholder={
+                    crawlTab === "category"
+                      ? "https://example.com/collections/chairs"
+                      : "https://example.com/products/oak-chair"
+                  }
+                  aria-label="Target URL input"
+                />
+              </label>
+            )}
+
+            {savedProfileMessage ? (
+              <div className="rounded-[var(--radius-md)] border border-subtle-panel-border bg-subtle-panel px-3 py-2 text-sm leading-[var(--leading-relaxed)] text-secondary">
+                {savedProfileMessage}
+              </div>
+            ) : null}
+
+            <AdditionalFieldInput
+              value={additionalDraft}
+              fields={additionalFields}
+              onChange={setAdditionalDraft}
+              onCommit={(value) => setAdditionalFields((current) => uniqueRequestedFields([...current, value]))}
+              onRemove={(value) => setAdditionalFields((current) => current.filter((field) => field !== value))}
+            />
+          </div>
+        </Card>
 
         <div className="h-full xl:self-stretch">
           <div className="h-full xl:sticky xl:top-[68px]">
-            <Card className="section-card overflow-hidden">
+            <Card className="section-card overflow-hidden h-full">
               <header className="cs-panel-header">
                 <span className="cs-panel-title">Crawl Settings</span>
                 <Badge tone="accent" className="h-5 px-1.5 text-2xs">{studioMode === "advanced" ? "Advanced" : "Quick"}</Badge>
@@ -1082,7 +994,7 @@ export function CrawlConfigScreen({
                           setProxyInput(event.target.value);
                         }}
                         placeholder={"http://host:port\nhttp://user:pass@host:port"}
-                        className="min-h-[104px] leading-[var(--leading-relaxed)]"
+                        className="min-h-[104px] leading-[var(--leading-relaxed)] font-mono"
                         aria-label="Proxy pool input"
                       />
                     </div>
@@ -1098,6 +1010,94 @@ export function CrawlConfigScreen({
             </Card>
           </div>
         </div>
+
+        {studioMode === "advanced" ? (
+          <Card className="section-card xl:col-span-2 overflow-hidden">
+            <header className="cs-panel-header">
+              <span className="cs-panel-title">Field Configuration</span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  type="button"
+                  size="sm"
+                  onClick={() => void generateFieldSelectors()}
+                  disabled={generatingSelectors}
+                  className="h-7 rounded-lg px-2.5 text-xs" >
+                  <Sparkles className="size-3" />
+                  {generatingSelectors ? "Generating..." : "Generate"}
+                </Button>
+                <Button variant="ghost" type="button" size="sm" onClick={addManualField} className="h-7 rounded-lg px-2.5 text-xs">
+                  <Plus className="size-3" />
+                  New Field
+                </Button>
+                <Button
+                  variant="accent"
+                  type="button"
+                  size="sm"
+                  onClick={() => void saveToDomainMemory()}
+                  disabled={savingDomainMemory || !fieldRows.some((row) => normalizeField(row.fieldName) && (row.cssSelector.trim() || row.xpath.trim() || row.regex.trim()))}
+                  className="h-7 rounded-lg px-3 text-xs shadow-[0_6px_16px_color-mix(in_srgb,var(--accent)_20%,transparent)]"
+                >
+                  {savingDomainMemory ? "Saving..." : "Save to Memory"}
+                </Button>
+              </div>
+            </header>
+            <div className="p-4 space-y-3">
+              {fieldConfigMessage ? <p className="text-sm leading-[var(--leading-relaxed)] text-success">{fieldConfigMessage}</p> : null}
+              {fieldConfigError ? <InlineAlert message={fieldConfigError} /> : null}
+              <div className="flex flex-col gap-2">
+                {fieldRows.length ? (
+                  <>
+                    <FieldEditorHeader />
+                    {fieldRows.map((row) => (
+                      <ManualFieldEditor
+                        key={row.id}
+                        row={row}
+                        showLabels={false}
+                        message={fieldRowMessages[row.id]?.message}
+                        messageTone={fieldRowMessages[row.id]?.tone}
+                        onChange={(patch) => {
+                          setFieldRows((current) =>
+                            current.map((entry) => (entry.id === row.id ? { ...entry, ...patch } : entry)),
+                          );
+                          setFieldRowMessages((current) => {
+                            if (!current[row.id]) {
+                              return current;
+                            }
+                            const next = { ...current };
+                            delete next[row.id];
+                            return next;
+                          });
+                        }}
+                        onDelete={() => {
+                          setFieldRows((current) => current.filter((entry) => entry.id !== row.id));
+                          setFieldRowMessages((current) => {
+                            if (!current[row.id]) {
+                              return current;
+                            }
+                            const next = { ...current };
+                            delete next[row.id];
+                            return next;
+                          });
+                        }}
+                        onTest={() => void testFieldRow(row)}
+                        testing={activeFieldTestId === row.id}
+                        testDisabled={!targetUrl.trim() || (!row.cssSelector.trim() && !row.xpath.trim() && !row.regex.trim())}
+                      />
+                    ))}
+                  </>
+                ) : (
+                  <div className="surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[var(--leading-relaxed)] text-secondary">
+                    No selector rows yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </Card>
+        ) : null}
+
+        {configError ? <div className="xl:col-span-2"><InlineAlert message={configError} /></div> : null}
+
 
         {studioMode === "advanced" ? (
           <Card className="section-card xl:col-span-2 overflow-visible">

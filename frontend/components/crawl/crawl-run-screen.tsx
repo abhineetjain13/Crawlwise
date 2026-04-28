@@ -821,7 +821,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <PageHeader
  title={run?.url ? (
  <span className="flex items-center gap-1.5">
- Run Details: <a href={run.url} target="_blank"rel="noreferrer"className="font-mono text-sm leading-[var(--leading-relaxed)] text-accent underline-offset-2 hover:underline">{getDomain(run.url)}</a>
+ Run Details: <a href={run.url} target="_blank" rel="noreferrer" className="type-mono-standard text-accent underline-offset-2 hover:underline">{getDomain(run.url)}</a>
  </span>
  ) :"Crawl Results"}
  actions={
@@ -924,7 +924,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  href={run.url}
  target="_blank"
  rel="noreferrer"
- className="link-accent block truncate text-sm font-medium leading-[1.4] underline-offset-2 hover:underline"
+ className="type-mono-standard link-accent block truncate leading-[1.4] underline-offset-2 hover:underline"
  >
  {run.url}
  </a>
@@ -977,7 +977,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
  summary={
    <RunSummaryChips
-     duration={summary.duration.replace(/(\d+)(m|s)/g, "$1 $2")}
+     duration={summary.duration}
      verdict={humanizeVerdict(verdict).toLowerCase()}
      quality={humanizeQuality(completedQualityLevel).toLowerCase()}
    />

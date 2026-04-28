@@ -1,28 +1,20 @@
-:global(html:not([data-theme="dark"]) .auth-shell-ticker) {
-  border-width: 1px;
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-card-value);
-}
-
 :global(.auth-shell) {
   min-height: 100dvh;
-  display: grid;
-  grid-template-columns: minmax(min(420px, 100%), 1fr) 1.1fr;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
   background: var(--bg-base);
 }
 
-:global(.auth-shell-main) {
-  padding: 40px 48px;
-  display: flex;
-}
-
-:global(.auth-shell-inner) {
+:global(.auth-shell-card) {
   width: 100%;
-  max-width: 440px;
-  margin: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
+  max-width: 400px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 40px 36px;
+  box-shadow: var(--shadow-modal);
 }
 
 :global(.auth-shell-header) {
@@ -30,152 +22,27 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  margin-bottom: 28px;
 }
 
-:global(.auth-shell-card) {
+:global(.auth-shell-brand) {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-:global(.auth-shell-aside) {
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 48px;
-  background:
-    linear-gradient(var(--divider) 1px, transparent 1px),
-    linear-gradient(90deg, var(--divider) 1px, transparent 1px),
-    var(--bg-alt);
-  background-size: 36px 36px;
-}
-
-:global(html[data-theme="dark"] .auth-shell-aside) {
-  background-color: var(--bg-aside-dark, #0a1220);
-}
-
-:global(.auth-shell-side-inner) {
-  position: relative;
-  width: 100%;
-  max-width: 440px;
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-}
-
-:global(.auth-shell-trace) {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface-card) 88%, transparent);
-  box-shadow: var(--shadow-card-value);
-  padding: 14px 16px;
-}
-
-:global(.auth-shell-trace-row) {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) 22px;
   align-items: center;
   gap: 10px;
-  min-height: 28px;
-}
-
-:global(.auth-shell-trace-dot) {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-
-:global(.auth-shell-trace-line) {
-  height: 1px;
-  background: linear-gradient(90deg, var(--accent), var(--divider));
-}
-
-:global(.auth-shell-trace-code) {
-  font-family: var(--font-jetbrains-mono);
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  text-align: right;
-}
-
-:global(.auth-shell-ticker) {
-  position: relative;
-  background: var(--surface-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 14px 16px;
-  box-shadow: var(--shadow-lg);
-}
-
-:global(.auth-shell-ticker-head) {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
-}
-
-:global(.auth-shell-pulse) {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 0 var(--accent-subtle);
-  animation: auth-pulse-ring 1.6s infinite ease;
-}
-
-:global(.auth-shell-ticker-row) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  border-top: 1px solid var(--divider);
-}
-
-:global(.auth-shell-ticker-domain) {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
   color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 
-:global(.auth-shell-ticker-meta),
-:global(.auth-shell-ticker-time) {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-@media (max-width: 960px) {
+@media (max-width: 480px) {
   :global(.auth-shell) {
-    grid-template-columns: 1fr;
+    padding: 16px;
+    align-items: flex-start;
+    padding-top: 10vh;
   }
 
-  :global(.auth-shell-aside) {
-    display: none;
-  }
-
-  :global(.auth-shell-main) {
-    padding: 24px 20px;
-  }
-
-  :global(.auth-shell-inner) {
-    max-width: 100%;
-  }
-}
-
-@keyframes auth-pulse-ring {
-  0% {
-    box-shadow: 0 0 0 0 var(--accent-subtle);
-  }
-  70% {
-    box-shadow: 0 0 0 6px transparent;
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
+  :global(.auth-shell-card) {
+    padding: 28px 24px;
   }
 }

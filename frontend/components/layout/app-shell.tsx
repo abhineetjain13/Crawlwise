@@ -77,13 +77,6 @@ function isNavItemActive(
     return pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
-const authTickerRows = [
-    { domain: "shop.nike.com", records: "2,847 records", time: "just now" },
-    { domain: "target.com", records: "4,120 records", time: "2m ago" },
-    { domain: "wayfair.com", records: "920 records", time: "6m ago" },
-    { domain: "bestbuy.com", records: "1,412 records", time: "11m ago" },
-];
-
 const navItemCount = navGroups.reduce((total, group) => total + group.items.length, 0);
 
 type ResetMode = "crawl" | "memory" | "intelligence";
@@ -215,43 +208,16 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
 function AuthShell({ children }: Readonly<{ children: ReactNode }>) {
     return (
         <div className="auth-shell">
-            <section className="auth-shell-main">
-                <div className="auth-shell-inner">
-                    <div className="auth-shell-header">
+            <div className="auth-shell-card">
+                <div className="auth-shell-header">
+                    <div className="auth-shell-brand">
                         <LogoMark auth />
-                        <ThemeToggle compact />
+                        <span>CrawlerAI</span>
                     </div>
-                    <div className="auth-shell-card">{children}</div>
+                    <ThemeToggle compact />
                 </div>
-            </section>
-            <aside className="auth-shell-aside">
-                <div className="auth-shell-side-inner">
-                    <div className="auth-shell-trace" aria-hidden="true">
-                        {authTickerRows.map((row, index) => (
-                            <div key={`${row.domain}-trace`} className="auth-shell-trace-row">
-                                <span className="auth-shell-trace-dot" />
-                                <span className="auth-shell-trace-line" />
-                                <span className="auth-shell-trace-code">{index + 1}</span>
-                            </div>
-                        ))}
-                    </div>
-                    <div className="auth-shell-ticker">
-                        <div className="auth-shell-ticker-head">
-                            <span className="auth-shell-pulse" aria-hidden="true" />
-                            <span>Live across your workspace</span>
-                        </div>
-                        {authTickerRows.map((row) => (
-                            <div key={row.domain} className="auth-shell-ticker-row">
-                                <div>
-                                    <div className="auth-shell-ticker-domain">{row.domain}</div>
-                                    <div className="auth-shell-ticker-meta">extracted {row.records}</div>
-                                </div>
-                                <span className="auth-shell-ticker-time">{row.time}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </aside>
+                {children}
+            </div>
         </div>
     );
 }

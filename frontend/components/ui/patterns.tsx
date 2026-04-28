@@ -1,6 +1,6 @@
 "use client";
 
-import { LucideIcon } from "lucide-react";
+import { Award, CheckCircle2, Clock, LucideIcon } from "lucide-react";
 import { Children, isValidElement, useEffectEvent, useLayoutEffect, useMemo } from "react";
 import type { ReactNode } from "react";
 
@@ -119,7 +119,7 @@ export function TabBar({
     return (
       <div
         className={cn(
-          "flex h-[var(--control-height)] items-stretch border-b border-divider bg-transparent p-0",
+          "flex h-[var(--control-height)] items-stretch bg-transparent p-0 -mb-px",
           className,
         )}
       >
@@ -130,11 +130,11 @@ export function TabBar({
             aria-pressed={value === option.value}
             onClick={() => onChange(option.value)}
             className={cn(
-              "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-sm leading-[var(--leading-snug)] font-medium transition-all",
+              "relative -mb-px inline-flex shrink-0 items-center justify-center whitespace-nowrap text-sm leading-[var(--leading-snug)] font-medium transition-all",
               padX,
               value === option.value
-                ? "border-b-[3px] border-accent text-accent"
-                : "border-b-[3px] border-transparent text-secondary hover:text-foreground hover:border-border",
+                ? "border-b-2 border-accent text-accent"
+                : "border-b-2 border-transparent text-secondary hover:text-foreground hover:border-border",
             )}
           >
             {option.label}
@@ -343,9 +343,9 @@ export function RunWorkspaceShell({
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
       <div className="page-stack">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          {tabs}
-          {summary ? <div className="pb-2">{summary}</div> : null}
+        <div className="flex flex-wrap items-stretch justify-between gap-3 border-b border-divider">
+          <div className="flex items-end">{tabs}</div>
+          {summary ? <div className="py-2 self-center">{summary}</div> : null}
         </div>
         {content}
       </div>
@@ -363,22 +363,49 @@ export function RunSummaryChips({
   verdict: string;
   quality: string;
 }>) {
+  const normalizedVerdict = verdict.toLowerCase();
+  const normalizedQuality = quality.toLowerCase();
+
+  // Themed tones and backgrounds matching the requested high-density aesthetic
+  const verdictTone = normalizedVerdict === "success" ? "text-[#107c41]" : normalizedVerdict === "partial" ? "text-[#9a6b00]" : "text-[#d93025]";
+  const verdictBg = normalizedVerdict === "success" ? "bg-[#e6f4ea]" : normalizedVerdict === "partial" ? "bg-[#fff4e5]" : "bg-[#fce8e6]";
+  const verdictBar = normalizedVerdict === "success" ? "bg-[#107c41]" : normalizedVerdict === "partial" ? "bg-[#f9ab00]" : "bg-[#d93025]";
+
+  const qualityTone = normalizedQuality === "high" ? "text-[#107c41]" : normalizedQuality === "medium" ? "text-[#9a6b00]" : normalizedQuality === "low" ? "text-[#d93025]" : "text-[#5f6368]";
+  const qualityBg = normalizedQuality === "high" ? "bg-[#e6f4ea]" : normalizedQuality === "medium" ? "bg-[#fff4e5]" : normalizedQuality === "low" ? "bg-[#fce8e6]" : "bg-[#f1f3f4]";
+  const qualityBar = normalizedQuality === "high" ? "bg-[#107c41]" : normalizedQuality === "medium" ? "bg-[#f9ab00]" : normalizedQuality === "low" ? "bg-[#d93025]" : "bg-[#9aa0a6]";
+
   const chips = [
-    { label: "Time", value: duration },
-    { label: "Verdict", value: verdict },
-    { label: "Quality", value: quality },
+    { label: "TIME", value: duration, icon: Clock, tone: "text-[#005a9e]", bg: "bg-[#eff6fc]", bar: "bg-[#005a9e]" },
+    { label: "VERDICT", value: verdict, icon: CheckCircle2, tone: verdictTone, bg: verdictBg, bar: verdictBar },
+    { label: "QUALITY", value: quality, icon: Award, tone: qualityTone, bg: qualityBg, bar: qualityBar },
   ];
+
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2">
-      {chips.map((chip) => (
-        <span
-          key={chip.label}
-          className="inline-flex items-center gap-1.5 rounded-full border border-subtle-panel-border bg-subtle-panel px-2.5 py-1 text-sm leading-[var(--leading-normal)] text-muted"
-        >
-          <span className="text-sm font-medium leading-[var(--leading-normal)] text-foreground">{chip.label}:</span>
-          <span>{chip.value}</span>
-        </span>
-      ))}
+    <div className="flex flex-wrap items-center justify-end gap-2.5">
+      {chips.map((chip) => {
+        const Icon = chip.icon;
+        return (
+          <div
+            key={chip.label}
+            className={cn(
+              "inline-flex items-center gap-2.5 rounded-xl px-3 py-1.5 transition-all hover:brightness-[0.98]",
+              chip.bg,
+            )}
+          >
+            <div className={cn("h-4 w-[3.5px] shrink-0 rounded-full", chip.bar)} />
+            <div className="flex items-center gap-1.5">
+              <Icon className={cn("size-3.5 shrink-0 opacity-90", chip.tone)} aria-hidden="true" />
+              <div className="flex items-baseline gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-[0.05em] text-[#5f6368]">{chip.label}</span>
+                <span className={cn("text-sm font-semibold tabular-nums tracking-tight", chip.tone)}>
+                  {chip.value}
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   GripVertical,
   Info,
   Monitor,
+  Plus,
   RefreshCw,
   RotateCcw,
   ShieldAlert,
@@ -641,20 +642,20 @@ export const LogTerminal = memo(function LogTerminal({
               <div
                 key={log.id}
                 className={cn(
-                  "group flex items-center gap-3 px-4 py-2.5 transition-colors",
+                  "group flex items-center gap-3 px-4 py-1.5 transition-colors",
                   "odd:bg-background-alt/20 hover:bg-background-alt/60",
                   isNewest && live && "log-entry-animate",
                 )}
                 title={log.message}
               >
-                <span className="w-[68px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">
+                <span className="w-[82px] shrink-0 font-mono text-sm tabular-nums text-foreground/90">
                   {formatTimeHms(log.created_at)}
                 </span>
                 <div className={cn(
-                  "flex size-6 shrink-0 items-center justify-center rounded-full",
+                  "flex size-5 shrink-0 items-center justify-center rounded-full",
                   bgCls,
                 )}>
-                  <Icon className={cn("size-3.5", iconCls)} aria-hidden="true" />
+                  <Icon className={cn("size-3", iconCls)} aria-hidden="true" />
                 </div>
                 <span className="min-w-0 flex-1 text-sm leading-snug text-foreground/90">{compressed}</span>
               </div>
@@ -850,7 +851,7 @@ export function AdditionalFieldInput({
         onChange={(event) => handleChange(event.target.value)}
         onBlur={handleBlur}
         placeholder="price, sku, Features & Benefits, Product Story"
-        className="text-mono-body"
+        className="font-mono"
       />
       {validationHint ? <p className="text-sm leading-[var(--leading-normal)] text-danger">{validationHint}</p> : null}
       {chips.length ? (
@@ -895,10 +896,10 @@ export function ManualFieldEditor({
   showLabels?: boolean;
 }>) {
   return (
-    <div className="space-y-2 rounded-md border border-border bg-background p-3">
+    <div className="space-y-1.5 rounded-md border border-border/60 bg-background/50 p-2.5">
       <div className="grid gap-2 xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
-        <div className="hidden items-center justify-center text-muted xl:flex">
-          <GripVertical className="size-4" />
+        <div className="hidden items-center justify-center text-muted/50 xl:flex">
+          <GripVertical className="size-3.5" />
         </div>
         <label className="grid gap-1">
           <span className={cn("field-label", !showLabels && "sr-only")}>Field</span>
@@ -907,7 +908,7 @@ export function ManualFieldEditor({
             value={row.fieldName}
             onChange={(event) => onChange({ fieldName: event.target.value })}
             placeholder="price"
-            className="text-mono-body"
+            className="font-mono h-8 text-xs"
           />
         </label>
         <ValidatedField
@@ -938,7 +939,7 @@ export function ManualFieldEditor({
           onBlur={(value) => onChange({ regexState: validateRegex(value) })}
         />
         <div className="flex items-end justify-end">
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             {onTest ? (
               <Button
                 type="button"
@@ -946,18 +947,18 @@ export function ManualFieldEditor({
                 size="sm"
                 onClick={onTest}
                 disabled={testing || testDisabled}
-                className="min-w-[72px]"
+                className="h-8 min-w-[64px] text-xs"
               >
-                {testing ? "Testing..." : "Test"}
+                {testing ? "..." : "Test"}
               </Button>
             ) : null}
             <button
               type="button"
               onClick={onDelete}
               aria-label={`Delete ${row.fieldName || "manual field"}`}
-              className="surface-muted inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger hover:bg-danger/10"
+              className="surface-muted inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger/70 hover:bg-danger/10 hover:text-danger"
             >
-              <Trash2 className="size-4" />
+              <Trash2 className="size-3.5" />
             </button>
           </div>
         </div>
@@ -965,7 +966,7 @@ export function ManualFieldEditor({
       {message ? (
         <div
           className={cn(
-            "alert-surface px-3 py-2 text-sm leading-[var(--leading-normal)]",
+            "alert-surface px-2.5 py-1.5 text-xs leading-[var(--leading-normal)]",
             messageTone === "success" && "alert-success",
             messageTone === "warning" && "alert-warning",
             messageTone === "danger" && "alert-danger",
@@ -980,13 +981,25 @@ export function ManualFieldEditor({
 
 export function FieldEditorHeader() {
   return (
-    <div className="hidden items-center gap-2 rounded-md border border-border/70 bg-background-elevated px-3 py-2 xl:grid xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
+    <div className="hidden items-center gap-2 px-3 py-1.5 xl:grid xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
       <div />
-      <span className="field-label">Field</span>
-      <span className="field-label">CSS</span>
-      <span className="field-label">XPath</span>
-      <span className="field-label">Regex</span>
-      <span className="field-label text-right">Actions</span>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e]">Field</span>
+        <Info className="size-3 text-[#005a9e]/60" />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e]">CSS</span>
+        <Info className="size-3 text-[#005a9e]/60" />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e]">XPath</span>
+        <Info className="size-3 text-[#005a9e]/60" />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e]">Regex</span>
+        <Info className="size-3 text-[#005a9e]/60" />
+      </div>
+      <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e] text-right">Actions</span>
     </div>
   );
 }
@@ -1018,11 +1031,11 @@ function ValidatedField({
           onChange={(event) => onChange(event.target.value)}
           onBlur={(event) => onBlur(event.target.value)}
           placeholder={placeholder}
-          className="pr-10 mono-body"
+          className="pr-9 font-mono h-8 text-xs"
         />
-        <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
-          {state === "valid" ? <CheckCircle2 className="size-4 text-success" /> : null}
-          {state === "invalid" ? <CircleAlert className="size-4 text-danger" /> : null}
+        <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
+          {state === "valid" ? <CheckCircle2 className="size-3.5 text-success/80" /> : null}
+          {state === "invalid" ? <CircleAlert className="size-3.5 text-danger/80" /> : null}
         </div>
       </div>
     </label>
@@ -1280,7 +1293,7 @@ export function PreviewRow({ label, value, mono }: Readonly<{ label: string; val
   return (
     <div className="surface-muted flex items-start justify-between gap-4 rounded-[var(--radius-md)] px-3 py-2">
       <div className="field-label shrink-0">{label}</div>
-      <div className={cn("min-w-0 flex-1 text-right text-sm leading-[var(--leading-normal)] text-foreground", mono && "font-mono")}>
+      <div className={cn("min-w-0 flex-1 text-right text-sm leading-[var(--leading-normal)] text-foreground", mono && "type-mono-standard")}>
         {value || "--"}
       </div>
     </div>
