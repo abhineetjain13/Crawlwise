@@ -24,7 +24,7 @@ ACQUIRE → EXTRACT → NORMALIZE → PERSIST
 **Optional agents extend the pipeline post-normalization:**
 
 ```
-ACQUIRE → EXTRACT → NORMALIZE → PERSIST → [Commerce Agent] → [Job Apply Agent]
+ACQUIRE → EXTRACT → NORMALIZE → PERSIST → [Commerce Agent]
 ```
 
 Users toggle optional agents on or off per run. The core never toggles.
@@ -36,24 +36,22 @@ Users toggle optional agents on or off per run. The core never toggles.
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                      USER INTERFACE                        │
-│         Goal · Agent toggles · Presets · Approval         │
+│         Goal · Presets · Approval                        │
 └───────────────────────────┬──────────────────────────────┘
                             │
                             ▼
 ┌──────────────────────────────────────────────────────────┐
-│                     ORCHESTRATOR                           │
-│  Goal → execution plan · Agent selection · DAG runner     │
-│  Runtime adaptation · Error recovery · Approval gating    │
-└──────┬──────────────┬──────────────┬─────────────────────┘
-       │              │              │
-       ▼              ▼              ▼
-┌────────────┐ ┌────────────┐ ┌────────────────────────────┐
-│   CORE PIPELINE (always active)   │  OPTIONAL AGENTS       │
-│ Acquisition│ │ Extraction │ │ Commerce Agent             │
-│ Normalization · Persistence       │ Job Apply Agent        │
-└────────────┘ └────────────┘ └────────────────────────────┘
-                      │
-                      ▼
+│                  CORE PIPELINE (always active)             │
+│  Acquire → Extract → Normalize → Persist                  │
+└───────────────────────────┬──────────────────────────────┘
+                            │
+                            ▼
+┌──────────────────────────────────────────────────────────┐
+│                   OPTIONAL AGENTS                          │
+│  Commerce Agent — enrichment & supervised checkout        │
+└───────────────────────────┬──────────────────────────────┘
+                            │
+                            ▼
 ┌──────────────────────────────────────────────────────────┐
 │                  SHARED SERVICES                           │
 │  Browser Runtime · LLM Runtime · Domain Memory · Config   │
@@ -108,8 +106,8 @@ Config tunables for all buckets: `app/services/config/*`
 
 ## 4. Agent Interface Contract
 
-Every agent — core or optional — implements this interface. The orchestrator invokes
-all agents generically through it.
+Every agent — core or optional — implements this interface. The pipeline invokes
+agents through a typed contract.
 
 ```python
 class AgentCapability(Enum):
@@ -117,7 +115,6 @@ class AgentCapability(Enum):
     EXTRACT    = "extract"
     NORMALIZE  = "normalize"
     COMMERCE   = "commerce"
-    JOB_APPLY  = "job_apply"
 
 @dataclass
 class AgentRequest:
@@ -152,7 +149,7 @@ class Artifact:
     schema_version: int
 ```
 
-Agents never call each other directly. The orchestrator routes artifacts between them.
+Agents never call each other directly. The pipeline routes artifacts between them via explicit handoff points.
 
 ---
 
@@ -171,18 +168,13 @@ Optional agents are toggled per run via `CrawlRun.settings` JSONB:
         "enrichment_subagents": [],    # which enrichers to activate
         "brand_voice": null
       }
-    },
-    "job_apply": {
-      "enabled": false,
-      "config": {}
     }
   }
 }
 ```
 
-**Orchestrator override rule:** The orchestrator may activate an optional agent when a
-goal requires it, but only if the agent is not explicitly disabled and the user has
-granted prior consent for action agents.
+**Pipeline rule:** An optional agent runs only when explicitly enabled in run settings.
+Action agents (Commerce checkout) additionally require explicit user consent.
 
 ### Presets
 
@@ -196,39 +188,16 @@ class AgentPreset(Base):
     is_default:   bool
 ```
 
-| Preset | Commerce | Job Apply |
-|--------|:--------:|:---------:|
-| Quick Scrape | ❌ | ❌ |
-| Deep Extract | ❌ | ❌ |
-| Catalog Enrich | ✅ enrichment | ❌ |
-| Shop & Buy | ✅ checkout | ❌ |
-| Job Hunter | ❌ | ✅ supervised |
-| Full Auto | ✅ both | ✅ supervised |
+| Preset | Commerce |
+|--------|:--------:|
+| Quick Scrape | ❌ |
+| Deep Extract | ❌ |
+| Catalog Enrich | ✅ enrichment |
+| Shop & Buy | ✅ checkout |
 
 ---
 
-## 6. Orchestrator
-
-The orchestrator replaces the hardcoded linear pipeline call in `_batch_runtime.process_run()`
-with a DAG-driven execution engine. It is responsible for:
-
-1. **Goal interpretation** — parse user goal into a structured execution plan
-2. **Agent selection** — decide which agents participate based on goal and toggles
-3. **DAG execution** — agents run in parallel where artifact dependencies allow
-4. **Runtime adaptation** — if acquisition is blocked, select a different strategy;
-   if extraction yields thin results, invoke schema inferencer; degrade gracefully on budget exhaustion
-5. **Error recovery** — agent failures do not crash the pipeline; orchestrator decides retry, skip, or fail
-6. **Approval gating** — for supervised agents, pause and present state for user decision
-
-**Intelligence model:** LLM-powered planner for goal interpretation + deterministic executor
-for DAG traversal. The deterministic executor runs regardless of LLM availability.
-
-**Backward compatibility:** Runs without a goal use the orchestrator to generate a linear
-plan identical to the current pipeline. Existing API contracts are preserved.
-
----
-
-## 7. Commerce Agent
+## 6. Commerce Agent
 
 > The primary new capability. Transforms raw crawled product records into AI-ready
 > catalog intelligence — enriched for the era of agentic commerce where AI assistants
@@ -245,7 +214,6 @@ Enriched fields are stored in `enriched_data JSONB` on `CrawlRecord`, separate f
 |-----------|---------|-------------|
 | **Intent Attribute Generator** | Intent-driven attributes (style, occasion, audience, use-case) matching how shoppers think and search | LLM — brand-voice-aware |
 | **Metadata Generator** | SEO titles, descriptions, keywords, alt-text — optimized for traditional search and AI discovery | LLM — SEO + AI-aware |
-| **Vision Tagger** | Color, pattern, style, material, fit extracted from product images | CV model + LLM refinement |
 | **Category Harmonizer** | Normalize taxonomy across source schemas into a unified hierarchy | LLM — category semantics |
 | **Review Summarizer** | On-brand summaries from product reviews; enables shoppers to ask questions about fit and quality | LLM — sentiment + brand-voice |
 | **Suggestion Engine** | Intent-driven product recommendations and complete-the-look bundles | LLM + co-occurrence rules |
@@ -292,27 +260,7 @@ Every enriched field carries provenance: source sub-agent, model used, confidenc
 
 ---
 
-## 8. Job Application Agent
-
-> Supervised. Applies for jobs on behalf of the user — navigates application flows,
-> fills forms with user profile data, and always pauses for approval before submission.
-
-| Sub-agent | Purpose | Intelligence |
-|-----------|---------|-------------|
-| **Application Navigator** | Navigate multi-step application flows across Workday, Greenhouse, Lever, and others | LLM — every site is different |
-| **Profile Filler** | Fill personal info, work history, education from structured user profile | Rule-based field mapping |
-| **Question Responder** | Answer custom application questions derived from user profile and job description | LLM — profile-grounded only |
-| **Document Attacher** | Attach resume, cover letter, portfolio files | Rule-based file upload |
-| **Approval Gate** | Pause before final submission; present completed application for review | Deterministic — always triggers |
-
-**Non-negotiable constraints — identical to Commerce checkout:**
-- Never auto-submit an application.
-- LLM answers are derived only from user-provided profile data. No fabrication.
-- Credential vault, session isolation, audit trail, abort-at-any-point — same model as Commerce.
-
----
-
-## 9. Multi-Model LLM Strategy
+## 7. Multi-Model LLM Strategy
 
 Different tasks require different models. The existing `llm_config_service` per-run pattern
 extends to per-agent model preferences declared in `AgentConfig`.
@@ -321,29 +269,27 @@ extends to per-agent model preferences declared in `AgentConfig`.
 |------------|-------------|---------|
 | High-volume mechanical (attribute generation, categorization) | Fast / cheap | Groq, Haiku |
 | Complex inference (schema inference, block analysis, strategy) | Powerful | Claude Opus, GPT-4 |
-| Vision tasks (image tagging) | Vision-capable | GPT-4o, Claude vision |
 
-Each agent has its own LLM budget (token cap, cost cap per run). The orchestrator tracks
-cumulative spend across all agents and can downgrade model selection or disable LLM-powered
+Each agent has its own LLM budget (token cap, cost cap per run). The pipeline tracks
+cumulative spend and can downgrade model selection or disable LLM-powered
 sub-agents when budget is exhausted. Rule-based sub-agents always run regardless of budget.
 
 ---
 
-## 10. Planned API Surface Additions
+## 8. Planned API Surface Additions
 
 | Route | Method | Agent | Purpose |
 |-------|--------|-------|---------|
 | `/api/crawls/{id}/enrich` | POST | Commerce | Trigger enrichment on completed run |
 | `/api/crawls/{id}/enrich` | GET | Commerce | Get enrichment status and results |
 | `/api/crawls/{id}/checkout` | POST | Commerce | Initiate supervised checkout |
-| `/api/crawls/{id}/approve` | POST | Commerce / Job Apply | Submit approval gate decision |
-| `/api/crawls/{id}/apply` | POST | Job Apply | Initiate supervised job application |
+| `/api/crawls/{id}/approve` | POST | Commerce | Submit approval gate decision |
 | `/api/presets` | GET / POST / PUT / DELETE | All | User preset management |
 | `/api/agents` | GET | All | List registered agents and capabilities |
 
 ---
 
-## 11. Future Capabilities
+## 9. Future Capabilities
 
 ### Multi-Tenant Cloud Deployment
 
@@ -358,15 +304,9 @@ Agent execution state must be serializable so runs can be resumed after interrup
 `AgentResult.output_artifacts` must be JSON-serializable. Each agent's `execute()` must
 be idempotent relative to its input artifacts.
 
-### Computer Vision — Self-Hosted
-
-Vision Tagger runs a self-hosted open model (CLIP, BLIP, or equivalent) rather than
-cloud vision APIs. This avoids per-image costs and external dependencies. The agent
-interface must support non-LLM model backends as a distinct inference path.
-
 ---
 
-## 12. Architectural Boundaries
+## 10. Architectural Boundaries
 
 These boundaries must be respected by every change, regardless of phase.
 
@@ -376,10 +316,9 @@ These boundaries must be respected by every change, regardless of phase.
 - `source_trace` and `discovered_data` carry provenance without leaking raw manifest noise.
 
 **Agent isolation:**
-- Agents never call each other directly. Data flows through the orchestrator via artifacts.
+- Agents never call each other directly. Data flows through explicit pipeline handoff points.
 - Disabling any optional agent must never break core pipeline agents or other optional agents.
-- Action agents (Commerce checkout, Job Apply) require explicit user consent. The orchestrator
-  cannot activate them from goal inference alone.
+- Action agents (Commerce checkout) require explicit user consent.
 
 **LLM boundaries:**
 - LLM use is opt-in per run. It cannot activate silently.
@@ -393,13 +332,13 @@ These boundaries must be respected by every change, regardless of phase.
 
 **File structure:**
 - The 7 core ownership buckets do not change.
-- New agents are added as new top-level directories under `services/` (`commerce_agent/`, `job_apply_agent/`).
+- New agents are added as new top-level directories under `services/` (e.g. `commerce_agent/`).
 - Shared agent infrastructure lives in `services/agents/` (`types.py`, `registry.py`, `approval_gate.py`).
 - Core bucket files are not renamed to match agent sub-agent naming conventions.
 
 ---
 
-## 13. Canonical Docs
+## 11. Canonical Docs
 
 | Doc | Purpose |
 |-----|---------|
