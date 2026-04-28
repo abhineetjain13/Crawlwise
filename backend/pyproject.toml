@@ -27,8 +27,6 @@ dependencies = [
   "lxml>=6.0.0",
   "passlib[bcrypt]>=1.7.4",
   "patchright>=1.58.2",
-  "playwright>=1.54.0",
-  "playwright-stealth>=2.0.0",
   "price-parser>=0.5.0",
   "prometheus-client>=0.23.1",
   "psutil>=7.1.0",
@@ -62,9 +60,7 @@ dev = [
   "types-jmespath>=1.1.0.20260408",
   "types-cachetools>=6.2.0.20260408",
   "types-passlib>=1.7.7.20260211",
-  "flake8>=7.3.0",
   "pylint>=4.0.5",
-  "pyright>=1.1.408",
   "basedpyright>=1.39.2",
   "bandit>=1.9.4",
   "vulture>=2.16",
@@ -86,10 +82,12 @@ ignore-paths = [
 
 [tool.pylint.messages_control]
 disable = [
-  "C",
-  "R",
   "import-error",
   "no-name-in-module",
+  "line-too-long",
+  "missing-module-docstring",
+  "missing-class-docstring",
+  "missing-function-docstring",
   "too-many-lines",
   "too-many-arguments",
   "too-many-branches",

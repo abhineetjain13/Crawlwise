@@ -1,73 +1,85 @@
-These are comments left during a code review. Please review all issues and provide fixes.
-
-1. possible bug: Switching to a new browser engine can silently drop the init script and change the browser context contract.
-   Path: backend/app/services/acquisition/browser_identity.py
-   Lines: 157-157
-
-2. possible bug: Engine availability is reported as true even when the runtime cannot actually start.
-   Path: backend/app/services/acquisition/browser_runtime.py
-   Lines: 173-173
-
-3. possible bug: Patchright is selected but still launched through the generic Chromium path, which can break runtime startup.
-   Path: backend/app/services/acquisition/browser_runtime.py
-   Lines: 291-291
-
-4. possible bug: Adding `patchright` to supported storage-state engines may be incomplete if the rest of the codebase never emits that engine metadata.
-   Path: backend/app/services/acquisition/cookie_store.py
-   Lines: 37-37
-
-5. logic error: Patchright blocks are classified inconsistently, so blocked hosts can be reported as usable.
-   Path: backend/app/services/acquisition/host_protection_memory.py
-   Lines: 112-112
-
-6. possible bug: Forcing real Chrome can now fail outright when Chrome is unavailable.
-   Path: backend/app/services/crawl_fetch_runtime.py
-   Lines: 999-999
-
-7. race condition: Wrapping `_browser_fetch(...)` in `asyncio.wait_for` changes timeout/cancellation behavior.
-   Path: backend/app/services/crawl_fetch_runtime.py
-   Lines: 594-594
-
-Validate the correctness of each issue sequentially. For each issue that is correct, implement a fix. Please make the fixes concise and address all issues comprehensively and don't impact anything else.
-
 Fix the following issues. The issues can be from different files or can overlap on same lines in one file.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/pyproject.toml around lines 29 - 31, Decide whether you are migrating to patchright or retaining playwright and update the dependency list accordingly: if migrating, remove "playwright>=1.54.0" and "playwright-stealth>=2.0.0" from pyproject and keep "patchright>=1.58.2" (and verify patchright provides the needed stealth features); if keeping playwright, remove "patchright>=1.58.2" and keep "playwright" and "playwright-stealth"; additionally verify compatibility between the chosen package versions (search for patchright v1.58.2 docs regarding compatibility with playwright and whether both can coexist) and update any import statements or code paths that reference patchright, playwright, or playwright-stealth to match the chosen dependency.
+In @backend/app/services/extract/shared_variant_logic.py around lines 388 - 403, The function _is_sequential_integer_run may raise on Unicode digit characters because stripped.isdigit() can be True for characters int() can't parse; wrap the int(stripped) conversion in a try/except ValueError (return False on exception) to guard against non-parseable digits, and remove the redundant if not ints check since length >=5 is already enforced; keep the sort and contiguous-run check as-is.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/app/runs/page.tsx around lines 282 - 296, The ConfirmDialog usage leaves the dialog open on delete failure and may allow closing while a pending mutation is in flight; update the delete flow so errors are surfaced inside the dialog or the dialog is closed on error and it cannot be dismissed while pending. Concretely: in the deleteMutation error handler (deleteMutation.onError) either call setDeleteTarget(null) after setting actionError, or set a local error state and pass it into ConfirmDialog (e.g., an error or errorMessage prop) so the dialog renders the error inline; also ensure the dialog cannot be dismissed while pending by making onOpenChange ignore close requests when pendingDeleteIds.has(deleteTarget?.id) or by passing a prop to ConfirmDialog to disable backdrop/escape during pending, and keep pending={deleteTarget ? pendingDeleteIds.has(deleteTarget.id) : false} as-is.
+In @backend/app/services/extract/shared_variant_logic.py around lines 486 - 504, The token set _QUANTITY_ATTR_TOKENS contains compound entries (e.g., "item-count", "number_of_items") that never match because _select_is_quantity_node splits attribute values on hyphens/underscores; update the function to either (a) expand _QUANTITY_ATTR_TOKENS into normalized component tokens (e.g., "item", "count", "number", "items") or (b) also check a normalized attribute string with hyphens/underscores removed (e.g., value.replace("-", "").replace("_","")) before/alongside splitting, and keep references to _QUANTITY_ATTR_TOKENS and _select_is_quantity_node when making the change.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/next-env.d.ts at line 3, The file next-env.d.ts (which currently contains the import "./.next/types/routes.d.ts") is auto-generated by Next.js and should not be manually edited or tracked; update the repository by adding next-env.d.ts to .gitignore, remove any committed copy from version control (e.g., git rm --cached next-env.d.ts) so Next.js can regenerate it without causing persistent diffs, and revert any manual edits to next-env.d.ts so the import line is managed only by the framework.
+In @coderabbit_codeant_flags.md at line 17, The variants object for the Button component has duplicate class strings for the 'primary' and 'accent' keys; locate the variants definition (the object with keys 'primary' and 'accent') and either replace the 'accent' value with the intended distinct CSS class string for accent styling or remove the 'accent' key and update all call sites to use 'primary' instead; ensure you update any usages of the 'accent' variant (e.g., <Button variant="accent">) to the new key or to 'primary' and run a quick search for 'variant:"accent"'/'variant=\'accent\'' to catch all callers.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/next-env.d.ts around lines 5 - 6, Add the auto-generated file "next-env.d.ts" to version control ignore by updating your .gitignore: open the repository's .gitignore and add a line that ignores next-env.d.ts so the file is not committed; this targets the auto-generated file referenced by the frontend/next-env.d.ts review and prevents unnecessary VCS noise from development vs production changes.
+In @coderabbit_codeant_flags.md at line 9, The dropdown shows an option { value: "harness", label: "harness" } but the onChange handler only handles "user" and "admin", so selecting "harness" is ignored; choose one fix and implement it: either remove the "harness" entry from the options array used by the Dropdown component, or mark that option as disabled in the same options array if per-option disabled is supported, or extend the Dropdown onChange arrow to handle "harness" by calling updateUser(user.id, { role: "harness" }) and ensure updateUser accepts that role; update the options array, the Dropdown onChange handler, and the updateUser call accordingly (look for the Dropdown component, the options array definition, the onChange arrow, and updateUser references in the users page).
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/app/product-intelligence/product-intelligence-components.tsx around lines 57 - 92, The modal markup currently rendered in product-intelligence-components.tsx doesn't include ARIA dialog attributes or keyboard handling: add role="dialog" and aria-modal="true" to the main content container div (the one with className starting "fixed left-1/2...") and wire a keydown handler that listens for Escape and calls the existing onClose callback; additionally implement a focus-trap on mount/unmount for the modal (using a small utility or library like focus-trap/react) so Tab/Shift+Tab cycle focus within the modal and set initial focus to the first focusable element (e.g., the Close Button that calls onClose) and restore focus to the previously focused element when the modal closes.
+In @coderabbit_codeant_flags.md at line 5, The forced_engine handling in crawl_fetch_runtime.py currently silently ignores non-"real_chrome" values when reading context.forced_browser_engine; update the logic in the block that inspects context.forced_browser_engine to validate the supplied value against your allowed_engines list (e.g., contains "real_chrome", "chromium", etc.), and either (A) accept and return the forced_engine when it matches a supported engine (return the single-engine list or call _append_engine_once as existing code uses), or (B) fail-fast by raising or logging a clear error/warning that includes the offending forced_engine and context.forced_browser_engine so callers like fetch_page aren’t silently ignored; modify the code paths around forced_engine/allowed_engines/_append_engine_once to perform this explicit validation and error handling.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/components/crawl/crawl.module.css around lines 42 - 48, The live-dot styles (.cs-live-dot.is-error and .cs-live-dot.is-success) currently convey status by color only; update the implementation to add a non-color visual cue and proper accessibility attributes: adjust the CSS for .cs-live-dot.is-error and .cs-live-dot.is-success to include distinct shapes or patterns (e.g., border, outline, or pseudo-element icon) and ensure the HTML markup for the live dot includes an accessible label (aria-label or visually-hidden text) that describes the state (e.g., "Error" or "Success"); keep the color changes but add the additional visual indicator and ARIA text so color-blind users and screen readers receive the same status information.
+In @frontend/app/admin/users/page.tsx around lines 115 - 129, The JSX for the user row is malformed: close the email cell <td> that currently contains user.email, remove the stray standalone "/>" and move the <Dropdown> into its own <td> so the table cells are well-formed; ensure the <Dropdown> keeps its props (value={user.role}, onChange calling updateUser(user.id, { role }), disabled={pendingUserId === user.id}, options, className) and nothing else is altered (preserve user.email cell, Dropdown props and surrounding <td> tags).
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/components/layout/auth-shell.module.css around lines 123 - 130, The pulse animation for .auth-shell-pulse (and the other pulse rule around lines 171-181) should respect users' motion preferences: add a prefers-reduced-motion media query that disables or significantly reduces the animation (set animation: none and remove or minimize animated box-shadow) for users who prefer reduced motion, leaving the static styling (size, background) intact; apply the same change for the other pulse class that uses the auth-pulse-ring animation so both animated elements are suppressed under @media (prefers-reduced-motion: reduce).
+In @frontend/app/product-intelligence/page.tsx around lines 338 - 347, The "Select all" checkbox checked state should ignore falsy candidate URLs to match toggleAllUrls behavior: update the checked expression on the input so it only considers truthy candidate URLs (e.g., use filteredCandidates.filter(Boolean) or map to candidate.url and filter(Boolean)) when computing length and when calling .every(... includes(selectedUrls)), ensuring the check uses the same filtering logic as toggleAllUrls and still requires > 0 truthy URLs before marking checked.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/components/ui/input.tsx around lines 8 - 14, Hover currently has no effect because inputVariants and textareaVariants both use border-border-strong for default and hover; update the hover token so the border changes on hover (e.g., replace "hover:border-border-strong" with a stronger token like "hover:border-border-stronger" or an accent such as "hover:border-accent") inside the cva calls for inputVariants and textareaVariants to provide visible hover feedback.
+In @frontend/components/crawl/shared.tsx around lines 600 - 611, The replacement currently slices the path to 55 chars into slug and uses slug.length >= 55 to decide adding an ellipsis, which incorrectly appends “…” when the original path is exactly 55; change the logic in the msg.replace callback (the function using parsed, slug, verb, url) to compute the originalPath = parsed.pathname + parsed.search, compute truncated = originalPath.slice(0, 55), and only append the ellipsis when originalPath.length > 55 (not when truncated.length >= 55), then use truncated in the returned string.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/components/ui/input.tsx around lines 27 - 31, The Textarea component doesn't forward refs which breaks integration with form libraries and focus control; update the exported Textarea (function Textarea) to use React.forwardRef so it accepts a ref parameter and passes it to the underlying <textarea> element (alongside existing normalizedProps and className computed with cn(textareaVariants(), normalizedProps.className)); ensure the prop normalization logic (const normalizedProps = ...) remains and that the forwarded ref is attached to the rendered textarea element.
+In @frontend/package.json around lines 56 - 58, The package.json override forcing "postcss": "^8.5.10" can break compatibility/security with TailwindCSS v4 and Next.js; instead, remove or update the overrides entry and determine the correct postcss version by reproducing the dependency conflict: run npm/yarn pnpm list to find which package requires an older postcss, capture the build error that prompted this override, then update the override to the minimum postcss version compatible with Tailwind v4 (or remove it and upgrade the transitive dependency or bump the dependent package), and verify by rebuilding; check/change the "overrides" -> "postcss" entry in package.json and adjust lockfile accordingly.
 
-- Verify each finding against the current code and only fix it if needed.
+These are comments left during a code review. Please review all issues and provide fixes.
 
-In @frontend/components/ui/input.tsx around lines 16 - 25, The Input component currently doesn't forward refs, preventing consumers from accessing the native input; wrap and export it using React.forwardRef: change the function Input(...) to a forwardRef call (e.g., const Input = forwardRef<HTMLInputElement, ComponentPropsWithoutRef<"input">>(function Input(props, ref) { ... })), accept the ref parameter and pass it to the rendered <input ref={ref} ... />, and keep the existing normalization logic (props.type === "file" etc.) and usage of cn(inputVariants(), normalizedProps.className); ensure you export the forwardRef-wrapped Input as the component.
+1. logic error: Non-patchright engines now skip the init script entirely, breaking previous browser fingerprint behavior.
+   Path: backend/app/services/acquisition/browser_identity.py
+   Lines: 157-157
+
+2. possible bug: Switching browser exception imports to patchright may break runtime compatibility if the backend still expects Playwright.
+   Path: backend/app/services/acquisition/browser_page_flow.py
+   Lines: 11-11
+
+3. possible bug: Using Patchright exception classes may break timeout/error handling if the browser stack is still Playwright-based.
+   Path: backend/app/services/acquisition/browser_readiness.py
+   Lines: 50-50
+
+4. possible bug: Catching every exception from `cookies_fn([url])` can mask real cookie lookup failures.
+   Path: backend/app/services/acquisition/browser_recovery.py
+   Lines: 407-407
+
+5. possible bug: Real Chrome is now forced through the Patchright backend.
+   Path: backend/app/services/acquisition/browser_runtime.py
+   Lines: 250-250
+
+6. possible bug: Removing legacy keyword-argument fallbacks can break older provider implementations.
+   Path: backend/app/services/acquisition/browser_runtime.py
+   Lines: 1017-1017
+
+7. logic error: Unknown browser engines are now normalized to Patchright instead of Chromium.
+   Path: backend/app/services/acquisition/browser_runtime.py
+   Lines: 131-131
+
+8. possible bug: Switching to a different browser exception class can break existing error handling when the package is unavailable.
+   Path: backend/app/services/acquisition/traversal.py
+   Lines: 14-14
+
+9. possible bug: Removing established runtime settings breaks existing configuration consumers.
+   Path: backend/app/services/config/runtime_settings.py
+   Lines: 187-187
+
+10. logic error: Forced chromium requests are now ignored instead of being honored as an alias.
+   Path: backend/app/services/crawl_fetch_runtime.py
+   Lines: 971-971
+
+11. possible bug: Removing Chromium from fallback attempts can make browser escalation fail where it previously succeeded.
+   Path: backend/app/services/crawl_fetch_runtime.py
+   Lines: 929-929
+
+Validate the correctness of each issue sequentially. For each issue that is correct, implement a fix. Please make the fixes concise and address all issues comprehensively and don't impact anything else.

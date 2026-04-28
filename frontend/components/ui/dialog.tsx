@@ -47,7 +47,7 @@ export function ConfirmDialog({
               <DialogPrimitive.Title className="m-0 text-base font-semibold leading-snug text-foreground">
                 {title}
               </DialogPrimitive.Title>
-              <DialogPrimitive.Description className="mt-2 text-sm leading-[1.55] text-secondary">
+              <DialogPrimitive.Description className="mt-2 text-sm leading-[var(--leading-relaxed)] text-secondary">
                 {description}
               </DialogPrimitive.Description>
             </div>
@@ -58,7 +58,7 @@ export function ConfirmDialog({
             </DialogPrimitive.Close>
           </div>
           {error ? (
-            <div role="alert" className="mt-4 rounded-[var(--radius-md)] border border-danger/20 bg-danger/10 px-3 py-2 text-sm leading-[1.45] text-danger">
+            <div role="alert" className="mt-4 rounded-[var(--radius-md)] border border-danger/20 bg-danger/10 px-3 py-2 text-sm leading-[var(--leading-normal)] text-danger">
               {error}
             </div>
           ) : null}

@@ -1,5 +1,6 @@
 .env
 .vscode/
+.windsurf/
 
 .hypothesis/
 .scannerwork/

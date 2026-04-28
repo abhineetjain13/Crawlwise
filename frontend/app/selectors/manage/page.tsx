@@ -518,7 +518,7 @@ export default function DomainMemoryManagePage() {
  {/* ── Domain sidebar ── */}
  <SurfacePanel className="p-3 space-y-3">
  <div className="flex items-center justify-between px-1">
- <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Domains</h3>
+ <h3 className="type-label">Domains</h3>
  <span className="text-xs text-muted">{groupedWorkspaces.length}</span>
  </div>
  <NavList
@@ -547,7 +547,7 @@ export default function DomainMemoryManagePage() {
  {selectedWorkspace ? (
  <>
  <div className="flex flex-wrap items-center justify-between gap-3">
- <h2 className="text-lg font-semibold text-foreground">{selectedWorkspace.domain}</h2>
+ <h2 className="text-lg font-semibold text-foreground type-heading">{selectedWorkspace.domain}</h2>
  {selectedWorkspace.surfaces.some((surface) => surface.selectors.length) ? (
  <Button
  type="button"
@@ -595,7 +595,7 @@ export default function DomainMemoryManagePage() {
  >
  <div className="flex flex-wrap items-center justify-between gap-2">
  <div>
- <div className="text-sm font-semibold text-foreground">{surfaceLabel(surfaceWorkspace.surface)}</div>
+ <div className="text-sm font-medium text-foreground">{surfaceLabel(surfaceWorkspace.surface)}</div>
  <div className="text-xs text-muted">
  {surfaceWorkspace.selectors.length} selector{surfaceWorkspace.selectors.length === 1 ? "" : "s"}
  </div>
@@ -726,7 +726,7 @@ export default function DomainMemoryManagePage() {
  .map((surface) => (
  <DetailRow key={`${selectedWorkspace.domain}:${surface.surface}:profile`}>
  <div className="flex items-center justify-between gap-2">
- <div className="text-sm font-semibold text-foreground">{surfaceLabel(surface.surface)}</div>
+ <div className="text-sm font-medium text-foreground">{surfaceLabel(surface.surface)}</div>
  <div className="text-xs text-muted">Saved {formatTimestamp(surface.profile?.updated_at ?? null)}</div>
  </div>
  <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -778,7 +778,7 @@ export default function DomainMemoryManagePage() {
  <DetailRow key={row.id}>
  <div className="flex flex-wrap items-center gap-2">
  <Badge tone={row.action === "reject" ? "warning" : "success"}>{row.action}</Badge>
- <span className="text-sm font-medium text-foreground">{row.field_name}</span>
+ <span className="text-sm font-normal text-foreground">{row.field_name}</span>
  <Badge tone="neutral">{surfaceLabel(row.surface)}</Badge>
  </div>
  <div className="mt-2 text-xs text-secondary">

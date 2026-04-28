@@ -168,8 +168,8 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
         return (
             <div className="app-shell-feedback">
                 <div className="max-w-sm rounded-[var(--radius-xl)] border border-border bg-panel p-6 text-center shadow-card">
-                    <p className="text-base font-semibold leading-snug text-foreground">Session expired</p>
-                    <p className="mt-1.5 text-sm leading-[1.55] text-secondary">Redirecting to login…</p>
+                    <p className="text-base font-semibold leading-snug text-foreground type-heading">Session expired</p>
+                    <p className="mt-1.5 text-sm leading-[var(--leading-relaxed)] text-secondary">Redirecting to login…</p>
                 </div>
             </div>
         );
@@ -179,8 +179,8 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
         return (
             <div className="app-shell-feedback">
                 <div className="max-w-sm rounded-[var(--radius-xl)] border border-border bg-panel p-6 text-center shadow-card">
-                    <p className="text-base font-semibold leading-snug text-foreground">Unable to load session</p>
-                    <p className="mt-1.5 text-sm leading-[1.55] text-secondary">
+                    <p className="text-base font-semibold leading-snug text-foreground type-heading">Unable to load session</p>
+                    <p className="mt-1.5 text-sm leading-[var(--leading-relaxed)] text-secondary">
                         Refresh to retry, or sign in again if the session expired.
                     </p>
                     <div className="mt-4 flex justify-center">
@@ -260,11 +260,30 @@ function LogoMark({
     collapsed = false,
     auth = false,
 }: Readonly<{ collapsed?: boolean; auth?: boolean }>) {
+    const iconSize = auth ? "size-5" : "size-4";
+    const mark = (
+        <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            className={cn(iconSize, "text-inherit")}
+            aria-hidden="true"
+        >
+            <path
+                d="M17 5H7C5.89543 5 5 5.89543 5 7V17C5 18.1046 5.89543 19 7 19H17"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="square"
+            />
+            <rect x="14" y="10" width="4" height="4" fill="currentColor" />
+        </svg>
+    );
+
     if (collapsed) {
         return (
             <div className="app-logo app-logo-collapsed">
                 <div className="app-logo-mark">
-                    <Zap className="size-3.5" strokeWidth={2.4} />
+                    {mark}
                 </div>
             </div>
         );
@@ -273,7 +292,7 @@ function LogoMark({
     return (
         <div className="app-logo">
             <div className={cn("app-logo-mark", auth && "app-logo-mark-large")}>
-                <Zap className={cn(auth ? "size-[18px]" : "size-3.5")} strokeWidth={2.4} />
+                {mark}
             </div>
             <div className="app-logo-copy">
                 <span className="app-logo-title">CrawlerAI</span>

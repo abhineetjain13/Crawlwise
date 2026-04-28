@@ -27,6 +27,9 @@ from app.services.acquisition.browser_detail import (
     expand_all_interactive_elements,
     expand_detail_content_if_needed_impl,
     expand_interactive_elements_via_accessibility,
+    interactive_candidate_snapshot,
+    interactive_label,
+    is_actionable_interactive_handle,
     requested_field_tokens,
 )
 from app.services.acquisition.browser_identity import (
@@ -90,14 +93,14 @@ from app.services.config.network_capture import (
     BLOCKED_BROWSER_ROUTE_TOKENS,
     PROTECTED_CHALLENGE_ROUTE_TOKENS,
 )
-from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.runtime_settings import crawler_runtime_settings, proxy_rotation_mode
 from app.services.config.selectors import CARD_SELECTORS
 from app.services.domain_utils import normalize_domain
 from app.services.field_value_core import clean_text
 from app.services.platform_policy import resolve_listing_readiness_override
 
 if TYPE_CHECKING:
-    from playwright.async_api import Browser, BrowserContext, Playwright
+    from patchright.async_api import Browser, BrowserContext, Playwright
 
 logger = logging.getLogger(__name__)
 
@@ -112,38 +115,6 @@ _SUPPORTED_BROWSER_ENGINES = {
     _PATCHRIGHT_BROWSER_ENGINE,
     _REAL_CHROME_BROWSER_ENGINE,
 }
-
-try:
-    from playwright_stealth import Stealth as _PlaywrightStealth  # type: ignore[import-untyped]
-
-    # browserforge already owns UA/client-hint/platform identity. Keep stealth for
-    # webdriver/plugins/runtime evasions only so both layers do not emit conflicting
-    # fingerprints in the same session.
-    _STEALTH = _PlaywrightStealth(
-        navigator_plugins=False,
-        navigator_user_agent=False,
-        navigator_user_agent_data=False,
-        navigator_vendor=False,
-        iframe_content_window=True,
-        navigator_webdriver=True,
-        sec_ch_ua=False,
-        webgl_vendor=False,
-    )
-    _STEALTH.navigator_hardware_concurrency = False
-    _STEALTH.navigator_languages = False
-    _STEALTH.navigator_platform = False
-    _STEALTH_APPLIER = _STEALTH.apply_stealth_async
-except Exception:  # pragma: no cover - optional dep missing
-    _STEALTH_APPLIER = None
-
-async def _apply_stealth(page_or_context: Any) -> None:
-    if _STEALTH_APPLIER is None:
-        return
-    try:
-        await _STEALTH_APPLIER(page_or_context)
-    except Exception:
-        logger.debug("Failed to apply playwright-stealth", exc_info=True)
-
 
 _BROWSER_PREFERRED_HOST_TTL_SECONDS = 1800.0
 _BROWSER_PREFERRED_HOSTS: dict[str, float] = {}
@@ -161,7 +132,7 @@ def _normalize_browser_engine(value: object) -> str:
     normalized = str(value or "").strip().lower()
     if normalized in _SUPPORTED_BROWSER_ENGINES:
         return normalized
-    return _CHROMIUM_BROWSER_ENGINE
+    return _PATCHRIGHT_BROWSER_ENGINE
 
 
 def _patchright_async_playwright_factory():
@@ -226,15 +197,6 @@ def _use_native_real_chrome_context(engine: str) -> bool:
     )
 
 
-def _apply_stealth_for_engine(engine: str) -> bool:
-    normalized_engine = _normalize_browser_engine(engine)
-    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
-        return bool(crawler_runtime_settings.browser_patchright_apply_stealth)
-    if normalized_engine != _REAL_CHROME_BROWSER_ENGINE:
-        return True
-    return bool(crawler_runtime_settings.browser_real_chrome_apply_stealth)
-
-
 def _browser_launch_mode(engine: str) -> str:
     return "headless" if _launch_headless_for_engine(engine) else "headful"
 
@@ -259,10 +221,7 @@ def _browser_profile_diagnostics(engine: str) -> dict[str, object]:
         "browser_native_context": _use_native_real_chrome_context(
             normalized_engine
         ),
-        "browser_stealth_enabled": bool(
-            _STEALTH_APPLIER is not None
-            and _apply_stealth_for_engine(normalized_engine)
-        ),
+        "browser_stealth_enabled": False,
     }
 
 
@@ -280,26 +239,29 @@ def _resolve_browser_binary(engine: str) -> tuple[str | None, str]:
     normalized_engine = _normalize_browser_engine(engine)
     if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
         return None, _PATCHRIGHT_BROWSER_ENGINE
-    if normalized_engine != _REAL_CHROME_BROWSER_ENGINE:
-        return None, _CHROMIUM_BROWSER_ENGINE
+    if normalized_engine == _CHROMIUM_BROWSER_ENGINE:
+        return None, _PATCHRIGHT_BROWSER_ENGINE
     executable_path = real_chrome_executable_path()
     if executable_path is None:
-        return None, _CHROMIUM_BROWSER_ENGINE
+        return None, _REAL_CHROME_BROWSER_ENGINE
     return executable_path, executable_path
 
 
 def _async_playwright_manager_for_engine(engine: str):
     normalized_engine = _normalize_browser_engine(engine)
-    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
+    if normalized_engine in {_PATCHRIGHT_BROWSER_ENGINE, _CHROMIUM_BROWSER_ENGINE}:
         try:
             return _patchright_async_playwright_factory()
         except Exception as exc:
             raise RuntimeError(
                 "Patchright package is not available for browser runtime"
             ) from exc
-    from playwright.async_api import async_playwright
-
-    return async_playwright
+    try:
+        return _patchright_async_playwright_factory()
+    except Exception as exc:
+        raise RuntimeError(
+            "Patchright package is not available for real_chrome browser runtime"
+        ) from exc
 
 
 def _proxy_host_port(parsed) -> str:
@@ -374,9 +336,9 @@ class SharedBrowserRuntime:
             self.browser_engine
         )
         self.engine_available = bool(
-            self.browser_engine == _CHROMIUM_BROWSER_ENGINE
-            or (
-                self.browser_engine == _PATCHRIGHT_BROWSER_ENGINE
+            (
+                self.browser_engine
+                in {_PATCHRIGHT_BROWSER_ENGINE, _CHROMIUM_BROWSER_ENGINE}
                 and patchright_browser_available()
             )
             or self.executable_path
@@ -608,8 +570,6 @@ class SharedBrowserRuntime:
             if init_script:
                 await context.add_init_script(init_script)
             await _configure_context_routes(context)
-            if _apply_stealth_for_engine(self.browser_engine):
-                await _apply_stealth(context)
             async with self._counter_lock:
                 self._total_contexts_created += 1
             page = await context.new_page()
@@ -1057,15 +1017,10 @@ async def _load_storage_state_for_run(
     *,
     browser_engine: str,
 ) -> dict[str, object] | None:
-    try:
-        return await load_storage_state_for_run(
-            run_id,
-            browser_engine=browser_engine,
-        )
-    except TypeError as exc:
-        if "browser_engine" not in str(exc):
-            raise
-        return await load_storage_state_for_run(run_id)
+    return await load_storage_state_for_run(
+        run_id,
+        browser_engine=browser_engine,
+    )
 
 
 async def _load_storage_state_for_domain(
@@ -1073,15 +1028,10 @@ async def _load_storage_state_for_domain(
     *,
     browser_engine: str,
 ) -> dict[str, object] | None:
-    try:
-        return await load_storage_state_for_domain(
-            domain,
-            browser_engine=browser_engine,
-        )
-    except TypeError as exc:
-        if "browser_engine" not in str(exc):
-            raise
-        return await load_storage_state_for_domain(domain)
+    return await load_storage_state_for_domain(
+        domain,
+        browser_engine=browser_engine,
+    )
 
 
 async def _persist_storage_state_for_run(
@@ -1090,16 +1040,11 @@ async def _persist_storage_state_for_run(
     *,
     browser_engine: str,
 ) -> None:
-    try:
-        await persist_storage_state_for_run(
-            run_id,
-            storage_state,
-            browser_engine=browser_engine,
-        )
-    except TypeError as exc:
-        if "browser_engine" not in str(exc):
-            raise
-        await persist_storage_state_for_run(run_id, storage_state)
+    await persist_storage_state_for_run(
+        run_id,
+        storage_state,
+        browser_engine=browser_engine,
+    )
 
 
 async def _persist_storage_state_for_domain(
@@ -1108,16 +1053,11 @@ async def _persist_storage_state_for_domain(
     *,
     browser_engine: str,
 ) -> bool:
-    try:
-        return await persist_storage_state_for_domain(
-            domain,
-            storage_state,
-            browser_engine=browser_engine,
-        )
-    except TypeError as exc:
-        if "browser_engine" not in str(exc):
-            raise
-        return await persist_storage_state_for_domain(domain, storage_state)
+    return await persist_storage_state_for_domain(
+        domain,
+        storage_state,
+        browser_engine=browser_engine,
+    )
 
 
 def _mark_storage_state_persist_policy(
@@ -1207,21 +1147,8 @@ def _snapshot_count(snapshot: dict[str, int | bool | str], *keys: str) -> int:
     return 0
 
 
-def _proxy_rotation_mode(proxy_profile: dict[str, object] | None) -> str | None:
-    if not isinstance(proxy_profile, dict):
-        return None
-    normalized = str(proxy_profile.get("rotation") or "").strip().lower()
-    if not normalized:
-        return None
-    if normalized in set(crawler_runtime_settings.proxy_rotation_sticky_tokens or ()):
-        return "sticky"
-    if normalized in set(crawler_runtime_settings.proxy_rotation_rotating_tokens or ()):
-        return "rotating"
-    return normalized
-
-
 def _proxy_requires_fresh_browser_state(proxy_profile: dict[str, object] | None) -> bool:
-    return _proxy_rotation_mode(proxy_profile) == "rotating"
+    return proxy_rotation_mode(proxy_profile) == "rotating"
 
 
 def _surface_supports_origin_warmup(surface: str) -> bool:
@@ -1252,12 +1179,7 @@ async def _resolve_runtime_provider(
     *,
     browser_engine: str,
 ):
-    try:
-        return await runtime_provider(browser_engine=browser_engine)
-    except TypeError as exc:
-        if "browser_engine" not in str(exc):
-            raise
-        return await runtime_provider()
+    return await runtime_provider(browser_engine=browser_engine)
 
 
 def _resolve_proxied_page_factory(
@@ -1270,41 +1192,14 @@ def _resolve_proxied_page_factory(
     locality_profile: dict[str, object] | None,
     allow_storage_state: bool,
 ):
-    try:
-        return proxied_page_factory(
-            proxy=proxy,
-            run_id=run_id,
-            domain=domain,
-            browser_engine=browser_engine,
-            locality_profile=locality_profile,
-            allow_storage_state=allow_storage_state,
-        )
-    except TypeError as exc:
-        if (
-            "browser_engine" not in str(exc)
-            and "allow_storage_state" not in str(exc)
-            and "locality_profile" not in str(exc)
-        ):
-            raise
-        try:
-            return proxied_page_factory(
-                proxy=proxy,
-                run_id=run_id,
-                domain=domain,
-                browser_engine=browser_engine,
-                locality_profile=locality_profile,
-            )
-        except TypeError as inner_exc:
-            if (
-                "browser_engine" not in str(inner_exc)
-                and "locality_profile" not in str(inner_exc)
-            ):
-                raise
-            return proxied_page_factory(
-                proxy=proxy,
-                run_id=run_id,
-                domain=domain,
-            )
+    return proxied_page_factory(
+        proxy=proxy,
+        run_id=run_id,
+        domain=domain,
+        browser_engine=browser_engine,
+        locality_profile=locality_profile,
+        allow_storage_state=allow_storage_state,
+    )
 
 
 async def browser_fetch(
@@ -1335,7 +1230,7 @@ async def browser_fetch(
 ) -> PageFetchResult:
     normalized_domain = normalize_domain(url)
     normalized_engine = _normalize_browser_engine(browser_engine)
-    proxy_rotation_mode = _proxy_rotation_mode(proxy_profile)
+    resolved_proxy_rotation_mode = proxy_rotation_mode(proxy_profile)
     # Rotating proxies must not reuse cookies/localStorage from a prior IP identity.
     allow_storage_state = not _proxy_requires_fresh_browser_state(proxy_profile)
     browser_proxy_mode = _browser_proxy_mode(
@@ -1403,7 +1298,7 @@ async def browser_fetch(
                     f"proxy: {_display_proxy(proxy)}, binary: {runtime_binary})"
                 ),
             )
-            if proxy_rotation_mode == "rotating":
+            if resolved_proxy_rotation_mode == "rotating":
                 await _emit_browser_event(
                     on_event,
                     "info",
@@ -1577,7 +1472,7 @@ async def browser_fetch(
                     "browser_proxy_mode": browser_proxy_mode,
                     "escalation_lane": str(escalation_lane or "").strip().lower() or None,
                     "host_policy_snapshot": dict(host_policy_snapshot or {}),
-                    "proxy_rotation_mode": proxy_rotation_mode,
+                    "proxy_rotation_mode": resolved_proxy_rotation_mode,
                     "browser_state_reuse_allowed": allow_storage_state,
                     "behavior_realism": dict(behavior_diagnostics),
                 }
@@ -1664,8 +1559,6 @@ async def _maybe_warm_origin_before_navigation(
     warm_page = None
     try:
         warm_page = await new_page()
-        if _apply_stealth_for_engine(browser_engine):
-            await _apply_stealth(warm_page)
         warm_response = await warm_page.goto(
             warm_url,
             wait_until="domcontentloaded",
@@ -1914,116 +1807,6 @@ def detail_expansion_keywords(
     if dynamic_keywords:
         keywords.extend(dynamic_keywords)
     return tuple(dict.fromkeys(keywords))
-
-
-async def interactive_label(handle: Any) -> str:
-    value = await handle.evaluate(
-        """(node) => {
-            const pieces = [
-                node.innerText,
-                node.textContent,
-                node.getAttribute('aria-label'),
-                node.getAttribute('title'),
-                node.getAttribute('data-testid'),
-            ];
-            return pieces.find((item) => item && item.trim()) || '';
-        }"""
-    )
-    return " ".join(str(value or "").split()).strip().lower()
-
-
-async def is_actionable_interactive_handle(handle: Any) -> bool:
-    state = await handle.evaluate(
-        """(node) => {
-            if (!(node instanceof HTMLElement) || !node.isConnected) {
-                return { actionable: false };
-            }
-            const style = window.getComputedStyle(node);
-            const rect = node.getBoundingClientRect();
-            const disabled = Boolean(
-                node.hasAttribute('disabled') ||
-                node.getAttribute('aria-disabled') === 'true' ||
-                node.inert
-            );
-            const hidden = Boolean(
-                node.hidden ||
-                node.getAttribute('aria-hidden') === 'true' ||
-                style.display === 'none' ||
-                style.visibility === 'hidden' ||
-                style.pointerEvents === 'none'
-            );
-            const collapsed = rect.width <= 0 || rect.height <= 0;
-            return { actionable: !(disabled || hidden || collapsed) };
-        }"""
-    )
-    if not isinstance(state, dict):
-        return False
-    return bool(state.get("actionable"))
-
-
-async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
-    label = await interactive_label(handle)
-    visible = await _interactive_handle_is_visible(handle)
-    aria_label = await _interactive_handle_attr(handle, "aria-label")
-    title = await _interactive_handle_attr(handle, "title")
-    href = await _interactive_handle_attr(handle, "href")
-    aria_controls = await _interactive_handle_attr(handle, "aria-controls")
-    aria_expanded = await _interactive_handle_attr(handle, "aria-expanded")
-    data_qa_action = await _interactive_handle_attr(handle, "data-qa-action")
-    data_testid = await _interactive_handle_attr(handle, "data-testid")
-    class_name = await _interactive_handle_attr(handle, "class")
-    tag_name = await _interactive_handle_tag_name(handle)
-    probe = " ".join(
-        part
-        for part in (label, aria_label, title, data_qa_action, data_testid)
-        if str(part or "").strip()
-    ).strip().lower()
-    return {
-        "label": label,
-        "probe": probe,
-        "aria_label": aria_label,
-        "title": title,
-        "href": href,
-        "aria_controls": aria_controls,
-        "aria_expanded": aria_expanded,
-        "data_qa_action": data_qa_action,
-        "data_testid": data_testid,
-        "class_name": class_name,
-        "tag_name": tag_name,
-        "visible": visible,
-        "actionable": await is_actionable_interactive_handle(handle),
-    }
-
-
-async def _interactive_handle_attr(handle: Any, attr_name: str) -> str:
-    getter = getattr(handle, "get_attribute", None)
-    if getter is None:
-        return ""
-    try:
-        value = await getter(attr_name)
-    except Exception:
-        return ""
-    return " ".join(str(value or "").split()).strip().lower()
-
-
-async def _interactive_handle_tag_name(handle: Any) -> str:
-    try:
-        value = await handle.evaluate(
-            "(node) => node instanceof Element ? node.tagName.toLowerCase() : ''"
-        )
-    except Exception:
-        return ""
-    return " ".join(str(value or "").split()).strip().lower()
-
-
-async def _interactive_handle_is_visible(handle: Any) -> bool:
-    checker = getattr(handle, "is_visible", None)
-    if checker is None:
-        return True
-    try:
-        return bool(await checker())
-    except Exception:
-        return False
 
 
 def classify_browser_outcome(

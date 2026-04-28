@@ -402,9 +402,6 @@ async def test_build_report_uses_runtime_page_init_script_path(
         del proxy, browser_engine
         return runtime
 
-    async def _noop_stealth(_target) -> None:
-        return None
-
     monkeypatch.setattr(
         acquisition_browser_runtime,
         "build_playwright_context_spec",
@@ -423,7 +420,6 @@ async def test_build_report_uses_runtime_page_init_script_path(
             init_script="window.__fingerprint = true;",
         ),
     )
-    monkeypatch.setattr(acquisition_browser_runtime, "_STEALTH_APPLIER", _noop_stealth)
     monkeypatch.setattr(
         probe,
         "BROWSER_SURFACE_PROBE_TARGETS",

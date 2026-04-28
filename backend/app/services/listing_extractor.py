@@ -19,9 +19,6 @@ from app.services.config.extraction_rules import (
     LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_STRUCTURE_NEGATIVE_HINTS,
-    LISTING_UTILITY_TITLE_PATTERNS,
-    LISTING_UTILITY_TITLE_TOKENS,
-    LISTING_UTILITY_URL_TOKENS,
     NON_PRODUCT_IMAGE_HINTS,
     NON_PRODUCT_PROVIDER_HINTS,
     TITLE_PROMOTION_PREFIXES,
@@ -33,6 +30,7 @@ from app.services.extraction_context import (
 )
 from app.services.extract.listing_candidate_ranking import (
     best_listing_candidate_set,
+    looks_like_utility_record,
 )
 from app.services.extract.listing_card_fragments import (
     listing_node_attr,
@@ -69,9 +67,6 @@ from app.services.field_value_dom import apply_selector_fallbacks
 from app.services.config.surface_hints import detail_path_hints
 
 logger = logging.getLogger(__name__)
-_UTILITY_TITLE_REGEXES = tuple(
-    re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
-)
 _PRICE_NODE_SELECTORS = (
     "[itemprop='price']",
     "[class*='price']",
@@ -483,7 +478,7 @@ def _record_is_supported_listing_candidate(
     source_kind = str(record.get("_source") or "").strip().lower()
     if not title or not url or is_title_noise(title) or _url_is_structural(url, page_url):
         return False
-    if _listing_url_or_title_looks_like_utility(title=title, url=url):
+    if looks_like_utility_record(title=title, url=url):
         return False
     is_job_surface = surface.startswith("job_")
     detail_like = _detail_like_path(url, is_job=is_job_surface)
@@ -501,34 +496,6 @@ def _record_is_supported_listing_candidate(
     if is_job_surface and _job_listing_url_looks_like_posting(url):
         return True
     return not is_job_surface and source_kind == "structured_listing" and len(title) >= 12
-
-
-def _listing_url_or_title_looks_like_utility(*, title: str, url: str) -> bool:
-    normalized_title = " ".join(str(title or "").strip().lower().split())
-    normalized_url = str(url or "").strip().lower()
-    if normalized_title:
-        if any(pattern.search(normalized_title) for pattern in _UTILITY_TITLE_REGEXES):
-            return True
-        if any(
-            _listing_title_contains_token_phrase(normalized_title, token)
-            for token in LISTING_UTILITY_TITLE_TOKENS
-        ):
-            return True
-    return bool(
-        normalized_url
-        and any(
-            re.search(rf"{re.escape(token)}(?:[/?#]|$)", normalized_url)
-            for token in LISTING_UTILITY_URL_TOKENS
-        )
-    )
-
-
-def _listing_title_contains_token_phrase(title: str, token: str) -> bool:
-    normalized_token = " ".join(str(token or "").strip().lower().split())
-    if not normalized_token:
-        return False
-    pattern = rf"(^|[^a-z0-9]){re.escape(normalized_token)}([^a-z0-9]|$)"
-    return re.search(pattern, title) is not None
 
 
 def _listing_card_html_fragments(
@@ -1246,7 +1213,7 @@ def _listing_record_from_card(
         and title_score >= 10
         and len(re.findall(r"[a-z0-9]+", cleaned_title, flags=re.I)) >= 3
         and not _url_is_structural(cleaned_url, page_url)
-        and not _listing_url_or_title_looks_like_utility(
+        and not looks_like_utility_record(
             title=cleaned_title,
             url=cleaned_url,
         )

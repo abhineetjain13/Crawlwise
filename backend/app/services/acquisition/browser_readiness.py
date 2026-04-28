@@ -47,7 +47,7 @@ async def wait_for_listing_readiness_impl(
     *,
     override: dict[str, object] | None,
 ) -> dict[str, object]:
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+    from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
     if not override:
         return {}
@@ -193,8 +193,8 @@ async def listing_card_signal_count_impl(page: Any, *, surface: str) -> int:
 
 
 async def count_matching_selectors(page: Any, *, selectors: list[str]) -> int:
-    from playwright.async_api import Error as PlaywrightError
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+    from patchright.async_api import Error as PlaywrightError
+    from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
     matches = 0
     for selector in selectors:

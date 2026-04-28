@@ -187,11 +187,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_real_chrome_executable_path: str = ""
     browser_real_chrome_force_headful: bool = True
     browser_real_chrome_native_context: bool = True
-    browser_real_chrome_apply_stealth: bool = False
     browser_patchright_enabled: bool = True
-    browser_patchright_prefer: bool = True
-    browser_patchright_apply_stealth: bool = False
-    browser_patchright_use_legacy_init_script: bool = False
     browser_launch_args: tuple[str, ...] = (
         "--disable-blink-features=AutomationControlled",
         "--disable-features=IsolateOrigins,site-per-process",
@@ -457,3 +453,16 @@ class CrawlerRuntimeSettings(BaseSettings):
 
 
 crawler_runtime_settings = CrawlerRuntimeSettings()
+
+
+def proxy_rotation_mode(proxy_profile: dict[str, object] | None) -> str | None:
+    if not isinstance(proxy_profile, dict):
+        return None
+    normalized = str(proxy_profile.get("rotation") or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in set(crawler_runtime_settings.proxy_rotation_sticky_tokens or ()):
+        return "sticky"
+    if normalized in set(crawler_runtime_settings.proxy_rotation_rotating_tokens or ()):
+        return "rotating"
+    return normalized

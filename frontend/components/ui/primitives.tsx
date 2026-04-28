@@ -27,11 +27,11 @@ export function Title({
   return (
     <div className={cn("space-y-1", className)}>
       {kicker ? (
-        <p className="m-0 mb-1.5 text-sm font-semibold text-accent">
+        <p className="m-0 mb-1.5 text-sm font-medium text-accent">
           {kicker}
         </p>
       ) : null}
-      <h1 className="m-0 text-[clamp(1.75rem,1.45rem+0.8vw,2rem)] font-semibold leading-[1.08] text-foreground">
+      <h1 className="m-0 text-[clamp(1.75rem,1.45rem+0.8vw,2rem)] font-semibold leading-[var(--leading-tight)] text-foreground type-heading">
         {children}
       </h1>
     </div>
@@ -39,7 +39,7 @@ export function Title({
 }
 
 export function Subtitle({ children }: Readonly<{ children: ReactNode }>) {
-  return <p className="mt-1.5 max-w-2xl text-sm leading-[1.55] text-secondary">{children}</p>;
+  return <p className="mt-1.5 max-w-2xl text-sm leading-[var(--leading-relaxed)] text-secondary">{children}</p>;
 }
 
 /* ─── Field ──────────────────────────────────────────────────────────────── */
@@ -174,8 +174,8 @@ export function Dropdown<T extends string>({
         disabled={disabled}
         onKeyDown={handleKeyDown}
         className={cn(
-          "focus-ring flex h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-background-elevated text-sm font-medium leading-[1.4] text-foreground transition-[border-color,box-shadow] hover:border-border-strong focus:border-accent focus:shadow-[0_0_0_3px_var(--accent-subtle)]",
-          align === "center" ? "justify-center px-9 text-center" : "justify-between px-3 text-left",
+          "focus-ring flex h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-background-elevated px-3 text-sm font-medium leading-[1.4] text-foreground shadow-sm transition-[background-color,border-color,box-shadow] hover:bg-background-alt focus:border-accent focus:shadow-[0_0_0_3px_var(--accent-subtle)]",
+          align === "center" ? "justify-center text-center" : "justify-between text-left",
         )}
       >
         <span className="truncate">{selectedLabel}</span>
@@ -215,7 +215,7 @@ export function Dropdown<T extends string>({
                 }}
                 onMouseDown={(e) => e.preventDefault()}
                 className={cn(
-                  "flex w-full items-center py-2 text-sm leading-[1.35] transition-colors",
+                  "flex w-full items-center py-2 text-sm leading-[var(--leading-snug)] transition-colors",
                   align === "center" ? "justify-center px-8" : "justify-start px-3",
                   option.value === value
                     ? "bg-accent-subtle text-accent font-medium"
@@ -335,32 +335,33 @@ export function Tooltip({
       {enhancedChild}
       {open && typeof document !== "undefined"
         ? createPortal(
+          <div
+            ref={tooltipRef}
+            id={tooltipId}
+            role="tooltip"
+            className={cn(
+              "pointer-events-none fixed w-max max-w-[min(420px,calc(100vw-24px))]",
+              "tooltip-surface rounded-[var(--radius-md)] bg-panel px-2 py-1.5 shadow-lg",
+              "text-sm font-medium leading-normal text-foreground z-[200] break-words",
+            )}
+            style={{ left: `${position.left}px`, top: `${position.top}px` }}
+          >
+            {content}
             <div
-              ref={tooltipRef}
-              id={tooltipId}
-              role="tooltip"
-              className={cn(
-                "pointer-events-none fixed w-max max-w-[min(420px,calc(100vw-24px))]",
-                "tooltip-surface rounded-[var(--radius-md)] bg-panel px-2 py-1.5 shadow-lg",
-                "text-sm font-medium leading-normal text-foreground z-[200] break-words",
-              )}
-              style={{ left: `${position.left}px`, top: `${position.top}px` }}
-            >
-              {content}
-              <div
-                className="absolute -bottom-[6px] size-2.5 rotate-45 border-b border-r border-border-strong bg-panel"
-                style={{
-                  left:
-                    align === "start"
-                      ? "12px"
-                      : "50%",
-                  transform: align === "start" ? undefined : "translateX(-50%)",
-                }}
-              />
-            </div>,
-            document.body,
-          )
+              className="absolute -bottom-[6px] size-2.5 border-b border-r border-border-strong bg-panel"
+              style={{
+                left:
+                  align === "start"
+                    ? "12px"
+                    : "50%",
+                transform: align === "start" ? "rotate(45deg)" : "translateX(-50%) rotate(45deg)",
+              }}
+            />
+          </div>,
+          document.body,
+        )
         : null}
     </div>
   );
 }
+

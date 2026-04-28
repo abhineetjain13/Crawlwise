@@ -47,6 +47,7 @@ ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("extract/shared_variant_logic.py", "_VARIANT_AXIS_GENERIC_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_AXIS_LABEL_NOISE_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_GROUP_ATTR_NOISE_TOKENS"),
+    ("extract/shared_variant_logic.py", "_QUANTITY_ATTR_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_OPTION_VALUE_NOISE_TOKENS"),
     ("field_value_dom.py", "_SECTION_CONTAINER_SELECTORS"),
     ("field_value_dom.py", "_SECTION_LABEL_SELECTOR"),

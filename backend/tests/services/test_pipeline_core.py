@@ -199,10 +199,10 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
 
     async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
         forced_engine = str(
-            request.acquisition_profile.get("forced_browser_engine") or "chromium"
+            request.acquisition_profile.get("forced_browser_engine") or "patchright"
         )
         attempted_engines.append(forced_engine)
-        challenge = forced_engine == "chromium"
+        challenge = forced_engine == "patchright"
         return AcquisitionResult(
             request=request,
             final_url=request.url,
@@ -251,8 +251,8 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
     result = await process_single_url(db_session, run, run.url)
     rows, total = await get_run_records(db_session, run.id, 1, 20)
 
-    assert attempted_engines == ["chromium", "real_chrome"]
-    assert hard_blocks[0]["method"] == "browser:chromium"
+    assert attempted_engines == ["patchright", "real_chrome"]
+    assert hard_blocks[0]["method"] == "browser:patchright"
     assert result.verdict == "success"
     assert total == 1
     assert rows[0].data["title"] == "Nike Widget"
@@ -278,7 +278,7 @@ async def test_usable_detail_with_active_provider_evidence_does_not_retry_real_c
 
     async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
         forced_engine = str(
-            request.acquisition_profile.get("forced_browser_engine") or "chromium"
+            request.acquisition_profile.get("forced_browser_engine") or "patchright"
         )
         attempted_engines.append(forced_engine)
         return AcquisitionResult(
@@ -319,14 +319,14 @@ async def test_usable_detail_with_active_provider_evidence_does_not_retry_real_c
 
     result = await process_single_url(db_session, run, run.url)
 
-    assert attempted_engines == ["chromium"]
+    assert attempted_engines == ["patchright"]
     assert result.verdict == "success"
     assert result.url_metrics["blocked"] is False
     assert result.url_metrics.get("failure_reason") is None
 
 
 @pytest.mark.asyncio
-async def test_chromium_challenge_shell_updates_host_memory(
+async def test_patchright_challenge_shell_updates_host_memory(
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
@@ -347,13 +347,13 @@ async def test_chromium_challenge_shell_updates_host_memory(
         return AcquisitionResult(
             request=request,
             final_url=request.url,
-            html="<html><body>chromium</body></html>",
+            html="<html><body>patchright</body></html>",
             method="browser",
             status_code=200,
             blocked=False,
             browser_diagnostics={
                 "browser_attempted": True,
-                "browser_engine": "chromium",
+                "browser_engine": "patchright",
                 "browser_outcome": "usable_content",
                 "challenge_evidence": ["strong:captcha", "provider:akamai"],
                 "challenge_provider_hits": ["akamai"],
@@ -384,7 +384,7 @@ async def test_chromium_challenge_shell_updates_host_memory(
     await process_single_url(db_session, run, run.url)
 
     assert hard_blocks
-    assert hard_blocks[0]["method"] == "browser:chromium"
+    assert hard_blocks[0]["method"] == "browser:patchright"
 
 
 @pytest.mark.asyncio

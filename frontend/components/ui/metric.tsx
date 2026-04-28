@@ -17,11 +17,11 @@ export function Metric({
 }: Readonly<{ label: string; value: ReactNode; loading?: boolean }>) {
   return (
     <div className="relative space-y-1.5 overflow-hidden rounded-[var(--radius-xl)] border border-border bg-panel p-4 shadow-card transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-border-strong hover:shadow-elevated">
-      <p className="text-sm font-semibold text-secondary">{label}</p>
+      <p className="text-sm font-medium text-secondary">{label}</p>
       {loading ? (
         <div className="skeleton h-7 w-20" aria-hidden />
       ) : (
-        <div className="font-mono text-[28px] font-semibold leading-none text-foreground tabular-nums">{value}</div>
+        <div className="font-mono text-[var(--text-3xl)] font-semibold leading-none text-foreground tabular-nums">{value}</div>
       )}
     </div>
   );
@@ -48,7 +48,7 @@ export function StatCard({
     <div className="relative overflow-hidden rounded-[var(--radius-xl)] border border-border bg-panel p-4 shadow-card transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-border-strong hover:shadow-elevated">
       <div className="absolute inset-x-0 top-0 h-0.5" style={{ background: stripeColor ?? "var(--accent)" }} aria-hidden />
       <div className="mb-2.5 flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-secondary">{label}</p>
+        <p className="text-sm font-medium text-secondary">{label}</p>
         {icon ? (
           <div
             className="grid size-[22px] place-items-center rounded-md"
@@ -61,9 +61,9 @@ export function StatCard({
       {loading ? (
         <div className="mt-2.5 skeleton h-9 w-28" aria-hidden />
       ) : (
-        <div className="mt-2 font-mono text-[28px] font-semibold leading-none text-foreground tabular-nums">{value}</div>
+        <div className="mt-2 font-mono text-[var(--text-3xl)] font-semibold leading-none text-foreground tabular-nums">{value}</div>
       )}
-      {sub && !loading ? <div className="mt-1.5 text-sm leading-[1.45] text-muted">{sub}</div> : null}
+      {sub && !loading ? <div className="mt-1.5 text-sm leading-[var(--leading-normal)] text-muted">{sub}</div> : null}
     </div>
   );
 }

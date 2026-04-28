@@ -21,8 +21,11 @@ export function useTerminalSync(
  queries: ReadonlyArray<RefetchableQuery>,
 ) {
   const terminalSyncRef = useRef<string | null>(null);
+  const queriesRef = useRef(queries);
+
 
   useEffect(() => {
+    queriesRef.current = queries;
     if (!run || !terminal) {
       terminalSyncRef.current = null;
       return;
@@ -34,6 +37,6 @@ export function useTerminalSync(
     }
     terminalSyncRef.current = syncKey;
 
-    void Promise.allSettled(queries.map((query) => query.refetch()));
-  }, [queries, run, terminal]);
+    void Promise.allSettled(queriesRef.current.map((query) => query.refetch()));
+  }, [run, terminal, queries]);
 }

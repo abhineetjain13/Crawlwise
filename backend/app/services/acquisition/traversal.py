@@ -12,7 +12,7 @@ from app.services.acquisition.dom_runtime import get_page_html, wait_for_dom_mut
 from app.services.acquisition.runtime import classify_blocked_page_async
 
 try:
-    from playwright.async_api import Error as PlaywrightError
+    from patchright.async_api import Error as PlaywrightError
 except ImportError:  # pragma: no cover
     class PlaywrightError(Exception):  # type: ignore[no-redef]
         pass

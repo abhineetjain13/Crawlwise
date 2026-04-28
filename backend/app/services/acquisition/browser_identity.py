@@ -156,11 +156,7 @@ def _context_color_scheme() -> str | None:
 
 def _should_use_legacy_init_script(browser_engine: str) -> bool:
     normalized_engine = _normalize_browser_engine_label(browser_engine)
-    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
-        return bool(
-            crawler_runtime_settings.browser_patchright_use_legacy_init_script
-        )
-    return True
+    return normalized_engine != _PATCHRIGHT_BROWSER_ENGINE
 
 
 def _viewport_from_screen(

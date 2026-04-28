@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from patchright.async_api import Error as PlaywrightError
+from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.services.acquisition import browser_capture, browser_detail, browser_recovery
 from app.services.acquisition.browser_capture import BrowserNetworkCapture
@@ -438,7 +438,7 @@ async def _page_markdown_via_browser_fetch(
         accessibility_snapshot=accessibility_snapshot,
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -468,7 +468,7 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
         """,
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -500,7 +500,7 @@ async def test_browser_fetch_fast_paths_ready_listing_cards_without_networkidle(
     )
     page.card_selectors = set(selectors)
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -541,7 +541,7 @@ async def test_browser_fetch_listing_does_not_treat_product_titles_as_extractabl
     )
     page.card_selectors = set(selectors)
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -566,7 +566,7 @@ async def test_browser_fetch_listing_skips_detail_extractability_probe(
     )
     page.card_selectors = set(selectors)
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     def _unexpected_extractability(*args, **kwargs):
@@ -642,7 +642,7 @@ async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_lis
             ]
         )
 
-        async def _fake_runtime():
+        async def _fake_runtime(**_kwargs):
             return _FakeRuntime(page)
 
         original_probe_browser_readiness = browser_runtime.probe_browser_readiness
@@ -712,7 +712,7 @@ async def test_browser_fetch_bounds_response_capture_workers_under_burst_load(
         response_events=[_FakeResponse(index) for index in range(200)],
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _fake_read_network_payload_body(response, **_kwargs):
@@ -777,7 +777,7 @@ async def test_browser_fetch_expands_detail_accordions_before_collecting_html() 
         labels=[{"label": "product specifications"}, {"label": "share"}],
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -813,7 +813,7 @@ async def test_browser_fetch_expands_requested_field_sections_even_when_probe_is
         ],
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -848,7 +848,7 @@ async def test_browser_fetch_skips_detail_expansion_when_requested_section_is_al
         ],
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -883,7 +883,7 @@ async def test_browser_fetch_expands_requested_dom_pattern_content_without_headi
         """,
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -988,7 +988,7 @@ async def test_browser_fetch_flattens_shadow_dom_before_serializing_html() -> No
         ),
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -1026,7 +1026,7 @@ async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view(
         },
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -1067,7 +1067,7 @@ async def test_browser_fetch_captures_rendered_listing_fragments_artifact() -> N
         ],
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -1099,7 +1099,7 @@ async def test_browser_fetch_ignores_non_string_rendered_listing_fragments(
     )
     page.url = "https://example.com/collections/widgets"
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _bad_fragments(*args, **kwargs):
@@ -1129,7 +1129,7 @@ async def test_browser_fetch_keeps_empty_successful_listing_artifacts(
     )
     page.url = "https://example.com/collections/widgets"
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _empty_fragments(*args, **kwargs):
@@ -1172,7 +1172,7 @@ async def test_generate_page_markdown_tolerates_nodes_with_missing_attrs(
         base_html="<html><body><div class='hero'>Widget Prime</div></body></html>"
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _skip_settle(*args, **kwargs):
@@ -1498,7 +1498,7 @@ async def test_browser_fetch_records_extractable_sections_after_detail_expansion
         labels=[{"label": "materials"}],
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -1545,7 +1545,7 @@ async def test_browser_fetch_does_not_skip_requested_dom_pattern_when_selector_i
         ],
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -1740,7 +1740,7 @@ async def test_browser_fetch_waits_for_challenge_recovery_before_settling(
             challenge_element_hits=[],
         )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     monkeypatch.setattr(
@@ -1785,7 +1785,7 @@ async def test_browser_fetch_uses_aom_expansion_when_dom_keyword_scan_misses() -
         role_targets={("tab", "product specifications")},
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -1866,7 +1866,7 @@ async def test_browser_fetch_aom_expansion_respects_interaction_cap() -> None:
             role_targets={("tab", "product specifications")},
         )
 
-        async def _fake_runtime():
+        async def _fake_runtime(**_kwargs):
             return _FakeRuntime(page)
 
         result = await browser_runtime.browser_fetch(
@@ -2475,7 +2475,7 @@ def test_build_failed_browser_diagnostics_uses_exception_proxy_mode() -> None:
 async def test_browser_fetch_logs_non_usable_outcomes(caplog: pytest.LogCaptureFixture) -> None:
     page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     with caplog.at_level("WARNING", logger=browser_page_flow.logger.name):
@@ -2501,7 +2501,7 @@ async def test_browser_fetch_respects_disabled_screenshot_capture(
 ) -> None:
     page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     with caplog.at_level("WARNING", logger=browser_page_flow.logger.name):
@@ -2539,7 +2539,7 @@ async def test_browser_fetch_surfaces_rendered_listing_evidence_counts() -> None
     )
     page.url = "https://example.com/collections/widgets"
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -2574,7 +2574,7 @@ async def test_browser_fetch_bounds_listing_artifact_capture_time(
     )
     page.url = "https://example.com/collections/widgets"
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _slow_rendered_listing_fragments(*args, **kwargs):
@@ -3038,7 +3038,7 @@ async def test_browser_fetch_records_navigation_timing_when_fallback_navigation_
         },
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     with pytest.raises(PlaywrightError, match="fallback failed") as excinfo:
@@ -3135,21 +3135,11 @@ async def test_origin_warmup_skips_for_rotating_proxy_profile() -> None:
 
 
 @pytest.mark.asyncio
-async def test_origin_warmup_skips_stealth_for_native_real_chrome(
+async def test_origin_warmup_runs_without_stealth_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
-    stealth_calls: list[object] = []
-
-    async def _fake_stealth(target) -> None:
-        stealth_calls.append(target)
-
-    monkeypatch.setattr(browser_runtime, "_STEALTH_APPLIER", _fake_stealth)
-    monkeypatch.setattr(
-        browser_runtime.crawler_runtime_settings,
-        "browser_real_chrome_apply_stealth",
-        False,
-    )
+    del monkeypatch
 
     await browser_runtime._maybe_warm_origin_before_navigation(
         page,
@@ -3163,7 +3153,6 @@ async def test_origin_warmup_skips_stealth_for_native_real_chrome(
     )
 
     assert page.spawned_pages
-    assert stealth_calls == []
 
 
 def test_browser_runtime_snapshot_uses_capacity_fallback_for_pooled_runtimes(
@@ -3242,7 +3231,7 @@ async def test_browser_fetch_recovers_when_commit_navigation_is_interrupted_by_s
         },
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     result = await browser_runtime.browser_fetch(
@@ -3268,7 +3257,7 @@ async def test_browser_fetch_force_closes_context_when_cancelled_mid_stage() -> 
         content_entered=content_entered,
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     task = asyncio.create_task(
@@ -3300,7 +3289,7 @@ async def test_browser_fetch_force_closes_context_when_stage_times_out(
         ignore_content_cancellation=True,
     )
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     remaining_timeouts = iter([5.0, 0.05, 0.05, 0.05])
@@ -3347,7 +3336,7 @@ async def test_browser_fetch_surfaces_traversal_fragment_metrics(
     )
     page.url = "https://example.com/collections/widgets"
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _fake_execute_listing_traversal(*args, **kwargs):
@@ -3409,7 +3398,7 @@ async def test_browser_fetch_keeps_full_rendered_html_when_traversal_makes_no_pr
     )
     page.url = "https://example.com/collections/widgets"
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _fake_execute_listing_traversal(*args, **kwargs):
@@ -3465,7 +3454,7 @@ async def test_browser_fetch_prefers_rendered_html_when_progress_traversal_fragm
     )
     page.url = "https://example.com/collections/widgets"
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _fake_execute_listing_traversal(*args, **kwargs):
@@ -3516,7 +3505,7 @@ async def test_browser_fetch_runs_listing_recovery_when_thin_listing_retry_reque
     page.url = "https://example.com/collections/widgets"
     calls = {"count": 0}
 
-    async def _fake_runtime():
+    async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
 
     async def _fake_recover_listing_page_content(*args, **kwargs):

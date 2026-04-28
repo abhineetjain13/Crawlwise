@@ -8,6 +8,7 @@ from glom import Coalesce, glom  # type: ignore[import-untyped]
 
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.extract.shared_variant_logic import (
+    merge_variant_rows,
     normalized_variant_axis_key,
     resolve_variants,
     split_variant_axes,
@@ -229,7 +230,7 @@ def _merge_same_product_record(
         ):
             merged[field_name] = field_value
 
-    merged_variants = _merge_variant_rows(
+    merged_variants = merge_variant_rows(
         base_record.get("variants"),
         incoming.get("variants"),
     )
@@ -257,43 +258,6 @@ def _merge_same_product_record(
     _refresh_record_from_selected_variant(merged)
     return compact_dict(merged)
 
-def _merge_variant_rows(
-    existing_rows: Any,
-    incoming_rows: Any,
-) -> list[dict[str, Any]]:
-    merged_by_identity: dict[str, dict[str, Any]] = {}
-    ordered_keys: list[str] = []
-
-    def _remember(row: dict[str, Any]) -> None:
-        identity = _variant_identity(row)
-        if not identity:
-            return
-        current = merged_by_identity.get(identity)
-        if current is None:
-            merged_by_identity[identity] = dict(row)
-            ordered_keys.append(identity)
-            return
-        richer, weaker = _variant_rows_by_richness(current, row)
-        merged_row = dict(richer)
-        for field_name, field_value in weaker.items():
-            if merged_row.get(field_name) in (None, "", [], {}) and field_value not in (
-                None,
-                "",
-                [],
-                {},
-            ):
-                merged_row[field_name] = field_value
-        merged_by_identity[identity] = merged_row
-
-    for rows in (existing_rows, incoming_rows):
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if isinstance(row, dict):
-                _remember(row)
-
-    return [merged_by_identity[key] for key in ordered_keys]
-
 def _merge_variant_axes(existing_axes: Any, incoming_axes: Any) -> dict[str, list[str]]:
     merged: dict[str, list[str]] = {}
     for axes in (existing_axes, incoming_axes):
@@ -312,54 +276,6 @@ def _merge_variant_axes(existing_axes: Any, incoming_axes: Any) -> dict[str, lis
                 seen.add(cleaned_value.lower())
                 bucket.append(cleaned_value)
     return merged
-
-def _variant_identity(variant: dict[str, Any]) -> str | None:
-    variant_id = text_or_none(variant.get("variant_id"))
-    if variant_id:
-        return f"id:{variant_id}"
-    sku = text_or_none(variant.get("sku"))
-    if sku:
-        return f"sku:{sku}"
-    option_values = variant.get("option_values")
-    if isinstance(option_values, dict) and option_values:
-        normalized_pairs = [
-            (str(axis_name).strip(), text_or_none(axis_value) or "")
-            for axis_name, axis_value in option_values.items()
-            if str(axis_name).strip() and text_or_none(axis_value)
-        ]
-        if normalized_pairs:
-            normalized_pairs.sort()
-            return "options:" + "|".join(f"{axis}={value}" for axis, value in normalized_pairs)
-    variant_url = text_or_none(variant.get("url"))
-    if variant_url:
-        return f"url:{variant_url}"
-    return None
-
-def _variant_rows_by_richness(
-    left: dict[str, Any],
-    right: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    left_score = _variant_row_richness(left)
-    right_score = _variant_row_richness(right)
-    if right_score > left_score:
-        return right, left
-    return left, right
-
-def _variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
-    populated_fields = sum(
-        1 for value in variant.values() if value not in (None, "", [], {})
-    )
-    option_values = variant.get("option_values")
-    option_value_count = (
-        len(option_values)
-        if isinstance(option_values, dict)
-        else 0
-    )
-    has_stock_signal = int(
-        variant.get("stock_quantity") not in (None, "", [], {})
-        or variant.get("original_price") not in (None, "", [], {})
-    )
-    return (populated_fields, option_value_count, has_stock_signal)
 
 def _refresh_record_from_selected_variant(record: dict[str, Any]) -> None:
     selected_variant = record.get("selected_variant")

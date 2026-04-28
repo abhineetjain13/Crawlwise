@@ -190,16 +190,16 @@ export default function AdminLlmPage() {
  <div className="flex items-start justify-between gap-3">
  <div className="space-y-1">
  <div className="flex items-center gap-2">
- <div className="text-sm font-semibold text-foreground">{config.task_type}</div>
+ <div className="text-sm font-medium text-foreground">{config.task_type}</div>
  {config.is_active ? (
- <div className="inline-flex items-center gap-1 rounded-full bg-success-bg px-2 py-1 text-sm font-semibold text-success">
+ <div className="inline-flex items-center gap-1 rounded-full bg-success-bg px-2 py-1 text-sm font-medium text-success">
  <CheckCircle2 className="size-3.5"/>
  active
  </div>
  ) : null}
  </div>
- <div className="text-sm text-muted">{config.provider} · {config.model}</div>
- <div className="text-sm text-muted">{config.api_key_set ? config.api_key_masked :"env-backed or unset"}</div>
+ <div className="text-sm font-normal text-muted">{config.provider} · {config.model}</div>
+ <div className="text-sm font-normal text-muted">{config.api_key_set ? config.api_key_masked :"env-backed or unset"}</div>
  </div>
  <Button type="button"variant="danger"size="icon"onClick={() => void handleDelete(config.id)} aria-label="Delete config">
  <Trash2 className="size-3.5"/>
@@ -218,7 +218,7 @@ export default function AdminLlmPage() {
  <div className="space-y-2">
  {costLog.slice(0, 8).map((entry) => (
  <div key={entry.id} className="rounded-[var(--radius-md)] border border-border bg-background-elevated px-3 py-2 text-sm text-muted">
- <div className="font-medium text-foreground">{entry.task_type}</div>
+ <div className="font-normal text-foreground">{entry.task_type}</div>
  <div>{entry.provider} · {entry.model}</div>
  <div>{entry.domain ||"n/a"} · {entry.input_tokens}/{entry.output_tokens} tokens</div>
  </div>

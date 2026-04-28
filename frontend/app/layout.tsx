@@ -1,13 +1,13 @@
 import "./globals.css";
 import { AppShell } from "../components/layout/app-shell";
 import { QueryProvider } from "../components/ui/query-provider";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Outfit, JetBrains_Mono } from "next/font/google";
 
 
-const mainFont = Inter({
+const mainFont = Outfit({
  subsets: ["latin"],
-  variable: "--font-inter",
-  weight: ["400", "500", "600", "700"],
+  variable: "--font-outfit",
+  weight: ["300", "400", "500", "600", "700"],
 });
 
 const jetbrainsMono = JetBrains_Mono({
@@ -33,6 +33,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className={`${mainFont.variable} ${jetbrainsMono.variable}`}>
+        <div className="noise-overlay" aria-hidden="true" />
         <QueryProvider>
           <AppShell>{children}</AppShell>
         </QueryProvider>

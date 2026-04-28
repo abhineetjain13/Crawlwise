@@ -310,7 +310,7 @@ export default function SelectorsPage() {
  value={url}
  onChange={(event) => setUrl(event.target.value)}
  placeholder="https://example.com/products/oak-chair"
- className="font-mono text-sm leading-[1.55]"
+ className="font-mono text-sm leading-[var(--leading-relaxed)]"
  />
  </label>
  <label className="grid gap-1.5">
@@ -319,7 +319,7 @@ export default function SelectorsPage() {
  value={expectedColumns}
  onChange={(event) => setExpectedColumns(event.target.value)}
  placeholder="price, sku, availability, brand"
- className="min-h-[80px] text-sm leading-[1.55]"
+ className="min-h-[80px] text-sm leading-[var(--leading-relaxed)]"
  />
  </label>
  <Button type="button"variant="accent"onClick={() => void loadPageAndSuggestions()} disabled={loadingSuggestions}>
@@ -344,7 +344,7 @@ export default function SelectorsPage() {
  sandbox="allow-same-origin"
  />
  ) : (
- <div className="grid h-[760px] place-items-center text-sm leading-[1.55] text-muted">
+ <div className="grid h-[760px] place-items-center text-sm leading-[var(--leading-relaxed)] text-muted">
  No page loaded.
  </div>
  )}
@@ -392,7 +392,7 @@ export default function SelectorsPage() {
  value={row.selectorValue}
  onChange={(event) => updateRow(row.key, { selectorValue: event.target.value, state: nextEditedState(row.state) })}
  placeholder={selectorPlaceholder(row.kind)}
- className="pr-10 font-mono text-sm leading-[1.55]"
+ className="pr-10 font-mono text-sm leading-[var(--leading-relaxed)]"
  />
  <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
  {row.selectorValue.trim() ? <CheckCircle2 className="size-4 text-success"/> : <AlertCircle className="size-4 text-muted"/>}
@@ -420,7 +420,7 @@ export default function SelectorsPage() {
  value={row.extractedValue}
  onChange={(event) => updateRow(row.key, { extractedValue: event.target.value })}
  placeholder="Extracted value"
- className="font-mono text-sm leading-[1.55]"
+ className="font-mono text-sm leading-[var(--leading-relaxed)]"
  />
  </label>
 

@@ -5,9 +5,11 @@ from typing import Any
 
 from app.services.field_value_core import clean_text, text_or_none
 from app.services.extract.shared_variant_logic import (
+    merge_variant_rows,
     normalized_variant_axis_display_name,
     normalized_variant_axis_key,
     split_variant_axes,
+    variant_identity,
 )
 
 
@@ -166,52 +168,7 @@ def _dedupe_variant_rows(record: dict[str, Any]) -> None:
     variants = record.get("variants")
     if not isinstance(variants, list) or not variants:
         return
-    best_by_identity: dict[tuple[tuple[str, str], ...] | str, dict[str, Any]] = {}
-    ordered_keys: list[tuple[tuple[str, str], ...] | str] = []
-    for variant in variants:
-        if not isinstance(variant, dict):
-            continue
-        option_values = variant.get("option_values")
-        identity_key: tuple[tuple[str, str], ...] | str | None = None
-        if isinstance(option_values, dict) and option_values:
-            normalized_pairs = tuple(
-                sorted(
-                    (
-                        str(axis_name).strip(),
-                        clean_text(axis_value),
-                    )
-                    for axis_name, axis_value in option_values.items()
-                    if str(axis_name).strip() and clean_text(axis_value)
-                )
-            )
-            if normalized_pairs:
-                identity_key = normalized_pairs
-        if identity_key is None:
-            identity_key = (
-                text_or_none(variant.get("variant_id"))
-                or text_or_none(variant.get("sku"))
-                or text_or_none(variant.get("url"))
-            )
-        if not identity_key:
-            continue
-        existing = best_by_identity.get(identity_key)
-        candidate = dict(variant)
-        if existing is None:
-            best_by_identity[identity_key] = candidate
-            ordered_keys.append(identity_key)
-            continue
-        if len(candidate) > len(existing):
-            best_by_identity[identity_key] = candidate
-            existing = candidate
-        for field_name, field_value in candidate.items():
-            if existing.get(field_name) in (None, "", [], {}) and field_value not in (
-                None,
-                "",
-                [],
-                {},
-            ):
-                existing[field_name] = field_value
-    deduped_variants = [best_by_identity[key] for key in ordered_keys]
+    deduped_variants = merge_variant_rows(variants)
     if not deduped_variants:
         return
     record["variants"] = deduped_variants
@@ -219,24 +176,21 @@ def _dedupe_variant_rows(record: dict[str, Any]) -> None:
     selected_variant = record.get("selected_variant")
     if not isinstance(selected_variant, dict):
         return
-    selected_option_values = selected_variant.get("option_values")
-    if isinstance(selected_option_values, dict) and selected_option_values:
-        selected_key = tuple(
-            sorted(
-                (
-                    str(axis_name).strip(),
-                    clean_text(axis_value),
-                )
-                for axis_name, axis_value in selected_option_values.items()
-                if str(axis_name).strip() and clean_text(axis_value)
-            )
+    selected_id = variant_identity(selected_variant)
+    if selected_id:
+        match = next(
+            (row for row in deduped_variants if variant_identity(row) == selected_id),
+            None,
         )
-        if selected_key in best_by_identity:
+        if match is not None:
             record["selected_variant"] = _merge_selected_variant_candidate(
                 selected_variant,
-                best_by_identity[selected_key],
+                match,
             )
-    elif deduped_variants:
+            return
+    # No identity match — only overwrite if current selected_variant has no
+    # meaningful identity (preserve adapter-provided data like sku).
+    if not selected_id:
         record["selected_variant"] = dict(deduped_variants[0])
 
 def _merge_selected_variant_candidate(

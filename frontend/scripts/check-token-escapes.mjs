@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const ROOT = process.cwd();
@@ -27,7 +27,6 @@ for (const root of SEARCH_ROOTS) {
     if (!TOKEN_ESCAPE_PATTERN.test(text)) continue;
     violations.push(normalized);
   }
-}
 }
 
 if (violations.length) {

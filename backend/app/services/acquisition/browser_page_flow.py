@@ -8,8 +8,8 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 import httpx
 from bs4 import BeautifulSoup, Tag
-from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from patchright.async_api import Error as PlaywrightError
+from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 from app.services.acquisition.browser_capture import is_response_closed_error
 from app.services.acquisition.browser_recovery import (
     capture_rendered_listing_fragments,

@@ -1,7 +1,5 @@
 "use client";
 
-import styles from "./table.module.css";
-
 import type { ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
@@ -9,7 +7,7 @@ import { cn } from "../../lib/utils";
 export function Table({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
     <div className="relative w-full overflow-auto">
-      <table className={cn("w-full caption-bottom text-sm leading-[1.55]", className)}>{children}</table>
+      <table className={cn("w-full caption-bottom leading-[var(--leading-relaxed)]", className)}>{children}</table>
     </div>
   );
 }
@@ -35,7 +33,7 @@ export function TableRow({
 }
 
 export function TableHead({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
-  return <th className={cn("h-9 px-4 text-left align-middle text-sm font-semibold text-muted", className)}>{children}</th>;
+  return <th className={cn("h-9 px-4 text-left align-middle text-[var(--table-header-font-size)] font-[var(--table-header-weight)] uppercase tracking-[var(--table-header-tracking)] text-muted", className)}>{children}</th>;
 }
 
 export function TableCell({
@@ -44,7 +42,7 @@ export function TableCell({
   colSpan,
 }: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
   return (
-    <td className={cn("p-4 align-middle text-sm leading-[1.5] text-secondary", className)} colSpan={colSpan}>
+    <td className={cn("p-4 align-middle text-[var(--table-font-size)] font-normal leading-[1.5] text-secondary", className)} colSpan={colSpan}>
       {children}
     </td>
   );

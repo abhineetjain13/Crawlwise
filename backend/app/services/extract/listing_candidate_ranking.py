@@ -6,17 +6,13 @@ from urllib.parse import urlsplit
 
 from app.services.config.extraction_rules import (
     LISTING_NON_LISTING_PATH_TOKENS,
-    LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import (
+    LISTING_UTILITY_TITLE_REGEXES,
     clean_text,
-)
-
-_UTILITY_TITLE_REGEXES = tuple(
-    re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
 )
 _EDITORIAL_TITLE_REGEXES = (
     re.compile(r"\bcustomer\s+(?:reviews?|photos?)\b", re.I),
@@ -319,17 +315,24 @@ def _should_drop_record(metrics: dict[str, object], *, surface: str) -> bool:
     return score < 0
 
 
-def _looks_like_utility_record(*, title: str, url: str) -> bool:
+def looks_like_utility_title(title: str) -> bool:
+    """Title-only utility check. Used by visual cluster scoring and adapter title gating."""
     normalized_title = " ".join(str(title or "").strip().lower().split())
+    if not normalized_title:
+        return False
+    if any(pattern.search(normalized_title) for pattern in LISTING_UTILITY_TITLE_REGEXES):
+        return True
+    return any(
+        title_contains_token_phrase(normalized_title, token)
+        for token in LISTING_UTILITY_TITLE_TOKENS
+    )
+
+
+def looks_like_utility_url(url: str) -> bool:
+    """URL-only utility check. Catches utility/help/account/legal anchors and disallowed path segments."""
     normalized_url = str(url or "").strip().lower()
-    if normalized_title:
-        if any(pattern.search(normalized_title) for pattern in _UTILITY_TITLE_REGEXES):
-            return True
-        if any(
-            _title_has_token_phrase(normalized_title, token)
-            for token in LISTING_UTILITY_TITLE_TOKENS
-        ):
-            return True
+    if not normalized_url:
+        return False
     parsed = urlsplit(normalized_url)
     segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
     if (
@@ -338,13 +341,28 @@ def _looks_like_utility_record(*, title: str, url: str) -> bool:
         and any(segment in LISTING_NON_LISTING_PATH_TOKENS for segment in segments)
     ):
         return True
-    return bool(
-        normalized_url
-        and any(
-            re.search(rf"{re.escape(token)}(?:[/?#]|$)", normalized_url)
-            for token in LISTING_UTILITY_URL_TOKENS
-        )
+    return any(
+        re.search(rf"{re.escape(token)}(?:[/?#]|$)", normalized_url)
+        for token in LISTING_UTILITY_URL_TOKENS
     )
+
+
+def looks_like_utility_record(*, title: str, url: str) -> bool:
+    """Single canonical utility-record check. Title or URL signals are sufficient."""
+    return looks_like_utility_title(title) or looks_like_utility_url(url)
+
+
+def title_contains_token_phrase(title: str, token: str) -> bool:
+    normalized_title = " ".join(str(title or "").strip().lower().split())
+    normalized_token = " ".join(str(token or "").strip().lower().split())
+    if not normalized_token or not normalized_title:
+        return False
+    pattern = rf"(^|[^a-z0-9]){re.escape(normalized_token)}([^a-z0-9]|$)"
+    return re.search(pattern, normalized_title) is not None
+
+
+# Backward-compatible private alias for in-module callers.
+_looks_like_utility_record = looks_like_utility_record
 
 
 def _unsupported_non_detail_ecommerce_merchandise_hint(*, title: str, url: str) -> bool:
@@ -413,9 +431,3 @@ def _unsupported_detail_like_ecommerce_merchandise_hint(*, title: str, url: str)
     return bool(title_tokens & set(terminal_tokens))
 
 
-def _title_has_token_phrase(title: str, token: str) -> bool:
-    normalized_token = " ".join(str(token or "").strip().lower().split())
-    if not normalized_token:
-        return False
-    pattern = rf"(^|[^a-z0-9]){re.escape(normalized_token)}([^a-z0-9]|$)"
-    return re.search(pattern, title) is not None

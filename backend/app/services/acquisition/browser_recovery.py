@@ -406,13 +406,13 @@ async def _page_has_cookie(page: Any, *, url: str, name: str) -> bool:
         return False
     try:
         cookies = await cookies_fn([url])
-    except TypeError:
+    except Exception:
+        # Some context implementations (CDP-backed, patched) only accept
+        # the no-argument form of cookies(). Fall back to retrieve all cookies.
         try:
             cookies = await cookies_fn()
         except Exception:
             return False
-    except Exception:
-        return False
     for cookie in list(cookies or []):
         if str(cookie.get("name") or "").strip() == str(name).strip():
             return True

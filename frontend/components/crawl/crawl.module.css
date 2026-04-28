@@ -22,7 +22,7 @@
 }
 
 :global(.cs-metric-value) {
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   font-variant-numeric: tabular-nums;
 }
 
@@ -64,9 +64,8 @@
 }
 
 :global(.cs-panel-title) {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   color: var(--text-primary);
   opacity: 0.75;
 }
@@ -81,3 +80,5 @@
     opacity: 0.4;
   }
 }
+
+/* ct-image-cell, ct-image-wrap, ct-header-badge are defined in globals.css commerce-table */

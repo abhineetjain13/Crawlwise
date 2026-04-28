@@ -1,7 +1,7 @@
 "use client";
 
 import { Copy, Download, Loader2, X } from "lucide-react";
-import React from "react";
+import React, { useEffect } from "react";
 
 import { Badge, Button, Dropdown, Field, Input, Textarea } from "../../components/ui/primitives";
 import type { ProductIntelligenceDiscoveryResponse, ProductIntelligenceOptions } from "../../lib/api/types";
@@ -59,7 +59,7 @@ export function JsonModal({
       <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose} aria-hidden="true" />
       <div className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[640px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--radius-md)] border border-border bg-background-elevated shadow-xl">
         <div className="flex items-center justify-between border-b border-divider px-4 py-3">
-          <h3 className="text-sm font-semibold text-foreground">Raw JSON</h3>
+          <h3 className="text-sm font-medium text-foreground type-heading">Raw JSON</h3>
           <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close">
             <X className="size-3.5" />
           </Button>
@@ -114,7 +114,7 @@ export function ProductIntelligenceJobRow({
       <td className="p-0">
         <button type="button" onClick={onOpen} className="flex w-full flex-col text-left gap-1.5 p-2.5 focus:outline-none">
           <div className="flex w-full items-center justify-between">
-            <span className="font-mono text-sm font-medium text-accent hover:underline">#{job.id}</span>
+            <span className="font-mono text-sm font-normal text-accent hover:underline">#{job.id}</span>
             <Badge tone={job.status === "complete" ? "success" : job.status === "failed" ? "danger" : "neutral"} className="scale-90 origin-right">
               {job.status}
             </Badge>
@@ -143,7 +143,7 @@ export function DiscoveryStatus({
     <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-md)] border border-accent/30 bg-accent-subtle px-4 py-3 text-xs text-foreground">
       <Loader2 className="size-4 animate-spin text-accent" aria-hidden="true" />
       <div className="min-w-[180px] flex-1">
-        <div className="font-semibold">{providerLabel} discovery running</div>
+        <div className="font-medium">{providerLabel} discovery running</div>
         <div className="mt-0.5 text-muted">
           Searching {sourceCount} source product{sourceCount === 1 ? "" : "s"}, filtering source domains, ranking brand sites before aggregators.
         </div>
@@ -165,7 +165,7 @@ export function DiscoveryTableLoading({ provider }: Readonly<{ provider: string 
         <Loader2 className="absolute left-1/2 top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 animate-spin text-accent" aria-hidden="true" />
       </div>
       <div>
-        <div className="text-sm font-semibold text-foreground">{providerLabel} is searching product candidates</div>
+        <div className="text-sm font-medium text-foreground">{providerLabel} is searching product candidates</div>
         <div className="mt-1 max-w-[520px] text-xs leading-5 text-muted">
           Querying organic results, removing blocked/source domains, classifying domains, and scoring each result from title, brand, identifiers, price, and source authority.
         </div>
@@ -224,18 +224,31 @@ export function SettingsDrawer({
       />
       <div className="fixed right-0 top-0 z-50 h-full w-[380px] max-w-full overflow-y-auto border-l border-divider bg-background-elevated p-5 shadow-xl animate-in slide-in-from-right-4 duration-200">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-foreground">Configuration</h2>
+          <h2 className="text-sm font-medium text-foreground type-heading">Configuration</h2>
           <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close settings">
             <X className="size-3.5" />
           </Button>
         </div>
         <div className="mt-4 space-y-4">
           <Field label="Provider">
-            <Dropdown
-              value={options.search_provider}
-              onChange={(value) => onOptionsChange({ search_provider: searchProvider(value) })}
-              options={SEARCH_PROVIDER_OPTIONS}
-            />
+            <div className="flex gap-1.5">
+              {SEARCH_PROVIDER_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => onOptionsChange({ search_provider: opt.value })}
+                  aria-pressed={options.search_provider === opt.value}
+                  className={cn(
+                    "flex-1 rounded-[var(--radius-md)] border px-3 py-1.5 text-sm font-medium transition-[background-color,border-color] text-center",
+                    options.search_provider === opt.value
+                      ? "border-accent bg-accent-subtle text-accent"
+                      : "border-border-strong bg-background-elevated text-foreground hover:bg-background-alt"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </Field>
           <Field label="Max Sources">
             <Input
@@ -272,7 +285,7 @@ export function SettingsDrawer({
           </Field>
           <Field label="LLM Cleanup">
             <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 shadow-sm">
-              <span className="text-xs font-medium text-muted">Enable Enrichment</span>
+              <span className="text-xs font-normal text-muted">Enable Enrichment</span>
               <input
                 type="checkbox"
                 checked={options.llm_enrichment_enabled}
@@ -306,7 +319,7 @@ export function SettingsDrawer({
 function DiscoveryLoadingStep({ label, detail }: Readonly<{ label: string; detail: string }>) {
   return (
     <div className="rounded-[var(--radius-md)] border border-divider bg-background-alt px-3 py-2">
-      <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+      <div className="flex items-center gap-2 text-xs font-medium text-foreground">
         <span className="size-1.5 rounded-full bg-accent" />
         {label}
       </div>

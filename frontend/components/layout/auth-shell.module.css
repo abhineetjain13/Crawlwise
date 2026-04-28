@@ -5,7 +5,7 @@
 }
 
 :global(.auth-shell) {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(min(420px, 100%), 1fr) 1.1fr;
   background: var(--bg-base);
@@ -117,7 +117,7 @@
   margin-bottom: 10px;
   color: var(--text-muted);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 :global(.auth-shell-pulse) {
@@ -140,7 +140,7 @@
 
 :global(.auth-shell-ticker-domain) {
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   color: var(--text-primary);
 }
 

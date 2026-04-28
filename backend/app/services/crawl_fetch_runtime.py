@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import secrets
 from dataclasses import dataclass, field
@@ -25,7 +24,6 @@ from app.services.acquisition.browser_runtime import (
     classify_network_endpoint,
     expand_all_interactive_elements,
     get_browser_runtime,
-    patchright_browser_available,
     read_network_payload_body,
     real_chrome_browser_available,
     should_capture_network_payload,
@@ -61,7 +59,7 @@ from app.services.acquisition.runtime import (
     should_escalate_to_browser,
 )
 from app.services.acquisition.traversal import should_run_traversal
-from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.runtime_settings import crawler_runtime_settings, proxy_rotation_mode
 from app.services.platform_policy import resolve_platform_runtime_policy
 
 logger = logging.getLogger(__name__)
@@ -201,7 +199,7 @@ async def _browser_fetch(
     *,
     run_id: int | None = None,
     proxy: str | None = None,
-    browser_engine: str = "chromium",
+    browser_engine: str = "patchright",
     browser_reason: str | None = None,
     escalation_lane: str | None = None,
     host_policy_snapshot: dict[str, object] | None = None,
@@ -486,19 +484,6 @@ def _proxy_session_rewrite_enabled(proxy_profile: dict[str, object] | None) -> b
     return False
 
 
-def _proxy_rotation_mode(proxy_profile: dict[str, object] | None) -> str | None:
-    if not isinstance(proxy_profile, dict):
-        return None
-    normalized = str(proxy_profile.get("rotation") or "").strip().lower()
-    if not normalized:
-        return None
-    if normalized in set(crawler_runtime_settings.proxy_rotation_sticky_tokens or ()):
-        return "sticky"
-    if normalized in set(crawler_runtime_settings.proxy_rotation_rotating_tokens or ()):
-        return "rotating"
-    return normalized
-
-
 def _normalize_fetch_mode(value: object) -> str:
     normalized = str(value or "").strip().lower()
     if normalized in {"auto", "http_only", "browser_only", "http_then_browser"}:
@@ -582,39 +567,34 @@ async def _run_browser_attempts(
             host_policy=active_host_policy,
             proxy=proxy,
         )
-        attempted_engines_for_proxy: set[str] = set()
         engine_index = 0
         while engine_index < len(engine_attempts):
             browser_engine = engine_attempts[engine_index]
             engine_index += 1
-            attempted_engines_for_proxy.add(browser_engine)
             host_policy_snapshot = _host_policy_snapshot(active_host_policy)
             try:
                 await wait_for_host_slot(context.url)
-                result = await asyncio.wait_for(
-                    _browser_fetch(
-                        context.url,
-                        context.resolved_timeout,
-                        run_id=context.run_id,
-                        proxy=proxy,
-                        browser_engine=browser_engine,
-                        browser_reason=reason,
-                        escalation_lane=escalation_lane,
-                        host_policy_snapshot=host_policy_snapshot,
-                        proxy_profile=context.proxy_profile,
-                        locality_profile=context.locality_profile,
-                        surface=context.surface,
-                        traversal_mode=context.traversal_mode,
-                        requested_fields=browser_requested_fields,
-                        listing_recovery_mode=recovery_mode,
-                        capture_page_markdown=capture_page_markdown,
-                        capture_screenshot=capture_screenshot,
-                        max_pages=context.max_pages,
-                        max_scrolls=context.max_scrolls,
-                        max_records=context.max_records,
-                        on_event=context.on_event,
-                    ),
-                    timeout=context.resolved_timeout,
+                result = await _browser_fetch(
+                    context.url,
+                    context.resolved_timeout,
+                    run_id=context.run_id,
+                    proxy=proxy,
+                    browser_engine=browser_engine,
+                    browser_reason=reason,
+                    escalation_lane=escalation_lane,
+                    host_policy_snapshot=host_policy_snapshot,
+                    proxy_profile=context.proxy_profile,
+                    locality_profile=context.locality_profile,
+                    surface=context.surface,
+                    traversal_mode=context.traversal_mode,
+                    requested_fields=browser_requested_fields,
+                    listing_recovery_mode=recovery_mode,
+                    capture_page_markdown=capture_page_markdown,
+                    capture_screenshot=capture_screenshot,
+                    max_pages=context.max_pages,
+                    max_scrolls=context.max_scrolls,
+                    max_records=context.max_records,
+                    on_event=context.on_event,
                 )
                 result.browser_diagnostics = {
                     **dict(result.browser_diagnostics or {}),
@@ -623,7 +603,7 @@ async def _run_browser_attempts(
                     "browser_proxy_mode": "launch" if proxy else "direct",
                     "proxy_attempt_index": proxy_attempt_index,
                     "engine_attempt_index": engine_index,
-                    "proxy_rotation_mode": _proxy_rotation_mode(context.proxy_profile),
+                    "proxy_rotation_mode": proxy_rotation_mode(context.proxy_profile),
                 }
                 if bool(result.blocked):
                     last_blocked_result = result
@@ -636,7 +616,7 @@ async def _run_browser_attempts(
                     )
                     engine_attempts = _extend_browser_engine_attempts_after_block(
                         engine_attempts=engine_attempts,
-                        attempted_engines=attempted_engines_for_proxy,
+                        attempted_engine=browser_engine,
                         context=context,
                         host_policy=active_host_policy,
                     )
@@ -947,19 +927,7 @@ def _host_policy_snapshot(policy: HostProtectionPolicy) -> dict[str, object]:
 
 
 def _default_browser_engine_attempts() -> list[str]:
-    real_chrome_attempts = (
-        ["real_chrome"]
-        if bool(crawler_runtime_settings.browser_real_chrome_enabled)
-        and real_chrome_browser_available()
-        else []
-    )
-    if (
-        bool(crawler_runtime_settings.browser_patchright_enabled)
-        and bool(crawler_runtime_settings.browser_patchright_prefer)
-        and patchright_browser_available()
-    ):
-        return ["patchright", *real_chrome_attempts, "chromium"]
-    return ["chromium"]
+    return ["patchright"]
 
 
 def _append_engine_once(engine_attempts: list[str], engine: str) -> list[str]:
@@ -990,6 +958,12 @@ def _browser_escalation_lane(
     return base
 
 
+# "chromium" is a legacy alias that resolves identically to "patchright" at the
+# browser_runtime layer (_resolve_browser_binary maps both to patchright).
+# Only two operationally distinct engines exist: patchright (default) and real_chrome.
+_SUPPORTED_FORCED_ENGINES = {"patchright", "real_chrome"}
+
+
 def _browser_engine_attempts(
     *,
     context: _FetchRuntimeContext,
@@ -997,37 +971,22 @@ def _browser_engine_attempts(
 ) -> list[str]:
     forced_engine = str(context.forced_browser_engine or "").strip().lower()
     if forced_engine:
-        if forced_engine == "patchright":
-            return ["patchright"]
-        if forced_engine == "real_chrome":
-            return ["real_chrome"]
-        if forced_engine == "chromium":
-            return ["chromium"]
+        if forced_engine in _SUPPORTED_FORCED_ENGINES:
+            return [forced_engine]
+        logger.warning(
+            "Unsupported forced_browser_engine=%r for %s; ignoring and using default engine selection",
+            forced_engine,
+            context.url,
+        )
     engines = _default_browser_engine_attempts()
-    if host_policy.patchright_blocked and "patchright" in engines:
-        engines = [engine for engine in engines if engine != "patchright"]
     if not str(context.surface or "").startswith("ecommerce_"):
         return engines
-    if not bool(crawler_runtime_settings.browser_real_chrome_enabled):
-        return engines
-    if not real_chrome_browser_available():
-        return engines
-    if host_policy.chromium_blocked and not host_policy.real_chrome_success:
-        if "patchright" in engines and not host_policy.patchright_blocked:
-            return _append_engine_once(["patchright", "real_chrome", "chromium"], "chromium")
-        return _append_engine_once(["real_chrome", *engines], "chromium")
-    if host_policy.patchright_blocked and not host_policy.chromium_blocked:
-        return _append_engine_once(engines, "chromium")
-    if host_policy.real_chrome_blocked and not (
-        host_policy.chromium_blocked or host_policy.patchright_blocked
-    ):
-        return _append_engine_once(engines, "real_chrome")
     if (
-        host_policy.request_blocked
-        or host_policy.prefer_browser
-        or host_policy.last_block_vendor
-        or host_policy.patchright_blocked
+        not bool(crawler_runtime_settings.browser_real_chrome_enabled)
+        or not real_chrome_browser_available()
     ):
+        return engines
+    if host_policy.patchright_blocked or host_policy.request_blocked or host_policy.prefer_browser or host_policy.last_block_vendor:
         return _append_engine_once(engines, "real_chrome")
     return engines
 
@@ -1035,7 +994,7 @@ def _browser_engine_attempts(
 def _extend_browser_engine_attempts_after_block(
     *,
     engine_attempts: list[str],
-    attempted_engines: set[str],
+    attempted_engine: str,
     context: _FetchRuntimeContext,
     host_policy: HostProtectionPolicy,
 ) -> list[str]:
@@ -1045,7 +1004,7 @@ def _extend_browser_engine_attempts_after_block(
     )
     appended = list(engine_attempts)
     for engine in refreshed_attempts:
-        if engine in attempted_engines or engine in appended:
+        if engine == attempted_engine or engine in appended:
             continue
         appended.append(engine)
     return appended
@@ -1079,40 +1038,16 @@ async def _invoke_run_browser_attempts(
     proxies: list[str | None] | None,
     host_policy: HostProtectionPolicy | None,
 ) -> PageFetchResult:
-    kwargs: dict[str, object] = {
-        "reason": reason,
-        "requested_fields": requested_fields,
-        "listing_recovery_mode": listing_recovery_mode,
-        "capture_page_markdown": capture_page_markdown,
-        "capture_screenshot": capture_screenshot,
-        "proxies": proxies,
-        "host_policy": host_policy,
-    }
-    try:
-        signature = inspect.signature(_run_browser_attempts)
-    except (TypeError, ValueError):
-        signature = None
-    if signature is not None:
-        accepts_var_kwargs = any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in signature.parameters.values()
-        )
-        if not accepts_var_kwargs:
-            allowed_names = {
-                name
-                for name, parameter in signature.parameters.items()
-                if parameter.kind
-                in (
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    inspect.Parameter.KEYWORD_ONLY,
-                )
-            }
-            kwargs = {
-                name: value
-                for name, value in kwargs.items()
-                if name in allowed_names
-            }
-    return await _run_browser_attempts(context, **kwargs)
+    return await _run_browser_attempts(
+        context,
+        reason=reason,
+        requested_fields=requested_fields,
+        listing_recovery_mode=listing_recovery_mode,
+        capture_page_markdown=capture_page_markdown,
+        capture_screenshot=capture_screenshot,
+        proxies=proxies,
+        host_policy=host_policy,
+    )
 
 
 async def _update_host_result_memory(

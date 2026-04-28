@@ -836,15 +836,7 @@ def test_build_playwright_context_spec_injects_chrome_runtime_and_audio_masks() 
     assert "installDescriptor(Navigator.prototype, 'gpu', () => gpu);" in spec.init_script
 
 
-def test_build_playwright_context_spec_skips_legacy_init_script_for_patchright_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        browser_identity.crawler_runtime_settings,
-        "browser_patchright_use_legacy_init_script",
-        False,
-    )
-
+def test_build_playwright_context_spec_skips_legacy_init_script_for_patchright() -> None:
     spec = browser_identity.build_playwright_context_spec(
         identity=browser_identity.BrowserIdentity(
             user_agent=(
@@ -864,37 +856,6 @@ def test_build_playwright_context_spec_skips_legacy_init_script_for_patchright_b
     )
 
     assert spec.init_script is None
-
-
-def test_build_playwright_context_spec_allows_legacy_init_script_for_patchright_when_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        browser_identity.crawler_runtime_settings,
-        "browser_patchright_use_legacy_init_script",
-        True,
-    )
-
-    spec = browser_identity.build_playwright_context_spec(
-        identity=browser_identity.BrowserIdentity(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/145.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1366, "height": 768},
-            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-            locale="en-US",
-            device_scale_factor=1.0,
-            has_touch=False,
-            is_mobile=False,
-            raw_fingerprint=None,
-        ),
-        browser_engine="patchright",
-    )
-
-    assert spec.init_script is not None
-    assert "__pwInitScripts" in spec.init_script
 
 
 def test_playwright_identity_seed_is_stable_and_changes_with_identity() -> None:
@@ -934,14 +895,6 @@ def test_playwright_identity_seed_is_stable_and_changes_with_identity() -> None:
 
     assert first_seed == second_seed
     assert first_seed != changed_seed
-
-
-def test_playwright_stealth_enables_iframe_content_window() -> None:
-    stealth = getattr(acquisition_browser_runtime, "_STEALTH", None)
-    if stealth is None:
-        pytest.skip("playwright_stealth not installed")
-
-    assert stealth.iframe_content_window is True
 
 
 def test_build_playwright_context_options_aligns_auto_locality_to_system_timezone(
@@ -1551,10 +1504,9 @@ async def test_shared_browser_runtime_passes_generated_context_options(
 
 
 @pytest.mark.asyncio
-async def test_shared_browser_runtime_applies_playwright_stealth_with_browserforge_active(
+async def test_shared_browser_runtime_applies_init_script_without_stealth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stealth_calls: list[object] = []
     init_scripts: list[str] = []
 
     class FakeContext:
@@ -1576,9 +1528,6 @@ async def test_shared_browser_runtime_applies_playwright_stealth_with_browserfor
             del kwargs
             return FakeContext()
 
-    async def _fake_stealth(target) -> None:
-        stealth_calls.append(target)
-
     runtime = crawl_fetch_runtime.SharedBrowserRuntime(max_contexts=1)
     runtime._browser = FakeBrowser()
     runtime._playwright = object()
@@ -1588,21 +1537,18 @@ async def test_shared_browser_runtime_applies_playwright_stealth_with_browserfor
         "build_playwright_context_spec",
         lambda **_: _context_spec(init_script="window.__browserforge = true;"),
     )
-    monkeypatch.setattr(acquisition_browser_runtime, "_STEALTH_APPLIER", _fake_stealth)
 
     async with runtime.page(inject_init_script=True):
         pass
 
     assert init_scripts == ["window.__browserforge = true;"]
-    assert len(stealth_calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_shared_browser_runtime_uses_native_context_and_skips_stealth_for_real_chrome(
+async def test_shared_browser_runtime_uses_native_context_for_real_chrome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_kwargs: list[dict[str, object]] = []
-    stealth_calls: list[object] = []
 
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
@@ -1620,9 +1566,6 @@ async def test_shared_browser_runtime_uses_native_context_and_skips_stealth_for_
             captured_kwargs.append(kwargs)
             return FakeContext()
 
-    async def _fake_stealth(target) -> None:
-        stealth_calls.append(target)
-
     monkeypatch.setattr(
         acquisition_browser_runtime,
         "_resolve_browser_binary",
@@ -1638,13 +1581,6 @@ async def test_shared_browser_runtime_uses_native_context_and_skips_stealth_for_
         "browser_real_chrome_native_context",
         True,
     )
-    monkeypatch.setattr(
-        acquisition_browser_runtime.crawler_runtime_settings,
-        "browser_real_chrome_apply_stealth",
-        False,
-    )
-    monkeypatch.setattr(acquisition_browser_runtime, "_STEALTH_APPLIER", _fake_stealth)
-
     runtime = acquisition_browser_runtime.SharedBrowserRuntime(
         max_contexts=1,
         browser_engine="real_chrome",
@@ -1656,7 +1592,6 @@ async def test_shared_browser_runtime_uses_native_context_and_skips_stealth_for_
         pass
 
     assert captured_kwargs == [{}]
-    assert stealth_calls == []
 
 
 @pytest.mark.asyncio
@@ -1684,9 +1619,6 @@ async def test_shared_browser_runtime_skips_init_script_by_default(
             del kwargs
             return FakeContext()
 
-    async def _noop_stealth(_target) -> None:
-        return None
-
     runtime = crawl_fetch_runtime.SharedBrowserRuntime(max_contexts=1)
     runtime._browser = FakeBrowser()
     runtime._playwright = object()
@@ -1696,8 +1628,6 @@ async def test_shared_browser_runtime_skips_init_script_by_default(
         "build_playwright_context_spec",
         lambda **_: _context_spec(init_script="window.__browserforge = true;"),
     )
-    monkeypatch.setattr(acquisition_browser_runtime, "_STEALTH_APPLIER", _noop_stealth)
-
     async with runtime.page():
         pass
 
@@ -1764,7 +1694,7 @@ async def test_shared_browser_runtime_uses_socks5_auth_bridge_and_keeps_context_
     )
     monkeypatch.setattr(acquisition_browser_runtime, "Socks5AuthBridge", FakeBridge)
     monkeypatch.setattr(
-        "playwright.async_api.async_playwright",
+        "patchright.async_api.async_playwright",
         lambda: FakePlaywrightManager(),
     )
 
@@ -1839,7 +1769,7 @@ async def test_shared_browser_runtime_launches_http_proxy_directly(
         lambda **_: _context_spec(),
     )
     monkeypatch.setattr(
-        "playwright.async_api.async_playwright",
+        "patchright.async_api.async_playwright",
         lambda: FakePlaywrightManager(),
     )
 
@@ -1922,7 +1852,7 @@ async def test_shared_browser_runtime_launches_real_chrome_headful_for_fallback(
         True,
     )
     monkeypatch.setattr(
-        "playwright.async_api.async_playwright",
+        "patchright.async_api.async_playwright",
         lambda: FakePlaywrightManager(),
     )
 
@@ -2039,7 +1969,8 @@ async def test_shared_browser_runtime_reuses_run_storage_state(
         lambda **_: _context_spec(),
     )
 
-    async def _fake_load_storage_state_for_run(run_id: int | None):
+    async def _fake_load_storage_state_for_run(run_id: int | None, **_kwargs):
+        del _kwargs
         assert run_id == 77
         return {
             "cookies": [
@@ -2063,7 +1994,9 @@ async def test_shared_browser_runtime_reuses_run_storage_state(
     async def _fake_persist_storage_state_for_run(
         run_id: int | None,
         storage_state: dict[str, object],
+        **_kwargs,
     ) -> None:
+        del _kwargs
         assert run_id == 77
         persisted_states.append((int(run_id), dict(storage_state)))
 
@@ -2227,17 +2160,17 @@ async def test_shared_browser_runtime_skips_domain_storage_for_proxied_runtime_b
         lambda **_: _context_spec(),
     )
 
-    async def _load_run(run_id: int | None):
-        del run_id
+    async def _load_run(run_id: int | None, **_kwargs):
+        del run_id, _kwargs
         return None
 
-    async def _load_domain(domain: str | None, session=None):
-        del session
+    async def _load_domain(domain: str | None, **_kwargs):
+        del _kwargs
         domain_load_calls.append(domain)
         return {"cookies": [], "origins": []}
 
-    async def _persist_domain(domain: str, storage_state: dict[str, object]) -> None:
-        del storage_state
+    async def _persist_domain(domain: str, storage_state: dict[str, object], **_kwargs) -> None:
+        del storage_state, _kwargs
         domain_persist_calls.append(domain)
 
     monkeypatch.setattr(
@@ -2305,8 +2238,8 @@ async def test_shared_browser_runtime_suppresses_storage_state_persist_failures(
         "persist_storage_state_for_run",
         _boom,
     )
-    async def _no_state(run_id: int | None):
-        del run_id
+    async def _no_state(run_id: int | None, **_kwargs):
+        del run_id, _kwargs
         return None
     monkeypatch.setattr(
         acquisition_browser_runtime,
@@ -2454,8 +2387,8 @@ async def test_persist_context_storage_state_normalizes_domain_before_persist(
 
     persisted_domains: list[str] = []
 
-    async def _persist_domain(domain: str, storage_state: dict[str, object]) -> None:
-        del storage_state
+    async def _persist_domain(domain: str, storage_state: dict[str, object], **_kwargs) -> None:
+        del storage_state, _kwargs
         persisted_domains.append(domain)
 
     monkeypatch.setattr(
@@ -2493,8 +2426,8 @@ async def test_persist_context_storage_state_skips_domain_persist_when_disallowe
 
     persisted_domains: list[str] = []
 
-    async def _persist_domain(domain: str, storage_state: dict[str, object]) -> None:
-        del storage_state
+    async def _persist_domain(domain: str, storage_state: dict[str, object], **_kwargs) -> None:
+        del storage_state, _kwargs
         persisted_domains.append(domain)
 
     monkeypatch.setattr(
@@ -2533,8 +2466,8 @@ async def test_persist_context_storage_state_skips_run_persist_when_disallowed(
 
     persisted_run_ids: list[int] = []
 
-    async def _persist_run(run_id: int | None, storage_state: dict[str, object]) -> None:
-        del storage_state
+    async def _persist_run(run_id: int | None, storage_state: dict[str, object], **_kwargs) -> None:
+        del storage_state, _kwargs
         persisted_run_ids.append(int(run_id or 0))
 
     monkeypatch.setattr(
@@ -2675,7 +2608,7 @@ async def test_shared_browser_runtime_recycles_browser_without_deadlocking(
         "browser_max_contexts_before_recycle",
         1,
     )
-    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: FakePlaywrightManager())
+    monkeypatch.setattr("patchright.async_api.async_playwright", lambda: FakePlaywrightManager())
 
     async with asyncio.timeout(1):
         async with runtime.page():

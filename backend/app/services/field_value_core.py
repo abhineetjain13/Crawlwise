@@ -145,7 +145,7 @@ def _coerce_int(value: object, *, default: int = 0) -> int:
 
 
 _REVIEW_TITLE_RE = re.compile(r"^\s*\d[\d,\s]*\s+reviews?\s*$", re.I)
-_LISTING_UTILITY_TITLE_REGEXES = tuple(
+LISTING_UTILITY_TITLE_REGEXES = tuple(
     re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
 )
 _CSS_NOISE_RE = re.compile(str(CSS_NOISE_PATTERN), re.I)
@@ -180,7 +180,7 @@ def is_title_noise(title: object) -> bool:
         return True
     if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
         return True
-    if any(pattern.search(lowered) for pattern in _LISTING_UTILITY_TITLE_REGEXES):
+    if any(pattern.search(lowered) for pattern in LISTING_UTILITY_TITLE_REGEXES):
         return True
     if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
         return True

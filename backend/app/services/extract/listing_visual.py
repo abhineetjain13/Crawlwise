@@ -3,10 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from app.services.config.extraction_rules import (
-    LISTING_UTILITY_TITLE_PATTERNS,
-    LISTING_UTILITY_TITLE_TOKENS,
-)
+from app.services.extract.listing_candidate_ranking import looks_like_utility_title
 from app.services.field_value_core import (
     absolute_url,
     clean_text,
@@ -334,9 +331,7 @@ def _visual_title_is_utility(title: str) -> bool:
     lowered = clean_text(title).casefold()
     if not lowered:
         return True
-    if any(re.search(pattern, lowered, flags=re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS):
-        return True
-    return any(token in lowered for token in LISTING_UTILITY_TITLE_TOKENS)
+    return looks_like_utility_title(lowered)
 
 
 def _visual_cluster_brand(

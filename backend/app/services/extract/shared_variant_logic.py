@@ -279,6 +279,9 @@ def infer_variant_group_name_from_values(values: Sequence[object]) -> str:
     cleaned_values = [clean_text(value) for value in list(values or []) if clean_text(value)]
     if len(cleaned_values) < 2:
         return ""
+    # Sequential integer runs are quantity selectors, not variant axes.
+    if _is_sequential_integer_run(cleaned_values):
+        return ""
     size_hits = sum(
         1 for value in cleaned_values
         if any(pattern.fullmatch(value) for pattern in _VARIANT_SIZE_VALUE_PATTERNS)
@@ -382,10 +385,30 @@ def _select_option_texts(node: Any) -> list[str]:
     return values
 
 
+def _is_sequential_integer_run(values: list[str]) -> bool:
+    """Return True when every value is a bare integer and the set forms a
+    contiguous run of >= 5 values.  This is the signature of a quantity
+    selector (1, 2, 3 … N), not a product variant axis."""
+    if len(values) < 5:
+        return False
+    ints: list[int] = []
+    for value in values:
+        stripped = value.strip()
+        if not stripped.isdigit():
+            return False
+        ints.append(int(stripped))
+    if not ints:
+        return False
+    ints.sort()
+    return ints[-1] - ints[0] == len(ints) - 1
+
+
 def _select_option_values_are_noise(node: Any) -> bool:
     values = _select_option_texts(node)
     if not values:
         return False
+    if _is_sequential_integer_run(values):
+        return True
     normalized = {
         re.sub(r"[^a-z0-9]+", "", value.lower())
         for value in values
@@ -459,10 +482,34 @@ def variant_axis_name_is_semantic(value: object) -> bool:
     return True
 
 
+
+_QUANTITY_ATTR_TOKENS: frozenset[str] = frozenset({
+    "quantity", "qty", "amount", "item-count", "number-of-items",
+    "number_of_items", "item_count", "howmany",
+})
+
+
+def _select_is_quantity_node(node: Any) -> bool:
+    """Return True when the <select> element signals it is a quantity picker,
+    not a product variant axis."""
+    if not hasattr(node, "get"):
+        return False
+    for attr_name in ("name", "id", "aria-label", "data-testid"):
+        value = str(node.get(attr_name) or "").strip().lower()
+        if not value:
+            continue
+        tokens = re.split(r"[^a-z0-9]+", value)
+        if any(t in _QUANTITY_ATTR_TOKENS for t in tokens):
+            return True
+    return False
+
+
 def iter_variant_select_groups(soup: Any) -> list[Any]:
     groups: list[Any] = []
     seen_ids: set[int] = set()
     for select in soup.select(VARIANT_SELECT_GROUP_SELECTOR):
+        if _select_is_quantity_node(select):
+            continue
         if _select_option_values_are_noise(select):
             continue
         if resolve_variant_group_name(select):
@@ -475,6 +522,8 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
     for select in soup.select("select"):
         if id(select) in seen_ids:
             continue
+        if _select_is_quantity_node(select):
+            continue
         if _select_option_values_are_noise(select):
             continue
         if resolve_variant_group_name(select):
@@ -483,6 +532,7 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
         if len(groups) >= 4:
             break
     return groups
+
 
 
 def iter_variant_choice_groups(soup: Any) -> list[Any]:
@@ -647,3 +697,103 @@ def resolve_variants(
                 seen_ids.add(vid)
 
     return resolved or list(variants)
+
+
+def variant_identity(variant: dict[str, Any]) -> str | None:
+    """Canonical identity for a variant row.
+
+    Priority: ``variant_id`` > ``sku`` > sorted ``option_values`` pairs > ``url``.
+    Used by both the JS-state product-merge path and the post-extraction
+    record-level dedupe path so two rows are considered the same iff this
+    function returns the same string for them.
+    """
+    if not isinstance(variant, dict):
+        return None
+    variant_id = text_or_none(variant.get("variant_id"))
+    if variant_id:
+        return f"id:{variant_id}"
+    sku = text_or_none(variant.get("sku"))
+    if sku:
+        return f"sku:{sku}"
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict) and option_values:
+        normalized_pairs = sorted(
+            (str(axis_name).strip(), text_or_none(axis_value) or "")
+            for axis_name, axis_value in option_values.items()
+            if str(axis_name).strip() and text_or_none(axis_value)
+        )
+        if normalized_pairs:
+            return "options:" + "|".join(
+                f"{axis}={value}" for axis, value in normalized_pairs
+            )
+    variant_url = text_or_none(variant.get("url"))
+    if variant_url:
+        return f"url:{variant_url}"
+    return None
+
+
+def variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
+    """Compare key for two rows that share an identity.
+
+    Higher is richer. Larger row, more option axes, presence of stock signals.
+    """
+    populated_fields = sum(
+        1 for value in variant.values() if value not in (None, "", [], {})
+    )
+    option_values = variant.get("option_values")
+    option_value_count = (
+        len(option_values) if isinstance(option_values, dict) else 0
+    )
+    has_stock_signal = int(
+        variant.get("stock_quantity") not in (None, "", [], {})
+        or variant.get("original_price") not in (None, "", [], {})
+    )
+    return (populated_fields, option_value_count, has_stock_signal)
+
+
+def merge_variant_pair(
+    primary: dict[str, Any],
+    secondary: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge two rows of the same identity. Primary wins; missing fields filled from secondary."""
+    merged = dict(primary)
+    for field_name, field_value in secondary.items():
+        if merged.get(field_name) in (None, "", [], {}) and field_value not in (
+            None,
+            "",
+            [],
+            {},
+        ):
+            merged[field_name] = field_value
+    return merged
+
+
+def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
+    """Merge variant row lists by canonical identity. Richer row wins per identity.
+
+    Order is preserved by first appearance. Rows without a derivable identity
+    are dropped (no stable way to dedupe them).
+    """
+    merged_by_identity: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+    for rows in row_lists:
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            identity = variant_identity(row)
+            if not identity:
+                continue
+            current = merged_by_identity.get(identity)
+            if current is None:
+                merged_by_identity[identity] = dict(row)
+                ordered_keys.append(identity)
+                continue
+            primary, secondary = (
+                (row, current)
+                if variant_row_richness(row) > variant_row_richness(current)
+                else (current, row)
+            )
+            merged_by_identity[identity] = merge_variant_pair(primary, secondary)
+    return [merged_by_identity[key] for key in ordered_keys]

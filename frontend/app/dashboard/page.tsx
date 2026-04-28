@@ -37,7 +37,7 @@ function DomainBar({
   return (
     <div className="flex items-center gap-3 py-1.5">
       <span
-        className="min-w-0 flex-1 truncate font-mono text-sm font-medium leading-[1.4] text-secondary"
+        className="min-w-0 flex-1 truncate font-mono text-sm font-normal leading-[1.4] text-secondary"
         title={domain}
       >
         {domain}
@@ -48,7 +48,7 @@ function DomainBar({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="w-7 text-right text-sm leading-[1.45] tabular-nums text-muted">{count}</span>
+      <span className="w-7 text-right text-sm font-normal leading-[var(--leading-normal)] tabular-nums text-muted">{count}</span>
     </div>
   );
 }
@@ -82,10 +82,10 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       className="no-underline group flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 transition-colors hover:bg-background-elevated"
     >
       <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
-      <span className="min-w-0 flex-1 truncate font-mono text-sm font-medium leading-[1.4] text-primary transition-colors group-hover:text-accent">
+      <span className="min-w-0 flex-1 truncate font-mono text-sm font-normal leading-[1.4] text-primary transition-colors group-hover:text-accent">
         {domain || `Run #${run.id}`}
       </span>
-      <span className="text-sm leading-[1.45] tabular-nums text-muted">
+      <span className="text-sm font-normal leading-[var(--leading-normal)] tabular-nums text-muted">
         {recordCount.toLocaleString()} rec
       </span>
       <Badge tone={runExecutionTone(run.status, run.result_summary)}>
@@ -189,9 +189,9 @@ export default function DashboardPage() {
  </div>
  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
  {sortedStatusEntries.map(([status, count]) => (
- <div key={status} className="flex items-center gap-1.5 text-sm leading-[1.45] text-muted">
+ <div key={status} className="flex items-center gap-1.5 text-sm font-normal leading-[var(--leading-normal)] text-muted">
  <Badge tone={statusTone(status)}>{statusLabel(status)}</Badge>
- <span className="text-sm font-medium leading-[1.45] text-foreground tabular-nums">{count}</span>
+ <span className="text-sm font-medium leading-[var(--leading-normal)] text-foreground tabular-nums">{count}</span>
  </div>
  ))}
  </div>

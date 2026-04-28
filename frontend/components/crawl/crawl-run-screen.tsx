@@ -3,7 +3,7 @@
 import "./crawl.module.css";
 
 import { useQuery } from"@tanstack/react-query";
-import { ArrowRightCircle, Check, ChevronsDown, Copy, Download, Info, Plus, Search } from"lucide-react";
+import { ArrowRightCircle, Brain, Check, ChevronsDown, Clock, Copy, Download, Info, Plus, Search } from"lucide-react";
 import { useRouter } from"next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from"react";
 import ReactMarkdown from"react-markdown";
@@ -15,7 +15,6 @@ import {
  DataRegionLoading,
  InlineAlert,
  PageHeader,
- ProgressBar,
  RunSummaryChips,
  RunWorkspaceShell,
  SectionHeader,
@@ -50,7 +49,6 @@ import {
  isListingRun,
  LogTerminal,
  type OutputTabKey,
- progressPercent,
  qualityTone,
  RecordsTable,
  scoreFieldQuality,
@@ -244,6 +242,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  refetchInterval: false,
  refetchOnMount:"always",
  });
+ const { refetch: refetchTableRecords } = tableRecordsQuery;
 
  const jsonRecordsQuery = useQuery({
  queryKey: ["crawl-records-json", runId, recordsFetchLimit],
@@ -252,10 +251,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  refetchInterval: false,
  refetchOnMount:"always",
  });
+ const { refetch: refetchJsonRecords } = jsonRecordsQuery;
 
  const logsQuery = useQuery({
- queryKey: ["crawl-logs", runId, logCursorAfterId],
- queryFn: () => api.getCrawlLogs(runId, { afterId: logCursorAfterId, limit: CRAWL_DEFAULTS.MAX_LIVE_LOGS }),
+ queryKey: ["crawl-logs", runId],
+ queryFn: () => api.getCrawlLogs(runId, { afterId: logCursorRef.current, limit: CRAWL_DEFAULTS.MAX_LIVE_LOGS }),
  enabled: shouldFetchLogs,
  refetchInterval: false,
  });
@@ -266,6 +266,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  enabled: shouldFetchMarkdown,
  refetchInterval: false,
  });
+ const { refetch: refetchMarkdownQuery } = markdownQuery;
  const domainRecipeQuery = useQuery({
  queryKey: ["crawl-domain-recipe", runId],
  queryFn: () => api.getDomainRecipe(runId),
@@ -300,12 +301,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  [deferredJsonRecords, outputTab],
  );
  const showRunLoadingState = runQuery.isLoading && !run;
- const panelRefreshErrors = [
+ const panelRefreshErrors = useMemo(() => [
  {
  key:"run",
  label:"run",
  error: runQuery.error,
- refetch: runQuery.refetch,
+ refetch: refetchRunQuery,
  },
  {
  key:"records",
@@ -314,13 +315,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  refetch: async () => {
  const tasks: Array<Promise<unknown>> = [];
  if (tableRecordsQuery.error) {
- tasks.push(tableRecordsQuery.refetch());
+ tasks.push(refetchTableRecords());
  }
  if (jsonRecordsQuery.error) {
- tasks.push(jsonRecordsQuery.refetch());
+ tasks.push(refetchJsonRecords());
  }
  if (!tasks.length) {
- tasks.push(tableRecordsQuery.refetch(), jsonRecordsQuery.refetch());
+ tasks.push(refetchTableRecords(), refetchJsonRecords());
  }
  await Promise.allSettled(tasks);
  },
@@ -329,21 +330,34 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  key:"logs",
  label:"logs",
  error: logsQuery.error,
- refetch: logsQuery.refetch,
+ refetch: refetchLogsQuery,
  },
  {
  key:"markdown",
  label:"markdown",
  error: markdownQuery.error,
- refetch: markdownQuery.refetch,
+ refetch: refetchMarkdownQuery,
  },
  {
  key:"domain-recipe",
  label:"domain recipe",
  error: domainRecipeQuery.error,
- refetch: domainRecipeQuery.refetch,
+ refetch: refetchDomainRecipeQuery,
  },
- ].filter((panel) => panel.error);
+ ].filter((panel) => panel.error), [
+ runQuery.error,
+ tableRecordsQuery.error,
+ jsonRecordsQuery.error,
+ logsQuery.error,
+ markdownQuery.error,
+ domainRecipeQuery.error,
+ refetchRunQuery,
+ refetchTableRecords,
+ refetchJsonRecords,
+ refetchLogsQuery,
+ refetchMarkdownQuery,
+ refetchDomainRecipeQuery,
+ ]);
 
  useEffect(() => {
  if (!domainRecipe) {
@@ -446,18 +460,18 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
 
  const refetchPanels = () => {
- const tasks: Array<Promise<unknown>> = [runQuery.refetch()];
+ const tasks: Array<Promise<unknown>> = [refetchRunQuery()];
  if (shouldFetchTableRecords) {
- tasks.push(tableRecordsQuery.refetch());
+ tasks.push(refetchTableRecords());
  }
  if (shouldFetchJsonRecords) {
- tasks.push(jsonRecordsQuery.refetch());
+ tasks.push(refetchJsonRecords());
  }
  if (shouldFetchLogs && !logSocketConnected) {
- tasks.push(logsQuery.refetch());
+ tasks.push(refetchLogsQuery());
  }
  if (shouldFetchMarkdown) {
- tasks.push(markdownQuery.refetch());
+ tasks.push(refetchMarkdownQuery());
  }
  void Promise.allSettled(tasks);
  };
@@ -466,16 +480,16 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  return () => window.clearInterval(intervalId);
  }, [
  live,
- jsonRecordsQuery,
  logSocketConnected,
- logsQuery,
- markdownQuery,
- runQuery,
  shouldFetchLogs,
  shouldFetchJsonRecords,
  shouldFetchMarkdown,
  shouldFetchTableRecords,
- tableRecordsQuery,
+ refetchRunQuery,
+ refetchTableRecords,
+ refetchJsonRecords,
+ refetchLogsQuery,
+ refetchMarkdownQuery,
  ]);
 
  useEffect(() => {
@@ -528,28 +542,20 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
  }, [outputTab, run]);
 
- const recordsForAnalysis = outputTab ==="table"? tableRecords : records.slice(0, CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
- const visibleColumns = useMemo(() => {
- const columns = new Set<string>();
- for (const record of recordsForAnalysis) {
- Object.keys(record.data ?? {}).forEach((key) => {
- if (!key.startsWith("_")) {
- columns.add(key);
- }
- });
- }
- return Array.from(columns);
- }, [recordsForAnalysis]);
- const fieldQualityScores = useMemo(() => {
- const scores: Record<string, number> = {};
- if (!recordsForAnalysis.length || !visibleColumns.length) {
- return scores;
- }
- for (const column of visibleColumns) {
- scores[column] = scoreFieldQuality(recordsForAnalysis, column);
- }
- return scores;
- }, [recordsForAnalysis, visibleColumns]);
+  const visibleColumns = useMemo(() => {
+  const columns = new Set<string>();
+  for (const record of [...tableRecords, ...records]) {
+  for (const source of [record.data, record.raw_data]) {
+  Object.keys(source ?? {}).forEach((key) => {
+  if (!key.startsWith("_")) {
+  columns.add(key);
+  }
+  });
+  }
+  }
+  return Array.from(columns);
+  }, [tableRecords, records]);
+
  const filteredTableRecords = tableRecords;
 
  useEffect(() => {
@@ -593,8 +599,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  return null;
  }, [run?.result_summary?.quality_summary?.level]);
  const quality = useMemo(
- () => estimateDataQuality(recordsForAnalysis, visibleColumns),
- [recordsForAnalysis, visibleColumns],
+ () => estimateDataQuality(tableRecords.length ? tableRecords : records, visibleColumns),
+ [tableRecords, records, visibleColumns],
  );
  const completedQualityLevel = terminal ? (persistedQualityLevel ?? quality.level) : quality.level;
  const emptyRecordsState = verdict ==="blocked"
@@ -662,11 +668,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  return;
  }
  terminalRecordsRetryAttemptsRef.current += 1;
- void Promise.allSettled([tableRecordsQuery.refetch(), jsonRecordsQuery.refetch()]);
+ void Promise.allSettled([refetchTableRecords(), refetchJsonRecords()]);
  }, POLLING_INTERVALS.RECORDS_MS);
 
  return () => window.clearInterval(intervalId);
- }, [jsonRecordsQuery, tableRecordsQuery, terminalRecordsNeedSync]);
+ }, [refetchJsonRecords, refetchTableRecords, terminalRecordsNeedSync]);
 
  function downloadExport(kind:"csv"|"json"|"markdown") {
  setRunActionError("");
@@ -802,7 +808,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  />
  <Card className="space-y-3 px-6 py-8">
  <SectionHeader title="Unable to Load Crawl"description="The run workspace could not be restored."/>
- <div className="text-sm leading-[1.55] text-danger">
+ <div className="text-sm leading-[var(--leading-relaxed)] text-danger">
  {runQuery.error instanceof Error ? runQuery.error.message :"Unknown crawl loading error."}
  </div>
  </Card>
@@ -815,7 +821,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <PageHeader
  title={run?.url ? (
  <span className="flex items-center gap-1.5">
- Run Details: <a href={run.url} target="_blank"rel="noreferrer"className="font-mono text-sm leading-[1.5] text-accent underline-offset-2 hover:underline">{getDomain(run.url)}</a>
+ Run Details: <a href={run.url} target="_blank"rel="noreferrer"className="font-mono text-sm leading-[var(--leading-relaxed)] text-accent underline-offset-2 hover:underline">{getDomain(run.url)}</a>
  </span>
  ) :"Crawl Results"}
  actions={
@@ -826,50 +832,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
  />
 
- {/* Flow Stepper */}
- <div className="flex items-center gap-0 text-[11px]">
- <CsFlowStep step={1} label="Launch" active={!!run} />
- <CsFlowConnector active={!!run} />
- <CsFlowStep step={2} label="Crawl" active={live || terminal} />
- <CsFlowConnector active={live || terminal} />
- <CsFlowStep step={3} label="Complete" active={terminal} />
- </div>
 
- {/* Status Metrics Bar */}
- {run && !showRunLoadingState ? (
- <div className="cs-status-bar">
- <div className="cs-metric">
- <span className="cs-live-dot" />
- <span className="cs-metric-value">{humanizeStatus(run.status)}</span>
- <span className="cs-metric-label">Status</span>
- </div>
- <div className="cs-metric">
- <span className="cs-metric-value">{summary.records}</span>
- <span className="cs-metric-label">Records</span>
- </div>
- <div className="cs-metric">
- <span className="cs-metric-value">{summary.pages}</span>
- <span className="cs-metric-label">Pages</span>
- </div>
- <div className="cs-metric">
- <span className="cs-metric-value">{summary.duration.replace(/(\d+)(m|s)/g, "$1 $2")}</span>
- <span className="cs-metric-label">Elapsed</span>
- </div>
- <div className="cs-metric">
- <Badge tone={extractionVerdictTone(verdict)} className="text-[10px]">{humanizeVerdict(verdict).toLowerCase()}</Badge>
- <span className="cs-metric-label">Verdict</span>
- </div>
- <div className="cs-metric">
- <Badge tone={qualityTone(completedQualityLevel)} className="text-[10px]">{humanizeQuality(completedQualityLevel).toLowerCase()} ({Math.round(quality.score * 100)}%)</Badge>
- <span className="cs-metric-label">Quality</span>
- </div>
- </div>
- ) : null}
 
  {showRunLoadingState ? (
  <Card className="space-y-3 px-6 py-8">
  <SectionHeader title="Loading Crawl"description="Fetching run details and restoring the workspace."/>
- <div className="text-sm leading-[1.55] text-muted">Run #{runId} is loading.</div>
+ <div className="text-sm leading-[var(--leading-relaxed)] text-muted">Run #{runId} is loading.</div>
  </Card>
  ) : null}
 
@@ -906,7 +874,19 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  {logSocketConnected ? <span className="cs-live-dot is-success" /> : <span className="cs-live-dot" />}
  </span>
  <div className="flex items-center gap-3">
- {run ? <div className="w-28"><ProgressBar percent={progressPercent(run)} /></div> : null}
+  {run ? (
+  <span className="inline-flex items-center gap-1.5 rounded border border-divider bg-background-elevated px-2 py-0.5 font-mono text-xs tabular-nums text-foreground">
+   <Clock className="size-3" />
+   {(() => {
+    const elapsedMs = Math.max(0, localNow - effectiveStartMs);
+    const totalS = Math.floor(elapsedMs / 1000);
+    const m = Math.floor(totalS / 60);
+    const s = totalS % 60;
+    return `${m}m ${String(s).padStart(2, "0")}s`;
+   })()}
+  </span>
+  ) : null}
+
  {liveJumpAvailable ? (
  <button
  type="button"
@@ -914,7 +894,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  scrollViewportToBottom(logViewportRef);
  setLiveJumpAvailable(false);
  }}
- className="bg-background-alt rounded-lg shadow-card inline-flex items-center gap-1 px-2.5 py-1.5 text-sm leading-[1.45]"
+ className="bg-background-alt rounded-lg shadow-card inline-flex items-center gap-1 px-2.5 py-1.5 text-sm leading-[var(--leading-normal)]"
  >
  <ChevronsDown className="size-3.5"aria-hidden="true"/>
  Jump to Latest
@@ -949,7 +929,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  {run.url}
  </a>
  ) : (
- <p className="text-sm leading-[1.55] text-muted">Waiting for completed run data.</p>
+ <p className="text-sm leading-[var(--leading-relaxed)] text-muted">Waiting for completed run data.</p>
  )
  }
  actions={
@@ -962,7 +942,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  ) : null}
  {listingRun && productIntelligenceRecords.length ? (
  <Button variant="secondary"type="button"onClick={triggerProductIntelligenceFromResults}>
- <Search className="size-3.5"/>
+ <Brain className="size-3.5"/>
  {productIntelligenceLabel}
  </Button>
  ) : null}
@@ -1012,7 +992,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <RecordsTable
  records={filteredTableRecords}
  visibleColumns={visibleColumns}
- fieldQualityScores={fieldQualityScores}
  selectedIds={selectedIds}
  onSelectAll={(checked) => setSelectedIds(checked ? filteredTableRecords.map((record) => record.id) : [])}
  onToggleRow={(id, checked) =>
@@ -1022,7 +1001,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  }
  />
  {hasMoreTableRecords ? (
- <div className="surface-muted flex items-center justify-between rounded-lg px-3 py-2 text-sm leading-[1.45] text-muted">
+ <div className="surface-muted flex items-center justify-between rounded-lg px-3 py-2 text-sm leading-[var(--leading-normal)] text-muted">
  <span>
  Showing {tableRecords.length} of {tableTotal} records
  </span>
@@ -1064,7 +1043,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  {recordsJson}
  </pre>
  {hasMoreJsonRecords ? (
- <div className="surface-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-sm leading-[1.45] text-muted">
+ <div className="surface-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-sm leading-[var(--leading-normal)] text-muted">
  <span>
  JSON previewing {jsonRecords.length} of {recordsTotal} records
  </span>
@@ -1124,7 +1103,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </article>
  </div>
  ) : (
- <div className="surface-muted grid min-h-40 place-items-center rounded-lg border-dashed text-sm leading-[1.55] text-muted">
+ <div className="surface-muted grid min-h-40 place-items-center rounded-lg border-dashed text-sm leading-[var(--leading-relaxed)] text-muted">
  No markdown is available for this run.
  </div>
  )}
@@ -1152,7 +1131,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  description={`Review extraction evidence for ${domainRecipe.domain} on ${domainRecipe.surface}. Keep what should compound, reject what should not.`}
  />
  <div className="grid gap-3 md:grid-cols-2">
- <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[1.5] text-secondary">
+ <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[var(--leading-relaxed)] text-secondary">
  <div className="field-label mb-1">Requested Coverage</div>
  Requested: {domainRecipe.requested_field_coverage.requested.join(", ") || "None"}
  <br />
@@ -1160,7 +1139,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <br />
  Missing: {domainRecipe.requested_field_coverage.missing.join(", ") || "None"}
  </div>
- <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[1.5] text-secondary">
+ <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[var(--leading-relaxed)] text-secondary">
  <div className="field-label mb-1">Acquisition Evidence</div>
  Method: {domainRecipe.acquisition_evidence.actual_fetch_method || "—"}
  <br />
@@ -1175,7 +1154,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  <div className="space-y-3">
  <div>
  <div className="field-label mb-0">Field Learning</div>
- <p className="mt-1 text-sm leading-[1.45] text-secondary">Keep accepted field evidence or reject bad field evidence for future runs on this domain and surface.</p>
+ <p className="mt-1 text-sm leading-[var(--leading-normal)] text-secondary">Keep accepted field evidence or reject bad field evidence for future runs on this domain and surface.</p>
  </div>
  {domainRecipe.field_learning.length ? (
  <div className="space-y-2">
@@ -1210,7 +1189,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  })}
  </div>
  ) : (
- <div className="surface-muted rounded-lg border-dashed px-3 py-3 text-sm leading-[1.5] text-secondary">
+ <div className="surface-muted rounded-lg border-dashed px-3 py-3 text-sm leading-[var(--leading-relaxed)] text-secondary">
  No field learning signals were captured for this run.
  </div>
  )}
@@ -1241,7 +1220,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  />
  {recipeActionError ? <InlineAlert tone="danger" message={recipeActionError} /> : null}
  <div className="flex items-center justify-between gap-3">
- <div className="text-sm leading-[1.5] text-secondary">
+ <div className="text-sm leading-[var(--leading-relaxed)] text-secondary">
  Saved profile source run: {domainRecipe.saved_run_profile?.source_run_id ?? "—"} · Last saved: {domainRecipe.saved_run_profile?.saved_at ?? "Not saved yet"}
  </div>
  <Button
@@ -1499,29 +1478,3 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  );
 }
 
-function CsFlowStep({ step, label, active }: Readonly<{ step: number; label: string; active: boolean }>) {
- return (
-  <span className={cn(
-   "inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-all",
-   active
-    ? "bg-accent-subtle text-accent"
-    : "text-muted",
-  )}>
-   <span className={cn(
-    "inline-flex size-4 items-center justify-center rounded-full text-[9px] font-bold",
-    active
-     ? "ui-on-accent-surface bg-accent"
-     : "bg-border text-muted",
-   )}>
-    {active ? <Check className="size-2.5" /> : step}
-   </span>
-   {label}
-  </span>
- );
-}
-
-function CsFlowConnector({ active }: Readonly<{ active: boolean }>) {
- return (
-  <div className={cn("mx-0.5 h-px w-4", active ? "bg-accent" : "bg-border")} />
- );
-}
