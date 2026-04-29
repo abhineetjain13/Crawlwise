@@ -121,7 +121,7 @@ Canonical config owner:
 | File | Purpose |
 |---|---|
 | `crawl_engine.py` | Extraction facade and routing |
-| `detail_extractor.py` | Detail-page extraction |
+| `detail_extractor.py` | Detail-page extraction orchestration |
 | `listing_extractor.py` | Listing-page extraction |
 | `structured_sources.py` | JSON-LD, microdata, OG, Nuxt, harvested JS state |
 | `js_state_mapper.py` | JS state to field mapping |
@@ -134,7 +134,11 @@ Canonical config owner:
 | `adapters/registry.py` | Adapter resolution |
 | `adapters/[platform].py` | Platform-specific extraction |
 | `extract/listing_card_fragments.py` | Canonical listing-fragment discovery, scoring, and listing-card heuristics shared by traversal, browser artifact capture, and listing extraction |
-| `extract/listing_candidate_ranking.py` | Shared candidate-set ranking and utility filtering for listing rows |
+| `extract/listing_candidate_ranking.py` | Shared candidate-set ranking and canonical utility-record filtering for listing rows |
+| `extract/detail_dom_extractor.py` | Detail DOM context selection |
+| `extract/detail_price_extractor.py` | Detail price, currency reconciliation, and visible PDP price backfill |
+| `extract/detail_title_scorer.py` | Detail title promotion and shell-title scoring |
+| `extract/shared_variant_logic.py` | Canonical variant identity, merge, richness, DOM cue, and axis helpers |
 | `extract/variant_record_normalization.py` | Variant axis/value normalization before record persistence |
 | `extract/*` | Other extraction helpers |
 
@@ -143,7 +147,7 @@ Canonical config owners:
 | File | Purpose |
 |---|---|
 | `config/field_mappings.py` | field aliases |
-| `config/extraction_rules.py` | extraction/runtime selector tokens, detail price selectors, shell/utility path rules |
+| `config/extraction_rules.py` | extraction/runtime selector tokens, structured-source key maps, detail selectors, shell/utility path rules |
 | `config/selectors.py` | DOM selectors |
 | `config/platforms.json` | adapter metadata, signatures, JS mappings, readiness selectors |
 | `config/network_payload_specs.py` | payload specs and endpoint tokens |

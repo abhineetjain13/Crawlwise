@@ -534,3 +534,26 @@ def test_ghost_route_rejects_product_payload_whose_url_does_not_match_current_de
     )
 
     assert rows == []
+
+
+def test_ghost_route_rejects_product_payload_whose_url_only_matches_locale_tokens() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://www.zara.com/us/en/util/messages?v=1822&ajax=true",
+                "endpoint_type": "generic_json",
+                "body": {
+                    "title": "ZARA {storeName} - Official Website",
+                    "description": "Template copy for the store shell.",
+                    "price": "19.99",
+                    "url": "https://www.zara.com/us/en/Please enter a valid URL such as http:/www.zara.com",
+                    "color": "Finish",
+                    "size": "Size",
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://www.zara.com/us/en/rustic-cotton-t-shirt-p04424306.html?v1=527078510",
+    )
+
+    assert rows == []

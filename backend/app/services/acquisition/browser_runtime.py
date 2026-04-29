@@ -46,6 +46,7 @@ from app.services.acquisition.cookie_store import (
 from app.services.acquisition.browser_page_flow import (
     BrowserFinalizeInput,
     append_readiness_probe,
+    dismiss_safe_location_interstitial,
     finalize_browser_fetch,
     navigate_browser_page_impl,
     remaining_timeout_factory,
@@ -122,6 +123,7 @@ _BROWSER_PREFERRED_HOST_SUCCESSES: dict[str, tuple[int, float]] = {}
 _DIRECT_BROWSER_RUNTIMES: dict[str, SharedBrowserRuntime] = {}
 _PROXIED_BROWSER_RUNTIMES: dict[tuple[str, str], SharedBrowserRuntime] = {}
 _BROWSER_RUNTIME_LOCK = asyncio.Lock()
+_POPUP_GUARD_TASKS: set[asyncio.Task[Any]] = set()
 _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {str(key): tuple(str(item) for item in list(value or [])) for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()}
 _DETAIL_READINESS_HINTS: dict[str, tuple[str, ...]] = {str(key): tuple(str(item) for item in list(value or [])) for key, value in dict(BROWSER_DETAIL_READINESS_HINTS or {}).items()}
 _AOM_EXPAND_ROLES = {"button", "tab"}
@@ -223,6 +225,46 @@ def _browser_profile_diagnostics(engine: str) -> dict[str, object]:
         ),
         "browser_stealth_enabled": False,
     }
+
+
+def build_browser_diagnostics_contract(
+    *,
+    diagnostics: dict[str, object] | None = None,
+    browser_reason: str | None = None,
+    browser_outcome: str | None = None,
+    browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
+    browser_binary: str | None = None,
+    failure_reason: str | None = None,
+    retry_reason: str | None = None,
+    phase_timings_ms: dict[str, int] | None = None,
+) -> dict[str, object]:
+    normalized_engine = _normalize_browser_engine(browser_engine)
+    payload = dict(diagnostics or {})
+    payload["browser_attempted"] = True
+    payload["browser_reason"] = str(browser_reason or "").strip().lower() or None
+    payload["browser_outcome"] = str(browser_outcome or "").strip().lower() or None
+    payload["failure_reason"] = str(failure_reason or "").strip().lower() or None
+    if retry_reason is not None:
+        normalized_retry = str(retry_reason or "").strip().lower() or None
+        if normalized_retry or "retry_reason" not in payload:
+            payload["retry_reason"] = normalized_retry
+    else:
+        payload.setdefault("retry_reason", None)
+    payload["browser_engine"] = normalized_engine
+    payload["browser_binary"] = str(browser_binary or normalized_engine)
+    profile = _browser_profile_diagnostics(normalized_engine)
+    for key, value in profile.items():
+        payload[key] = value
+    existing_timings = (
+        dict(payload.get("phase_timings_ms"))
+        if isinstance(payload.get("phase_timings_ms"), dict)
+        else {}
+    )
+    incoming_timings = dict(phase_timings_ms or {}) if phase_timings_ms is not None else {}
+    existing_timings.update(incoming_timings)
+    payload["phase_timings_ms"] = existing_timings
+    payload.setdefault("artifact_paths", {})
+    return payload
 
 
 def _should_run_behavior_realism(engine: str) -> bool:
@@ -426,6 +468,50 @@ class SharedBrowserRuntime:
             async with self._counter_lock:
                 self._total_contexts_created = 0
 
+    async def _recycle_after_driver_disconnect(self) -> None:
+        async with self._lock:
+            await self._close_locked()
+        await self._ensure()
+
+    async def _open_context_page(
+        self,
+        *,
+        context_options: dict[str, Any],
+        context_spec: PlaywrightContextSpec,
+    ) -> tuple[BrowserContext, Any]:
+        last_error: Exception | None = None
+        for attempt in range(2):
+            if self._browser is None:
+                raise RuntimeError("Browser runtime failed to initialize")
+            context: BrowserContext | None = None
+            try:
+                context = await self._browser.new_context(**cast(Any, context_options))
+                init_script = str(context_spec.init_script or "").strip()
+                setattr(context, _BROWSERFORGE_ACTIVE_ATTR, bool(init_script))
+                if init_script:
+                    await context.add_init_script(init_script)
+                await _configure_context_routes(context)
+                async with self._counter_lock:
+                    self._total_contexts_created += 1
+                page = await context.new_page()
+                return context, page
+            except Exception as exc:
+                last_error = exc
+                if context is not None:
+                    await _close_browser_context_safely(context)
+                if attempt >= 1 or _browser_failure_kind(exc) not in {
+                    "browser_driver_closed",
+                    "page_closed",
+                }:
+                    raise
+                logger.warning(
+                    "Browser runtime disconnected during context bootstrap; recycling runtime"
+                )
+                await self._recycle_after_driver_disconnect()
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Browser runtime failed to create page context")
+
     async def _launch_proxy_config_for_browser(self) -> dict[str, str] | None:
         if self.launch_proxy_config is None:
             return None
@@ -564,15 +650,10 @@ class SharedBrowserRuntime:
                     )
                 if storage_state:
                     context_options["storage_state"] = storage_state
-            context = await self._browser.new_context(**cast(Any, context_options))
-            init_script = str(context_spec.init_script or "").strip()
-            setattr(context, _BROWSERFORGE_ACTIVE_ATTR, bool(init_script))
-            if init_script:
-                await context.add_init_script(init_script)
-            await _configure_context_routes(context)
-            async with self._counter_lock:
-                self._total_contexts_created += 1
-            page = await context.new_page()
+            context, page = await self._open_context_page(
+                context_options=context_options,
+                context_spec=context_spec,
+            )
             yield page
         finally:
             await self._update_active_contexts(-1)
@@ -1316,6 +1397,7 @@ async def browser_fetch(
                 traversal_mode=traversal_mode,
                 should_run_traversal=should_run_traversal,
             )
+            popup_guard_registrations: list[tuple[Any, str, Any]] = []
             try:
                 pre_nav_pause_ms = max(
                     0, int(crawler_runtime_settings.browser_first_nav_pause_ms)
@@ -1332,6 +1414,7 @@ async def browser_fetch(
                     timeout_seconds=_remaining(),
                     phase_timings_ms=phase_timings_ms,
                 )
+                popup_guard_registrations = _install_popup_guard(page, on_event=on_event)
                 response, navigation_strategy = await _run_browser_stage(
                     stage="navigation",
                     page=page,
@@ -1358,6 +1441,20 @@ async def browser_fetch(
                         + (f' - title="{page_title}"' if page_title else "")
                     ),
                 )
+                interstitial_started_at = time.perf_counter()
+                interstitial_diagnostics = await dismiss_safe_location_interstitial(page)
+                phase_timings_ms["interstitial_dismissal"] = _elapsed_ms(
+                    interstitial_started_at
+                )
+                if interstitial_diagnostics.get("status") == "dismissed":
+                    await _emit_browser_event(
+                        on_event,
+                        "info",
+                        (
+                            "Dismissed location interstitial via "
+                            f"{interstitial_diagnostics.get('selector')}"
+                        ),
+                    )
                 behavior_diagnostics: dict[str, object] = {}
                 if _should_run_behavior_realism(runtime_engine):
                     behavior_started_at = time.perf_counter()
@@ -1446,6 +1543,7 @@ async def browser_fetch(
                             traversal_result=traversal_result,
                             rendered_html=rendered_html,
                             page_markdown=page_markdown,
+                            interstitial_diagnostics=interstitial_diagnostics,
                             phase_timings_ms=phase_timings_ms,
                             started_at=started_at,
                             capture_screenshot=bool(capture_screenshot),
@@ -1463,19 +1561,23 @@ async def browser_fetch(
                 finalized_platform_family = (
                     str(finalized.get("platform_family") or "").strip() or None
                 )
-                diagnostics = {
-                    **_mapping_value(finalized.get("diagnostics")),
-                    "browser_engine": runtime_engine,
-                    "browser_binary": runtime_binary,
-                    **_browser_profile_diagnostics(runtime_engine),
-                    "bridge_used": runtime_bridge_used,
-                    "browser_proxy_mode": browser_proxy_mode,
-                    "escalation_lane": str(escalation_lane or "").strip().lower() or None,
-                    "host_policy_snapshot": dict(host_policy_snapshot or {}),
-                    "proxy_rotation_mode": resolved_proxy_rotation_mode,
-                    "browser_state_reuse_allowed": allow_storage_state,
-                    "behavior_realism": dict(behavior_diagnostics),
-                }
+                finalized_diagnostics = _mapping_value(finalized.get("diagnostics"))
+                diagnostics = build_browser_diagnostics_contract(
+                    diagnostics={
+                        **finalized_diagnostics,
+                        "bridge_used": runtime_bridge_used,
+                        "browser_proxy_mode": browser_proxy_mode,
+                        "escalation_lane": str(escalation_lane or "").strip().lower() or None,
+                        "host_policy_snapshot": dict(host_policy_snapshot or {}),
+                        "proxy_rotation_mode": resolved_proxy_rotation_mode,
+                        "browser_state_reuse_allowed": allow_storage_state,
+                        "behavior_realism": dict(behavior_diagnostics),
+                    },
+                    browser_reason=browser_reason,
+                    browser_outcome=str(finalized_diagnostics.get("browser_outcome") or ""),
+                    browser_engine=runtime_engine,
+                    browser_binary=runtime_binary,
+                )
                 _mark_storage_state_persist_policy(
                     page,
                     persist_run_storage_state=allow_storage_state and not bool(finalized["blocked"]),
@@ -1499,6 +1601,7 @@ async def browser_fetch(
                     page_markdown=str(finalized.get("page_markdown") or ""),
                 )
             finally:
+                _remove_popup_guard(popup_guard_registrations)
                 await payload_capture.close(page)
     except Exception as exc:
         setattr(exc, "browser_proxy_mode", browser_proxy_mode)
@@ -1854,10 +1957,7 @@ def build_failed_browser_diagnostics(
     failure_kind = _browser_failure_kind(exc)
     failure_stage = str(getattr(exc, "browser_failure_stage", "navigation") or "navigation")
     normalized_engine = _normalize_browser_engine(browser_engine)
-    return {
-        "browser_attempted": True,
-        "browser_reason": str(browser_reason or "").strip().lower() or None,
-        "browser_outcome": outcome,
+    diagnostics = {
         "failure_kind": failure_kind,
         "failure_stage": failure_stage,
         "timeout_phase": failure_stage if _is_timeout_error(exc) else None,
@@ -1872,18 +1972,21 @@ def build_failed_browser_diagnostics(
             or ("launch" if proxy else "direct")
         ),
         "proxy_attempt_index": proxy_attempt_index,
-        "browser_engine": normalized_engine,
-        "browser_binary": str(browser_binary or normalized_engine),
-        **_browser_profile_diagnostics(normalized_engine),
         "bridge_used": bool(bridge_used),
         "escalation_lane": str(escalation_lane or "").strip().lower() or None,
         "host_policy_snapshot": dict(host_policy_snapshot or {}),
         "error": f"{type(exc).__name__}: {exc}",
         "navigation_strategy": getattr(exc, "browser_navigation_strategy", None),
-        "phase_timings_ms": dict(
-            getattr(exc, "browser_phase_timings_ms", {}) or {}
-        ),
     }
+    return build_browser_diagnostics_contract(
+        diagnostics=diagnostics,
+        browser_reason=browser_reason,
+        browser_outcome=outcome,
+        browser_engine=normalized_engine,
+        browser_binary=browser_binary,
+        failure_reason=failure_kind,
+        phase_timings_ms=dict(getattr(exc, "browser_phase_timings_ms", {}) or {}),
+    )
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -1909,6 +2012,59 @@ async def _emit_browser_event(on_event, level: str, message: str) -> None:
         await on_event(level, message)
     except Exception:
         logger.debug("Browser event callback failed", exc_info=True)
+
+
+def _install_popup_guard(page: Any, *, on_event=None) -> list[tuple[Any, str, Any]]:
+    context = getattr(page, "context", None)
+    if callable(context):
+        with suppress(Exception):
+            context = context()
+    if context is None:
+        return []
+
+    def _handle_context_page(candidate: Any) -> None:
+        if candidate is page:
+            return
+        _schedule_popup_close(candidate, on_event=on_event)
+
+    emitter_on = getattr(context, "on", None)
+    if not callable(emitter_on):
+        return []
+    emitter_on("page", _handle_context_page)
+    return [(context, "page", _handle_context_page)]
+
+
+def _remove_popup_guard(registrations: list[tuple[Any, str, Any]]) -> None:
+    for emitter, event_name, callback in registrations:
+        remove_listener = getattr(emitter, "remove_listener", None)
+        if callable(remove_listener):
+            with suppress(Exception):
+                remove_listener(event_name, callback)
+                continue
+        off = getattr(emitter, "off", None)
+        if callable(off):
+            with suppress(Exception):
+                off(event_name, callback)
+
+
+def _schedule_popup_close(page: Any, *, on_event=None) -> None:
+    task = asyncio.create_task(_close_unexpected_popup(page, on_event=on_event))
+    _POPUP_GUARD_TASKS.add(task)
+    task.add_done_callback(_POPUP_GUARD_TASKS.discard)
+
+
+async def _close_unexpected_popup(page: Any, *, on_event=None) -> None:
+    popup_url = str(getattr(page, "url", "") or "").strip() or "about:blank"
+    close_page = getattr(page, "close", None)
+    if not callable(close_page):
+        return
+    with suppress(Exception):
+        await close_page()
+        await _emit_browser_event(
+            on_event,
+            "info",
+            f"Closed unexpected popup page: {popup_url}",
+        )
 
 
 def _is_timeout_error(exc: Exception) -> bool:
@@ -2058,6 +2214,8 @@ def _browser_failure_kind(exc: Exception) -> str:
         return "page_closed"
     if "page closed" in message or "browser has been closed" in message:
         return "page_closed"
+    if "connection closed while reading from the driver" in message:
+        return "browser_driver_closed"
     if "real chrome executable is not available" in message:
         return "engine_unavailable"
     if "patchright package is not available" in message:
@@ -2080,6 +2238,7 @@ __all__ = [
     "_NETWORK_CAPTURE_WORKERS",
     "NetworkPayloadReadResult",
     "browser_fetch",
+    "build_browser_diagnostics_contract",
     "browser_runtime_snapshot",
     "build_failed_browser_diagnostics",
     "capture_browser_screenshot",

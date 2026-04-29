@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from w3lib.url import url_query_cleaner
+
+from app.services.config.field_mappings import (
+    PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_KEYS,
+    PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_PREFIXES,
+)
 
 
 TRACKING_PARAM_EXACT_KEYS = {"fbclid", "gclid", "ref", "sid"}
@@ -18,7 +23,7 @@ TRACKING_DETAIL_CONTEXT_EXACT_KEYS = {
 
 
 TRACKING_PARAM_PREFIXES = ("utm_", "click_")
-TRACKING_STRIP_URL_FIELDS = {"apply_url", "source_url", "url"}
+TRACKING_STRIP_URL_FIELDS = {"apply_url", "canonical_url", "source_url", "url"}
 _PRESERVED_SHORT_QUERY_KEYS = {"id", "ids", "p", "page", "pid", "q", "sku", "v"}
 _SHORT_TRACKING_VALUE_RE = re.compile(r"^[a-z0-9_-]{0,8}$", re.I)
 
@@ -105,3 +110,45 @@ def strip_record_tracking_params(
         if value:
             cleaned[field_name] = value
     return cleaned
+
+
+def canonical_public_record_url(
+    url: object,
+    *,
+    surface: str | None,
+    field_name: str,
+) -> str | None:
+    text = _text_or_none(url)
+    if not text:
+        return None
+    if str(field_name or "").strip().lower() not in {"apply_url", "canonical_url", "url"}:
+        return text
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface != "ecommerce_detail":
+        return text
+    parsed = urlparse(text)
+    if not parsed.query:
+        return text
+    remove_keys = {
+        str(key or "").strip().lower()
+        for key in tuple(PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_KEYS or ())
+        if str(key or "").strip()
+    }
+    remove_prefixes = tuple(
+        str(prefix or "").strip().lower()
+        for prefix in tuple(PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_PREFIXES or ())
+        if str(prefix or "").strip()
+    )
+    kept_pairs = []
+    changed = False
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        lowered = str(key or "").strip().lower()
+        if lowered in remove_keys or any(
+            lowered.startswith(prefix) for prefix in remove_prefixes
+        ):
+            changed = True
+            continue
+        kept_pairs.append((key, value))
+    if not changed:
+        return text
+    return urlunparse(parsed._replace(query=urlencode(kept_pairs, doseq=True)))

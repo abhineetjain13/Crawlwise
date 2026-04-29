@@ -832,6 +832,23 @@ describe("CrawlRunScreen", () => {
  }
  });
 
+ it("keeps table and exports visible for failed terminal runs with records", async () => {
+ apiMock.getCrawl.mockResolvedValue({
+ ...terminalRun(101),
+ status:"failed",
+ result_summary: {
+ extraction_verdict:"partial",
+ record_count: 2,
+ error:"One URL failed.",
+ },
+ });
+
+ renderRunScreen();
+
+ expect(await screen.findByRole("button", { name:/Table \(2\)/ })).toBeInTheDocument();
+ expect(screen.getByRole("button", { name:"Excel (CSV)"})).toBeInTheDocument();
+ });
+
  it("renders completed-run learning and run-config tabs", async () => {
  renderRunScreen();
 

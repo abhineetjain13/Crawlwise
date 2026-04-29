@@ -3125,6 +3125,57 @@ def test_extract_ecommerce_detail_rejects_same_site_wrong_product_payload_withou
     assert rows == []
 
 
+def test_extract_ecommerce_detail_keeps_same_url_color_variant_product_path() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Bondi 9",
+          "brand": {
+            "@type": "Brand",
+            "name": "Hoka"
+          },
+          "color": "Berry Jam/Berry Patch",
+          "description": "Women's Hoka Bondi 9 by Hoka at Zappos.com.",
+          "image": "https://m.media-amazon.com/images/I/71tLsSyLUZL._SX700_.jpg",
+          "offers": {
+            "@type": "Offer",
+            "price": "175.00",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Bondi 9</h1>
+          <div class="price">$175.00</div>
+        </main>
+      </body>
+    </html>
+    """
+
+    requested_url = (
+        "https://www.zappos.com/kratos/p/"
+        "womens-hoka-bondi-9-berry-jam-berry-patch/product/9984296/color/318988"
+        "?zlfid=191"
+    )
+
+    rows = extract_records(
+        html,
+        requested_url,
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url=requested_url,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Bondi 9"
+
+
 def test_extract_ecommerce_detail_rejects_fragment_backed_shell_payload_from_spa_root() -> None:
     html = """
     <html>
@@ -3155,6 +3206,23 @@ def test_extract_ecommerce_detail_rejects_fragment_backed_shell_payload_from_spa
     )
 
     assert rows == []
+
+
+def test_detail_rejection_does_not_claim_identity_mismatch_when_same_url_never_redirected() -> None:
+    requested_url = "https://www.zara.com/us/en/rustic-cotton-t-shirt-p04424306.html?v1=527078510"
+    record = {
+        "title": "United States",
+        "url": requested_url,
+    }
+
+    assert (
+        detail_extractor.detail_record_rejection_reason(
+            record,
+            page_url=requested_url,
+            requested_page_url=requested_url,
+        )
+        is None
+    )
 
 
 def test_extract_ecommerce_detail_rejects_search_results_shell_with_sort_filter_controls() -> None:
@@ -4478,6 +4546,82 @@ def test_variant_axis_headers_do_not_pollute_size_or_available_sizes() -> None:
     assert record["available_sizes"] == ["XS", "M"]
 
 
+def test_normalize_variant_record_infers_size_from_variant_titles() -> None:
+    record = {
+        "title": "Chicken Recipe Dry Dog Food",
+        "original_price": "64.99",
+        "variants": [
+            {
+                "title": "Chicken Recipe Dry Dog Food, 4-lb bag",
+                "url": "https://www.chewy.com/acme-food/dp/123?size=4-lb",
+                "price": "18.99",
+            },
+            {
+                "title": "Chicken Recipe Dry Dog Food, 12-lb bag",
+                "url": "https://www.chewy.com/acme-food/dp/123?size=12-lb",
+                "price": "42.99",
+            },
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variant_axes"] == {"size": ["4-lb bag", "12-lb bag"]}
+    assert [row["option_values"]["size"] for row in record["variants"]] == [
+        "4-lb bag",
+        "12-lb bag",
+    ]
+    assert "original_price" not in record["variants"][0]
+    assert "original_price" not in record["variants"][1]
+
+
+def test_extract_detail_infers_chewy_style_offer_variant_sizes() -> None:
+    html = """
+    <html><head>
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Product",
+        "name": "Chicken Recipe Dry Dog Food",
+        "brand": {"@type": "Brand", "name": "Acme"},
+        "offers": [
+          {
+            "@type": "Offer",
+            "name": "Chicken Recipe Dry Dog Food, 4-lb bag",
+            "url": "https://www.chewy.com/acme-food/dp/123?size=4-lb",
+            "price": "18.99",
+            "priceCurrency": "USD"
+          },
+          {
+            "@type": "Offer",
+            "name": "Chicken Recipe Dry Dog Food, 12-lb bag",
+            "url": "https://www.chewy.com/acme-food/dp/123?size=12-lb",
+            "price": "42.99",
+            "priceCurrency": "USD"
+          }
+        ]
+      }
+      </script>
+    </head><body><h1>Chicken Recipe Dry Dog Food</h1></body></html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.chewy.com/acme-food/dp/123",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {"size": ["4-lb bag", "12-lb bag"]}
+    assert [row["option_values"]["size"] for row in record["variants"]] == [
+        "4-lb bag",
+        "12-lb bag",
+    ]
+    assert [row["price"] for row in record["variants"]] == ["18.99", "42.99"]
+
+
 def test_extract_ecommerce_detail_does_not_infer_price_from_shell_chrome_text() -> None:
     html = """
     <html>
@@ -4756,3 +4900,35 @@ def test_extract_detail_dom_images_excludes_related_product_cards() -> None:
     record = rows[0]
     assert record["image_url"] == "https://example.com/images/trail-runner-1.jpg"
     assert record["additional_images"] == ["https://example.com/images/trail-runner-2.jpg"]
+
+
+def test_extract_detail_dom_images_excludes_compare_model_assets() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>iPhone 16</h1>
+        <main>
+          <section class="product-gallery">
+            <img src="/images/iphone-16-front.jpg" alt="iPhone 16 front">
+            <img src="/images/iphone-16-side.jpg" alt="iPhone 16 side">
+          </section>
+          <section class="compare-models">
+            <img src="/images/iphone-17-pro.jpg" alt="iPhone 17 Pro">
+            <img src="/images/iphone-air.jpg" alt="iPhone Air">
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/iphone-16",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["image_url"] == "https://example.com/images/iphone-16-front.jpg"
+    assert record["additional_images"] == ["https://example.com/images/iphone-16-side.jpg"]

@@ -71,7 +71,7 @@ class NikeAdapter(BaseAdapter):
 
 
 def _extract_detail_record(page_url: str, html: str) -> dict[str, Any] | None:
-    product = _preloaded_product(html)
+    product = _preloaded_product(html) or _next_data_product(html)
     if not product:
         return None
     record = _map_product(product, page_url=page_url)
@@ -99,6 +99,137 @@ def _preloaded_product(html: str) -> dict[str, Any] | None:
     return product if isinstance(product, dict) and product.get("id") else None
 
 
+def _next_data_product(html: str) -> dict[str, Any] | None:
+    soup = BeautifulSoup(str(html or ""), "html.parser")
+    node = soup.find("script", id="__NEXT_DATA__")
+    if node is None:
+        return None
+    raw = node.string or node.get_text()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    page_props = payload.get("props", {}).get("pageProps")
+    if not isinstance(page_props, dict):
+        return None
+    product = page_props.get("selectedProduct")
+    if not isinstance(product, dict) or not product.get("id"):
+        return None
+    product_info = product.get("productInfo")
+    if not isinstance(product_info, dict):
+        product_info = {}
+    prices = product.get("prices")
+    if not isinstance(prices, dict):
+        prices = {}
+    images = _next_data_images(page_props, product)
+    color = text_or_none(product.get("colorDescription"))
+    sizes = product.get("sizes") if isinstance(product.get("sizes"), list) else []
+    current_price = prices.get("currentPrice")
+    initial_price = prices.get("initialPrice")
+    size_options = [
+        compact_dict(
+            {
+                "id": option.get("merchSkuId"),
+                "sku": option.get("merchSkuId"),
+                "barcode": _next_data_gtin(option),
+                "sizeName": text_or_none(option.get("label") or option.get("localizedLabel")),
+                "discountedPrice": current_price,
+                "price": initial_price,
+                "isOutOfStock": not _next_data_size_is_in_stock(option),
+            }
+        )
+        for option in sizes
+        if isinstance(option, dict)
+        and text_or_none(option.get("label") or option.get("localizedLabel"))
+    ]
+    return compact_dict(
+        {
+            "id": product.get("id") or product.get("merchProductId") or product.get("globalProductId"),
+            "sku": product.get("styleColor") or product.get("styleCode") or product.get("id"),
+            "discountedPrice": current_price,
+            "price": initial_price,
+            "imageUrl": images[0] if images else None,
+            "color": {"name": color} if color else None,
+            "action_url": product_info.get("path") or product_info.get("url"),
+            "title": product_info.get("title") or product.get("displayStyle"),
+            "subTitle": product_info.get("subtitle"),
+            "isOutOfStock": not any(_next_data_size_is_in_stock(option) for option in sizes if isinstance(option, dict)),
+            "product_summary": (
+                {"description": product_info.get("productDescription")}
+                if text_or_none(product_info.get("productDescription"))
+                else None
+            ),
+            "view_product_details": _next_data_product_details(product_info),
+            "productMedia": [{"mediaType": "image", "url": image} for image in images],
+            "sizeOptions": {"options": size_options} if size_options else None,
+        }
+    )
+
+
+def _next_data_images(page_props: dict[str, Any], product: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for item in list(page_props.get("colorwayImages") or []):
+        if not isinstance(item, dict):
+            continue
+        for field_name in ("portraitImg", "squarishImg"):
+            image = text_or_none(item.get(field_name))
+            if image:
+                values.append(image)
+    for item in list(product.get("contentImages") or []):
+        if not isinstance(item, dict):
+            continue
+        properties = item.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        for field_name in ("portrait", "squarish"):
+            image = properties.get(field_name)
+            if not isinstance(image, dict):
+                continue
+            url = text_or_none(image.get("url"))
+            if url:
+                values.append(url)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value)
+    return deduped
+
+
+def _next_data_product_details(product_info: dict[str, Any]) -> str | None:
+    parts: list[str] = []
+    for field_name in ("featuresAndBenefits", "productDetails", "sizeFitSections"):
+        for item in list(product_info.get(field_name) or []):
+            if isinstance(item, dict):
+                text = text_or_none(item.get("body") or item.get("text") or item.get("header"))
+            else:
+                text = text_or_none(item)
+            if text:
+                parts.append(clean_text(BeautifulSoup(text, "html.parser").get_text(" ", strip=True)))
+    combined = clean_text(" ".join(parts))
+    return combined or None
+
+
+def _next_data_gtin(option: dict[str, Any]) -> str | None:
+    for item in list(option.get("gtins") or []):
+        if not isinstance(item, dict):
+            continue
+        gtin = text_or_none(item.get("gtin"))
+        if gtin:
+            return gtin
+    return None
+
+
+def _next_data_size_is_in_stock(option: dict[str, Any]) -> bool:
+    status = text_or_none(option.get("status"))
+    return bool(status and status.upper() in {"ACTIVE", "AVAILABLE"})
+
+
 def _map_product(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
     variants = _variants(product, page_url=page_url)
     selected_variant = select_variant(variants, page_url=page_url)
@@ -120,12 +251,8 @@ def _map_product(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
             "product_id": product.get("id"),
             "sku": product.get("sku"),
             "part_number": product.get("sku"),
-            "price": normalize_price(
-                product.get("discountedPrice"), interpret_integral_as_cents=False
-            ),
-            "original_price": normalize_price(
-                product.get("price"), interpret_integral_as_cents=False
-            ),
+            "price": _preserve_numeric_price(product.get("discountedPrice")),
+            "original_price": _preserve_numeric_price(product.get("price")),
             "currency": _currency_for(page_url),
             "availability": "out_of_stock"
             if product.get("isOutOfStock")
@@ -218,14 +345,11 @@ def _variants(product: dict[str, Any], *, page_url: str) -> list[dict[str, Any]]
             {
                 "variant_id": option.get("id"),
                 "sku": option.get("sku"),
+                "barcode": option.get("barcode"),
                 "size": size,
                 "color": color,
-                "price": normalize_price(
-                    option.get("discountedPrice"), interpret_integral_as_cents=False
-                ),
-                "original_price": normalize_price(
-                    option.get("price"), interpret_integral_as_cents=False
-                ),
+                "price": _preserve_numeric_price(option.get("discountedPrice")),
+                "original_price": _preserve_numeric_price(option.get("price")),
                 "currency": _currency_for(page_url),
                 "availability": "out_of_stock"
                 if option.get("isOutOfStock")
@@ -247,13 +371,8 @@ def _variants(product: dict[str, Any], *, page_url: str) -> list[dict[str, Any]]
                     "sku": product.get("sku"),
                     "size": size,
                     "color": color,
-                    "price": normalize_price(
-                        product.get("discountedPrice"),
-                        interpret_integral_as_cents=False,
-                    ),
-                    "original_price": normalize_price(
-                        product.get("price"), interpret_integral_as_cents=False
-                    ),
+                    "price": _preserve_numeric_price(product.get("discountedPrice")),
+                    "original_price": _preserve_numeric_price(product.get("price")),
                     "currency": _currency_for(page_url),
                     "availability": availability_value(
                         {"available": not product.get("isOutOfStock")}
@@ -265,3 +384,21 @@ def _variants(product: dict[str, Any], *, page_url: str) -> list[dict[str, Any]]
             )
         ]
     return []
+
+
+def _preserve_numeric_price(value: Any) -> Any:
+    if isinstance(value, dict):
+        for field_name in (
+            "currentPrice",
+            "initialPrice",
+            "salePrice",
+            "listPrice",
+            "price",
+            "amount",
+            "value",
+        ):
+            nested = _preserve_numeric_price(value.get(field_name))
+            if nested is not None:
+                return nested
+        return None
+    return normalize_price(value, interpret_integral_as_cents=False)

@@ -22,9 +22,12 @@ from app.services.config.extraction_rules import (
     LISTING_NETWORK_TITLE_KEYS,
 )
 from app.services.detail_extractor import (
-    _backfill_detail_price_from_html,
-    drop_low_signal_zero_detail_price,
     extract_detail_records,
+    repair_ecommerce_detail_record_quality,
+)
+from app.services.extract.detail_price_extractor import (
+    backfill_detail_price_from_html,
+    drop_low_signal_zero_detail_price,
 )
 from app.services.extract.variant_record_normalization import (
     normalize_variant_record,
@@ -109,7 +112,12 @@ def extract_records(
                 for row in json_records
                 if isinstance(row, dict)
             ]
-        return _postprocess_detail_records(json_records[:max_records], html=html)
+        return _postprocess_detail_records(
+            json_records[:max_records],
+            html=html,
+            page_url=page_url,
+            requested_page_url=requested_page_url,
+        )
     if _html_is_blocked_extraction_shell(html):
         return []
     if "listing" in surface:
@@ -197,6 +205,8 @@ def extract_records(
         extraction_runtime_snapshot=extraction_runtime_snapshot,
         )[:max_records],
         html=html,
+        page_url=page_url,
+        requested_page_url=requested_page_url,
     )
 
 
@@ -253,13 +263,21 @@ def _postprocess_detail_records(
     records: list[dict],
     *,
     html: str,
+    page_url: str,
+    requested_page_url: str | None,
 ) -> list[dict]:
     rows: list[dict] = []
     for record in list(records or []):
         if not isinstance(record, dict):
             continue
         normalize_variant_record(record)
-        _backfill_detail_price_from_html(record, html=html)
+        repair_ecommerce_detail_record_quality(
+            record,
+            html=html,
+            page_url=page_url,
+            requested_page_url=requested_page_url,
+        )
+        backfill_detail_price_from_html(record, html=html)
         drop_low_signal_zero_detail_price(record)
         rows.append(record)
     return rows

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import ast
 import importlib
+import json
+from pathlib import Path
 
 from app.models.crawl_settings import CrawlRunSettings
 from app.services.acquisition_plan import AcquisitionPlan
+from app.services.config._export_data import (
+    EXPORT_PROVENANCE_KEY,
+    load_export_data,
+    main,
+    validate_export_file,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.exceptions import CrawlerConfigurationError
 from app.services.platform_policy import resolve_platform_runtime_policy
+from collections import Counter
 import pytest
 
 
@@ -26,6 +36,62 @@ def test_static_config_exports_remain_import_stable() -> None:
     assert "CANONICAL_SCHEMAS" in field_mappings_reloaded.__all__
     assert field_mappings_reloaded.CANONICAL_SCHEMAS == original_canonical_schemas
     assert "job_detail" in field_mappings_reloaded.CANONICAL_SCHEMAS
+
+
+def test_static_config_exports_have_provenance() -> None:
+    config_dir = Path(__file__).parents[2] / "app" / "services" / "config"
+    for path in sorted(config_dir.glob("*.exports.json")):
+        exports = load_export_data(str(path))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert EXPORT_PROVENANCE_KEY in payload
+        assert EXPORT_PROVENANCE_KEY not in exports
+        validate_export_file(path)
+
+
+def test_export_validator_main_returns_clean_error_for_bad_payload(tmp_path, capsys) -> None:
+    bad_export = tmp_path / "broken.exports.json"
+    bad_export.write_text(json.dumps({"CARD_SELECTORS": []}), encoding="utf-8")
+
+    assert main([str(bad_export)]) == 1
+    assert "_export_provenance" in capsys.readouterr().err
+
+
+def test_location_interstitial_tokens_are_unique() -> None:
+    config_dir = Path(__file__).parents[2] / "app" / "services" / "config"
+    exports = load_export_data(str(config_dir / "selectors.exports.json"))
+
+    for key in (
+        "LOCATION_INTERSTITIAL_DISMISS_TEXT_TOKENS",
+        "LOCATION_INTERSTITIAL_TEXT_TOKENS",
+    ):
+        values = [str(item) for item in list(exports[key] or [])]
+        duplicates = {value: count for value, count in Counter(values).items() if count > 1}
+        assert duplicates == {}
+
+
+def test_extraction_rules_export_keys_cover_module_references() -> None:
+    config_dir = Path(__file__).parents[2] / "app" / "services" / "config"
+    module_path = config_dir / "extraction_rules.py"
+    exports = load_export_data(str(config_dir / "extraction_rules.exports.json"))
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    referenced_keys = {
+        node.slice.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "_EXPORTS"
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+    }
+
+    assert referenced_keys
+    assert referenced_keys <= set(exports)
+
+
+def test_extraction_rules_exports_document_link_patterns_via___all__() -> None:
+    extraction_rules = importlib.import_module("app.services.config.extraction_rules")
+
+    assert "DETAIL_DOCUMENT_LINK_LABEL_PATTERNS" in extraction_rules.__all__
 
 
 def test_crawl_run_settings_exposes_normalized_acquisition_plan() -> None:

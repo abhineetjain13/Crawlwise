@@ -5,10 +5,11 @@ from urllib.parse import urlparse
 
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
+    PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS,
     PUBLIC_RECORD_URL_BLOCKED_PATH_MARKERS,
     PUBLIC_RECORD_URL_MAX_LENGTH,
 )
-from app.services.field_policy import normalize_field_key
+from app.services.field_policy import canonical_requested_fields, normalize_field_key
 from app.services.field_value_core import (
     IMAGE_FIELDS,
     LONG_TEXT_FIELDS,
@@ -20,6 +21,7 @@ from app.services.field_value_core import (
     finalize_record,
     text_or_none,
 )
+from app.services.field_url_normalization import canonical_public_record_url
 
 
 def public_record_data_for_surface(
@@ -27,6 +29,7 @@ def public_record_data_for_surface(
     *,
     surface: str,
     page_url: str,
+    requested_fields: list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     normalized_surface = str(surface or "").strip().lower()
     allowed_fields = {
@@ -35,6 +38,20 @@ def public_record_data_for_surface(
         if str(field_name).strip()
     }
     allowed_fields.add("url")
+    explicit_fields = {
+        normalize_field_key(field_name)
+        for field_name in canonical_requested_fields(requested_fields or [])
+        if normalize_field_key(field_name)
+    }
+    default_excluded = {
+        normalize_field_key(field_name)
+        for field_name in list(
+            PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS.get(normalized_surface, [])
+            if isinstance(PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS, dict)
+            else []
+        )
+        if normalize_field_key(field_name)
+    }
     data: dict[str, Any] = {}
     rejected: dict[str, str] = {}
     for raw_field_name, raw_value in dict(record or {}).items():
@@ -42,6 +59,9 @@ def public_record_data_for_surface(
         if not field_name or str(raw_field_name).startswith("_"):
             continue
         if raw_value in (None, "", [], {}):
+            continue
+        if field_name in default_excluded and field_name not in explicit_fields:
+            rejected[str(raw_field_name)] = "default_public_field_excluded"
             continue
         if field_name not in allowed_fields:
             rejected[str(raw_field_name)] = "field_not_allowed_for_surface"
@@ -53,9 +73,18 @@ def public_record_data_for_surface(
         if not _public_record_field_shape_valid(field_name, coerced):
             rejected[str(raw_field_name)] = "invalid_field_shape"
             continue
-        if field_name in {"url", "apply_url"} and not public_navigation_url_safe(coerced):
+        if field_name in {"url", "apply_url", "canonical_url"} and not public_navigation_url_safe(coerced):
             rejected[str(raw_field_name)] = "unsafe_navigation_url"
             continue
+        if field_name in {"url", "apply_url", "canonical_url"}:
+            coerced = canonical_public_record_url(
+                coerced,
+                surface=normalized_surface,
+                field_name=field_name,
+            )
+            if coerced in (None, "", [], {}):
+                rejected[str(raw_field_name)] = "empty_after_canonical_url"
+                continue
         data[field_name] = coerced
     return finalize_record(data, surface=surface), rejected
 

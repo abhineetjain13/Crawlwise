@@ -66,6 +66,45 @@ async def test_export_streams_serialize_clean_record_data(
 
 
 @pytest.mark.asyncio
+async def test_export_streams_include_records_from_failed_partial_run(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "url": "https://example.com/products/widget",
+            "surface": "ecommerce_detail",
+        },
+    )
+    run.status = "failed"
+    run.result_summary = {
+        "extraction_verdict": "partial",
+        "record_count": 1,
+        "url_verdicts": ["error", "success"],
+    }
+    db_session.add(
+        CrawlRecord(
+            run_id=run.id,
+            source_url=run.url,
+            data={"title": "Widget Prime", "price": "19.99"},
+            raw_data={},
+            discovered_data={},
+            source_trace={},
+        )
+    )
+    await db_session.commit()
+
+    exported_json = await _collect_chunks(stream_export_json(db_session, run.id))
+    exported_csv = await _collect_chunks(stream_export_csv(db_session, run.id))
+
+    assert json.loads(exported_json) == [{"price": "19.99", "title": "Widget Prime"}]
+    assert "Widget Prime" in exported_csv
+
+
+@pytest.mark.asyncio
 async def test_export_streamers_preserve_order_across_paged_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

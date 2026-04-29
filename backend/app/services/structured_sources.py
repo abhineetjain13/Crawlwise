@@ -8,8 +8,13 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 from app.services.config.extraction_rules import (
+    EMBEDDED_ASSIGNMENT_NAMES,
     HYDRATED_STATE_PATTERNS,
     HYDRATED_STATE_SCRIPT_IDS,
+    NON_STATE_ASSIGNMENT_PATTERNS,
+    OPENGRAPH_KEY_MAP,
+    OPENGRAPH_META_PREFIXES,
+    OPENGRAPH_PRODUCT_TYPE,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.script_text_extractor import (
@@ -29,8 +34,11 @@ try:
 except ImportError:  # pragma: no cover - dependency may be absent in local test envs
     get_base_url = None  # type: ignore[assignment]
 
-_EMBEDDED_ASSIGNMENT_NAMES = ("data", "items", "listings", "posts", "products", "records", "results")
-_NON_STATE_ASSIGNMENT_PATTERNS = (re.compile(r"ShopifyAnalytics\.meta\s*=\s*(\{.*?\})\s*;", re.S), re.compile(r"var\s+meta\s*=\s*(\{.*?\})\s*;", re.S))
+_NON_STATE_ASSIGNMENT_REGEXES = tuple(
+    re.compile(str(pattern), re.S)
+    for pattern in NON_STATE_ASSIGNMENT_PATTERNS
+    if str(pattern).strip()
+)
 logger = logging.getLogger(__name__)
 
 
@@ -200,7 +208,7 @@ def parse_embedded_json(soup: BeautifulSoup, html: str) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         rows.extend(json_candidates(payload))
-    for pattern in _NON_STATE_ASSIGNMENT_PATTERNS:
+    for pattern in _NON_STATE_ASSIGNMENT_REGEXES:
         for raw in find_script_regex_matches(html, pattern):
             try:
                 payload = json.loads(raw)
@@ -274,7 +282,7 @@ def _extract_generic_assignment_payloads(html: str) -> list[Any]:
         if len(raw) > max_script_chars:
             continue
         script_matches = 0
-        for name in _EMBEDDED_ASSIGNMENT_NAMES:
+        for name in EMBEDDED_ASSIGNMENT_NAMES:
             for pattern in _assignment_patterns(name, declarations_only=True):
                 for match in pattern.finditer(raw):
                     script_matches += 1
@@ -456,7 +464,9 @@ def _parse_opengraph_fallback(soup: BeautifulSoup) -> list[dict[str, Any]]:
         content = str(node.get("content") or "").strip()
         if not property_name or not content:
             continue
-        if not (property_name.startswith("og:") or property_name.startswith("product:")):
+        if not any(
+            property_name.startswith(prefix) for prefix in OPENGRAPH_META_PREFIXES
+        ):
             continue
         _append_property_value(row, property_name, content)
     normalized = _normalize_opengraph_row(row)
@@ -467,19 +477,7 @@ def _normalize_opengraph_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     explicit_type = _first_value(row.get("og:type"))
     saw_product_property = False
-    key_map = {
-        "og:title": "name",
-        "og:description": "description",
-        "og:image": "image",
-        "og:url": "url",
-        "product:price:amount": "price",
-        "product:price:currency": "priceCurrency",
-        "product:availability": "availability",
-        "product:brand": "brand",
-        "product:retailer_item_id": "sku",
-        "product:item_group_id": "product_id",
-    }
-    for raw_key, target_key in key_map.items():
+    for raw_key, target_key in OPENGRAPH_KEY_MAP.items():
         value = row.get(raw_key)
         if value in (None, "", [], {}):
             continue
@@ -489,7 +487,7 @@ def _normalize_opengraph_row(row: dict[str, Any]) -> dict[str, Any]:
     if explicit_type:
         normalized["@type"] = explicit_type
     elif saw_product_property:
-        normalized["@type"] = "product"
+        normalized["@type"] = OPENGRAPH_PRODUCT_TYPE
     return normalized
 
 

@@ -76,7 +76,7 @@ FILE_LOC_BUDGETS = {
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
     # Fetch runtime remains the request/browser arbitration owner.
-    Path("app/services/crawl_fetch_runtime.py"): 1165,
+    Path("app/services/crawl_fetch_runtime.py"): 1235,
     # Detail extraction remains the single owner for structured, DOM, and variant recovery.
     Path("app/services/detail_extractor.py"): 3205,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.

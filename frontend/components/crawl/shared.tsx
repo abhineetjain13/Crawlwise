@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Activity,
   AlertTriangle,
   CheckCircle2,
   CircleAlert,
@@ -8,7 +9,9 @@ import {
   Dot,
   Globe,
   GripVertical,
+  HardDrive,
   Info,
+  Layers,
   Monitor,
   Plus,
   RefreshCw,
@@ -519,40 +522,39 @@ export function scrollViewportToBottom(ref: RefObject<HTMLDivElement | null>) {
 function getLogIcon(level: string, message: string) {
   const msg = message.toLowerCase();
   const isWarn = level === "warning" || level === "warn";
-  const isError = level === "error";
+  const isError = logMessageIsError(level, message);
+  const hasUrl = /https?:\/\//i.test(message);
 
   if (isError) return XCircle;
   if (isWarn) return AlertTriangle;
+
+  if (msg.includes("starting crawl")) return Activity;
+  if (msg.includes("ignoring robots.txt")) return ShieldAlert;
+  if (msg.includes("extracted")) return Database;
+  if (msg.includes("normalized") || msg.includes("normalised")) return Layers;
+  if (msg.includes("persisted")) return HardDrive;
   if (
-    msg.includes("challenge") ||
-    msg.includes("blocked") ||
-    msg.includes("captcha") ||
-    msg.includes("bot check")
-  ) return ShieldAlert;
-  if (
-    msg.includes("extracted") ||
-    msg.includes("persisted") ||
-    msg.includes("record") ||
-    msg.includes("normalized") ||
-    msg.includes("normalised")
-  ) return Database;
-  if (
-    msg.includes("page loaded") ||
-    msg.includes("page load")
-  ) return Zap;
+    msg.includes("acquiring") ||
+    msg.includes("fetching")
+  ) return Globe;
   if (
     msg.includes("browser") ||
     msg.includes("playwright") ||
     msg.includes("patchright") ||
     msg.includes("headless")
   ) return Monitor;
+  if (msg.includes("record")) return Database;
   if (
-    msg.includes("acquiring") ||
-    msg.includes("fetching") ||
-    msg.includes("http") ||
-    msg.includes("https://") ||
-    msg.includes("robots.txt")
-  ) return Globe;
+    msg.includes("page loaded") ||
+    msg.includes("page load")
+  ) return Zap;
+  if (
+    msg.includes("challenge") ||
+    msg.includes("blocked") ||
+    msg.includes("captcha") ||
+    msg.includes("bot check")
+  ) return ShieldAlert;
+  if (hasUrl) return Globe;
   if (
     msg.includes("retry") ||
     msg.includes("retrying") ||
@@ -569,24 +571,49 @@ function getLogIcon(level: string, message: string) {
 
 function getLogIconStyle(level: string, message: string): { iconCls: string; bgCls: string } {
   const msg = message.toLowerCase();
-  if (level === "error") return { iconCls: "text-danger", bgCls: "bg-danger/10" };
+  const isError = logMessageIsError(level, message);
+  const hasUrl = /https?:\/\//i.test(message);
+
+  if (isError) return { iconCls: "text-danger", bgCls: "bg-danger/10" };
   if (level === "warning" || level === "warn") return { iconCls: "text-warning", bgCls: "bg-warning/10" };
-  if (msg.includes("challenge") || msg.includes("blocked") || msg.includes("captcha"))
-    return { iconCls: "text-orange-400", bgCls: "bg-orange-400/12" };
+
+  if (msg.includes("starting crawl")) return { iconCls: "text-sky-500", bgCls: "bg-sky-500/10" };
+  if (msg.includes("ignoring robots.txt")) return { iconCls: "text-orange-400", bgCls: "bg-orange-400/10" };
+  if (msg.includes("extracted")) return { iconCls: "text-emerald-400", bgCls: "bg-emerald-400/12" };
+  if (msg.includes("normalized") || msg.includes("normalised")) return { iconCls: "text-amber-400", bgCls: "bg-amber-400/12" };
+  if (msg.includes("persisted")) return { iconCls: "text-fuchsia-400", bgCls: "bg-fuchsia-400/12" };
   if (msg.includes("page loaded") || msg.includes("page load"))
     return { iconCls: "text-amber-400", bgCls: "bg-amber-400/12" };
+  if (msg.includes("challenge") || msg.includes("blocked") || msg.includes("captcha") || msg.includes("bot check"))
+    return { iconCls: "text-orange-400", bgCls: "bg-orange-400/12" };
+  if (msg.includes("acquiring") || msg.includes("fetching"))
+    return { iconCls: "text-indigo-400", bgCls: "bg-indigo-400/12" };
   if (msg.includes("browser") || msg.includes("patchright") || msg.includes("playwright") || msg.includes("headless"))
     return { iconCls: "text-violet-400", bgCls: "bg-violet-400/12" };
-  if (msg.includes("extracted") || msg.includes("persisted") || msg.includes("record") || msg.includes("normalized") || msg.includes("normalised"))
-    return { iconCls: "text-emerald-400", bgCls: "bg-emerald-400/12" };
-  if (msg.includes("acquiring") || msg.includes("fetching") || msg.includes("https://") || msg.includes("http") || msg.includes("robots.txt") || msg.includes("starting crawl") || msg.includes("seed url"))
-    return { iconCls: "text-blue-400", bgCls: "bg-blue-400/12" };
+  if (msg.includes("record")) return { iconCls: "text-emerald-400", bgCls: "bg-emerald-400/12" };
+  if (hasUrl) return { iconCls: "text-indigo-400", bgCls: "bg-indigo-400/12" };
   if (msg.includes("complete") || msg.includes("success") || msg.includes("done") || msg.includes("finished"))
     return { iconCls: "text-emerald-500", bgCls: "bg-emerald-500/10" };
   if (msg.includes("retry") || msg.includes("retrying"))
     return { iconCls: "text-sky-400", bgCls: "bg-sky-400/12" };
   if (level === "debug") return { iconCls: "text-muted/40", bgCls: "bg-transparent" };
   return { iconCls: "text-muted/60", bgCls: "bg-background-alt" };
+}
+
+function logMessageIsError(level: string, message: string): boolean {
+  const normalizedLevel = String(level || "").toLowerCase();
+  if (normalizedLevel === "error") return true;
+  if (normalizedLevel) return false;
+  const text = String(message || "");
+  const lowered = text.toLowerCase();
+  if (
+    /\b(no|not|none|no longer)\s+(error|errors|failed)\b/i.test(text) ||
+    lowered.includes("no errors found") ||
+    lowered.includes("validation failed check passed")
+  ) {
+    return false;
+  }
+  return /^\s*(error|failed)\b/i.test(text);
 }
 
 function compressLogMessage(message: string): string {
@@ -637,13 +664,33 @@ export const LogTerminal = memo(function LogTerminal({
             const Icon = getLogIcon(log.level, log.message);
             const { iconCls, bgCls } = getLogIconStyle(log.level, log.message);
             const compressed = compressLogMessage(sanitizeLogMessage(log.message));
+            const isStartingCrawl = log.message.toLowerCase().includes("starting crawl");
             const isNewest = log.id === lastId;
+
+            // Highlight counter (n/m) in starting crawl lines
+            let displayMessage: React.ReactNode = compressed;
+            if (isStartingCrawl) {
+              const counterMatch = compressed.match(/\(\d+\/\d+\)/);
+              if (counterMatch && counterMatch.index !== undefined) {
+                const before = compressed.slice(0, counterMatch.index);
+                const after = compressed.slice(counterMatch.index + counterMatch[0].length);
+                displayMessage = (
+                  <>
+                    {before}
+                    <span className="text-accent-bright font-extrabold">{counterMatch[0]}</span>
+                    {after}
+                  </>
+                );
+              }
+            }
+
             return (
               <div
                 key={log.id}
                 className={cn(
                   "group flex items-center gap-3 px-4 py-1.5 transition-colors",
                   "odd:bg-background-alt/20 hover:bg-background-alt/60",
+                  isStartingCrawl && "bg-accent/5 border-l-2 border-accent/30",
                   isNewest && live && "log-entry-animate",
                 )}
                 title={log.message}
@@ -657,7 +704,12 @@ export const LogTerminal = memo(function LogTerminal({
                 )}>
                   <Icon className={cn("size-3", iconCls)} aria-hidden="true" />
                 </div>
-                <span className="min-w-0 flex-1 text-sm leading-snug text-foreground/90">{compressed}</span>
+                <span className={cn(
+                  "min-w-0 flex-1 text-sm leading-snug",
+                  isStartingCrawl ? "font-bold text-foreground" : "text-foreground/90"
+                )}>
+                  {displayMessage}
+                </span>
               </div>
             );
           })

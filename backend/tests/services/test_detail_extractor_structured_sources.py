@@ -6,7 +6,16 @@ import pytest
 from bs4 import BeautifulSoup
 
 from app.services.adapters.myntra import MyntraAdapter
-from app.services.detail_extractor import variant_option_availability
+from app.services.detail_extractor import (
+    _detail_image_matches_primary_family,
+    _sanitize_variant_row,
+    build_detail_record,
+    variant_option_availability,
+)
+from app.services.extract.detail_price_extractor import (
+    detail_currency_hint_is_host_level,
+    reconcile_detail_currency_with_url,
+)
 from app.services.extraction_runtime import extract_records
 
 
@@ -15,6 +24,40 @@ def _read_optional_artifact_text(path: str) -> str:
     if not artifact.exists():
         pytest.skip(f"artifact fixture missing: {artifact}")
     return artifact.read_text(encoding="utf-8", errors="ignore")
+
+
+def test_detail_currency_hint_host_matching_avoids_partial_word_false_positive() -> None:
+    assert (
+        detail_currency_hint_is_host_level(
+            "https://www.notarget.com/products/widget",
+            expected_currency="USD",
+        )
+        is False
+    )
+    assert (
+        detail_currency_hint_is_host_level(
+            "https://www.target.com/products/widget",
+            expected_currency="USD",
+        )
+        is True
+    )
+
+
+def test_reconcile_detail_currency_with_url_tracks_nested_currency_sources() -> None:
+    record = {
+        "selected_variant": {"price": "10.00"},
+        "variants": [{"price": "10.00"}],
+    }
+
+    reconcile_detail_currency_with_url(
+        record,
+        page_url="https://www.target.com/p/widget",
+    )
+
+    assert record["selected_variant"]["currency"] == "USD"
+    assert record["variants"][0]["currency"] == "USD"
+    assert "url_currency_hint" in record["_field_sources"]["selected_variant.currency"]
+    assert "url_currency_hint" in record["_field_sources"]["variants[0].currency"]
 
 
 def test_extract_ecommerce_detail_from_microdata() -> None:
@@ -51,6 +94,24 @@ def test_extract_ecommerce_detail_from_microdata() -> None:
     assert record["currency"] == "USD"
     assert record["availability"] == "in_stock"
     assert record["_source"] == "microdata"
+
+
+def test_sanitize_variant_row_keeps_option_label_titles_with_variant_signals() -> None:
+    variant = {"title": "Large", "sku": "TRAIL-L", "price": "8.99"}
+
+    assert _sanitize_variant_row(
+        variant,
+        identity_url="https://example.com/products/trail-mix",
+    )
+    assert variant["title"] == "Large"
+
+
+def test_detail_image_family_requires_full_media_code_match() -> None:
+    assert not _detail_image_matches_primary_family(
+        "https://cdn.example.com/a999999/image.jpg",
+        primary_image="https://cdn.example.com/a123456/image.jpg",
+        title="",
+    )
 
 
 def test_extract_ecommerce_detail_from_opengraph() -> None:
@@ -1484,6 +1545,7 @@ def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fall
     assert record["variant_axes"] == {"size": ["S", "M", "L"]}
     assert record["selected_variant"] == {
         "sku": "TRAIL-S",
+        "size": "S",
         "option_values": {"size": "S"},
     }
 
@@ -2632,3 +2694,767 @@ def test_extract_detail_keeps_slug_match_when_identity_codes_disagree() -> None:
 
     assert len(rows) == 1
     assert rows[0]["title"] == "Widget Premium"
+
+
+def test_extract_detail_rejects_same_url_identity_mismatch_from_carousel_product() -> None:
+    requested_url = "https://www.target.com/p/apple-airpods-pro-2nd-generation-with-magsafe-case-usb-c/-/A-89791402"
+    html = """
+    <html>
+      <head>
+        <link rel="canonical" href="https://www.target.com/p/apple-airpods-pro-2nd-generation-with-magsafe-case-usb-c/-/A-89791402">
+        <meta property="og:title" content="Monster Jam Grave Digger Monster Truck">
+        <meta property="og:image" content="https://target.scene7.com/truck.jpg">
+      </head>
+      <body><main><h1>Monster Jam Grave Digger Monster Truck</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        requested_url,
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url=requested_url,
+    )
+
+    assert rows == []
+
+
+def test_extract_detail_keeps_nike_record_when_canonical_drops_style_code() -> None:
+    requested_url = "https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111"
+    html = """
+    <html>
+      <head>
+        <link rel="canonical" href="https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr">
+        <meta property="og:title" content="Nike Air Force 1 '07 Men's Shoes">
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Nike Air Force 1 '07 Men's Shoes",
+          "brand": {"@type": "Brand", "name": "Nike"},
+          "sku": "CW2288-111",
+          "mpn": "CW2288-111",
+          "image": "https://static.nike.com/af1.png",
+          "description": "Comfortable, durable and timeless.",
+          "offers": {
+            "@type": "Offer",
+            "price": "115",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+      </head>
+      <body><main><h1>Nike Air Force 1 '07 Men's Shoes</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        requested_url,
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url=requested_url,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Nike Air Force 1 '07 Men's Shoes"
+    assert rows[0]["part_number"] == "CW2288-111"
+
+
+def test_extract_detail_keeps_shopify_collection_detail_when_canonical_collapses_path() -> None:
+    requested_url = "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000"
+    html = """
+    <html>
+      <head>
+        <link rel="canonical" href="https://kith.com/products/st40002-02000">
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "SATISFY TheROCKER - Jet Black",
+          "brand": {"@type": "Brand", "name": "SATISFY"},
+          "sku": "13876003",
+          "image": "https://kith.com/files/therocker.jpg",
+          "description": "TheROCKER silhouette.",
+          "offers": {
+            "@type": "Offer",
+            "price": "28200",
+            "priceCurrency": "INR",
+            "availability": "https://schema.org/OutOfStock"
+          }
+        }
+        </script>
+      </head>
+      <body><main><h1>SATISFY TheROCKER - Jet Black</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        requested_url,
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url=requested_url,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "SATISFY TheROCKER - Jet Black"
+    assert rows[0]["currency"] == "USD"
+    assert rows[0]["price"] == "282.00"
+
+
+def test_extract_detail_corrects_host_currency_hint_integer_cent_price() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "SATISFY TheROCKER - Jet Black",
+          "offers": {"price": "28200", "priceCurrency": "INR"}
+        }
+        </script>
+      </head>
+      <body><main><h1>SATISFY TheROCKER - Jet Black</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["currency"] == "USD"
+    assert rows[0]["price"] == "282.00"
+
+
+def test_extract_detail_drops_decimal_price_when_currency_conflicts_with_host_hint() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "EVGA GeForce RTX 3090",
+          "offers": {"price": "260650.21", "priceCurrency": "INR"}
+        }
+        </script>
+      </head>
+      <body><main><h1>EVGA GeForce RTX 3090</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.amazon.com/dp/B08J5F3G18",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert "currency" not in rows[0]
+    assert "price" not in rows[0]
+
+
+def test_extract_detail_cleans_tracking_pixels_and_video_thumbs_from_images() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Yellow Pebbles Tile</h1>
+          <section class="product-gallery">
+            <img src="/images/yellow-pebbles.jpg" alt="Yellow Pebbles Tile">
+            <img src="https://securemetrics.apple.com/b/ss/pixel.gif">
+            <img src="https://www.facebook.com/tr?id=123">
+            <img src="https://players.boltdns.net/thumb.jpg">
+            <img src="https://site.qualtrics.com/intercept/pixel.png">
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.homedepot.com/p/yellow-pebbles/202515091",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["image_url"] == "https://www.homedepot.com/images/yellow-pebbles.jpg"
+    assert "additional_images" not in rows[0]
+
+
+def test_build_detail_record_runs_dom_tier_when_authoritative_record_has_no_images() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Cozyla 32&quot; 4K Calendar+ 2 (White)</h1>
+          <img src="https://cdn.example.com/products/cozyla-calendar-main.jpg" />
+        </main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://www.bhphotovideo.com/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": 'Cozyla 32" 4K Calendar+ 2 (White)',
+                "price": "989.99",
+                "currency": "USD",
+                "sku": "COCD8V543F0W",
+            }
+        ],
+    )
+
+    assert record["image_url"] == "https://cdn.example.com/products/cozyla-calendar-main.jpg"
+
+
+def test_extract_ecommerce_detail_prunes_irrelevant_nested_related_products_from_structured_data() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Going Coconuts",
+          "description": "Neutral coconut shades only.",
+          "image": [
+            "https://cdn.shopify.com/s/files/1/1338/0845/files/EyePalette-GoingCoconuts-Closed-PDP.jpg",
+            "https://cdn.shopify.com/s/files/1/1338/0845/files/EyePalette-GoingCoconuts-MacroCrush.jpg"
+          ],
+          "offers": {"price": "14.00", "priceCurrency": "USD"},
+          "relatedProducts": [
+            {
+              "@type": "Product",
+              "name": "Pink Dreams",
+              "url": "https://colourpop.com/products/pink-dreams-shadow-palette",
+              "description": "Pink Dreams should not leak into the parent PDP.",
+              "image": [
+                "https://cdn.shopify.com/s/files/1/1338/0845/files/PPBlushCompact-ForeverYours-editorial-square_4980.jpg"
+              ]
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body><main><h1>Going Coconuts</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://colourpop.com/products/going-coconuts-eyeshadow-palette",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["description"] == "Neutral coconut shades only."
+    assert record["image_url"].endswith("EyePalette-GoingCoconuts-Closed-PDP.jpg")
+    assert all("ForeverYours" not in image for image in record.get("additional_images", []))
+
+
+def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_and_legal_tail() -> None:
+    html = "<html><body><main><h1>Black Seascape Stretch Bracelet</h1></main></body></html>"
+
+    record = build_detail_record(
+        html,
+        "https://www.puravidabracelets.com/products/black-seascape-stretch-bracelet",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Black Seascape Stretch Bracelet",
+                "description": (
+                    "These sleek joggers feature our ABC technology. "
+                    "Black Seascape Stretch Bracelet - Black - One Size. "
+                    "These sleek joggers feature our ABC technology."
+                ),
+                "specifications": (
+                    "Main material rubber. "
+                    "EU product safety contact. "
+                    "Customer service DECATHLON SE 4, boulevard de Mons 59665."
+                ),
+                "materials": "DECATHLON SE",
+                "image_url": "http://www.puravidabracelets.com/cdn/shop/files/50907BLCK_1-min.jpg?v=1717477241",
+                "additional_images": [
+                    "https://cdn.shopify.com/s/files/1/0297/6313/files/50907BLCK_3-min.jpg?v=1717609172",
+                    "https://www.puravidabracelets.com/cdn/shop/files/square-image_3_1.jpg?crop=center&height=600&v=1774914906&width=600",
+                    "https://www.puravidabracelets.com/cdn/shop/products/Solid_Black_ed35d7f8-dc76-4e8a-9e2b-821126dbb895.jpg?v=1718918266&width=1200",
+                    "https://www.macys.com/shop/product/1&fmt=webp",
+                    "https://www.fashionnova.com/products/R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+                ],
+                "variants": [
+                    {
+                        "price": "8.00",
+                        "currency": "USD",
+                        "option_values": {"size": "Please select"},
+                    },
+                    {
+                        "price": "8.00",
+                        "currency": "USD",
+                        "option_values": {"toggle_color_swatches": "Swatch", "color": "Black"},
+                    },
+                ],
+                "selected_variant": {
+                    "price": "8.00",
+                    "currency": "USD",
+                    "option_values": {"size": "Please select"},
+                },
+                "product_attributes": {"title": "Default Title"},
+            }
+        ],
+    )
+
+    assert record["description"] == "These sleek joggers feature our ABC technology."
+    assert record["specifications"] == "Main material rubber."
+    assert "materials" not in record
+    assert "product_attributes" not in record
+    assert "50907BLCK" in record["image_url"]
+    assert all(
+        bad_token not in " ".join(record.get("additional_images", []))
+        for bad_token in ("square-image", "Solid_Black", "macys.com/shop/product", "R0lGODlhAQAB")
+    )
+    assert record["variants"] == [
+        {
+            "price": "8.00",
+            "currency": "USD",
+            "color": "Black",
+            "image_url": "http://www.puravidabracelets.com/cdn/shop/files/50907BLCK_1-min.jpg?v=1717477241",
+            "option_values": {"color": "Black"},
+        }
+    ]
+    assert record["selected_variant"] == {
+        "price": "8.00",
+        "currency": "USD",
+        "color": "Black",
+        "option_values": {"color": "Black"},
+    }
+
+
+def test_build_detail_record_rejects_cross_sell_images_by_filename_identity() -> None:
+    html = "<html><body><main><h1>Nike Dunk Low Retro White Black Panda</h1></main></body></html>"
+
+    record = build_detail_record(
+        html,
+        "https://stockx.com/nike-dunk-low-retro-white-black-2021",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Nike Dunk Low Retro White Black Panda",
+                "image_url": "https://images.stockx.com/images/Nike-Dunk-Low-Retro-White-Black-2021-Product.jpg",
+                "additional_images": [
+                    "https://images.stockx.com/360/Nike-Dunk-Low-Retro-White-Black-2021/Images/Nike-Dunk-Low-Retro-White-Black-2021/Lv2/img01.jpg",
+                    "https://images.stockx.com/images/Nike-Dunk-Low-Grey-Fog-Product.jpg",
+                    "https://images.stockx.com/images/Nike-Dunk-Low-Court-Purple-Product.jpg",
+                ],
+            }
+        ],
+    )
+
+    assert record["image_url"].endswith("Nike-Dunk-Low-Retro-White-Black-2021-Product.jpg")
+    assert record["additional_images"] == [
+        "https://images.stockx.com/360/Nike-Dunk-Low-Retro-White-Black-2021/Images/Nike-Dunk-Low-Retro-White-Black-2021/Lv2/img01.jpg"
+    ]
+
+
+def test_build_detail_record_replaces_uuid_sku_with_merch_code() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Nike Dunk Low Retro White Black Panda</h1></main></body></html>",
+        "https://stockx.com/nike-dunk-low-retro-white-black-2021",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "sku": "5e6a1e57-1c7d-435a-82bd-5666a13560fe",
+                "title": "Nike Dunk Low Retro White Black Panda",
+                "product_details": "Style DD1391-100 Colorway White/Black Retail Price $115",
+            }
+        ],
+    )
+
+    assert record["sku"] == "DD1391-100"
+    assert record["part_number"] == "DD1391-100"
+
+
+def test_build_detail_record_drops_costco_shell_long_text_labels() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Sleep Number Ultimate 12&quot; Mattress</h1></main></body></html>",
+        "https://www.costco.com/p/-/sleep-number-ultimate-12-mattress/4201005351?langId=-1",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": 'Sleep Number Ultimate 12" Mattress',
+                "description": "Product Label",
+                "specifications": "Specifications",
+                "product_details": (
+                    "Product Label Powered by Product details have been supplied by the manufacturer "
+                    "and are hosted by a third party. View More"
+                ),
+            }
+        ],
+    )
+
+    assert "description" not in record
+    assert "specifications" not in record
+    assert "product_details" not in record
+
+
+def test_raw_json_detail_postprocess_drops_costco_shell_long_text_labels() -> None:
+    rows = extract_records(
+        """
+        {
+          "title": "Sleep Number Ultimate 12\\" Mattress",
+          "description": "Product Label",
+          "specifications": "Specifications",
+          "product_details": "Product Label Powered by Product details have been supplied by the manufacturer View More",
+          "price": "2299.99"
+        }
+        """,
+        "https://www.costco.com/p/-/sleep-number-ultimate-12-mattress/4201005351?langId=-1",
+        "ecommerce_detail",
+        max_records=5,
+        content_type="application/json",
+    )
+
+    assert rows[0]["title"] == 'Sleep Number Ultimate 12" Mattress'
+    assert "description" not in rows[0]
+    assert "specifications" not in rows[0]
+    assert "product_details" not in rows[0]
+
+
+def test_extract_detail_infers_costco_textual_variant_sizes_from_titles() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Sleep Number Ultimate 12&quot; Mattress</h1></main></body></html>",
+        "https://www.costco.com/p/-/sleep-number-ultimate-12-mattress/4201005351?langId=-1",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": 'Sleep Number Ultimate 12" Mattress',
+                "variants": [
+                    {
+                        "sku": "1981348",
+                        "title": 'Sleep Number Ultimate 12" Mattress Only, Queen',
+                        "price": "2299.99",
+                        "currency": "USD",
+                        "availability": "in_stock",
+                    },
+                    {
+                        "sku": "1981349",
+                        "title": 'Sleep Number Ultimate 12" Mattress Only, King',
+                        "price": "2299.99",
+                        "currency": "USD",
+                        "availability": "in_stock",
+                    },
+                ],
+                "selected_variant": {
+                    "sku": "1981348",
+                    "title": 'Sleep Number Ultimate 12" Mattress Only, Queen',
+                    "price": "2299.99",
+                    "currency": "USD",
+                    "availability": "in_stock",
+                },
+            }
+        ],
+    )
+
+    assert record["variant_axes"] == {"size": ["Queen", "King"]}
+    assert record["variants"][0]["option_values"] == {"size": "Queen"}
+    assert record["variants"][1]["option_values"] == {"size": "King"}
+    assert record["selected_variant"]["option_values"] == {"size": "Queen"}
+
+
+def test_build_detail_record_strips_review_copy_from_color_scalar() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Blouson Twill Utility Jacket</h1></main></body></html>",
+        "https://www.nordstrom.com/s/treasure-and-bond-blouson-twill-utility-jacket/8045019",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Blouson Twill Utility Jacket",
+                "color": "Ivory Dove Customers say the fit runs true to size",
+            }
+        ],
+    )
+
+    assert record["color"] == "Ivory Dove"
+
+
+def test_build_detail_record_drops_document_link_only_description() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Lansdale Sand Black Transitional Opal Glass Lantern Pendant Light</h1></main></body></html>",
+        "https://www.lowes.com/pd/Minka-Lavery-Lansdale-Sand-Black-Transitional-Opal-Glass-Lantern-Pendant-Light/1001420790",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Lansdale Sand Black Transitional Opal Glass Lantern Pendant Light",
+                "description": "Warranty Guide Prop65 Warning Label Use and Care Manual Installation Manual Dimensions Guide",
+            }
+        ],
+    )
+
+    assert "description" not in record
+
+
+def test_build_detail_record_backfills_shared_variant_image_and_availability() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Brown Ruff Rider Leather Jacket</h1></main></body></html>",
+        "https://www.ssense.com/en-us/men/product/willy-chavarria/brown-ruff-rider-leather-jacket/19072301",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Brown Ruff Rider Leather Jacket",
+                "image_url": "https://res.cloudinary.com/ssenseweb/image/upload/item.jpg",
+                "availability": "out_of_stock",
+                "variants": [
+                    {"size": "S", "price": "3890", "currency": "USD", "option_values": {"size": "S"}},
+                    {"size": "M", "price": "3890", "currency": "USD", "option_values": {"size": "M"}},
+                ],
+            }
+        ],
+    )
+
+    assert record["variants"][0]["image_url"] == "https://res.cloudinary.com/ssenseweb/image/upload/item.jpg"
+    assert record["variants"][1]["availability"] == "out_of_stock"
+
+
+def test_build_detail_record_repairs_nike_uuid_variant_skus_and_empty_prices() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Nike Air Force 1 '07 Men's Shoes</h1></main></body></html>",
+        "https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "sku": "CW2288-111",
+                "title": "Nike Air Force 1 '07 Men's Shoes",
+                "price": "115.00",
+                "currency": "USD",
+                "variants": [
+                    {
+                        "sku": "3c95b6cf-42e7-567c-8bf2-2ee9c9398f9d",
+                        "variant_id": "3c95b6cf-42e7-567c-8bf2-2ee9c9398f9d",
+                        "size": "6",
+                        "price": "",
+                        "currency": "USD",
+                        "availability": "in_stock",
+                        "option_values": {"size": "6"},
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert record["variants"][0]["price"] == "115.00"
+    assert "sku" not in record["variants"][0]
+    assert record["sku"] == "CW2288-111"
+
+
+def test_build_detail_record_repairs_shopify_cent_variant_prices_and_numeric_titles() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>SATISFY TheROCKER - Jet Black</h1></main></body></html>",
+        "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "SATISFY TheROCKER - Jet Black",
+                "price": "282.00",
+                "currency": "USD",
+                "variants": [
+                    {
+                        "sku": "13875993",
+                        "price": "28200",
+                        "title": "3",
+                        "currency": "USD",
+                        "availability": "in_stock",
+                        "option_values": {"size": "3"},
+                    }
+                ],
+                "selected_variant": {
+                    "sku": "13875993",
+                    "price": "28200",
+                    "title": "3",
+                    "currency": "USD",
+                    "availability": "in_stock",
+                    "option_values": {"size": "3"},
+                },
+            }
+        ],
+    )
+
+    assert record["variants"][0]["price"] == "282.00"
+    assert record["variants"][0]["title"] == "SATISFY TheROCKER - Jet Black - 3"
+    assert record["selected_variant"]["price"] == "282.00"
+    assert record["selected_variant"]["title"] == "SATISFY TheROCKER - Jet Black"
+
+
+def test_build_detail_record_replaces_ai_outfit_title_from_url() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Your AI-Generated Outfit</h1></main></body></html>",
+        "https://www.nordstrom.com/s/treasure-and-bond-blouson-twill-utility-jacket/8045019",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Your AI-Generated Outfit",
+                "sku": "9656609",
+                "price": "59.99",
+            }
+        ],
+    )
+
+    assert record["title"] == "Treasure And Bond Blouson Twill Utility Jacket"
+
+
+def test_build_detail_record_drops_low_signal_numeric_only_variants() -> None:
+    html = "<html><body><main><h1>Cozyla 32&quot; 4K Calendar+ 2 (White)</h1></main></body></html>"
+
+    record = build_detail_record(
+        html,
+        "https://www.bhphotovideo.com/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": 'Cozyla 32" 4K Calendar+ 2 (White)',
+                "price": "989.99",
+                "currency": "USD",
+                "variants": [
+                    {"price": "989.99", "currency": "USD", "option_values": {"size": "1"}},
+                    {"price": "989.99", "currency": "USD", "option_values": {"size": "2"}},
+                    {"price": "989.99", "currency": "USD", "option_values": {"size": "3"}},
+                ],
+                "selected_variant": {
+                    "price": "989.99",
+                    "currency": "USD",
+                    "option_values": {"size": "1"},
+                },
+            }
+        ],
+    )
+
+    assert "variants" not in record
+    assert "variant_axes" not in record
+    assert "selected_variant" not in record
+
+
+def test_extract_detail_backfills_current_price_variants_and_strips_unavailable_suffixes() -> None:
+    html = """
+    <html>
+      <body>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "product": {
+                "id": "stan-smith-1",
+                "title": "Stan Smith Shoes",
+                "brand": "adidas",
+                "prices": {
+                  "currency": "USD",
+                  "currentPrice": 100
+                },
+                "options": [{"name": "Size"}],
+                "variants": [
+                  {
+                    "id": "size-12.5",
+                    "availability": "out_of_stock",
+                    "selectedOptions": [
+                      {"name": "Size", "value": "12.5 is currently unavailable."}
+                    ]
+                  },
+                  {
+                    "id": "size-13",
+                    "availability": "in_stock",
+                    "selectedOptions": [
+                      {"name": "Size", "value": "13"}
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+        </script>
+      </body>
+    </html>
+    """
+
+    record = extract_records(
+        html,
+        "https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+        "ecommerce_detail",
+        max_records=5,
+    )[0]
+
+    assert record["price"] == "100"
+    assert record["variant_axes"] == {"size": ["12.5", "13"]}
+    assert record["variants"][0]["price"] == "100"
+    assert record["variants"][0]["option_values"] == {"size": "12.5"}
+
+
+def test_extract_detail_rejects_asos_mixed_product_identity_record() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="ASOS DESIGN Curve lightweight pull on barrel pants in darkwash">
+        <meta property="og:description" content="Shop the latest ASOS DESIGN Curve lightweight pull on barrel pants in darkwash trends with ASOS!">
+      </head>
+      <body>
+        <main>
+          <h1>ASOS DESIGN oversized t-shirt with lace hem in light blue</h1>
+          <img src="https://images.asos-media.com/products/asos-design-oversized-t-shirt-with-lace-hem-in-light-blue/210817202-1-lightblue">
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.asos.com/us/prd/210397084/asos-design-curve-lightweight-pull-on-barrel-pants-in-darkwash/prd/210817202",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert rows == []
+
+
+def test_extract_detail_rejects_known_error_page_titles() -> None:
+    html = """
+    <html>
+      <body>
+        <main><h1>Oops, Something Went Wrong.</h1></main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.dickssportinggoods.com/p/birkenstock-womens-arizona-big-buckle-soft-footbed-sandals-25birwcasuwrznbgbcegp/25birwcasuwrznbgbcegp",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert rows == []

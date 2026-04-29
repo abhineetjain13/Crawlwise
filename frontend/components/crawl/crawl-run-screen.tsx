@@ -533,14 +533,24 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  return () => window.cancelAnimationFrame(frame);
  }, [logs, live]);
 
+ const terminalRecordCount = Math.max(
+ tableTotal,
+ recordsTotal,
+ Number(run?.result_summary?.record_count ?? 0) || 0,
+ );
+
  useEffect(() => {
  if (!run) {
  return;
  }
- if ((run.status ==="failed"|| run.status ==="proxy_exhausted") && outputTab ==="table") {
+ if (
+ (run.status ==="failed"|| run.status ==="proxy_exhausted") &&
+ outputTab ==="table" &&
+ terminalRecordCount === 0
+ ) {
  setOutputTab("logs");
  }
- }, [outputTab, run]);
+ }, [outputTab, run, terminalRecordCount]);
 
   const visibleColumns = useMemo(() => {
   const columns = new Set<string>();
@@ -875,8 +885,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
  </span>
  <div className="flex items-center gap-3">
   {run ? (
-  <span className="inline-flex items-center gap-1.5 rounded border border-divider bg-background-elevated px-2 py-0.5 font-mono text-xs tabular-nums text-foreground">
-   <Clock className="size-3" />
+  <span className="inline-flex items-center gap-1.5 rounded border border-divider bg-background-elevated px-2.5 py-1 font-mono text-sm tabular-nums text-foreground">
+   <Clock className="size-3.5" />
    {(() => {
     const elapsedMs = Math.max(0, localNow - effectiveStartMs);
     const totalS = Math.floor(elapsedMs / 1000);

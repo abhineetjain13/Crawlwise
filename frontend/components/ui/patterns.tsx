@@ -367,16 +367,17 @@ export function RunSummaryChips({
   const normalizedQuality = quality.toLowerCase();
 
   // Themed tones and backgrounds matching the requested high-density aesthetic
-  const verdictTone = normalizedVerdict === "success" ? "text-[#107c41]" : normalizedVerdict === "partial" ? "text-[#9a6b00]" : "text-[#d93025]";
-  const verdictBg = normalizedVerdict === "success" ? "bg-[#e6f4ea]" : normalizedVerdict === "partial" ? "bg-[#fff4e5]" : "bg-[#fce8e6]";
-  const verdictBar = normalizedVerdict === "success" ? "bg-[#107c41]" : normalizedVerdict === "partial" ? "bg-[#f9ab00]" : "bg-[#d93025]";
+  // Themed tones and backgrounds using CSS variables for dark mode support
+  const verdictTone = normalizedVerdict === "success" ? "text-success" : normalizedVerdict === "partial" ? "text-warning" : "text-danger";
+  const verdictBg = normalizedVerdict === "success" ? "bg-success-bg" : normalizedVerdict === "partial" ? "bg-warning-bg" : "bg-danger-bg";
+  const verdictBar = normalizedVerdict === "success" ? "bg-success" : normalizedVerdict === "partial" ? "bg-warning" : "bg-danger";
 
-  const qualityTone = normalizedQuality === "high" ? "text-[#107c41]" : normalizedQuality === "medium" ? "text-[#9a6b00]" : normalizedQuality === "low" ? "text-[#d93025]" : "text-[#5f6368]";
-  const qualityBg = normalizedQuality === "high" ? "bg-[#e6f4ea]" : normalizedQuality === "medium" ? "bg-[#fff4e5]" : normalizedQuality === "low" ? "bg-[#fce8e6]" : "bg-[#f1f3f4]";
-  const qualityBar = normalizedQuality === "high" ? "bg-[#107c41]" : normalizedQuality === "medium" ? "bg-[#f9ab00]" : normalizedQuality === "low" ? "bg-[#d93025]" : "bg-[#9aa0a6]";
+  const qualityTone = normalizedQuality === "high" ? "text-success" : normalizedQuality === "medium" ? "text-warning" : normalizedQuality === "low" ? "text-danger" : "text-muted";
+  const qualityBg = normalizedQuality === "high" ? "bg-success-bg" : normalizedQuality === "medium" ? "bg-warning-bg" : normalizedQuality === "low" ? "bg-danger-bg" : "bg-status-neutral-bg";
+  const qualityBar = normalizedQuality === "high" ? "bg-success" : normalizedQuality === "medium" ? "bg-warning" : normalizedQuality === "low" ? "bg-danger" : "bg-muted";
 
   const chips = [
-    { label: "TIME", value: duration, icon: Clock, tone: "text-[#005a9e]", bg: "bg-[#eff6fc]", bar: "bg-[#005a9e]" },
+    { label: "TIME", value: duration, icon: Clock, tone: "text-accent", bg: "bg-accent-subtle", bar: "bg-accent" },
     { label: "VERDICT", value: verdict, icon: CheckCircle2, tone: verdictTone, bg: verdictBg, bar: verdictBar },
     { label: "QUALITY", value: quality, icon: Award, tone: qualityTone, bg: qualityBg, bar: qualityBar },
   ];
@@ -397,7 +398,7 @@ export function RunSummaryChips({
             <div className="flex items-center gap-1.5">
               <Icon className={cn("size-3.5 shrink-0 opacity-90", chip.tone)} aria-hidden="true" />
               <div className="flex items-baseline gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-[0.05em] text-[#5f6368]">{chip.label}</span>
+                <span className="text-[10px] font-bold uppercase tracking-[0.05em] text-muted">{chip.label}</span>
                 <span className={cn("text-sm font-semibold tabular-nums tracking-tight", chip.tone)}>
                   {chip.value}
                 </span>

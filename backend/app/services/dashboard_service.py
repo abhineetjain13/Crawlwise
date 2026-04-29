@@ -155,15 +155,16 @@ async def _reset_crawl_data_db(session: AsyncSession) -> dict:
 
 
 async def _reset_domain_memory_db(session: AsyncSession) -> dict:
+    preserved_cookie_memory = await _count_rows(session, DomainCookieMemory)
+    preserved_host_memory = await _count_rows(session, HostProtectionMemory)
     counts = {
         "domain_memory_deleted": await _count_rows(session, DomainMemory),
         "domain_run_profiles_deleted": await _count_rows(session, DomainRunProfile),
-        "domain_cookie_memory_deleted": await _count_rows(session, DomainCookieMemory),
+        "domain_cookie_memory_deleted": 0,
+        "domain_cookie_memory_preserved": preserved_cookie_memory,
         "domain_field_feedback_deleted": await _count_rows(session, DomainFieldFeedback),
-        "host_protection_memory_deleted": await _count_rows(
-            session,
-            HostProtectionMemory,
-        ),
+        "host_protection_memory_deleted": 0,
+        "host_protection_memory_preserved": preserved_host_memory,
     }
     await _reset_domain_memory_tables(session)
     return counts
@@ -257,17 +258,13 @@ async def _reset_domain_memory_tables(session: AsyncSession) -> None:
     bind = session.get_bind()
     dialect_name = bind.dialect.name if bind is not None else ""
     await session.execute(delete(DomainFieldFeedback))
-    await session.execute(delete(DomainCookieMemory))
     await session.execute(delete(DomainRunProfile))
-    await session.execute(delete(HostProtectionMemory))
     await session.execute(delete(DomainMemory))
     if dialect_name == "postgresql":
         await _reset_postgres_identities(
             session,
             "domain_field_feedback",
-            "domain_cookie_memory",
             "domain_run_profiles",
-            "host_protection_memory",
             "domain_memory",
         )
     elif dialect_name == "sqlite":
@@ -284,8 +281,8 @@ async def _reset_domain_memory_tables(session: AsyncSession) -> None:
                 text(
                     "DELETE FROM sqlite_sequence "
                     "WHERE name IN ("
-                    "'domain_field_feedback', 'domain_cookie_memory', "
-                    "'domain_run_profiles', 'host_protection_memory', 'domain_memory'"
+                    "'domain_field_feedback', "
+                    "'domain_run_profiles', 'domain_memory'"
                     ")"
                 )
             )

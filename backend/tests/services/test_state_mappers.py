@@ -926,6 +926,24 @@ def test_map_product_payload_uses_configured_jmespaths_when_glom_fails(
     }
 
 
+def test_map_product_payload_normalizes_raw_price_fallbacks() -> None:
+    mapped = js_state_mapper._map_product_payload(
+        {
+            "id": "prod-1",
+            "variants": [],
+            "prices": {
+                "currentPrice": "$129.50",
+                "initialPrice": {"value": 149},
+            },
+        },
+        page_url="https://store.example.com/products/commuter-backpack",
+        category_fallback_from_type=False,
+    )
+
+    assert mapped["price"] == "129.50"
+    assert mapped["original_price"] == "149"
+
+
 def test_normalize_variant_tolerates_non_dict_glom_result(
     monkeypatch,
 ) -> None:
@@ -1100,3 +1118,46 @@ def test_map_js_state_to_fields_reads_nested_variant_original_price_objects() ->
     assert mapped["selected_variant"]["original_price"] == "130.00"
     assert mapped["variants"][0]["original_price"] == "120.00"
     assert mapped["variants"][1]["original_price"] == "130.00"
+
+
+def test_map_js_state_to_fields_reads_current_price_style_product_fields() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "id": "af1-1",
+                            "title": "Air Force 1",
+                            "brand": "Nike",
+                            "prices": {
+                                "currency": "USD",
+                                "currentPrice": 115,
+                                "initialPrice": 130,
+                            },
+                            "options": [{"name": "Size"}],
+                            "variants": [
+                                {
+                                    "id": "size-6",
+                                    "available": True,
+                                    "selectedOptions": [{"name": "Size", "value": "6"}],
+                                },
+                                {
+                                    "id": "size-7",
+                                    "available": False,
+                                    "selectedOptions": [{"name": "Size", "value": "7"}],
+                                },
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/air-force-1?variant=size-6",
+    )
+
+    assert mapped["price"] == "USD 115"
+    assert mapped["original_price"] == "USD 130"
+    assert mapped["currency"] == "USD"
+    assert mapped["selected_variant"]["price"] == "USD 115"

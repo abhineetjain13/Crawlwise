@@ -2617,6 +2617,90 @@ async def test_shared_browser_runtime_recycles_browser_without_deadlocking(
     assert old_events == ["browser_closed", "playwright_stopped"]
     assert new_events == ["launched", "new_context", "context_closed"]
 
+
+@pytest.mark.asyncio
+async def test_acquisition_shared_browser_runtime_recycles_after_driver_closed_on_new_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_events: list[str] = []
+    new_events: list[str] = []
+
+    class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
+        async def new_page(self):
+            return object()
+
+        async def close(self) -> None:
+            new_events.append("context_closed")
+
+    class DeadBrowser:
+        def is_connected(self) -> bool:
+            return True
+
+        async def new_context(self, **kwargs):
+            del kwargs
+            raise Exception("Browser.new_context: Connection closed while reading from the driver")
+
+        async def close(self) -> None:
+            old_events.append("browser_closed")
+
+    class FreshBrowser:
+        def is_connected(self) -> bool:
+            return True
+
+        async def new_context(self, **kwargs):
+            del kwargs
+            new_events.append("new_context")
+            return FakeContext()
+
+        async def close(self) -> None:
+            new_events.append("browser_closed")
+
+    class FakePlaywrightInstance:
+        def __init__(self) -> None:
+            self.chromium = SimpleNamespace(launch=self._launch)
+
+        async def _launch(self, **kwargs):
+            del kwargs
+            new_events.append("launched")
+            return FreshBrowser()
+
+        async def stop(self) -> None:
+            old_events.append("playwright_stopped")
+
+    class FakePlaywrightManager:
+        async def start(self) -> FakePlaywrightInstance:
+            return FakePlaywrightInstance()
+
+    class OldPlaywright:
+        async def stop(self) -> None:
+            old_events.append("playwright_stopped")
+
+    runtime = acquisition_browser_runtime.SharedBrowserRuntime(max_contexts=1)
+    runtime._browser = DeadBrowser()
+    runtime._playwright = OldPlaywright()
+    runtime._browser_launched_at = 1.0
+
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "build_playwright_context_spec",
+        lambda **_: _context_spec(),
+    )
+    monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "_patchright_async_playwright_factory",
+        lambda: (lambda: FakePlaywrightManager()),
+    )
+
+    async with runtime.page():
+        pass
+
+    assert old_events == ["browser_closed", "playwright_stopped"]
+    assert new_events == ["launched", "new_context", "context_closed"]
+
 def test_browser_runtime_snapshot_reports_runtime_capacity_without_host_cache() -> None:
     snapshot = crawl_fetch_runtime.browser_runtime_snapshot()
 
@@ -2833,6 +2917,41 @@ async def test_persist_storage_state_for_domain_persists_test_domains(db_session
 
 
 @pytest.mark.asyncio
+async def test_persist_storage_state_for_domain_strips_null_bytes(db_session) -> None:
+    domain = f"null-byte-{uuid4().hex}.example.com"
+
+    saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "abc\x00def",
+                    "domain": f".{domain}",
+                    "path": "/",
+                }
+            ],
+            "origins": [
+                {
+                    "origin": f"https://{domain}",
+                    "localStorage": [
+                        {"name": "cart", "value": '{"id":"123\x00"}'},
+                    ],
+                }
+            ],
+        },
+        session=db_session,
+    )
+
+    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+
+    assert saved is True
+    assert loaded is not None
+    assert loaded["cookies"][0]["value"] == "abcdef"
+    assert loaded["origins"][0]["localStorage"][0]["value"] == '{"id":"123"}'
+
+
+@pytest.mark.asyncio
 async def test_persist_storage_state_for_domain_keeps_engine_specific_rows(db_session) -> None:
     domain = f"engine-scoped-{uuid4().hex}.example.com"
 
@@ -2994,6 +3113,98 @@ async def test_persist_storage_state_for_domain_accepts_iterable_storage_rows(
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_export_cookie_header_for_domain_dedupes_cookie_names(
+    db_session,
+) -> None:
+    domain = f"handoff-cookie-{uuid4().hex}.example.com"
+
+    saved = await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/products/widget",
+        {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "root",
+                    "domain": f".{domain}",
+                    "path": "/",
+                },
+                {
+                    "name": "session",
+                    "value": "product",
+                    "domain": f".{domain}",
+                    "path": "/products",
+                },
+                {
+                    "name": "_px3",
+                    "value": "challenge",
+                    "domain": f".{domain}",
+                    "path": "/",
+                },
+                {
+                    "name": "consent",
+                    "value": "yes",
+                    "domain": f".{domain}",
+                    "path": "/",
+                },
+            ],
+            "origins": [
+                {
+                    "origin": f"https://{domain}",
+                    "localStorage": [{"name": "consent", "value": "accepted"}],
+                }
+            ],
+        },
+        session=db_session,
+        browser_engine="real_chrome",
+    )
+
+    header = await cookie_store.export_cookie_header_for_domain(
+        f"https://{domain}/products/widget",
+        session=db_session,
+        browser_engine="real_chrome",
+    )
+
+    assert saved is True
+    assert header == "session=product; consent=yes"
+
+
+@pytest.mark.asyncio
+async def test_export_cookie_header_for_domain_does_not_match_path_prefixes(
+    db_session,
+) -> None:
+    domain = f"path-prefix-{uuid4().hex}.example.com"
+
+    await cookie_store.persist_storage_state_for_domain(
+        f"https://{domain}/foo",
+        {
+            "cookies": [
+                {
+                    "name": "prefix-only",
+                    "value": "1",
+                    "domain": f".{domain}",
+                    "path": "/foo",
+                },
+                {
+                    "name": "nested",
+                    "value": "1",
+                    "domain": f".{domain}",
+                    "path": "/foo/bar",
+                },
+            ],
+            "origins": [],
+        },
+        session=db_session,
+    )
+
+    header = await cookie_store.export_cookie_header_for_domain(
+        f"https://{domain}/foobar",
+        session=db_session,
+    )
+
+    assert header is None
 
 
 @pytest.mark.asyncio

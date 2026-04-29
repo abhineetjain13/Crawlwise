@@ -334,6 +334,7 @@ def test_extract_records_deep_merges_structured_variant_fields_across_tiers() ->
     }
     assert record["selected_variant"] == {
         "sku": "TRAIL-S",
+        "size": "S",
         "option_values": {"size": "S"},
     }
 

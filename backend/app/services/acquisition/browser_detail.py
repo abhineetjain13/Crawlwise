@@ -182,6 +182,11 @@ async def expand_all_interactive_elements_impl(
                 data_qa_action = str(snapshot.get("data_qa_action") or "").strip().lower()
                 class_name = str(snapshot.get("class_name") or "").strip().lower()
                 tag_name = str(snapshot.get("tag_name") or "").strip().lower()
+                inside_main = bool(snapshot.get("inside_main"))
+                inside_header = bool(snapshot.get("inside_header"))
+                inside_nav = bool(snapshot.get("inside_nav"))
+                inside_footer = bool(snapshot.get("inside_footer"))
+                inside_aside = bool(snapshot.get("inside_aside"))
                 requested_keyword_probe = " ".join(
                     part for part in (label, aria_controls, data_qa_action) if part
                 ).strip()
@@ -264,6 +269,24 @@ async def expand_all_interactive_elements_impl(
                     or matches_generic_keywords
                 )
                 if not looks_expandable:
+                    continue
+                if not inside_main and (inside_header or inside_nav or inside_footer) and not (
+                    aria_controls
+                    or aria_expanded == "false"
+                    or matches_requested_keywords
+                    or matches_generic_requested_keywords
+                    or matches_generic_keywords
+                    or size_toggle_hint
+                ):
+                    continue
+                if inside_aside and not (
+                    aria_controls
+                    or aria_expanded == "false"
+                    or matches_requested_keywords
+                    or matches_generic_requested_keywords
+                    or matches_generic_keywords
+                    or size_toggle_hint
+                ):
                     continue
                 if not bool(snapshot.get("visible")) or not bool(snapshot.get("actionable")):
                     continue
@@ -580,6 +603,44 @@ async def _interactive_handle_is_visible(handle: Any) -> bool:
         return False
 
 
+async def _interactive_handle_context_flags(handle: Any) -> dict[str, bool]:
+    try:
+        value = await handle.evaluate(
+            """(node) => {
+                const flags = {
+                    insideMain: false,
+                    insideHeader: false,
+                    insideNav: false,
+                    insideFooter: false,
+                    insideAside: false,
+                };
+                let current = node instanceof Element ? node : null;
+                while (current) {
+                    const tag = (current.tagName || '').toLowerCase();
+                    const role = (current.getAttribute('role') || '').toLowerCase();
+                    if (tag === 'main' || role === 'main') flags.insideMain = true;
+                    if (tag === 'header' || role === 'banner') flags.insideHeader = true;
+                    if (tag === 'nav' || role === 'navigation') flags.insideNav = true;
+                    if (tag === 'footer' || role === 'contentinfo') flags.insideFooter = true;
+                    if (tag === 'aside' || role === 'complementary') flags.insideAside = true;
+                    current = current.parentElement;
+                }
+                return flags;
+            }"""
+        )
+    except Exception:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "inside_main": bool(value.get("insideMain")),
+        "inside_header": bool(value.get("insideHeader")),
+        "inside_nav": bool(value.get("insideNav")),
+        "inside_footer": bool(value.get("insideFooter")),
+        "inside_aside": bool(value.get("insideAside")),
+    }
+
+
 async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
     label = await interactive_label(handle)
     visible = await _interactive_handle_is_visible(handle)
@@ -592,6 +653,7 @@ async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
     data_testid = await _interactive_handle_attr(handle, "data-testid")
     class_name = await _interactive_handle_attr(handle, "class")
     tag_name = await _interactive_handle_tag_name(handle)
+    context_flags = await _interactive_handle_context_flags(handle)
     probe = " ".join(
         part
         for part in (label, aria_label, title, data_qa_action, data_testid)
@@ -609,6 +671,7 @@ async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
         "data_testid": data_testid,
         "class_name": class_name,
         "tag_name": tag_name,
+        **context_flags,
         "visible": visible,
         "actionable": await is_actionable_interactive_handle(handle),
     }

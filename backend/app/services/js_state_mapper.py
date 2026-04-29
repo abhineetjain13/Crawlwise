@@ -48,6 +48,10 @@ PRODUCT_FIELD_SPEC = {
         "currency",
         "currencyCode",
         "priceCurrency",
+        "prices.currency",
+        "prices.currentPrice.currencyCode",
+        "pricing_information.currency",
+        "pricing_information.currentPrice.currencyCode",
         "prices.promo.currency.code",
         "prices.base.currency.code",
         "prices.promo.currencyCode",
@@ -63,6 +67,17 @@ PRODUCT_FIELD_SPEC = {
         "minPrice",
         "maxPrice",
         "formattedPrice",
+        "salePrice",
+        "salePrice.amount",
+        "salePrice.value",
+        "currentPrice",
+        "currentPrice.amount",
+        "currentPrice.value",
+        "prices.currentPrice",
+        "prices.currentPrice.amount",
+        "pricing_information.currentPrice",
+        "pricing_information.currentPrice.amount",
+        "pricing_information.standard_price",
         "prices.promo.value",
         "prices.base.value",
         "prices.promo.amount",
@@ -78,6 +93,12 @@ PRODUCT_FIELD_SPEC = {
         "original_price",
         "originalPrice",
         "listPrice",
+        "fullPrice",
+        "fullPrice.amount",
+        "prices.initialPrice",
+        "prices.initialPrice.amount",
+        "pricing_information.standard_price",
+        "pricing_information.listPrice",
         "prices.base.value",
         "prices.base.amount",
         "compareAtPriceRange.minVariantPrice.amount",
@@ -524,17 +545,31 @@ def _map_product_payload(
         axes,
         always_selectable_axes=frozenset({"size"}),
     )
-    price = variant_attribute(selected_variant, "price") or normalize_price(
-        base.get("price"),
-        interpret_integral_as_cents=shopify_like,
-    )
+    price = variant_attribute(selected_variant, "price")
+    if price in (None, "", [], {}):
+        raw_current_price = _raw_current_price_value(product)
+        price = (
+            normalize_price(raw_current_price, interpret_integral_as_cents=shopify_like)
+            if raw_current_price is not None
+            else normalize_price(
+                base.get("price"),
+                interpret_integral_as_cents=shopify_like,
+            )
+        )
     original_price = variant_attribute(
         selected_variant,
         "original_price",
-    ) or normalize_price(
-        base.get("original_price"),
-        interpret_integral_as_cents=shopify_like,
     )
+    if original_price in (None, "", [], {}):
+        raw_original_price = _raw_original_price_value(product)
+        original_price = (
+            normalize_price(raw_original_price, interpret_integral_as_cents=shopify_like)
+            if raw_original_price is not None
+            else normalize_price(
+                base.get("original_price"),
+                interpret_integral_as_cents=shopify_like,
+            )
+        )
     currency = (
         variant_attribute(selected_variant, "currency")
         or text_or_none(base.get("currency"))
@@ -615,6 +650,73 @@ def _map_product_payload(
         record["option2_name"] = ordered[1][0]
         record["option2_values"] = ordered[1][1]
     return record
+
+
+def _raw_current_price_value(product: dict[str, Any]) -> str | None:
+    return _contextual_numeric_value(
+        product,
+        (
+            ("prices", "currentPrice"),
+            ("currentPrice",),
+            ("pricing_information", "currentPrice"),
+            ("pricing_information", "standard_price"),
+        ),
+    )
+
+def _raw_original_price_value(product: dict[str, Any]) -> str | None:
+    return _contextual_numeric_value(
+        product,
+        (
+            ("prices", "initialPrice"),
+            ("fullPrice",),
+            ("pricing_information", "listPrice"),
+        ),
+    )
+
+def _contextual_numeric_value(
+    product: dict[str, Any],
+    paths: tuple[tuple[str, ...], ...],
+) -> str | None:
+    currency = _raw_currency_value(product)
+    if not currency:
+        return None
+    value = _raw_numeric_value(product, paths)
+    if value is None:
+        return None
+    return f"{currency} {value}"
+
+def _raw_numeric_value(
+    product: dict[str, Any],
+    paths: tuple[tuple[str, ...], ...],
+) -> int | float | None:
+    for path in paths:
+        current: Any = product
+        for key in path:
+            if not isinstance(current, dict):
+                current = None
+                break
+            current = current.get(key)
+        if isinstance(current, (int, float)) and not isinstance(current, bool):
+            return current
+    return None
+
+def _raw_currency_value(product: dict[str, Any]) -> str | None:
+    for path in (
+        ("prices", "currency"),
+        ("pricing_information", "currency"),
+        ("currency",),
+        ("currencyCode",),
+        ("priceCurrency",),
+    ):
+        current: Any = product
+        for key in path:
+            if not isinstance(current, dict):
+                current = None
+                break
+            current = current.get(key)
+        if isinstance(current, str) and current.strip():
+            return current.strip()
+    return None
 
 def _product_base_fields(
     product: dict[str, Any],
@@ -737,6 +839,14 @@ _VARIANT_FIELD_SPEC = {
         "price.value",
         "priceV2.amount",
         "priceV2.value",
+        "salePrice.amount",
+        "salePrice.value",
+        "salePrice",
+        "currentPrice.amount",
+        "currentPrice.value",
+        "currentPrice",
+        "prices.currentPrice",
+        "prices.currentPrice.amount",
         "amount",
         "formattedPrice",
         "price",
@@ -753,6 +863,10 @@ _VARIANT_FIELD_SPEC = {
         "originalPrice",
         "listPrice.amount",
         "listPrice",
+        "fullPrice.amount",
+        "fullPrice",
+        "prices.initialPrice",
+        "prices.initialPrice.amount",
         default=None,
         skip=_SKIP,
     ),
@@ -760,6 +874,9 @@ _VARIANT_FIELD_SPEC = {
         "currency",
         "currencyCode",
         "priceCurrency",
+        "currentPrice.currencyCode",
+        "salePrice.currencyCode",
+        "prices.currency",
         "price.currencyCode",
         "price.currency_code",
         "priceV2.currencyCode",

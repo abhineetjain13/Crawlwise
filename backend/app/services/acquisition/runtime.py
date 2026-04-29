@@ -14,7 +14,11 @@ from bs4 import BeautifulSoup
 from app.services.acquisition.browser_readiness import HtmlAnalysis, analyze_html
 from app.core.config import settings
 from app.services.config.block_signatures import BLOCK_SIGNATURES
-from app.services.config.extraction_rules import LISTING_CLIENT_RENDERED_SHELL_HINTS
+from app.services.config.extraction_rules import (
+    ACTION_BUY_NOW,
+    BROWSER_DETAIL_READINESS_HINTS,
+    LISTING_CLIENT_RENDERED_SHELL_HINTS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.db_utils import mapping_or_empty
 from app.services.field_value_core import clean_text
@@ -30,6 +34,18 @@ logger = logging.getLogger(__name__)
 
 _SHARED_HTTP_CLIENTS: dict[tuple[str | None, str], httpx.AsyncClient] = {}
 _SHARED_HTTP_CLIENT_LOCK = asyncio.Lock()
+_ECOMMERCE_DETAIL_READINESS_HINTS = tuple(
+    str(item).strip().lower()
+    for item in list(
+        (
+            BROWSER_DETAIL_READINESS_HINTS.get("ecommerce")
+            if isinstance(BROWSER_DETAIL_READINESS_HINTS, Mapping)
+            else []
+        )
+        or []
+    )
+    if str(item).strip()
+)
 
 
 @dataclass(slots=True)
@@ -253,7 +269,18 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
         and not has_extractable_content
     ):
         blocked = True
-    if blocked and has_extractable_content and not hard_strong_hits and not title_matches:
+    elif "captcha" in strong_hits and provider_hits and title_matches:
+        blocked = True
+    if (
+        blocked
+        and has_extractable_content
+        and not title_matches
+        and "captcha" not in strong_hits
+        and (
+            not hard_strong_hits
+            or hard_strong_hits <= {"captcha"}
+        )
+    ):
         blocked = False
     return BlockPageClassification(
         blocked=blocked,
@@ -413,8 +440,15 @@ async def curl_fetch(
     timeout_seconds: float,
     *,
     proxy: str | None = None,
+    cookie_header: str | None = None,
 ) -> PageFetchResult:
-    return await asyncio.to_thread(_curl_fetch_sync, url, timeout_seconds, proxy=proxy)
+    return await asyncio.to_thread(
+        _curl_fetch_sync,
+        url,
+        timeout_seconds,
+        proxy=proxy,
+        cookie_header=cookie_header,
+    )
 
 
 def copy_headers(headers: Any) -> httpx.Headers:
@@ -432,6 +466,7 @@ def _curl_fetch_sync(
     timeout_seconds: float,
     *,
     proxy: str | None = None,
+    cookie_header: str | None = None,
 ) -> PageFetchResult:
     from curl_cffi import requests as curl_requests
 
@@ -441,13 +476,17 @@ def _curl_fetch_sync(
         else crawler_runtime_settings.curl_impersonate_target
     ).strip()
     impersonate_target = cast(Any, raw_impersonate_target or None)
+    headers = default_request_headers()
+    normalized_cookie_header = str(cookie_header or "").strip()
+    if normalized_cookie_header:
+        headers["Cookie"] = normalized_cookie_header
     response = curl_requests.get(
         url,
         impersonate=impersonate_target,
         allow_redirects=True,
         timeout=timeout_seconds,
         proxy=proxy,
-        headers=default_request_headers(),
+        headers=headers,
     )
     html = response.text or ""
     headers = copy_headers(response.headers)
@@ -498,16 +537,71 @@ def _has_extractable_detail_signals(
     js_states = harvest_js_state_objects(parsed.soup, parsed.html)
     if any(_state_payload_has_content(payload) for payload in js_states.values()):
         return True
-    return any(
-        token in parsed.lowered_html
+    if _has_extractable_dom_detail_signals(parsed):
+        return True
+    lowered_html = parsed.lowered_html
+    if any(
+        token in lowered_html
         for token in (
             "shopifyanalytics.meta",
             "var meta = {\"product\"",
             "window.__remixcontext",
-            "__next_data__",
-            "__nuxt__",
+        )
+    ):
+        return True
+    return any(token in lowered_html for token in ("__next_data__", "__nuxt__")) and any(
+        token in lowered_html
+        for token in (
+            "\"product\":",
+            "\"products\":",
+            "\"currentprice\":",
+            "\"initialprice\":",
+            "\"skudata\":",
+            "\"stylecolor\":",
         )
     )
+
+
+def _has_extractable_dom_detail_signals(analysis: HtmlAnalysis) -> bool:
+    if not analysis.h1_present:
+        return False
+    lowered_text = analysis.normalized_text.lower()
+    detail_hint_hits = sum(
+        1 for hint in _ECOMMERCE_DETAIL_READINESS_HINTS if hint in lowered_text
+    )
+    if ACTION_BUY_NOW.strip().lower() in lowered_text:
+        detail_hint_hits += 1
+    has_product_anchor = bool(
+        analysis.soup.find(
+            attrs={
+                "content": re.compile(r"\bproduct\b", re.I),
+                "property": re.compile(r"og:type", re.I),
+            }
+        )
+    )
+    has_price_anchor = bool(
+        analysis.soup.find(
+            attrs={
+                "content": re.compile(
+                    r"(?:[$€£₹]\s*)?\d{1,3}(?:,\d{3})*(?:[.,]\d{1,2})?|(?:[$€£₹]\s*)?\d+(?:[.,]\d{1,2})?",
+                    re.I,
+                ),
+                "property": re.compile(r"(?:product:)?price", re.I),
+            }
+        )
+        or analysis.soup.find(attrs={"itemprop": re.compile(r"price", re.I)})
+        or re.search(r"(?:[$€£₹]\s*)\d+(?:[.,]\d{2})?", analysis.normalized_text)
+    )
+    if (
+        "load in the app" in lowered_text
+        or "loads in the app" in lowered_text
+    ) and not (has_product_anchor or has_price_anchor):
+        return False
+    if detail_hint_hits >= int(crawler_runtime_settings.detail_field_signal_min_count):
+        if analysis.soup.select_one("main h1, article h1, [role='main'] h1"):
+            return True
+        return has_product_anchor or has_price_anchor
+    return detail_hint_hits > 0 and has_product_anchor
 
 
 def _has_extractable_listing_signals(

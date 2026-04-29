@@ -1,4 +1,9 @@
 {
+  "_export_provenance": {
+    "generator": "app.services.config._export_data",
+    "regenerate": "cd backend; $env:PYTHONPATH='.'; .\\.venv\\Scripts\\python.exe -m app.services.config._export_data app/services/config/field_mappings.exports.json",
+    "invariant": "Static field mapping export. Keep keys loaded by field_mappings.py present and decodeable."
+  },
   "CANONICAL_SCHEMAS": {
     "automobile_detail": {
       "__type__": "list",
@@ -44,6 +49,7 @@
       "__type__": "list",
       "items": [
         "title",
+        "canonical_url",
         "brand",
         "vendor",
         "sku",
@@ -996,6 +1002,39 @@
       "system_file": "xpath_discovery.system.txt",
       "user_file": "xpath_discovery.user.txt"
     }
+  },
+  "PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS": {
+    "ecommerce_detail": {
+      "__type__": "list",
+      "items": [
+        "canonical_url",
+        "created_at",
+        "image_count",
+        "option1_name",
+        "option1_values",
+        "option2_name",
+        "option2_values",
+        "published_at",
+        "updated_at",
+        "variant_count"
+      ]
+    }
+  },
+  "PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_KEYS": {
+    "__type__": "tuple",
+    "items": [
+      "color",
+      "colour",
+      "sku",
+      "size",
+      "variant"
+    ]
+  },
+  "PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_PREFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "dwvar_"
+    ]
   },
   "VARIANT_DOM_FIELD_NAMES": {
     "__type__": "tuple",

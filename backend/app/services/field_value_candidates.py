@@ -111,6 +111,40 @@ def _structured_variant_rows(variants: object, page_url: str) -> list[dict[str, 
     return rows
 
 
+def _structured_offer_variant_rows(offers: object, page_url: str) -> list[dict[str, object]]:
+    raw_offers = offers if isinstance(offers, list) else []
+    if len(raw_offers) < 2:
+        return []
+    rows: list[dict[str, object]] = []
+    for item in raw_offers:
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, object] = {}
+        offered_item = item.get("itemOffered")
+        offered_item = offered_item if isinstance(offered_item, dict) else {}
+        title = coerce_text(item.get("name") or offered_item.get("name"))
+        if title:
+            row["title"] = title
+        sku = coerce_text(item.get("sku") or offered_item.get("sku"))
+        if sku:
+            row["sku"] = sku
+        price = coerce_field_value("price", item, page_url)
+        if price not in (None, "", [], {}):
+            row["price"] = price
+        currency = coerce_field_value("currency", item, page_url)
+        if currency not in (None, "", [], {}):
+            row["currency"] = currency
+        availability = coerce_field_value("availability", item, page_url)
+        if availability not in (None, "", [], {}):
+            row["availability"] = availability
+        variant_url = coerce_field_value("url", item, page_url)
+        if variant_url not in (None, "", [], {}):
+            row["url"] = variant_url
+        if row.get("url") or row.get("price"):
+            rows.append(row)
+    return rows
+
+
 def _variant_axes_from_rows(variants: list[dict[str, object]]) -> dict[str, list[str]]:
     axes: dict[str, list[str]] = {}
     for row in variants:
@@ -439,6 +473,9 @@ def collect_structured_candidates(
                 add_candidate(candidates, "image_url", images[0])
                 add_candidate(candidates, "additional_images", images[1:])
             variants = _structured_variant_rows(payload.get("hasVariant"), page_url)
+            offer_variants = _structured_offer_variant_rows(payload.get("offers"), page_url)
+            if offer_variants:
+                variants.extend(offer_variants)
             product_variants = _structured_variants_from_product_payload(payload, page_url)
             if product_variants:
                 variants.extend(product_variants)

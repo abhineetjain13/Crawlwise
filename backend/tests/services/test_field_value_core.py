@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.field_value_core import (
+    absolute_url,
     clean_text,
     extract_currency_code,
     extract_urls,
@@ -12,6 +13,22 @@ from app.services.field_value_core import (
     validate_record_for_surface,
 )
 from app.services.public_record_firewall import public_record_data_for_surface
+
+
+def test_absolute_url_promotes_bare_host_candidates_to_https() -> None:
+    assert absolute_url(
+        "https://www.asos.com/us/prd/210817202",
+        "images.asos-media.com/products/widget/image-1.jpg",
+    ) == "https://images.asos-media.com/products/widget/image-1.jpg"
+
+
+def test_absolute_url_does_not_promote_hosts_with_edge_hyphen_labels() -> None:
+    assert absolute_url("https://example.com/base/", "-bad.example/path") == (
+        "https://example.com/base/-bad.example/path"
+    )
+    assert absolute_url("https://example.com/base/", "bad-.example/path") == (
+        "https://example.com/base/bad-.example/path"
+    )
 
 
 def test_validate_and_clean_drops_fields_outside_surface_schema() -> None:
@@ -105,6 +122,127 @@ def test_persistence_schema_firewall_drops_unknown_and_internal_fields() -> None
 
     assert data == {"title": "Widget Prime", "price": "19.99"}
     assert rejected == {"debug_payload": "field_not_allowed_for_surface"}
+
+
+def test_persistence_schema_firewall_drops_default_ecommerce_schema_pollution() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Widget Prime",
+            "brand": "Acme",
+            "vendor": "Acme",
+            "product_type": "CriteoProductRail",
+            "image_count": 12,
+            "variant_count": 4,
+            "option1_name": "Size",
+            "option1_values": ["4 lb", "12 lb"],
+            "canonical_url": "https://example.com/products/widget-prime",
+            "created_at": "2026-04-28T10:00:00Z",
+            "published_at": "2026-04-28T10:00:00Z",
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget-prime",
+    )
+
+    assert data == {
+        "title": "Widget Prime",
+        "brand": "Acme",
+        "vendor": "Acme",
+        "product_type": "CriteoProductRail",
+    }
+    assert rejected == {
+        "image_count": "default_public_field_excluded",
+        "variant_count": "default_public_field_excluded",
+        "option1_name": "default_public_field_excluded",
+        "option1_values": "default_public_field_excluded",
+        "canonical_url": "default_public_field_excluded",
+        "created_at": "default_public_field_excluded",
+        "published_at": "default_public_field_excluded",
+    }
+
+
+def test_persistence_schema_firewall_keeps_explicitly_requested_pollution_field() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Widget Prime",
+            "product_type": "Dog Food",
+            "vendor": "Acme",
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget-prime",
+        requested_fields=["product_type"],
+    )
+
+    assert data == {
+        "title": "Widget Prime",
+        "product_type": "Dog Food",
+        "vendor": "Acme",
+    }
+    assert rejected == {}
+
+
+def test_persistence_schema_firewall_canonicalizes_detail_url_query_params() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Shape Tape Concealer",
+            "url": (
+                "https://www.ulta.com/p/shape-tape-concealer-xlsImpprod14251035"
+                "?sku=2501218&size=0.33oz&utm_source=ad"
+            ),
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.ulta.com/p/shape-tape-concealer-xlsImpprod14251035",
+    )
+
+    assert data == {
+        "title": "Shape Tape Concealer",
+        "url": "https://www.ulta.com/p/shape-tape-concealer-xlsImpprod14251035",
+    }
+    assert rejected == {}
+
+
+def test_persistence_schema_firewall_normalizes_availability_enum_values() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Apple AirPods",
+            "availability": "OUT_OF_STOCK",
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.walmart.com/ip/Apple-AirPods/604342441",
+    )
+
+    assert data["availability"] == "out_of_stock"
+    assert rejected == {}
+
+
+def test_persistence_schema_firewall_strips_size_cta_suffixes() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Shape Tape Concealer",
+            "size": "0.33 oz Find your shade",
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.ulta.com/p/shape-tape-concealer-xlsImpprod14251035",
+    )
+
+    assert data["size"] == "0.33 oz"
+    assert rejected == {}
+
+
+def test_listing_url_firewall_preserves_functional_variant_query_params() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Widget Prime",
+            "url": "https://example.com/products/widget-prime?variant=blue",
+        },
+        surface="ecommerce_listing",
+        page_url="https://example.com/collections/widgets",
+    )
+
+    assert data == {
+        "title": "Widget Prime",
+        "url": "https://example.com/products/widget-prime?variant=blue",
+    }
+    assert rejected == {}
 
 
 def test_listing_url_firewall_rejects_api_event_click_urls() -> None:
@@ -215,6 +353,17 @@ def test_extract_urls_preserves_balanced_parentheses_and_brackets() -> None:
         "https://example.com/release_(2026)",
         "https://example.com/archive/[spring]",
     ]
+
+
+def test_extract_urls_rejects_malformed_relative_image_fragments() -> None:
+    assert extract_urls(
+        "g_auto/69721f2e7c934d909168a80e00818569_9366/Stan_Smith_Shoes_White_M20324_01_standard.jpg",
+        "https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+    ) == []
+    assert extract_urls(
+        "R0lGODlhAQABAIAAAP/wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==",
+        "https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+    ) == []
 
 
 def test_infer_brand_from_title_marker_keeps_leading_trademark_brand_token() -> None:

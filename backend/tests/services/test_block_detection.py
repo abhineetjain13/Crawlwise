@@ -251,6 +251,56 @@ def test_classify_blocked_page_preserves_extractable_listing_with_captcha_provid
     assert "recaptcha" in classification.provider_hits
 
 
+def test_classify_blocked_page_preserves_dom_heavy_detail_content_despite_challenge_iframe() -> None:
+    html = """
+    <html>
+      <head>
+        <title>1984 by George Orwell | Waterstones</title>
+        <script>window.vendor = "akamai";</script>
+      </head>
+      <body>
+        <iframe title="captcha"></iframe>
+        <main>
+          <h1>1984</h1>
+          <p>Price</p>
+          <p>Reviews</p>
+          <button>Add to basket</button>
+          <section>Product details</section>
+        </main>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is False
+    assert "akamai" in classification.provider_hits
+    assert "captcha_titled_iframe" in classification.challenge_element_hits
+
+
+def test_classify_blocked_page_keeps_captcha_detail_gate_blocked() -> None:
+    html = """
+    <html>
+      <head><title>Security Check</title></head>
+      <body>
+        <p>Please complete the captcha to continue.</p>
+        <script src="https://www.google.com/recaptcha/api.js"></script>
+        <main>
+          <h1>Widget Prime</h1>
+          <p>Price</p>
+          <p>Product details</p>
+          <button>Add to cart</button>
+        </main>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is True
+    assert "captcha" in classification.strong_hits
+
+
 def test_classify_blocked_page_blocks_captcha_provider_page_without_extractable_content() -> None:
     html = """
     <html>

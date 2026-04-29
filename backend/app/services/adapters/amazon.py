@@ -6,8 +6,7 @@ import re
 from collections.abc import Iterable, Mapping
 from html import unescape
 from itertools import product
-from urllib.parse import urljoin
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from selectolax.lexbor import LexborHTMLParser
 
@@ -17,6 +16,7 @@ from app.services.adapters.base import (
     selectolax_node_attr,
     selectolax_node_text,
 )
+from app.services.field_value_core import extract_currency_code
 
 
 def _clean_brand(value: str) -> str:
@@ -43,6 +43,34 @@ def _availability(value: object) -> str | None:
     if normalized in {"AVAILABLE", "SELECTED"}:
         return "in_stock"
     return None
+
+
+def _normalize_price_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = re.sub(r"\s+", " ", text)
+    match = re.search(
+        r"(?:(?:[$€£₹]|[A-Z]{3})\s*)?\d[\d,]*(?:\.\d{1,2})?(?:\s*(?:[$€£₹]|[A-Z]{3}))?",
+        text,
+        re.I,
+    )
+    return match.group(0) if match else None
+
+
+def _asin_from_url(url: str) -> str | None:
+    match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", url, re.I)
+    return match.group(1).upper() if match else None
+
+
+def _clean_detail_text(value: object) -> str | None:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text or None
+
+
+def _gtin_like(value: object) -> str | None:
+    text = re.sub(r"\D+", "", str(value or ""))
+    return text if len(text) in {8, 12, 13, 14} else None
 
 
 def _iter_json_state_payloads(
@@ -107,28 +135,158 @@ class AmazonAdapter(BaseAdapter):
         avail_el = parser.css_first("#availability span")
         if not title_el:
             return None
+        detail_table = self._detail_table(parser)
+        asin = (
+            _asin_from_url(url)
+            or self._detail_value_from_table(detail_table, "asin")
+            or self._detail_value_from_table(detail_table, "item model number")
+        )
         rating_text = selectolax_node_text(rating_el)
         rating_match = re.search(r"(\d+\.?\d*)", rating_text)
         review_text = selectolax_node_text(review_el)
         review_match = re.search(r"([\d,]+)", review_text)
+        price_text = _normalize_price_text(selectolax_node_text(price_el))
+        currency = extract_currency_code(price_text)
+        images = self._detail_images(parser)
+        bullets = self._feature_bullets(parser)
+        description = self._detail_description(parser)
+        specifications = self._detail_specifications_text(detail_table)
         record = {
             "title": selectolax_node_text(title_el) or None,
-            "price": selectolax_node_text(price_el) or None,
+            "price": price_text,
             "brand": _clean_brand(selectolax_node_text(brand_el)) if brand_el else None,
             "rating": float(rating_match.group(1)) if rating_match else None,
             "review_count": int(review_match.group(1).replace(",", ""))
             if review_match
             else None,
-            "image_url": selectolax_node_attr(image_el, "src")
-            or selectolax_node_attr(image_el, "data-old-hires")
-            if image_el
-            else None,
-            "description": desc_el.text(separator=" ", strip=True) if desc_el else None,
-            "availability": selectolax_node_text(avail_el) or None,
+            "image_url": (
+                images[0]
+                if images
+                else (
+                    selectolax_node_attr(image_el, "src")
+                    or selectolax_node_attr(image_el, "data-old-hires")
+                    if image_el
+                    else None
+                )
+            ),
+            "additional_images": images[1:] if len(images) > 1 else None,
+            "description": description or (desc_el.text(separator=" ", strip=True) if desc_el else None),
+            "availability": _clean_detail_text(selectolax_node_text(avail_el)),
+            "currency": currency,
+            "sku": asin,
+            "product_id": asin,
+            "part_number": self._detail_value_from_table(detail_table, "item model number") or asin,
+            "barcode": (
+                self._detail_value_from_table(detail_table, "upc")
+                or self._detail_value_from_table(detail_table, "ean")
+            ),
+            "product_type": self._detail_product_type(parser),
+            "features": bullets or None,
+            "specifications": specifications,
+            "product_details": self._detail_product_details_text(description, bullets, detail_table),
             "url": url,
         }
         record.update(self._extract_detail_variants(parser, url))
         return record
+
+    def _detail_images(self, parser: LexborHTMLParser) -> list[str]:
+        values: list[str] = []
+        seen: set[str] = set()
+        for node in parser.css("#landingImage, #imgBlkFront, #altImages img, #imageBlock img"):
+            for attr_name in ("data-old-hires", "src"):
+                candidate = selectolax_node_attr(node, attr_name)
+                if not candidate:
+                    continue
+                normalized = candidate.strip()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    values.append(normalized)
+            dynamic_images = selectolax_node_attr(node, "data-a-dynamic-image")
+            if not dynamic_images:
+                continue
+            try:
+                payload = json.loads(dynamic_images)
+            except json.JSONDecodeError:
+                continue
+            for candidate in payload.keys() if isinstance(payload, Mapping) else []:
+                normalized = str(candidate or "").strip()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    values.append(normalized)
+        return values
+
+    def _feature_bullets(self, parser: LexborHTMLParser) -> list[str]:
+        values: list[str] = []
+        for node in parser.css("#feature-bullets li, #feature-bullets .a-list-item"):
+            text = _clean_detail_text(selectolax_node_text(node))
+            if not text or text.lower() in {"", "see more product details"}:
+                continue
+            if text not in values:
+                values.append(text)
+        return values
+
+    def _detail_description(self, parser: LexborHTMLParser) -> str | None:
+        parts = [
+            _clean_detail_text(selectolax_node_text(node))
+            for node in parser.css("#productDescription p, #productDescription, #bookDescription_feature_div")
+        ]
+        parts = [part for part in parts if part]
+        return " ".join(dict.fromkeys(parts)).strip() or None
+
+    def _detail_table(self, parser: LexborHTMLParser) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for row in parser.css("#productDetails_techSpec_section_1 tr, #productDetails_detailBullets_sections1 tr"):
+            header = _clean_detail_text(selectolax_node_text(row.css_first("th")))
+            value = _clean_detail_text(selectolax_node_text(row.css_first("td")))
+            if header and value:
+                values[header] = value
+        for item in parser.css("#detailBullets_feature_div li"):
+            text = _clean_detail_text(selectolax_node_text(item))
+            if not text or ":" not in text:
+                continue
+            key, value = text.split(":", 1)
+            cleaned_key = _clean_detail_text(key)
+            cleaned_value = _clean_detail_text(value)
+            if cleaned_key and cleaned_value:
+                values.setdefault(cleaned_key, cleaned_value)
+        return values
+
+    def _detail_value_from_table(self, detail_table: dict[str, str], label: str) -> str | None:
+        target = label.strip().lower()
+        for key, value in detail_table.items():
+            normalized_key = str(key or "").strip().lower().removesuffix(":")
+            if normalized_key == target:
+                return value
+        return None
+
+    def _detail_product_type(self, parser: LexborHTMLParser) -> str | None:
+        crumbs = [
+            _clean_detail_text(selectolax_node_text(node))
+            for node in parser.css("#wayfinding-breadcrumbs_feature_div li, #wayfinding-breadcrumbs_container li")
+        ]
+        crumbs = [crumb for crumb in crumbs if crumb]
+        return crumbs[-1] if crumbs else None
+
+    def _detail_specifications_text(self, detail_table: dict[str, str]) -> str | None:
+        if not detail_table:
+            return None
+        return " ".join(f"{key}: {value}" for key, value in detail_table.items())
+
+    def _detail_product_details_text(
+        self,
+        description: str | None,
+        bullets: list[str],
+        detail_table: dict[str, str],
+    ) -> str | None:
+        parts: list[str] = []
+        if description:
+            parts.append(description)
+        if bullets:
+            parts.append(" ".join(bullets))
+        if detail_table:
+            parts.append(self._detail_specifications_text(detail_table) or "")
+        merged = " ".join(part for part in parts if part).strip()
+        return merged or None
 
     def _extract_detail_variants(self, parser: LexborHTMLParser, url: str) -> dict:
         state = next(

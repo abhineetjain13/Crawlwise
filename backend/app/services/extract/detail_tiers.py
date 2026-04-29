@@ -107,6 +107,7 @@ def collect_structured_data_tier(
                 payload,
                 alias_lookup=alias_lookup,
                 page_url=state.page_url,
+                requested_page_url=state.requested_page_url,
                 candidates=state.candidates,
                 candidate_sources=state.candidate_sources,
                 field_sources=state.field_sources,

@@ -177,18 +177,15 @@ async def test_split_reset_crawl_data_and_domain_memory_preserve_the_other_scope
 
     assert memory_reset["domain_memory_deleted"] == 1
     assert memory_reset["domain_run_profiles_deleted"] == 1
-    assert memory_reset["domain_cookie_memory_deleted"] == 1
+    assert memory_reset["domain_cookie_memory_deleted"] == 0
+    assert memory_reset["domain_cookie_memory_preserved"] == 1
     assert memory_reset["domain_field_feedback_deleted"] == 1
-    assert memory_reset["host_protection_memory_deleted"] == 1
-    for model in (
-        DomainMemory,
-        DomainRunProfile,
-        DomainCookieMemory,
-        DomainFieldFeedback,
-        HostProtectionMemory,
-    ):
-        remaining = (await db_session.execute(select(model))).scalars().all()
-        assert remaining == []
+    assert memory_reset["host_protection_memory_deleted"] == 0
+    assert memory_reset["host_protection_memory_preserved"] == 1
+    for model in (DomainMemory, DomainRunProfile, DomainFieldFeedback):
+        assert (await db_session.execute(select(model))).scalars().all() == []
+    assert (await db_session.execute(select(DomainCookieMemory))).scalars().all() != []
+    assert (await db_session.execute(select(HostProtectionMemory))).scalars().all() != []
 
 
 @pytest.mark.asyncio

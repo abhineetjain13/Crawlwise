@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -176,6 +177,9 @@ def _normalize_availability(value: object) -> str:
         return "in_stock" if value else "out_of_stock"
     text = _normalize_text(value)
     lowered = text.lower()
+    normalized_enum = lowered.replace("-", "_").replace(" ", "_")
+    if normalized_enum in _AVAILABILITY_TOKENS:
+        return normalized_enum
     if lowered in {"true", "1", "yes"}:
         return "in_stock"
     if lowered in {"false", "0", "no"}:
@@ -196,17 +200,30 @@ def normalize_value(field_name: str, value: object) -> object:
     normalized_field = str(field_name or "").strip().lower()
     if value is None:
         return None
+    if normalized_field == "barcode" and isinstance(value, str):
+        parsed = _unwrap_singleton_literal_list(value)
+        if parsed is not None:
+            value = parsed
     if normalized_field in _LIST_TEXT_FIELDS:
         return _normalize_text_list(value)
     if normalized_field in _BOOLEAN_FIELDS:
         return _normalize_bool(value)
     if normalized_field == "availability":
         return _normalize_availability(value)
+    if normalized_field == "rating":
+        result = normalize_decimal_price(value)
+        return _normalize_rating(result) if result is not None else ""
     if normalized_field in _DECIMAL_FIELDS:
         if isinstance(value, str):
             trimmed = value.strip()
             if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", trimmed):
-                return normalize_decimal_price(trimmed) or ""
+                candidate = _canonicalize_decimal_candidate(trimmed)
+                if candidate is None:
+                    return ""
+                try:
+                    return format(Decimal(candidate), "f")
+                except (InvalidOperation, ValueError):
+                    return ""
         result = normalize_decimal_price(value)
         return result if result is not None else ""
     if normalized_field.endswith("_count") or normalized_field in _INTEGER_FIELDS:
@@ -228,6 +245,34 @@ def normalize_value(field_name: str, value: object) -> object:
     if isinstance(value, (bool, int, float)):
         return value
     return _normalize_text(value)
+
+
+def _unwrap_singleton_literal_list(value: str) -> str | None:
+    text = _normalize_text(value)
+    if not text.startswith("[") or not text.endswith("]"):
+        return None
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return None
+    if not isinstance(parsed, (list, tuple)) or len(parsed) != 1:
+        return None
+    return _normalize_text(parsed[0])
+
+
+def _normalize_rating(value: str) -> str:
+    text = _normalize_text(value)
+    if not text:
+        return ""
+    try:
+        decimal = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return text
+    quantized = decimal.quantize(Decimal("0.01"))
+    normalized = format(quantized.normalize(), "f")
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+    return normalized or "0"
 
 
 def normalize_record_fields(record: dict[str, Any]) -> dict[str, Any]:

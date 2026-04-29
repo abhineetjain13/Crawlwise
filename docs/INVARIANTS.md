@@ -91,15 +91,15 @@ for field in ("variants", "variant_axes", "selected_variant", "variant_count"):
         base_record[field] = mapped[field]
 ```
 
-**Bug 3 — `_backfill_detail_price_from_html` and variant backfill not called after early exit. Owner: `build_detail_record`.**
+**Bug 3 — `backfill_detail_price_from_html` and variant backfill not called after early exit. Owner: `build_detail_record` orchestration plus `extract/detail_price_extractor.py`.**
 
 The early exit return path (end of structured_data tier) bypasses the post-tier backfill calls. Any record that exits early is missing these safety nets.
 
-Fix: call `_backfill_detail_price_from_html` and `_backfill_variants_from_dom_if_missing` before every return point in `build_detail_record`, including the early exit.
+Fix: call `backfill_detail_price_from_html` and `_backfill_variants_from_dom_if_missing` before every return point in `build_detail_record`, including the early exit.
 
 **Visible detail prices are extraction-owned. Owner: `detail_extractor.py` + `config/extraction_rules.py`.**
 
-When structured data lacks price but the rendered detail DOM exposes a product display-price block, `_backfill_detail_price_from_html` may fill `price` and `original_price` from configured detail price selectors. This is still upstream extraction. Do not add price repair in `publish/` or `pipeline/`.
+When structured data lacks price but the rendered detail DOM exposes a product display-price block, `extract/detail_price_extractor.py` may fill `price` and `original_price` from configured detail price selectors. This is still upstream extraction. Do not add price repair in `publish/` or `pipeline/`.
 
 ---
 
@@ -107,7 +107,7 @@ When structured data lacks price but the rendered detail DOM exposes a product d
 - Replacing the per-field `candidates` + `_winning_candidates_for_field` system with a record-level merge or a single `winner` variable
 - Adding a new tier or source that writes directly to `record` instead of going through `_add_sourced_candidate`
 - Fixing missing variants by adding browser interaction before verifying Bug 1 and Bug 2 are fixed
-- Calling `_backfill_detail_price_from_html` only at the end of the full tier sequence but not after early exit paths
+- Calling `backfill_detail_price_from_html` only at the end of the full tier sequence but not after early exit paths
 - Fixing missing visible PDP prices in persistence/export instead of `detail_extractor.py`
 
 ---
@@ -143,6 +143,8 @@ When structured data lacks price but the rendered detail DOM exposes a product d
 **Rule:** Acquisition returns observational facts only: URL, final URL, status, method, headers, blocked state, diagnostics, and artifacts. It does not invent blocker causes, insert retries not in policy, or escalate without evidence.
 
 Diagnostics controls are user controls. If `diagnostics_profile.capture_screenshot` is `False`, browser acquisition must not capture any screenshots, regardless of outcome.
+
+Browser-driver disconnects are URL-local failures. If a shared browser dies during `new_context`, page bootstrap, or content serialization, the runtime may recycle that browser once, but `_batch_runtime.py` must keep the failure scoped to the current URL and continue the batch.
 
 **Usable content beats provider noise. This is a hard contract.**
 If browser diagnostics report `browser_outcome == "usable_content"`, provider telemetry such as `provider:*`,
@@ -183,6 +185,7 @@ Detail extraction must also reject collection/category URLs that expose product-
 - `verdict.py` returns `success` for a listing run that extracted zero product rows
 - `crawl_engine.py` routes a listing URL through `detail_extractor.py`
 - An `ecommerce_detail` run on `/c/...`, `/category/...`, or `/collections/...` persists a fake detail record from a product tile
+- Detail expansion clicks header/nav/footer chrome and navigates a PDP request onto a marketing or utility page
 
 ---
 
@@ -211,6 +214,7 @@ Detail extraction must also reject collection/category URLs that expose product-
 - Challenge-state cookies/localStorage from bot-defense pages must never be persisted or replayed as reusable domain memory.
 - A blocked browser run must not promote its storage state into domain memory or run-scoped browser storage.
 - Run-scoped and domain-scoped browser storage must stay engine-scoped; `chromium`, `patchright`, and `real_chrome` state must not bleed across engines.
+- Browser-to-HTTP handoff may only reuse sanitized engine-scoped session state on the same proxy identity. If proxy affinity cannot be proven, skip handoff and stay browser-first.
 - Host browser-first memory is for repeated hard blocks, not one noisy challenge hit.
 - Risky detail browser fetches may warm the site origin before direct PDP navigation; that warmup happens before the target nav, not after a challenge page already landed.
 

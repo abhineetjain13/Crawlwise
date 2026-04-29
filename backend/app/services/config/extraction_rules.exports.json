@@ -1,4 +1,9 @@
 {
+  "_export_provenance": {
+    "generator": "app.services.config._export_data",
+    "regenerate": "cd backend; $env:PYTHONPATH='.'; .\\.venv\\Scripts\\python.exe -m app.services.config._export_data app/services/config/extraction_rules.exports.json",
+    "invariant": "Static runtime config export. Keep keys loaded by extraction_rules.py present and decodeable."
+  },
   "ACQUISITION_GUARDS_RULES": {
     "job_error_page_headings": {
       "__type__": "list",
@@ -1210,7 +1215,8 @@
     "items": [
       "best experience",
       "download our app",
-      "shop on our app"
+      "shop on our app",
+      "learn about mylow here"
     ]
   },
   "DETAIL_BRAND_SHELL_TITLE_TOKENS": {
@@ -1286,6 +1292,13 @@
       "[data-testid*='price' i]",
       "[data-test*='price' i]",
       "[aria-label*='price' i]"
+    ]
+  },
+  "DETAIL_CURRENCY_META_SELECTORS": {
+    "__type__": "tuple",
+    "items": [
+      "meta[property='product:price:currency']",
+      "meta[itemprop='priceCurrency']"
     ]
   },
   "DETAIL_EXPAND_KEYWORD_EXTENSIONS": {
@@ -1367,6 +1380,51 @@
     "items": [
       "[data-component-id='display-price'] [aria-label*='original price' i]",
       "[data-component-id='display-price'] s"
+    ]
+  },
+  "DETAIL_PRICE_JSONLD_PATTERN": "\"price\"\\s*:\\s*\"?(?P<price>\\d+(?:\\.\\d+)?)\"?",
+  "DETAIL_PRICE_JSONLD_TYPE_PATTERN": "\"@type\"\\s*:\\s*\"(?:Product|ProductGroup|Offer)\"",
+  "DETAIL_PRICE_META_SELECTORS": {
+    "__type__": "tuple",
+    "items": [
+      "meta[property='product:price:amount']",
+      "meta[itemprop='price']",
+      "meta[name='price']",
+      "[itemprop='price']"
+    ]
+  },
+  "DETAIL_DOCUMENT_LINK_LABEL_PATTERNS": {
+    "__type__": "tuple",
+    "items": [
+      "^warranty\\s+guide$",
+      "^prop\\s*65\\s+warning\\s+label$",
+      "^use\\s+and\\s+care\\s+manual$",
+      "^installation\\s+manual$",
+      "^dimensions\\s+guide$",
+      "^manual$",
+      "^guide$"
+    ]
+  },
+  "DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR": "main, article, h1, [itemprop='name']",
+  "DETAIL_CURRENCY_JSONLD_PATTERN": "\"priceCurrency\"\\s*:\\s*\"(?P<currency>[A-Z]{3})\"",
+  "DETAIL_CENT_BASED_PRICE_CURRENCIES": {
+    "__type__": "tuple",
+    "items": [
+      "AUD",
+      "CAD",
+      "EUR",
+      "GBP",
+      "NZD",
+      "USD"
+    ]
+  },
+  "DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES": {
+    "__type__": "tuple",
+    "items": [
+      "dom_selector",
+      "dom_images",
+      "dom_text",
+      "selector_rule"
     ]
   },
   "DETAIL_PRODUCT_PATH_TOKENS": {
@@ -1605,6 +1663,18 @@
       "\u2014",
       "--",
       "-"
+    ]
+  },
+  "EMBEDDED_ASSIGNMENT_NAMES": {
+    "__type__": "tuple",
+    "items": [
+      "data",
+      "items",
+      "listings",
+      "posts",
+      "products",
+      "records",
+      "results"
     ]
   },
   "EXTRACTION_RULES": {
@@ -3336,6 +3406,33 @@
       "__APP_STATE__"
     ]
   },
+  "NON_STATE_ASSIGNMENT_PATTERNS": {
+    "__type__": "tuple",
+    "items": [
+      "ShopifyAnalytics\\.meta\\s*=\\s*(\\{.*?\\})\\s*;",
+      "var\\s+meta\\s*=\\s*(\\{.*?\\})\\s*;"
+    ]
+  },
+  "OPENGRAPH_KEY_MAP": {
+    "og:title": "name",
+    "og:description": "description",
+    "og:image": "image",
+    "og:url": "url",
+    "product:price:amount": "price",
+    "product:price:currency": "priceCurrency",
+    "product:availability": "availability",
+    "product:brand": "brand",
+    "product:retailer_item_id": "sku",
+    "product:item_group_id": "product_id"
+  },
+  "OPENGRAPH_META_PREFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "og:",
+      "product:"
+    ]
+  },
+  "OPENGRAPH_PRODUCT_TYPE": "product",
   "INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS": {
     "__type__": "tuple",
     "items": [
@@ -4694,11 +4791,18 @@
     "__type__": "tuple",
     "items": [
       "avatar",
+      "analytics",
       "badge",
+      "beacon",
+      "bing",
       "blog",
       "brand",
       "breadcrumb",
+      "boltdns",
+      "compare",
       "discount",
+      "doubleclick",
+      "facebook",
       "flag",
       "icon",
       "loader",
@@ -4708,10 +4812,16 @@
       "payment",
       "placeholder",
       "promo",
+      "qualtrics",
       "rating",
+      "recommend",
       "review",
+      "securemetrics",
+      "similar",
       "social",
-      "sprite"
+      "sprite",
+      "tracking",
+      "video"
     ]
   },
   "NON_PRODUCT_PROVIDER_HINTS": {
@@ -5151,9 +5261,14 @@
     ]
   },
   "PAGE_URL_CURRENCY_HINTS_RAW": {
+    "amazon.com/": "USD",
+    "apple.com/": "USD",
     "/au/": "AUD",
+    "bestbuy.com/": "USD",
     "/ca/": "CAD",
+    "costco.com/": "USD",
     "/de/": "EUR",
+    "dickssportinggoods.com/": "USD",
     "/en-au/": "AUD",
     "/en-ca/": "CAD",
     "/en-gb/": "GBP",
@@ -5163,13 +5278,23 @@
     "/eu/": "EUR",
     "/fr/": "EUR",
     "/gb/": "GBP",
+    "goat.com/": "USD",
+    "homedepot.com/": "USD",
     "/in/": "INR",
     "/it/": "EUR",
     "/ja-jp/": "JPY",
     "/jp/": "JPY",
+    "kith.com/": "USD",
+    "lowes.com/": "USD",
+    "newbalance.com/": "USD",
+    "nordstrom.com/": "USD",
     "/nl/": "EUR",
+    "samsclub.com/": "USD",
+    "stockx.com/": "USD",
+    "target.com/": "USD",
     "/uk/": "GBP",
-    "/us/": "USD"
+    "/us/": "USD",
+    "walmart.com/": "USD"
   },
   "PRICE_FIELDS": {
     "__type__": "tuple",
@@ -5410,6 +5535,9 @@
         "contact",
         "share",
         "top searches",
+        "compare",
+        "compare models",
+        "comparison",
         "complete the look",
         "pair with",
         "recently viewed",
@@ -5809,22 +5937,28 @@
       "answers",
       "availability",
       "background",
+      "country",
+      "currency",
       "delivery",
       "emi",
       "faq",
       "filter",
       "helpfulness",
+      "locale",
       "language",
+      "market",
       "payment",
       "question",
       "questions",
       "rating",
       "ratings",
+      "region",
       "review",
       "reviews",
       "shipping",
       "size-chart",
       "sizechart",
+      "site",
       "sort",
       "text",
       "translate",
@@ -5899,7 +6033,18 @@
       "^(?:one|free|single)\\s+size$",
       "^(?:os|o/s)$",
       "^(?:(?:eu|uk|us|cm|mm)[-\\s]?)?\\d{1,3}(?:/\\d{1,3})?$",
-      "^\\d+(?:\\.\\d+)?\\s?(?:cm|mm|in\\.?|inch|inches)$"
+      "^\\d+(?:\\.\\d+)?\\s?(?:cm|mm|in\\.?|inch|inches)$",
+      "^\\d+(?:\\.\\d+)?[-\\s]?(?:oz|ounces?|lb|lbs|pounds?|g|kg)(?:\\s+(?:bag|bags|pack|packs|case|cases|can|cans|bottle|bottles|box|boxes|tub|tubs))?$",
+      "^\\d+(?:\\.\\d+)?[-\\s]?(?:fl\\s?oz|ml|l|liter|litre|liters|litres)(?:\\s+(?:can|cans|bottle|bottles|pack|packs|case|cases))?$"
+    ]
+  },
+  "VARIANT_SIZE_VALUE_EXTRACT_PATTERNS": {
+    "__type__": "tuple",
+    "items": [
+      "\\b\\d+(?:\\.\\d+)?[-\\s]?(?:oz|ounces?|lb|lbs|pounds?|g|kg)(?:\\s+(?:bag|bags|pack|packs|case|cases|can|cans|bottle|bottles|box|boxes|tub|tubs))?\\b",
+      "\\b\\d+(?:\\.\\d+)?[-\\s]?(?:fl\\s?oz|ml|l|liter|litre|liters|litres)(?:\\s+(?:can|cans|bottle|bottles|pack|packs|case|cases))?\\b",
+      "\\b(?:xxxs|xxs|xs|s|m|l|xl|xxl|xxxl|\\d+xl)\\b",
+      "\\b(?:twin(?:\\s+xl)?|full|queen|king|cal(?:ifornia)?\\s+king)\\b"
     ]
   },
   "CURRENCY_ALIAS_PATTERNS": {
@@ -5922,8 +6067,14 @@
     "__type__": "tuple",
     "items": [
       "\\s+(?:variant\\s+)?sold\\s+out(?:\\s+or\\s+unavailable)?\\s*$",
+      "\\s*-\\s*only\\s+\\d+\\s+remaining\\s*$",
+      "\\s+only\\s+\\d+\\s+remaining\\s*$",
       "\\s+out\\s+of\\s+stock\\s*$",
-      "\\s+unavailable\\s*$"
+      "\\s+unavailable\\s*$",
+      "\\s+is\\s+currently\\s+unavailable\\.?\\s*$",
+      "\\s+customers\\s+say.*$",
+      "\\s+-\\s*$",
+      "\\s+find\\s+your\\s+shade\\s*$"
     ]
   }
 }

@@ -27,6 +27,10 @@ from app.services.config.extraction_rules import (
 from app.services.config.selectors import (
     ANCHOR_SELECTOR,
     DETAIL_MARKDOWN_HEADING_SELECTOR,
+    LOCATION_INTERSTITIAL_CONTAINER_SELECTORS,
+    LOCATION_INTERSTITIAL_DISMISS_SELECTORS,
+    LOCATION_INTERSTITIAL_DISMISS_TEXT_TOKENS,
+    LOCATION_INTERSTITIAL_TEXT_TOKENS,
     LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS,
     LISTING_VISUAL_CANDIDATE_CONTAINER_SELECTORS,
     LISTING_VISUAL_CAPTURE_SELECTORS,
@@ -62,6 +66,7 @@ class BrowserFinalizeInput:
     page_markdown: str
     phase_timings_ms: dict[str, int]
     started_at: float
+    interstitial_diagnostics: dict[str, object] | None = None
     capture_screenshot: bool = False
 class BrowserAcquisitionResultBuilder:
     def __init__(
@@ -113,6 +118,7 @@ class BrowserAcquisitionResultBuilder:
             payload.html,
             html_bytes=html_bytes,
         )
+        location_interstitial_present = location_interstitial_detected(payload.html)
         browser_outcome = self.classify_browser_outcome(
             html=payload.html,
             html_bytes=html_bytes,
@@ -120,6 +126,8 @@ class BrowserAcquisitionResultBuilder:
             block_classification=blocked_classification,
             traversal_result=payload.traversal_result,
         )
+        if location_interstitial_present:
+            browser_outcome = "location_required"
         await self._emit_events(browser_outcome=browser_outcome, blocked=blocked)
         screenshot_path = await self._capture_screenshot(browser_outcome=browser_outcome)
         (
@@ -151,6 +159,10 @@ class BrowserAcquisitionResultBuilder:
             expansion_diagnostics=payload.expansion_diagnostics,
             listing_recovery_diagnostics=payload.listing_recovery_diagnostics,
             listing_artifact_diagnostics=listing_artifact_diagnostics,
+            interstitial_diagnostics={
+                **dict(payload.interstitial_diagnostics or {}),
+                "location_required": location_interstitial_present,
+            },
             traversal_result=payload.traversal_result,
         )
         diagnostics["rendered_listing_fragment_count"] = listing_evidence_counts[
@@ -852,6 +864,7 @@ def build_browser_diagnostics(
     expansion_diagnostics: dict[str, object],
     listing_recovery_diagnostics: dict[str, object],
     listing_artifact_diagnostics: dict[str, object],
+    interstitial_diagnostics: dict[str, object],
     traversal_result,
 ) -> dict[str, object]:
     diagnostics = {
@@ -882,6 +895,10 @@ def build_browser_diagnostics(
         "listing_readiness": readiness_diagnostics,
         "listing_recovery": listing_recovery_diagnostics,
         "listing_artifact_capture": listing_artifact_diagnostics,
+        "interstitial": interstitial_diagnostics,
+        "failure_reason": "location_required"
+        if browser_outcome == "location_required"
+        else None,
         "detail_expansion": expansion_diagnostics,
     }
     if traversal_result is not None:
@@ -907,6 +924,169 @@ def build_browser_artifacts(
         artifacts["traversal_composed_html"] = traversal_result.compose_html()
         artifacts["full_rendered_html"] = rendered_html
     return artifacts
+
+
+def _string_config_list(value: object) -> list[str]:
+    return [str(item).strip() for item in list(value or []) if str(item).strip()]
+
+
+def location_interstitial_detected(html: str) -> bool:
+    soup = BeautifulSoup(str(html or ""), "html.parser")
+    text = " ".join(soup.get_text(" ", strip=True).lower().split())
+    tokens = _string_config_list(LOCATION_INTERSTITIAL_TEXT_TOKENS)
+    matched_tokens = [
+        token.lower()
+        for token in tokens
+        if token and token.lower() in text
+    ]
+    if not text or not matched_tokens:
+        return False
+    selectors = _string_config_list(LOCATION_INTERSTITIAL_CONTAINER_SELECTORS)
+    for selector in selectors:
+        try:
+            if soup.select_one(selector) is not None:
+                return True
+        except Exception:
+            logger.debug("Invalid location interstitial selector=%s", selector, exc_info=True)
+    for node in soup.select("[aria-modal='true'], [role='dialog'], .modal, .popup, .overlay"):
+        node_text = " ".join(node.get_text(" ", strip=True).lower().split())
+        if any(token in node_text for token in matched_tokens):
+            return True
+    return len(matched_tokens) >= 2
+
+
+async def dismiss_safe_location_interstitial(page: Any) -> dict[str, object]:
+    selectors = _string_config_list(LOCATION_INTERSTITIAL_DISMISS_SELECTORS)
+    still_present_result: dict[str, object] | None = None
+    for selector in selectors:
+        try:
+            matches = page.locator(selector)
+            if await matches.count() <= 0:
+                continue
+            locator = matches.first
+            await locator.wait_for(
+                state="visible",
+                timeout=int(crawler_runtime_settings.traversal_cookie_consent_visible_timeout_ms),
+            )
+            await locator.click(
+                timeout=int(crawler_runtime_settings.traversal_cookie_consent_click_timeout_ms),
+                force=True,
+            )
+            await page.wait_for_timeout(
+                int(crawler_runtime_settings.cookie_consent_postclick_wait_ms)
+            )
+            if not await _page_has_location_interstitial(page):
+                return {"status": "dismissed", "selector": selector}
+            still_present_result = {"status": "still_present", "selector": selector}
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug(
+                "Location interstitial dismissal probe failed selector=%s url=%s",
+                selector,
+                getattr(page, "url", ""),
+                exc_info=True,
+            )
+    text_result = await _dismiss_location_interstitial_by_text(page)
+    if text_result.get("status") == "dismissed":
+        return text_result
+    if text_result.get("status") == "still_present":
+        return text_result
+    if still_present_result is not None:
+        return still_present_result
+    return {"status": "not_found"}
+
+
+async def _dismiss_location_interstitial_by_text(page: Any) -> dict[str, object]:
+    tokens = _string_config_list(LOCATION_INTERSTITIAL_DISMISS_TEXT_TOKENS)
+    location_tokens = _string_config_list(LOCATION_INTERSTITIAL_TEXT_TOKENS)
+    if not tokens:
+        return {"status": "skipped", "reason": "no_text_tokens"}
+    try:
+        result = await page.evaluate(
+            """
+            ({tokens, locationTokens}) => {
+              const normalizedTokens = tokens
+                .map((value) => String(value || '').trim().toLowerCase())
+                .filter(Boolean);
+              const normalizedLocationTokens = locationTokens
+                .map((value) => String(value || '').trim().toLowerCase())
+                .filter(Boolean);
+              const hasLocationText = (node) => {
+                const root = node.closest('[aria-modal="true"],[role="dialog"],.modal,.popup,.overlay')
+                  || node.parentElement;
+                const text = String((root && root.innerText) || document.body.innerText || '')
+                  .replace(/\\s+/g, ' ')
+                  .trim()
+                  .toLowerCase();
+                return normalizedLocationTokens.some((token) => text.includes(token));
+              };
+              const elements = Array.from(document.querySelectorAll(
+                'button,[role="button"],a,input[type="button"],input[type="submit"]'
+              ));
+              const visible = (node) => {
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                  && style.display !== 'none'
+                  && rect.width > 0
+                  && rect.height > 0;
+              };
+              for (const node of elements) {
+                if (!visible(node)) continue;
+                if (!hasLocationText(node)) continue;
+                const rawText = node.innerText || node.textContent || node.value
+                  || node.getAttribute('aria-label') || '';
+                const text = String(rawText).replace(/\\s+/g, ' ').trim();
+                const lowered = text.toLowerCase();
+                if (!lowered) continue;
+                const matched = normalizedTokens.find(
+                  (token) => lowered === token || lowered.includes(token)
+                );
+                if (!matched) continue;
+                node.click();
+                return {status: 'dismissed', text, selector: 'text:' + matched};
+              }
+              return {status: 'not_found'};
+            }
+            """,
+            {"tokens": tokens, "locationTokens": location_tokens},
+        )
+        if isinstance(result, dict) and result.get("status") == "dismissed":
+            await page.wait_for_timeout(
+                int(crawler_runtime_settings.cookie_consent_postclick_wait_ms)
+            )
+            if not await _page_has_location_interstitial(page):
+                return dict(result)
+            return {
+                **dict(result),
+                "status": "still_present",
+            }
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug(
+            "Location interstitial text dismissal failed url=%s",
+            getattr(page, "url", ""),
+            exc_info=True,
+        )
+    return {"status": "not_found"}
+
+
+async def _page_has_location_interstitial(page: Any) -> bool:
+    try:
+        return location_interstitial_detected(await get_page_html(page))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug(
+            "Location interstitial post-click verification failed url=%s",
+            getattr(page, "url", ""),
+            exc_info=True,
+        )
+        return True
+
+
 def _select_primary_browser_html(
     *,
     surface: str | None,

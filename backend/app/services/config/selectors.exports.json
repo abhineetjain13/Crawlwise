@@ -1,4 +1,9 @@
 {
+  "_export_provenance": {
+    "generator": "app.services.config._export_data",
+    "regenerate": "cd backend; $env:PYTHONPATH='.'; .\\.venv\\Scripts\\python.exe -m app.services.config._export_data app/services/config/selectors.exports.json",
+    "invariant": "Static selector export. Public keys must not start with underscore; selectors.py filters metadata keys."
+  },
   "ANCHOR_SELECTOR": "a[href]",
   "DETAIL_MARKDOWN_HEADING_SELECTOR": "h1, h2, h3, h4, summary, button, [role='tab']",
   "LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS": {
@@ -136,6 +141,109 @@
           ]
         }
       }
+    ]
+  },
+  "LOCATION_INTERSTITIAL_CONTAINER_SELECTORS": {
+    "__type__": "list",
+    "items": [
+      "[aria-modal='true'][class*='location' i]",
+      "[aria-modal='true'][id*='location' i]",
+      "[aria-modal='true'][class*='postal' i]",
+      "[aria-modal='true'][id*='postal' i]",
+      "[aria-modal='true'][class*='zip' i]",
+      "[aria-modal='true'][id*='zip' i]",
+      "[role='dialog'][class*='location' i]",
+      "[role='dialog'][id*='location' i]",
+      "[role='dialog'][class*='postal' i]",
+      "[role='dialog'][id*='postal' i]",
+      "[role='dialog'][class*='zip' i]",
+      "[role='dialog'][id*='zip' i]",
+      ".modal[class*='location' i]",
+      ".modal[id*='location' i]",
+      ".overlay[class*='location' i]",
+      ".overlay[id*='location' i]"
+    ]
+  },
+  "LOCATION_INTERSTITIAL_DISMISS_SELECTORS": {
+    "__type__": "list",
+    "items": [
+      "button[aria-label='Close']",
+      "button[aria-label='close']",
+      "[role='button'][aria-label='Close']",
+      "[role='button'][aria-label='close']"
+    ]
+  },
+  "LOCATION_INTERSTITIAL_DISMISS_TEXT_TOKENS": {
+    "__type__": "list",
+    "items": [
+      "Not now",
+      "Maybe later",
+      "Continue",
+      "Continue without location",
+      "Skip",
+      "No thanks",
+      "Ahora no",
+      "Quizás luego",
+      "No gracias",
+      "Pas maintenant",
+      "Peut-être plus tard",
+      "Non merci",
+      "Nicht jetzt",
+      "Vielleicht später",
+      "Nein danke",
+      "Agora não",
+      "Talvez mais tarde",
+      "Não obrigado",
+      "Quizas luego",
+      "Peut-etre plus tard",
+      "Vielleicht spaeter",
+      "Agora nao",
+      "Nao obrigado"
+    ]
+  },
+  "LOCATION_INTERSTITIAL_TEXT_TOKENS": {
+    "__type__": "list",
+    "items": [
+      "choose your location",
+      "select your location",
+      "set your location",
+      "enter your zip",
+      "enter zip code",
+      "zip code",
+      "postal code",
+      "use my location",
+      "deliver to",
+      "store location",
+      "elige tu ubicación",
+      "selecciona tu ubicación",
+      "código postal",
+      "usar mi ubicación",
+      "entregar a",
+      "choisissez votre emplacement",
+      "sélectionnez votre emplacement",
+      "code postal",
+      "utiliser ma position",
+      "livrer à",
+      "wählen sie ihren standort",
+      "standort auswählen",
+      "postleitzahl",
+      "meinen standort verwenden",
+      "liefern nach",
+      "escolha sua localização",
+      "selecionar localização",
+      "usar minha localização",
+      "entregar em",
+      "elige tu ubicacion",
+      "selecciona tu ubicacion",
+      "codigo postal",
+      "usar mi ubicacion",
+      "selectionnez votre emplacement",
+      "livrer a",
+      "waehlen sie ihren standort",
+      "standort auswaehlen",
+      "escolha sua localizacao",
+      "selecionar localizacao",
+      "usar minha localizacao"
     ]
   },
   "COOKIE_CONSENT_SELECTORS": {

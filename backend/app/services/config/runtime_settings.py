@@ -200,6 +200,11 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_proxy_bridge_auth_timeout_seconds: float = 10.0
     browser_proxy_bridge_first_byte_timeout_seconds: float = 15.0
     browser_proxy_domain_storage_enabled: bool = False
+    browser_http_handoff_enabled: bool = True
+    browser_http_handoff_cookie_engines: tuple[str, ...] = (
+        "real_chrome",
+        "patchright",
+    )
     proxy_rotation_sticky_tokens: tuple[str, ...] = ("sticky", "session", "affinity")
     proxy_rotation_rotating_tokens: tuple[str, ...] = ("rotating", "rotate", "random")
     proxy_sticky_username_markers: tuple[str, ...] = ("-session-", "session-")
@@ -304,6 +309,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     selector_synthesis_max_html_chars: int = 200000
     raw_json_surface_field_overlap_ratio: float = 0.25
     raw_json_surface_field_overlap_absolute: int = 2
+    detail_max_variant_axes: int = 3
+    detail_max_variant_rows: int = 100
+    detail_max_variant_matrix_cells: int = 200
     listing_candidate_strong_score_threshold: int = 18
     robots_cache_size: int = 512
     robots_cache_ttl: float = 3600.0
@@ -428,6 +436,12 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("llm_confidence_threshold must be between 0 and 1")
         if not 0.0 <= float(self.selector_self_heal_min_confidence) <= 1.0:
             raise ValueError("selector_self_heal_min_confidence must be between 0 and 1")
+        if self.detail_max_variant_axes <= 0:
+            raise ValueError("detail_max_variant_axes must be > 0")
+        if self.detail_max_variant_rows <= 0:
+            raise ValueError("detail_max_variant_rows must be > 0")
+        if self.detail_max_variant_matrix_cells <= 0:
+            raise ValueError("detail_max_variant_matrix_cells must be > 0")
         return self
 
     def coerce_url_timeout_seconds(self, value: object) -> float:

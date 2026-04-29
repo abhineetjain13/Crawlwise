@@ -861,6 +861,26 @@ async def test_amazon_adapter_preserves_css_field_output() -> None:
 
 
 @pytest.mark.asyncio
+async def test_amazon_adapter_preserves_currency_code_in_price_text() -> None:
+    result = await AmazonAdapter().extract(
+        "https://www.amazon.com/dp/example",
+        """
+        <html>
+          <body>
+            <span id="productTitle">Widget Prime</span>
+            <span class="a-price"><span class="a-offscreen">USD 19.99</span></span>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    record = result.records[0]
+    assert record["price"] == "USD 19.99"
+    assert record["currency"] == "USD"
+
+
+@pytest.mark.asyncio
 async def test_amazon_adapter_preserves_store_brand_suffix() -> None:
     result = await AmazonAdapter().extract(
         "https://www.amazon.com/dp/example",
@@ -925,6 +945,53 @@ async def test_amazon_adapter_extracts_inline_twister_variants() -> None:
         "color": "Pitch Gray-black",
         "size": "Large",
     }
+
+
+@pytest.mark.asyncio
+async def test_amazon_adapter_extracts_detail_completeness_fields() -> None:
+    result = await AmazonAdapter().extract(
+        "https://www.amazon.com/dp/B08J5F3G18",
+        """
+        <html>
+          <body>
+            <span id="productTitle">EVGA GeForce RTX 3090</span>
+            <span class="a-price"><span class="a-offscreen">$1,499.99</span></span>
+            <a id="bylineInfo">Visit the EVGA Store</a>
+            <div id="availability"><span>In Stock.</span></div>
+            <div id="wayfinding-breadcrumbs_feature_div"><ul><li>Computer Graphics Cards</li></ul></div>
+            <img id="landingImage" data-old-hires="https://m.media-amazon.com/images/I/71tLsSyLUZL._SX700_.jpg">
+            <div id="altImages">
+              <img src="https://m.media-amazon.com/images/I/71tLsSyLUZL._SX700_.jpg">
+              <img src="https://m.media-amazon.com/images/I/71tLsSyLUZL._SX900_.jpg">
+            </div>
+            <div id="feature-bullets">
+              <ul>
+                <li><span class="a-list-item">24GB GDDR6X memory</span></li>
+                <li><span class="a-list-item">Triple-fan cooling</span></li>
+              </ul>
+            </div>
+            <div id="productDescription"><p>Flagship graphics card for 4K gaming.</p></div>
+            <table id="productDetails_techSpec_section_1">
+              <tr><th>ASIN</th><td>B08J5F3G18</td></tr>
+              <tr><th>Item model number</th><td>24G-P5-3987-KR</td></tr>
+              <tr><th>UPC</th><td>843368067763</td></tr>
+            </table>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    record = result.records[0]
+    assert record["sku"] == "B08J5F3G18"
+    assert record["product_id"] == "B08J5F3G18"
+    assert record["part_number"] == "24G-P5-3987-KR"
+    assert record["barcode"] == "843368067763"
+    assert record["currency"] == "USD"
+    assert record["availability"] == "In Stock."
+    assert record["product_type"] == "Computer Graphics Cards"
+    assert record["features"] == ["24GB GDDR6X memory", "Triple-fan cooling"]
+    assert record["additional_images"] == ["https://m.media-amazon.com/images/I/71tLsSyLUZL._SX900_.jpg"]
 
 
 @pytest.mark.asyncio
@@ -1093,6 +1160,8 @@ async def test_nike_adapter_maps_preloaded_state_product() -> None:
     record = result.records[0]
     assert record["title"] == "Nike Pro Training Men's Dri-FIT Short-Sleeve Top"
     assert record["brand"] == "Nike"
+    assert record["price"] == "1996"
+    assert record["original_price"] == "2495"
     assert record["color"] == "Green"
     assert record["size"] == "S"
     assert record["variant_axes"] == {"size": ["XXS", "S"]}
@@ -1166,6 +1235,129 @@ async def test_nike_detail_extraction_uses_adapter_and_rejects_shell_json_ld() -
     assert "Bill Bowerman" not in record.values()
     assert "background" not in record["variant_axes"]
     assert "text" not in record["variant_axes"]
+
+
+@pytest.mark.asyncio
+async def test_nike_adapter_maps_next_data_selected_product_payload() -> None:
+    result = await NikeAdapter().extract(
+        "https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111",
+        """
+        <html>
+          <body>
+            <script id="__NEXT_DATA__" type="application/json">
+            {
+              "props": {
+                "pageProps": {
+                  "colorwayImages": [
+                    {
+                      "portraitImg": "https://static.nike.com/af1-main.jpg",
+                      "squarishImg": "https://static.nike.com/af1-alt.jpg"
+                    }
+                  ],
+                  "selectedProduct": {
+                    "id": "13071857",
+                    "styleCode": "CW2288",
+                    "styleColor": "CW2288-111",
+                    "colorDescription": "White/White",
+                    "prices": {
+                      "currency": "USD",
+                      "currentPrice": 115,
+                      "initialPrice": 115
+                    },
+                    "productInfo": {
+                      "title": "Nike Air Force 1 '07",
+                      "subtitle": "Men's Shoes",
+                      "productDescription": "Comfortable, durable and timeless.",
+                      "path": "/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111",
+                      "featuresAndBenefits": [
+                        {"body": "<ul><li>Padded collar</li></ul>"}
+                      ]
+                    },
+                    "sizes": [
+                      {
+                        "label": "6",
+                        "status": "ACTIVE",
+                        "merchSkuId": "sku-6",
+                        "gtins": [{"gtin": "00194500874886"}]
+                      },
+                      {
+                        "label": "7",
+                        "status": "OOS",
+                        "merchSkuId": "sku-7",
+                        "gtins": [{"gtin": "00194500874909"}]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    record = result.records[0]
+    assert record["title"] == "Nike Air Force 1 '07 Men's Shoes"
+    assert record["sku"] == "CW2288-111"
+    assert record["price"] == "115"
+    assert record["currency"] == "USD"
+    assert record["image_url"] == "https://static.nike.com/af1-main.jpg"
+    assert record["additional_images"] == ["https://static.nike.com/af1-alt.jpg"]
+    assert record["variant_axes"] == {"size": ["6", "7"]}
+    assert record["variants"][0]["barcode"] == "00194500874886"
+    assert record["variants"][0]["price"] == "115"
+    assert record["variants"][1]["availability"] == "out_of_stock"
+
+
+@pytest.mark.asyncio
+async def test_nike_adapter_maps_nested_next_data_price_objects() -> None:
+    result = await NikeAdapter().extract(
+        "https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111",
+        """
+        <html>
+          <body>
+            <script id="__NEXT_DATA__" type="application/json">
+            {
+              "props": {
+                "pageProps": {
+                  "selectedProduct": {
+                    "id": "13071857",
+                    "styleColor": "CW2288-111",
+                    "colorDescription": "White/White",
+                    "prices": {
+                      "currentPrice": {"value": 115},
+                      "initialPrice": {"value": 130}
+                    },
+                    "productInfo": {
+                      "title": "Nike Air Force 1 '07",
+                      "subtitle": "Men's Shoes",
+                      "path": "/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111"
+                    },
+                    "sizes": [
+                      {
+                        "label": "6",
+                        "status": "ACTIVE",
+                        "merchSkuId": "sku-6"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    record = result.records[0]
+    assert record["price"] == "115"
+    assert record["original_price"] == "130"
+    assert record["variants"][0]["price"] == "115"
+    assert record["variants"][0]["original_price"] == "130"
 
 
 @pytest.mark.asyncio

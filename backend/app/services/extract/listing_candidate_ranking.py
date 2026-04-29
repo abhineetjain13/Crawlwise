@@ -204,7 +204,7 @@ def _listing_record_quality_metrics(
     url = str(record.get("url") or "").strip()
     is_job_surface = str(surface or "").startswith("job_")
     detail_like = bool(detail_like_url(url)) if url and detail_like_url is not None else False
-    utility = _looks_like_utility_record(title=title, url=url)
+    utility = looks_like_utility_record(title=title, url=url)
     supported = _record_has_supporting_signals(
         record,
         detail_like=detail_like,
@@ -359,11 +359,6 @@ def title_contains_token_phrase(title: str, token: str) -> bool:
         return False
     pattern = rf"(^|[^a-z0-9]){re.escape(normalized_token)}([^a-z0-9]|$)"
     return re.search(pattern, normalized_title) is not None
-
-
-# Backward-compatible private alias for in-module callers.
-_looks_like_utility_record = looks_like_utility_record
-
 
 def _unsupported_non_detail_ecommerce_merchandise_hint(*, title: str, url: str) -> bool:
     normalized_title = " ".join(str(title or "").strip().lower().split())

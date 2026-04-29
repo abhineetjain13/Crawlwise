@@ -11,7 +11,12 @@ import pytest
 from patchright.async_api import Error as PlaywrightError
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from app.services.acquisition import browser_capture, browser_detail, browser_recovery
+from app.services.acquisition import (
+    browser_capture,
+    browser_detail,
+    browser_recovery,
+    dom_runtime,
+)
 from app.services.acquisition.browser_capture import BrowserNetworkCapture
 from app.services.acquisition import browser_page_flow, browser_readiness, browser_runtime
 from app.services.acquisition.traversal import TraversalResult
@@ -43,6 +48,187 @@ def test_select_primary_browser_html_prefers_full_rendered_when_traversal_fragme
     assert "products/b" in html
 
 
+def test_location_interstitial_diagnostics_marks_location_required() -> None:
+    html = """
+    <html><body>
+      <div role="dialog" class="location-modal"><h2>Choose your location</h2><button>Continue</button></div>
+    </body></html>
+    """
+    assert browser_page_flow.location_interstitial_detected(html) is True
+
+    diagnostics = browser_page_flow.build_browser_diagnostics(
+        browser_reason="http-escalation",
+        browser_outcome="location_required",
+        navigation_strategy="domcontentloaded",
+        response_missing=False,
+        networkidle_timed_out=False,
+        networkidle_skip_reason=None,
+        readiness_policy={},
+        phase_timings_ms={},
+        html_bytes=len(html.encode("utf-8")),
+        challenge_evidence=[],
+        blocked_classification=SimpleNamespace(
+            provider_hits=[],
+            challenge_element_hits=[],
+        ),
+        low_content_reason=None,
+        readiness_probes=[],
+        capture_summary=SimpleNamespace(
+            network_payload_count=0,
+            malformed_network_payloads=0,
+            network_payload_read_failures=0,
+            network_payload_read_timeouts=0,
+            closed_network_payloads=0,
+            skipped_oversized_network_payloads=0,
+            dropped_payload_events=0,
+        ),
+        readiness_diagnostics={},
+        expansion_diagnostics={},
+        listing_recovery_diagnostics={},
+        listing_artifact_diagnostics={},
+        interstitial_diagnostics={"location_required": True},
+        traversal_result=None,
+    )
+
+    assert diagnostics["browser_outcome"] == "location_required"
+    assert diagnostics["failure_reason"] == "location_required"
+    assert diagnostics["interstitial"]["location_required"] is True
+
+
+def test_location_interstitial_detects_text_only_fallback() -> None:
+    html = """
+    <html><body>
+      <section>
+        <h2>Choose your location</h2>
+        <p>Enter zip code to deliver to your area.</p>
+      </section>
+    </body></html>
+    """
+
+    assert browser_page_flow.location_interstitial_detected(html) is True
+
+
+@pytest.mark.asyncio
+async def test_location_interstitial_dismisses_by_safe_text_token() -> None:
+    class _MissingLocator:
+        async def count(self) -> int:
+            return 0
+
+        @property
+        def first(self):
+            return self
+
+    class _Page:
+        url = "https://www.newbalance.com/pd/574-core/ML574V3-40377.html"
+
+        def __init__(self) -> None:
+            self.waited = False
+
+        def locator(self, selector: str):
+            del selector
+            return _MissingLocator()
+
+        async def evaluate(self, script: str, payload: dict[str, object]):
+            del script
+            assert "Continue" in payload["tokens"]
+            return {"status": "dismissed", "selector": "text:continue"}
+
+        async def content(self) -> str:
+            return "<html><body></body></html>"
+
+        async def wait_for_timeout(self, timeout_ms: int) -> None:
+            del timeout_ms
+            self.waited = True
+
+    page = _Page()
+
+    result = await browser_page_flow.dismiss_safe_location_interstitial(page)
+
+    assert result == {"status": "dismissed", "selector": "text:continue"}
+    assert page.waited is True
+
+
+@pytest.mark.asyncio
+async def test_location_interstitial_dismissal_counts_before_first_locator() -> None:
+    class _FirstLocator:
+        async def wait_for(self, **_kwargs) -> None:
+            return None
+
+        async def click(self, **_kwargs) -> None:
+            return None
+
+    class _Locator:
+        @property
+        def first(self):
+            return _FirstLocator()
+
+        async def count(self) -> int:
+            return 1
+
+    class _Page:
+        url = "https://example.com/products/widget"
+
+        def __init__(self) -> None:
+            self.waited = False
+
+        def locator(self, _selector: str):
+            return _Locator()
+
+        async def content(self) -> str:
+            return "<html><body></body></html>"
+
+        async def wait_for_timeout(self, _timeout_ms: int) -> None:
+            self.waited = True
+
+    result = await browser_page_flow.dismiss_safe_location_interstitial(_Page())
+
+    assert result["status"] == "dismissed"
+
+
+@pytest.mark.asyncio
+async def test_location_interstitial_dismissal_requires_modal_to_clear() -> None:
+    html = (
+        "<html><body><div role='dialog'>"
+        "<h2>Choose your location</h2><button>Continue</button>"
+        "</div></body></html>"
+    )
+
+    class _FirstLocator:
+        async def wait_for(self, **_kwargs) -> None:
+            return None
+
+        async def click(self, **_kwargs) -> None:
+            return None
+
+    class _Locator:
+        @property
+        def first(self):
+            return _FirstLocator()
+
+        async def count(self) -> int:
+            return 1
+
+    class _Page:
+        url = "https://example.com/products/widget"
+
+        def locator(self, _selector: str):
+            return _Locator()
+
+        async def wait_for_timeout(self, _timeout_ms: int) -> None:
+            return None
+
+        async def content(self) -> str:
+            return html
+
+        async def evaluate(self, _script: str, _payload: dict[str, object]):
+            return {"status": "not_found"}
+
+    result = await browser_page_flow.dismiss_safe_location_interstitial(_Page())
+
+    assert result["status"] == "still_present"
+    assert str(result.get("selector") or "")
+
+
 @dataclass
 class _FakeHandle:
     label: str
@@ -50,10 +236,23 @@ class _FakeHandle:
     attributes: dict[str, str]
     tag_name: str = "button"
     actionable: bool = True
+    inside_main: bool = False
+    inside_header: bool = False
+    inside_nav: bool = False
+    inside_footer: bool = False
+    inside_aside: bool = False
 
     async def evaluate(self, script: str) -> str | dict[str, bool] | None:
         if "pieces" in script:
             return self.label
+        if "insideMain" in script:
+            return {
+                "insideMain": self.inside_main,
+                "insideHeader": self.inside_header,
+                "insideNav": self.inside_nav,
+                "insideFooter": self.inside_footer,
+                "insideAside": self.inside_aside,
+            }
         if "tagName" in script:
             return self.tag_name
         if "getBoundingClientRect" in script:
@@ -104,6 +303,11 @@ class _FakeLocator:
                     attributes=attributes,
                     tag_name=tag_name,
                     actionable=bool(row.get("actionable", True)),
+                    inside_main=bool(row.get("inside_main", False)),
+                    inside_header=bool(row.get("inside_header", False)),
+                    inside_nav=bool(row.get("inside_nav", False)),
+                    inside_footer=bool(row.get("inside_footer", False)),
+                    inside_aside=bool(row.get("inside_aside", False)),
                 )
             )
         return handles
@@ -230,6 +434,18 @@ class _FakePageContext:
         warm_page = _FakeExpansionPage(base_html=self._page.base_html)
         self._page.spawned_pages.append(warm_page)
         return warm_page
+
+    def on(self, event_name: str, callback: Any) -> None:
+        self._page.listeners.setdefault(f"context:{event_name}", []).append(callback)
+
+    def remove_listener(self, event_name: str, callback: Any) -> None:
+        key = f"context:{event_name}"
+        listeners = self._page.listeners.get(key)
+        if not listeners:
+            return
+        self._page.listeners[key] = [
+            listener for listener in listeners if listener is not callback
+        ]
 
 
 class _FakeExpansionPage:
@@ -488,6 +704,53 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
     assert page.goto_calls == ["domcontentloaded"]
     assert page.wait_timeout_calls == []
     assert "networkidle" not in page.load_state_calls
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_closes_unexpected_popup_pages() -> None:
+    popup_page = _FakeExpansionPage(base_html="<html><body>popup</body></html>")
+
+    class _PopupPage(_FakeExpansionPage):
+        async def goto(
+            self,
+            url: str,
+            wait_until: str | None = None,
+            timeout: int | None = None,
+        ) -> Any:
+            response = await super().goto(url, wait_until=wait_until, timeout=timeout)
+            for callback in list(self.listeners.get("context:page", [])):
+                callback(popup_page)
+            await asyncio.sleep(0)
+            return response
+
+    page = _PopupPage(
+        base_html="""
+        <html>
+          <head>
+            <script type="application/ld+json">
+            {"@context":"https://schema.org","@type":"Product","name":"Widget Prime"}
+            </script>
+          </head>
+          <body>
+            <h1>Widget Prime</h1>
+            <p>Price Reviews Product details Shipping</p>
+          </body>
+        </html>
+        """,
+    )
+
+    async def _fake_runtime(**_kwargs):
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert result.browser_diagnostics["browser_outcome"] == "usable_content"
+    assert popup_page.page_close_calls == 1
 
 
 @pytest.mark.asyncio
@@ -1688,6 +1951,42 @@ async def test_expand_detail_content_skips_navigation_anchors_that_match_generic
 
     assert diagnostics["clicked_count"] == 0
     assert page.expanded is False
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_skips_header_controls_outside_main_content() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html><body>
+          <header><button aria-controls='about-panel'>About</button></header>
+          <main><button aria-controls='details-panel'>Details</button></main>
+        </body></html>
+        """,
+        labels=[
+            {
+                "label": "about",
+                "attributes": {"aria-controls": "about-panel"},
+                "tag_name": "button",
+                "inside_header": True,
+            },
+            {
+                "label": "details",
+                "attributes": {"aria-controls": "details-panel"},
+                "tag_name": "button",
+                "inside_main": True,
+            },
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=None,
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["details"]
+    assert page.expanded is True
 
 
 @pytest.mark.asyncio
@@ -2985,6 +3284,125 @@ async def test_recover_browser_challenge_marks_retry_response_without_wrapping()
     assert result.request is retried_response.request
     assert result.name == "retried"
     assert result.browser_navigation_strategy == "domcontentloaded"
+
+
+@pytest.mark.asyncio
+async def test_get_page_html_falls_back_to_outer_html_after_driver_close() -> None:
+    original_attempts = crawler_runtime_settings.browser_error_retry_attempts
+    original_delay = crawler_runtime_settings.browser_error_retry_delay_ms
+    crawler_runtime_settings.browser_error_retry_attempts = 1
+    crawler_runtime_settings.browser_error_retry_delay_ms = 0
+
+    class _Page:
+        def __init__(self) -> None:
+            self.content_calls = 0
+
+        async def content(self) -> str:
+            self.content_calls += 1
+            raise RuntimeError("Page.content: Connection closed while reading from the driver")
+
+        async def evaluate(self, script: str):
+            if "flattenedRoots" in script:
+                return 0
+            return "<html><body><main><h1>Recovered</h1></main></body></html>"
+
+    try:
+        html = await dom_runtime.get_page_html(_Page())
+    finally:
+        crawler_runtime_settings.browser_error_retry_attempts = original_attempts
+        crawler_runtime_settings.browser_error_retry_delay_ms = original_delay
+
+    assert "Recovered" in html
+
+
+@pytest.mark.asyncio
+async def test_get_page_html_outer_html_fallback_preserves_doctype() -> None:
+    original_attempts = crawler_runtime_settings.browser_error_retry_attempts
+    original_delay = crawler_runtime_settings.browser_error_retry_delay_ms
+    crawler_runtime_settings.browser_error_retry_attempts = 0
+    crawler_runtime_settings.browser_error_retry_delay_ms = 0
+
+    class _Page:
+        async def content(self) -> str:
+            raise RuntimeError("Page.content: Connection closed while reading from the driver")
+
+        async def evaluate(self, script: str):
+            if "flattenedRoots" in script:
+                return 0
+            return "<!DOCTYPE html><html><body>Recovered</body></html>"
+
+    try:
+        html = await dom_runtime.get_page_html(_Page())
+    finally:
+        crawler_runtime_settings.browser_error_retry_attempts = original_attempts
+        crawler_runtime_settings.browser_error_retry_delay_ms = original_delay
+
+    assert html.startswith("<!DOCTYPE html>")
+
+
+@pytest.mark.asyncio
+async def test_page_has_location_interstitial_uses_resilient_html_fetch() -> None:
+    original_attempts = crawler_runtime_settings.browser_error_retry_attempts
+    original_delay = crawler_runtime_settings.browser_error_retry_delay_ms
+    crawler_runtime_settings.browser_error_retry_attempts = 0
+    crawler_runtime_settings.browser_error_retry_delay_ms = 0
+
+    class _Page:
+        url = "https://example.com/product"
+
+        async def content(self) -> str:
+            raise RuntimeError("Page.content: Connection closed while reading from the driver")
+
+        async def evaluate(self, script: str):
+            if "flattenedRoots" in script:
+                return 0
+            return (
+                "<html><body>"
+                "<div role='dialog'>Choose your location to continue</div>"
+                "</body></html>"
+            )
+
+    try:
+        detected = await browser_page_flow._page_has_location_interstitial(_Page())
+    finally:
+        crawler_runtime_settings.browser_error_retry_attempts = original_attempts
+        crawler_runtime_settings.browser_error_retry_delay_ms = original_delay
+
+    assert detected is True
+
+
+def test_browser_diagnostics_preserves_existing_retry_reason_and_timings() -> None:
+    diagnostics = browser_runtime.build_browser_diagnostics_contract(
+        diagnostics={
+            "retry_reason": "empty_extraction",
+            "phase_timings_ms": {"navigation": 120},
+        },
+        retry_reason="",
+        phase_timings_ms={"content_serialization": 20},
+    )
+
+    assert diagnostics["retry_reason"] == "empty_extraction"
+    assert diagnostics["phase_timings_ms"] == {
+        "navigation": 120,
+        "content_serialization": 20,
+    }
+
+
+def test_browser_diagnostics_contract_clears_stale_nested_outcome_fields() -> None:
+    diagnostics = browser_runtime.build_browser_diagnostics_contract(
+        diagnostics={
+            "browser_reason": "nested",
+            "browser_outcome": "location_required",
+            "failure_reason": "location_required",
+        },
+        browser_reason="",
+        browser_outcome="",
+        failure_reason="",
+    )
+
+    assert diagnostics["browser_reason"] is None
+    assert diagnostics["browser_outcome"] is None
+    assert diagnostics["failure_reason"] is None
 
 
 @pytest.mark.asyncio

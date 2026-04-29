@@ -168,11 +168,10 @@ async def note_host_hard_block(
         1,
         int(getattr(crawler_runtime_settings, "browser_first_host_block_threshold", 2)),
     )
-    if row.last_block_method != "browser":
-        if row.last_block_vendor:
-            row.browser_first_until = now + _ttl_delta()
-        elif row.hard_block_count >= threshold:
-            row.browser_first_until = now + _ttl_delta()
+    if row.last_block_vendor or row.last_block_status_code in {403, 429}:
+        row.browser_first_until = now + _ttl_delta()
+    elif row.hard_block_count >= threshold:
+        row.browser_first_until = now + _ttl_delta()
     await session.flush()
     return await load_host_protection_policy(normalized, session=session)
 

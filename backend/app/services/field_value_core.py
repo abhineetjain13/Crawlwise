@@ -23,6 +23,7 @@ from app.services.config.extraction_rules import (
     LISTING_WEAK_TITLES,
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
     PAGE_URL_CURRENCY_HINTS_RAW,
+    VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
 )
 from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
 from app.services.config.surface_hints import detail_path_hints
@@ -69,6 +70,11 @@ _CODED_PRICE_RE = re.compile(
 )
 _UNMARKED_PRICE_RE = re.compile(r"\d[\d.,]*")
 _CURRENCY_CODE_RE = re.compile(rf"\b({_CURRENCY_CODE_PATTERN})\b")
+_OPTION_VALUE_SUFFIX_NOISE_RE = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS or ())
+    if str(pattern).strip()
+)
 PERCENT_RE = re.compile(r"\b\d{1,3}(?:\.\d+)?\s?%")
 REVIEW_COUNT_RE = re.compile(r"\b(\d[\d,]*)\s+reviews?\b", re.I)
 RATING_RE = re.compile(r"\b([1-5](?:\.\d)?)\s*(?:/5|out of 5|stars?)\b", re.I)
@@ -113,7 +119,7 @@ LONG_TEXT_FIELDS = {
     "specifications",
     "summary",
 }
-URL_FIELDS = {"apply_url", "company_logo", "image_url", "url"}
+URL_FIELDS = {"apply_url", "canonical_url", "company_logo", "image_url", "url"}
 IMAGE_FIELDS = {"additional_images", "company_logo", "image_url"}
 
 def _object_list(value: object) -> list:
@@ -150,6 +156,10 @@ LISTING_UTILITY_TITLE_REGEXES = tuple(
 )
 _CSS_NOISE_RE = re.compile(str(CSS_NOISE_PATTERN), re.I)
 _LEADING_CSS_BLOCK_RE = re.compile(r"^(?:\s*\.[a-z0-9_-]+\{[^{}]*\})+", re.I)
+_BARE_HOST_URL_RE = re.compile(
+    r"^(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?))+(?:[/:?#][^\s]*)?$",
+    re.I,
+)
 
 
 def clean_text(value: object) -> str:
@@ -277,6 +287,13 @@ def absolute_url(base_url: str, candidate: object) -> str:
     text = clean_text(candidate)
     if not text:
         return ""
+    parsed = urlparse(text)
+    if parsed.scheme:
+        return text
+    if text.startswith(("//", "/", "#", "?", "./", "../")):
+        return urljoin(base_url, text)
+    if _BARE_HOST_URL_RE.fullmatch(text):
+        return f"https://{text}"
     return urljoin(base_url, text)
 
 
@@ -535,6 +552,8 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = re.sub(r"^size\s*:\s*", "", cleaned, flags=re.I)
         cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
         cleaned = clean_text(cleaned)
+        for pattern in _OPTION_VALUE_SUFFIX_NOISE_RE:
+            cleaned = clean_text(pattern.sub("", cleaned))
     return cleaned or None
 
 
@@ -605,6 +624,8 @@ def extract_urls(value: object, page_url: str) -> list[str]:
         text = str(value or "").strip()
         if not text:
             return results
+        if _looks_like_malformed_relative_url_candidate(text):
+            return results
         embedded_urls = re.findall(r"https?://[^\s,]+", text)
         if len(embedded_urls) >= 2:
             for candidate in embedded_urls:
@@ -648,6 +669,18 @@ def _trim_trailing_url_candidate(value: str) -> str:
             break
         trimmed = trimmed[:-1].rstrip(".,:;!?}'\"")
     return trimmed
+
+
+def _looks_like_malformed_relative_url_candidate(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if urlparse(text).scheme or text.startswith(("//", "/", "#", "?", "./", "../")):
+        return False
+    head = text.split("/", 1)[0].lower()
+    if head.startswith("r0lgodlh"):
+        return True
+    return any(token in head for token in ("g_auto", "f_auto", "q_auto", "c_fill"))
 
 
 def coerce_variant_axes(value: object) -> dict[str, list[str]] | None:

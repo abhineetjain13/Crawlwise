@@ -37,6 +37,7 @@ from app.services.acquisition.host_protection_memory import (
     note_host_usable_fetch,
 )
 from app.services.acquisition.cookie_store import clear_cookie_store_cache
+from app.services.acquisition.cookie_store import export_cookie_header_for_domain
 from app.services.acquisition.http_client import (
     close_shared_http_client as close_adapter_shared_http_client,
 )
@@ -189,8 +190,14 @@ async def _curl_fetch(
     timeout_seconds: float,
     *,
     proxy: str | None = None,
+    cookie_header: str | None = None,
 ) -> PageFetchResult:
-    return await curl_fetch(url, timeout_seconds, proxy=proxy)
+    return await curl_fetch(
+        url,
+        timeout_seconds,
+        proxy=proxy,
+        cookie_header=cookie_header,
+    )
 
 
 async def _browser_fetch(
@@ -362,6 +369,16 @@ async def fetch_page(
         host_preference_enabled=host_preference_enabled,
     )
     if browser_first:
+        handoff_result = await _try_browser_http_handoff(
+            context,
+            host_policy=learned_host_policy,
+        )
+        if handoff_result is not None:
+            await _update_host_result_memory(
+                context,
+                result=handoff_result,
+            )
+            return handoff_result
         resolved_browser_reason = _resolve_browser_reason(
             browser_reason=browser_reason,
             requires_browser=bool(context.runtime_policy.get("requires_browser")),
@@ -407,7 +424,7 @@ async def fetch_page(
                 proxies=context.proxies,
                 host_policy=browser_host_policy,
             )
-        except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
+        except Exception as exc:
             _attach_exception_browser_diagnostics(
                 context.last_error,
                 context.last_browser_attempt_diagnostics,
@@ -633,7 +650,7 @@ async def _run_browser_attempts(
                         continue
                     break
                 return result
-            except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
+            except Exception as exc:
                 last_browser_error = exc
                 context.last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
                     browser_reason=reason,
@@ -712,6 +729,80 @@ async def _run_http_fetch_chain_with_fetcher(
         if result is not None:
             return result, vendor_block_confirmed
     return None, vendor_block_confirmed
+
+
+async def _try_browser_http_handoff(
+    context: _FetchRuntimeContext,
+    *,
+    host_policy: HostProtectionPolicy,
+) -> PageFetchResult | None:
+    if not bool(crawler_runtime_settings.browser_http_handoff_enabled):
+        return None
+    if _hard_browser_requirement(context=context):
+        return None
+    if context.fetch_mode == "browser_only":
+        return None
+    if not (
+        host_policy.prefer_browser
+        or host_policy.patchright_success
+        or host_policy.real_chrome_success
+    ):
+        return None
+    engines = _handoff_cookie_engines(host_policy)
+    for proxy in context.proxies:
+        if proxy is not None:
+            continue
+        for engine in engines:
+            cookie_header = await export_cookie_header_for_domain(
+                context.url,
+                browser_engine=engine,
+            )
+            if not cookie_header:
+                continue
+            result = await _curl_fetch(
+                context.url,
+                context.resolved_timeout,
+                proxy=proxy,
+                cookie_header=cookie_header,
+            )
+            result.browser_diagnostics = {
+                **dict(result.browser_diagnostics or {}),
+                "browser_http_handoff": True,
+                "handoff_cookie_engine": engine,
+                "proxy_url_redacted": _display_proxy(proxy),
+                "proxy_scheme": _proxy_scheme(proxy),
+            }
+            if not bool(result.blocked) and not await _should_escalate_to_browser_async(
+                result,
+                surface=context.surface,
+                runtime_policy=resolve_platform_runtime_policy(
+                    result.final_url or result.url,
+                    result.html,
+                    surface=context.surface,
+                ),
+            ):
+                return result
+            await apply_protected_host_backoff(result.final_url or result.url or context.url)
+            context.last_browser_attempt_diagnostics = dict(result.browser_diagnostics)
+            return None
+    return None
+
+
+def _handoff_cookie_engines(host_policy: HostProtectionPolicy) -> tuple[str, ...]:
+    configured = tuple(
+        str(engine or "").strip().lower()
+        for engine in tuple(crawler_runtime_settings.browser_http_handoff_cookie_engines or ())
+        if str(engine or "").strip()
+    )
+    preferred: list[str] = []
+    if host_policy.real_chrome_success:
+        preferred.append("real_chrome")
+    if host_policy.patchright_success:
+        preferred.append("patchright")
+    for engine in configured:
+        if engine in {"real_chrome", "patchright"} and engine not in preferred:
+            preferred.append(engine)
+    return tuple(preferred)
 
 
 def _select_http_fetcher(context: _FetchRuntimeContext):

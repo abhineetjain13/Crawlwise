@@ -47,7 +47,11 @@ def map_network_payloads_to_fields(
             continue
         if surface_specs:
             mapped = _map_payload_body(body, surface_specs=surface_specs)
-            if mapped:
+            if mapped and _mapped_detail_result_matches_page(
+                mapped,
+                surface=normalized_surface,
+                page_url=page_url,
+            ):
                 rows.append(mapped)
                 continue
         ghost_mapped = _ghost_route_payload(
@@ -56,7 +60,11 @@ def map_network_payloads_to_fields(
             page_url=page_url,
             requested_fields=requested_fields,
         )
-        if ghost_mapped:
+        if ghost_mapped and _mapped_detail_result_matches_page(
+            ghost_mapped,
+            surface=normalized_surface,
+            page_url=page_url,
+        ):
             rows.append(ghost_mapped)
     return rows
 
@@ -433,6 +441,20 @@ def _finalize_detail_result(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _mapped_detail_result_matches_page(
+    result: dict[str, Any],
+    *,
+    surface: str,
+    page_url: str,
+) -> bool:
+    if str(surface or "").strip().lower() != "ecommerce_detail":
+        return True
+    candidate_url = result.get("url")
+    if candidate_url in (None, "", [], {}):
+        return True
+    return _detail_url_matches_page(candidate_url, page_url)
+
+
 def _detail_url_matches_page(candidate_url: object, page_url: str) -> bool:
     candidate = str(candidate_url or "").strip()
     if not candidate:
@@ -462,4 +484,8 @@ def _detail_url_matches_page(candidate_url: object, page_url: str) -> bool:
     if not candidate_tokens or not page_tokens:
         return False
     overlap = candidate_tokens & page_tokens
+    if not overlap:
+        return False
+    if not any(len(token) >= 4 or any(char.isdigit() for char in token) for token in overlap):
+        return False
     return len(overlap) >= min(2, len(candidate_tokens))

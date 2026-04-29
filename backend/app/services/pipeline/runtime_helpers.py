@@ -81,6 +81,7 @@ def suppress_empty_downstream_record_logs(
 def screenshot_required(browser_outcome: str) -> bool:
     return browser_outcome in {
         "challenge_page",
+        "location_required",
         "low_content_shell",
         "navigation_failed",
         "traversal_failed",

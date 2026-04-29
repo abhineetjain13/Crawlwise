@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from datetime import UTC, datetime
 
+from app.core.database import SessionLocal
 from app.models.crawl import CrawlRun
 from app.services.crawl_state import (
     CONTROL_REQUEST_KILL,
@@ -85,11 +87,134 @@ def _url_timeout_seconds(settings_view) -> float:
     return crawler_runtime_settings.default_url_process_timeout_seconds()
 
 
+def _url_failure_metrics(exc: BaseException) -> dict[str, object]:
+    metrics: dict[str, object] = {"error": f"{type(exc).__name__}: {exc}"}
+    browser_diagnostics = getattr(exc, "browser_diagnostics", None)
+    if not isinstance(browser_diagnostics, dict):
+        return metrics
+    diagnostics = dict(browser_diagnostics)
+    metrics["browser_diagnostics"] = diagnostics
+    failure_reason = str(diagnostics.get("failure_reason") or "").strip()
+    if failure_reason:
+        metrics["failure_reason"] = failure_reason
+    browser_outcome = str(diagnostics.get("browser_outcome") or "").strip()
+    if browser_outcome:
+        metrics["browser_outcome"] = browser_outcome
+    if diagnostics.get("browser_attempted") is not None:
+        metrics["browser_attempted"] = bool(diagnostics.get("browser_attempted"))
+    return metrics
+
+
+async def _rollback_url_session(session: AsyncSession, *, context: str) -> bool:
+    try:
+        await session.rollback()
+        session.expire_all()
+        return True
+    except Exception:
+        logger.debug("Session rollback failed during %s", context, exc_info=True)
+        return False
+
+
+async def _recover_url_failure(
+    session: AsyncSession,
+    *,
+    run: CrawlRun | None = None,
+    run_id: int,
+    url: str,
+    exc: BaseException,
+    log_message: str,
+) -> tuple[CrawlRun, URLProcessingResult]:
+    await _rollback_url_session(session, context="URL failure recovery")
+    if run is not None:
+        with suppress(Exception):
+            session.expire(run)
+        with suppress(Exception):
+            await session.refresh(run)
+    recovery_error: Exception | None = None
+    try:
+        run = await _persist_url_failure_log(
+            session,
+            run_id=run_id,
+            url=url,
+            exc=exc,
+            log_message=log_message,
+        )
+    except Exception as original_session_error:
+        recovery_error = original_session_error
+        logger.debug(
+            "Original session unusable for URL failure recovery; falling back to SessionLocal",
+            exc_info=True,
+        )
+        await _rollback_url_session(session, context="before URL recovery fallback")
+        try:
+            async with SessionLocal() as recovery:
+                await _persist_url_failure_log(
+                    recovery,
+                    run_id=run_id,
+                    url=url,
+                    exc=exc,
+                    log_message=log_message,
+                )
+        except Exception as fallback_error:
+            recovery_error = fallback_error
+            logger.exception(
+                "Failed to persist URL failure log for run=%s url=%s",
+                run_id,
+                url,
+            )
+        await _rollback_url_session(session, context="after URL recovery fallback")
+        try:
+            reloaded_run = await session.get(CrawlRun, run_id, populate_existing=True)
+        except Exception as reload_error:
+            logger.debug(
+                "Failed to reload run after URL failure recovery; keeping current instance",
+                exc_info=True,
+            )
+            if run is None:
+                raise RuntimeError(
+                    f"Original session unusable after URL failure recovery for run {run_id}"
+                ) from reload_error
+        else:
+            if reloaded_run is not None:
+                run = reloaded_run
+    if run is None:
+        raise RuntimeError(f"Run {run_id} disappeared after URL failure") from exc
+    metrics = _url_failure_metrics(exc)
+    if recovery_error is not None:
+        metrics["failure_log_persistence_error"] = (
+            f"{type(recovery_error).__name__}: {recovery_error}"
+        )
+        metrics["failure_log_persisted"] = False
+    return run, URLProcessingResult(
+        records=[],
+        verdict=VERDICT_ERROR,
+        url_metrics=metrics,
+    )
+
+
+async def _persist_url_failure_log(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    url: str,
+    exc: BaseException,
+    log_message: str,
+) -> CrawlRun:
+    run = await session.get(CrawlRun, run_id, populate_existing=True)
+    if run is None:
+        raise RuntimeError(f"Run {run_id} disappeared after URL failure") from exc
+    logger.warning("URL processing failed for run=%s url=%s", run_id, url, exc_info=True)
+    await log_event(session, run.id, "warning", log_message)
+    await session.commit()
+    return run
+
+
 async def process_run(session: AsyncSession, run_id: int) -> None:
     try:
-        run = await session.get(CrawlRun, run_id)
+        run = await session.get(CrawlRun, run_id, populate_existing=True)
         if run is None or run.status_value in TERMINAL_STATUSES:
             return
+        await session.refresh(run)
         if run.status_value == CrawlStatus.PAUSED:
             return
         if run.status_value == CrawlStatus.PENDING:
@@ -176,46 +301,45 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                         timeout=url_timeout_seconds,
                     )
                 )
-            except TimeoutError:
+            except TimeoutError as exc:
                 logger.warning("URL processing timed out for run=%s url=%s", run.id, url)
-                await log_event(
+                run, url_result = await _recover_url_failure(
                     session,
-                    run.id,
-                    "warning",
-                    f"URL processing timed out for {url} (timeout_seconds={url_timeout_seconds})",
+                    run=run,
+                    run_id=run.id,
+                    url=url,
+                    exc=exc,
+                    log_message=(
+                        f"URL processing timed out for {url} "
+                        f"(timeout_seconds={url_timeout_seconds})"
+                    ),
                 )
-                url_result = URLProcessingResult(
-                    records=[],
-                    verdict=VERDICT_ERROR,
-                    url_metrics={
-                        "error": f"TimeoutError: url exceeded timeout_seconds={url_timeout_seconds}",
-                    },
+                url_result.url_metrics["error"] = (
+                    f"TimeoutError: url exceeded timeout_seconds={url_timeout_seconds}"
                 )
-            except SQLAlchemyError:
-                logger.exception(
-                    "URL processing hit database error for run=%s url=%s",
-                    run.id,
-                    url,
-                )
-                raise
-            except (RuntimeError, ValueError, TypeError, OSError) as exc:
-                logger.warning("URL processing failed for run=%s url=%s", run.id, url, exc_info=True)
-                await log_event(
+            except SQLAlchemyError as exc:
+                run, url_result = await _recover_url_failure(
                     session,
-                    run.id,
-                    "warning",
-                    f"URL processing failed for {url}: {type(exc).__name__}: {exc}",
+                    run=run,
+                    run_id=run.id,
+                    url=url,
+                    exc=exc,
+                    log_message=(
+                        f"URL processing failed for {url}: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
                 )
-                url_metrics: dict[str, object] = {
-                    "error": f"{type(exc).__name__}: {exc}"
-                }
-                browser_diagnostics = getattr(exc, "browser_diagnostics", None)
-                if isinstance(browser_diagnostics, dict):
-                    url_metrics["browser_diagnostics"] = dict(browser_diagnostics)
-                url_result = URLProcessingResult(
-                    records=[],
-                    verdict=VERDICT_ERROR,
-                    url_metrics=url_metrics,
+            except Exception as exc:
+                run, url_result = await _recover_url_failure(
+                    session,
+                    run=run,
+                    run_id=run.id,
+                    url=url,
+                    exc=exc,
+                    log_message=(
+                        f"URL processing failed for {url}: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
                 )
 
             verdicts.append(str(url_result.verdict or VERDICT_ERROR))
@@ -269,4 +393,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         )
         await session.commit()
     except (RuntimeError, ValueError, TypeError, SQLAlchemyError) as exc:
+        logger.exception("Run-level failure for run=%s", run_id)
+        await _rollback_url_session(session, context="run failure marking")
         await _mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")

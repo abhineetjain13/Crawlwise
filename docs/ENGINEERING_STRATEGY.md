@@ -143,6 +143,13 @@ Writing a new function, class, or module without first confirming no existing im
 
 **Fix:** Always run `grep -r "function_name_or_concept" backend/app` before writing new code. If a similar function exists, extend it. If it is too complex to extend safely, the complexity is the real bug — fix that first.
 
+### AP-16: Detail expansion clicks site chrome
+Allowing generic detail-expansion probes to click header/nav/footer controls, marketing promos, or app-assistant entry points during a PDP fetch.
+
+**Violation looks like:** A requested product URL finishes on `about`, `AI`, `wishlist`, `homecare`, or other utility/marketing content because the expansion pass clicked outside main content. Browser diagnostics show `usable_content`, but extraction returns shell metadata or a wrong-page identity.
+
+**Fix:** Expansion candidates must prefer in-page/main-content controls. Skip header/nav/footer chrome and real navigation links unless they are proven in-page expanders for the requested detail content.
+
 ---
 
 ## Agent Behavior

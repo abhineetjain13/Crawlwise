@@ -6,6 +6,7 @@ import json
 import time
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.core.database import SessionLocal
 from app.core.config import settings
@@ -167,6 +168,25 @@ async def load_storage_state_for_domain(
             continue
         return _clone_storage_state(normalized_state)
     return None
+
+
+async def export_cookie_header_for_domain(
+    url: str | None,
+    *,
+    browser_engine: str | None = None,
+    session: AsyncSession | None = None,
+) -> str | None:
+    state = await load_storage_state_for_domain(
+        url,
+        browser_engine=browser_engine,
+        session=session,
+    )
+    if not state:
+        return None
+    cookie_pairs = _http_cookie_pairs_for_url(url, state)
+    if not cookie_pairs:
+        return None
+    return "; ".join(f"{name}={value}" for name, value in cookie_pairs)
 
 
 async def persist_storage_state_for_run(
@@ -473,7 +493,7 @@ def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
 
 def _normalize_cookies(value: object) -> list[dict[str, object]]:
     now = time.time()
-    cookies: list[dict[str, object]] = []
+    cookies_by_key: dict[tuple[str, str, str], dict[str, object]] = {}
     rows = (
         list(value)
         if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, Mapping))
@@ -487,7 +507,7 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
             raw_value = item.get(field_name)
             if raw_value in (None, ""):
                 continue
-            cookie[field_name] = raw_value
+            cookie[field_name] = _sanitize_storage_state_scalar(raw_value)
         if not cookie.get("name") or not cookie.get("value"):
             continue
         # Do not learn challenge-state cookies as reusable domain memory.
@@ -496,8 +516,13 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
         expires = cookie.get("expires")
         if isinstance(expires, (int, float)) and float(expires) > 0 and float(expires) <= now:
             continue
-        cookies.append(cookie)
-    return cookies
+        key = (
+            str(cookie.get("name") or "").strip().lower(),
+            str(cookie.get("domain") or cookie.get("url") or "").strip().lower(),
+            str(cookie.get("path") or "/").strip() or "/",
+        )
+        cookies_by_key[key] = cookie
+    return list(cookies_by_key.values())
 
 
 def _normalized_browser_engine(value: object) -> str | None:
@@ -566,7 +591,7 @@ def _normalize_origins(value: object) -> list[dict[str, object]]:
     for item in rows:
         if not isinstance(item, Mapping):
             continue
-        origin = str(item.get("origin") or "").strip()
+        origin = str(_sanitize_storage_state_scalar(item.get("origin")) or "").strip()
         if not origin:
             continue
         local_storage_rows: list[dict[str, str]] = []
@@ -580,7 +605,7 @@ def _normalize_origins(value: object) -> list[dict[str, object]]:
         for entry in entries:
             if not isinstance(entry, Mapping):
                 continue
-            name = str(entry.get("name") or "").strip()
+            name = str(_sanitize_storage_state_scalar(entry.get("name")) or "").strip()
             if not name:
                 continue
             # Do not replay anti-bot localStorage across future runs.
@@ -589,11 +614,17 @@ def _normalize_origins(value: object) -> list[dict[str, object]]:
             local_storage_rows.append(
                 {
                     "name": name,
-                    "value": str(entry.get("value") or ""),
+                    "value": str(_sanitize_storage_state_scalar(entry.get("value")) or ""),
                 }
             )
         origins.append({"origin": origin, "localStorage": local_storage_rows})
     return origins
+
+
+def _sanitize_storage_state_scalar(value: object) -> object:
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    return value
 
 
 def _cookie_name_is_challenge_state(value: object) -> bool:
@@ -655,3 +686,74 @@ def _clone_storage_state(
             if isinstance(origin, Mapping)
         ],
     }
+
+
+def _http_cookie_pairs_for_url(
+    url: str | None,
+    storage_state: Mapping[str, object],
+) -> list[tuple[str, str]]:
+    host = _cookie_target_host(url)
+    path = _cookie_target_path(url)
+    candidates: list[tuple[int, int, str, str]] = []
+    for cookie in _object_list(storage_state.get("cookies")):
+        if not isinstance(cookie, Mapping):
+            continue
+        name = str(cookie.get("name") or "").strip()
+        value = str(cookie.get("value") or "").strip()
+        if not name or value == "":
+            continue
+        domain = str(cookie.get("domain") or "").strip().lower()
+        cookie_path = str(cookie.get("path") or "/").strip() or "/"
+        if host and domain and not _cookie_domain_matches(host, domain):
+            continue
+        if path and not _cookie_path_matches(path, cookie_path):
+            continue
+        domain_score = len(domain.lstrip("."))
+        path_score = len(cookie_path)
+        candidates.append((domain_score, path_score, name, value))
+    selected: dict[str, tuple[int, int, str, str]] = {}
+    for domain_score, path_score, name, value in candidates:
+        key = name.lower()
+        existing = selected.get(key)
+        if existing is None or (domain_score, path_score) >= (
+            existing[0],
+            existing[1],
+        ):
+            selected[key] = (domain_score, path_score, name, value)
+    return [
+        (name, value)
+        for _key, (_domain_score, _path_score, name, value) in selected.items()
+    ]
+
+
+def _cookie_target_host(url: str | None) -> str:
+    normalized = str(url or "").strip()
+    if not normalized:
+        return ""
+    parsed = urlparse(normalized if "://" in normalized else f"//{normalized}")
+    return str(parsed.hostname or "").strip().lower()
+
+
+def _cookie_target_path(url: str | None) -> str:
+    normalized = str(url or "").strip()
+    if not normalized:
+        return "/"
+    parsed = urlparse(normalized if "://" in normalized else f"//{normalized}")
+    return str(parsed.path or "/").strip() or "/"
+
+
+def _cookie_domain_matches(host: str, domain: str) -> bool:
+    normalized_domain = domain.lstrip(".")
+    return host == normalized_domain or host.endswith(f".{normalized_domain}")
+
+
+def _cookie_path_matches(request_path: str, cookie_path: str) -> bool:
+    normalized_request_path = str(request_path or "/").strip() or "/"
+    normalized_cookie_path = str(cookie_path or "/").strip() or "/"
+    if normalized_request_path == normalized_cookie_path:
+        return True
+    if not normalized_request_path.startswith(normalized_cookie_path):
+        return False
+    return normalized_cookie_path.endswith("/") or normalized_request_path[
+        len(normalized_cookie_path) : len(normalized_cookie_path) + 1
+    ] == "/"

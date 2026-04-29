@@ -196,6 +196,7 @@ async def persist_extracted_records(
             raw_record,
             surface=run.surface,
             page_url=preliminary_source_url,
+            requested_fields=list(run.requested_fields or []),
         )
         if not data:
             continue
