@@ -115,7 +115,6 @@ class Socks5AuthBridge:
         task = asyncio.current_task()
         if task is not None:
             self._tasks.add(task)
-        upstream_reader: asyncio.StreamReader | None = None
         upstream_writer: asyncio.StreamWriter | None = None
         try:
             request = await asyncio.wait_for(
@@ -133,7 +132,6 @@ class Socks5AuthBridge:
                     crawler_runtime_settings.browser_proxy_bridge_connect_timeout_seconds
                 ),
             )
-            upstream_reader = opened_reader
             upstream_writer = opened_writer
             await asyncio.wait_for(
                 _authenticate_upstream(

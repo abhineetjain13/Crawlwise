@@ -29,7 +29,7 @@ from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_url_normalization import (
     strip_record_tracking_params,
-    strip_tracking_query_params,
+    strip_tracking_query_params as _strip_tracking_query_params,
 )
 from app.services.field_policy import (
     exact_requested_field_key,
@@ -38,6 +38,8 @@ from app.services.field_policy import (
     normalize_field_key,
 )
 from app.services.normalizers import normalize_record_fields
+
+strip_tracking_query_params = _strip_tracking_query_params
 
 PRODUCT_URL_HINTS = detail_path_hints("ecommerce_detail")
 JOB_URL_HINTS = detail_path_hints("job_detail")

@@ -7,16 +7,28 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.services.config.browser_init_scripts import (
-    build_audio_fingerprint_init_script,
-    build_canvas_fingerprint_init_script,
-    build_chrome_runtime_init_script,
-    build_font_surface_init_script,
-    build_intl_coherence_init_script,
-    build_navigator_coherence_init_script,
-    build_performance_coherence_init_script,
-    build_permissions_coherence_init_script,
-    build_webgl_fingerprint_init_script,
+    build_audio_fingerprint_init_script as _build_audio_fingerprint_init_script,
+    build_canvas_fingerprint_init_script as _build_canvas_fingerprint_init_script,
+    build_chrome_runtime_init_script as _build_chrome_runtime_init_script,
+    build_font_surface_init_script as _build_font_surface_init_script,
+    build_intl_coherence_init_script as _build_intl_coherence_init_script,
+    build_navigator_coherence_init_script as _build_navigator_coherence_init_script,
+    build_permissions_coherence_init_script as _build_permissions_coherence_init_script,
+    build_performance_coherence_init_script as _build_performance_coherence_init_script,
+    build_webgl_fingerprint_init_script as _build_webgl_fingerprint_init_script,
 )
+
+
+build_audio_fingerprint_init_script = _build_audio_fingerprint_init_script
+build_canvas_fingerprint_init_script = _build_canvas_fingerprint_init_script
+build_chrome_runtime_init_script = _build_chrome_runtime_init_script
+build_font_surface_init_script = _build_font_surface_init_script
+build_intl_coherence_init_script = _build_intl_coherence_init_script
+build_navigator_coherence_init_script = _build_navigator_coherence_init_script
+build_permissions_coherence_init_script = _build_permissions_coherence_init_script
+build_performance_coherence_init_script = _build_performance_coherence_init_script
+build_webgl_fingerprint_init_script = _build_webgl_fingerprint_init_script
+
 
 _BACKEND_DIR = Path(__file__).resolve().parents[3]
 _ENV_FILES = (str(_BACKEND_DIR.parent / ".env"), str(_BACKEND_DIR / ".env"))

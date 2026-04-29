@@ -927,7 +927,15 @@ def build_browser_artifacts(
 
 
 def _string_config_list(value: object) -> list[str]:
-    return [str(item).strip() for item in list(value or []) if str(item).strip()]
+    if isinstance(value, (str, bytes)):
+        return [str(value).strip()] if str(value).strip() else []
+    if isinstance(value, dict):
+        items: list[object] = list(value.keys())
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        return []
+    return [str(item).strip() for item in items if str(item).strip()]
 
 
 def location_interstitial_detected(html: str) -> bool:

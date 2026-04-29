@@ -46,13 +46,11 @@ from app.services.platform_policy import detect_platform_family
 from app.services.publish import (
     VERDICT_BLOCKED,
     VERDICT_EMPTY,
-    VERDICT_ERROR,
     VERDICT_LISTING_FAILED,
     build_acquisition_profile,
     build_url_metrics,
     compute_verdict,
     finalize_url_metrics,
-    is_effectively_blocked,
 )
 from app.services.robots_policy import (
     ROBOTS_FETCH_FAILURE,
@@ -95,6 +93,7 @@ __all__ = [
 ]
 
 acquire = _acquire
+mark_run_failed = _mark_run_failed
 
 
 @dataclass(slots=True)

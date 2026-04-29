@@ -15,15 +15,9 @@ from types import SimpleNamespace as _SimpleNamespace
 from typing import Any
 
 from browserforge.fingerprints import FingerprintGenerator
+from cachetools import TTLCache
 import pytz  # type: ignore[import-untyped]
 from tzlocal import get_localzone_name as _get_localzone_name
-
-try:
-    from browserforge.fingerprints import Fingerprint as _BrowserforgeFingerprintType
-except Exception:  # pragma: no cover - optional dependency contract
-    _BrowserforgeFingerprintType = None  # type: ignore[assignment,misc]
-_BrowserforgeFingerprint: Any | None = _BrowserforgeFingerprintType
-from cachetools import TTLCache
 
 from app.services.config.runtime_settings import (
     build_audio_fingerprint_init_script,
@@ -38,6 +32,12 @@ from app.services.config.runtime_settings import (
     crawler_runtime_settings,
 )
 from app.services.network_resolution import _accept_language_for_locale
+
+try:
+    from browserforge.fingerprints import Fingerprint as _BrowserforgeFingerprintType
+except Exception:  # pragma: no cover - optional dependency contract
+    _BrowserforgeFingerprintType = None  # type: ignore[assignment,misc]
+_BrowserforgeFingerprint: Any | None = _BrowserforgeFingerprintType
 
 try:
     from browserforge.injectors.utils import InjectFunction as _BrowserforgeInjectFunctionType

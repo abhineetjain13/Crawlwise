@@ -27,9 +27,6 @@ from app.services.acquisition.browser_detail import (
     expand_all_interactive_elements,
     expand_detail_content_if_needed_impl,
     expand_interactive_elements_via_accessibility,
-    interactive_candidate_snapshot,
-    interactive_label,
-    is_actionable_interactive_handle,
     requested_field_tokens,
 )
 from app.services.acquisition.browser_identity import (
@@ -87,7 +84,6 @@ from app.services.config.extraction_rules import (
     BROWSER_DETAIL_EXPAND_KEYWORDS,
     BROWSER_DETAIL_READINESS_HINTS,
     DETAIL_EXPAND_KEYWORD_EXTENSIONS,
-    DETAIL_EXPAND_SELECTORS,
 )
 from app.services.config.network_capture import (
     BLOCKED_BROWSER_RESOURCE_TYPES,
@@ -255,9 +251,10 @@ def build_browser_diagnostics_contract(
     profile = _browser_profile_diagnostics(normalized_engine)
     for key, value in profile.items():
         payload[key] = value
-    existing_timings = (
-        dict(payload.get("phase_timings_ms"))
-        if isinstance(payload.get("phase_timings_ms"), dict)
+    phase_timings_payload = payload.get("phase_timings_ms")
+    existing_timings: dict[str, object] = (
+        dict(phase_timings_payload)
+        if isinstance(phase_timings_payload, dict)
         else {}
     )
     incoming_timings = dict(phase_timings_ms or {}) if phase_timings_ms is not None else {}
@@ -537,7 +534,7 @@ class SharedBrowserRuntime:
     def eviction_key(self) -> tuple[int, float]:
         snapshot = self.snapshot()
         return (
-            int(snapshot.get("active", 0) or 0) + int(snapshot.get("queued", 0) or 0),
+            _int_or_zero(snapshot.get("active")) + _int_or_zero(snapshot.get("queued")),
             self._last_used_at,
         )
 
@@ -734,8 +731,8 @@ class SharedBrowserRuntime:
         async with self._stats_lock:
             self._queued_count = max(0, self._queued_count + delta)
 
-    def snapshot(self) -> dict[str, int | bool | str]:
-        return {
+    def snapshot(self) -> dict[str, object]:
+        snapshot: dict[str, object] = {
             "ready": self._browser is not None,
             "size": self._active_contexts,
             "max_size": self.max_contexts,
@@ -752,6 +749,7 @@ class SharedBrowserRuntime:
             **_browser_profile_diagnostics(self.browser_engine),
             "bridge_used": self.bridge_used(),
         }
+        return snapshot
 
 
 async def _configure_context_routes(context: Any) -> None:
@@ -1000,17 +998,17 @@ def browser_runtime_snapshot() -> dict[str, int | bool]:
     capacity = sum(_snapshot_count(snapshot, "capacity", "max_size") for snapshot in snapshots)
     return {
         "ready": any(bool(snapshot.get("ready")) for snapshot in snapshots),
-        "size": sum(int(snapshot.get("size", 0) or 0) for snapshot in snapshots),
+        "size": sum(_int_or_zero(snapshot.get("size")) for snapshot in snapshots),
         "max_size": max_size,
-        "active": sum(int(snapshot.get("active", 0) or 0) for snapshot in snapshots),
-        "queued": sum(int(snapshot.get("queued", 0) or 0) for snapshot in snapshots),
+        "active": sum(_int_or_zero(snapshot.get("active")) for snapshot in snapshots),
+        "queued": sum(_int_or_zero(snapshot.get("queued")) for snapshot in snapshots),
         "capacity": capacity,
         "total_contexts_created": sum(
-            int(snapshot.get("total_contexts_created", 0) or 0)
+            _int_or_zero(snapshot.get("total_contexts_created"))
             for snapshot in snapshots
         ),
         "browser_lifetime_seconds": max(
-            int(snapshot.get("browser_lifetime_seconds", 0) or 0)
+            _int_or_zero(snapshot.get("browser_lifetime_seconds"))
             for snapshot in snapshots
         ),
     }
@@ -1220,12 +1218,28 @@ def _mapping_value(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _snapshot_count(snapshot: dict[str, int | bool | str], *keys: str) -> int:
+def _snapshot_count(snapshot: dict[str, object], *keys: str) -> int:
     for key in keys:
         value = snapshot.get(key)
         if value is not None:
-            return int(value or 0)
+            return _int_or_zero(value)
     return 0
+
+
+def _int_or_zero(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    normalized = str(value or "").strip()
+    if not normalized:
+        return 0
+    try:
+        return int(normalized)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _proxy_requires_fresh_browser_state(proxy_profile: dict[str, object] | None) -> bool:

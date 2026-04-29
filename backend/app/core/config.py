@@ -100,7 +100,12 @@ class Settings(BaseSettings):
         return _resolve_project_path(value, anchor=PROJECT_ROOT)
 
 
-settings = Settings()
+def _load_settings() -> Settings:
+    # BaseSettings reads required values from environment/.env at runtime.
+    return Settings()  # type: ignore[call-arg]
+
+
+settings = _load_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +186,7 @@ def get_frontend_origins() -> list[str]:
 def load_admin_bootstrap_settings() -> Settings:
     import os
 
-    fresh = Settings()
+    fresh = _load_settings()
     resolved = settings.model_copy()
     if (
         os.getenv("DEFAULT_ADMIN_EMAIL") is not None

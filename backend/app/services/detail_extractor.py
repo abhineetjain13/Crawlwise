@@ -7,7 +7,6 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlsplit, urlu
 from typing import Any
 
 from bs4 import BeautifulSoup
-from selectolax.lexbor import LexborHTMLParser
 
 from app.services.confidence import score_record_confidence
 from app.services.config.field_mappings import (
@@ -83,11 +82,9 @@ from app.services.extract.detail_identity import (
     detail_identity_codes_match,
 )
 from app.services.extract.detail_price_extractor import (
-    append_record_field_source as _append_record_field_source,
     backfill_detail_price_from_html,
     drop_low_signal_zero_detail_price,
     reconcile_detail_currency_with_url as _reconcile_detail_currency_with_url,
-    record_field_sources as _record_field_sources,
 )
 from app.services.extract.detail_title_scorer import (
     promote_detail_title,
@@ -976,7 +973,7 @@ def _detail_variant_cluster_is_low_signal_numeric_only(variants: list[dict[str, 
 
 
 def _variant_title_looks_like_other_product(title: str, *, identity_url: str) -> bool:
-    candidate = {"title": title}
+    candidate: dict[str, object] = {"title": title}
     return not _record_matches_requested_detail_identity(
         candidate,
         requested_page_url=identity_url,

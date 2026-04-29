@@ -125,7 +125,8 @@ def _next_data_product(html: str) -> dict[str, Any] | None:
         prices = {}
     images = _next_data_images(page_props, product)
     color = text_or_none(product.get("colorDescription"))
-    sizes = product.get("sizes") if isinstance(product.get("sizes"), list) else []
+    raw_sizes = product.get("sizes")
+    sizes = raw_sizes if isinstance(raw_sizes, list) else []
     current_price = prices.get("currentPrice")
     initial_price = prices.get("initialPrice")
     size_options = [

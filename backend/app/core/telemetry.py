@@ -125,10 +125,11 @@ def install_asyncio_exception_filter(
                 "Suppressed benign Windows Proactor pipe reset during transport teardown"
             )
             return
+        context_dict = dict(context)
         if previous_handler is not None:
-            previous_handler(loop, context)
+            previous_handler(loop, context_dict)
             return
-        loop.default_exception_handler(context)
+        loop.default_exception_handler(context_dict)
 
     target_loop.set_exception_handler(_handler)
     _ASYNCIO_EXCEPTION_FILTERS[target_loop] = _handler

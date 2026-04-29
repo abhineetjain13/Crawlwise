@@ -59,6 +59,13 @@ from app.services.product_intelligence.matching import (
 logger = logging.getLogger(__name__)
 
 
+def _row_data_payload(row: dict[str, object]) -> dict[str, object]:
+    raw_data = row.get("data")
+    if isinstance(raw_data, dict):
+        return {str(key): value for key, value in raw_data.items()}
+    return {}
+
+
 async def create_product_intelligence_job(
     session: AsyncSession,
     *,
@@ -89,7 +96,11 @@ async def create_product_intelligence_job(
 
     llm_enabled = bool(options.get("llm_enrichment_enabled"))
     for row in source_rows[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]:
-        snapshot = await _resolve_source_snapshot(session, raw=row["data"], llm_enabled=llm_enabled)
+        snapshot = await _resolve_source_snapshot(
+            session,
+            raw=_row_data_payload(row),
+            llm_enabled=llm_enabled,
+        )
         source_url = str(snapshot.get("url") or row.get("source_url") or "")
         private_label = is_private_label(snapshot.get("brand"))
         session.add(
@@ -263,7 +274,11 @@ async def discover_product_intelligence_candidates(
     resolved_snapshots: dict[int, dict[str, object]] = {}
     llm_enabled = bool(options.get("llm_enrichment_enabled"))
     for index, row in enumerate(source_rows[:max_source_products]):
-        snapshot = await _resolve_source_snapshot(session, raw=row["data"], llm_enabled=llm_enabled)
+        snapshot = await _resolve_source_snapshot(
+            session,
+            raw=_row_data_payload(row),
+            llm_enabled=llm_enabled,
+        )
         resolved_snapshots[index] = snapshot
         if is_private_label(snapshot.get("brand")) and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
             continue
@@ -386,7 +401,9 @@ async def _persist_discovery_job(
     llm_enabled = bool(options.get("llm_enrichment_enabled"))
     for index, row in enumerate(source_rows[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]):
         snapshot = snapshots_lookup.get(index) or await _resolve_source_snapshot(
-            session, raw=row["data"], llm_enabled=llm_enabled
+            session,
+            raw=_row_data_payload(row),
+            llm_enabled=llm_enabled,
         )
         source_url = str(snapshot.get("url") or row.get("source_url") or "")
         source = ProductIntelligenceSourceProduct(

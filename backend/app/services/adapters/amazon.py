@@ -230,8 +230,8 @@ class AmazonAdapter(BaseAdapter):
             _clean_detail_text(selectolax_node_text(node))
             for node in parser.css("#productDescription p, #productDescription, #bookDescription_feature_div")
         ]
-        parts = [part for part in parts if part]
-        return " ".join(dict.fromkeys(parts)).strip() or None
+        cleaned_parts = [part for part in parts if isinstance(part, str) and part]
+        return " ".join(dict.fromkeys(cleaned_parts)).strip() or None
 
     def _detail_table(self, parser: LexborHTMLParser) -> dict[str, str]:
         values: dict[str, str] = {}

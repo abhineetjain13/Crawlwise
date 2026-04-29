@@ -476,21 +476,21 @@ def _curl_fetch_sync(
         else crawler_runtime_settings.curl_impersonate_target
     ).strip()
     impersonate_target = cast(Any, raw_impersonate_target or None)
-    headers = default_request_headers()
+    request_headers = default_request_headers()
     normalized_cookie_header = str(cookie_header or "").strip()
     if normalized_cookie_header:
-        headers["Cookie"] = normalized_cookie_header
+        request_headers["Cookie"] = normalized_cookie_header
     response = curl_requests.get(
         url,
         impersonate=impersonate_target,
         allow_redirects=True,
         timeout=timeout_seconds,
         proxy=proxy,
-        headers=headers,
+        headers=request_headers,
     )
     html = response.text or ""
-    headers = copy_headers(response.headers)
-    vendor = classify_block_from_headers(headers)
+    response_headers = copy_headers(response.headers)
+    vendor = classify_block_from_headers(response_headers)
     blocked = bool(vendor) or is_blocked_html(html, response.status_code)
     runtime_policy = resolve_platform_runtime_policy(str(response.url), html)
     return PageFetchResult(
@@ -502,7 +502,7 @@ def _curl_fetch_sync(
         content_type=response.headers.get("content-type", "text/html"),
         blocked=blocked,
         platform_family=runtime_policy.get("family"),
-        headers=headers,
+        headers=response_headers,
     )
 
 

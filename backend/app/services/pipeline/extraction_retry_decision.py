@@ -59,14 +59,24 @@ def _empty_detail_extraction_has_static_evidence(
         requested_fields=requested_fields,
         selector_rules=selector_rules,
     )
+    raw_extractable_fields = extractability.get("extractable_fields")
+    extractable_field_values = (
+        raw_extractable_fields if isinstance(raw_extractable_fields, list) else []
+    )
     extractable_fields = {
         str(field_name).strip()
-        for field_name in list(extractability.get("extractable_fields") or [])
+        for field_name in extractable_field_values
         if str(field_name).strip()
     }
+    raw_matched_requested_fields = extractability.get("matched_requested_fields")
+    matched_requested_values = (
+        raw_matched_requested_fields
+        if isinstance(raw_matched_requested_fields, list)
+        else []
+    )
     matched_requested_fields = {
         str(field_name).strip()
-        for field_name in list(extractability.get("matched_requested_fields") or [])
+        for field_name in matched_requested_values
         if str(field_name).strip()
     }
     return bool(

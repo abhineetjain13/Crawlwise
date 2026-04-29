@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from typing import Annotated, Any
+from typing import Annotated
 
 from app.core.database import SessionLocal
 from app.core.dependencies import get_current_user, get_db

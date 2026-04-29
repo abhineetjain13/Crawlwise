@@ -19,10 +19,6 @@ except ImportError:  # pragma: no cover
 
 from app.services.config.extraction_rules import (
     LISTING_CARD_URL_ATTRS,
-    LISTING_FALLBACK_CONTAINER_SELECTOR,
-    LISTING_NON_LISTING_PATH_TOKENS,
-    LISTING_STRUCTURE_POSITIVE_HINTS,
-    LISTING_UTILITY_TITLE_TOKENS,
 )
 from app.services.platform_policy import (
     path_tenant_boundary_family,

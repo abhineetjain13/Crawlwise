@@ -4,10 +4,11 @@ import logging
 
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlLog, CrawlRun
-from app.services.acquisition.acquirer import PageEvidence
+from app.services.acquisition.acquirer import AcquisitionResult, PageEvidence
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
 from app.services.db_utils import mapping_or_empty
 from app.services.publish import VERDICT_ERROR, is_effectively_blocked
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 
 
