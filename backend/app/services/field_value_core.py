@@ -136,6 +136,12 @@ def _coerce_int(value: object, *, default: int = 0) -> int:
         return default
 
 
+object_list = _object_list
+object_dict = _object_dict
+safe_int = _safe_int
+coerce_int = _coerce_int
+
+
 _REVIEW_TITLE_RE = REVIEW_TITLE_RE
 LISTING_UTILITY_TITLE_REGEXES = tuple(
     re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS

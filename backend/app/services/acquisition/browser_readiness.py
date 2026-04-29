@@ -7,11 +7,10 @@ from typing import Any
 
 from bs4 import BeautifulSoup, Comment
 
-from app.services.acquisition.browser_detail import _coerce_int
 from app.services.acquisition.dom_runtime import get_page_html
 from app.services.config.extraction_rules import LOW_CONTENT_SHELL_PHRASES
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.field_value_core import clean_text
+from app.services.field_value_core import clean_text, coerce_int as _coerce_int
 
 
 @dataclass(frozen=True, slots=True)

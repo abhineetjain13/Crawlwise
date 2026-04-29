@@ -543,7 +543,7 @@ select:focus-visible:not(.focus-ring) {
 }
 
 .crawl-activity-log {
-  background: var(--color-panel);
+  background: transparent;
   color: var(--color-foreground);
 }
 
@@ -552,7 +552,6 @@ select:focus-visible:not(.focus-ring) {
 .crawl-activity-log,
 .crawl-activity-log * {
   font-family: var(--font-mono-family);
-  font-size: var(--font-mono-size) !important;
   line-height: var(--font-mono-line-height);
   letter-spacing: 0;
   font-stretch: normal;

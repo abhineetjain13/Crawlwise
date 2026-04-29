@@ -19,7 +19,7 @@ from app.services.domain_run_profile_service import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import normalize_field_key, normalize_review_target
-from app.services.field_value_core import _object_list, _safe_int
+from app.services.field_value_core import object_list as _object_list, safe_int as _safe_int
 from app.services.normalizers import normalize_value
 from app.services.publish import refresh_record_commit_metadata
 from app.services.schema_service import load_resolved_schema

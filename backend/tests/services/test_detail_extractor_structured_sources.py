@@ -88,6 +88,58 @@ def test_extract_ecommerce_detail_from_microdata() -> None:
     assert record["_source"] == "microdata"
 
 
+def test_detail_record_runs_dom_tier_when_variant_dom_cues_exist() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Trail Shoe</h1>
+          <select name="color">
+            <option>Black</option>
+            <option>Blue</option>
+          </select>
+        </main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://example.com/products/trail-shoe",
+        "ecommerce_detail",
+        requested_fields=[
+            "title",
+            "price",
+            "variants",
+            "variant_axes",
+            "selected_variant",
+        ],
+        adapter_records=[
+            {
+                "title": "Trail Shoe",
+                "price": "49.99",
+                "variant_axes": {"color": ["Black"]},
+                "variants": [
+                    {
+                        "title": "Trail Shoe Black",
+                        "option_values": {"color": "Black"},
+                    }
+                ],
+                "selected_variant": {
+                    "title": "Trail Shoe Black",
+                    "option_values": {"color": "Black"},
+                },
+            }
+        ],
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.0}
+        },
+    )
+
+    assert record["_extraction_tiers"]["current"] == "dom"
+    assert record["_extraction_tiers"]["early_exit"] is None
+
+
 def test_sanitize_variant_row_keeps_option_label_titles_with_variant_signals() -> None:
     variant = {"title": "Large", "sku": "TRAIL-L", "price": "8.99"}
 

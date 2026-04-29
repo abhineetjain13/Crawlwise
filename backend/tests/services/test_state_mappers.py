@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.services import js_state_mapper
-from app.services.js_state_mapper import map_js_state_to_fields
+from app.services.js_state_mapper import map_configured_state_payload, map_js_state_to_fields
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 
 
@@ -817,6 +817,22 @@ def test_map_js_state_to_fields_uses_platform_owned_job_detail_selector_config()
         mapped["url"]
         == "https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699"
     )
+
+
+def test_configured_state_payload_merges_later_root_fields() -> None:
+    mapped = map_configured_state_payload(
+        {
+            "first": {"title": "Platform Engineer"},
+            "second": {"company_name": "Acme"},
+        },
+        root_paths=[["first"], ["second"]],
+        field_paths={
+            "title": [["title"]],
+            "company": [["company_name"]],
+        },
+    )
+
+    assert mapped == {"title": "Platform Engineer", "company": "Acme"}
 
 
 def test_map_js_state_to_fields_rejects_dict_tags_from_promotional_ui() -> None:

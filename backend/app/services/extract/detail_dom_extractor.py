@@ -19,13 +19,13 @@ from app.services.config.extraction_rules import (
 from app.services.field_value_core import (
     RATING_RE,
     REVIEW_COUNT_RE,
-    _object_dict,
-    _object_list,
     absolute_url,
     clean_text,
     coerce_field_value,
     extract_currency_code,
     is_title_noise,
+    object_dict as _object_dict,
+    object_list as _object_list,
     surface_alias_lookup,
     surface_fields,
     text_or_none,
@@ -1060,3 +1060,8 @@ def _backfill_variants_from_dom_if_missing(
             variant["price"] = price
         if currency and variant.get("currency") in (None, "", [], {}):
             variant["currency"] = currency
+
+
+backfill_variants_from_dom_if_missing = _backfill_variants_from_dom_if_missing
+extract_variants_from_dom = _extract_variants_from_dom
+variant_option_value_is_noise = _variant_option_value_is_noise

@@ -2,92 +2,64 @@ Fix the following issues. The issues can be from different files or can overlap 
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/acquisition/browser_identity.py around lines 325 - 339, _safely_clone_fingerprint currently returns the original raw_fingerprint on copy failures which allows callers like _align_raw_fingerprint_to_user_agent_platform to mutate shared objects (e.g., setting navigator.platform) and corrupt _RUN_BROWSER_IDENTITIES; change _safely_clone_fingerprint to return None on failure (or raise a specific CloneError), and update callers to explicitly handle that case by either skipping mutation, logging a warning, or creating a safe shallow clone of only the navigator before mutating; ensure handling covers both the copy failure and the navigator-copy fallback so the original raw_fingerprint is never modified.
+In @backend/app/services/acquisition/browser_proxy_config.py around lines 57 - 60, The condition in browser_proxy_config.py that currently reads `if userinfo or ":" in userinfo` is incorrect; replace it with a single clear check depending on intent—if any userinfo should be redacted then use `if userinfo`, otherwise if only credentials should be redacted use `if ":" in userinfo`; update the conditional guarding the existing `return "REDACTED"` (working with variables raw_proxy and userinfo) so the colon test is not short-circuited and the logic is unambiguous.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/acquisition/browser_proxy_config.py at line 31, Replace the use of the original parsed.scheme when building the server URL with the normalized, lowercased scheme variable (the one created for validation) so the server string uses the normalized scheme; modify the assignment that sets server (which currently uses parsed.scheme and proxy_host_port(parsed)) to use that normalized scheme variable together with proxy_host_port(parsed) to ensure consistent, lowercase scheme in the URL.
+In @backend/app/services/acquisition/browser_stage_runner.py around lines 139 - 145, The current logic calls context() inside a suppress(TypeError) which only silences TypeError; if context() raises other exceptions it will propagate and prevent the fallback to closing the context. Update the callsite around page/context (the block assigning context = context() in browser_stage_runner.py) to catch broad exceptions (e.g., except Exception) instead of only TypeError so any error from invoking context() is handled; ensure you preserve existing behavior by leaving context as-is on failure and proceed to check context.close via the existing context_close logic (optionally log the caught exception for debugging).
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/acquisition/browser_proxy_config.py around lines 33 - 36, The current logic sets config["username"] when parsed.username is truthy but sets config["password"] whenever parsed.password is not None, allowing a password without a username; update the condition so password is only added when a username is present (e.g., require parsed.username truthy before assigning config["password"]) or use consistent presence checks for both parsed.username and parsed.password; modify the assignments around parsed.username, parsed.password, and config to enforce that password is only included if username was set.
+In @backend/app/services/extract/detail_price_extractor.py around lines 47 - 51, The needs_price condition currently only considers record.get("price") and misses low-signal prices nested in selected_variant or variants; update the needs_price expression in this module to also call _detail_price_value_is_low_signal on selected_variant.get("price") and on any variant.get("price") (or aggregate with any(...) over variants) so that low-signal nested prices trigger backfill, or alternatively remove the later redundant low-signal checks (lines checking selected_variant and variants) and keep a single authoritative check in needs_price; locate and update the needs_price assignment and ensure it references _detail_price_value_is_low_signal, selected_variant, and variants consistently.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/acquisition/browser_proxy_config.py around lines 58 - 61, The current conditional returns raw_proxy when scheme or hostname is missing which can leak credentials; change the logic to detect credentials (parsed.username or parsed.password) before the validity check and redact them regardless of URL validity: if parsed.username or parsed.password, construct and return a redacted string (e.g., replace credentials portion with "REDACTED" or remove userinfo) instead of returning raw_proxy, otherwise fall back to the existing validity check (the conditional referencing parsed.scheme, parsed.hostname, parsed.username, parsed.password and raw_proxy).
+In @backend/app/services/selectors_runtime.py around lines 184 - 187, Validate and normalize the limit before applying it to the query: convert limit to int and ensure it's non-negative (similar to the existing offset check) and either raise a clear ValueError when limit < 0 or treat negative values as no limit; then only call query = query.limit(int(limit)) when the validated limit is not None and >= 0. Apply this change around the existing query/offset/limit handling (the variables query, offset, limit in selectors_runtime.py) so negative limits are rejected or ignored consistently.
 
 These are comments left during a code review. Please review all issues and provide fixes.
 
-1. possible bug: The backend install command in the README does not match the project’s actual setup flow.
-   Path: README.md
-   Lines: 74-74
-
-2. possible bug: The README advertises frontend commands that are not exposed by the repository’s root scripts.
-   Path: README.md
-   Lines: 127-127
-
-3. possible bug: Pagination happens after loading all summaries, causing avoidable full-table reads.
+1. logic error: Moving pagination into the service can change summary results if the service does not preserve the old slicing semantics.
    Path: backend/app/api/selectors.py
-   Lines: 42-42
+   Lines: 53-53
 
-4. possible bug: New summary response model may not match the actual selector summary payload.
-   Path: backend/app/schemas/selectors.py
-   Lines: 8-8
+2. logic error: Diagnostics always claim stealth is disabled even when the browser is using a shaped profile.
+   Path: backend/app/services/acquisition/browser_diagnostics.py
+   Lines: 63-63
 
-5. logic error: Header and navigation expanders can now be skipped even when they are valid collapsible controls.
-   Path: backend/app/services/acquisition/browser_detail.py
-   Lines: 273-273
+3. null pointer: A failed fingerprint clone can now trigger a NoneType attribute error instead of falling back safely.
+   Path: backend/app/services/acquisition/browser_identity.py
+   Lines: 1032-1032
 
-6. logic error: Failure diagnostics are no longer populated on browser fetch errors.
+4. possible bug: Accessibility snapshot cancellation is swallowed, preventing normal task cancellation.
+   Path: backend/app/services/acquisition/browser_page_flow.py
+   Lines: 1189-1189
+
+5. possible bug: Narrowing the network-idle exception handler can break the existing timeout fallback path.
+   Path: backend/app/services/acquisition/browser_page_flow.py
+   Lines: 641-641
+
+6. logic error: Early browser launch failures are reported with incorrect diagnostics.
    Path: backend/app/services/acquisition/browser_runtime.py
-   Lines: 1441-1441
+   Lines: 1192-1192
 
-7. possible bug: _storage_state_entry_count() counts arbitrary iterables by materializing them.
+7. resource leak: A synchronous failure before the cleanup path can leak browser resources.
+   Path: backend/app/services/acquisition/browser_stage_runner.py
+   Lines: 33-33
+
+8. logic error: _storage_state_entry_count now only counts Collection values, changing iterable handling.
    Path: backend/app/services/acquisition/cookie_store.py
    Lines: 476-476
 
-8. logic error: Refactoring marker extraction can silently stop challenge signatures from matching.
-   Path: backend/app/services/acquisition/runtime.py
-   Lines: 692-692
-
-9. state inconsistency: Returning the original fingerprint when cloning omits isolation.
-   Path: backend/app/services/acquisition/browser_identity.py
-   Lines: 347-347
-
-10. possible bug: The site path regex can extract the wrong site identifier.
-   Path: backend/app/services/adapters/oracle_hcm.py
-   Lines: 193-193
-
-11. possible bug: The job-id parser can extract the wrong identifier from Oracle HCM detail URLs.
+9. logic error: _extract_cx_config_object() can truncate valid Oracle HCM config objects whenever a string value contains braces.
    Path: backend/app/services/adapters/oracle_hcm.py
    Lines: 242-242
 
-12. logic error: The Oracle HCM config regex will miss valid page variants and fail to extract configuration.
+10. logic error: _extract_job_id_from_url() is now restricted to CandidateExperience job URLs.
+   Path: backend/app/services/adapters/oracle_hcm.py
+   Lines: 281-281
+
+11. possible bug: The Oracle HCM config regex can fail to match valid page configuration blobs.
    Path: backend/app/services/config/extraction_rules.py
    Lines: 150-150
-
-13. possible bug: A newly added timeout setting is validated as strictly positive, which may reject a disabled value of 0.
-   Path: backend/app/services/config/runtime_settings.py
-   Lines: 393-393
-
-14. logic error: Removing the ecommerce variant DOM-completion branch can skip variant backfill.
-   Path: backend/app/services/detail_extractor.py
-   Lines: 877-877
-
-15. logic error: Shared parameter resolution can silently change precedence between plan and config values.
-   Path: backend/app/services/pipeline/core.py
-   Lines: 141-141
-
-16. possible bug: Directly mutating shared runtime settings without explicit restoration can leak state between tests.
-   Path: backend/tests/services/test_browser_expansion_runtime.py
-   Lines: 2165-2165
-
-17. possible bug: Shared configuration mutation makes the AOM timeout test order-dependent.
-   Path: backend/tests/services/test_browser_expansion_runtime.py
-   Lines: 2234-2234
-
-18. possible bug: Moving artifact loading to a shared helper can break fixture resolution if its fallback path differs.
-   Path: backend/tests/services/test_crawl_engine.py
-   Lines: 11-11
 
 Validate the correctness of each issue sequentially. For each issue that is correct, implement a fix. Please make the fixes concise and address all issues comprehensively and don't impact anything else.

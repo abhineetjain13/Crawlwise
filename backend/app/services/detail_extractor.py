@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from urllib.parse import unquote, urlparse
 from typing import Any
 
@@ -32,13 +33,13 @@ from app.services.field_value_core import (
     LONG_TEXT_FIELDS,
     STRUCTURED_OBJECT_FIELDS,
     STRUCTURED_OBJECT_LIST_FIELDS,
-    _object_dict,
-    _object_list,
     absolute_url,
     clean_text,
     coerce_field_value,
     finalize_record,
     is_title_noise,
+    object_dict as _object_dict,
+    object_list as _object_list,
     same_site,
     surface_alias_lookup,
     surface_fields,
@@ -57,34 +58,34 @@ from app.services.field_value_dom import (
 from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 from app.services.extract.detail_dom_extractor import (
-    _backfill_variants_from_dom_if_missing,
-    _extract_variants_from_dom,
-    _variant_option_value_is_noise,
     apply_dom_fallbacks,
+    backfill_variants_from_dom_if_missing as _backfill_variants_from_dom_if_missing,
+    extract_variants_from_dom as _extract_variants_from_dom,
     primary_dom_context,
+    variant_option_value_is_noise as _variant_option_value_is_noise,
     variant_option_availability,
 )
 from app.services.extract.detail_identity import (
-    _detail_identity_codes_from_record_fields,
-    _detail_identity_codes_from_url,
-    _detail_identity_tokens,
-    _detail_redirect_identity_is_mismatched,
-    _detail_title_from_url,
-    _detail_url_candidate_is_low_signal,
-    _detail_url_is_collection_like,
-    _detail_url_is_utility,
-    _detail_url_looks_like_product,
-    _detail_url_matches_requested_identity,
-    _preferred_detail_identity_url,
-    _record_matches_requested_detail_identity,
     detail_identity_codes_match,
+    detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
+    detail_identity_codes_from_url as _detail_identity_codes_from_url,
+    detail_identity_tokens as _detail_identity_tokens,
+    detail_redirect_identity_is_mismatched as _detail_redirect_identity_is_mismatched,
+    detail_title_from_url as _detail_title_from_url,
+    detail_url_candidate_is_low_signal as _detail_url_candidate_is_low_signal,
+    detail_url_is_collection_like as _detail_url_is_collection_like,
+    detail_url_is_utility as _detail_url_is_utility,
+    detail_url_looks_like_product as _detail_url_looks_like_product,
+    detail_url_matches_requested_identity as _detail_url_matches_requested_identity,
+    preferred_detail_identity_url as _preferred_detail_identity_url,
+    record_matches_requested_detail_identity as _record_matches_requested_detail_identity,
 )
 from app.services.extract.detail_record_finalizer import (
-    _dedupe_primary_and_additional_images,
-    _detail_image_matches_primary_family,
-    _detail_title_looks_like_placeholder,
-    _sanitize_variant_row,
+    dedupe_primary_and_additional_images as _dedupe_primary_and_additional_images,
+    detail_image_matches_primary_family as _detail_image_matches_primary_family,
+    detail_title_looks_like_placeholder as _detail_title_looks_like_placeholder,
     repair_ecommerce_detail_record_quality,
+    sanitize_variant_row as _sanitize_variant_row,
 )
 from app.services.extract.detail_price_extractor import (
     backfill_detail_price_from_html,
@@ -112,6 +113,19 @@ from app.services.extract.detail_tiers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class PreparedDetailExtraction:
+    context: Any
+    dom_parser: Any
+    soup: BeautifulSoup
+    state: DetailTierState
+    js_state_objects: dict[str, Any]
+    js_state_record: dict[str, Any]
+    selector_self_heal: dict[str, object]
+
+
 def _coerce_float(value: object, default: float = 0.0) -> float:
     if isinstance(value, (int, float)):
         return float(value)
@@ -875,11 +889,7 @@ def _requires_dom_completion(
     normalized_surface = str(surface or "").strip().lower()
     requested_missing_fields = _missing_requested_fields(record, requested_fields)
     if normalized_surface == "ecommerce_detail" and variant_dom_cues_present(soup):
-        if any(
-            record.get(field_name) in (None, "", [], {})
-            for field_name in ("variant_axes", "variants", "selected_variant")
-        ):
-            return True
+        return True
     if (
         normalized_surface == "ecommerce_detail"
         and record.get("image_url") in (None, "", [], {})
@@ -934,31 +944,126 @@ def _requires_dom_completion(
     }
     return bool(requested_missing_fields & selector_backed_fields)
 
-def build_detail_record(
+
+def _finalize_early_detail_record(
+    record: dict[str, Any],
+    *,
+    html: str,
+    page_url: str,
+    surface: str,
+    requested_fields: list[str] | None,
+    soup: BeautifulSoup,
+    js_state_objects: dict[str, Any],
+) -> dict[str, Any]:
+    backfill_detail_price_from_html(record, html=html)
+    _backfill_variants_from_dom_if_missing(
+        record,
+        soup=soup,
+        page_url=page_url,
+        js_state_objects=js_state_objects,
+    )
+    _reconcile_detail_currency_with_url(record, page_url=page_url)
+    drop_low_signal_zero_detail_price(record)
+    record["_confidence"] = score_record_confidence(
+        record,
+        surface=surface,
+        requested_fields=requested_fields,
+    )
+    record["_extraction_tiers"]["early_exit"] = "js_state"
+    return record
+
+
+def _promote_dom_detail_title(
+    record: dict[str, Any],
+    *,
+    js_state_record: dict[str, Any],
+    page_url: str,
+) -> None:
+    if not title_needs_promotion(
+        text_or_none(record.get("title")) or "",
+        page_url=page_url,
+    ):
+        return
+    preferred_title = text_or_none(js_state_record.get("title"))
+    if preferred_title:
+        record["title"] = preferred_title
+        return
+    fallback_title = _detail_title_from_url(page_url)
+    if not fallback_title:
+        return
+    record["title"] = fallback_title
+    title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
+    if "url_slug" not in title_sources:
+        title_sources.append("url_slug")
+
+
+def _fill_missing_dom_detail_title(record: dict[str, Any], *, page_url: str) -> None:
+    if text_or_none(record.get("title")):
+        return
+    fallback_title = _detail_title_from_url(page_url)
+    if not fallback_title:
+        return
+    record["title"] = fallback_title
+    title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
+    if "url_slug" not in title_sources:
+        title_sources.append("url_slug")
+
+
+def _finalize_dom_detail_record(
+    record: dict[str, Any],
+    *,
+    html: str,
+    page_url: str,
+    surface: str,
+    requested_fields: list[str] | None,
+    soup: BeautifulSoup,
+    js_state_objects: dict[str, Any],
+) -> dict[str, Any]:
+    backfill_detail_price_from_html(record, html=html)
+    _backfill_variants_from_dom_if_missing(
+        record,
+        soup=soup,
+        page_url=page_url,
+        js_state_objects=js_state_objects,
+    )
+    _reconcile_detail_currency_with_url(record, page_url=page_url)
+    record["_confidence"] = score_record_confidence(
+        record,
+        surface=surface,
+        requested_fields=requested_fields,
+    )
+    record["_extraction_tiers"]["early_exit"] = None
+    return record
+
+
+def _prepare_detail_extraction(
     html: str,
     page_url: str,
     surface: str,
     requested_fields: list[str] | None,
     *,
-    requested_page_url: str | None = None,
-    adapter_records: list[dict[str, Any]] | None = None,
-    network_payloads: list[dict[str, object]] | None = None,
-    selector_rules: list[dict[str, object]] | None = None,
-    extraction_runtime_snapshot: dict[str, object] | None = None,
-) -> dict[str, Any]:
+    requested_page_url: str | None,
+    extraction_runtime_snapshot: dict[str, object] | None,
+) -> PreparedDetailExtraction:
     context = prepare_extraction_context(html)
-    dom_parser, soup = primary_dom_context(
-        context,
-        page_url=page_url,
-    )
-    alias_lookup = surface_alias_lookup(surface, requested_fields)
+    dom_parser, soup = primary_dom_context(context, page_url=page_url)
     candidates: dict[str, list[object]] = {}
     candidate_sources: dict[str, list[str]] = {}
     field_sources: dict[str, list[str]] = {}
     selector_trace_candidates: dict[str, list[dict[str, object]]] = {}
-    fields = surface_fields(surface, requested_fields)
-    selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
-    state = DetailTierState(page_url=page_url, requested_page_url=requested_page_url, surface=surface, requested_fields=requested_fields, fields=fields, candidates=candidates, candidate_sources=candidate_sources, field_sources=field_sources, selector_trace_candidates=selector_trace_candidates, extraction_runtime_snapshot=extraction_runtime_snapshot, completed_tiers=[])
+    state = DetailTierState(
+        page_url=page_url,
+        requested_page_url=requested_page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        fields=surface_fields(surface, requested_fields),
+        candidates=candidates,
+        candidate_sources=candidate_sources,
+        field_sources=field_sources,
+        selector_trace_candidates=selector_trace_candidates,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        completed_tiers=[],
+    )
     js_state_objects = harvest_js_state_objects(None, context.cleaned_html)
     js_state_record = map_js_state_to_fields(
         js_state_objects,
@@ -968,62 +1073,69 @@ def build_detail_record(
     if surface == "ecommerce_detail" and is_title_noise(js_state_record.get("title")):
         js_state_record = dict(js_state_record)
         js_state_record.pop("title", None)
+    return PreparedDetailExtraction(
+        context=context,
+        dom_parser=dom_parser,
+        soup=soup,
+        state=state,
+        js_state_objects=js_state_objects,
+        js_state_record=js_state_record,
+        selector_self_heal=_selector_self_heal_config(extraction_runtime_snapshot),
+    )
 
+
+def _collect_pre_dom_detail_tiers(
+    prepared: PreparedDetailExtraction,
+    *,
+    adapter_records: list[dict[str, Any]] | None,
+    network_payloads: list[dict[str, object]] | None,
+    alias_lookup: dict[str, str],
+) -> dict[str, Any]:
     collect_authoritative_tier(
-        state,
+        prepared.state,
         adapter_records=adapter_records,
         network_payloads=network_payloads,
         collect_record_candidates=_collect_record_candidates,
         map_network_payloads_to_fields=map_network_payloads_to_fields,
     )
-    record = materialize_detail_tier(state, tier_name="authoritative", materialize_record=_materialize_record)
-
+    materialize_detail_tier(
+        prepared.state,
+        tier_name="authoritative",
+        materialize_record=_materialize_record,
+    )
     collect_structured_data_tier(
-        state,
-        context=context,
+        prepared.state,
+        context=prepared.context,
         alias_lookup=alias_lookup,
         collect_structured_source_payloads=collect_structured_source_payloads,
         collect_structured_payload_candidates=_collect_structured_payload_candidates,
     )
-    record = materialize_detail_tier(state, tier_name="structured_data", materialize_record=_materialize_record)
+    materialize_detail_tier(
+        prepared.state,
+        tier_name="structured_data",
+        materialize_record=_materialize_record,
+    )
     collect_js_state_tier(
-        state,
-        js_state_record=js_state_record,
+        prepared.state,
+        js_state_record=prepared.js_state_record,
         collect_record_candidates=_collect_record_candidates,
     )
-    record = materialize_detail_tier(state, tier_name="js_state", materialize_record=_materialize_record)
-    if (
-        _coerce_float(_object_dict(record.get("_confidence")).get("score"))
-        >= _coerce_float(selector_self_heal.get("threshold"))
-        and not _requires_dom_completion(
-            record=record,
-            surface=surface,
-            requested_fields=requested_fields,
-            selector_rules=selector_rules,
-            soup=soup,
-        )
-    ):
-        backfill_detail_price_from_html(record, html=html)
-        _backfill_variants_from_dom_if_missing(
-            record,
-            soup=soup,
-            page_url=page_url,
-            js_state_objects=js_state_objects,
-        )
-        _reconcile_detail_currency_with_url(record, page_url=page_url)
-        drop_low_signal_zero_detail_price(record)
-        record["_confidence"] = score_record_confidence(
-            record,
-            surface=surface,
-            requested_fields=requested_fields,
-        )
-        record["_extraction_tiers"]["early_exit"] = "js_state"
-        return record
+    return materialize_detail_tier(
+        prepared.state,
+        tier_name="js_state",
+        materialize_record=_materialize_record,
+    )
 
+
+def _collect_dom_detail_tier(
+    prepared: PreparedDetailExtraction,
+    *,
+    selector_rules: list[dict[str, object]] | None,
+) -> dict[str, Any]:
     collect_dom_tier(
-        state,
-        dom_parser=dom_parser,
-        soup=soup,
+        prepared.state,
+        dom_parser=prepared.dom_parser,
+        soup=prepared.soup,
         selector_rules=selector_rules,
         apply_dom_fallbacks=(
             lambda dom_parser, soup, page_url, surface, requested_fields, candidates,
@@ -1046,49 +1158,115 @@ def build_detail_record(
             lambda dom_soup, *, page_url: _extract_variants_from_dom(
                 dom_soup,
                 page_url=page_url,
-                js_state_objects=js_state_objects,
+                js_state_objects=prepared.js_state_objects,
             )
         ),
         should_collect_dom_variants=_should_collect_dom_variants,
         add_sourced_candidate=_add_sourced_candidate,
     )
-    record = materialize_detail_tier(state, tier_name="dom", materialize_record=_materialize_record)
-    if surface == "ecommerce_detail" and title_needs_promotion(
-        text_or_none(record.get("title")) or "",
-        page_url=page_url,
-    ):
-        preferred_title = text_or_none(js_state_record.get("title"))
-        if preferred_title:
-            record["title"] = preferred_title
-        else:
-            fallback_title = _detail_title_from_url(page_url)
-            if fallback_title:
-                record["title"] = fallback_title
-                title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
-                if "url_slug" not in title_sources:
-                    title_sources.append("url_slug")
-    if surface == "ecommerce_detail" and not text_or_none(record.get("title")):
-        fallback_title = _detail_title_from_url(page_url)
-        if fallback_title:
-            record["title"] = fallback_title
-            title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
-            if "url_slug" not in title_sources:
-                title_sources.append("url_slug")
-    backfill_detail_price_from_html(record, html=html)
-    _backfill_variants_from_dom_if_missing(
-        record,
-        soup=soup,
-        page_url=page_url,
-        js_state_objects=js_state_objects,
+    return materialize_detail_tier(
+        prepared.state,
+        tier_name="dom",
+        materialize_record=_materialize_record,
     )
-    _reconcile_detail_currency_with_url(record, page_url=page_url)
-    record["_confidence"] = score_record_confidence(
-        record,
+
+
+def _can_skip_dom_tier(
+    record: dict[str, Any],
+    prepared: PreparedDetailExtraction,
+    *,
+    surface: str,
+    requested_fields: list[str] | None,
+    selector_rules: list[dict[str, object]] | None,
+) -> bool:
+    confidence_score = _coerce_float(_object_dict(record.get("_confidence")).get("score"))
+    threshold = _coerce_float(prepared.selector_self_heal.get("threshold"))
+    return confidence_score >= threshold and not _requires_dom_completion(
+        record=record,
         surface=surface,
         requested_fields=requested_fields,
+        selector_rules=selector_rules,
+        soup=prepared.soup,
     )
-    record["_extraction_tiers"]["early_exit"] = None
+
+
+def _build_dom_tier_record(
+    prepared: PreparedDetailExtraction,
+    *,
+    selector_rules: list[dict[str, object]] | None,
+    surface: str,
+    page_url: str,
+) -> dict[str, Any]:
+    record = _collect_dom_detail_tier(prepared, selector_rules=selector_rules)
+    if surface == "ecommerce_detail":
+        _promote_dom_detail_title(
+            record,
+            js_state_record=prepared.js_state_record,
+            page_url=page_url,
+        )
+        _fill_missing_dom_detail_title(record, page_url=page_url)
     return record
+
+
+def build_detail_record(
+    html: str,
+    page_url: str,
+    surface: str,
+    requested_fields: list[str] | None,
+    *,
+    requested_page_url: str | None = None,
+    adapter_records: list[dict[str, Any]] | None = None,
+    network_payloads: list[dict[str, object]] | None = None,
+    selector_rules: list[dict[str, object]] | None = None,
+    extraction_runtime_snapshot: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    prepared = _prepare_detail_extraction(
+        html,
+        page_url,
+        surface,
+        requested_fields,
+        requested_page_url=requested_page_url,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+    )
+    alias_lookup = surface_alias_lookup(surface, requested_fields)
+    record = _collect_pre_dom_detail_tiers(
+        prepared,
+        adapter_records=adapter_records,
+        network_payloads=network_payloads,
+        alias_lookup=alias_lookup,
+    )
+    if _can_skip_dom_tier(
+        record,
+        prepared,
+        surface=surface,
+        requested_fields=requested_fields,
+        selector_rules=selector_rules,
+    ):
+        return _finalize_early_detail_record(
+            record,
+            html=html,
+            page_url=page_url,
+            surface=surface,
+            requested_fields=requested_fields,
+            soup=prepared.soup,
+            js_state_objects=prepared.js_state_objects,
+        )
+
+    record = _build_dom_tier_record(
+        prepared,
+        selector_rules=selector_rules,
+        surface=surface,
+        page_url=page_url,
+    )
+    return _finalize_dom_detail_record(
+        record,
+        html=html,
+        page_url=page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        soup=prepared.soup,
+        js_state_objects=prepared.js_state_objects,
+    )
 
 
 def detail_record_rejection_reason(

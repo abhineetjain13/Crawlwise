@@ -87,6 +87,7 @@ def _map_configured_state_payload(
     root_paths: list[list[str]],
     field_paths: dict[str, list[list[str]]],
 ) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
     for root_path in root_paths:
         candidate = _path_value(payload, root_path)
         if not isinstance(candidate, dict):
@@ -97,9 +98,15 @@ def _map_configured_state_payload(
                 for field_name, paths in field_paths.items()
             }
         )
-        if mapped:
-            return mapped
-    return {}
+        for field_name, value in mapped.items():
+            if merged.get(field_name) in (None, "", [], {}) and value not in (
+                None,
+                "",
+                [],
+                {},
+            ):
+                merged[field_name] = value
+    return compact_dict(merged)
 
 def _first_path_value(payload: dict[str, Any], paths: list[list[str]]) -> Any:
     for path in paths:
@@ -122,6 +129,9 @@ def _path_value(payload: Any, path: list[str]) -> Any:
             continue
         return None
     return current
+
+
+map_configured_state_payload = _map_configured_state_payload
 
 def _map_ecommerce_detail_state(
     js_state_objects: dict[str, Any],

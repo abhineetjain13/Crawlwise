@@ -122,6 +122,7 @@ export default function AdminUsersPage() {
                                                 disabled={pendingUserId === user.id}
                                                 options={[
                                                     { value: "user", label: "user" },
+                                                    { value: "harness", label: "harness" },
                                                     { value: "admin", label: "admin" },
                                                 ]}
                                                 className="min-w-24"

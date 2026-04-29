@@ -77,6 +77,8 @@ export function Dropdown<T extends string>({
 }>) {
   const [open, setOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const listboxRef = React.useRef<HTMLDivElement>(null);
+  const [listboxPosition, setListboxPosition] = React.useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 0 });
   const closeTimerRef = React.useRef<number | undefined>(undefined);
   const dropdownId = useId().replace(/[^a-zA-Z0-9_-]+/g, "") || "dropdown";
   const activeIndex = options.findIndex((o) => o.value === value);
@@ -101,6 +103,30 @@ export function Dropdown<T extends string>({
     }
   }
 
+  const updatePosition = React.useCallback(() => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    setListboxPosition({
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+    });
+  }, []);
+
+  React.useLayoutEffect(() => {
+    if (open) {
+      updatePosition();
+      const handleResize = () => updatePosition();
+      const handleScroll = () => updatePosition();
+      window.addEventListener("resize", handleResize);
+      window.addEventListener("scroll", handleScroll, true);
+      return () => {
+        window.removeEventListener("resize", handleResize);
+        window.removeEventListener("scroll", handleScroll, true);
+      };
+    }
+  }, [open, updatePosition]);
+
   React.useEffect(() => {
     return () => {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
@@ -110,7 +136,7 @@ export function Dropdown<T extends string>({
   React.useEffect(() => {
     if (!open) return;
     function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node) && listboxRef.current && !listboxRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     }
@@ -195,11 +221,19 @@ export function Dropdown<T extends string>({
           <path d="M4 6l4 4 4-4" />
         </svg>
       </button>
-      {open ? (
+      {open && typeof document !== "undefined" ? createPortal(
         <div
+          ref={listboxRef}
           id={listboxId}
           role="listbox"
-          className="absolute left-0 z-50 mt-1 w-max min-w-full rounded-[var(--radius-lg)] border border-border bg-background-elevated py-1 shadow-lg animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)]"
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+          className="fixed z-[300] w-max rounded-[var(--radius-lg)] border border-border bg-background-elevated py-1 shadow-lg animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)]"
+          style={{
+            top: `${listboxPosition.top}px`,
+            left: `${listboxPosition.left}px`,
+            minWidth: `${listboxPosition.width}px`,
+          }}
         >
           {options.map((option, index) => {
             const optionId = `${dropdownId}-option-${index}-${sanitizeIdSegment(option.value)}`;
@@ -226,7 +260,8 @@ export function Dropdown<T extends string>({
               </button>
             );
           })}
-        </div>
+        </div>,
+        document.body
       ) : null}
     </div>
   );

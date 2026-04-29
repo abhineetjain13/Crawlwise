@@ -5,7 +5,7 @@ import json
 from json import loads as parse_json
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.field_value_core import _safe_int
+from app.services.field_value_core import safe_int as _safe_int
 
 
 class RemoteOkAdapter(BaseAdapter):

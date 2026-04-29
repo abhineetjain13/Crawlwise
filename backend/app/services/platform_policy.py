@@ -15,12 +15,6 @@ from app.services.config.surface_hints import GENERIC_PLATFORM_URL_TOKENS, surfa
 from app.services.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
-_DEFAULT_ADAPTER_ORDER = (
-    "amazon",
-    "walmart",
-    "ebay",
-    "shopify",
-)
 
 
 class PlatformConfig(BaseModel):
@@ -147,9 +141,6 @@ def configured_adapter_names() -> tuple[str, ...]:
             normalized = str(adapter_name or "").strip().lower()
             if normalized and normalized not in ordered_names:
                 ordered_names.append(normalized)
-    for adapter_name in _DEFAULT_ADAPTER_ORDER:
-        if adapter_name not in ordered_names:
-            ordered_names.append(adapter_name)
     return tuple(ordered_names)
 
 

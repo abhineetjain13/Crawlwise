@@ -15,17 +15,19 @@ from app.services.field_value_core import (
     text_or_none,
 )
 from app.services.field_value_dom import dedupe_image_urls
-from app.services.extract.detail_dom_extractor import _variant_option_value_is_noise
+from app.services.extract.detail_dom_extractor import (
+    variant_option_value_is_noise as _variant_option_value_is_noise,
+)
 from app.services.extract.detail_identity import (
-    _detail_identity_codes_from_record_fields,
-    _detail_identity_codes_from_url,
-    _detail_identity_tokens,
-    _detail_title_from_url,
-    _detail_url_looks_like_product,
-    _detail_url_matches_requested_identity,
-    _record_matches_requested_detail_identity,
-    _semantic_detail_identity_tokens,
     detail_identity_codes_match,
+    detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
+    detail_identity_codes_from_url as _detail_identity_codes_from_url,
+    detail_identity_tokens as _detail_identity_tokens,
+    detail_title_from_url as _detail_title_from_url,
+    detail_url_looks_like_product as _detail_url_looks_like_product,
+    detail_url_matches_requested_identity as _detail_url_matches_requested_identity,
+    record_matches_requested_detail_identity as _record_matches_requested_detail_identity,
+    semantic_detail_identity_tokens as _semantic_detail_identity_tokens,
 )
 from app.services.extract.detail_price_extractor import (
     backfill_detail_price_from_html,
@@ -911,3 +913,9 @@ def _reconcile_detail_availability_from_variants(record: dict[str, Any]) -> None
         record["availability"] = "in_stock"
     elif availabilities == {"out_of_stock"}:
         record["availability"] = "out_of_stock"
+
+
+dedupe_primary_and_additional_images = _dedupe_primary_and_additional_images
+detail_image_matches_primary_family = _detail_image_matches_primary_family
+detail_title_looks_like_placeholder = _detail_title_looks_like_placeholder
+sanitize_variant_row = _sanitize_variant_row

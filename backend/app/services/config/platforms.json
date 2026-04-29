@@ -363,7 +363,34 @@
       ]
     },
     {
+      "family": "amazon",
+      "adapter_names": [
+        "amazon"
+      ],
+      "job_platform": false,
+      "requires_browser": false
+    },
+    {
+      "family": "walmart",
+      "adapter_names": [
+        "walmart"
+      ],
+      "job_platform": false,
+      "requires_browser": false
+    },
+    {
+      "family": "ebay",
+      "adapter_names": [
+        "ebay"
+      ],
+      "job_platform": false,
+      "requires_browser": false
+    },
+    {
       "family": "shopify",
+      "adapter_names": [
+        "shopify"
+      ],
       "network_signature_patterns": [
         "shopify",
         "product.js",

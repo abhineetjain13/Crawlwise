@@ -17,7 +17,7 @@ from app.services.field_policy import (
     NORMALIZED_REQUESTED_FIELD_ALIASES,
     normalize_requested_field,
 )
-from app.services.field_value_core import _coerce_int
+from app.services.field_value_core import coerce_int as _coerce_int
 
 _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))

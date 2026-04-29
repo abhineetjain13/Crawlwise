@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import DomainMemory
-from app.services.field_value_core import _safe_int
+from app.services.field_value_core import safe_int as _safe_int
 
 
 def _normalized_selector_rule(row: dict[str, object]) -> dict[str, object]:

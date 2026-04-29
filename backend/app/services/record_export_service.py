@@ -27,7 +27,10 @@ from app.services.config.field_mappings import (
     PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS,
     PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS,
 )
-from app.services.field_value_core import _object_dict, _object_list
+from app.services.field_value_core import (
+    object_dict as _object_dict,
+    object_list as _object_list,
+)
 from app.schemas.crawl import CrawlRecordProvenanceResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession

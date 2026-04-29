@@ -16,9 +16,6 @@ from app.services.acquisition.browser_identity import (
 )
 from app.services.acquisition.browser_runtime import (
     SharedBrowserRuntime as _SharedBrowserRuntime,
-    _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES,
-    _display_proxy,
-    _proxy_scheme,
     build_failed_browser_diagnostics,
     browser_fetch,
     browser_runtime_snapshot,
@@ -31,6 +28,7 @@ from app.services.acquisition.browser_runtime import (
     shutdown_browser_runtime,
     temporary_browser_page,
 )
+from app.services.acquisition.browser_proxy_config import display_proxy, proxy_scheme
 from app.services.acquisition.host_protection_memory import (
     HostProtectionPolicy,
     load_host_protection_policy,
@@ -529,8 +527,8 @@ async def _run_browser_attempts(
                 )
                 result.browser_diagnostics = {
                     **dict(result.browser_diagnostics or {}),
-                    "proxy_url_redacted": _display_proxy(proxy),
-                    "proxy_scheme": _proxy_scheme(proxy),
+                    "proxy_url_redacted": display_proxy(proxy),
+                    "proxy_scheme": proxy_scheme(proxy),
                     "browser_proxy_mode": "launch" if proxy else "direct",
                     "proxy_attempt_index": proxy_attempt_index,
                     "engine_attempt_index": engine_index,
@@ -573,7 +571,7 @@ async def _run_browser_attempts(
                     proxy_attempt_index=proxy_attempt_index,
                     browser_engine=browser_engine,
                     browser_binary=browser_engine,
-                    bridge_used=_proxy_scheme(proxy) in {"socks5", "socks5h"},
+                    bridge_used=proxy_scheme(proxy) in {"socks5", "socks5h"},
                     escalation_lane=escalation_lane,
                     host_policy_snapshot=host_policy_snapshot,
                 )
@@ -683,8 +681,8 @@ async def _try_browser_http_handoff(
                 **dict(result.browser_diagnostics or {}),
                 "browser_http_handoff": True,
                 "handoff_cookie_engine": engine,
-                "proxy_url_redacted": _display_proxy(proxy),
-                "proxy_scheme": _proxy_scheme(proxy),
+                "proxy_url_redacted": display_proxy(proxy),
+                "proxy_scheme": proxy_scheme(proxy),
             }
             if not bool(result.blocked) and not await _should_escalate_to_browser_async(
                 result,
@@ -1102,7 +1100,6 @@ async def _sleep_before_retry(attempt: int) -> None:
 __all__ = [
     "PageFetchResult",
     "SharedBrowserRuntime",
-    "_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES",
     "_classify_network_endpoint",
     "_curl_fetch",
     "_http_fetch",

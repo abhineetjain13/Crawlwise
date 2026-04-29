@@ -663,3 +663,18 @@ def _detail_redirect_identity_is_mismatched(
         record,
         requested_page_url=requested,
     )
+
+
+detail_identity_codes_from_record_fields = _detail_identity_codes_from_record_fields
+detail_identity_codes_from_url = _detail_identity_codes_from_url
+detail_identity_tokens = _detail_identity_tokens
+detail_redirect_identity_is_mismatched = _detail_redirect_identity_is_mismatched
+detail_title_from_url = _detail_title_from_url
+detail_url_candidate_is_low_signal = _detail_url_candidate_is_low_signal
+detail_url_is_collection_like = _detail_url_is_collection_like
+detail_url_is_utility = _detail_url_is_utility
+detail_url_looks_like_product = _detail_url_looks_like_product
+detail_url_matches_requested_identity = _detail_url_matches_requested_identity
+preferred_detail_identity_url = _preferred_detail_identity_url
+record_matches_requested_detail_identity = _record_matches_requested_detail_identity
+semantic_detail_identity_tokens = _semantic_detail_identity_tokens

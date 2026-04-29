@@ -429,7 +429,7 @@ async def _recover_interrupted_navigation(
         await page.wait_for_load_state(recovery_state, timeout=timeout_ms)
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except (asyncio.TimeoutError, PlaywrightTimeoutError, PlaywrightError):
         return False
     return _urls_match_for_navigation(url, str(getattr(page, "url", "") or ""))
 
@@ -646,7 +646,7 @@ async def settle_browser_page_impl(
                     networkidle_timeout_cap_ms,
                 ),
             )
-        except Exception:
+        except PlaywrightTimeoutError:
             networkidle_timed_out = True
         phase_timings_ms["networkidle_wait"] = elapsed_ms(networkidle_wait_started_at)
         current_probe = await _cached_probe(refresh_html=True)
@@ -987,7 +987,7 @@ async def dismiss_safe_location_interstitial(page: Any) -> dict[str, object]:
             still_present_result = {"status": "still_present", "selector": selector}
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (asyncio.TimeoutError, PlaywrightTimeoutError, PlaywrightError):
             logger.debug(
                 "Location interstitial dismissal probe failed selector=%s url=%s",
                 selector,
@@ -1071,7 +1071,7 @@ async def _dismiss_location_interstitial_by_text(page: Any) -> dict[str, object]
             }
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except (asyncio.TimeoutError, PlaywrightTimeoutError, PlaywrightError):
         logger.debug(
             "Location interstitial text dismissal failed url=%s",
             getattr(page, "url", ""),
@@ -1085,7 +1085,7 @@ async def _page_has_location_interstitial(page: Any) -> bool:
         return location_interstitial_detected(await get_page_html(page))
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except (asyncio.TimeoutError, PlaywrightTimeoutError, PlaywrightError):
         logger.debug(
             "Location interstitial post-click verification failed url=%s",
             getattr(page, "url", ""),
@@ -1139,6 +1139,16 @@ async def _generate_page_markdown(
     surface: str | None = None,
 ) -> str:
     detail_surface = "detail" in str(surface or "").strip().lower()
+    soup = _prepare_markdown_soup(html, detail_surface=detail_surface)
+    markdown, _link_lines = _choose_markdown_payload(
+        soup,
+        detail_surface=detail_surface,
+    )
+    markdown = await _append_accessibility_markdown(page, markdown)
+    return markdown.strip()
+
+
+def _prepare_markdown_soup(html: str, *, detail_surface: bool) -> BeautifulSoup:
     soup = BeautifulSoup(str(html or ""), "html.parser")
     for node in list(soup.find_all(True)):
         if not isinstance(getattr(node, "attrs", None), dict):
@@ -1163,6 +1173,14 @@ async def _generate_page_markdown(
             node.decompose()
     if detail_surface:
         _prune_detail_markdown_noise(soup)
+    return soup
+
+
+def _choose_markdown_payload(
+    soup: BeautifulSoup,
+    *,
+    detail_surface: bool,
+) -> tuple[str, list[str]]:
     content_root = _select_markdown_root(soup)
     body_or_soup = soup.body if soup.body is not None else soup
     markdown, link_lines = _serialize_markdown_root(content_root)
@@ -1183,24 +1201,31 @@ async def _generate_page_markdown(
             if markdown
             else "Visible links:\n" + "\n".join(link_lines[:120])
         )
+    return markdown, link_lines
+
+
+async def _append_accessibility_markdown(page: Any, markdown: str) -> str:
     accessibility = getattr(page, "accessibility", None)
     snapshot_fn = getattr(accessibility, "snapshot", None)
-    if snapshot_fn is not None:
-        try:
-            snapshot = await asyncio.wait_for(
-                snapshot_fn(),
-                timeout=crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds,
-            )
-        except Exception:
-            snapshot = None
-        aria_text = _serialize_accessibility_snapshot(snapshot)
-        if aria_text:
-            markdown = (
-                f"{markdown}\n\n=== SEMANTIC ACCESSIBILITY SNAPSHOT ===\n{aria_text}"
-                if markdown
-                else f"=== SEMANTIC ACCESSIBILITY SNAPSHOT ===\n{aria_text}"
-            )
-    return markdown.strip()
+    if snapshot_fn is None:
+        return markdown
+    try:
+        snapshot = await asyncio.wait_for(
+            snapshot_fn(),
+            timeout=crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds,
+        )
+    except (asyncio.TimeoutError, PlaywrightError):
+        return markdown
+    aria_text = _serialize_accessibility_snapshot(snapshot)
+    if not aria_text:
+        return markdown
+    return (
+        f"{markdown}\n\n=== SEMANTIC ACCESSIBILITY SNAPSHOT ===\n{aria_text}"
+        if markdown
+        else f"=== SEMANTIC ACCESSIBILITY SNAPSHOT ===\n{aria_text}"
+    )
+
+
 def _serialize_markdown_root(root: BeautifulSoup | Any) -> tuple[str, list[str]]:
     text = root.get_text("\n", strip=True)
     lines = [

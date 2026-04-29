@@ -23,7 +23,7 @@ from app.services.domain_memory_service import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import canonical_requested_fields, field_allowed_for_surface
-from app.services.field_value_core import _safe_int
+from app.services.field_value_core import safe_int as _safe_int
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import extract_selector_value, validate_or_convert_xpath
 

@@ -579,6 +579,8 @@ function getLogIconStyle(level: string, message: string): { iconCls: string; bgC
 
   if (msg.includes("starting crawl")) return { iconCls: "text-sky-500", bgCls: "bg-sky-500/10" };
   if (msg.includes("ignoring robots.txt")) return { iconCls: "text-orange-400", bgCls: "bg-orange-400/10" };
+  if (msg.includes("resolved")) return { iconCls: "text-slate-400", bgCls: "bg-slate-400/10" };
+  if (msg.includes("acquired")) return { iconCls: "text-indigo-400", bgCls: "bg-indigo-400/10" };
   if (msg.includes("extracted")) return { iconCls: "text-emerald-400", bgCls: "bg-emerald-400/12" };
   if (msg.includes("normalized") || msg.includes("normalised")) return { iconCls: "text-amber-400", bgCls: "bg-amber-400/12" };
   if (msg.includes("persisted")) return { iconCls: "text-fuchsia-400", bgCls: "bg-fuchsia-400/12" };
@@ -596,8 +598,8 @@ function getLogIconStyle(level: string, message: string): { iconCls: string; bgC
     return { iconCls: "text-emerald-500", bgCls: "bg-emerald-500/10" };
   if (msg.includes("retry") || msg.includes("retrying"))
     return { iconCls: "text-sky-400", bgCls: "bg-sky-400/12" };
-  if (level === "debug") return { iconCls: "text-muted/40", bgCls: "bg-transparent" };
-  return { iconCls: "text-muted/60", bgCls: "bg-background-alt" };
+  if (level === "debug") return { iconCls: "text-white/20", bgCls: "bg-transparent" };
+  return { iconCls: "text-white/40", bgCls: "bg-white/5" };
 }
 
 function logMessageIsError(level: string, message: string): boolean {
@@ -616,28 +618,89 @@ function logMessageIsError(level: string, message: string): boolean {
   return /^\s*(error|failed)\b/i.test(text);
 }
 
-function compressLogMessage(message: string): string {
-  // Strip [ROBOTS] prefix noise
-  let msg = message.replace(/^\[ROBOTS\]\s*/i, "");
-  // Condense verbose browser launch lines
-  msg = msg.replace(
+function sanitizeLogMessage(message: string) {
+  return String(message || "")
+    .replace(/\s*\[corr=[^\]]+\]/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function ShortenedUrl({ url }: { url: string }) {
+  let display = url;
+  try {
+    const parsed = new URL(url);
+    const domain = parsed.hostname.replace(/^www\./, "");
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const lastPart = parts.at(-1) || "";
+    if (parts.length > 1) {
+      display = `${domain}/.../${lastPart}`;
+    } else {
+      display = domain + (lastPart ? `/${lastPart}` : "");
+    }
+  } catch {
+    display = url.length > 40 ? url.slice(0, 40) + "…" : url;
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-blue-400/60 hover:text-blue-400 underline underline-offset-2 decoration-blue-400/20 transition-colors"
+      title={url}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {display}
+    </a>
+  );
+}
+
+function renderLogContent(message: string, isStartingCrawl: boolean): React.ReactNode {
+  let text = sanitizeLogMessage(message).replace(/^\[ROBOTS\]\s*/i, "");
+  text = text.replace(
     /launched headless browser \(([^,]+),[^)]+\)/i,
     (_, engine) => `Launched ${engine.trim()} browser`,
   );
-  // Condense URL lines to just the domain+path snippet
-  msg = msg.replace(
-    /(acquiring|fetching)\s+(https?:\/\/[^\s]+)/i,
-    (_, verb, url) => {
-      try {
-        const parsed = new URL(url);
-        const slug = (parsed.pathname + parsed.search).slice(0, 55);
-        return `${verb.charAt(0).toUpperCase() + verb.slice(1).toLowerCase()} ${parsed.hostname}${slug}${slug.length >= 55 ? "…" : ""}`;
-      } catch {
-        return `${verb} ${url.slice(0, 60)}…`;
+
+  const urlRegex = /https?:\/\/[^\s]+/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = urlRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    parts.push(<ShortenedUrl key={match.index} url={match[0]} />);
+    lastIndex = urlRegex.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  const baseContent = parts.length > 0 ? parts : [text];
+
+  if (isStartingCrawl) {
+    return baseContent.map((part, i) => {
+      if (typeof part === "string") {
+        const counterMatch = part.match(/\(\d+\/\d+\)/);
+        if (counterMatch && counterMatch.index !== undefined) {
+          const before = part.slice(0, counterMatch.index);
+          const after = part.slice(counterMatch.index + counterMatch[0].length);
+          return (
+            <React.Fragment key={i}>
+              {before}
+              <span className="text-blue-400/70 font-extrabold">{counterMatch[0]}</span>
+              {after}
+            </React.Fragment>
+          );
+        }
       }
-    },
-  );
-  return msg;
+      return part;
+    });
+  }
+
+  return baseContent;
 }
 
 export const LogTerminal = memo(function LogTerminal({
@@ -651,73 +714,67 @@ export const LogTerminal = memo(function LogTerminal({
 }>) {
   const ref = useLogViewport(logs.length, viewportRef);
   const lastId = logs.length > 0 ? logs[logs.length - 1].id : null;
+
   return (
-    <div
-      ref={ref}
-      className="crawl-activity-log min-h-[50vh] max-h-[72vh] overflow-y-auto divide-y divide-divider/30"
-      role="log"
-      aria-live={live ? "polite" : "off"}
-      aria-atomic="false"
-    >
-      {logs.length
-        ? logs.map((log) => {
-            const Icon = getLogIcon(log.level, log.message);
-            const { iconCls, bgCls } = getLogIconStyle(log.level, log.message);
-            const compressed = compressLogMessage(sanitizeLogMessage(log.message));
-            const isStartingCrawl = log.message.toLowerCase().includes("starting crawl");
-            const isNewest = log.id === lastId;
+    <div className="flex flex-col rounded-xl border border-white/5 bg-[var(--terminal-code-bg)] shadow-2xl overflow-hidden">
+      {/* Terminal Header */}
+      <div className="flex items-center gap-1.5 px-4 py-2 border-b border-white/5 bg-white/5">
+        <div className="size-2.5 rounded-full bg-red-500/20 border border-red-500/40" />
+        <div className="size-2.5 rounded-full bg-amber-500/20 border border-amber-500/40" />
+        <div className="size-2.5 rounded-full bg-emerald-500/20 border border-emerald-500/40" />
+        <span className="ml-2 text-[10px] font-bold uppercase tracking-widest text-[var(--terminal-fg)] opacity-40 font-mono">activity_stream.log</span>
+      </div>
 
-            // Highlight counter (n/m) in starting crawl lines
-            let displayMessage: React.ReactNode = compressed;
-            if (isStartingCrawl) {
-              const counterMatch = compressed.match(/\(\d+\/\d+\)/);
-              if (counterMatch && counterMatch.index !== undefined) {
-                const before = compressed.slice(0, counterMatch.index);
-                const after = compressed.slice(counterMatch.index + counterMatch[0].length);
-                displayMessage = (
-                  <>
-                    {before}
-                    <span className="text-accent-bright font-extrabold">{counterMatch[0]}</span>
-                    {after}
-                  </>
-                );
-              }
-            }
+      <div
+        ref={ref}
+        className="crawl-activity-log min-h-[50vh] max-h-[72vh] overflow-y-auto p-2"
+        role="log"
+        aria-live={live ? "polite" : "off"}
+        aria-atomic="false"
+      >
+        {logs.length
+          ? logs.map((log) => {
+              const Icon = getLogIcon(log.level, log.message);
+              const { iconCls, bgCls } = getLogIconStyle(log.level, log.message);
+              const isStartingCrawl = log.message.toLowerCase().includes("starting crawl");
+              const isNewest = log.id === lastId;
+              const displayMessage = renderLogContent(log.message, isStartingCrawl);
 
-            return (
-              <div
-                key={log.id}
-                className={cn(
-                  "group flex items-center gap-3 px-4 py-1.5 transition-colors",
-                  "odd:bg-background-alt/20 hover:bg-background-alt/60",
-                  isStartingCrawl && "bg-accent/5 border-l-2 border-accent/30",
-                  isNewest && live && "log-entry-animate",
-                )}
-                title={log.message}
-              >
-                <span className="w-[82px] shrink-0 font-mono text-sm tabular-nums text-foreground/90">
-                  {formatTimeHms(log.created_at)}
-                </span>
-                <div className={cn(
-                  "flex size-5 shrink-0 items-center justify-center rounded-full",
-                  bgCls,
-                )}>
-                  <Icon className={cn("size-3", iconCls)} aria-hidden="true" />
+              return (
+                <div
+                  key={log.id}
+                  className={cn(
+                    "group flex items-start gap-3 px-3 py-1 font-mono transition-colors rounded-md",
+                    "hover:bg-white/5",
+                    isStartingCrawl && "bg-white/[0.04] my-1",
+                    isNewest && live && "log-entry-animate",
+                  )}
+                  title={log.message}
+                >
+                  <span className="w-[72px] shrink-0 text-[11px] tabular-nums text-[var(--terminal-fg)] opacity-40 mt-0.5">
+                    {formatTimeHms(log.created_at)}
+                  </span>
+                  <div className={cn(
+                    "flex size-4 shrink-0 items-center justify-center rounded-sm mt-0.5",
+                    bgCls,
+                  )}>
+                    <Icon className={cn("size-2.5", iconCls)} aria-hidden="true" />
+                  </div>
+                  <span className={cn(
+                    "min-w-0 flex-1 text-[13px] leading-relaxed break-words",
+                    isStartingCrawl ? "text-[var(--terminal-fg)] opacity-100" : "text-[var(--terminal-fg)] opacity-85"
+                  )}>
+                    {displayMessage}
+                  </span>
                 </div>
-                <span className={cn(
-                  "min-w-0 flex-1 text-sm leading-snug",
-                  isStartingCrawl ? "font-bold text-foreground" : "text-foreground/90"
-                )}>
-                  {displayMessage}
-                </span>
-              </div>
-            );
-          })
-        : (
-          <div className="px-4 py-3 text-sm text-muted">
-            {live ? "Waiting for logs…" : "No logs recorded"}
-          </div>
-        )}
+              );
+            })
+          : (
+            <div className="px-4 py-8 text-center text-sm text-muted font-mono italic">
+              {live ? "Waiting for log stream..." : "No log activity recorded"}
+            </div>
+          )}
+      </div>
     </div>
   );
 });
@@ -1429,12 +1486,7 @@ function normalizeLogLevel(level: string) {
   return String(level || "").trim().toUpperCase();
 }
 
-function sanitizeLogMessage(message: string) {
-  return String(message || "")
-    .replace(/\s*\[corr=[^\]]+\]/gi, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null>) {
+function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null>) {
   const internalRef = useRef<HTMLDivElement | null>(null);
   const targetRef = ref ?? internalRef;
 

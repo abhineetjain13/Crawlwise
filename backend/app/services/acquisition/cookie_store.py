@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.models.crawl import DomainCookieMemory
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.domain_utils import normalize_domain
-from app.services.field_value_core import _object_list
+from app.services.field_value_core import object_list as _object_list
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
