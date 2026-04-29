@@ -28,37 +28,53 @@ def _context_spec(
     )
 
 
+def _make_fingerprint(
+    *,
+    screen: dict[str, object] | None = None,
+    navigator: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
+):
+    default_user_agent = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/145.0.0.0 Safari/537.36"
+    )
+    navigator_data = {
+        "userAgent": default_user_agent,
+        "language": "en-US",
+        "maxTouchPoints": 0,
+        "userAgentData": {
+            "brands": [{"brand": "Google Chrome", "version": "145"}],
+            "mobile": False,
+        },
+        **dict(navigator or {}),
+    }
+    screen_data = {
+        "width": 1440,
+        "height": 900,
+        "devicePixelRatio": 2,
+        **dict(screen or {}),
+    }
+    header_data = {
+        "User-Agent": navigator_data["userAgent"],
+        "Accept": "text/html",
+        "Accept-Language": "en-US;q=1.0",
+        "sec-ch-ua": '"Google Chrome";v="145"',
+        "Accept-Encoding": "gzip, br",
+        "Sec-Fetch-Mode": "navigate",
+        **dict(headers or {}),
+    }
+    return SimpleNamespace(
+        screen=SimpleNamespace(**screen_data),
+        navigator=SimpleNamespace(**navigator_data),
+        headers=header_data,
+    )
+
+
 def test_build_playwright_context_options_uses_generated_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fingerprint = SimpleNamespace(
-        screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=2),
-        navigator=SimpleNamespace(
-            userAgent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/145.0.0.0 Safari/537.36"
-            ),
-            language="en-US",
-            maxTouchPoints=0,
-            userAgentData={
-                "brands": [{"brand": "Google Chrome", "version": "145"}],
-                "mobile": False,
-            },
-        ),
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/145.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html",
-            "Accept-Language": "en-US;q=1.0",
-            "sec-ch-ua": '"Google Chrome";v="145"',
-            "Accept-Encoding": "gzip, br",
-            "Sec-Fetch-Mode": "navigate",
-        },
-    )
+    fingerprint = _make_fingerprint()
 
     monkeypatch.setattr(
         browser_identity,
@@ -112,22 +128,9 @@ def test_resolve_timezone_id_prefers_explicit_locality_timezone() -> None:
 def test_create_browser_identity_keeps_desktop_viewport_shorter_than_screen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fingerprint = SimpleNamespace(
-        screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=1.5),
-        navigator=SimpleNamespace(
-            userAgent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/145.0.0.0 Safari/537.36"
-            ),
-            language="en-US",
-            maxTouchPoints=0,
-            userAgentData={
-                "brands": [{"brand": "Google Chrome", "version": "145"}],
-                "mobile": False,
-            },
-        ),
-        headers={"Accept": "text/html"},
+    fingerprint = _make_fingerprint(
+        screen={"devicePixelRatio": 1.5},
+        headers={"User-Agent": "", "sec-ch-ua": ""},
     )
 
     monkeypatch.setattr(
@@ -149,25 +152,16 @@ def test_create_browser_identity_keeps_desktop_viewport_shorter_than_screen(
 def test_create_browser_identity_keeps_outer_height_below_screen_when_frame_saturates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fingerprint = SimpleNamespace(
-        screen=SimpleNamespace(
-            width=1366,
-            height=768,
-            availWidth=1366,
-            availHeight=728,
-            devicePixelRatio=1,
-        ),
-        navigator=SimpleNamespace(
-            userAgent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/145.0.0.0 Safari/537.36"
-            ),
-            language="en-US",
-            maxTouchPoints=0,
-            userAgentData={"brands": [], "mobile": False},
-        ),
-        headers={"Accept": "text/html"},
+    fingerprint = _make_fingerprint(
+        screen={
+            "width": 1366,
+            "height": 768,
+            "availWidth": 1366,
+            "availHeight": 728,
+            "devicePixelRatio": 1,
+        },
+        navigator={"userAgentData": {"brands": [], "mobile": False}},
+        headers={"User-Agent": "", "sec-ch-ua": ""},
     )
 
     monkeypatch.setattr(
@@ -186,21 +180,14 @@ def test_create_browser_identity_keeps_outer_height_below_screen_when_frame_satu
 def test_create_browser_identity_aligns_runtime_hardware_to_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fingerprint = SimpleNamespace(
-        screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=1.25),
-        navigator=SimpleNamespace(
-            userAgent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/145.0.0.0 Safari/537.36"
-            ),
-            language="en-US",
-            maxTouchPoints=0,
-            hardwareConcurrency=20,
-            deviceMemory=4,
-            userAgentData={"brands": [], "mobile": False},
-        ),
-        headers={"Accept": "text/html"},
+    fingerprint = _make_fingerprint(
+        screen={"devicePixelRatio": 1.25},
+        navigator={
+            "hardwareConcurrency": 20,
+            "deviceMemory": 4,
+            "userAgentData": {"brands": [], "mobile": False},
+        },
+        headers={"User-Agent": "", "sec-ch-ua": ""},
     )
 
     monkeypatch.setattr(
@@ -225,27 +212,17 @@ def test_create_browser_identity_aligns_runtime_hardware_to_host(
 def test_create_browser_identity_aligns_platform_to_user_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fingerprint = SimpleNamespace(
-        screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=1.25),
-        navigator=SimpleNamespace(
-            userAgent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/145.0.0.0 Safari/537.36"
-            ),
-            language="en-US",
-            platform="Linux x86_64",
-            maxTouchPoints=0,
-            userAgentData={
+    fingerprint = _make_fingerprint(
+        screen={"devicePixelRatio": 1.25},
+        navigator={
+            "platform": "Linux x86_64",
+            "userAgentData": {
                 "brands": [{"brand": "Google Chrome", "version": "145"}],
                 "mobile": False,
                 "platform": "Linux",
             },
-        ),
-        headers={
-            "Accept": "text/html",
-            "sec-ch-ua-platform": '"Linux"',
         },
+        headers={"sec-ch-ua-platform": '"Linux"'},
     )
 
     monkeypatch.setattr(
@@ -473,44 +450,39 @@ def test_build_playwright_context_options_replaces_malformed_client_hints_withou
 
 def test_build_playwright_context_options_uses_configured_min_chrome_version(
     monkeypatch: pytest.MonkeyPatch,
+    patch_settings,
 ) -> None:
-    old_min_version = crawler_runtime_settings.browser_identity_min_chrome_version
-    crawler_runtime_settings.browser_identity_min_chrome_version = 130
-    try:
-        fingerprint = SimpleNamespace(
-            screen=SimpleNamespace(width=1366, height=768, devicePixelRatio=1),
-            navigator=SimpleNamespace(
-                userAgent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/129.0.0.0 Safari/537.36"
-                ),
-                language="en-US",
-                maxTouchPoints=0,
-                userAgentData={
-                    "brands": [{"brand": "Google Chrome", "version": "129"}],
-                    "mobile": False,
-                    "platform": "Windows",
-                    "uaFullVersion": "129.0.0.0",
-                },
+    patch_settings(browser_identity_min_chrome_version=130)
+    fingerprint = _make_fingerprint(
+        screen={"width": 1366, "height": 768, "devicePixelRatio": 1},
+        navigator={
+            "userAgent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/129.0.0.0 Safari/537.36"
             ),
-            headers={"Accept": "text/html"},
-        )
-        attempts = {"count": 0}
+            "userAgentData": {
+                "brands": [{"brand": "Google Chrome", "version": "129"}],
+                "mobile": False,
+                "platform": "Windows",
+                "uaFullVersion": "129.0.0.0",
+            },
+        },
+        headers={"User-Agent": "", "sec-ch-ua": ""},
+    )
+    attempts = {"count": 0}
 
-        def _generate():
-            attempts["count"] += 1
-            return fingerprint
+    def _generate():
+        attempts["count"] += 1
+        return fingerprint
 
-        monkeypatch.setattr(
-            browser_identity,
-            "_FINGERPRINT_GENERATOR",
-            SimpleNamespace(generate=_generate),
-        )
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=_generate),
+    )
 
-        options = browser_identity.build_playwright_context_options()
-    finally:
-        crawler_runtime_settings.browser_identity_min_chrome_version = old_min_version
+    options = browser_identity.build_playwright_context_options()
 
     assert attempts["count"] == 3
     assert options["user_agent"].endswith("Chrome/129.0.0.0 Safari/537.36")
@@ -3380,6 +3352,38 @@ async def test_load_storage_state_for_domain_filters_existing_challenge_state(
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_list_domain_cookie_memory_counts_stored_entries(db_session) -> None:
+    domain = f"stored-count-{uuid4().hex}.example.com"
+    db_session.add(
+        DomainCookieMemory(
+            domain=domain,
+            storage_state={
+                "cookies": [
+                    {
+                        "name": "session",
+                        "value": "safe",
+                        "domain": f".{domain}",
+                        "path": "/",
+                    },
+                    "legacy-cookie-row",
+                ],
+                "origins": [
+                    {"origin": f"https://{domain}", "localStorage": []},
+                    "legacy-origin-row",
+                ],
+            },
+            state_fingerprint="stored-count",
+        )
+    )
+    await db_session.commit()
+
+    rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
+
+    assert rows[0]["cookie_count"] == 2
+    assert rows[0]["origin_count"] == 2
 
 
 @pytest.mark.asyncio

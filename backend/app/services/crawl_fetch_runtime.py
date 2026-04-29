@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 import logging
 import secrets
 from dataclasses import dataclass, field
@@ -153,19 +154,6 @@ class SharedBrowserRuntime(_SharedBrowserRuntime):
         )
 
 
-def _should_escalate_to_browser(
-    result: PageFetchResult,
-    *,
-    surface: str | None = None,
-    runtime_policy: dict[str, object] | None = None,
-) -> bool:
-    return should_escalate_to_browser(
-        result,
-        surface=surface,
-        runtime_policy=runtime_policy,
-    )
-
-
 async def _get_shared_http_client(*, proxy: str | None = None):
     return await get_shared_http_client(proxy=proxy)
 
@@ -181,77 +169,8 @@ async def _http_fetch(
         timeout_seconds,
         proxy=proxy,
         get_client=_get_shared_http_client,
-        blocked_html_checker=_is_blocked_html_async,
+        blocked_html_checker=is_blocked_html_async,
     )
-
-
-async def _curl_fetch(
-    url: str,
-    timeout_seconds: float,
-    *,
-    proxy: str | None = None,
-    cookie_header: str | None = None,
-) -> PageFetchResult:
-    return await curl_fetch(
-        url,
-        timeout_seconds,
-        proxy=proxy,
-        cookie_header=cookie_header,
-    )
-
-
-async def _browser_fetch(
-    url: str,
-    timeout_seconds: float,
-    *,
-    run_id: int | None = None,
-    proxy: str | None = None,
-    browser_engine: str = "patchright",
-    browser_reason: str | None = None,
-    escalation_lane: str | None = None,
-    host_policy_snapshot: dict[str, object] | None = None,
-    proxy_profile: dict[str, object] | None = None,
-    locality_profile: dict[str, object] | None = None,
-    surface: str | None = None,
-    traversal_mode: str | None = None,
-    requested_fields: list[str] | None = None,
-    listing_recovery_mode: str | None = None,
-    capture_page_markdown: bool = False,
-    capture_screenshot: bool = True,
-    max_pages: int = 1,
-    max_scrolls: int = 1,
-    max_records: int | None = None,
-    on_event=None,
-) -> PageFetchResult:
-    return await browser_fetch(
-        url,
-        timeout_seconds,
-        run_id=run_id,
-        proxy=proxy,
-        browser_engine=browser_engine,
-        browser_reason=browser_reason,
-        escalation_lane=escalation_lane,
-        host_policy_snapshot=host_policy_snapshot,
-        proxy_profile=proxy_profile,
-        locality_profile=locality_profile,
-        surface=surface,
-        traversal_mode=traversal_mode,
-        requested_fields=requested_fields,
-        listing_recovery_mode=listing_recovery_mode,
-        capture_page_markdown=capture_page_markdown,
-        capture_screenshot=capture_screenshot,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        max_records=max_records,
-        on_event=on_event,
-        runtime_provider=get_browser_runtime,
-        proxied_page_factory=temporary_browser_page,
-        blocked_html_checker=_is_blocked_html_async,
-    )
-
-
-async def _is_blocked_html_async(html: str, status_code: int) -> bool:
-    return await is_blocked_html_async(html, status_code)
 
 
 async def _should_escalate_to_browser_async(
@@ -261,28 +180,23 @@ async def _should_escalate_to_browser_async(
     runtime_policy: dict[str, object] | None = None,
 ) -> bool:
     return await asyncio.to_thread(
-        _should_escalate_to_browser,
+        should_escalate_to_browser,
         result,
         surface=surface,
         runtime_policy=runtime_policy,
     )
 
 
-def _should_capture_network_payload(*, url: str, content_type: str, headers, captured_count: int) -> bool:
-    return should_capture_network_payload(
-        url=url,
-        content_type=content_type,
-        headers=headers,
-        captured_count=captured_count,
-    )
-
-
-def _classify_network_endpoint(*, response_url: str, surface: str) -> dict[str, str]:
-    return classify_network_endpoint(response_url=response_url, surface=surface)
-
-
-async def _read_network_payload_body(response) -> NetworkPayloadReadResult:
-    return await read_network_payload_body(response)
+_curl_fetch = curl_fetch
+_browser_fetch = partial(
+    browser_fetch,
+    runtime_provider=get_browser_runtime,
+    proxied_page_factory=temporary_browser_page,
+    blocked_html_checker=is_blocked_html_async,
+)
+_should_capture_network_payload = should_capture_network_payload
+_classify_network_endpoint = classify_network_endpoint
+_read_network_payload_body = read_network_payload_body
 
 
 def _vendor_confirmed_block(result: PageFetchResult) -> str | None:

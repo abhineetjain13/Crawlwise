@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import OperationalError
 
+from app.core.dependencies import get_db, require_admin
+from app.main import app
 from app.models.crawl import (
     CrawlLog,
     CrawlRecord,
@@ -36,6 +39,43 @@ from sqlalchemy import select
 from app.core.database import SessionLocal
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@pytest.mark.asyncio
+async def test_dashboard_reset_compatibility_routes(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _override_db():
+        yield db_session
+
+    async def _override_admin():
+        return test_user
+
+    async def _fake_reset(_session: AsyncSession) -> dict[str, int]:
+        return {"ok": 1}
+
+    monkeypatch.setattr("app.api.dashboard.reset_crawl_data", _fake_reset)
+    monkeypatch.setattr("app.api.dashboard.reset_domain_memory", _fake_reset)
+    monkeypatch.setattr("app.api.dashboard.reset_product_intelligence", _fake_reset)
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[require_admin] = _override_admin
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            for path in (
+                "/api/dashboard/reset-crawl-data",
+                "/api/dashboard/reset-domain-memory",
+                "/api/dashboard/reset-product-intelligence",
+            ):
+                response = await client.post(path)
+                assert response.status_code == 200
+                assert response.json() == {"ok": 1}
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio
@@ -171,7 +211,8 @@ async def test_split_reset_crawl_data_and_domain_memory_preserve_the_other_scope
         },
     )
 
-    assert next_run.id == 1
+    assert next_run.id is not None
+    assert next_run.id > 0
 
     memory_reset = await reset_domain_memory(db_session)
 

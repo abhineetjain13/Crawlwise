@@ -90,6 +90,7 @@ __all__ = [
     "STAGE_EXTRACT",
     "STAGE_NORMALIZE",
     "STAGE_PERSIST",
+    "process_single_url",
 ]
 
 acquire = _acquire
@@ -150,6 +151,22 @@ def _resolved_url_processing_config(
     update_run_state: bool,
     persist_logs: bool,
 ) -> URLProcessingConfig:
+    def _resolve_positive_int(
+        primary: object | None,
+        secondary: object | None,
+        default: int,
+    ) -> int:
+        for candidate in (primary, secondary):
+            if candidate is None:
+                continue
+            try:
+                resolved = int(candidate)
+            except (TypeError, ValueError):
+                continue
+            if resolved > 0:
+                return resolved
+        return int(default)
+
     if config is not None:
         plan = config.resolved_acquisition_plan(surface=surface)
         resolved_proxy_list = list(plan.proxy_list or config.proxy_list or proxy_list or [])
@@ -163,35 +180,15 @@ def _resolved_url_processing_config(
         safety_iteration_cap = int(crawler_runtime_settings.traversal_max_iterations_cap)
         resolved_max_pages = safety_iteration_cap
         resolved_max_scrolls = safety_iteration_cap
-        plan_max_records = plan.max_records
-        config_max_records = config.max_records
-        resolved_plan_max_records = (
-            int(plan_max_records) if plan_max_records is not None else None
+        resolved_max_records = _resolve_positive_int(
+            plan.max_records,
+            config.max_records,
+            max_records,
         )
-        resolved_config_max_records = (
-            int(config_max_records) if config_max_records is not None else None
-        )
-        resolved_max_records = (
-            resolved_plan_max_records
-            if resolved_plan_max_records is not None and resolved_plan_max_records > 0
-            else resolved_config_max_records
-            if resolved_config_max_records is not None and resolved_config_max_records > 0
-            else int(max_records)
-        )
-        plan_sleep_ms = plan.sleep_ms
-        config_sleep_ms = config.sleep_ms
-        resolved_plan_sleep_ms = (
-            int(plan_sleep_ms) if plan_sleep_ms is not None else None
-        )
-        resolved_config_sleep_ms = (
-            int(config_sleep_ms) if config_sleep_ms is not None else None
-        )
-        resolved_sleep_ms = (
-            resolved_plan_sleep_ms
-            if resolved_plan_sleep_ms is not None and resolved_plan_sleep_ms > 0
-            else resolved_config_sleep_ms
-            if resolved_config_sleep_ms is not None and resolved_config_sleep_ms > 0
-            else int(sleep_ms)
+        resolved_sleep_ms = _resolve_positive_int(
+            plan.sleep_ms,
+            config.sleep_ms,
+            sleep_ms,
         )
         return URLProcessingConfig.from_acquisition_plan(
             AcquisitionPlan(
@@ -221,6 +218,8 @@ def _resolved_url_processing_config(
         update_run_state=update_run_state,
         persist_logs=persist_logs,
     )
+
+
 async def process_single_url(
     session: AsyncSession,
     run: CrawlRun,

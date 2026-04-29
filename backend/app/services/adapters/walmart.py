@@ -26,11 +26,7 @@ class WalmartAdapter(BaseAdapter):
                 records.append(record)
         elif surface in ("ecommerce_listing",):
             records = self._extract_listing(soup, next_data, url)
-        return AdapterResult(
-            records=records,
-            source_type="walmart_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     def _get_next_data(self, soup: BeautifulSoup) -> dict:
         node = soup.select_one("script#__NEXT_DATA__")

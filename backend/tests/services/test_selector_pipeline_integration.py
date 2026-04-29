@@ -4,8 +4,7 @@ import pytest
 
 from app.services._batch_runtime import process_run
 from app.services.acquisition.acquirer import AcquisitionResult
-from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.crawl_crud import create_crawl_run, get_run_records
+from app.services.crawl_crud import get_run_records
 from app.services.domain_memory_service import load_domain_memory, save_domain_memory
 
 
@@ -14,6 +13,7 @@ async def test_process_run_uses_domain_memory_selector_rules(
     db_session,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
+    create_test_run,
 ) -> None:
     await save_domain_memory(
         db_session,
@@ -42,14 +42,9 @@ async def test_process_run_uses_domain_memory_selector_rules(
     )
     await db_session.commit()
 
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/selector-widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/selector-widget",
+        surface="ecommerce_detail",
     )
 
     async def _fake_acquire(request):
@@ -86,6 +81,7 @@ async def test_process_run_applies_exact_and_generic_saved_rules_and_run_local_o
     db_session,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
+    create_test_run,
 ) -> None:
     await save_domain_memory(
         db_session,
@@ -137,21 +133,16 @@ async def test_process_run_applies_exact_and_generic_saved_rules_and_run_local_o
     )
     await db_session.commit()
 
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/runtime-selector-widget",
-            "surface": "ecommerce_detail",
-            "settings": {
-                "extraction_contract": [
-                    {
-                        "field_name": "price",
-                        "css_selector": ".run-price",
-                    }
-                ]
-            },
+    run = await create_test_run(
+        url="https://example.com/products/runtime-selector-widget",
+        surface="ecommerce_detail",
+        settings={
+            "extraction_contract": [
+                {
+                    "field_name": "price",
+                    "css_selector": ".run-price",
+                }
+            ]
         },
     )
 
@@ -220,106 +211,94 @@ async def test_process_run_self_heals_selectors_and_reuses_domain_memory_without
     db_session,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
+    create_test_run,
+    patch_settings,
 ) -> None:
-    original_enabled = crawler_runtime_settings.selector_self_heal_enabled
-    original_threshold = crawler_runtime_settings.selector_self_heal_min_confidence
-    crawler_runtime_settings.selector_self_heal_enabled = True
-    crawler_runtime_settings.selector_self_heal_min_confidence = 0.8
+    patch_settings(
+        selector_self_heal_enabled=True,
+        selector_self_heal_min_confidence=0.8,
+    )
     llm_calls: list[list[str]] = []
-    try:
-        first_run = await create_crawl_run(
-            db_session,
-            test_user.id,
-            {
-                "run_type": "crawl",
-                "url": "https://example.com/products/self-heal-widget",
-                "surface": "ecommerce_detail",
-                "additional_fields": ["specifications"],
-                "settings": {"llm_enabled": True},
-            },
-        )
-        second_run = await create_crawl_run(
-            db_session,
-            test_user.id,
-            {
-                "run_type": "crawl",
-                "url": "https://example.com/products/self-heal-widget",
-                "surface": "ecommerce_detail",
-                "additional_fields": ["specifications"],
-                "settings": {"llm_enabled": True},
-            },
-        )
+    first_run = await create_test_run(
+        url="https://example.com/products/self-heal-widget",
+        surface="ecommerce_detail",
+        additional_fields=["specifications"],
+        settings={"llm_enabled": True},
+    )
+    second_run = await create_test_run(
+        url="https://example.com/products/self-heal-widget",
+        surface="ecommerce_detail",
+        additional_fields=["specifications"],
+        settings={"llm_enabled": True},
+    )
 
-        async def _fake_acquire(request):
-            return AcquisitionResult(
-                request=request,
-                final_url=request.url,
-                html="""
-                <html>
-                  <body>
-                    <h1>Self Heal Widget</h1>
-                    <div class="custom-specs">Rubber outsole, reinforced toe cap.</div>
-                  </body>
-                </html>
-                """,
-                method="test",
-                status_code=200,
-            )
-
-        async def _fake_discover_xpath_candidates(
-            session,
-            *,
-            run_id,
-            domain,
-            url,
-            html_text,
-            missing_fields,
-            existing_values,
-        ):
-            del session, run_id, domain, url, html_text, existing_values
-            llm_calls.append(list(missing_fields))
-            return (
-                [
-                    {
-                        "field_name": "specifications",
-                        "xpath": "//div[contains(concat(' ', normalize-space(@class), ' '), ' custom-specs ')]",
-                    }
-                ],
-                None,
-            )
-
-        monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-        monkeypatch.setattr(
-            "app.services.selector_self_heal.discover_xpath_candidates",
-            _fake_discover_xpath_candidates,
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="""
+            <html>
+              <body>
+                <h1>Self Heal Widget</h1>
+                <div class="custom-specs">Rubber outsole, reinforced toe cap.</div>
+              </body>
+            </html>
+            """,
+            method="test",
+            status_code=200,
         )
 
-        await process_run(db_session, first_run.id)
-        await process_run(db_session, second_run.id)
-
-        first_rows, first_total = await get_run_records(db_session, first_run.id, 1, 20)
-        second_rows, second_total = await get_run_records(db_session, second_run.id, 1, 20)
-        memory = await load_domain_memory(
-            db_session,
-            domain="example.com",
-            surface="ecommerce_detail",
+    async def _fake_discover_xpath_candidates(
+        session,
+        *,
+        run_id,
+        domain,
+        url,
+        html_text,
+        missing_fields,
+        existing_values,
+    ):
+        del session, run_id, domain, url, html_text, existing_values
+        llm_calls.append(list(missing_fields))
+        return (
+            [
+                {
+                    "field_name": "specifications",
+                    "xpath": "//div[contains(concat(' ', normalize-space(@class), ' '), ' custom-specs ')]",
+                }
+            ],
+            None,
         )
 
-        assert first_total == 1
-        assert second_total == 1
-        assert first_rows[0].data["specifications"] == "Rubber outsole, reinforced toe cap."
-        assert second_rows[0].data["specifications"] == "Rubber outsole, reinforced toe cap."
-        assert first_rows[0].source_trace["extraction"]["self_heal"]["mode"] == "selector_synthesis"
-        assert (
-            second_rows[0].source_trace["field_discovery"]["specifications"]["value"]
-            == "Rubber outsole, reinforced toe cap."
-        )
-        assert llm_calls == [["specifications"]]
-        assert memory is not None
-        assert any(
-            row.get("field_name") == "specifications"
-            for row in memory.selectors.get("rules", [])
-        )
-    finally:
-        crawler_runtime_settings.selector_self_heal_enabled = original_enabled
-        crawler_runtime_settings.selector_self_heal_min_confidence = original_threshold
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr(
+        "app.services.selector_self_heal.discover_xpath_candidates",
+        _fake_discover_xpath_candidates,
+    )
+
+    await process_run(db_session, first_run.id)
+    await process_run(db_session, second_run.id)
+
+    first_rows, first_total = await get_run_records(db_session, first_run.id, 1, 20)
+    second_rows, second_total = await get_run_records(db_session, second_run.id, 1, 20)
+    memory = await load_domain_memory(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+    )
+
+    assert first_total == 1
+    assert second_total == 1
+    assert first_rows[0].data["specifications"] == "Rubber outsole, reinforced toe cap."
+    assert second_rows[0].data["specifications"] == "Rubber outsole, reinforced toe cap."
+    assert first_rows[0].source_trace["extraction"]["self_heal"]["mode"] == "selector_synthesis"
+    assert (
+        second_rows[0].source_trace["field_discovery"]["specifications"]["value"]
+        == "Rubber outsole, reinforced toe cap."
+    )
+    assert llm_calls == [["specifications"]]
+    assert memory is not None
+    assert any(
+        row.get("field_name") == "specifications"
+        for row in memory.selectors.get("rules", [])
+    )

@@ -27,11 +27,7 @@ class EbayAdapter(BaseAdapter):
                 records.append(record)
         elif surface in ("ecommerce_listing",):
             records = self._extract_listing(parser, url)
-        return AdapterResult(
-            records=records,
-            source_type="ebay_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     def _extract_detail(self, parser: LexborHTMLParser, url: str) -> dict | None:
         title_el = parser.css_first("h1.x-item-title__mainTitle span, h1#itemTitle")

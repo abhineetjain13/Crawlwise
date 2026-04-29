@@ -5,9 +5,9 @@ import { Outfit } from "next/font/google";
 
 
 const mainFont = Outfit({
- subsets: ["latin"],
-  variable: "--font-outfit",
- weight: ["300", "400", "500", "600", "700"],
+  subsets: ["latin"],
+  variable: "--font-primary-source",
+  weight: ["300", "400", "500", "600", "700"],
 });
 
 // Runs before first paint to set theme and prevent FOUC

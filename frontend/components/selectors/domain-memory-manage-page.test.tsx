@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { TopBarProvider } from "../layout/top-bar-context";
+import { TopBarProvider, useTopBarHeader } from "../layout/top-bar-context";
 import DomainMemoryManagePage from "../../app/selectors/manage/page";
 
 const apiMock = vi.hoisted(() => ({
+ listSelectorSummaries: vi.fn(),
  listSelectors: vi.fn(),
  listDomainRunProfiles: vi.fn(),
  listDomainCookieMemory: vi.fn(),
@@ -19,9 +20,22 @@ vi.mock("../../lib/api", () => ({
  api: apiMock,
 }));
 
+function HeaderActions() {
+ const header = useTopBarHeader();
+ return <>{header?.actions ?? null}</>;
+}
+
 describe("DomainMemoryManagePage", () => {
  beforeEach(() => {
  vi.clearAllMocks();
+ apiMock.listSelectorSummaries.mockResolvedValue([
+ {
+ domain: "example.com",
+ surface: "ecommerce_detail",
+ selector_count: 1,
+ updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+ },
+ ]);
  apiMock.listSelectors.mockResolvedValue([
  {
  id: 11,
@@ -155,6 +169,9 @@ describe("DomainMemoryManagePage", () => {
  );
 
  expect(await screen.findByText("Selector Memory")).toBeInTheDocument();
+ await waitFor(() => {
+ expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: "example.com" });
+ });
  expect(screen.getAllByText("example.com").length).toBeGreaterThan(0);
  expect(screen.getAllByText("price").length).toBeGreaterThan(0);
 
@@ -192,5 +209,61 @@ describe("DomainMemoryManagePage", () => {
  css_selector: ".sale-price",
  }));
  });
+ });
+
+ it("reloads selectors for the resolved domain after workspace refresh", async () => {
+ apiMock.listSelectors.mockImplementation(async ({ domain }: { domain?: string }) => [
+ {
+ id: domain === "other.com" ? 22 : 11,
+ domain: domain ?? "example.com",
+ surface: "ecommerce_detail",
+ field_name: "price",
+ css_selector: domain === "other.com" ? ".other-price" : ".price",
+ xpath: null,
+ regex: null,
+ status: "validated",
+ sample_value: "$19.99",
+ source: "domain_recipe",
+ source_run_id: 101,
+ is_active: true,
+ created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+ updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+ },
+ ]);
+
+ render(
+ <TopBarProvider>
+ <HeaderActions />
+ <DomainMemoryManagePage />
+ </TopBarProvider>,
+ );
+
+ await waitFor(() => {
+ expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: "example.com" });
+ });
+
+ apiMock.listSelectors.mockClear();
+ apiMock.listSelectorSummaries.mockResolvedValueOnce([
+ {
+ domain: "other.com",
+ surface: "ecommerce_detail",
+ selector_count: 1,
+ updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+ },
+ ]);
+ apiMock.listDomainRunProfiles.mockResolvedValueOnce([]);
+ apiMock.listDomainCookieMemory.mockResolvedValueOnce([]);
+ apiMock.listDomainFieldFeedback.mockResolvedValueOnce([]);
+ apiMock.listCrawls.mockResolvedValueOnce({
+ items: [],
+ meta: { page: 1, limit: 200, total: 0 },
+ });
+
+ fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+ await waitFor(() => {
+ expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: "other.com" });
+ });
+ expect(apiMock.listSelectors).not.toHaveBeenCalledWith({ domain: "example.com" });
  });
 });

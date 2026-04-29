@@ -27,6 +27,7 @@ from app.services.acquisition.browser_detail import (
     expand_all_interactive_elements,
     expand_detail_content_if_needed_impl,
     expand_interactive_elements_via_accessibility,
+    interactive_candidate_snapshot,
     requested_field_tokens,
 )
 from app.services.acquisition.browser_identity import (
@@ -2259,6 +2260,7 @@ __all__ = [
     "classify_network_endpoint",
     "classify_browser_outcome",
     "expand_all_interactive_elements",
+    "interactive_candidate_snapshot",
     "get_browser_runtime",
     "looks_like_low_content_shell",
     "patchright_browser_available",

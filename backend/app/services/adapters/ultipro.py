@@ -27,11 +27,7 @@ class UltiProAdapter(BaseAdapter):
             records = []
         else:
             records = await self._extract_listing(url)
-        return AdapterResult(
-            records=records,
-            source_type="ultipro_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     async def _extract_listing(self, url: str) -> list[dict]:
         context = self._board_context(url)

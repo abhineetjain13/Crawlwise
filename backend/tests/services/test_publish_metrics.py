@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.services.publish.metadata import _stringify_value, refresh_record_commit_metadata
+from app.services.publish.metadata import refresh_record_commit_metadata
 from app.services.publish.metrics import build_url_metrics, diagnostics_indicate_block
 
 
@@ -169,14 +169,6 @@ def test_diagnostics_indicate_block_keeps_strong_challenge_over_ready_probe() ->
     }
 
     assert diagnostics_indicate_block(diagnostics) is True
-
-
-def test_stringify_value_preserves_falsy_scalars() -> None:
-    assert _stringify_value(0) == "0"
-    assert _stringify_value(False) == "False"
-    assert _stringify_value(0.0) == "0.0"
-    assert _stringify_value(None) == ""
-
 
 def test_refresh_record_commit_metadata_filters_empty_requested_fields() -> None:
     record = SimpleNamespace(source_trace={}, discovered_data={})

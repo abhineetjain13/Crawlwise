@@ -50,11 +50,7 @@ class ShopifyAdapter(BaseAdapter):
                     records = [self._merge_product_records(records[0], api_records[0])]
                 else:
                     records = api_records
-        return AdapterResult(
-            records=records,
-            source_type="shopify_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     async def try_public_endpoint(
         self,

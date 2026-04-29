@@ -9,15 +9,15 @@ from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
     EXTRACTION_RULES,
-    JOB_LISTING_DETAIL_PATH_MARKERS,
     JOB_UTILITY_URL_TOKENS,
     LISTING_BRAND_MAX_WORDS,
     LISTING_BRAND_SELECTORS,
     LISTING_CARD_URL_ATTRS,
-    LISTING_DETAIL_PATH_MARKERS,
     LISTING_LABEL_NOISE_TOKENS,
     LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_NON_LISTING_PATH_TOKENS,
+    LISTING_PRICE_NODE_SELECTORS,
+    LISTING_PROMINENT_TITLE_TAGS,
     LISTING_STRUCTURE_NEGATIVE_HINTS,
     NON_PRODUCT_IMAGE_HINTS,
     NON_PRODUCT_PROVIDER_HINTS,
@@ -32,12 +32,17 @@ from app.services.extract.listing_candidate_ranking import (
     best_listing_candidate_set,
     looks_like_utility_record,
 )
+from app.services.extract.detail_identity import (
+    listing_detail_like_path,
+    listing_url_is_structural,
+)
 from app.services.extract.listing_card_fragments import (
     listing_node_attr,
     listing_node_css,
     listing_node_text,
     select_listing_fragment_nodes,
 )
+from app.services.extract.listing_record_finalizer import finalize_listing_price_fields
 from app.services.extract.listing_visual import visual_listing_records
 from app.services.field_policy import normalize_requested_field
 from app.services.field_value_core import (
@@ -64,20 +69,8 @@ from app.services.field_value_candidates import (
     finalize_candidate_value,
 )
 from app.services.field_value_dom import apply_selector_fallbacks
-from app.services.config.surface_hints import detail_path_hints
 
 logger = logging.getLogger(__name__)
-_PRICE_NODE_SELECTORS = (
-    "[itemprop='price']",
-    "[class*='price']",
-    "[data-testid*='price']",
-    "[data-price]",
-    "[aria-label*='price']",
-)
-_PROMINENT_TITLE_TAGS = {"strong", "b", "h1", "h2", "h3", "h4", "h5", "h6"}
-_REVIEW_TITLE_RE = re.compile(r"^\s*\d[\d,\s]*\s+reviews?\s*$", re.I)
-
-
 def _path_segment_tokens(value: str) -> set[str]:
     return {
         token
@@ -119,73 +112,21 @@ def _structured_listing_record(
             record["title"] = fallback_title
     if not record.get("title"):
         return {}
-    if _url_is_structural(url, page_url):
+    if listing_url_is_structural(url, page_url):
         return {}
-    return _finalize_listing_price_fields(finalize_record(record, surface=surface))
-
-
-def _finalize_listing_price_fields(record: dict[str, Any]) -> dict[str, Any]:
-    if record.get("price") in (None, "", [], {}):
-        for fallback_field in ("sale_price", "original_price"):
-            fallback_price = record.get(fallback_field)
-            if fallback_price not in (None, "", [], {}):
-                record["price"] = fallback_price
-                break
-    if record.get("price") in (None, "", [], {}) and record.get("currency") not in (
-        None,
-        "",
-        [],
-        {},
-    ):
-        record.pop("currency", None)
-    return record
-
-
-def _url_is_structural(url: str, page_url: str) -> bool:
-    """Return True for URLs that are site chrome, not product detail pages."""
-    from urllib.parse import urlsplit
-
-    lowered = url.lower()
-    if lowered.startswith(("javascript:", "#", "mailto:")):
-        return True
-    if lowered == page_url.lower():
-        return True
-    try:
-        parsed = urlsplit(url)
-        page_parsed = urlsplit(page_url)
-        # Bare domain root (homepage)
-        if parsed.path in ("", "/"):
-            return True
-        # Same path as source page (query-string/fragment variant of the page itself)
-        if parsed.path.rstrip("/").lower() == page_parsed.path.rstrip("/").lower():
-            return True
-        raw_segments = [
-            segment.strip().lower()
-            for segment in parsed.path.split("/")
-            if segment.strip()
-        ]
-        tokenized_segments = [_path_segment_tokens(segment) for segment in raw_segments]
-        terminal_tokens = tokenized_segments[-1] if tokenized_segments else set()
-        if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
-            return True
-        leading_tokens = tokenized_segments[:-1] if len(tokenized_segments) <= 2 else []
-        if any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens):
-            return True
-    except Exception:
-        logger.debug("URL structural check failed for %s", page_url, exc_info=True)
-    return False
+    return finalize_listing_price_fields(finalize_record(record, surface=surface))
 
 
 def _structured_listing_url(payload: dict[str, Any], page_url: str) -> str | None:
     for key in ("url", "link", "href"):
         resolved = absolute_url(page_url, payload.get(key))
-        if resolved and not _url_is_structural(resolved, page_url):
+        if resolved and not listing_url_is_structural(resolved, page_url):
             return resolved
     author = payload.get("author")
     if isinstance(author, dict):
         for key in ("url", "link", "href"):
             resolved = absolute_url(page_url, author.get(key))
-            if resolved and not _url_is_structural(resolved, page_url):
+            if resolved and not listing_url_is_structural(resolved, page_url):
                 return resolved
     return None
 
@@ -476,12 +417,12 @@ def _record_is_supported_listing_candidate(
     title = clean_text(record.get("title"))
     url = str(record.get("url") or "").strip()
     source_kind = str(record.get("_source") or "").strip().lower()
-    if not title or not url or is_title_noise(title) or _url_is_structural(url, page_url):
+    if not title or not url or is_title_noise(title) or listing_url_is_structural(url, page_url):
         return False
     if looks_like_utility_record(title=title, url=url):
         return False
     is_job_surface = surface.startswith("job_")
-    detail_like = _detail_like_path(url, is_job=is_job_surface)
+    detail_like = listing_detail_like_path(url, is_job=is_job_surface)
     if is_job_surface and (
         _job_listing_url_is_utility(url)
         or _job_listing_url_is_hub(url)
@@ -570,7 +511,7 @@ def _same_url_anchor_text_candidates(card, url: str) -> list[str]:
 def _extract_price_signal_from_card(card) -> str | None:
     candidates: list[tuple[int, int, str]] = []
     order = 0
-    for selector in _PRICE_NODE_SELECTORS:
+    for selector in LISTING_PRICE_NODE_SELECTORS:
         for node in listing_node_css(card, selector):
             order += 1
             raw_text = clean_text(
@@ -707,7 +648,7 @@ def _fallback_card_title_candidates(card) -> list[object]:
             continue
         if any(token in lowered_text for token in ("add to bag", "add to cart", "wishlist")):
             continue
-        if tag_name in _PROMINENT_TITLE_TAGS:
+        if tag_name in LISTING_PROMINENT_TITLE_TAGS:
             candidates.append(node)
             continue
         attrs = _node_signature(node)
@@ -743,7 +684,7 @@ def _select_primary_anchor(
         if not url or (not same_host(page_url, url) and not same_site(page_url, url)):
             continue
         lowered_url = url.lower()
-        if _url_is_structural(url, page_url):
+        if listing_url_is_structural(url, page_url):
             continue
         if any(token in lowered_url for token in ("sort=", "filter=", "facet=", "#review", "#details")):
             continue
@@ -758,7 +699,7 @@ def _select_primary_anchor(
             tag_name=_node_tag(anchor),
             href_present=True,
         )
-        if _detail_like_path(url, is_job=is_job):
+        if listing_detail_like_path(url, is_job=is_job):
             score += 6
         if any(token in lowered_url for token in ("/seller/", "/profile/", "/brand/", "/help/", "/search")):
             score -= 5
@@ -786,58 +727,9 @@ def _select_primary_card_url(
     for candidate in candidates:
         for attr_name in LISTING_CARD_URL_ATTRS:
             url = absolute_url(page_url, listing_node_attr(candidate, attr_name))
-            if url and not _url_is_structural(url, page_url):
+            if url and not listing_url_is_structural(url, page_url):
                 return url
     return ""
-
-
-def _detail_like_path(url: str, *, is_job: bool) -> bool:
-    lowered = url.lower()
-    if is_job:
-        return _job_detail_like_path(lowered)
-    parsed = urlsplit(lowered)
-    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
-    if "products" in segments:
-        products_index = segments.index("products")
-        tail_segments = segments[products_index + 1 :]
-        if (
-            len(tail_segments) > 2
-            and not parsed.query
-            and not any(re.search(r"\d", segment) for segment in tail_segments[-2:])
-        ):
-            return False
-    if any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS):
-        return True
-    hints = detail_path_hints("ecommerce_detail")
-    return any(marker in lowered for marker in hints)
-
-
-def _job_detail_like_path(url: str) -> bool:
-    parsed = urlsplit(url)
-    segments = [segment for segment in parsed.path.split("/") if segment]
-    if not segments:
-        return False
-    terminal = segments[-1].strip().lower()
-    if not terminal or _job_listing_url_is_hub(url):
-        return False
-    query = parsed.query.lower()
-    if any(token in query for token in ("showjob=", "jobid=", "job_id=", "gh_jid=")):
-        return True
-    if any(marker in parsed.path.lower() for marker in JOB_LISTING_DETAIL_PATH_MARKERS):
-        return True
-    if _job_listing_url_looks_like_posting(url):
-        return True
-    if re.match(r"jobs?-\d", terminal):
-        return True
-    detail_roots = {"job", "jobs", "opening", "position", "posting", "career", "careers"}
-    for index, segment in enumerate(segments[:-1]):
-        normalized = segment.strip().lower()
-        if normalized not in detail_roots:
-            continue
-        next_segment = segments[index + 1].strip().lower()
-        if next_segment and not _job_listing_url_is_hub(f"https://example.com/{next_segment}/"):
-            return True
-    return False
 
 
 def _extract_page_images_from_node(root, page_url: str) -> list[str]:
@@ -1107,7 +999,7 @@ def _listing_record_from_card(
         or REVIEW_COUNT_RE.search(card_text)
         or image_urls
     )
-    if not _detail_like_path(url, is_job=is_job):
+    if not listing_detail_like_path(url, is_job=is_job):
         if is_job and anchor_score < 8:
             if not any(token in card_text.lower() for token in ("salary", "remote", "location", "apply")):
                 return None
@@ -1212,7 +1104,7 @@ def _listing_record_from_card(
         and anchor_score >= 10
         and title_score >= 10
         and len(re.findall(r"[a-z0-9]+", cleaned_title, flags=re.I)) >= 3
-        and not _url_is_structural(cleaned_url, page_url)
+        and not listing_url_is_structural(cleaned_url, page_url)
         and not looks_like_utility_record(
             title=cleaned_title,
             url=cleaned_url,
@@ -1259,7 +1151,7 @@ def _detail_anchor_count(
         if not url or url in seen_urls:
             continue
         seen_urls.add(url)
-        if _detail_like_path(url, is_job=is_job):
+        if listing_detail_like_path(url, is_job=is_job):
             count += 1
     return count
 
@@ -1394,7 +1286,7 @@ def extract_listing_records(
         surface=surface,
         max_records=max_records,
         title_is_noise=is_title_noise,
-        url_is_structural=_url_is_structural,
+        url_is_structural=listing_url_is_structural,
     )
     visual_records = [
         record
@@ -1422,8 +1314,8 @@ def extract_listing_records(
         surface=surface,
         max_records=max_records,
         title_is_noise=is_title_noise,
-        url_is_structural=_url_is_structural,
-        detail_like_url=lambda candidate_url: _detail_like_path(
+        url_is_structural=listing_url_is_structural,
+        detail_like_url=lambda candidate_url: listing_detail_like_path(
             candidate_url,
             is_job=is_job_surface,
         ),

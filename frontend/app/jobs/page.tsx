@@ -103,9 +103,9 @@ export default function JobsPage() {
                             <tbody>
                                 {jobs.map((job) => (
                                     <tr key={job.run_id}>
-                                        <td className="font-mono text-sm leading-[1.5] text-foreground">{job.run_id}</td>
+                                        <td className="mono-body text-sm leading-[1.5] text-foreground">{job.run_id}</td>
                                         <td className="text-sm leading-[var(--leading-relaxed)] text-muted">{formatJobType(job.type)}</td>
-                                        <td className="max-w-[320px] truncate text-sm leading-[var(--leading-relaxed)] text-foreground" title={job.url}>
+                                        <td className="mono-body max-w-[320px] truncate text-sm leading-[var(--leading-relaxed)] text-foreground" title={job.url}>
                                             {job.url}
                                         </td>
                                         <td>

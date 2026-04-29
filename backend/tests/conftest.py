@@ -21,6 +21,8 @@ from app.core import database as app_database
 from app.core.database import Base
 from app.core.security import hash_password
 from app.models.user import User
+from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.crawl_crud import create_crawl_run
 from app.services.crawl_fetch_runtime import reset_fetch_runtime_state
 from app.services.acquisition.pacing import reset_pacing_state
 from sqlalchemy import text
@@ -28,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 _TMP_COUNTER = itertools.count()
 _WORKSPACE_TMP_ROOT = _BACKEND_ROOT / ".pytest-tmp"
+_UNSET = object()
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db",
@@ -229,3 +232,38 @@ async def test_user(db_session: AsyncSession) -> User:
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+@pytest.fixture
+def patch_settings(monkeypatch: pytest.MonkeyPatch):
+    def _patch(target=None, **kwargs):
+        settings = crawler_runtime_settings if target is None else target
+        for key, value in kwargs.items():
+            monkeypatch.setattr(settings, key, value)
+
+    return _patch
+
+
+@pytest.fixture
+def create_test_run(db_session: AsyncSession, test_user: User):
+    async def _create_test_run(
+        *,
+        url: str,
+        surface: str,
+        run_type: str = "crawl",
+        settings: object = _UNSET,
+        **payload_overrides,
+    ):
+        payload = {
+            "run_type": run_type,
+            "url": url,
+            "surface": surface,
+            **payload_overrides,
+        }
+        if settings is _UNSET:
+            payload["settings"] = {"respect_robots_txt": False}
+        else:
+            payload["settings"] = settings
+        return await create_crawl_run(db_session, test_user.id, payload)
+
+    return _create_test_run

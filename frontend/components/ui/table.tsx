@@ -33,7 +33,7 @@ export function TableRow({
 }
 
 export function TableHead({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
-  return <th className={cn("h-9 px-4 text-left align-middle text-[var(--table-header-font-size)] font-[var(--table-header-weight)] uppercase tracking-[var(--table-header-tracking)] text-muted", className)}>{children}</th>;
+  return <th className={cn("h-9 px-4 text-left align-middle font-[family:var(--table-header-font-family)] text-[var(--table-header-font-size)] font-[var(--table-header-weight)] uppercase tracking-[var(--table-header-tracking)] text-muted", className)}>{children}</th>;
 }
 
 export function TableCell({

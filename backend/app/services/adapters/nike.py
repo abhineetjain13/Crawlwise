@@ -65,9 +65,7 @@ class NikeAdapter(BaseAdapter):
             record = _extract_detail_record(url, html)
             if record:
                 records.append(record)
-        return AdapterResult(
-            records=records, source_type="nike_adapter", adapter_name=self.name
-        )
+        return self._result(records)
 
 
 def _extract_detail_record(page_url: str, html: str) -> dict[str, Any] | None:

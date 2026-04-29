@@ -52,6 +52,52 @@ class _FakeResponse:
         return self._body
 
 
+def _default_fetch_context(
+    url: str = "https://example.com/products/widget",
+    surface: str = "ecommerce_detail",
+    **overrides,
+):
+    return crawl_fetch_runtime._FetchRuntimeContext(
+        url=url,
+        resolved_timeout=5.0,
+        run_id=None,
+        surface=surface,
+        traversal_mode=None,
+        max_pages=1,
+        max_scrolls=1,
+        max_records=None,
+        on_event=None,
+        browser_reason=None,
+        requested_fields=[],
+        listing_recovery_mode=None,
+        proxies=[None],
+        proxy_profile={},
+        traversal_required=False,
+        fetch_mode="browser_only",
+        runtime_policy={},
+        **overrides,
+    )
+
+
+def _page_fetch_result(
+    html: str,
+    *,
+    url: str = "https://example.com/products/widget",
+    final_url: str | None = None,
+    method: str = "browser",
+    status_code: int = 200,
+    **overrides,
+) -> PageFetchResult:
+    return PageFetchResult(
+        url=url,
+        final_url=final_url or url,
+        html=html,
+        status_code=status_code,
+        method=method,
+        **overrides,
+    )
+
+
 @pytest.mark.asyncio
 async def test_real_chrome_success_updates_host_memory(
     monkeypatch: pytest.MonkeyPatch,
@@ -66,31 +112,9 @@ async def test_real_chrome_success_updates_host_memory(
         "note_host_usable_fetch",
         _fake_note_host_usable_fetch,
     )
-    context = crawl_fetch_runtime._FetchRuntimeContext(
-        url="https://example.com/products/widget",
-        resolved_timeout=5.0,
-        run_id=None,
-        surface="ecommerce_detail",
-        traversal_mode=None,
-        max_pages=1,
-        max_scrolls=1,
-        max_records=None,
-        on_event=None,
-        browser_reason=None,
-        requested_fields=[],
-        listing_recovery_mode=None,
-        proxies=[None],
-        proxy_profile={},
-        traversal_required=False,
-        fetch_mode="browser_only",
-        runtime_policy={},
-    )
-    result = PageFetchResult(
-        url="https://example.com/products/widget",
-        final_url="https://example.com/products/widget",
-        html="<html><body>Widget</body></html>",
-        status_code=200,
-        method="browser",
+    context = _default_fetch_context()
+    result = _page_fetch_result(
+        "<html><body>Widget</body></html>",
         blocked=False,
         browser_diagnostics={"browser_engine": "real_chrome"},
     )
@@ -120,31 +144,9 @@ async def test_patchright_success_updates_host_memory(
         "note_host_usable_fetch",
         _fake_note_host_usable_fetch,
     )
-    context = crawl_fetch_runtime._FetchRuntimeContext(
-        url="https://example.com/products/widget",
-        resolved_timeout=5.0,
-        run_id=None,
-        surface="ecommerce_detail",
-        traversal_mode=None,
-        max_pages=1,
-        max_scrolls=1,
-        max_records=None,
-        on_event=None,
-        browser_reason=None,
-        requested_fields=[],
-        listing_recovery_mode=None,
-        proxies=[None],
-        proxy_profile={},
-        traversal_required=False,
-        fetch_mode="browser_only",
-        runtime_policy={},
-    )
-    result = PageFetchResult(
-        url="https://example.com/products/widget",
-        final_url="https://example.com/products/widget",
-        html="<html><body>Widget</body></html>",
-        status_code=200,
-        method="browser",
+    context = _default_fetch_context()
+    result = _page_fetch_result(
+        "<html><body>Widget</body></html>",
         blocked=False,
         browser_diagnostics={"browser_engine": "patchright"},
     )
@@ -183,31 +185,9 @@ async def test_location_required_diagnostics_do_not_write_hard_block_memory(
         "note_host_usable_fetch",
         _fake_note_host_usable_fetch,
     )
-    context = crawl_fetch_runtime._FetchRuntimeContext(
-        url="https://example.com/products/widget",
-        resolved_timeout=5.0,
-        run_id=None,
-        surface="ecommerce_detail",
-        traversal_mode=None,
-        max_pages=1,
-        max_scrolls=1,
-        max_records=None,
-        on_event=None,
-        browser_reason=None,
-        requested_fields=[],
-        listing_recovery_mode=None,
-        proxies=[None],
-        proxy_profile={},
-        traversal_required=False,
-        fetch_mode="browser_only",
-        runtime_policy={},
-    )
-    result = PageFetchResult(
-        url="https://example.com/products/widget",
-        final_url="https://example.com/products/widget",
-        html="<html><body>Choose your location</body></html>",
-        status_code=200,
-        method="browser",
+    context = _default_fetch_context()
+    result = _page_fetch_result(
+        "<html><body>Choose your location</body></html>",
         blocked=False,
         browser_diagnostics={
             "browser_engine": "real_chrome",
@@ -292,13 +272,9 @@ def test_should_capture_network_payload_accepts_chunked_json_without_content_len
     )
 
 
-def test_select_http_fetcher_uses_httpx_when_forced() -> None:
-    original_force_httpx = crawler_runtime_settings.force_httpx
-    crawler_runtime_settings.force_httpx = True
-    try:
-        fetcher = crawl_fetch_runtime._select_http_fetcher(object())
-    finally:
-        crawler_runtime_settings.force_httpx = original_force_httpx
+def test_select_http_fetcher_uses_httpx_when_forced(patch_settings) -> None:
+    patch_settings(force_httpx=True)
+    fetcher = crawl_fetch_runtime._select_http_fetcher(object())
 
     assert fetcher is crawl_fetch_runtime._http_fetch
 
@@ -365,13 +341,15 @@ def test_classify_network_endpoint_uses_platform_config_family_signatures() -> N
 @pytest.mark.asyncio
 async def test_curl_fetch_uses_runtime_owned_default_request_headers(
     monkeypatch: pytest.MonkeyPatch,
+    patch_settings,
 ) -> None:
     captured_headers: dict[str, str] = {}
-    original_user_agent = crawler_runtime_settings.http_user_agent
-    crawler_runtime_settings.http_user_agent = (
+    patch_settings(
+        http_user_agent=(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
+        )
     )
 
     def _fake_get(url: str, **kwargs):
@@ -389,13 +367,10 @@ async def test_curl_fetch_uses_runtime_owned_default_request_headers(
         "curl_cffi",
         SimpleNamespace(requests=SimpleNamespace(get=_fake_get)),
     )
-    try:
-        result = await acquisition_runtime.curl_fetch(
-            "https://example.com/products/widget",
-            5.0,
-        )
-    finally:
-        crawler_runtime_settings.http_user_agent = original_user_agent
+    result = await acquisition_runtime.curl_fetch(
+        "https://example.com/products/widget",
+        5.0,
+    )
 
     assert result.method == "curl_cffi"
     assert captured_headers["User-Agent"].endswith("Chrome/131.0.0.0 Safari/537.36")
@@ -408,9 +383,9 @@ async def test_curl_fetch_uses_runtime_owned_default_request_headers(
 @pytest.mark.asyncio
 async def test_curl_fetch_coerces_blank_impersonate_target_to_none(
     monkeypatch: pytest.MonkeyPatch,
+    patch_settings,
 ) -> None:
     captured_impersonate: list[object] = []
-    original_impersonate_target = crawler_runtime_settings.curl_impersonate_target
 
     def _fake_get(url: str, **kwargs):
         del url
@@ -427,14 +402,11 @@ async def test_curl_fetch_coerces_blank_impersonate_target_to_none(
         "curl_cffi",
         SimpleNamespace(requests=SimpleNamespace(get=_fake_get)),
     )
-    crawler_runtime_settings.curl_impersonate_target = "   "
-    try:
-        await acquisition_runtime.curl_fetch(
-            "https://example.com/products/widget",
-            5.0,
-        )
-    finally:
-        crawler_runtime_settings.curl_impersonate_target = original_impersonate_target
+    patch_settings(curl_impersonate_target="   ")
+    await acquisition_runtime.curl_fetch(
+        "https://example.com/products/widget",
+        5.0,
+    )
 
     assert captured_impersonate == [None]
 
@@ -475,25 +447,7 @@ async def test_fetch_page_waits_for_host_slot_before_http_attempt(
 
 
 def test_browser_engine_attempts_uses_patchright_by_default() -> None:
-    context = crawl_fetch_runtime._FetchRuntimeContext(
-        url="https://example.com/products/widget",
-        resolved_timeout=5.0,
-        run_id=None,
-        surface="ecommerce_detail",
-        traversal_mode=None,
-        max_pages=1,
-        max_scrolls=1,
-        max_records=None,
-        on_event=None,
-        browser_reason=None,
-        requested_fields=[],
-        listing_recovery_mode=None,
-        proxies=[None],
-        proxy_profile={},
-        traversal_required=False,
-        fetch_mode="browser_only",
-        runtime_policy={},
-    )
+    context = _default_fetch_context()
 
     attempts = crawl_fetch_runtime._browser_engine_attempts(
         context=context,
@@ -516,25 +470,7 @@ def test_browser_engine_attempts_uses_real_chrome_after_patchright_when_availabl
         "real_chrome_browser_available",
         lambda: True,
     )
-    context = crawl_fetch_runtime._FetchRuntimeContext(
-        url="https://example.com/products/widget",
-        resolved_timeout=5.0,
-        run_id=None,
-        surface="ecommerce_detail",
-        traversal_mode=None,
-        max_pages=1,
-        max_scrolls=1,
-        max_records=None,
-        on_event=None,
-        browser_reason=None,
-        requested_fields=[],
-        listing_recovery_mode=None,
-        proxies=[None],
-        proxy_profile={},
-        traversal_required=False,
-        fetch_mode="browser_only",
-        runtime_policy={},
-    )
+    context = _default_fetch_context()
 
     attempts = crawl_fetch_runtime._browser_engine_attempts(
         context=context,
@@ -545,26 +481,7 @@ def test_browser_engine_attempts_uses_real_chrome_after_patchright_when_availabl
 
 
 def test_browser_engine_attempts_keeps_forced_patchright_explicit_when_unavailable() -> None:
-    context = crawl_fetch_runtime._FetchRuntimeContext(
-        url="https://example.com/products/widget",
-        resolved_timeout=5.0,
-        run_id=None,
-        surface="ecommerce_detail",
-        traversal_mode=None,
-        max_pages=1,
-        max_scrolls=1,
-        max_records=None,
-        on_event=None,
-        browser_reason=None,
-        requested_fields=[],
-        listing_recovery_mode=None,
-        proxies=[None],
-        proxy_profile={},
-        traversal_required=False,
-        fetch_mode="browser_only",
-        runtime_policy={},
-        forced_browser_engine="patchright",
-    )
+    context = _default_fetch_context(forced_browser_engine="patchright")
 
     attempts = crawl_fetch_runtime._browser_engine_attempts(
         context=context,
@@ -587,25 +504,7 @@ def test_browser_engine_attempts_escalates_from_patchright_to_real_chrome(
         "real_chrome_browser_available",
         lambda: True,
     )
-    context = crawl_fetch_runtime._FetchRuntimeContext(
-        url="https://example.com/products/widget",
-        resolved_timeout=5.0,
-        run_id=None,
-        surface="ecommerce_detail",
-        traversal_mode=None,
-        max_pages=1,
-        max_scrolls=1,
-        max_records=None,
-        on_event=None,
-        browser_reason=None,
-        requested_fields=[],
-        listing_recovery_mode=None,
-        proxies=[None],
-        proxy_profile={},
-        traversal_required=False,
-        fetch_mode="browser_only",
-        runtime_policy={},
-    )
+    context = _default_fetch_context()
 
     attempts = crawl_fetch_runtime._browser_engine_attempts(
         context=context,
@@ -1854,16 +1753,16 @@ async def test_fetch_page_falls_back_to_httpx_after_curl_transport_errors(
 @pytest.mark.asyncio
 async def test_fetch_page_retries_curl_before_httpx_fallback(
     monkeypatch: pytest.MonkeyPatch,
+    patch_settings,
 ) -> None:
     import httpx
 
     await crawl_fetch_runtime.reset_fetch_runtime_state()
-    original_retries = crawler_runtime_settings.http_max_retries
-    original_base = crawler_runtime_settings.http_retry_backoff_base_ms
-    original_max = crawler_runtime_settings.http_retry_backoff_max_ms
-    crawler_runtime_settings.http_max_retries = 2
-    crawler_runtime_settings.http_retry_backoff_base_ms = 0
-    crawler_runtime_settings.http_retry_backoff_max_ms = 0
+    patch_settings(
+        http_max_retries=2,
+        http_retry_backoff_base_ms=0,
+        http_retry_backoff_max_ms=0,
+    )
     curl_calls: list[int] = []
     http_calls: list[str] = []
 
@@ -1895,15 +1794,10 @@ async def test_fetch_page_retries_curl_before_httpx_fallback(
         "_should_escalate_to_browser_async",
         _no_browser_escalation,
     )
-    try:
-        result = await crawl_fetch_runtime.fetch_page(
-            "https://example.com/products/widget",
-            surface="ecommerce_detail",
-        )
-    finally:
-        crawler_runtime_settings.http_max_retries = original_retries
-        crawler_runtime_settings.http_retry_backoff_base_ms = original_base
-        crawler_runtime_settings.http_retry_backoff_max_ms = original_max
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/products/widget",
+        surface="ecommerce_detail",
+    )
 
     assert result.method == "httpx"
     assert len(curl_calls) == 3

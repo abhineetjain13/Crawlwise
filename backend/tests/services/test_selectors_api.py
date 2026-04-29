@@ -165,3 +165,56 @@ async def test_selectors_api_lists_all_domain_records_when_surface_is_omitted(
         ("ecommerce_detail", "price"),
         ("generic", "title"),
     }
+
+
+@pytest.mark.asyncio
+async def test_selectors_api_summary_returns_per_surface_counts(
+    selector_api_client: AsyncClient,
+) -> None:
+    first_response = await selector_api_client.post(
+        "/api/selectors",
+        json={
+            "domain": "example.com",
+            "surface": "ecommerce_detail",
+            "field_name": "price",
+            "css_selector": ".detail-price",
+        },
+    )
+    second_response = await selector_api_client.post(
+        "/api/selectors",
+        json={
+            "domain": "example.com",
+            "surface": "ecommerce_detail",
+            "field_name": "title",
+            "css_selector": "h1",
+        },
+    )
+    third_response = await selector_api_client.post(
+        "/api/selectors",
+        json={
+            "domain": "example.com",
+            "surface": "generic",
+            "field_name": "brand",
+            "css_selector": ".brand",
+        },
+    )
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert third_response.status_code == 200
+
+    summary_response = await selector_api_client.get("/api/selectors/summary")
+    filtered_response = await selector_api_client.get(
+        "/api/selectors/summary",
+        params={"domain": "example.com", "surface": "generic", "limit": 1, "offset": 0},
+    )
+
+    assert summary_response.status_code == 200
+    assert filtered_response.status_code == 200
+    assert filtered_response.json()[0]["surface"] == "generic"
+    assert {
+        (row["domain"], row["surface"], row["selector_count"])
+        for row in summary_response.json()
+    } == {
+        ("example.com", "ecommerce_detail", 2),
+        ("example.com", "generic", 1),
+    }

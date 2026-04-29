@@ -11,27 +11,10 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.config.surface_hints import surface_group
+from app.services.config.surface_hints import GENERIC_PLATFORM_URL_TOKENS, surface_group
 from app.services.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
-
-_GENERIC_JOB_TOKENS = (
-    "/jobs",
-    "/careers",
-    "/career",
-    "job-search",
-    "jobboard",
-    "recruitment",
-    "currentopenings",
-)
-_GENERIC_COMMERCE_TOKENS = (
-    "/product",
-    "/product/",
-    "/products/",
-    "/shop/",
-    "/collections/",
-)
 _DEFAULT_ADAPTER_ORDER = (
     "amazon",
     "walmart",
@@ -283,9 +266,9 @@ def detect_platform_family(url: str, html: str = "") -> str | None:
         if any(pattern in normalized_url for pattern in url_patterns):
             return config.family
 
-    if any(token in normalized_url for token in _GENERIC_JOB_TOKENS):
+    if any(token in normalized_url for token in GENERIC_PLATFORM_URL_TOKENS["job"]):
         return "generic_jobs"
-    if any(token in normalized_url for token in _GENERIC_COMMERCE_TOKENS):
+    if any(token in normalized_url for token in GENERIC_PLATFORM_URL_TOKENS["ecommerce"]):
         return "generic_commerce"
     return None
 

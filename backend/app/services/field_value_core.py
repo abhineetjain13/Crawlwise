@@ -8,10 +8,13 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from app.services.config.extraction_rules import (
+    BARE_HOST_URL_RE,
     CSS_NOISE_PATTERN,
     CURRENCY_ALIAS_PATTERNS,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
+    IMAGE_FIELDS,
+    INTEGER_VALUE_FIELDS,
     LISTING_ACTION_NOISE_PATTERNS,
     LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_BRAND_MAX_WORDS,
@@ -21,8 +24,18 @@ from app.services.config.extraction_rules import (
     LISTING_TITLE_CTA_TITLES,
     LISTING_UTILITY_TITLE_PATTERNS,
     LISTING_WEAK_TITLES,
+    LONG_TEXT_FIELDS,
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
     PAGE_URL_CURRENCY_HINTS_RAW,
+    PERCENT_RE,
+    PRICE_VALUE_FIELDS,
+    RATING_RE,
+    REVIEW_COUNT_RE,
+    REVIEW_TITLE_RE,
+    STRUCTURED_MULTI_FIELDS,
+    STRUCTURED_OBJECT_FIELDS,
+    STRUCTURED_OBJECT_LIST_FIELDS,
+    URL_FIELDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
 )
 from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
@@ -77,9 +90,6 @@ _OPTION_VALUE_SUFFIX_NOISE_RE = tuple(
     for pattern in tuple(VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS or ())
     if str(pattern).strip()
 )
-PERCENT_RE = re.compile(r"\b\d{1,3}(?:\.\d+)?\s?%")
-REVIEW_COUNT_RE = re.compile(r"\b(\d[\d,]*)\s+reviews?\b", re.I)
-RATING_RE = re.compile(r"\b([1-5](?:\.\d)?)\s*(?:/5|out of 5|stars?)\b", re.I)
 WHITESPACE_RE = re.compile(r"\s+")
 ALL_CANONICAL_FIELDS = sorted(
     {
@@ -89,41 +99,15 @@ ALL_CANONICAL_FIELDS = sorted(
         if field_name
     }
 )
-STRUCTURED_MULTI_FIELDS = {
-    "additional_images",
-    "available_sizes",
-    "option1_values",
-    "option2_values",
-    "tags",
-}
-STRUCTURED_OBJECT_FIELDS = {"product_attributes", "selected_variant", "variant_axes"}
-STRUCTURED_OBJECT_LIST_FIELDS = {"variants"}
 # Price-like fields: string values must contain at least one digit to be valid
-_PRICE_FIELD_NAMES = {"price", "sale_price", "original_price", "discount_amount"}
+_PRICE_FIELD_NAMES = PRICE_VALUE_FIELDS
 # Integer-only fields: string values like "out_of_stock" should be nulled
-_INTEGER_FIELD_NAMES = {"stock_quantity", "variant_count", "image_count"}
+_INTEGER_FIELD_NAMES = INTEGER_VALUE_FIELDS
 _NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
     normalize_field_key(str(key or ""))
     for key in tuple(NOISY_PRODUCT_ATTRIBUTE_KEYS or ())
     if str(key or "").strip()
 ) | {"availability", "available", "in_stock", "stock_status"}
-LONG_TEXT_FIELDS = {
-    "benefits",
-    "care",
-    "description",
-    "features",
-    "materials",
-    "product_details",
-    "qualifications",
-    "requirements",
-    "responsibilities",
-    "skills",
-    "specifications",
-    "summary",
-}
-URL_FIELDS = {"apply_url", "canonical_url", "company_logo", "image_url", "url"}
-IMAGE_FIELDS = {"additional_images", "company_logo", "image_url"}
-
 def _object_list(value: object) -> list:
     return list(value) if isinstance(value, list) else []
 
@@ -152,16 +136,13 @@ def _coerce_int(value: object, *, default: int = 0) -> int:
         return default
 
 
-_REVIEW_TITLE_RE = re.compile(r"^\s*\d[\d,\s]*\s+reviews?\s*$", re.I)
+_REVIEW_TITLE_RE = REVIEW_TITLE_RE
 LISTING_UTILITY_TITLE_REGEXES = tuple(
     re.compile(pattern, re.I) for pattern in LISTING_UTILITY_TITLE_PATTERNS
 )
 _CSS_NOISE_RE = re.compile(str(CSS_NOISE_PATTERN), re.I)
 _LEADING_CSS_BLOCK_RE = re.compile(r"^(?:\s*\.[a-z0-9_-]+\{[^{}]*\})+", re.I)
-_BARE_HOST_URL_RE = re.compile(
-    r"^(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?))+(?:[/:?#][^\s]*)?$",
-    re.I,
-)
+_BARE_HOST_URL_RE = BARE_HOST_URL_RE
 
 
 def clean_text(value: object) -> str:

@@ -184,6 +184,13 @@ export type SelectorRecord = {
  updated_at: string;
 };
 
+export type SelectorDomainSummary = {
+ domain: string;
+ surface: string;
+ selector_count: number;
+ updated_at: string | null;
+};
+
 export type ProductIntelligenceOptions = {
  max_source_products: number;
  max_candidates_per_product: number;

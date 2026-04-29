@@ -57,7 +57,7 @@ class BelkAdapter(BaseAdapter):
             record = _extract_detail_record(url, html)
             if record:
                 records.append(record)
-        return AdapterResult(records=records, source_type="belk_adapter", adapter_name=self.name)
+        return self._result(records)
 
 
 def _extract_listing_records(page_url: str, html: str) -> list[dict[str, Any]]:

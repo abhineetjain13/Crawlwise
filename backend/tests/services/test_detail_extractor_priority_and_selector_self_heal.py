@@ -210,24 +210,22 @@ def test_extract_records_applies_regex_as_post_filter_to_xpath_result() -> None:
     assert record["_field_sources"]["sku"] == ["dom_selector"]
 
 
-def test_selector_self_heal_config_falls_back_to_runtime_enabled_when_missing() -> None:
-    original_enabled = crawler_runtime_settings.selector_self_heal_enabled
-    original_threshold = crawler_runtime_settings.selector_self_heal_min_confidence
-    crawler_runtime_settings.selector_self_heal_enabled = True
-    crawler_runtime_settings.selector_self_heal_min_confidence = 0.77
-    try:
-        record = extract_records(
-            "<html><body><h1>Widget Prime</h1></body></html>",
-            "https://example.com/products/widget-prime",
-            "ecommerce_detail",
-            max_records=1,
-            extraction_runtime_snapshot={
-                "selector_self_heal": {"enabled": None, "min_confidence": None}
-            },
-        )[0]
-    finally:
-        crawler_runtime_settings.selector_self_heal_enabled = original_enabled
-        crawler_runtime_settings.selector_self_heal_min_confidence = original_threshold
+def test_selector_self_heal_config_falls_back_to_runtime_enabled_when_missing(
+    patch_settings,
+) -> None:
+    patch_settings(
+        selector_self_heal_enabled=True,
+        selector_self_heal_min_confidence=0.77,
+    )
+    record = extract_records(
+        "<html><body><h1>Widget Prime</h1></body></html>",
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=1,
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": None, "min_confidence": None}
+        },
+    )[0]
 
     assert record["_self_heal"] == {
         "enabled": True,

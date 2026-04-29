@@ -24,11 +24,7 @@ class JibeAdapter(BaseAdapter):
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records = await self.try_public_endpoint(url, html, surface)
-        return AdapterResult(
-            records=records,
-            source_type="jibe_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     async def try_public_endpoint(
         self,

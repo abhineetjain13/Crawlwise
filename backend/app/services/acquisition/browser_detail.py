@@ -270,13 +270,13 @@ async def expand_all_interactive_elements_impl(
                 )
                 if not looks_expandable:
                     continue
-                if not inside_main and (inside_header or inside_nav or inside_footer) and not (
-                    aria_controls
-                    or aria_expanded == "false"
-                    or matches_requested_keywords
-                    or matches_generic_requested_keywords
-                    or matches_generic_keywords
-                    or size_toggle_hint
+                if (
+                    not inside_main
+                    and (inside_header or inside_nav or inside_footer)
+                    and not (
+                        matches_requested_keywords
+                        or size_toggle_hint
+                    )
                 ):
                     continue
                 if inside_aside and not (

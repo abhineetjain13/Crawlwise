@@ -27,11 +27,7 @@ class WorkdayAdapter(BaseAdapter):
             records = [record] if record else []
         else:
             records = await self._extract_listing(url, html)
-        return AdapterResult(
-            records=records,
-            source_type="workday_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     async def _extract_listing(self, url: str, html: str) -> list[dict]:
         context = self._site_context(url, html)

@@ -5,7 +5,6 @@ import json
 import pytest
 
 from app.models.crawl import CrawlRecord
-from app.services.crawl_crud import create_crawl_run
 from app.services import record_export_service
 from app.services.extraction_runtime import extract_records
 from app.services.record_export_service import (
@@ -27,15 +26,11 @@ async def _collect_chunks(stream) -> str:
 async def test_export_streams_serialize_clean_record_data(
     db_session: AsyncSession,
     test_user,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
     db_session.add(
         CrawlRecord(
@@ -69,15 +64,12 @@ async def test_export_streams_serialize_clean_record_data(
 async def test_export_streams_include_records_from_failed_partial_run(
     db_session: AsyncSession,
     test_user,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "batch",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        run_type="batch",
     )
     run.status = "failed"
     run.result_summary = {

@@ -105,6 +105,7 @@ def test_detect_platform_family_for_stable_spa_canaries() -> None:
 
 def test_detect_platform_family_truncates_html_before_regex_scan(
     monkeypatch,
+    patch_settings,
 ) -> None:
     monkeypatch.setattr(
         platform_policy,
@@ -116,25 +117,21 @@ def test_detect_platform_family_truncates_html_before_regex_scan(
             )
         ],
     )
-    original_limit = crawler_runtime_settings.platform_detection_html_search_limit
-    crawler_runtime_settings.platform_detection_html_search_limit = 32
-    try:
-        assert (
-            detect_platform_family(
-                "https://example.com/catalog/widget",
-                "x" * 32 + "late-marker",
-            )
-            is None
+    patch_settings(platform_detection_html_search_limit=32)
+    assert (
+        detect_platform_family(
+            "https://example.com/catalog/widget",
+            "x" * 32 + "late-marker",
         )
-        assert (
-            detect_platform_family(
-                "https://example.com/catalog/widget",
-                "x" * 16 + "late-marker",
-            )
-            == "late_marker"
+        is None
+    )
+    assert (
+        detect_platform_family(
+            "https://example.com/catalog/widget",
+            "x" * 16 + "late-marker",
         )
-    finally:
-        crawler_runtime_settings.platform_detection_html_search_limit = original_limit
+        == "late_marker"
+    )
 
 
 def test_resolve_browser_readiness_policy_requires_networkidle_for_platform_traversal_or_detail() -> None:

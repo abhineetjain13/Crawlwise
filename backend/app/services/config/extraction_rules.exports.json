@@ -1190,6 +1190,7 @@
     "\u20ac": "EUR",
     "\u20b9": "INR"
   },
+  "BARE_HOST_URL_PATTERN": "^(?:www\\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:\\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?))+(?:[/:?#][^\\s]*)?$",
   "DETAIL_BLOCKED_TOKENS": {
     "__type__": "tuple",
     "items": [
@@ -1354,6 +1355,12 @@
       "website"
     ]
   },
+  "DETAIL_FULFILLMENT_ONLY_LONG_TEXT_PHRASES": {
+    "__type__": "tuple",
+    "items": [
+      "shipping, pickup, and delivery options available at checkout"
+    ]
+  },
   "DETAIL_NON_PAGE_FILE_EXTENSIONS": {
     "__type__": "tuple",
     "items": [
@@ -1437,6 +1444,32 @@
       "product",
       "products",
       "sku"
+    ]
+  },
+  "DETAIL_SHELL_STATE_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "shopifyanalytics.meta",
+      "var meta = {\"product\"",
+      "window.__remixcontext"
+    ]
+  },
+  "DETAIL_SHELL_FRAMEWORK_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "__next_data__",
+      "__nuxt__"
+    ]
+  },
+  "DETAIL_SHELL_PRODUCT_DATA_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "\"product\":",
+      "\"products\":",
+      "\"currentprice\":",
+      "\"initialprice\":",
+      "\"skudata\":",
+      "\"stylecolor\":"
     ]
   },
   "DETAIL_SEARCH_QUERY_KEYS": {
@@ -3452,6 +3485,22 @@
       "inventory_quantity"
     ]
   },
+  "IMAGE_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "additional_images",
+      "company_logo",
+      "image_url"
+    ]
+  },
+  "INTEGER_VALUE_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "stock_quantity",
+      "variant_count",
+      "image_count"
+    ]
+  },
   "JOB_ERROR_PAGE_HEADINGS": {
     "__type__": "frozenset",
     "items": [
@@ -3474,6 +3523,16 @@
       "company",
       "salary",
       "location"
+    ]
+  },
+  "JS_REQUIRED_PLACEHOLDER_PHRASES": {
+    "__type__": "tuple",
+    "items": [
+      "javascript is disabled",
+      "please enable javascript",
+      "enable javascript to continue",
+      "javascript required",
+      "requires javascript"
     ]
   },
   "JOB_LISTING_DETAIL_PATH_MARKERS": {
@@ -3814,6 +3873,20 @@
       "summary"
     ]
   },
+  "LISTING_DETAIL_URL_MARKERS": {
+    "__type__": "tuple",
+    "items": [
+      "/products/",
+      "/product/",
+      "/p/",
+      "/dp/",
+      "/item/",
+      "/job/",
+      "/jobs/",
+      "/viewjob",
+      "showjob="
+    ]
+  },
   "LISTING_DETAIL_PATH_MARKERS": {
     "__type__": "tuple",
     "items": [
@@ -4114,6 +4187,35 @@
       "login",
       "accessories",
       "research"
+    ]
+  },
+  "LISTING_SHELL_FRAMEWORK_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "__next_data__",
+      "__nuxt__",
+      "ng-version",
+      "data-reactroot",
+      "data-react-class",
+      "application/json",
+      "application/ld+json"
+    ]
+  },
+  "LONG_TEXT_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "benefits",
+      "care",
+      "description",
+      "features",
+      "materials",
+      "product_details",
+      "qualifications",
+      "requirements",
+      "responsibilities",
+      "skills",
+      "specifications",
+      "summary"
     ]
   },
   "LISTING_PRODUCT_DETAIL_IMAGE_SOURCE_KEYS": {
@@ -5296,12 +5398,22 @@
     "/us/": "USD",
     "walmart.com/": "USD"
   },
+  "PERCENT_PATTERN": "\\b\\d{1,3}(?:\\.\\d+)?\\s?%",
   "PRICE_FIELDS": {
     "__type__": "tuple",
     "items": [
       "price",
       "sale_price",
       "original_price"
+    ]
+  },
+  "PRICE_VALUE_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "price",
+      "sale_price",
+      "original_price",
+      "discount_amount"
     ]
   },
   "PRICE_REGEX": "\\d[\\d,.]*",
@@ -5335,6 +5447,7 @@
       "sku"
     ]
   },
+  "RATING_PATTERN": "\\b([1-5](?:\\.\\d)?)\\s*(?:/5|out of 5|stars?)\\b",
   "REQUIRED_FIELDS_BY_SURFACE": {
     "ecommerce_detail": {
       "__type__": "frozenset",
@@ -5375,6 +5488,8 @@
       "provider"
     ]
   },
+  "REVIEW_COUNT_PATTERN": "\\b(\\d[\\d,]*)\\s+reviews?\\b",
+  "REVIEW_TITLE_PATTERN": "^\\s*\\d[\\d,\\s]*\\s+reviews?\\s*$",
   "SALARY_RANGE_REGEX": "(?i)(?:(?:[$\u00a3\u00a5\u20ac\u20b9]|[A-Z]{3})?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:[-\u2013\u2014]|to|until)\\s*(?:[$\u00a3\u00a5\u20ac\u20b9]|[A-Z]{3})?\\s*\\d[\\d,.]*[kKmMbB]?(?:\\s*/\\s*[a-zA-Z]+)?|(?:[$\u00a3\u00a5\u20ac\u20b9]|[A-Z]{3})\\s*\\d[\\d,.]*[kKmMbB]?(?:\\s*/\\s*[a-zA-Z]+)?|\\d[\\d,.]*[kKmMbB]?\\s*(?:[$\u00a3\u00a5\u20ac\u20b9]|[A-Z]{3})(?:\\s*/\\s*[a-zA-Z]+)?)",
   "SECTION_ANCESTOR_STOP_TAGS": {
     "__type__": "set",
@@ -5846,6 +5961,30 @@
       "helpful"
     ]
   },
+  "STRUCTURED_MULTI_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "additional_images",
+      "available_sizes",
+      "option1_values",
+      "option2_values",
+      "tags"
+    ]
+  },
+  "STRUCTURED_OBJECT_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "product_attributes",
+      "selected_variant",
+      "variant_axes"
+    ]
+  },
+  "STRUCTURED_OBJECT_LIST_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "variants"
+    ]
+  },
   "SURFACE_WEIGHTS": {
     "ecommerce_detail": {
       "title": 0.2,
@@ -5890,6 +6029,78 @@
     "__type__": "tuple",
     "items": [
       "apparel for"
+    ]
+  },
+  "TRAVERSAL_LISTING_RECOVERY_ACTIONS": {
+    "__type__": "tuple",
+    "items": [
+      {
+        "__type__": "tuple",
+        "items": [
+          "clear_filters",
+          "(clear all|clear filters|reset|reset filters)",
+          "Removing active filters"
+        ]
+      },
+      {
+        "__type__": "tuple",
+        "items": [
+          "view_all",
+          "(view all|see all|shop all|show all)",
+          "Expanding the listing view"
+        ]
+      },
+      {
+        "__type__": "tuple",
+        "items": [
+          "next_page",
+          "(next|older|\u203a|\u00bb|>)",
+          "Advancing pagination"
+        ]
+      }
+    ]
+  },
+  "TRAVERSAL_PRICE_HINT_RE": {
+    "__type__": "pattern",
+    "pattern": "(?:rs\\.?|inr|\\$|\u00a3|\u20ac)\\s*\\d|\\b\\d[\\d,]{2,}\\b",
+    "flags": 34
+  },
+  "TRAVERSAL_STRUCTURED_SCRIPT_IDS": {
+    "__type__": "frozenset",
+    "items": [
+      "__next_data__",
+      "__nuxt_data__"
+    ]
+  },
+  "TRAVERSAL_STRUCTURED_SCRIPT_TEXT_MARKERS": {
+    "__type__": "tuple",
+    "items": [
+      "__apollo_state__",
+      "__initial_state__",
+      "__nuxt__",
+      "__preloaded_state__",
+      "__remixcontext",
+      "shopifyanalytics.meta",
+      "var meta ="
+    ]
+  },
+  "TRAVERSAL_STRUCTURED_SCRIPT_TYPES": {
+    "__type__": "frozenset",
+    "items": [
+      "application/hal+json",
+      "application/json",
+      "application/ld+json",
+      "application/vnd.api+json"
+    ]
+  },
+  "URL_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "apply_url",
+      "canonical_url",
+      "company_logo",
+      "image_url",
+      "url"
     ]
   },
   "VARIANT_AXIS_ALIASES": {

@@ -37,7 +37,7 @@ function DomainBar({
   return (
     <div className="flex items-center gap-3 py-1.5">
       <span
-        className="min-w-0 flex-1 truncate font-mono text-sm font-normal leading-[1.4] text-secondary"
+        className="mono-body min-w-0 flex-1 truncate text-sm font-normal leading-[1.4] text-secondary"
         title={domain}
       >
         {domain}
@@ -82,7 +82,7 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       className="no-underline group flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 transition-colors hover:bg-background-elevated"
     >
       <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
-      <span className="min-w-0 flex-1 truncate font-mono text-sm font-normal leading-[1.4] text-primary transition-colors group-hover:text-accent">
+      <span className="mono-body min-w-0 flex-1 truncate text-sm font-normal leading-[1.4] text-primary transition-colors group-hover:text-accent">
         {domain || `Run #${run.id}`}
       </span>
       <span className="text-sm font-normal leading-[var(--leading-normal)] tabular-nums text-muted">

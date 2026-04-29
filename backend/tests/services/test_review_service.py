@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from app.models.crawl import CrawlRecord, DomainFieldFeedback, ReviewPromotion
-from app.services.crawl_crud import create_crawl_run
 from app.services.domain_memory_service import load_domain_memory, save_domain_memory
 from app.services.review import (
     apply_domain_recipe_field_action,
@@ -21,15 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 async def test_save_review_persists_mapping_and_promotes_values(
     db_session: AsyncSession,
     test_user,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
     record = CrawlRecord(
         run_id=run.id,
@@ -86,15 +81,11 @@ async def test_save_review_persists_mapping_and_promotes_values(
 async def test_load_resolved_schema_reads_latest_review_promotion_snapshot(
     db_session: AsyncSession,
     test_user,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
     db_session.add_all(
         [
@@ -154,15 +145,11 @@ async def test_save_review_excludes_falsy_normalized_new_fields(
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
     record = CrawlRecord(
         run_id=run.id,
@@ -245,15 +232,11 @@ async def test_promote_domain_recipe_selectors_matches_existing_selectors_by_kin
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
 
     update_calls: list[dict[str, object]] = []
@@ -304,15 +287,11 @@ async def test_promote_domain_recipe_selectors_skips_invalid_existing_selector_i
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
 
     update_calls: list[dict[str, object]] = []
@@ -362,15 +341,11 @@ async def test_promote_domain_recipe_selectors_skips_invalid_existing_selector_i
 async def test_apply_domain_recipe_field_action_reject_deactivates_saved_selector_and_records_feedback(
     db_session: AsyncSession,
     test_user,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
     await save_domain_memory(
         db_session,
@@ -428,15 +403,11 @@ async def test_apply_domain_recipe_field_action_reject_deactivates_saved_selecto
 async def test_apply_domain_recipe_field_action_skips_invalid_source_record_ids(
     db_session: AsyncSession,
     test_user,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
 
     await apply_domain_recipe_field_action(
@@ -466,15 +437,11 @@ async def test_apply_domain_recipe_field_action_skips_invalid_source_record_ids(
 async def test_list_domain_field_feedback_skips_invalid_serialized_source_record_ids(
     db_session: AsyncSession,
     test_user,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
     db_session.add(
         DomainFieldFeedback(
@@ -506,15 +473,11 @@ async def test_apply_domain_recipe_field_action_rolls_back_staged_mutations_on_e
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/products/widget",
-            "surface": "ecommerce_detail",
-        },
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
     )
 
     async def _failing_promote(session, *, run, selectors, commit=True):

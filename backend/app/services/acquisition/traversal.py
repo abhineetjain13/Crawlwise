@@ -19,6 +19,10 @@ except ImportError:  # pragma: no cover
 
 from app.services.config.extraction_rules import (
     LISTING_CARD_URL_ATTRS,
+    TRAVERSAL_LISTING_RECOVERY_ACTIONS,
+    TRAVERSAL_STRUCTURED_SCRIPT_IDS,
+    TRAVERSAL_STRUCTURED_SCRIPT_TEXT_MARKERS,
+    TRAVERSAL_STRUCTURED_SCRIPT_TYPES,
 )
 from app.services.platform_policy import (
     path_tenant_boundary_family,
@@ -40,34 +44,6 @@ from selectolax.lexbor import LexborHTMLParser
 
 logger = logging.getLogger(__name__)
 
-_STRUCTURED_SCRIPT_TYPES = {
-    "application/hal+json",
-    "application/json",
-    "application/ld+json",
-    "application/vnd.api+json",
-}
-_STRUCTURED_SCRIPT_IDS = {
-    "__next_data__",
-    "__nuxt_data__",
-}
-_STRUCTURED_SCRIPT_TEXT_MARKERS = (
-    "__apollo_state__",
-    "__initial_state__",
-    "__nuxt__",
-    "__preloaded_state__",
-    "__remixcontext",
-    "shopifyanalytics.meta",
-    "var meta =",
-)
-_PRICE_HINT_RE = re.compile(
-    r"(?:rs\.?|inr|\$|£|€)\s*\d|\b\d[\d,]{2,}\b",
-    re.I,
-)
-_LISTING_RECOVERY_ACTIONS: tuple[tuple[str, str, str], ...] = (
-    ("clear_filters", r"(clear all|clear filters|reset|reset filters)", "Removing active filters"),
-    ("view_all", r"(view all|see all|shop all|show all)", "Expanding the listing view"),
-    ("next_page", r"(next|older|›|»|>)", "Advancing pagination"),
-)
 @dataclass(slots=True)
 class TraversalResult:
     requested_mode: str | None
@@ -230,9 +206,15 @@ async def execute_listing_traversal(
     else:
         result.selected_mode = normalized_mode
 
+    timeout_value: float | None = None
+    if timeout_seconds is not None:
+        try:
+            timeout_value = float(timeout_seconds)
+        except (TypeError, ValueError):
+            timeout_value = None
     deadline_at = (
-        time.monotonic() + float(timeout_seconds)
-        if timeout_seconds is not None and float(timeout_seconds) > 0
+        time.monotonic() + timeout_value
+        if timeout_value is not None and timeout_value > 0
         else None
     )
     result.activated = True
@@ -303,6 +285,13 @@ async def _run_scroll_traversal(
     on_event,
 ) -> None:
     max_iterations = int(crawler_runtime_settings.traversal_max_iterations_cap)
+    effective_max = max_iterations
+    try:
+        local_max_scrolls = int(max_scrolls)
+    except (TypeError, ValueError):
+        local_max_scrolls = 0
+    if local_max_scrolls > 0:
+        effective_max = min(max_iterations, local_max_scrolls)
     weak_progress_streak = 0
     best_card_gain = 0
     marginal_gain_streak = 0
@@ -321,7 +310,7 @@ async def _run_scroll_traversal(
     if _target_record_limit_reached(max_records=max_records, current_count=result.card_count):
         _set_stop_reason(result, "target_records_reached", surface=surface)
         return
-    for _ in range(max_iterations):
+    for _ in range(effective_max):
         if _deadline_reached(deadline_at):
             _set_stop_reason(result, "budget_exceeded", surface=surface)
             break
@@ -357,7 +346,7 @@ async def _run_scroll_traversal(
             message = _format_traversal_progress_message(
                 label="Scroll",
                 step=result.iterations,
-                step_limit=max_iterations,
+                step_limit=effective_max,
                 previous_count=previous_count,
                 current_count=current_count,
                 max_records=max_records,
@@ -878,7 +867,7 @@ async def recover_listing_page_content(
 
     helper_result = TraversalResult(requested_mode="recovery")
     wait_ms = max(0, int(crawler_runtime_settings.listing_recovery_post_action_wait_ms))
-    for action_name, pattern, message in _LISTING_RECOVERY_ACTIONS:
+    for action_name, pattern, message in TRAVERSAL_LISTING_RECOVERY_ACTIONS:
         if clicked_count >= max_actions:
             diagnostics["status"] = "interaction_limit_reached"
             break
@@ -1473,9 +1462,12 @@ def _collect_structured_script_fragments(
         if not text:
             continue
         if not (
-            script_type in _STRUCTURED_SCRIPT_TYPES
-            or script_id in _STRUCTURED_SCRIPT_IDS
-            or any(marker in text.lower() for marker in _STRUCTURED_SCRIPT_TEXT_MARKERS)
+            script_type in TRAVERSAL_STRUCTURED_SCRIPT_TYPES
+            or script_id in TRAVERSAL_STRUCTURED_SCRIPT_IDS
+            or any(
+                marker in text.lower()
+                for marker in TRAVERSAL_STRUCTURED_SCRIPT_TEXT_MARKERS
+            )
         ):
             continue
         fragment = str(node.html or "").strip()

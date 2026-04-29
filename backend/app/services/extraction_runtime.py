@@ -9,8 +9,8 @@ from urllib.parse import unquote, urlsplit
 from defusedxml import ElementTree as ET  # type: ignore[import-untyped]
 
 from app.services.acquisition.runtime import classify_blocked_page
-from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.extraction_rules import (
+    JSON_RECORD_LIST_KEYS,
     LISTING_NETWORK_BACKFILL_FIELDS,
     LISTING_NETWORK_BRAND_CANDIDATE_KEYS,
     LISTING_NETWORK_DIRECT_PRICE_KEYS,
@@ -29,6 +29,11 @@ from app.services.extract.detail_price_extractor import (
     backfill_detail_price_from_html,
     drop_low_signal_zero_detail_price,
 )
+from app.services.extract.detail_identity import (
+    listing_detail_like_path,
+    listing_url_is_structural,
+)
+from app.services.extract.listing_record_finalizer import finalize_listing_price_fields
 from app.services.extract.variant_record_normalization import (
     normalize_variant_record,
 )
@@ -51,28 +56,10 @@ from app.services.field_policy import (
     normalize_field_key,
 )
 from app.services.extract.listing_candidate_ranking import best_listing_candidate_set
-from app.services.listing_extractor import (
-    _finalize_listing_price_fields,
-    _detail_like_path,
-    _url_is_structural,
-    extract_listing_records,
-)
+from app.services.listing_extractor import extract_listing_records
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.normalizers import normalize_decimal_price
 
-_JSON_LIST_KEYS = (
-    "data",
-    "edges",
-    "entries",
-    "items",
-    "jobs",
-    "listings",
-    "nodes",
-    "posts",
-    "products",
-    "records",
-    "results",
-)
 def extract_records(
     html: str,
     page_url: str,
@@ -108,7 +95,7 @@ def extract_records(
     if json_records:
         if "listing" in surface:
             return [
-                _finalize_listing_price_fields(dict(row))
+                finalize_listing_price_fields(dict(row))
                 for row in json_records
                 if isinstance(row, dict)
             ]
@@ -156,12 +143,12 @@ def extract_records(
             network_payloads=network_payloads,
         )
         adapter_rows = [
-            _finalize_listing_price_fields(dict(row))
+            finalize_listing_price_fields(dict(row))
             for row in adapter_rows
             if isinstance(row, dict)
         ]
         listing_rows = [
-            _finalize_listing_price_fields(dict(row))
+            finalize_listing_price_fields(dict(row))
             for row in listing_rows
             if isinstance(row, dict)
         ]
@@ -180,8 +167,8 @@ def extract_records(
                 surface=surface,
                 max_records=max_records,
                 title_is_noise=is_title_noise,
-                url_is_structural=_url_is_structural,
-                detail_like_url=lambda candidate_url: _detail_like_path(
+                url_is_structural=listing_url_is_structural,
+                detail_like_url=lambda candidate_url: listing_detail_like_path(
                     candidate_url,
                     is_job=str(surface or "").startswith("job_"),
                 ),
@@ -211,52 +198,19 @@ def extract_records(
 
 
 def _html_is_blocked_extraction_shell(html: str) -> bool:
-    lowered = str(html or "").lower()
-    if not lowered.strip():
+    if not str(html or "").strip():
         return False
     classification = classify_blocked_page(html, 0)
     if classification.blocked:
         return True
-    phrases_raw = BLOCK_SIGNATURES.get("phrases")
-    blocked_phrase_values = phrases_raw if isinstance(phrases_raw, list) else []
-    blocked_phrases = [
-        str(phrase or "").strip().lower()
-        for phrase in blocked_phrase_values
-        if str(phrase or "").strip()
-    ]
-    active_provider_markers_raw = BLOCK_SIGNATURES.get("active_provider_markers")
-    active_provider_markers = (
-        active_provider_markers_raw if isinstance(active_provider_markers_raw, list) else []
+    return bool(
+        (classification.active_provider_hits or classification.challenge_element_hits)
+        and (
+            classification.strong_hits
+            or classification.weak_hits
+            or classification.title_matches
+        )
     )
-    active_markers = [
-        str(item.get("marker") or "").strip().lower()
-        for item in active_provider_markers
-        if isinstance(item, dict) and str(item.get("marker") or "").strip()
-    ]
-    challenge_elements_raw = BLOCK_SIGNATURES.get("challenge_elements")
-    challenge_elements = challenge_elements_raw if isinstance(challenge_elements_raw, dict) else {}
-    html_markers_raw = challenge_elements.get("html_markers")
-    html_markers_map = html_markers_raw if isinstance(html_markers_raw, dict) else {}
-    html_markers = [
-        str(marker or "").strip().lower()
-        for marker in html_markers_map.keys()
-        if str(marker or "").strip()
-    ]
-    title_patterns_raw = BLOCK_SIGNATURES.get("title_regexes")
-    title_pattern_values = title_patterns_raw if isinstance(title_patterns_raw, list) else []
-    title_patterns = [
-        str(pattern or "").strip()
-        for pattern in title_pattern_values
-        if str(pattern or "").strip()
-    ]
-    phrase_hit = any(phrase in lowered for phrase in blocked_phrases)
-    active_provider_hit = any(marker in lowered for marker in active_markers)
-    challenge_html_hit = any(marker in lowered for marker in html_markers)
-    title_hit = any(
-        re.search(pattern, lowered, re.IGNORECASE) is not None
-        for pattern in title_patterns
-    )
-    return (active_provider_hit or challenge_html_hit) and (phrase_hit or title_hit)
 
 
 def _postprocess_detail_records(
@@ -741,7 +695,7 @@ def _raw_json_items(payload: object, *, surface: str) -> list[object]:
         return list(payload)
     if not isinstance(payload, dict):
         return [] if is_listing_surface else [payload]
-    for key in _JSON_LIST_KEYS:
+    for key in JSON_RECORD_LIST_KEYS:
         value = payload.get(key)
         if isinstance(value, list) and value:
             if is_listing_surface and not _has_surface_field_overlap(value, surface=surface):
@@ -796,7 +750,7 @@ def _listing_items_score(key: str, items: list[object]) -> int:
         return 0
     lowered_key = str(key or "").strip().lower()
     score = dict_like_count
-    if lowered_key in _JSON_LIST_KEYS:
+    if lowered_key in JSON_RECORD_LIST_KEYS:
         score += 20
     if lowered_key in {"edges", "nodes"}:
         score += 10
@@ -837,7 +791,7 @@ def _raw_json_record(
             record["url"] = _raw_json_url(payload, page_url, fallback_index=fallback_index)
         cleaned = finalize_record(record, surface=surface)
         if "listing" in surface:
-            cleaned = _finalize_listing_price_fields(cleaned)
+            cleaned = finalize_listing_price_fields(cleaned)
         return cleaned if len(cleaned) > 2 else {}
     title = coerce_text(payload)
     if not title:

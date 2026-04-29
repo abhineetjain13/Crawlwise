@@ -121,7 +121,7 @@ Canonical config owner:
 | File | Purpose |
 |---|---|
 | `crawl_engine.py` | Extraction facade and routing |
-| `detail_extractor.py` | Detail-page extraction orchestration |
+| `detail_extractor.py` | Detail-page tier orchestration and field candidate arbitration |
 | `listing_extractor.py` | Listing-page extraction |
 | `structured_sources.py` | JSON-LD, microdata, OG, Nuxt, harvested JS state |
 | `js_state_mapper.py` | JS state to field mapping |
@@ -135,8 +135,10 @@ Canonical config owner:
 | `adapters/[platform].py` | Platform-specific extraction |
 | `extract/listing_card_fragments.py` | Canonical listing-fragment discovery, scoring, and listing-card heuristics shared by traversal, browser artifact capture, and listing extraction |
 | `extract/listing_candidate_ranking.py` | Shared candidate-set ranking and canonical utility-record filtering for listing rows |
-| `extract/detail_dom_extractor.py` | Detail DOM context selection |
+| `extract/detail_dom_extractor.py` | Detail DOM context selection, DOM fallback fields, and DOM variant recovery |
 | `extract/detail_price_extractor.py` | Detail price, currency reconciliation, and visible PDP price backfill |
+| `extract/detail_record_finalizer.py` | Detail record image dedupe, field cleanup, variant row repair, and final quality normalization |
+| `extract/detail_text_sanitizer.py` | Detail long-text pollution filters, fulfillment copy cleanup, and low-signal scalar checks |
 | `extract/detail_title_scorer.py` | Detail title promotion and shell-title scoring |
 | `extract/shared_variant_logic.py` | Canonical variant identity, merge, richness, DOM cue, and axis helpers |
 | `extract/variant_record_normalization.py` | Variant axis/value normalization before record persistence |

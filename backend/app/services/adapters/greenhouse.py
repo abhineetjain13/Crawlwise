@@ -32,13 +32,9 @@ class GreenhouseAdapter(BaseAdapter):
         return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        if "detail" in str(surface or "").lower():
+        if self._is_detail_surface(surface):
             detail_record = await self._try_detail_api(url, html)
-            return AdapterResult(
-                records=[detail_record] if detail_record else [],
-                source_type="greenhouse_adapter",
-                adapter_name=self.name,
-            )
+            return self._result([detail_record] if detail_record else [])
 
         # Try JSON API first (most reliable)
         records: list[dict] = []
@@ -52,11 +48,7 @@ class GreenhouseAdapter(BaseAdapter):
         if not records:
             records = self._extract_from_html(html, url)
 
-        return AdapterResult(
-            records=records,
-            source_type="greenhouse_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     def _extract_company_slug(self, url: str, html: str) -> str | None:
         """Extract the company slug from URL or embedded script."""

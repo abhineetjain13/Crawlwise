@@ -57,11 +57,7 @@ class ADPAdapter(BaseAdapter):
                 records.append(detail)
         else:
             records = self._extract_listing(url, html)
-        return AdapterResult(
-            records=records,
-            source_type="adp_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     def _extract_listing(self, url: str, html: str) -> list[dict]:
         parser = LexborHTMLParser(html)

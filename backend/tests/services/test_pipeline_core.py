@@ -35,6 +35,29 @@ def _listing_html() -> str:
     return "<html><body><h1>Empty category</h1></body></html>"
 
 
+def _fake_acquire_result(
+    request: AcquisitionRequest,
+    *,
+    html: str | None = None,
+    method: str = "test",
+    status_code: int = 200,
+    final_url: str | None = None,
+    **overrides,
+) -> AcquisitionResult:
+    return AcquisitionResult(
+        request=request,
+        final_url=final_url or request.url,
+        html=_detail_html() if html is None else html,
+        method=method,
+        status_code=status_code,
+        **overrides,
+    )
+
+
+async def _no_adapter(*_args, **_kwargs):
+    return None
+
+
 def test_best_adapter_result_deduplicates_unsourced_records() -> None:
     result = _best_adapter_result(
         [
@@ -153,13 +176,7 @@ async def test_process_single_url_prefetch_only_returns_metrics_without_persisti
     )
 
     async def _fake_acquire(request):
-        return AcquisitionResult(
-            request=request,
-            final_url=request.url,
-            html=_detail_html(),
-            method="test",
-            status_code=200,
-        )
+        return _fake_acquire_result(request)
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
 
@@ -203,12 +220,10 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
         )
         attempted_engines.append(forced_engine)
         challenge = forced_engine == "patchright"
-        return AcquisitionResult(
-            request=request,
-            final_url=request.url,
+        return _fake_acquire_result(
+            request,
             html=f"<html><body>{forced_engine}</body></html>",
             method="browser",
-            status_code=200,
             blocked=False,
             browser_diagnostics={
                 "browser_attempted": True,
@@ -232,9 +247,6 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
 
     async def _fake_note_host_hard_block(value: str | None, **kwargs):
         hard_blocks.append({"value": value, **kwargs})
-
-    async def _no_adapter(*_args, **_kwargs):
-        return None
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
     monkeypatch.setattr("app.services.pipeline.core.extract_records", _fake_extract_records)
@@ -281,12 +293,10 @@ async def test_usable_detail_with_active_provider_evidence_does_not_retry_real_c
             request.acquisition_profile.get("forced_browser_engine") or "patchright"
         )
         attempted_engines.append(forced_engine)
-        return AcquisitionResult(
-            request=request,
-            final_url=request.url,
+        return _fake_acquire_result(
+            request,
             html="<html><body>Nike Widget</body></html>",
             method="browser",
-            status_code=200,
             blocked=False,
             browser_diagnostics={
                 "browser_attempted": True,
@@ -296,9 +306,6 @@ async def test_usable_detail_with_active_provider_evidence_does_not_retry_real_c
                 "challenge_provider_hits": ["akamai"],
             },
         )
-
-    async def _no_adapter(*_args, **_kwargs):
-        return None
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
     monkeypatch.setattr(
@@ -344,12 +351,10 @@ async def test_patchright_challenge_shell_updates_host_memory(
     hard_blocks: list[dict[str, object]] = []
 
     async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
-        return AcquisitionResult(
-            request=request,
-            final_url=request.url,
+        return _fake_acquire_result(
+            request,
             html="<html><body>patchright</body></html>",
             method="browser",
-            status_code=200,
             blocked=False,
             browser_diagnostics={
                 "browser_attempted": True,
@@ -362,9 +367,6 @@ async def test_patchright_challenge_shell_updates_host_memory(
 
     async def _fake_note_host_hard_block(value: str | None, **kwargs):
         hard_blocks.append({"value": value, **kwargs})
-
-    async def _no_adapter(*_args, **_kwargs):
-        return None
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
     monkeypatch.setattr(
@@ -415,12 +417,10 @@ async def test_process_single_url_runs_adapter_against_browser_artifact_fragment
     """
 
     async def _fake_acquire(request):
-        return AcquisitionResult(
-            request=request,
-            final_url=request.url,
+        return _fake_acquire_result(
+            request,
             html="<html><body><h1>Home</h1></body></html>",
             method="browser",
-            status_code=200,
             artifacts={"rendered_listing_fragments": [fragment]},
         )
 
@@ -485,12 +485,10 @@ async def test_process_single_url_prefers_richer_adapter_artifact_rows(
     )
 
     async def _fake_acquire(request):
-        return AcquisitionResult(
-            request=request,
-            final_url=request.url,
+        return _fake_acquire_result(
+            request,
             html="<html><body>partial product-tile</body></html>",
             method="browser",
-            status_code=200,
             artifacts={"rendered_listing_fragments": ["rich product-tile"]},
         )
 

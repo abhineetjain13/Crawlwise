@@ -434,6 +434,7 @@ async def test_process_run_default_timeout_includes_acquisition_slack(
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
+    patch_settings,
 ) -> None:
     run = await create_crawl_run(
         db_session,
@@ -445,14 +446,11 @@ async def test_process_run_default_timeout_includes_acquisition_slack(
         },
     )
 
-    original_url_timeout = crawler_runtime_settings.url_process_timeout_seconds
-    original_buffer = crawler_runtime_settings.url_process_timeout_buffer_seconds
-    original_acquisition_timeout = (
-        crawler_runtime_settings.acquisition_attempt_timeout_seconds
+    patch_settings(
+        url_process_timeout_seconds=0.01,
+        url_process_timeout_buffer_seconds=0.03,
+        acquisition_attempt_timeout_seconds=0.02,
     )
-    crawler_runtime_settings.url_process_timeout_seconds = 0.01
-    crawler_runtime_settings.url_process_timeout_buffer_seconds = 0.03
-    crawler_runtime_settings.acquisition_attempt_timeout_seconds = 0.02
 
     async def _slow_process_single_url(*args, **kwargs):
         del args, kwargs
@@ -464,15 +462,8 @@ async def test_process_run_default_timeout_includes_acquisition_slack(
         _slow_process_single_url,
     )
 
-    try:
-        await process_run(db_session, run.id)
-        await db_session.refresh(run)
-    finally:
-        crawler_runtime_settings.url_process_timeout_seconds = original_url_timeout
-        crawler_runtime_settings.url_process_timeout_buffer_seconds = original_buffer
-        crawler_runtime_settings.acquisition_attempt_timeout_seconds = (
-            original_acquisition_timeout
-        )
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
 
     assert run.status == "completed"
     assert run.result_summary["extraction_verdict"] == "success"

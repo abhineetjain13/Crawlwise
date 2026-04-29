@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 from app.services.config.extraction_rules import (
     DETAIL_CENT_BASED_PRICE_CURRENCIES,
+    DETAIL_CENT_PRICE_HOST_SUFFIXES,
     DETAIL_CURRENT_PRICE_SELECTORS,
     DETAIL_CURRENCY_JSONLD_PATTERN,
     DETAIL_CURRENCY_META_SELECTORS,
@@ -27,6 +28,11 @@ from app.services.normalizers import normalize_decimal_price
 
 _LOW_SIGNAL_ZERO_PRICE_SOURCES = frozenset(DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES)
 _CENT_BASED_CURRENCIES = frozenset(DETAIL_CENT_BASED_PRICE_CURRENCIES)
+_CENT_PRICE_HOST_SUFFIXES = tuple(
+    str(host).strip().lower()
+    for host in tuple(DETAIL_CENT_PRICE_HOST_SUFFIXES or ())
+    if str(host).strip()
+)
 _DETAIL_PRICE_JSONLD_TYPE_RE = re.compile(str(DETAIL_PRICE_JSONLD_TYPE_PATTERN))
 _DETAIL_PRICE_JSONLD_RE = re.compile(str(DETAIL_PRICE_JSONLD_PATTERN))
 _DETAIL_CURRENCY_JSONLD_RE = re.compile(str(DETAIL_CURRENCY_JSONLD_PATTERN))
@@ -179,6 +185,17 @@ def reconcile_detail_currency_with_url(
                     )
 
 
+def normalize_detail_cent_prices_for_context(
+    record: dict[str, Any],
+    *,
+    page_url: str,
+) -> None:
+    if not _detail_price_context_uses_cents(page_url):
+        return
+    for container in _detail_price_containers(record):
+        _normalize_cent_price_container(container)
+
+
 def record_field_sources(record: dict[str, Any], field_name: str) -> set[str]:
     field_sources = record.get("_field_sources")
     if not isinstance(field_sources, dict):
@@ -260,6 +277,48 @@ def normalize_mismatched_host_currency_price(
     if normalized and "." not in normalized:
         return f"{normalized}.00"
     return normalized
+
+
+def _detail_price_context_uses_cents(page_url: str) -> bool:
+    hostname = str(urlparse(str(page_url or "")).hostname or "").strip().lower()
+    return bool(
+        hostname
+        and any(hostname == suffix or hostname.endswith(f".{suffix}") for suffix in _CENT_PRICE_HOST_SUFFIXES)
+    )
+
+
+def _detail_price_containers(record: dict[str, Any]) -> list[dict[str, Any]]:
+    containers = [record]
+    selected_variant = record.get("selected_variant")
+    if isinstance(selected_variant, dict):
+        containers.append(selected_variant)
+    variants = record.get("variants")
+    if isinstance(variants, list):
+        containers.extend(variant for variant in variants if isinstance(variant, dict))
+    return containers
+
+
+def _normalize_cent_price_container(container: dict[str, Any]) -> None:
+    for field_name in ("price", "original_price"):
+        normalized = _normalize_cent_integer_price(container.get(field_name))
+        if normalized:
+            container[field_name] = normalized
+
+
+def _normalize_cent_integer_price(value: object) -> str | None:
+    text = text_or_none(value)
+    if not text or "." in text:
+        return None
+    digits_only = re.sub(r"\D+", "", text)
+    if len(digits_only) < 4:
+        return None
+    normalized = normalize_decimal_price(text, interpret_integral_as_cents=True)
+    if normalized is None:
+        return None
+    try:
+        return f"{float(normalized):.2f}"
+    except (TypeError, ValueError):
+        return normalized
 
 
 def _reconcile_container_currency(
@@ -476,6 +535,7 @@ __all__ = [
     "detail_currency_hint_is_host_level",
     "drop_low_signal_zero_detail_price",
     "normalize_mismatched_host_currency_price",
+    "normalize_detail_cent_prices_for_context",
     "reconcile_detail_currency_with_url",
     "record_field_sources",
 ]

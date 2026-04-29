@@ -17,6 +17,7 @@ from app.services.config.extraction_rules import (
     NON_PRODUCT_PROVIDER_HINTS,
     PRODUCT_GALLERY_CONTEXT_HINTS,
     SEMANTIC_SECTION_NOISE,
+    SEMANTIC_SECTION_LABEL_SKIP_TOKENS,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -75,27 +76,6 @@ def _selector_regex_timeout_seconds() -> float | None:
     return timeout if timeout > 0 else None
 
 
-_SECTION_LABEL_SKIP_TOKENS = tuple(
-    sorted(
-        {
-            *(
-                str(token).lower()
-                for token in (
-                    SEMANTIC_SECTION_NOISE.get("label_skip_tokens")
-                    or ()
-                )
-            ),
-            "answer",
-            "answers",
-            "q&a",
-            "question",
-            "questions",
-            "rating snapshot",
-            "review",
-            "reviews",
-        }
-    )
-)
 _SECTION_SKIP_PATTERNS = tuple(
     str(token).lower()
     for token in (
@@ -743,7 +723,7 @@ def _is_section_label(label: str) -> bool:
         return False
     if cleaned.lower() in {"details", "more", "overview"}:
         return False
-    if any(token in cleaned.lower() for token in _SECTION_LABEL_SKIP_TOKENS):
+    if any(token in cleaned.lower() for token in SEMANTIC_SECTION_LABEL_SKIP_TOKENS):
         return False
     return any(char.isalpha() for char in cleaned)
 
@@ -812,7 +792,7 @@ def _section_text_is_meaningful(
     lowered_text = clean_text(text).lower()
     if not lowered_text:
         return False
-    if any(token in lowered_label for token in _SECTION_LABEL_SKIP_TOKENS):
+    if any(token in lowered_label for token in SEMANTIC_SECTION_LABEL_SKIP_TOKENS):
         return False
     if any(pattern in lowered_text for pattern in _SECTION_SKIP_PATTERNS):
         return False

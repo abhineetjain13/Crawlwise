@@ -7,6 +7,11 @@ from bs4.element import Comment, NavigableString, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRun
+from app.services.config.selectors import (
+    SELECTOR_SYNTHESIS_ALLOWED_ATTRS,
+    SELECTOR_SYNTHESIS_DROP_TAGS,
+    SELECTOR_SYNTHESIS_LOW_VALUE_TAGS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.db_utils import mapping_or_empty
 from app.services.extraction_runtime import extract_records_async
@@ -22,49 +27,19 @@ from app.services.field_value_core import _safe_int
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import extract_selector_value, validate_or_convert_xpath
 
-_SELECTOR_SYNTHESIS_ALLOWED_ATTRS = frozenset(
-    {
-        "aria-label",
-        "class",
-        "data-testid",
-        "href",
-        "id",
-        "itemprop",
-        "name",
-        "shadowrootmode",
-        "slot",
-    }
-)
-_SELECTOR_SYNTHESIS_DROP_TAGS = frozenset({"script", "style", "noscript", "svg"})
-_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS = frozenset(
-    {
-        "nav",
-        "footer",
-        "aside",
-        "form",
-        "button",
-        "input",
-        "select",
-        "textarea",
-        "iframe",
-        "canvas",
-    }
-)
-
-
 def reduce_html_for_selector_synthesis(html: str) -> str:
     soup = BeautifulSoup(str(html or ""), "html.parser")
     for comment_node in soup.find_all(string=lambda value: isinstance(value, Comment)):
         comment_node.extract()
-    for drop_tag in list(soup.find_all(_SELECTOR_SYNTHESIS_DROP_TAGS)):
+    for drop_tag in list(soup.find_all(SELECTOR_SYNTHESIS_DROP_TAGS)):
         drop_tag.decompose()
-    for low_value_tag in list(soup.find_all(_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS)):
+    for low_value_tag in list(soup.find_all(SELECTOR_SYNTHESIS_LOW_VALUE_TAGS)):
         low_value_tag.decompose()
     for tag in list(soup.find_all(True)):
         allowed_attrs = {
             key: value
             for key, value in tag.attrs.items()
-            if key in _SELECTOR_SYNTHESIS_ALLOWED_ATTRS
+            if key in SELECTOR_SYNTHESIS_ALLOWED_ATTRS
         }
         tag.attrs = allowed_attrs
     reduced = BeautifulSoup("<html><body></body></html>", "html.parser")
@@ -111,7 +86,7 @@ def _append_reduced_node(
         return len(chunk)
     if not isinstance(node, Tag):
         return 0
-    if node.name in _SELECTOR_SYNTHESIS_LOW_VALUE_TAGS:
+    if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS:
         return 0
     if node.name == "template" and not node.has_attr("shadowrootmode"):
         return 0

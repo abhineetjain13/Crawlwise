@@ -325,16 +325,13 @@ async def list_domain_cookie_memory(
     rows = list((await session.execute(statement)).scalars().all())
     payload: list[dict[str, object]] = []
     for row in rows:
-        normalized_state = _normalize_storage_state(row.storage_state)
-        cookie_rows = _object_list(normalized_state.get("cookies"))
-        origin_rows = _object_list(normalized_state.get("origins"))
         payload.append(
             {
                 "id": row.id,
                 "domain": _domain_from_storage_key(row.domain),
                 "browser_engine": _storage_row_browser_engine(row),
-                "cookie_count": len(cookie_rows),
-                "origin_count": len(origin_rows),
+                "cookie_count": _storage_state_cookie_count(row.storage_state),
+                "origin_count": _storage_state_origin_count(row.storage_state),
                 "updated_at": row.updated_at,
             }
         )
@@ -462,6 +459,27 @@ def _normalize_storage_state(storage_state: Mapping[str, object]) -> dict[str, o
         "cookies": _normalize_cookies(storage_state.get("cookies")),
         "origins": _normalize_origins(storage_state.get("origins")),
     }
+
+
+def _storage_state_cookie_count(storage_state: object) -> int:
+    if not isinstance(storage_state, Mapping):
+        return 0
+    return _storage_state_entry_count(storage_state.get("cookies"))
+
+
+def _storage_state_origin_count(storage_state: object) -> int:
+    if not isinstance(storage_state, Mapping):
+        return 0
+    return _storage_state_entry_count(storage_state.get("origins"))
+
+
+def _storage_state_entry_count(value: object) -> int:
+    if isinstance(value, Iterable) and not isinstance(
+        value,
+        (str, bytes, bytearray, Mapping),
+    ):
+        return len(list(value))
+    return len(_object_list(value))
 
 
 def _normalize_storage_state_payload(

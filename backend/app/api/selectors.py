@@ -10,6 +10,7 @@ from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.selectors import (
     SelectorCreateRequest,
+    SelectorDomainSummaryResponse,
     SelectorRecordResponse,
     SelectorSuggestRequest,
     SelectorSuggestResponse,
@@ -23,18 +24,50 @@ from app.services.selectors_runtime import (
     delete_domain_selector_records,
     delete_selector_record,
     fetch_selector_document,
+    list_selector_domain_summaries,
     list_selector_records,
     suggest_selectors,
     test_selector,
     update_selector_record,
 )
 from app.services.url_safety import SecurityError, validate_public_target
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/selectors", tags=["selectors"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/summary")
+async def selectors_summary(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+    domain: str = "",
+    surface: str = "",
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[SelectorDomainSummaryResponse]:
+    normalized_domain = str(domain or "").strip().lower()
+    normalized_surface = str(surface or "").strip().lower()
+    rows = [
+        row
+        for row in await list_selector_domain_summaries(session)
+        if (
+            not normalized_domain
+            or str(row.get("domain") or "") == normalized_domain
+        )
+        and (
+            not normalized_surface
+            or str(row.get("surface") or "") == normalized_surface
+        )
+    ]
+    start = int(offset)
+    stop = start + int(limit)
+    return [
+        SelectorDomainSummaryResponse.model_validate(row)
+        for row in rows[start:stop]
+    ]
 
 
 @router.get("")

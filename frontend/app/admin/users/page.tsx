@@ -66,8 +66,8 @@ export default function AdminUsersPage() {
             </div>
 
             <SectionCard title="User Management" description="Filter by email and status.">
-                <div className="filter-toolbar">
-                    <div className="filter-toolbar-field">
+                <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex-1">
                         <Input
                             value={search}
                             onChange={(event) => setSearch(event.target.value)}

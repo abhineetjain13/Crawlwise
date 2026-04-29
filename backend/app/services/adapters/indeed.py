@@ -29,11 +29,7 @@ class IndeedAdapter(BaseAdapter):
                 records.append(record)
         elif surface in ("job_listing",):
             records = self._extract_listing(parser, url)
-        return AdapterResult(
-            records=records,
-            source_type="indeed_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     def _extract_detail(self, parser: LexborHTMLParser, url: str) -> dict | None:
         title_el = parser.css_first(".jobsearch-JobInfoHeader-title, h1")

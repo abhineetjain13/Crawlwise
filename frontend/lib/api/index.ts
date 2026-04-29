@@ -27,6 +27,7 @@ import type {
  ReviewPayload,
  ReviewSelection,
  SelectorCreatePayload,
+ SelectorDomainSummary,
  SelectorRecord,
  SelectorSuggestResponse,
  SelectorTestResponse,
@@ -54,9 +55,6 @@ export const api = {
  me: () => apiClient.get<User>("/api/auth/me"),
  dashboard: () => apiClient.get<Dashboard>("/api/dashboard"),
  resetApplicationData: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-data", {}),
- resetCrawlData: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-crawl-data", {}),
- resetDomainMemory: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-domain-memory", {}),
- resetProductIntelligence: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-product-intelligence", {}),
  createCrawl: (payload: CrawlCreatePayload) => apiClient.post<{ run_id: number }>("/api/crawls", payload),
  createCsvCrawl: (payload: {
  file: File;
@@ -194,6 +192,7 @@ export const api = {
  if (params?.surface) query.set("surface", params.surface);
  return apiClient.get<SelectorRecord[]>(withQuery("/api/selectors", query));
  },
+ listSelectorSummaries: () => apiClient.get<SelectorDomainSummary[]>("/api/selectors/summary"),
  suggestSelectors: (payload: { url: string; expected_columns: string[]; surface?: string }) =>
  apiClient.post<SelectorSuggestResponse>("/api/selectors/suggest", payload),
  createSelector: (payload: SelectorCreatePayload) => apiClient.post<SelectorRecord>("/api/selectors", payload),

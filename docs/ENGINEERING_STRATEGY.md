@@ -150,6 +150,33 @@ Allowing generic detail-expansion probes to click header/nav/footer controls, ma
 
 **Fix:** Expansion candidates must prefer in-page/main-content controls. Skip header/nav/footer chrome and real navigation links unless they are proven in-page expanders for the requested detail content.
 
+### AP-17: Cross-module private reach-in
+Importing underscore-prefixed names from another service module because "the helper already exists there."
+
+**Violation looks like:** `extraction_runtime.py` imports `_finalize_listing_price_fields` from `listing_extractor.py`. `crawl_fetch_runtime.py` imports `_display_proxy` from `browser_runtime.py`. A facade or runtime module reaches into another module's internals instead of promoting a real owner API.
+
+**Fix:** Either keep the logic inside the owner and call a public function, or promote the helper into the canonical owner file for that concern. Private imports that already exist must be treated as explicit debt with a shrinking allowlist in `backend/tests/services/test_structure.py`. No new private cross-module imports.
+
+---
+
+## Required Hygiene Gates
+
+These are mandatory controls, not suggestions.
+
+1. `backend/tests/services/test_structure.py` is the architecture ratchet.
+   It owns LOC budgets, config-placement checks, and the allowlist for private cross-module imports.
+
+2. Any new violation pattern found in an audit must become one of:
+   - a focused test gate
+   - a tighter LOC budget
+   - a smaller explicit allowlist
+
+3. Allowlists are debt ledgers, not parking lots.
+   If a private import or exception is removed in code, remove it from the allowlist in the same change.
+
+4. Audit work is not complete until the guard exists.
+   Deleting wrappers or moving config without adding the enforcement hook means the drift will return.
+
 ---
 
 ## Agent Behavior

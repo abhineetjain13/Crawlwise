@@ -29,7 +29,7 @@ import { httpErrorStatus } from "../../lib/api/client";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { cn } from "../../lib/utils";
 import { getAuthSessionQueryOptions, isAuthRoute } from "./auth-session-query";
-import { Button, Dropdown } from "../ui/primitives";
+import { Button } from "../ui/primitives";
 import { ConfirmDialog } from "../ui/dialog";
 import type { TopBarState } from "./top-bar-context";
 import { TopBarProvider, useTopBarHeader } from "./top-bar-context";
@@ -79,25 +79,12 @@ function isNavItemActive(
 
 const navItemCount = navGroups.reduce((total, group) => total + group.items.length, 0);
 
-type ResetMode = "crawl" | "memory" | "intelligence";
-
-const resetDialogCopy: Record<ResetMode, { title: string; description: string; confirmLabel: string }> = {
-    crawl: {
-        title: "Reset crawl data",
-        description: "Delete crawl runs, records, logs, artifacts, and runtime cookie files? Learned domain memory will be preserved.",
-        confirmLabel: "Reset Crawl Data",
-    },
-    memory: {
-        title: "Reset domain memory",
-        description: "Delete learned domain memory only? This clears saved selectors, saved run profiles, cookie memory, and field feedback without deleting crawl history.",
-        confirmLabel: "Reset Domain Memory",
-    },
-    intelligence: {
-        title: "Reset Product Intelligence",
-        description: "Delete Product Intelligence sessions, sources, discovered URLs, matches, and intelligence results? Crawl history and domain memory will be preserved.",
-        confirmLabel: "Reset Intelligence",
-    },
-};
+const resetDialogCopy = {
+    title: "Reset workspace data",
+    description:
+        "Delete crawl runs, records, logs, artifacts, runtime cookie files, learned domain memory, saved cookie memory, field feedback, host protection memory, and Product Intelligence data.",
+    confirmLabel: "Reset Workspace Data",
+} as const;
 
 const resetForbiddenMessage =
     "The API refused reset (admin-only on an older backend build, or a stale session). Stop and restart the FastAPI server so it loads the latest code, then try again, or sign out and sign back in.";
@@ -341,22 +328,15 @@ function ShellContent({
     const header = useTopBarHeader();
     const topBar = header ?? getFallbackHeader(pathname);
     const router = useRouter();
-    const [resetPending, setResetPending] = useState<ResetMode | null>(null);
-    const [resetMode, setResetMode] = useState<ResetMode>("crawl");
+    const [resetPending, setResetPending] = useState(false);
     const [resetDialogOpen, setResetDialogOpen] = useState(false);
     const [resetError, setResetError] = useState("");
 
     async function executeReset() {
-        setResetPending(resetMode);
+        setResetPending(true);
         setResetError("");
         try {
-            if (resetMode === "memory") {
-                await api.resetDomainMemory();
-            } else if (resetMode === "intelligence") {
-                await api.resetProductIntelligence();
-            } else {
-                await api.resetCrawlData();
-            }
+            await api.resetApplicationData();
             globalThis.location.reload();
         } catch (error) {
             const status = httpErrorStatus(error);
@@ -368,9 +348,9 @@ function ShellContent({
                 setResetError(resetForbiddenMessage);
                 return;
             }
-            setResetError(error instanceof Error ? error.message : "Failed to reset selected data.");
+            setResetError(error instanceof Error ? error.message : "Failed to reset workspace data.");
         } finally {
-            setResetPending(null);
+            setResetPending(false);
         }
     }
 
@@ -379,15 +359,7 @@ function ShellContent({
         setResetDialogOpen(true);
     }
 
-    const resetCopy = resetDialogCopy[resetMode];
-    const resetLabel =
-        resetPending === "crawl"
-            ? "Resetting Crawl Data..."
-            : resetPending === "memory"
-                ? "Resetting Domain Memory..."
-                : resetPending === "intelligence"
-                    ? "Resetting Intelligence..."
-                    : "Reset";
+    const resetLabel = resetPending ? "Resetting Workspace..." : "Reset Workspace";
 
     return (
         <div className="app-main-col">
@@ -410,26 +382,14 @@ function ShellContent({
                         <Button
                             type="button"
                             onClick={handleSelectedReset}
-                            disabled={resetPending !== null}
+                            disabled={resetPending}
                             variant="secondary"
                             className="h-[var(--control-height)]"
                         >
                             <Trash2 className="size-3.5" />
                             {resetLabel}
                         </Button>
-                        <Dropdown
-                            ariaLabel="Reset action"
-                            value={resetMode}
-                            onChange={setResetMode}
-                            disabled={resetPending !== null}
-                            align="center"
-                            className="w-max"
-                            options={[
-                                { value: "crawl", label: "Crawl Data" },
-                                { value: "memory", label: "Domain Memory" },
-                                { value: "intelligence", label: "Intelligence" },
-                            ]}
-                        />                    </div>
+                    </div>
                     <ThemeToggle compact />
                 </div>
             </header>
@@ -440,10 +400,10 @@ function ShellContent({
             <ConfirmDialog
                 open={resetDialogOpen}
                 onOpenChange={setResetDialogOpen}
-                title={resetCopy.title}
-                description={resetCopy.description}
-                confirmLabel={resetCopy.confirmLabel}
-                pending={resetPending !== null}
+                title={resetDialogCopy.title}
+                description={resetDialogCopy.description}
+                confirmLabel={resetDialogCopy.confirmLabel}
+                pending={resetPending}
                 danger
                 error={resetError}
                 onConfirm={() => void executeReset()}

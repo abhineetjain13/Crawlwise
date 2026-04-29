@@ -32,6 +32,20 @@ SURFACE_DETAIL_PATH_HINTS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+GENERIC_PLATFORM_URL_TOKENS: dict[str, tuple[str, ...]] = {
+    "job": (
+        *SURFACE_DETAIL_PATH_HINTS["job"],
+        "/job-search",
+        "/jobboard",
+        "/currentopenings",
+    ),
+    "ecommerce": (
+        "/product/",
+        *SURFACE_DETAIL_PATH_HINTS["ecommerce"],
+        "/collections/",
+    ),
+}
+
 
 def surface_group(surface: str | None) -> str | None:
     normalized = str(surface or "").strip().lower()
@@ -55,6 +69,7 @@ def detail_path_hints(surface: str | None = None) -> tuple[str, ...]:
 
 
 __all__ = [
+    "GENERIC_PLATFORM_URL_TOKENS",
     "SURFACE_DETAIL_PATH_HINTS",
     "detail_path_hints",
     "surface_group",

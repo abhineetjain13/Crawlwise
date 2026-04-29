@@ -47,7 +47,7 @@ function RunRow({
                         <Tooltip content={run.url} align="start">
                             <Link
                                 href={`/crawl?run_id=${run.id}`}
-                                className="link-accent no-underline block max-w-[280px] truncate font-mono text-sm font-normal leading-[1.4] text-primary transition-colors"
+                                className="type-mono-standard link-accent no-underline block max-w-[280px] truncate font-normal leading-[1.4] text-primary transition-colors"
                             >
                                 {domain || `Run #${run.id}`}
                             </Link>
@@ -82,7 +82,7 @@ function RunRow({
 
             {/* Mode */}
             <td>
-                <span className="rounded-[3px] bg-background-elevated px-1.5 py-0.5 text-sm leading-[var(--leading-normal)] font-mono text-muted">
+                <span className="mono-body rounded-[3px] bg-background-elevated px-1.5 py-0.5 text-sm leading-[var(--leading-normal)] text-muted">
                     {formatRunType(run.run_type)}
                 </span>
             </td>
@@ -96,14 +96,14 @@ function RunRow({
 
             {/* Records */}
             <td className="text-right">
-                <span className={cn("font-mono text-sm font-normal leading-[var(--leading-normal)] text-foreground tabular-nums", recordCount > 0 ? "text-primary" : "text-muted")}>
+                <span className={cn("mono-body text-sm font-normal leading-[var(--leading-normal)] text-foreground tabular-nums", recordCount > 0 ? "text-primary" : "text-muted")}>
                     {recordCount > 0 ? recordCount.toLocaleString() : "—"}
                 </span>
             </td>
 
             {/* Date */}
             <td className="text-right">
-                <span className="font-mono text-sm leading-[var(--leading-normal)] text-muted tabular-nums">{formatDate(run.created_at)}</span>
+                <span className="mono-body text-sm leading-[var(--leading-normal)] text-muted tabular-nums">{formatDate(run.created_at)}</span>
             </td>
 
             {/* Actions */}

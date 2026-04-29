@@ -2,55 +2,36 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from importlib import import_module
 import logging
 
-from app.services.adapters.adp import ADPAdapter
-from app.services.adapters.amazon import AmazonAdapter
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.adapters.belk import BelkAdapter
-from app.services.adapters.ebay import EbayAdapter
-from app.services.adapters.greenhouse import GreenhouseAdapter
-from app.services.adapters.icims import ICIMSAdapter
-from app.services.adapters.indeed import IndeedAdapter
-from app.services.adapters.jibe import JibeAdapter
-from app.services.adapters.linkedin import LinkedInAdapter
-from app.services.adapters.myntra import MyntraAdapter
-from app.services.adapters.nike import NikeAdapter
-from app.services.adapters.oracle_hcm import OracleHCMAdapter
-from app.services.adapters.paycom import PaycomAdapter
-from app.services.adapters.remoteok import RemoteOkAdapter
-from app.services.adapters.remotive import RemotiveAdapter
-from app.services.adapters.saashr import SaaSHRAdapter
-from app.services.adapters.shopify import ShopifyAdapter
-from app.services.adapters.ultipro import UltiProAdapter
-from app.services.adapters.walmart import WalmartAdapter
-from app.services.adapters.workday import WorkdayAdapter
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.platform_policy import configured_adapter_names, is_job_platform_signal
 
 logger = logging.getLogger(__name__)
 
-_ADAPTER_FACTORIES: dict[str, type[BaseAdapter]] = {
-    "amazon": AmazonAdapter,
-    "belk": BelkAdapter,
-    "walmart": WalmartAdapter,
-    "ebay": EbayAdapter,
-    "adp": ADPAdapter,
-    "icims": ICIMSAdapter,
-    "oracle_hcm": OracleHCMAdapter,
-    "paycom": PaycomAdapter,
-    "ultipro_ukg": UltiProAdapter,
-    "workday": WorkdayAdapter,
-    "saashr": SaaSHRAdapter,
-    "jibe": JibeAdapter,
-    "indeed": IndeedAdapter,
-    "linkedin": LinkedInAdapter,
-    "myntra": MyntraAdapter,
-    "nike": NikeAdapter,
-    "greenhouse": GreenhouseAdapter,
-    "remotive": RemotiveAdapter,
-    "remoteok": RemoteOkAdapter,
-    "shopify": ShopifyAdapter,
+_ADAPTER_FACTORIES: dict[str, tuple[str, str]] = {
+    "amazon": ("app.services.adapters.amazon", "AmazonAdapter"),
+    "belk": ("app.services.adapters.belk", "BelkAdapter"),
+    "walmart": ("app.services.adapters.walmart", "WalmartAdapter"),
+    "ebay": ("app.services.adapters.ebay", "EbayAdapter"),
+    "adp": ("app.services.adapters.adp", "ADPAdapter"),
+    "icims": ("app.services.adapters.icims", "ICIMSAdapter"),
+    "oracle_hcm": ("app.services.adapters.oracle_hcm", "OracleHCMAdapter"),
+    "paycom": ("app.services.adapters.paycom", "PaycomAdapter"),
+    "ultipro_ukg": ("app.services.adapters.ultipro", "UltiProAdapter"),
+    "workday": ("app.services.adapters.workday", "WorkdayAdapter"),
+    "saashr": ("app.services.adapters.saashr", "SaaSHRAdapter"),
+    "jibe": ("app.services.adapters.jibe", "JibeAdapter"),
+    "indeed": ("app.services.adapters.indeed", "IndeedAdapter"),
+    "linkedin": ("app.services.adapters.linkedin", "LinkedInAdapter"),
+    "myntra": ("app.services.adapters.myntra", "MyntraAdapter"),
+    "nike": ("app.services.adapters.nike", "NikeAdapter"),
+    "greenhouse": ("app.services.adapters.greenhouse", "GreenhouseAdapter"),
+    "remotive": ("app.services.adapters.remotive", "RemotiveAdapter"),
+    "remoteok": ("app.services.adapters.remoteok", "RemoteOkAdapter"),
+    "shopify": ("app.services.adapters.shopify", "ShopifyAdapter"),
 }
 
 
@@ -58,16 +39,26 @@ def available_adapter_names() -> tuple[str, ...]:
     return tuple(sorted(_ADAPTER_FACTORIES))
 
 
+def _build_adapter(adapter_name: str) -> BaseAdapter | None:
+    target = _ADAPTER_FACTORIES.get(adapter_name)
+    if target is None:
+        return None
+    module_name, class_name = target
+    module = import_module(module_name)
+    factory = getattr(module, class_name)
+    return factory()
+
+
 @lru_cache(maxsize=1)
 def registered_adapters() -> tuple[BaseAdapter, ...]:
     adapters: list[BaseAdapter] = []
     unknown: list[str] = []
     for adapter_name in configured_adapter_names():
-        factory = _ADAPTER_FACTORIES.get(adapter_name)
-        if factory is None:
+        adapter = _build_adapter(adapter_name)
+        if adapter is None:
             unknown.append(adapter_name)
             continue
-        adapters.append(factory())
+        adapters.append(adapter)
 
     if unknown:
         logger.warning(
@@ -175,9 +166,8 @@ async def try_blocked_adapter_recovery(
                 continue
             if not records:
                 continue
-            return AdapterResult(
-                records=records,
+            return adapter._result(
+                records,
                 source_type=f"{adapter.name}_adapter_recovery",
-                adapter_name=adapter.name,
             )
     return None

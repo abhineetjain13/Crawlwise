@@ -8,7 +8,7 @@ import {
  Trash2,
  X,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import {
   DataRegionEmpty,
@@ -31,6 +31,7 @@ import type {
  DomainCookieMemoryRecord,
  DomainFieldFeedbackRecord,
  DomainRunProfileRecord,
+ SelectorDomainSummary,
  SelectorRecord,
  SelectorUpdatePayload,
 } from "../../../lib/api/types";
@@ -48,6 +49,7 @@ type EditDraft = {
 
 type SurfaceWorkspace = {
  surface: string;
+ selectorCount: number;
  selectors: LocalRecord[];
  profile: DomainRunProfileRecord | null;
  learning: DomainFieldFeedbackRecord[];
@@ -142,15 +144,41 @@ function isInternalDomainMemoryArtifact(domain: string, surfaceCount: number, ha
  return hasCookieMemory && surfaceCount === 0 && learningCount === 0 && completedRunCount === 0;
 }
 
+function DomainMemoryWorkspaceLoading() {
+ return (
+ <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
+ <SurfacePanel className="p-3 space-y-3 flex flex-col max-h-[calc(100vh-180px)]">
+ <div className="flex items-center justify-between px-1 shrink-0">
+ <h3 className="type-label">Domains</h3>
+ <span className="text-xs text-muted">—</span>
+ </div>
+ <DataRegionLoading count={6} className="px-0 py-0" />
+ </SurfacePanel>
+ <div className="space-y-4">
+ <SurfacePanel className="p-4 space-y-4">
+ <DataRegionLoading count={2} className="px-0 py-0" />
+ </SurfacePanel>
+ <SurfacePanel className="p-4">
+ <DataRegionLoading count={8} className="px-0 py-0" />
+ </SurfacePanel>
+ </div>
+ </div>
+ );
+}
+
 export default function DomainMemoryManagePage() {
  const [records, setRecords] = useState<LocalRecord[]>([]);
+ const [selectorSummaries, setSelectorSummaries] = useState<SelectorDomainSummary[]>([]);
  const [profiles, setProfiles] = useState<DomainRunProfileRecord[]>([]);
  const [cookies, setCookies] = useState<DomainCookieMemoryRecord[]>([]);
  const [feedback, setFeedback] = useState<DomainFieldFeedbackRecord[]>([]);
  const [completedRuns, setCompletedRuns] = useState<CrawlRun[]>([]);
  const [loading, setLoading] = useState(true);
+ const [selectorLoading, setSelectorLoading] = useState(false);
  const [error, setError] = useState("");
  const [selectedDomain, setSelectedDomain] = useState("");
+ const [loadedSelectorDomain, setLoadedSelectorDomain] = useState("");
+ const [selectorRefreshKey, setSelectorRefreshKey] = useState(0);
  const [editingId, setEditingId] = useState<string | null>(null);
  const [draft, setDraft] = useState<EditDraft | null>(null);
  const [searchQuery, setSearchQuery] = useState("");
@@ -158,22 +186,31 @@ export default function DomainMemoryManagePage() {
  const [activeTab, setActiveTab] = useState("selectors");
  const deferredSearchQuery = useDeferredValue(searchQuery);
 
- async function loadWorkspace() {
+ function toLocalRecords(selectorData: SelectorRecord[]) {
+ return selectorData.map((record, index) => ({ ...record, _uid: `${record.id}-${index}-${Date.now()}` }));
+ }
+
+ async function loadWorkspace(showLoading = true) {
+ if (showLoading) {
  setLoading(true);
+ }
  setError("");
  try {
- const [selectorData, profileData, cookieData, feedbackData, crawlData] = await Promise.all([
- api.listSelectors(),
+ const [selectorSummaryData, profileData, cookieData, feedbackData, crawlData] = await Promise.all([
+ api.listSelectorSummaries(),
  api.listDomainRunProfiles(),
  api.listDomainCookieMemory(),
  api.listDomainFieldFeedback({ limit: 100 }),
  api.listCrawls({ status: "completed", limit: 100 }),
  ]);
- setRecords(selectorData.map((record, index) => ({ ...record, _uid: `${record.id}-${index}-${Date.now()}` })));
+ setSelectorSummaries(selectorSummaryData);
  setProfiles(profileData);
  setCookies(cookieData);
  setFeedback(feedbackData);
  setCompletedRuns(crawlData.items);
+ setRecords([]);
+ setLoadedSelectorDomain("");
+ setSelectorRefreshKey((current) => current + 1);
  } catch (nextError) {
  setError(nextError instanceof Error ? nextError.message : "Unable to load domain memory.");
  } finally {
@@ -181,20 +218,28 @@ export default function DomainMemoryManagePage() {
  }
  }
 
+ const loadWorkspaceOnMount = useEffectEvent(() => {
+ void loadWorkspace(false);
+ });
+
  useEffect(() => {
- void loadWorkspace();
+ const timeoutId = window.setTimeout(() => {
+ loadWorkspaceOnMount();
+ }, 0);
+ return () => window.clearTimeout(timeoutId);
  }, []);
 
  const availableSurfaces = useMemo(() => {
  return Array.from(
  new Set([
+ ...selectorSummaries.map((summary) => summary.surface),
  ...records.map((record) => record.surface),
  ...profiles.map((profile) => profile.surface),
  ...feedback.map((entry) => entry.surface),
  ...completedRuns.map((run) => run.surface),
  ]),
  ).sort();
- }, [completedRuns, feedback, profiles, records]);
+ }, [completedRuns, feedback, profiles, records, selectorSummaries]);
 
  const groupedWorkspaces = useMemo<DomainWorkspace[]>(() => {
  const query = deferredSearchQuery.trim().toLowerCase();
@@ -213,6 +258,7 @@ export default function DomainMemoryManagePage() {
  }
  const created: SurfaceWorkspace = {
  surface,
+ selectorCount: 0,
  selectors: [],
  profile: null,
  learning: [],
@@ -236,6 +282,17 @@ export default function DomainMemoryManagePage() {
  return created;
  }
 
+ for (const summary of selectorSummaries) {
+ if (surfaceFilter !== "all" && summary.surface !== surfaceFilter) {
+ continue;
+ }
+ const searchable = [summary.domain, summary.surface].join(" ").toLowerCase();
+ if (query && !searchable.includes(query) && !summary.domain.toLowerCase().includes(query)) {
+ continue;
+ }
+ ensureSurfaceWorkspace(summary.domain, summary.surface).selectorCount = summary.selector_count;
+ }
+
  for (const record of records) {
  if (surfaceFilter !== "all" && record.surface !== surfaceFilter) {
  continue;
@@ -252,7 +309,9 @@ export default function DomainMemoryManagePage() {
  if (query && !searchable.includes(query) && !record.domain.toLowerCase().includes(query)) {
  continue;
  }
- ensureSurfaceWorkspace(record.domain, record.surface).selectors.push(record);
+ const workspace = ensureSurfaceWorkspace(record.domain, record.surface);
+ workspace.selectors.push(record);
+ workspace.selectorCount = Math.max(workspace.selectorCount, workspace.selectors.length);
  }
 
  for (const profile of profiles) {
@@ -363,12 +422,12 @@ export default function DomainMemoryManagePage() {
  return rightTime - leftTime;
  }
  const leftMemoryScore =
- left.surfaces.reduce((count, surface) => count + surface.selectors.length, 0) +
+ left.surfaces.reduce((count, surface) => count + surface.selectorCount, 0) +
  left.surfaces.filter((surface) => surface.profile).length +
  left.learning.length +
  (left.cookieMemory ? 1 : 0);
  const rightMemoryScore =
- right.surfaces.reduce((count, surface) => count + surface.selectors.length, 0) +
+ right.surfaces.reduce((count, surface) => count + surface.selectorCount, 0) +
  right.surfaces.filter((surface) => surface.profile).length +
  right.learning.length +
  (right.cookieMemory ? 1 : 0);
@@ -377,22 +436,46 @@ export default function DomainMemoryManagePage() {
  }
  return left.domain.localeCompare(right.domain);
  });
- }, [completedRuns, cookies, deferredSearchQuery, feedback, profiles, records, surfaceFilter]);
+ }, [completedRuns, cookies, deferredSearchQuery, feedback, profiles, records, selectorSummaries, surfaceFilter]);
+
+ const resolvedSelectedDomain =
+ selectedDomain && groupedWorkspaces.some((entry) => entry.domain === selectedDomain)
+ ? selectedDomain
+ : groupedWorkspaces[0]?.domain ?? "";
+
+ const selectedWorkspace =
+ groupedWorkspaces.find((entry) => entry.domain === resolvedSelectedDomain) ?? groupedWorkspaces[0] ?? null;
 
  useEffect(() => {
- if (!groupedWorkspaces.length) {
- setSelectedDomain("");
+ if (!resolvedSelectedDomain) {
  return;
  }
- if (!selectedDomain || !groupedWorkspaces.some((entry) => entry.domain === selectedDomain)) {
- setSelectedDomain(groupedWorkspaces[0].domain);
+ let cancelled = false;
+ async function loadSelectedDomainSelectors() {
+ setSelectorLoading(true);
+ try {
+ const selectorData = await api.listSelectors({ domain: resolvedSelectedDomain });
+ if (cancelled) {
+ return;
  }
- }, [groupedWorkspaces, selectedDomain]);
-
- const selectedWorkspace = useMemo(
- () => groupedWorkspaces.find((entry) => entry.domain === selectedDomain) ?? groupedWorkspaces[0] ?? null,
- [groupedWorkspaces, selectedDomain],
- );
+ setRecords(toLocalRecords(selectorData));
+ setLoadedSelectorDomain(resolvedSelectedDomain);
+ } catch (nextError) {
+ if (cancelled) {
+ return;
+ }
+ setError(nextError instanceof Error ? nextError.message : "Unable to load selectors.");
+ } finally {
+ if (!cancelled) {
+ setSelectorLoading(false);
+ }
+ }
+ }
+ void loadSelectedDomainSelectors();
+ return () => {
+ cancelled = true;
+ };
+ }, [resolvedSelectedDomain, selectorRefreshKey]);
 
  function startEdit(record: LocalRecord) {
  setEditingId(record._uid);
@@ -448,6 +531,13 @@ export default function DomainMemoryManagePage() {
  try {
  await api.deleteSelector(record.id);
  setRecords((current) => current.filter((entry) => entry._uid !== record._uid));
+ setSelectorSummaries((current) =>
+ current.map((entry) =>
+ entry.domain === record.domain && entry.surface === record.surface
+ ? { ...entry, selector_count: Math.max(0, entry.selector_count - 1) }
+ : entry,
+ ),
+ );
  if (editingId === record._uid) {
  cancelEdit();
  }
@@ -468,6 +558,7 @@ export default function DomainMemoryManagePage() {
  if (removedEditingRecord) {
  cancelEdit();
  }
+ setSelectorSummaries((current) => current.filter((entry) => entry.domain !== domain));
  } catch (nextError) {
  setError(nextError instanceof Error ? nextError.message : "Unable to clear domain selectors.");
  }
@@ -507,7 +598,7 @@ export default function DomainMemoryManagePage() {
  {error ? <InlineAlert message={error} /> : null}
 
  {loading ? (
- <DataRegionLoading count={4} />
+ <DomainMemoryWorkspaceLoading />
  ) : !groupedWorkspaces.length ? (
  <EmptyPanel
  title="No domain memory found"
@@ -516,19 +607,20 @@ export default function DomainMemoryManagePage() {
  ) : (
  <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
  {/* ── Domain sidebar ── */}
- <SurfacePanel className="p-3 space-y-3">
- <div className="flex items-center justify-between px-1">
+ <SurfacePanel className="p-3 space-y-3 flex flex-col max-h-[calc(100vh-180px)]">
+ <div className="flex items-center justify-between px-1 shrink-0">
  <h3 className="type-label">Domains</h3>
  <span className="text-xs text-muted">{groupedWorkspaces.length}</span>
  </div>
+ <div className="overflow-y-auto min-h-0 -mr-1 pr-1">
  <NavList
  items={groupedWorkspaces}
- selectedKey={selectedWorkspace?.domain ?? ""}
+ selectedKey={resolvedSelectedDomain}
  onSelect={setSelectedDomain}
  getKey={(ws) => ws.domain}
  renderLabel={(ws) => ws.domain}
  renderMeta={(ws) => {
- const selectorCount = ws.surfaces.reduce((c, s) => c + s.selectors.length, 0);
+ const selectorCount = ws.surfaces.reduce((c, s) => c + s.selectorCount, 0);
  const profileCount = ws.surfaces.filter((s) => s.profile).length;
  const meta = [
  selectorCount ? `${selectorCount} selectors` : null,
@@ -540,6 +632,7 @@ export default function DomainMemoryManagePage() {
  }}
  renderBadge={(ws) => ws.cookieMemory ? <Badge tone="accent">{ws.cookieMemory.cookie_count}</Badge> : null}
  />
+ </div>
  </SurfacePanel>
 
  {/* ── Domain detail ── */}
@@ -548,7 +641,7 @@ export default function DomainMemoryManagePage() {
  <>
  <div className="flex flex-wrap items-center justify-between gap-3">
  <h2 className="text-lg font-semibold text-foreground type-heading">{selectedWorkspace.domain}</h2>
- {selectedWorkspace.surfaces.some((surface) => surface.selectors.length) ? (
+ {selectedWorkspace.surfaces.some((surface) => surface.selectorCount) ? (
  <Button
  type="button"
  variant="danger"
@@ -567,7 +660,7 @@ export default function DomainMemoryManagePage() {
  options={[
  {
  value: "selectors",
- label: `Selectors (${selectedWorkspace.surfaces.reduce((c, s) => c + s.selectors.length, 0)})`,
+ label: `Selectors (${selectedWorkspace.surfaces.reduce((c, s) => c + s.selectorCount, 0)})`,
  },
  {
  value: "profiles",
@@ -587,7 +680,9 @@ export default function DomainMemoryManagePage() {
  {/* ── Selectors tab ── */}
  {activeTab === "selectors" && (
  <SurfaceSection title="Selector Memory" description="Review and edit the selectors currently saved for this domain." bodyClassName="space-y-4">
- {selectedWorkspace.surfaces.length ? (
+ {selectorLoading && loadedSelectorDomain !== selectedWorkspace.domain ? (
+ <DataRegionLoading count={6} className="px-0" />
+ ) : selectedWorkspace.surfaces.some((surface) => surface.selectorCount) ? (
  selectedWorkspace.surfaces.map((surfaceWorkspace) => (
  <div
  key={`${selectedWorkspace.domain}:${surfaceWorkspace.surface}`}
@@ -597,7 +692,7 @@ export default function DomainMemoryManagePage() {
  <div>
  <div className="text-sm font-medium text-foreground">{surfaceLabel(surfaceWorkspace.surface)}</div>
  <div className="text-xs text-muted">
- {surfaceWorkspace.selectors.length} selector{surfaceWorkspace.selectors.length === 1 ? "" : "s"}
+ {surfaceWorkspace.selectorCount} selector{surfaceWorkspace.selectorCount === 1 ? "" : "s"}
  </div>
  </div>
  {surfaceWorkspace.profile ? <Badge tone="info">profile saved</Badge> : null}

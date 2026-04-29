@@ -3047,6 +3047,138 @@ def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_an
     }
 
 
+def test_build_detail_record_drops_v6_widget_fulfillment_and_variant_scalar_noise() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>V6 Test Sneaker</h1></main></body></html>",
+        "https://www.example.com/products/v6-test-sneaker",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "V6 Test Sneaker",
+                "features": "1 2 3 4 5 6 7 8 9 10",
+                "description": "Shipping, pickup, and delivery options available at checkout.",
+                "size": "Size Guide Please select a size",
+                "color": "Black",
+            }
+        ],
+    )
+
+    assert "features" not in record
+    assert "description" not in record
+    assert "size" not in record
+    assert record["color"] == "Black"
+
+
+def test_build_detail_record_drops_v6_generic_title_cross_product_text_and_ad_product_type() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Calvin Klein Bernard Lace-Up Oxfords</h1></main></body></html>",
+        "https://www.macys.com/shop/product/calvin-klein-mens-bernard-lace-up-oxfords?ID=12345",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "MENS SHOES",
+                "description": (
+                    "The Hiser men's lace up oxford. "
+                    "Calvin Klein Adeso dress shoe. "
+                    "Club Room casual dress shoes. "
+                    "Calvin Klein Bernard lace-up oxford."
+                ),
+                "product_type": "CriteoProductRail",
+            }
+        ],
+    )
+
+    assert record["title"] == "calvin klein mens bernard lace up oxfords"
+    assert record["description"] == "Calvin Klein Bernard lace-up oxford."
+    assert "product_type" not in record
+
+
+def test_build_detail_record_drops_v6_target_fulfillment_description() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Apple AirPods Pro 2nd Generation</h1></main></body></html>",
+        "https://www.target.com/p/apple-airpods-pro-2nd-generation-with-magsafe-case-usb-c/-/A-89791402",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Apple AirPods Pro 2nd Generation",
+                "description": "Get it today with Target delivery, pickup, or shipping options available at checkout.",
+            }
+        ],
+    )
+
+    assert "description" not in record
+
+
+def test_build_detail_record_normalizes_v6_cent_integer_prices_by_host_context() -> None:
+    cases = [
+        (
+            "https://in.puma.com/in/en/pd/deviate-nitro-elite-4-run-club-mens-road-running-shoes/312907",
+            "9999",
+            "99.99",
+            "INR",
+        ),
+        (
+            "https://www.farfetch.com/shopping/men/designer-sneakers-item-123.aspx",
+            "13880",
+            "138.80",
+            "USD",
+        ),
+        (
+            "https://www.ssense.com/en-us/men/product/willy-chavarria/brown-ruff-rider-leather-jacket/19072301",
+            "3890",
+            "38.90",
+            "USD",
+        ),
+    ]
+
+    for url, raw_price, expected_price, currency in cases:
+        record = build_detail_record(
+            "<html><body><main><h1>V6 Price Product</h1></main></body></html>",
+            url,
+            "ecommerce_detail",
+            None,
+            adapter_records=[
+                {
+                    "title": "V6 Price Product",
+                    "price": raw_price,
+                    "currency": currency,
+                    "variants": [{"price": raw_price, "currency": currency, "option_values": {"size": "M"}}],
+                }
+            ],
+        )
+
+        assert record["price"] == expected_price
+        assert record["variants"][0]["price"] == expected_price
+
+
+def test_build_detail_record_rejects_broken_extensionless_transformed_image_urls() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Adidas Samba OG Shoes</h1></main></body></html>",
+        "https://www.zappos.com/p/adidas-samba-og/product/12345",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Adidas Samba OG Shoes",
+                "image_url": "https://m.media-amazon.com/images/I/adidas-samba-og-shoes._AC_UL1500_.jpg",
+                "additional_images": [
+                    "https://m.media-amazon.com/images/I/adidas-samba-og-shoes._AC_SR1224",
+                    "https://m.media-amazon.com/images/I/adidas-samba-og-shoes-alt._AC_UL1500_.jpg",
+                ],
+            }
+        ],
+    )
+
+    images = " ".join([record["image_url"], *record.get("additional_images", [])])
+    assert "_AC_SR1224" not in images
+    assert record["additional_images"] == [
+        "https://m.media-amazon.com/images/I/adidas-samba-og-shoes-alt._AC_UL1500_.jpg"
+    ]
+
+
 def test_build_detail_record_rejects_cross_sell_images_by_filename_identity() -> None:
     html = "<html><body><main><h1>Nike Dunk Low Retro White Black Panda</h1></main></body></html>"
 
@@ -3358,6 +3490,7 @@ def test_build_detail_record_drops_low_signal_numeric_only_variants() -> None:
     assert "variants" not in record
     assert "variant_axes" not in record
     assert "selected_variant" not in record
+    assert "size" not in record
 
 
 def test_extract_detail_backfills_current_price_variants_and_strips_unavailable_suffixes() -> None:

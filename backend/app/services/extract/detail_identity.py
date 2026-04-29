@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from urllib.parse import parse_qsl, urlparse
 
@@ -10,7 +11,11 @@ from app.services.config.extraction_rules import (
     DETAIL_PRODUCT_PATH_TOKENS,
     DETAIL_SEARCH_QUERY_KEYS,
     DETAIL_UTILITY_PATH_TOKENS,
+    JOB_LISTING_DETAIL_PATH_MARKERS,
+    LISTING_DETAIL_PATH_MARKERS,
+    LISTING_NON_LISTING_PATH_TOKENS,
 )
+from app.services.config.surface_hints import detail_path_hints
 from app.services.field_value_core import (
     PRODUCT_URL_HINTS,
     clean_text,
@@ -19,6 +24,7 @@ from app.services.field_value_core import (
     text_or_none,
 )
 
+logger = logging.getLogger(__name__)
 _DETAIL_IDENTITY_STOPWORDS = frozenset(
     {
         "and",
@@ -49,6 +55,163 @@ _DETAIL_URL_PLACEHOLDER_SEGMENTS = frozenset(
         if str(value).strip()
     }
 )
+
+
+def _path_segment_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[\-\.]+", str(value or "").strip().lower())
+        if token
+    }
+
+
+def listing_url_is_structural(url: str, page_url: str) -> bool:
+    lowered = url.lower()
+    if lowered.startswith(("javascript:", "#", "mailto:")):
+        return True
+    if lowered == page_url.lower():
+        return True
+    try:
+        parsed = urlparse(url)
+        page_parsed = urlparse(page_url)
+        if parsed.path in ("", "/"):
+            return True
+        if parsed.path.rstrip("/").lower() == page_parsed.path.rstrip("/").lower():
+            return True
+        raw_segments = [
+            segment.strip().lower()
+            for segment in parsed.path.split("/")
+            if segment.strip()
+        ]
+        tokenized_segments = [_path_segment_tokens(segment) for segment in raw_segments]
+        terminal_tokens = tokenized_segments[-1] if tokenized_segments else set()
+        if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
+            return True
+        leading_tokens = tokenized_segments[:-1] if len(tokenized_segments) <= 2 else []
+        if any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens):
+            return True
+    except Exception:
+        logger.debug("URL structural check failed for %s", page_url, exc_info=True)
+    return False
+
+
+def listing_detail_like_path(url: str, *, is_job: bool) -> bool:
+    lowered = url.lower()
+    if is_job:
+        return _job_detail_like_path(lowered)
+    parsed = urlparse(lowered)
+    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
+    if "products" in segments:
+        products_index = segments.index("products")
+        tail_segments = segments[products_index + 1 :]
+        if (
+            len(tail_segments) > 2
+            and not parsed.query
+            and not any(re.search(r"\d", segment) for segment in tail_segments[-2:])
+        ):
+            return False
+    if any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS):
+        return True
+    hints = detail_path_hints("ecommerce_detail")
+    return any(marker in lowered for marker in hints)
+
+
+def _job_detail_like_path(url: str) -> bool:
+    parsed = urlparse(url)
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if not segments:
+        return False
+    terminal = segments[-1].strip().lower()
+    if not terminal or _job_listing_url_is_hub(url):
+        return False
+    query = parsed.query.lower()
+    if any(token in query for token in ("showjob=", "jobid=", "job_id=", "gh_jid=")):
+        return True
+    if any(marker in parsed.path.lower() for marker in JOB_LISTING_DETAIL_PATH_MARKERS):
+        return True
+    if _job_listing_url_looks_like_posting(url):
+        return True
+    if re.match(r"jobs?-\d", terminal):
+        return True
+    detail_roots = {"job", "jobs", "opening", "position", "posting", "career", "careers"}
+    for index, segment in enumerate(segments[:-1]):
+        normalized = segment.strip().lower()
+        if normalized not in detail_roots:
+            continue
+        next_segment = segments[index + 1].strip().lower()
+        if next_segment and not _job_listing_url_is_hub(f"https://example.com/{next_segment}/"):
+            return True
+    return False
+
+
+def _job_listing_url_is_hub(url: str) -> bool:
+    parsed = urlparse(url.lower())
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    terminal = segments[-1] if segments else ""
+    if terminal in {
+        "careers",
+        "jobs",
+        "openings",
+        "search",
+        "search-jobs",
+        "search-results",
+    }:
+        return True
+    return terminal.startswith(
+        (
+            "jobs-in-",
+            "careers-in-",
+            "openings-in-",
+            "search-jobs",
+            "job-search",
+        )
+    )
+
+
+def _job_listing_url_looks_like_posting(url: str) -> bool:
+    parsed = urlparse(url.lower())
+    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
+    if not segments:
+        return False
+    terminal = segments[-1]
+    leading_tokens = [_path_segment_tokens(segment) for segment in segments[:-1]]
+    if any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens):
+        return False
+    terminal_tokens = _path_segment_tokens(terminal)
+    if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
+        return False
+    if re.fullmatch(r"(?:19|20)\d{2}", terminal):
+        return False
+    if not re.search(r"\d{4,}", terminal):
+        return False
+    if any(
+        marker in parsed.path
+        for marker in (
+            "/job/",
+            "/jobs/",
+            "/opening/",
+            "/openings/",
+            "/position/",
+            "/positions/",
+            "/posting/",
+            "/postings/",
+            "/career/",
+            "/careers/",
+            "/requisition/",
+            "/requisitions/",
+            "/role/",
+            "/roles/",
+            "/vacancy/",
+            "/vacancies/",
+        )
+    ):
+        return True
+    terminal_words = [
+        token
+        for token in re.split(r"[^a-z0-9]+", terminal)
+        if len(token) >= 3 and not token.isdigit()
+    ]
+    return len(terminal_words) >= 2
 
 
 def _detail_url_path_segments(url: str) -> list[str]:

@@ -852,90 +852,77 @@ async def test_browser_fetch_listing_skips_detail_extractability_probe(
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_listing() -> None:
-    original_optimistic_wait_ms = (
-        crawler_runtime_settings.browser_navigation_optimistic_wait_ms
+async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_listing(
+    patch_settings,
+) -> None:
+    patch_settings(
+        browser_navigation_optimistic_wait_ms=25,
+        browser_spa_implicit_networkidle_timeout_ms=250,
     )
-    original_implicit_networkidle_timeout_ms = (
-        crawler_runtime_settings.browser_spa_implicit_networkidle_timeout_ms
+    page = _FakeExpansionPage(base_html="<html><body>Loading</body></html>")
+    probe_results = iter(
+        [
+            {
+                "url": "https://example.com/spa/listing",
+                "surface": "ecommerce_listing",
+                "is_ready": False,
+                "detail_like": False,
+                "structured_data_present": True,
+                "visible_text_length": 20,
+                "detail_hint_count": 0,
+                "listing_card_count": 0,
+                "matched_listing_selectors": 0,
+                "h1_present": False,
+            },
+            {
+                "url": "https://example.com/spa/listing",
+                "surface": "ecommerce_listing",
+                "is_ready": False,
+                "detail_like": False,
+                "structured_data_present": True,
+                "visible_text_length": 24,
+                "detail_hint_count": 0,
+                "listing_card_count": 0,
+                "matched_listing_selectors": 0,
+                "h1_present": False,
+            },
+            {
+                "url": "https://example.com/spa/listing",
+                "surface": "ecommerce_listing",
+                "is_ready": False,
+                "detail_like": False,
+                "structured_data_present": True,
+                "visible_text_length": 260,
+                "detail_hint_count": 0,
+                "listing_card_count": 0,
+                "matched_listing_selectors": 0,
+                "h1_present": False,
+            },
+        ]
     )
+    async def _fake_runtime(**_kwargs):
+        return _FakeRuntime(page)
+    original_probe_browser_readiness = browser_runtime.probe_browser_readiness
     try:
-        crawler_runtime_settings.browser_navigation_optimistic_wait_ms = 25
-        crawler_runtime_settings.browser_spa_implicit_networkidle_timeout_ms = 250
-        page = _FakeExpansionPage(base_html="<html><body>Loading</body></html>")
+        async def _fake_probe_browser_readiness(*args, **kwargs):
+            del args, kwargs
+            return next(probe_results)
 
-        probe_results = iter(
-            [
-                {
-                    "url": "https://example.com/spa/listing",
-                    "surface": "ecommerce_listing",
-                    "is_ready": False,
-                    "detail_like": False,
-                    "structured_data_present": True,
-                    "visible_text_length": 20,
-                    "detail_hint_count": 0,
-                    "listing_card_count": 0,
-                    "matched_listing_selectors": 0,
-                    "h1_present": False,
-                },
-                {
-                    "url": "https://example.com/spa/listing",
-                    "surface": "ecommerce_listing",
-                    "is_ready": False,
-                    "detail_like": False,
-                    "structured_data_present": True,
-                    "visible_text_length": 24,
-                    "detail_hint_count": 0,
-                    "listing_card_count": 0,
-                    "matched_listing_selectors": 0,
-                    "h1_present": False,
-                },
-                {
-                    "url": "https://example.com/spa/listing",
-                    "surface": "ecommerce_listing",
-                    "is_ready": False,
-                    "detail_like": False,
-                    "structured_data_present": True,
-                    "visible_text_length": 260,
-                    "detail_hint_count": 0,
-                    "listing_card_count": 0,
-                    "matched_listing_selectors": 0,
-                    "h1_present": False,
-                },
-            ]
+        browser_runtime.probe_browser_readiness = _fake_probe_browser_readiness
+        result = await browser_runtime.browser_fetch(
+            "https://example.com/spa/listing",
+            5,
+            surface="ecommerce_listing",
+            runtime_provider=_fake_runtime,
         )
-
-        async def _fake_runtime(**_kwargs):
-            return _FakeRuntime(page)
-
-        original_probe_browser_readiness = browser_runtime.probe_browser_readiness
-        try:
-            async def _fake_probe_browser_readiness(*args, **kwargs):
-                del args, kwargs
-                return next(probe_results)
-
-            browser_runtime.probe_browser_readiness = _fake_probe_browser_readiness
-            result = await browser_runtime.browser_fetch(
-                "https://example.com/spa/listing",
-                5,
-                surface="ecommerce_listing",
-                runtime_provider=_fake_runtime,
-            )
-        finally:
-            browser_runtime.probe_browser_readiness = original_probe_browser_readiness
-
-        assert result.browser_diagnostics["phase_timings_ms"]["optimistic_wait"] >= 0
-        assert result.browser_diagnostics["phase_timings_ms"]["networkidle_wait"] >= 0
-        assert page.wait_timeout_calls == [25]
-        assert page.load_state_calls == ["networkidle"]
-        assert result.browser_diagnostics["networkidle_skip_reason"] is None
     finally:
-        crawler_runtime_settings.browser_navigation_optimistic_wait_ms = (
-            original_optimistic_wait_ms
-        )
-        crawler_runtime_settings.browser_spa_implicit_networkidle_timeout_ms = (
-            original_implicit_networkidle_timeout_ms
-        )
+        browser_runtime.probe_browser_readiness = original_probe_browser_readiness
+
+    assert result.browser_diagnostics["phase_timings_ms"]["optimistic_wait"] >= 0
+    assert result.browser_diagnostics["phase_timings_ms"]["networkidle_wait"] >= 0
+    assert page.wait_timeout_calls == [25]
+    assert page.load_state_calls == ["networkidle"]
+    assert result.browser_diagnostics["networkidle_skip_reason"] is None
 
 
 @pytest.mark.asyncio
@@ -1619,6 +1606,12 @@ async def test_interactive_candidate_snapshot_excludes_class_names_from_probe() 
     assert "care-panel-toggle" in str(snapshot["probe"])
 
 
+def test_acquisition_package_exports_interactive_candidate_snapshot() -> None:
+    from app.services import acquisition
+
+    assert acquisition.interactive_candidate_snapshot is browser_runtime.interactive_candidate_snapshot
+
+
 @pytest.mark.asyncio
 async def test_expand_all_interactive_elements_matches_keywords_from_class_names() -> None:
     page = _FakeExpansionPage(
@@ -1637,6 +1630,34 @@ async def test_expand_all_interactive_elements_matches_keywords_from_class_names
     )
 
     assert diagnostics["clicked_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_expand_all_interactive_elements_allows_relevant_footer_controls() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {
+                "label": "Main menu",
+                "attributes": {"aria-controls": "site-menu"},
+                "inside_footer": True,
+            },
+            {
+                "label": "Size guide",
+                "attributes": {"aria-controls": "size-panel"},
+                "inside_footer": True,
+            },
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["size"],
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["size guide"]
 
 
 @pytest.mark.asyncio

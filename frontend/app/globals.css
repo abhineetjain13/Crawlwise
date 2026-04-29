@@ -1,23 +1,30 @@
 @import "tailwindcss";
 
-/* ─── Iosevka Charon (local monospace) ──────────────────────────────────── */
+/* ─── Local Fonts ───────────────────────────────────────────────────────── */
 @font-face {
-  font-family: "Iosevka Charon";
-  src: url("/fonts/IosevkaCharon/IosevkaCharon-Regular.ttf") format("truetype");
+  font-family: "Ioskeley Mono";
+  src: url("/fonts/IoskeleyMono-Regular.ttf") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Iosevka Charon";
-  src: url("/fonts/IosevkaCharon/IosevkaCharon-Medium.ttf") format("truetype");
+  font-family: "Ioskeley Mono";
+  src: url("/fonts/IoskeleyMono-Medium.ttf") format("truetype");
   font-weight: 500;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Iosevka Charon";
-  src: url("/fonts/IosevkaCharon/IosevkaCharon-Bold.ttf") format("truetype");
+  font-family: "Ioskeley Mono";
+  src: url("/fonts/IoskeleyMono-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Ioskeley Mono";
+  src: url("/fonts/IoskeleyMono-Bold.ttf") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
@@ -62,7 +69,7 @@
   --shadow-lg: var(--shadow-lg);
   --shadow-xl: var(--shadow-modal);
   --shadow-setting-icon-active: var(--setting-icon-active-shadow);
-  --font-sans: var(--font-outfit);
+  --font-sans: var(--font-primary-family);
   --font-mono: var(--font-mono-family);
 }
 
@@ -70,9 +77,13 @@
 :root {
   color-scheme: light;
 
-  --font-outfit: "Outfit", "SF Pro Display", "Geist Sans", "Helvetica Neue", system-ui, sans-serif;
-  --font-mono-family: "Iosevka Charon", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-primary-family: var(--font-primary-source), "Outfit", "SF Pro Display", "Geist Sans", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono-family: "Ioskeley Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --font-serif: "Instrument Serif", "Newsreader", "Playfair Display", Georgia, serif;
+  --font-mono-tracking: 0.012em;
+  --font-mono-numeric-tracking: 0.01em;
+  --font-mono-code-tracking: 0.016em;
+  --font-mono-label-tracking: 0.035em;
 
   /* Canvas / Surfaces — SenstoSales/Fiori */
   --bg-base: #f5f5f5;
@@ -234,8 +245,9 @@
   /* Standard Table Typography System */
   --table-font-size: 13.5px;
   --table-header-font-size: 11px;
+  --table-header-font-family: var(--font-mono-family);
   --table-header-weight: var(--weight-bold);
-  --table-header-tracking: 0.05em;
+  --table-header-tracking: var(--font-mono-label-tracking);
   --table-row-height: 44px;
 
   --transition-fast: 120ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -370,7 +382,7 @@ body {
   margin: 0;
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: var(--font-outfit);
+  font-family: var(--font-primary-family);
   font-size: var(--text-sm);
   letter-spacing: -0.008em;
 
@@ -411,6 +423,12 @@ a.no-underline:focus-visible {
 
 .tabular-nums {
   font-family: var(--font-mono-family);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--font-mono-numeric-tracking);
+}
+
+:where(.font-mono) {
+  letter-spacing: var(--font-mono-tracking);
 }
 
 .link-accent:hover,
@@ -527,8 +545,8 @@ select:focus-visible:not(.focus-ring) {
   border-radius: var(--radius-lg);
   color: var(--terminal-fg);
   font-family: var(--font-mono-family);
-  font-size: 13px;
-  letter-spacing: 0.05rem;
+  font-size: 12px;
+  letter-spacing: var(--font-mono-code-tracking);
   font-weight: var(--weight-normal);
   line-height: 1.7;
   padding: 12px 16px;
@@ -544,8 +562,8 @@ select:focus-visible:not(.focus-ring) {
   word-break: break-word;
   tab-size: 2;
   font-family: var(--font-mono-family);
-  font-size: 13px;
-  letter-spacing: 0.05rem;
+  font-size: 12px;
+  letter-spacing: var(--font-mono-code-tracking);
   font-weight: var(--weight-normal);
   line-height: 1.6;
 }
@@ -554,8 +572,8 @@ select:focus-visible:not(.focus-ring) {
   background: var(--color-panel);
   color: var(--color-foreground);
   font-family: var(--font-mono-family);
-  font-size: 13px;
-  letter-spacing: 0.05rem;
+  font-size: 12px;
+  letter-spacing: var(--font-mono-code-tracking);
 }
 
 @keyframes log-entry-in {
@@ -652,6 +670,7 @@ select:focus-visible:not(.focus-ring) {
   border: 1px solid var(--border);
   border-radius: 6px;
   font-family: var(--font-mono-family);
+  letter-spacing: var(--font-mono-code-tracking);
   font-size: 0.88em;
   padding: 0.1rem 0.28rem;
 }
@@ -880,23 +899,23 @@ html[data-theme="dark"] .noise-overlay {
   font-family: var(--font-mono-family);
   font-size: 10px;
   font-weight: var(--weight-semibold);
-  letter-spacing: 0.12em;
+  letter-spacing: var(--font-mono-label-tracking);
   text-transform: uppercase;
   color: var(--text-muted);
 }
 
 .type-label-mono-sm {
   font-family: var(--font-mono-family);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: var(--weight-bold);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--font-mono-label-tracking);
   text-transform: uppercase;
 }
 
 .type-mono-standard {
   font-family: var(--font-mono-family) !important;
-  font-size: 13px !important;
-  letter-spacing: 0.05rem !important;
+  font-size: 12px !important;
+  letter-spacing: var(--font-mono-tracking) !important;
   font-variant-numeric: tabular-nums;
 }
 
@@ -919,6 +938,7 @@ html[data-theme="dark"] .noise-overlay {
 
 .mono-body {
   font-family: var(--font-mono-family);
+  letter-spacing: var(--font-mono-tracking);
   font-variant-numeric: tabular-nums;
 }
 
@@ -996,6 +1016,7 @@ html[data-theme="dark"] .noise-overlay {
   border-radius: var(--radius-md);
   padding: 14px 16px;
   font-family: var(--font-mono-family);
+  letter-spacing: var(--font-mono-code-tracking);
   font-size: var(--text-sm);
   line-height: var(--leading-relaxed);
   color: var(--text-secondary);
@@ -1047,12 +1068,12 @@ html:not([data-theme="dark"]) .focus-ring:focus-visible {
   padding-inline: 16px;
   text-align: left;
   font-size: 13px;
-  font-family: var(--font-mono-family), monospace;
+  font-family: var(--table-header-font-family);
   font-weight: var(--weight-bold);
   color: var(--text-secondary);
   opacity: 0.9;
   text-transform: uppercase;
-  letter-spacing: 0.05rem;
+  letter-spacing: var(--table-header-tracking);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1176,8 +1197,8 @@ html:not([data-theme="dark"]) .compact-data-table {
   color: var(--text-primary);
   text-decoration: none;
   font-family: var(--font-mono-family);
-  font-size: 13px;
-  letter-spacing: 0.05rem;
+  font-size: 12px;
+  letter-spacing: var(--font-mono-tracking);
   font-weight: var(--weight-normal);
   opacity: 0.85;
 }

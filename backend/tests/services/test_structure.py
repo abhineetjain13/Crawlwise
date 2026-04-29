@@ -25,6 +25,67 @@ FIELD_POLICY_CONSUMERS = [
     SERVICES_ROOT / "schema_service.py",
     SERVICES_ROOT / "review" / "__init__.py",
 ]
+ALLOWED_PRIVATE_SERVICE_IMPORTS = {
+    "_batch_runtime.py -> app.services.pipeline.core:_mark_run_failed",
+    "_batch_runtime.py -> app.services.publish:_aggregate_verdict",
+    "acquisition/browser_detail.py -> app.services.field_value_core:_coerce_int",
+    "acquisition/browser_identity.py -> app.services.network_resolution:_accept_language_for_locale",
+    "acquisition/browser_readiness.py -> app.services.acquisition.browser_detail:_coerce_int",
+    "acquisition/browser_runtime.py -> app.services.acquisition.browser_capture:_MAX_CAPTURED_NETWORK_PAYLOADS",
+    "acquisition/browser_runtime.py -> app.services.acquisition.browser_capture:_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES",
+    "acquisition/browser_runtime.py -> app.services.acquisition.browser_capture:_NETWORK_CAPTURE_QUEUE_SIZE",
+    "acquisition/browser_runtime.py -> app.services.acquisition.browser_capture:_NETWORK_CAPTURE_WORKERS",
+    "acquisition/cookie_store.py -> app.services.field_value_core:_object_list",
+    "adapters/remoteok.py -> app.services.field_value_core:_safe_int",
+    "config/adapter_runtime_settings.py -> app.services.config.runtime_settings:_settings_config",
+    "config/llm_runtime.py -> app.services.config.runtime_settings:_settings_config",
+    "config/product_intelligence.py -> app.services.config.runtime_settings:_settings_config",
+    "crawl_fetch_runtime.py -> app.services.acquisition.browser_runtime:_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES",
+    "crawl_fetch_runtime.py -> app.services.acquisition.browser_runtime:_display_proxy",
+    "crawl_fetch_runtime.py -> app.services.acquisition.browser_runtime:_proxy_scheme",
+    "crawl_service.py -> app.services.pipeline.core:_mark_run_failed",
+    "detail_extractor.py -> app.services.extract.detail_dom_extractor:_backfill_variants_from_dom_if_missing",
+    "detail_extractor.py -> app.services.extract.detail_dom_extractor:_extract_variants_from_dom",
+    "detail_extractor.py -> app.services.extract.detail_dom_extractor:_variant_option_value_is_noise",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_identity_codes_from_record_fields",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_identity_codes_from_url",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_identity_tokens",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_redirect_identity_is_mismatched",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_title_from_url",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_url_candidate_is_low_signal",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_url_is_collection_like",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_url_is_utility",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_url_looks_like_product",
+    "detail_extractor.py -> app.services.extract.detail_identity:_detail_url_matches_requested_identity",
+    "detail_extractor.py -> app.services.extract.detail_identity:_preferred_detail_identity_url",
+    "detail_extractor.py -> app.services.extract.detail_identity:_record_matches_requested_detail_identity",
+    "detail_extractor.py -> app.services.extract.detail_record_finalizer:_dedupe_primary_and_additional_images",
+    "detail_extractor.py -> app.services.extract.detail_record_finalizer:_detail_image_matches_primary_family",
+    "detail_extractor.py -> app.services.extract.detail_record_finalizer:_detail_title_looks_like_placeholder",
+    "detail_extractor.py -> app.services.extract.detail_record_finalizer:_sanitize_variant_row",
+    "detail_extractor.py -> app.services.field_value_core:_object_dict",
+    "detail_extractor.py -> app.services.field_value_core:_object_list",
+    "domain_memory_service.py -> app.services.field_value_core:_safe_int",
+    "extract/detail_dom_extractor.py -> app.services.field_value_core:_object_dict",
+    "extract/detail_dom_extractor.py -> app.services.field_value_core:_object_list",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_dom_extractor:_variant_option_value_is_noise",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_identity:_detail_identity_codes_from_record_fields",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_identity:_detail_identity_codes_from_url",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_identity:_detail_identity_tokens",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_identity:_detail_title_from_url",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_identity:_detail_url_looks_like_product",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_identity:_detail_url_matches_requested_identity",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_identity:_record_matches_requested_detail_identity",
+    "extract/detail_record_finalizer.py -> app.services.extract.detail_identity:_semantic_detail_identity_tokens",
+    "pipeline/persistence.py -> app.services.field_value_core:_object_list",
+    "publish/__init__.py -> app.services.publish.verdict:_aggregate_verdict",
+    "record_export_service.py -> app.services.field_value_core:_object_dict",
+    "record_export_service.py -> app.services.field_value_core:_object_list",
+    "review/__init__.py -> app.services.field_value_core:_object_list",
+    "review/__init__.py -> app.services.field_value_core:_safe_int",
+    "selector_self_heal.py -> app.services.field_value_core:_safe_int",
+    "selectors_runtime.py -> app.services.field_value_core:_coerce_int",
+}
 CONFIG_CONSTANT_NAME_MARKERS = (
     "SELECTOR",
     "TOKEN",
@@ -41,8 +102,8 @@ ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_NAME_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS"),
     ("crawl_fetch_runtime.py", "_RETRY_SENTINEL"),
-    ("detail_extractor.py", "_VARIANT_OPTION_VALUE_NOISE_TOKENS"),
     ("extract/listing_candidate_ranking.py", "_EDITORIAL_URL_TOKENS"),
+    ("extract/detail_record_finalizer.py", "_VARIANT_OPTION_VALUE_NOISE_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_AXIS_ALLOWED_SINGLE_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_AXIS_GENERIC_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_AXIS_LABEL_NOISE_TOKENS"),
@@ -51,15 +112,9 @@ ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("extract/shared_variant_logic.py", "_VARIANT_OPTION_VALUE_NOISE_TOKENS"),
     ("field_value_dom.py", "_SECTION_CONTAINER_SELECTORS"),
     ("field_value_dom.py", "_SECTION_LABEL_SELECTOR"),
-    ("field_value_dom.py", "_SECTION_LABEL_SKIP_TOKENS"),
-    ("listing_extractor.py", "_PRICE_NODE_SELECTORS"),
     ("normalizers/__init__.py", "_AVAILABILITY_TOKENS"),
     ("platform_policy.py", "_GENERIC_COMMERCE_TOKENS"),
     ("platform_policy.py", "_GENERIC_JOB_TOKENS"),
-    ("selector_self_heal.py", "_SELECTOR_SYNTHESIS_ALLOWED_ATTRS"),
-    ("selector_self_heal.py", "_SELECTOR_SYNTHESIS_DROP_TAGS"),
-    ("selector_self_heal.py", "_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS"),
-    ("selectors_runtime.py", "_LISTING_FIELD_SELECTORS"),
     ("selectors_runtime.py", "_SELECTOR_NOISE_FROZEN"),
 }
 DEFAULT_LOC_BUDGET = 1000
@@ -77,16 +132,18 @@ FILE_LOC_BUDGETS = {
     Path("app/services/acquisition/traversal.py"): 1965,
     # Fetch runtime remains the request/browser arbitration owner.
     Path("app/services/crawl_fetch_runtime.py"): 1235,
-    # Detail extraction remains the single owner for structured, DOM, and variant recovery.
-    Path("app/services/detail_extractor.py"): 3205,
+    # Detail extraction owns candidate arbitration and tier orchestration.
+    Path("app/services/detail_extractor.py"): 1245,
+    # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
+    Path("app/services/extract/detail_dom_extractor.py"): 1100,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
-    Path("app/services/listing_extractor.py"): 1655,
+    Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
-    Path("app/services/field_value_dom.py"): 1265,
+    Path("app/services/field_value_dom.py"): 1245,
     # JS state mapping stays centralized to avoid adapter-specific drift.
-    Path("app/services/js_state_mapper.py"): 1150,
+    Path("app/services/js_state_mapper.py"): 1060,
     # Pipeline core still owns the per-URL orchestration boundary.
-    Path("app/services/pipeline/core.py"): 1180,
+    Path("app/services/pipeline/core.py"): 1160,
     # Product Intelligence service owns job + discovery orchestration with brand and enrichment LLM helpers.
     Path("app/services/product_intelligence/service.py"): 1160,
 }
@@ -125,6 +182,21 @@ def _module_level_names(path: Path) -> set[str]:
             if isinstance(target, ast.Name):
                 names.add(target.id)
     return names
+
+
+def _private_service_imports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imports: set[str] = set()
+    rel = _service_rel(path)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        if not node.module.startswith("app.services."):
+            continue
+        for alias in node.names:
+            if alias.name.startswith("_"):
+                imports.add(f"{rel} -> {node.module}:{alias.name}")
+    return imports
 
 
 def test_service_files_stay_under_loc_budget() -> None:
@@ -195,3 +267,10 @@ def test_new_service_level_config_constants_are_not_added_outside_config() -> No
             if (rel, name) not in ALLOWED_SERVICE_CONFIG_CONSTANTS:
                 offenders.append(f"{rel}:{name}")
     assert sorted(offenders) == []
+
+
+def test_private_service_imports_do_not_drift() -> None:
+    offenders: set[str] = set()
+    for path in SERVICES_ROOT.rglob("*.py"):
+        offenders.update(_private_service_imports(path))
+    assert offenders == ALLOWED_PRIVATE_SERVICE_IMPORTS

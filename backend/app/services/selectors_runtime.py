@@ -17,7 +17,7 @@ from app.services.config.extraction_rules import (
     SELECTOR_NOISE_VALUES,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.config.selectors import CARD_SELECTORS
+from app.services.config.selectors import CARD_SELECTORS, LISTING_FIELD_SELECTORS
 from app.services.domain_memory_service import (
     load_domain_memory,
     save_domain_memory,
@@ -160,6 +160,22 @@ async def list_selector_records(
         }
         for row in selector_rules_from_memory(memory)
     ]
+
+
+async def list_selector_domain_summaries(
+    session: AsyncSession,
+) -> list[dict[str, object]]:
+    summaries: list[dict[str, object]] = []
+    for memory in await _all_domain_memories(session):
+        summaries.append(
+            {
+                "domain": memory.domain,
+                "surface": memory.surface,
+                "selector_count": _selector_rule_count(memory.selectors),
+                "updated_at": memory.updated_at,
+            }
+        )
+    return summaries
 
 
 async def create_selector_record(
@@ -529,6 +545,19 @@ async def _ensure_unique_selector_ids(session: AsyncSession) -> None:
         await session.flush()
 
 
+def _selector_rule_count(value: object) -> int:
+    if not isinstance(value, dict):
+        return 0
+    rules = value.get("rules")
+    if isinstance(rules, list):
+        return sum(1 for row in rules if isinstance(row, dict))
+    return sum(
+        1
+        for field_name, payload in value.items()
+        if not str(field_name).startswith("_") and isinstance(payload, dict)
+    )
+
+
 def _primary_iframe_candidate(page_url: str, html: str) -> str:
     soup = BeautifulSoup(str(html or ""), "html.parser")
     page_text = clean_text(soup.get_text(" ", strip=True))
@@ -592,41 +621,6 @@ def _deterministic_suggestions(
     return suggestions
 
 
-_LISTING_FIELD_SELECTORS: dict[str, list[str]] = {
-    "title": [
-        "[itemprop='name']", "[class*='title']", "[class*='Title']",
-        "[data-testid*='title']", "[data-testid*='name']", "a[href]",
-    ],
-    "price": [
-        "[itemprop='price']", "[class*='price']", "[class*='Price']",
-        "[data-testid*='price']", "[data-price]", "[aria-label*='price']",
-    ],
-    "brand": [
-        "[itemprop='brand']", "[class*='brand']", "[class*='Brand']",
-        "[data-testid*='brand']", "[aria-label*='brand']",
-    ],
-    "image_url": [
-        "[itemprop='image']", "img[src]", "[class*='image']",
-        "[class*='Image']", "[data-testid*='image']",
-    ],
-    "rating": [
-        "[itemprop='ratingValue']", "[class*='rating']", "[class*='Rating']",
-        "[class*='stars']", "[data-testid*='rating']",
-    ],
-    "review_count": [
-        "[itemprop='reviewCount']", "[class*='review-count']",
-        "[class*='ReviewCount']", "[data-testid*='review']",
-    ],
-    "availability": [
-        "[itemprop='availability']", "[class*='stock']",
-        "[data-availability]", "[data-testid*='avail']",
-    ],
-    "sku": [
-        "[itemprop='sku']", "[data-sku]", "[class*='sku']",
-    ],
-}
-
-
 def _listing_card_suggestions(
     soup: BeautifulSoup,
     *,
@@ -642,7 +636,7 @@ def _listing_card_suggestions(
             break
     if not first_card:
         return []
-    field_selectors = _LISTING_FIELD_SELECTORS.get(field_name, [])
+    field_selectors = LISTING_FIELD_SELECTORS.get(field_name, [])
     if not field_selectors:
         return []
     suggestions: list[dict[str, object]] = []

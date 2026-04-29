@@ -88,6 +88,21 @@ class BaseAdapter(ABC):
     def normalize_acquisition_url(self, url: str | None) -> str | None:
         return url
 
+    def _result(
+        self,
+        records: AdapterRecords,
+        *,
+        source_type: str | None = None,
+    ) -> AdapterResult:
+        return AdapterResult(
+            records=records,
+            source_type=source_type or f"{self.name}_adapter",
+            adapter_name=self.name,
+        )
+
+    def _is_detail_surface(self, surface: str | None) -> bool:
+        return "detail" in str(surface or "").strip().lower()
+
     def _matches_platform_family(self, url: str, html: str) -> bool:
         expected_family = str(self.platform_family or "").strip().lower()
         if not expected_family:

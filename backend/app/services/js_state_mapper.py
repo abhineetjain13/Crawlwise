@@ -4,8 +4,12 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
 import jmespath
-from glom import Coalesce, glom  # type: ignore[import-untyped]
+from glom import glom  # type: ignore[import-untyped]
 
+from app.services.config.field_mappings import (
+    JS_STATE_PRODUCT_FIELD_SPEC,
+    JS_STATE_VARIANT_FIELD_SPEC,
+)
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.extract.shared_variant_logic import (
     merge_variant_rows,
@@ -28,90 +32,9 @@ from app.services.js_state_helpers import (
 )
 from app.services.platform_policy import JSStateExtractorConfig, platform_js_state_extractors
 
-_SKIP: tuple[object, ...] = ("", [], {})
-
 def _as_list(value: object) -> list[Any]:
     return value if isinstance(value, list) else []
 
-PRODUCT_FIELD_SPEC = {
-    "title": Coalesce("title", "name", default=None, skip=_SKIP),
-    "brand": Coalesce("brand.name", "brand", "vendor.name", "vendor", default=None, skip=_SKIP),
-    "vendor": Coalesce("vendor.name", "vendor", default=None, skip=_SKIP),
-    "handle": Coalesce("handle", "slug", default=None, skip=_SKIP),
-    "description": Coalesce("description", "body_html", "descriptionHtml", default=None, skip=_SKIP),
-    "product_id": Coalesce("id", "product_id", "productId", "legacyResourceId", default=None, skip=_SKIP),
-    "category": Coalesce("category", default=None, skip=_SKIP),
-    "product_type": Coalesce("product_type", "productType", "type", default=None, skip=_SKIP),
-    "sku": Coalesce("sku", "productId", "product_id", default=None, skip=_SKIP),
-    "barcode": Coalesce("barcode", default=None, skip=_SKIP),
-    "currency": Coalesce(
-        "currency",
-        "currencyCode",
-        "priceCurrency",
-        "prices.currency",
-        "prices.currentPrice.currencyCode",
-        "pricing_information.currency",
-        "pricing_information.currentPrice.currencyCode",
-        "prices.promo.currency.code",
-        "prices.base.currency.code",
-        "prices.promo.currencyCode",
-        "prices.base.currencyCode",
-        "priceRange.minVariantPrice.currencyCode",
-        "priceRange.maxVariantPrice.currencyCode",
-        default=None,
-        skip=_SKIP,
-    ),
-    "price": Coalesce(
-        "price",
-        "amount",
-        "minPrice",
-        "maxPrice",
-        "formattedPrice",
-        "salePrice",
-        "salePrice.amount",
-        "salePrice.value",
-        "currentPrice",
-        "currentPrice.amount",
-        "currentPrice.value",
-        "prices.currentPrice",
-        "prices.currentPrice.amount",
-        "pricing_information.currentPrice",
-        "pricing_information.currentPrice.amount",
-        "pricing_information.standard_price",
-        "prices.promo.value",
-        "prices.base.value",
-        "prices.promo.amount",
-        "prices.base.amount",
-        "priceRange.minVariantPrice.amount",
-        "priceRange.maxVariantPrice.amount",
-        default=None,
-        skip=_SKIP,
-    ),
-    "original_price": Coalesce(
-        "compare_at_price",
-        "compareAtPrice",
-        "original_price",
-        "originalPrice",
-        "listPrice",
-        "fullPrice",
-        "fullPrice.amount",
-        "prices.initialPrice",
-        "prices.initialPrice.amount",
-        "pricing_information.standard_price",
-        "pricing_information.listPrice",
-        "prices.base.value",
-        "prices.base.amount",
-        "compareAtPriceRange.minVariantPrice.amount",
-        "compareAtPriceRange.maxVariantPrice.amount",
-        default=None,
-        skip=_SKIP,
-    ),
-    "availability": Coalesce("availability", "inventory.status", "availableForSale", default=None, skip=_SKIP),
-    "tags": Coalesce("tags", default=None, skip=_SKIP),
-    "created_at": Coalesce("created_at", default=None, skip=_SKIP),
-    "updated_at": Coalesce("updated_at", default=None, skip=_SKIP),
-    "published_at": Coalesce("published_at", default=None, skip=_SKIP),
-}
 def map_js_state_to_fields(
     js_state_objects: dict[str, Any],
     *,
@@ -548,13 +471,9 @@ def _map_product_payload(
     price = variant_attribute(selected_variant, "price")
     if price in (None, "", [], {}):
         raw_current_price = _raw_current_price_value(product)
-        price = (
-            normalize_price(raw_current_price, interpret_integral_as_cents=shopify_like)
-            if raw_current_price is not None
-            else normalize_price(
-                base.get("price"),
-                interpret_integral_as_cents=shopify_like,
-            )
+        price = raw_current_price if raw_current_price is not None else normalize_price(
+            base.get("price"),
+            interpret_integral_as_cents=shopify_like,
         )
     original_price = variant_attribute(
         selected_variant,
@@ -562,13 +481,9 @@ def _map_product_payload(
     )
     if original_price in (None, "", [], {}):
         raw_original_price = _raw_original_price_value(product)
-        original_price = (
-            normalize_price(raw_original_price, interpret_integral_as_cents=shopify_like)
-            if raw_original_price is not None
-            else normalize_price(
-                base.get("original_price"),
-                interpret_integral_as_cents=shopify_like,
-            )
+        original_price = raw_original_price if raw_original_price is not None else normalize_price(
+            base.get("original_price"),
+            interpret_integral_as_cents=shopify_like,
         )
     currency = (
         variant_attribute(selected_variant, "currency")
@@ -735,7 +650,7 @@ def _product_base_fields(
 
 def _glom_product_base_fields(product: dict[str, Any]) -> dict[str, Any]:
     try:
-        base = glom(product, PRODUCT_FIELD_SPEC, default=None)
+        base = glom(product, JS_STATE_PRODUCT_FIELD_SPEC, default=None)
     except Exception:
         base = {}
     if not isinstance(base, dict):
@@ -833,62 +748,6 @@ def _option_names(raw_options: object) -> list[str]:
                     names.append(str(label))
     return names
 
-_VARIANT_FIELD_SPEC = {
-    "price": Coalesce(
-        "price.amount",
-        "price.value",
-        "priceV2.amount",
-        "priceV2.value",
-        "salePrice.amount",
-        "salePrice.value",
-        "salePrice",
-        "currentPrice.amount",
-        "currentPrice.value",
-        "currentPrice",
-        "prices.currentPrice",
-        "prices.currentPrice.amount",
-        "amount",
-        "formattedPrice",
-        "price",
-        default=None,
-        skip=_SKIP,
-    ),
-    "original_price": Coalesce(
-        "compare_at_price.amount",
-        "compare_at_price",
-        "compareAtPrice.amount",
-        "compareAtPriceV2.amount",
-        "compareAtPrice",
-        "original_price",
-        "originalPrice",
-        "listPrice.amount",
-        "listPrice",
-        "fullPrice.amount",
-        "fullPrice",
-        "prices.initialPrice",
-        "prices.initialPrice.amount",
-        default=None,
-        skip=_SKIP,
-    ),
-    "currency": Coalesce(
-        "currency",
-        "currencyCode",
-        "priceCurrency",
-        "currentPrice.currencyCode",
-        "salePrice.currencyCode",
-        "prices.currency",
-        "price.currencyCode",
-        "price.currency_code",
-        "priceV2.currencyCode",
-        "compareAtPrice.currencyCode",
-        "compareAtPriceV2.currencyCode",
-        default=None,
-        skip=_SKIP,
-    ),
-    "sku": Coalesce("sku", "productId", "product_id", default=None, skip=_SKIP),
-    "barcode": Coalesce("barcode", default=None, skip=_SKIP),
-}
-
 def _normalize_variant(
     variant: dict[str, Any],
     *,
@@ -905,7 +764,7 @@ def _normalize_variant(
         row["variant_id"] = variant_id
         row["url"] = _variant_url(page_url, variant_id)
     try:
-        base = glom(variant, _VARIANT_FIELD_SPEC, default=None)
+        base = glom(variant, JS_STATE_VARIANT_FIELD_SPEC, default=None)
     except Exception:
         base = {}
     if not isinstance(base, dict):

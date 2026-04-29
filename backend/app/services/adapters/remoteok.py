@@ -16,11 +16,7 @@ class RemoteOkAdapter(BaseAdapter):
         return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        return AdapterResult(
-            records=self._extract_remoteok_from_html(html),
-            source_type="remoteok_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(self._extract_remoteok_from_html(html))
 
     def _extract_remoteok_from_html(self, html: str) -> list[dict]:
         """Extract RemoteOK jobs from rendered HTML or a JSON body."""

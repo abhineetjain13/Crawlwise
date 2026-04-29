@@ -11,7 +11,6 @@ from app.models.crawl import (
     ProductIntelligenceSourceProduct,
 )
 from app.schemas.product_intelligence import ProductIntelligenceDiscoveryRequest
-from app.services.crawl_crud import create_crawl_run
 from app.services.config.product_intelligence import (
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_CRAWL_QUEUED,
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_CRAWL_TIMEOUT,
@@ -935,15 +934,11 @@ async def test_product_intelligence_discovery_keeps_search_delay_while_filling_p
 async def test_product_intelligence_job_stores_source_products_and_llm_option(
     db_session: AsyncSession,
     test_user,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://www.belk.com/category",
-            "surface": "ecommerce_listing",
-        },
+    run = await create_test_run(
+        url="https://www.belk.com/category",
+        surface="ecommerce_listing",
     )
     record = CrawlRecord(
         run_id=run.id,
@@ -991,15 +986,11 @@ async def test_product_intelligence_discovery_preview_returns_source_and_payload
     db_session: AsyncSession,
     test_user,
     monkeypatch,
+    create_test_run,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://www.belk.com/category",
-            "surface": "ecommerce_listing",
-        },
+    run = await create_test_run(
+        url="https://www.belk.com/category",
+        surface="ecommerce_listing",
     )
     record = CrawlRecord(
         run_id=run.id,

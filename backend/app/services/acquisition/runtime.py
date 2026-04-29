@@ -17,7 +17,13 @@ from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.extraction_rules import (
     ACTION_BUY_NOW,
     BROWSER_DETAIL_READINESS_HINTS,
+    DETAIL_SHELL_FRAMEWORK_TOKENS,
+    DETAIL_SHELL_PRODUCT_DATA_TOKENS,
+    DETAIL_SHELL_STATE_TOKENS,
+    JS_REQUIRED_PLACEHOLDER_PHRASES,
+    LISTING_DETAIL_URL_MARKERS,
     LISTING_CLIENT_RENDERED_SHELL_HINTS,
+    LISTING_SHELL_FRAMEWORK_TOKENS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.db_utils import mapping_or_empty
@@ -540,25 +546,10 @@ def _has_extractable_detail_signals(
     if _has_extractable_dom_detail_signals(parsed):
         return True
     lowered_html = parsed.lowered_html
-    if any(
-        token in lowered_html
-        for token in (
-            "shopifyanalytics.meta",
-            "var meta = {\"product\"",
-            "window.__remixcontext",
-        )
-    ):
+    if any(token in lowered_html for token in DETAIL_SHELL_STATE_TOKENS):
         return True
-    return any(token in lowered_html for token in ("__next_data__", "__nuxt__")) and any(
-        token in lowered_html
-        for token in (
-            "\"product\":",
-            "\"products\":",
-            "\"currentprice\":",
-            "\"initialprice\":",
-            "\"skudata\":",
-            "\"stylecolor\":",
-        )
+    return any(token in lowered_html for token in DETAIL_SHELL_FRAMEWORK_TOKENS) and any(
+        token in lowered_html for token in DETAIL_SHELL_PRODUCT_DATA_TOKENS
     )
 
 
@@ -629,20 +620,7 @@ def _has_extractable_listing_signals(
     detail_like_anchor_count = 0
     for anchor in parsed.soup.find_all("a", href=True):
         href = str(anchor.get("href") or "").strip().lower()
-        if any(
-            marker in href
-            for marker in (
-                "/products/",
-                "/product/",
-                "/p/",
-                "/dp/",
-                "/item/",
-                "/job/",
-                "/jobs/",
-                "/viewjob",
-                "showjob=",
-            )
-        ):
+        if any(marker in href for marker in LISTING_DETAIL_URL_MARKERS):
             detail_like_anchor_count += 1
             if detail_like_anchor_count >= 3:
                 return True
@@ -669,34 +647,14 @@ def _looks_like_listing_shell(
         return any(token in lowered_html for token in LISTING_CLIENT_RENDERED_SHELL_HINTS)
     if root is None and script_count < 3:
         return False
-    return any(
-        token in lowered_html
-        for token in (
-            "__next_data__",
-            "__nuxt__",
-            "ng-version",
-            "data-reactroot",
-            "data-react-class",
-            "application/json",
-            "application/ld+json",
-        )
-    )
+    return any(token in lowered_html for token in LISTING_SHELL_FRAMEWORK_TOKENS)
 
 
 def _looks_like_js_required_placeholder(parsed: HtmlAnalysis) -> bool:
     combined_text = clean_text(f"{parsed.title_text} {parsed.visible_text}").lower()
     if not combined_text:
         return False
-    if not any(
-        phrase in combined_text
-        for phrase in (
-            "javascript is disabled",
-            "please enable javascript",
-            "enable javascript to continue",
-            "javascript required",
-            "requires javascript",
-        )
-    ):
+    if not any(phrase in combined_text for phrase in JS_REQUIRED_PLACEHOLDER_PHRASES):
         return False
     return bool(parsed.soup.find("noscript")) or len(parsed.visible_text) <= 400
 
@@ -733,26 +691,13 @@ def _string_sequence(value: object) -> list[str]:
 
 def _challenge_element_hits(soup: BeautifulSoup, lowered_html: str) -> list[str]:
     challenge_elements = mapping_or_empty(BLOCK_SIGNATURES.get("challenge_elements"))
-    iframe_src_markers = {
-        str(marker or "").strip().lower(): str(hit or "").strip()
-        for marker, hit in mapping_or_empty(challenge_elements.get("iframe_src_markers")).items()
-        if str(marker or "").strip() and str(hit or "").strip()
-    }
-    iframe_title_markers = {
-        str(marker or "").strip().lower(): str(hit or "").strip()
-        for marker, hit in mapping_or_empty(challenge_elements.get("iframe_title_markers")).items()
-        if str(marker or "").strip() and str(hit or "").strip()
-    }
-    script_src_markers = {
-        str(marker or "").strip().lower(): str(hit or "").strip()
-        for marker, hit in mapping_or_empty(challenge_elements.get("script_src_markers")).items()
-        if str(marker or "").strip() and str(hit or "").strip()
-    }
-    html_markers = {
-        str(marker or "").strip().lower(): str(hit or "").strip()
-        for marker, hit in mapping_or_empty(challenge_elements.get("html_markers")).items()
-        if str(marker or "").strip() and str(hit or "").strip()
-    }
+    iframe_src_markers = _marker_map_from_config(challenge_elements, "iframe_src_markers")
+    iframe_title_markers = _marker_map_from_config(
+        challenge_elements,
+        "iframe_title_markers",
+    )
+    script_src_markers = _marker_map_from_config(challenge_elements, "script_src_markers")
+    html_markers = _marker_map_from_config(challenge_elements, "html_markers")
     hits: list[str] = []
     for iframe in list(soup.find_all("iframe")):
         src = str(iframe.get("src") or "").strip().lower()
@@ -772,6 +717,17 @@ def _challenge_element_hits(soup: BeautifulSoup, lowered_html: str) -> list[str]
         if marker in lowered_html:
             hits.append(hit)
     return hits
+
+
+def _marker_map_from_config(
+    source: Mapping[str, object],
+    key: str,
+) -> dict[str, str]:
+    return {
+        str(marker or "").strip().lower(): str(hit or "").strip()
+        for marker, hit in mapping_or_empty(source.get(key)).items()
+        if str(marker or "").strip() and str(hit or "").strip()
+    }
 
 
 __all__ = [

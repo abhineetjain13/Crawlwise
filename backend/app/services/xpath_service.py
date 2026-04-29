@@ -9,37 +9,14 @@ from cssselect import GenericTranslator, SelectorError
 from lxml import etree
 from lxml import html as lxml_html
 
+from app.services.config.selectors import (
+    XPATH_ALLOWED_FUNCTIONS,
+    XPATH_DISALLOWED_PATTERNS,
+    XPATH_FUNCTION_PATTERN,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 
 logger = logging.getLogger(__name__)
-
-_XPATH_ALLOWED_FUNCTIONS = {
-    "comment",
-    "concat",
-    "contains",
-    "last",
-    "normalize-space",
-    "node",
-    "not",
-    "position",
-    "processing-instruction",
-    "starts-with",
-    "string",
-    "text",
-}
-_XPATH_DISALLOWED_PATTERNS = (
-    (re.compile(r"\|"), "XPath unions are not supported"),
-    (
-        re.compile(
-            r"(?<![\w-])(ancestor|ancestor-or-self|descendant-or-self|following|following-sibling|namespace|preceding|preceding-sibling|self)::"
-        ),
-        "XPath axis is not allowed",
-    ),
-    (re.compile(r"\$[A-Za-z_][\w.-]*"), "XPath variables are not allowed"),
-)
-# This validator intentionally accepts common node tests that also look like
-# function calls in the raw XPath source, such as node() and comment().
-_XPATH_FUNCTION_PATTERN = re.compile(r"(?<![:\w-])([A-Za-z_][\w.-]*)\s*\(")
 
 
 def extract_selector_value(
@@ -192,12 +169,12 @@ def _build_xpath_tree(document_html: str):
 
 def _validate_xpath_policy(xpath: str) -> str | None:
     candidate = str(xpath or "").strip()
-    for pattern, message in _XPATH_DISALLOWED_PATTERNS:
+    for pattern, message in XPATH_DISALLOWED_PATTERNS:
         if pattern.search(candidate):
             return message
 
-    for function_name in _XPATH_FUNCTION_PATTERN.findall(candidate):
-        if function_name.lower() not in _XPATH_ALLOWED_FUNCTIONS:
+    for function_name in XPATH_FUNCTION_PATTERN.findall(candidate):
+        if function_name.lower() not in XPATH_ALLOWED_FUNCTIONS:
             return f"XPath function '{function_name}' is not allowed"
     return None
 
@@ -285,7 +262,7 @@ def _looks_like_css_selector(candidate: str) -> bool:
         return False
     if "::" in normalized or "@" in normalized:
         return False
-    if _XPATH_FUNCTION_PATTERN.search(normalized):
+    if XPATH_FUNCTION_PATTERN.search(normalized):
         return False
     if "#" in normalized:
         return True

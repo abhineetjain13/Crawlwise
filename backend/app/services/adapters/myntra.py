@@ -47,11 +47,7 @@ class MyntraAdapter(BaseAdapter):
                 records.append(record)
         elif normalized_surface == "ecommerce_listing":
             records.extend(_extract_listing_records(url, html))
-        return AdapterResult(
-            records=records,
-            source_type="myntra_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
 
 def _extract_detail_record(page_url: str, html: str) -> dict[str, Any] | None:

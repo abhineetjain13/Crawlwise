@@ -969,6 +969,72 @@ async def test_scroll_traversal_stops_at_user_max_records() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scroll_traversal_respects_max_scrolls_cap() -> None:
+    page = _FakePage(
+        surface="job_listing",
+        initial_state=_State(
+            html="<div>jobs</div>",
+            card_count=2,
+            scroll_height=2500,
+            client_height=600,
+            controls=set(),
+        ),
+        scroll_states=[
+            _State(html="<div>jobs</div>", card_count=2, scroll_height=2500, client_height=600, controls=set()),
+            _State(html="<div>jobs more</div>", card_count=6, scroll_height=3400, client_height=600, controls=set()),
+            _State(html="<div>jobs too-far</div>", card_count=9, scroll_height=4200, client_height=600, controls=set()),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="job_listing",
+        traversal_mode="scroll",
+        max_pages=2,
+        max_scrolls=1,
+    )
+
+    assert result.stop_reason == "scroll_limit_reached"
+    assert result.scroll_iterations == 1
+    assert result.card_count == 6
+    assert [f for f, _ in result.html_fragments][:2] == [
+        "<div>jobs</div>",
+        "<div>jobs more</div>",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_listing_traversal_ignores_invalid_timeout_value() -> None:
+    page = _FakePage(
+        surface="job_listing",
+        initial_state=_State(
+            html="<div>jobs</div>",
+            card_count=2,
+            scroll_height=2500,
+            client_height=600,
+            controls=set(),
+        ),
+        scroll_states=[
+            _State(html="<div>jobs</div>", card_count=2, scroll_height=2500, client_height=600, controls=set()),
+            _State(html="<div>jobs more</div>", card_count=6, scroll_height=3400, client_height=600, controls=set()),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="job_listing",
+        traversal_mode="scroll",
+        max_pages=2,
+        max_scrolls=1,
+        timeout_seconds="bad-timeout",
+    )
+
+    assert result.stop_reason == "scroll_limit_reached"
+    assert result.scroll_iterations == 1
+    assert result.card_count == 6
+
+
+@pytest.mark.asyncio
 async def test_auto_traversal_falls_back_to_scroll_when_auto_detection_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

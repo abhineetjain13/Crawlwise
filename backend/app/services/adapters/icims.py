@@ -46,21 +46,13 @@ class ICIMSAdapter(BaseAdapter):
         return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        if "detail" in str(surface or "").lower() or self._looks_like_detail_url(url):
+        if self._is_detail_surface(surface) or self._looks_like_detail_url(url):
             html = await self._follow_embedded_content_url(url, html)
             record = self._extract_detail(url, html)
-            return AdapterResult(
-                records=[record] if record else [],
-                source_type="icims_adapter",
-                adapter_name=self.name,
-            )
+            return self._result([record] if record else [])
 
         records = await self._extract_listing(url, html)
-        return AdapterResult(
-            records=records,
-            source_type="icims_adapter",
-            adapter_name=self.name,
-        )
+        return self._result(records)
 
     async def _extract_listing(self, url: str, html: str) -> list[dict]:
         parsed = urlparse(url)

@@ -143,40 +143,48 @@ async def reset_product_intelligence(session: AsyncSession) -> dict:
 
 
 async def _reset_crawl_data_db(session: AsyncSession) -> dict:
-    counts = {
-        "crawl_runs_deleted": await _count_rows(session, CrawlRun),
-        "crawl_records_deleted": await _count_rows(session, CrawlRecord),
-        "crawl_logs_deleted": await _count_rows(session, CrawlLog),
-        "review_promotions_deleted": await _count_rows(session, ReviewPromotion),
-        "llm_cost_logs_deleted": await _count_rows(session, LLMCostLog),
-    }
+    counts = await _reset_bucket_db(
+        session,
+        [
+            ("crawl_runs_deleted", CrawlRun),
+            ("crawl_records_deleted", CrawlRecord),
+            ("crawl_logs_deleted", CrawlLog),
+            ("review_promotions_deleted", ReviewPromotion),
+            ("llm_cost_logs_deleted", LLMCostLog),
+        ],
+    )
     await _reset_crawl_data_tables(session)
     return counts
 
 
 async def _reset_domain_memory_db(session: AsyncSession) -> dict:
-    preserved_cookie_memory = await _count_rows(session, DomainCookieMemory)
-    preserved_host_memory = await _count_rows(session, HostProtectionMemory)
-    counts = {
-        "domain_memory_deleted": await _count_rows(session, DomainMemory),
-        "domain_run_profiles_deleted": await _count_rows(session, DomainRunProfile),
-        "domain_cookie_memory_deleted": 0,
-        "domain_cookie_memory_preserved": preserved_cookie_memory,
-        "domain_field_feedback_deleted": await _count_rows(session, DomainFieldFeedback),
-        "host_protection_memory_deleted": 0,
-        "host_protection_memory_preserved": preserved_host_memory,
-    }
+    counts = await _reset_bucket_db(
+        session,
+        [
+            ("domain_memory_deleted", DomainMemory),
+            ("domain_run_profiles_deleted", DomainRunProfile),
+            ("domain_field_feedback_deleted", DomainFieldFeedback),
+        ],
+        preserved=[
+            ("domain_cookie_memory_preserved", DomainCookieMemory),
+            ("host_protection_memory_preserved", HostProtectionMemory),
+        ],
+        zeroed=("domain_cookie_memory_deleted", "host_protection_memory_deleted"),
+    )
     await _reset_domain_memory_tables(session)
     return counts
 
 
 async def _reset_product_intelligence_db(session: AsyncSession) -> dict:
-    counts = {
-        "product_intelligence_jobs_deleted": await _count_rows(session, ProductIntelligenceJob),
-        "product_intelligence_sources_deleted": await _count_rows(session, ProductIntelligenceSourceProduct),
-        "product_intelligence_candidates_deleted": await _count_rows(session, ProductIntelligenceCandidate),
-        "product_intelligence_matches_deleted": await _count_rows(session, ProductIntelligenceMatch),
-    }
+    counts = await _reset_bucket_db(
+        session,
+        [
+            ("product_intelligence_jobs_deleted", ProductIntelligenceJob),
+            ("product_intelligence_sources_deleted", ProductIntelligenceSourceProduct),
+            ("product_intelligence_candidates_deleted", ProductIntelligenceCandidate),
+            ("product_intelligence_matches_deleted", ProductIntelligenceMatch),
+        ],
+    )
     await _reset_product_intelligence_tables(session)
     return counts
 
@@ -216,95 +224,91 @@ async def _count_rows(session: AsyncSession, model: type) -> int:
     )
 
 
-async def _reset_crawl_data_tables(session: AsyncSession) -> None:
-    bind = session.get_bind()
-    dialect_name = bind.dialect.name if bind is not None else ""
-    await session.execute(delete(CrawlLog))
-    await session.execute(delete(CrawlRecord))
-    await session.execute(delete(ReviewPromotion))
-    await session.execute(delete(LLMCostLog))
-    await session.execute(delete(CrawlRun))
-    if dialect_name == "postgresql":
-        await _reset_postgres_identities(
-            session,
-            "crawl_logs",
-            "crawl_records",
-            "review_promotions",
-            "llm_cost_log",
-            "crawl_runs",
+async def _reset_bucket_db(
+    session: AsyncSession,
+    deleted: list[tuple[str, type]],
+    *,
+    preserved: list[tuple[str, type]] | None = None,
+    zeroed: tuple[str, ...] = (),
+) -> dict[str, int]:
+    counts = {
+        key: await _count_rows(session, model)
+        for key, model in deleted
+    }
+    counts.update({key: 0 for key in zeroed})
+    if preserved:
+        counts.update(
+            {
+                key: await _count_rows(session, model)
+                for key, model in preserved
+            }
         )
-    elif dialect_name == "sqlite":
-        sqlite_sequence_exists = (
-            await session.execute(
-                text(
-                    "SELECT 1 FROM sqlite_master "
-                    "WHERE type = 'table' AND name = 'sqlite_sequence'"
-                )
-            )
-        ).scalar()
-        if sqlite_sequence_exists:
-            await session.execute(
-                text(
-                    "DELETE FROM sqlite_sequence "
-                    "WHERE name IN ("
-                    "'crawl_logs', 'crawl_records', 'review_promotions', "
-                    "'llm_cost_log', 'crawl_runs'"
-                    ")"
-                )
-            )
+    return counts
+
+
+async def _reset_crawl_data_tables(session: AsyncSession) -> None:
+    await _reset_bucket_tables(
+        session,
+        [CrawlLog, CrawlRecord, ReviewPromotion, LLMCostLog, CrawlRun],
+        "crawl_logs",
+        "crawl_records",
+        "review_promotions",
+        "llm_cost_log",
+        "crawl_runs",
+    )
 
 
 async def _reset_domain_memory_tables(session: AsyncSession) -> None:
-    bind = session.get_bind()
-    dialect_name = bind.dialect.name if bind is not None else ""
-    await session.execute(delete(DomainFieldFeedback))
-    await session.execute(delete(DomainRunProfile))
-    await session.execute(delete(DomainMemory))
-    if dialect_name == "postgresql":
-        await _reset_postgres_identities(
-            session,
-            "domain_field_feedback",
-            "domain_run_profiles",
-            "domain_memory",
-        )
-    elif dialect_name == "sqlite":
-        sqlite_sequence_exists = (
-            await session.execute(
-                text(
-                    "SELECT 1 FROM sqlite_master "
-                    "WHERE type = 'table' AND name = 'sqlite_sequence'"
-                )
-            )
-        ).scalar()
-        if sqlite_sequence_exists:
-            await session.execute(
-                text(
-                    "DELETE FROM sqlite_sequence "
-                    "WHERE name IN ("
-                    "'domain_field_feedback', "
-                    "'domain_run_profiles', 'domain_memory'"
-                    ")"
-                )
-            )
+    await _reset_bucket_tables(
+        session,
+        [DomainFieldFeedback, DomainRunProfile, DomainMemory],
+        "domain_field_feedback",
+        "domain_run_profiles",
+        "domain_memory",
+    )
 
 
 async def _reset_product_intelligence_tables(session: AsyncSession) -> None:
+    await _reset_bucket_tables(
+        session,
+        [
+            ProductIntelligenceMatch,
+            ProductIntelligenceCandidate,
+            ProductIntelligenceSourceProduct,
+            ProductIntelligenceJob,
+        ],
+        "product_intelligence_matches",
+        "product_intelligence_candidates",
+        "product_intelligence_source_products",
+        "product_intelligence_jobs",
+    )
+
+
+async def _reset_bucket_tables(
+    session: AsyncSession,
+    models: list[type],
+    *table_names: str,
+) -> None:
     bind = session.get_bind()
     dialect_name = bind.dialect.name if bind is not None else ""
-    await session.execute(delete(ProductIntelligenceMatch))
-    await session.execute(delete(ProductIntelligenceCandidate))
-    await session.execute(delete(ProductIntelligenceSourceProduct))
-    await session.execute(delete(ProductIntelligenceJob))
+    for model in models:
+        await session.execute(delete(model))
     if dialect_name == "postgresql":
-        await _reset_postgres_identities(
-            session,
-            "product_intelligence_matches",
-            "product_intelligence_candidates",
-            "product_intelligence_source_products",
-            "product_intelligence_jobs",
+        await _reset_postgres_identities(session, *table_names)
+        return
+    if dialect_name == "sqlite" and await _sqlite_sequence_exists(session):
+        quoted_names = ", ".join(f"'{table_name}'" for table_name in table_names)
+        await session.execute(
+            text(
+                "DELETE FROM sqlite_sequence "
+                f"WHERE name IN ({quoted_names})"
+            )
         )
-    elif dialect_name == "sqlite":
-        sqlite_sequence_exists = (
+
+
+async def _sqlite_sequence_exists(session: AsyncSession) -> bool:
+    return bool(
+        (
             await session.execute(
                 text(
                     "SELECT 1 FROM sqlite_master "
@@ -312,18 +316,7 @@ async def _reset_product_intelligence_tables(session: AsyncSession) -> None:
                 )
             )
         ).scalar()
-        if sqlite_sequence_exists:
-            await session.execute(
-                text(
-                    "DELETE FROM sqlite_sequence "
-                    "WHERE name IN ("
-                    "'product_intelligence_matches', "
-                    "'product_intelligence_candidates', "
-                    "'product_intelligence_source_products', "
-                    "'product_intelligence_jobs'"
-                    ")"
-                )
-            )
+    )
 
 
 async def _reset_postgres_identities(

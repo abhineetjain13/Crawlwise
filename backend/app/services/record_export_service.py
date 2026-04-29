@@ -18,7 +18,15 @@ from app.services.crawl_access_service import (
     require_accessible_record,
 )
 from app.services.crawl_crud import get_run_records
-from app.services.config.extraction_rules import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
+from app.services.config.extraction_rules import (
+    DISCOVERIST_SCHEMA,
+    EXPORT_IMAGE_URL_SUFFIXES,
+    MARKDOWN_VIEW,
+)
+from app.services.config.field_mappings import (
+    PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS,
+    PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS,
+)
 from app.services.field_value_core import _object_dict, _object_list
 from app.schemas.crawl import CrawlRecordProvenanceResponse
 from fastapi.responses import StreamingResponse
@@ -37,30 +45,7 @@ RECORD_NOT_FOUND_RESPONSE = {
 RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
     404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
 }
-_FALLBACK_INTERNAL_FIELDS = frozenset(
-    {"page_markdown", "table_markdown", "record_type"}
-)
-_IMAGE_URL_SUFFIXES = (
-    ".avif",
-    ".bmp",
-    ".gif",
-    ".ico",
-    ".jpeg",
-    ".jpg",
-    ".png",
-    ".svg",
-    ".tif",
-    ".tiff",
-    ".webp",
-)
-_MARKDOWN_HIDDEN_FIELDS = frozenset(
-    {
-        "product_attributes",
-        "selected_variant",
-        "variant_axes",
-        "variants",
-    }
-)
+_HTML_FRAGMENT_RE = re.compile(r"<[a-zA-Z][^>]*>")
 
 ExportStreamer = Callable[[AsyncSession, int], AsyncIterator[str]]
 
@@ -355,7 +340,7 @@ def clean_export_data(data: dict) -> dict:
         if (
             v not in (None, "", [], {})
             and not str(k).startswith("_")
-            and str(k) not in _FALLBACK_INTERNAL_FIELDS
+            and str(k) not in PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS
         )
     }
 
@@ -493,7 +478,7 @@ def record_to_markdown(row: CrawlRecord) -> str:
     scalar_rows: list[tuple[str, object]] = []
     for field_name, raw_value in data.items():
         normalized_field = str(field_name).strip().lower()
-        if normalized_field in {"title", "url", "source_url"} | _MARKDOWN_HIDDEN_FIELDS:
+        if normalized_field in {"title", "url", "source_url"} | PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS:
             continue
         rendered_value = stringify_markdown_value(raw_value)
         if not rendered_value:
@@ -614,7 +599,7 @@ def _looks_like_image_asset_url(value: object) -> bool:
     path = str(urlparse(text).path or "").strip().lower()
     if not path:
         return False
-    return path.endswith(_IMAGE_URL_SUFFIXES)
+    return path.endswith(EXPORT_IMAGE_URL_SUFFIXES)
 
 
 def stringify_markdown_value(value: object) -> str:
@@ -683,7 +668,7 @@ def _looks_like_html_fragment(value: str) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
-    return bool(re.search(r"<[a-zA-Z][^>]*>", text))
+    return bool(_HTML_FRAGMENT_RE.search(text))
 
 
 def _html_fragment_to_markdown_text(value: str) -> str:
