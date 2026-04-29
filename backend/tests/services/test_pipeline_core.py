@@ -585,6 +585,30 @@ def test_resolved_url_processing_config_handles_none_plan_limits() -> None:
     assert resolved.sleep_ms == 7
 
 
+def test_resolved_url_processing_config_preserves_explicit_zero_sleep_ms() -> None:
+    config = URLProcessingConfig.from_acquisition_plan(
+        AcquisitionPlan(
+            surface="ecommerce_listing",
+            sleep_ms=0,
+        )
+    )
+
+    resolved = _resolved_url_processing_config(
+        config,
+        surface="ecommerce_listing",
+        proxy_list=[],
+        traversal_mode=None,
+        max_pages=4,
+        max_scrolls=5,
+        max_records=6,
+        sleep_ms=25,
+        update_run_state=True,
+        persist_logs=True,
+    )
+
+    assert resolved.sleep_ms == 0
+
+
 @pytest.mark.asyncio
 async def test_acquire_normalizes_retry_reason_aliases(
     monkeypatch: pytest.MonkeyPatch,
@@ -650,10 +674,6 @@ async def test_process_single_url_marks_empty_listing_as_listing_detection_faile
         )
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -708,10 +728,6 @@ async def test_process_single_url_preserves_proxy_list_for_detail_surface(
         )
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -771,10 +787,6 @@ async def test_process_single_url_repairs_missing_proxy_list_from_run_settings_w
         )
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -839,10 +851,6 @@ async def test_process_single_url_does_not_duplicate_block_warning_after_browser
                 "challenge_evidence": ["provider:datadome"],
             },
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -917,10 +925,6 @@ async def test_process_single_url_persists_detail_records_after_self_heal_and_ll
         return [record]
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -998,10 +1002,6 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
             status_code=200,
         )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -1062,10 +1062,6 @@ async def test_process_single_url_persists_listing_page_source_separately_from_r
             status_code=200,
             browser_diagnostics={"browser_attempted": True},
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -1131,10 +1127,6 @@ async def test_process_single_url_log_uses_generic_extraction_label_when_no_adap
             browser_diagnostics={"browser_attempted": True},
         )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -1197,10 +1189,6 @@ async def test_process_single_url_skips_duplicate_run_identity_records_during_pe
             status_code=200,
             browser_diagnostics={"browser_attempted": True},
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -1266,10 +1254,6 @@ async def test_process_single_url_offloads_extract_records_to_thread(
             status_code=200,
         )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -1314,10 +1298,6 @@ async def test_process_single_url_keeps_platform_family_separate_from_adapter_pr
             method="test",
             status_code=200,
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -1437,10 +1417,6 @@ async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_
         del args, kwargs
         return {"price": "19.99"}, None
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -1507,10 +1483,6 @@ async def test_process_single_url_strips_schema_type_mismatches_during_normaliza
             method="test",
             status_code=200,
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -1594,10 +1566,6 @@ async def test_process_single_url_persists_browser_diagnostics_and_screenshot_ar
             },
             artifacts={"browser_screenshot_path": str(staged_screenshot)},
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -1691,10 +1659,6 @@ async def test_process_single_url_does_not_retry_browser_after_empty_browser_acq
             },
         )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -1751,10 +1715,6 @@ async def test_process_single_url_skips_llm_on_low_content_browser_listing(
                 "browser_outcome": "low_content_shell",
             },
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -1819,10 +1779,6 @@ async def test_process_single_url_does_not_use_direct_llm_as_primary_listing_ext
             },
         )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -1884,10 +1840,6 @@ async def test_process_single_url_ignores_extracted_placeholder_records_from_low
                 "browser_outcome": "low_content_shell",
             },
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -1953,10 +1905,6 @@ async def test_process_single_url_does_not_retry_browser_after_prior_challenge_a
             },
         )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -2018,10 +1966,6 @@ async def test_process_single_url_marks_low_content_listing_with_challenge_signa
             },
         )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -2078,10 +2022,6 @@ async def test_process_single_url_rejects_detail_non_detail_seed_with_failure_re
                 "readiness_probes": [{"is_ready": True}],
             },
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -2152,10 +2092,6 @@ async def test_process_single_url_rejects_detail_challenge_shell_and_marks_block
                 "readiness_probes": [{"is_ready": False}],
             },
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -2230,10 +2166,6 @@ async def test_process_single_url_raises_when_browser_retry_fails(
             status_code=200,
         )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -2290,10 +2222,6 @@ async def test_process_single_url_persists_live_acquisition_events(
             status_code=200,
             browser_diagnostics={"browser_attempted": True},
         )
-
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
@@ -2371,10 +2299,6 @@ async def test_extract_records_for_acquisition_recovers_from_zero_record_travers
         },
     )
 
-    async def _no_adapter(*args, **kwargs):
-        del args, kwargs
-        return None
-
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
@@ -2412,3 +2336,4 @@ async def test_extract_records_for_acquisition_recovers_from_zero_record_travers
     assert result.url_metrics["traversal_fallback_used"] is True
     assert result.url_metrics["traversal_fallback_recovered"] is True
     assert result.url_metrics["traversal_fallback_record_count"] == 1
+

@@ -96,6 +96,7 @@
 :global(.app-logo-title) {
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-heading);
   color: var(--text-primary);
 }
 
@@ -241,6 +242,7 @@
   white-space: nowrap;
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-heading);
   line-height: 1.2;
   color: var(--text-primary);
 }

@@ -164,9 +164,30 @@ async def list_selector_records(
 
 async def list_selector_domain_summaries(
     session: AsyncSession,
+    *,
+    domain: str = "",
+    surface: str = "",
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[dict[str, object]]:
+    from sqlalchemy import select
+
+    from app.models.crawl import DomainMemory
+
+    normalized_domain = str(domain or "").strip().lower()
+    normalized_surface = str(surface or "").strip().lower()
+    query = select(DomainMemory).order_by(DomainMemory.id.asc())
+    if normalized_domain:
+        query = query.where(DomainMemory.domain == normalized_domain)
+    if normalized_surface:
+        query = query.where(DomainMemory.surface == normalized_surface)
+    if offset > 0:
+        query = query.offset(int(offset))
+    if limit is not None:
+        query = query.limit(int(limit))
+    result = await session.execute(query)
     summaries: list[dict[str, object]] = []
-    for memory in await _all_domain_memories(session):
+    for memory in list(result.scalars().all()):
         summaries.append(
             {
                 "domain": memory.domain,

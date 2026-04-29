@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from bs4 import BeautifulSoup
 
@@ -17,13 +15,7 @@ from app.services.extract.detail_price_extractor import (
     reconcile_detail_currency_with_url,
 )
 from app.services.extraction_runtime import extract_records
-
-
-def _read_optional_artifact_text(path: str) -> str:
-    artifact = Path(path)
-    if not artifact.exists():
-        pytest.skip(f"artifact fixture missing: {artifact}")
-    return artifact.read_text(encoding="utf-8", errors="ignore")
+from tests.fixtures.loader import read_optional_artifact_text
 
 
 def test_detail_currency_hint_host_matching_avoids_partial_word_false_positive() -> None:
@@ -1699,9 +1691,9 @@ def test_extract_ecommerce_detail_backfills_missing_variant_price_from_ld_json_p
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["price"] == "100"
-    assert record["selected_variant"]["price"] == "100"
-    assert record["variants"][0]["price"] == "100"
+    assert record["price"] == "100.00"
+    assert record["selected_variant"]["price"] == "100.00"
+    assert record["variants"][0]["price"] == "100.00"
 
 
 def test_extract_ecommerce_detail_ignores_generic_selector_axis_names_without_semantic_labels() -> None:
@@ -2636,7 +2628,7 @@ def test_extract_detail_matches_exact_requested_section_label_without_collapsing
 
 
 def test_extract_detail_keeps_company_details_body_for_requested_custom_field() -> None:
-    html = _read_optional_artifact_text("artifacts/runs/8/pages/dc80e38b20c25b9b.html")
+    html = read_optional_artifact_text("artifacts/runs/8/pages/dc80e38b20c25b9b.html")
 
     rows = extract_records(
         html,
@@ -3206,6 +3198,96 @@ def test_build_detail_record_rejects_cross_sell_images_by_filename_identity() ->
     ]
 
 
+def test_build_detail_record_rejects_same_cdn_different_product_image() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>RUSTIC COTTON T-SHIRT</h1></main></body></html>",
+        "https://www.zara.com/us/en/rustic-cotton-t-shirt-p04424306.html",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "RUSTIC COTTON T-SHIRT",
+                "image_url": "https://static.zara.net/assets/public/5326/04424306104-p/04424306104-p.jpg",
+                "additional_images": [
+                    "https://static.zara.net/assets/public/c95f/04424306104-a1/04424306104-a1.jpg",
+                    "https://static.zara.net/assets/public/db43/07223038250-f1/07223038250-f1.jpg",
+                ],
+            }
+        ],
+    )
+
+    assert record["additional_images"] == [
+        "https://static.zara.net/assets/public/c95f/04424306104-a1/04424306104-a1.jpg"
+    ]
+
+
+def test_build_detail_record_formats_currency_prices_and_drops_bad_discounts() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Jogger</h1></main></body></html>",
+        "https://shop.lululemon.com/p/men-joggers/Abc-Jogger/_/prod8530240",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Jogger",
+                "price": "128.000000",
+                "original_price": "128.000000",
+                "currency": "USD",
+                "discount_amount": "223",
+                "discount_percentage": "225",
+            }
+        ],
+    )
+
+    assert record["price"] == "128.00"
+    assert record["original_price"] == "128.00"
+    assert "discount_amount" not in record
+    assert "discount_percentage" not in record
+
+
+def test_build_detail_record_backfills_low_signal_one_dollar_prices_from_dom() -> None:
+    html = """
+    <html><body><main>
+      <h1>Stan Smith Shoes</h1>
+      <div data-testid="price">$100.00</div>
+    </main></body></html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Stan Smith Shoes",
+                "price": "1",
+                "currency": "USD",
+                "variants": [
+                    {
+                        "variant_id": "M20324-9",
+                        "sku": "M20324-9",
+                        "price": "1",
+                        "currency": "USD",
+                        "option_values": {"size": "9"},
+                    }
+                ],
+                "selected_variant": {
+                    "variant_id": "M20324-9",
+                    "sku": "M20324-9",
+                    "price": "1",
+                    "currency": "USD",
+                    "option_values": {"size": "9"},
+                },
+            }
+        ],
+    )
+
+    assert record["price"] == "100.00"
+    assert record["variants"][0]["price"] == "100.00"
+    assert record["selected_variant"]["price"] == "100.00"
+
+
 def test_build_detail_record_replaces_uuid_sku_with_merch_code() -> None:
     record = build_detail_record(
         "<html><body><main><h1>Nike Dunk Low Retro White Black Panda</h1></main></body></html>",
@@ -3542,9 +3624,9 @@ def test_extract_detail_backfills_current_price_variants_and_strips_unavailable_
         max_records=5,
     )[0]
 
-    assert record["price"] == "100"
+    assert record["price"] == "100.00"
     assert record["variant_axes"] == {"size": ["12.5", "13"]}
-    assert record["variants"][0]["price"] == "100"
+    assert record["variants"][0]["price"] == "100.00"
     assert record["variants"][0]["option_values"] == {"size": "12.5"}
 
 

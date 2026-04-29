@@ -50,23 +50,15 @@ async def selectors_summary(
 ) -> list[SelectorDomainSummaryResponse]:
     normalized_domain = str(domain or "").strip().lower()
     normalized_surface = str(surface or "").strip().lower()
-    rows = [
-        row
-        for row in await list_selector_domain_summaries(session)
-        if (
-            not normalized_domain
-            or str(row.get("domain") or "") == normalized_domain
-        )
-        and (
-            not normalized_surface
-            or str(row.get("surface") or "") == normalized_surface
-        )
-    ]
-    start = int(offset)
-    stop = start + int(limit)
     return [
         SelectorDomainSummaryResponse.model_validate(row)
-        for row in rows[start:stop]
+        for row in await list_selector_domain_summaries(
+            session,
+            domain=normalized_domain,
+            surface=normalized_surface,
+            limit=limit,
+            offset=offset,
+        )
     ]
 
 

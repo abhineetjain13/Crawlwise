@@ -2,56 +2,92 @@ Fix the following issues. The issues can be from different files or can overlap 
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/acquisition/traversal.py around lines 209 - 213, The current assignment to deadline_at uses float(timeout_seconds) which can raise ValueError/TypeError for non-numeric input; wrap the conversion in a small try/except (catch ValueError and TypeError) around the float(timeout_seconds) call used in the deadline_at calculation (the timeout_seconds -> deadline_at logic) and on exception treat the value as None (or log a warning) so invalid strings don't crash traversal code; ensure you only call float once and keep the existing > 0 check inside the guarded block.
+In @backend/app/services/acquisition/browser_identity.py around lines 325 - 339, _safely_clone_fingerprint currently returns the original raw_fingerprint on copy failures which allows callers like _align_raw_fingerprint_to_user_agent_platform to mutate shared objects (e.g., setting navigator.platform) and corrupt _RUN_BROWSER_IDENTITIES; change _safely_clone_fingerprint to return None on failure (or raise a specific CloneError), and update callers to explicitly handle that case by either skipping mutation, logging a warning, or creating a safe shallow clone of only the navigator before mutating; ensure handling covers both the copy failure and the navigator-copy fallback so the original raw_fingerprint is never modified.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/acquisition/traversal.py around lines 271 - 280, The _run_scroll_traversal function accepts max_scrolls but never uses it; update the loop bound that currently uses crawler_runtime_settings.traversal_max_iterations_cap so it respects the smaller of the two limits (max_scrolls and crawler_runtime_settings.traversal_max_iterations_cap) and handles None appropriately (e.g., treat None as "no local limit" or use the cap). Modify the iteration logic in _run_scroll_traversal to compute an effective_max = min(filtered cap, max_scrolls) and use effective_max when deciding to stop scrolling, ensuring the function signature's max_scrolls parameter actually limits iterations.
+In @backend/app/services/acquisition/browser_proxy_config.py at line 31, Replace the use of the original parsed.scheme when building the server URL with the normalized, lowercased scheme variable (the one created for validation) so the server string uses the normalized scheme; modify the assignment that sets server (which currently uses parsed.scheme and proxy_host_port(parsed)) to use that normalized scheme variable together with proxy_host_port(parsed) to ensure consistent, lowercase scheme in the URL.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/config/extraction_rules.py around lines 125 - 135, Export list missing constants: add DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES and DETAIL_LONG_TEXT_SOURCE_RANKS to the module's __all__ so they are publicly exported. Locate the __all__ declaration in extraction_rules.py and append the two symbol names (DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES, DETAIL_LONG_TEXT_SOURCE_RANKS) to the tuple/list of exported identifiers, ensuring the names match the defined constants exactly and preserve existing formatting and ordering conventions.
+In @backend/app/services/acquisition/browser_proxy_config.py around lines 33 - 36, The current logic sets config["username"] when parsed.username is truthy but sets config["password"] whenever parsed.password is not None, allowing a password without a username; update the condition so password is only added when a username is present (e.g., require parsed.username truthy before assigning config["password"]) or use consistent presence checks for both parsed.username and parsed.password; modify the assignments around parsed.username, parsed.password, and config to enforce that password is only included if username was set.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/config/extraction_rules.py around lines 376 - 396, SEMANTIC_SECTION_LABEL_SKIP_TOKENS is defined but not exported; add "SEMANTIC_SECTION_LABEL_SKIP_TOKENS" to the module's __all__ list so it becomes part of the public API. Locate the __all__ declaration in extraction_rules.py and append the identifier (as a string) to the tuple/list there (keeping formatting consistent with other exports) and run tests/type-checks to confirm no import breakage; ensure you reference the exact symbol name SEMANTIC_SECTION_LABEL_SKIP_TOKENS when updating __all__.
-
-- Verify each finding against the current code and only fix it if needed.
-
-In @backend/app/services/config/extraction_rules.py around lines 310 - 330, The module defines constants LISTING_PRICE_NODE_SELECTORS, LISTING_PROMINENT_TITLE_TAGS, and JSON_RECORD_LIST_KEYS but they are not exported via __all__; update the module's __all__ to include these three symbols so they are publicly available (add "LISTING_PRICE_NODE_SELECTORS", "LISTING_PROMINENT_TITLE_TAGS", and "JSON_RECORD_LIST_KEYS" to the existing __all__ tuple/list).
-
-- Verify each finding against the current code and only fix it if needed.
-
-In @backend/app/services/extract/detail_price_extractor.py around lines 282 - 287, The function _detail_price_context_uses_cents currently declares an unused keyword-only parameter record; remove the unused parameter from the signature (change def _detail_price_context_uses_cents(page_url: str) -> bool) and update all call sites that pass record (e.g., any calls like _detail_price_context_uses_cents(page_url=..., record=...)) to stop passing that argument so behavior is unchanged; if the parameter is intended for future use instead, add a short clarifying comment inside _detail_price_context_uses_cents explaining why record is present.
-
-- Verify each finding against the current code and only fix it if needed.
-
-In @backend/tests/services/test_dashboard_service.py at line 214, The test contains a flaky assertion that assumes PostgreSQL sequence reset (assert next_run.id == 1); update the test in backend/tests/services/test_dashboard_service.py to avoid relying on sequence values—either remove the id equality assertion or replace it with a stable check (e.g., assert next_run.id is not None or assert next_run.id > 0, or assert other deterministic fields/state of the created run). If sequence reset is truly required for the test, explicitly reset the relevant sequence in the test setup/teardown instead of depending on DELETE behavior.
-
-- Verify each finding against the current code and only fix it if needed.
-
-In @backend/app/services/extract/detail_text_sanitizer.py around lines 98 - 107, sanitize_detail_long_text compares cleaned_text.lower() to the raw DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES which can miss matches; create a normalized module-level frozenset (e.g., low_signal_long_text_values) by applying clean_text(value).lower() to each value in DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES (like how low_signal_title_values is built), then update sanitize_detail_long_text to check cleaned_text.lower() in low_signal_long_text_values instead of DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES; reference sanitize_detail_long_text, DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES, and the new low_signal_long_text_values when making the change.
+In @backend/app/services/acquisition/browser_proxy_config.py around lines 58 - 61, The current conditional returns raw_proxy when scheme or hostname is missing which can leak credentials; change the logic to detect credentials (parsed.username or parsed.password) before the validity check and redact them regardless of URL validity: if parsed.username or parsed.password, construct and return a redacted string (e.g., replace credentials portion with "REDACTED" or remove userinfo) instead of returning raw_proxy, otherwise fall back to the existing validity check (the conditional referencing parsed.scheme, parsed.hostname, parsed.username, parsed.password and raw_proxy).
 
 These are comments left during a code review. Please review all issues and provide fixes.
 
-1. logic error: Header and navigation expand controls are now skipped even when they are valid detail toggles.
+1. possible bug: The backend install command in the README does not match the project’s actual setup flow.
+   Path: README.md
+   Lines: 74-74
+
+2. possible bug: The README advertises frontend commands that are not exposed by the repository’s root scripts.
+   Path: README.md
+   Lines: 127-127
+
+3. possible bug: Pagination happens after loading all summaries, causing avoidable full-table reads.
+   Path: backend/app/api/selectors.py
+   Lines: 42-42
+
+4. possible bug: New summary response model may not match the actual selector summary payload.
+   Path: backend/app/schemas/selectors.py
+   Lines: 8-8
+
+5. logic error: Header and navigation expanders can now be skipped even when they are valid collapsible controls.
    Path: backend/app/services/acquisition/browser_detail.py
    Lines: 273-273
 
-2. possible bug: Importing a nonexistent helper breaks module loading at runtime.
+6. logic error: Failure diagnostics are no longer populated on browser fetch errors.
    Path: backend/app/services/acquisition/browser_runtime.py
-   Lines: 30-30
+   Lines: 1441-1441
 
-3. possible bug: Counting raw storage-state iterables can consume them and change later behavior.
+7. possible bug: _storage_state_entry_count() counts arbitrary iterables by materializing them.
    Path: backend/app/services/acquisition/cookie_store.py
-   Lines: 464-464
+   Lines: 476-476
 
-4. logic error: Refactoring marker loading can silently discard valid challenge signatures when the config shape is not a mapping.
+8. logic error: Refactoring marker extraction can silently stop challenge signatures from matching.
    Path: backend/app/services/acquisition/runtime.py
-   Lines: 722-722
+   Lines: 692-692
 
-5. logic error: Pagination now accumulates card counts across pages instead of tracking the current page count.
-   Path: backend/app/services/acquisition/traversal.py
-   Lines: 694-694
+9. state inconsistency: Returning the original fingerprint when cloning omits isolation.
+   Path: backend/app/services/acquisition/browser_identity.py
+   Lines: 347-347
+
+10. possible bug: The site path regex can extract the wrong site identifier.
+   Path: backend/app/services/adapters/oracle_hcm.py
+   Lines: 193-193
+
+11. possible bug: The job-id parser can extract the wrong identifier from Oracle HCM detail URLs.
+   Path: backend/app/services/adapters/oracle_hcm.py
+   Lines: 242-242
+
+12. logic error: The Oracle HCM config regex will miss valid page variants and fail to extract configuration.
+   Path: backend/app/services/config/extraction_rules.py
+   Lines: 150-150
+
+13. possible bug: A newly added timeout setting is validated as strictly positive, which may reject a disabled value of 0.
+   Path: backend/app/services/config/runtime_settings.py
+   Lines: 393-393
+
+14. logic error: Removing the ecommerce variant DOM-completion branch can skip variant backfill.
+   Path: backend/app/services/detail_extractor.py
+   Lines: 877-877
+
+15. logic error: Shared parameter resolution can silently change precedence between plan and config values.
+   Path: backend/app/services/pipeline/core.py
+   Lines: 141-141
+
+16. possible bug: Directly mutating shared runtime settings without explicit restoration can leak state between tests.
+   Path: backend/tests/services/test_browser_expansion_runtime.py
+   Lines: 2165-2165
+
+17. possible bug: Shared configuration mutation makes the AOM timeout test order-dependent.
+   Path: backend/tests/services/test_browser_expansion_runtime.py
+   Lines: 2234-2234
+
+18. possible bug: Moving artifact loading to a shared helper can break fixture resolution if its fallback path differs.
+   Path: backend/tests/services/test_crawl_engine.py
+   Lines: 11-11
 
 Validate the correctness of each issue sequentially. For each issue that is correct, implement a fix. Please make the fixes concise and address all issues comprehensively and don't impact anything else.

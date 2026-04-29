@@ -1,13 +1,20 @@
 import "./globals.css";
 import { AppShell } from "../components/layout/app-shell";
 import { QueryProvider } from "../components/ui/query-provider";
-import { Outfit } from "next/font/google";
+import { Outfit, JetBrains_Mono } from "next/font/google";
 
 
 const mainFont = Outfit({
   subsets: ["latin"],
   variable: "--font-primary-source",
   weight: ["300", "400", "500", "600", "700"],
+});
+
+const monoFont = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  weight: ["400", "500", "600", "700"],
+  display: "swap",
 });
 
 // Runs before first paint to set theme and prevent FOUC
@@ -25,7 +32,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${mainFont.variable}`}>
+      <body className={`${mainFont.variable} ${mainFont.className} ${monoFont.variable}`}>
         <div className="noise-overlay" aria-hidden="true" />
         <QueryProvider>
           <AppShell>{children}</AppShell>

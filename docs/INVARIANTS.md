@@ -43,7 +43,7 @@ If it exists, extend it. If a similar version exists, consolidate — do not cre
 
 ---
 
-## 3. Extraction Model — How It Actually Works + 3 Known Bugs
+## 3. Extraction Model — How It Actually Works
 
 **How the candidate system works (correct, do not change):**
 All tiers (adapter, structured data, JS state, DOM) write into a shared `candidates` dict via `_add_sourced_candidate`. Field selection in `_materialize_record` is per-field independently — `_winning_candidates_for_field` picks the best source for each field slot separately. This means price can come from js_state while sku comes from DOM. This architecture is correct. Do not replace it with a record-level merge.
@@ -60,42 +60,7 @@ All tiers (adapter, structured data, JS state, DOM) write into a shared `candida
 
 ---
 
-**3 known bugs causing missing variants and missing prices. Fix these, do not work around them.**
-
-**Bug 1 — Early exit skips DOM variant collection. Owner: `build_detail_record` / `_requires_dom_completion`.**
-
-When JSON-LD produces a confident record (good title, price, images), the confidence threshold check exits before the DOM tier runs. `_extract_variants_from_dom` only runs during the DOM tier. Variants that live in DOM option controls (selects, chip groups) are never collected.
-
-Fix: `_requires_dom_completion` must return `True` when surface is `ecommerce_detail` AND `candidates` has no `variant_axes` AND `variant_dom_cues_present(soup)` is True. `variant_dom_cues_present` already exists in `extract/shared_variant_logic.py`.
-
-```python
-# Add to _requires_dom_completion:
-if (
-    surface == "ecommerce_detail"
-    and not candidates.get("variant_axes")
-    and variant_dom_cues_present(soup)
-):
-    return True
-```
-
-**Bug 2 — JS state returns on first matching object, discarding variant data in later objects. Owner: `_map_ecommerce_detail_state`.**
-
-`_map_ecommerce_detail_state` iterates `js_state_objects` and returns on the first `mapped` result. Sites with multiple hydration objects (one with base fields, one with full variant arrays) lose the variant data from the second object.
-
-Fix: iterate all objects; backfill variant fields from subsequent objects into the base record before returning.
-
-```python
-# Replace early return with:
-for field in ("variants", "variant_axes", "selected_variant", "variant_count"):
-    if base_record.get(field) in (None, [], {}) and mapped.get(field) not in (None, [], {}):
-        base_record[field] = mapped[field]
-```
-
-**Bug 3 — `backfill_detail_price_from_html` and variant backfill not called after early exit. Owner: `build_detail_record` orchestration plus `extract/detail_price_extractor.py`.**
-
-The early exit return path (end of structured_data tier) bypasses the post-tier backfill calls. Any record that exits early is missing these safety nets.
-
-Fix: call `backfill_detail_price_from_html` and `_backfill_variants_from_dom_if_missing` before every return point in `build_detail_record`, including the early exit.
+**Active known bugs:** none. Keep this section for active extraction bugs only. Do not document already-fixed bugs here.
 
 **Visible detail prices are extraction-owned. Owner: `detail_extractor.py` + `config/extraction_rules.py`.**
 

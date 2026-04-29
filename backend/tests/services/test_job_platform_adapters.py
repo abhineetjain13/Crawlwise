@@ -916,6 +916,25 @@ def test_extract_listing_records_preserves_job_cards_inside_filtered_container()
     ]
 
 
+def test_oracle_hcm_adapter_extracts_site_number_and_job_id_from_candidate_experience_paths() -> None:
+    adapter = OracleHCMAdapter()
+    url = "https://example.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/R89546/"
+
+    assert adapter._extract_site_number(url, "") == "CX_1"
+    assert adapter._extract_job_id_from_url(url) == "R89546"
+
+
+def test_oracle_hcm_adapter_accepts_window_cx_config_without_semicolon() -> None:
+    adapter = OracleHCMAdapter()
+    html = """
+    <script>
+      window.CX_CONFIG = {"app": {"siteNumber": "CX_9", "siteLang": "en"}}
+    </script>
+    """
+
+    assert adapter._extract_site_number("", html) == "CX_9"
+
+
 def test_shopify_adapter_strips_blank_and_empty_tags() -> None:
     adapter = ShopifyAdapter()
 

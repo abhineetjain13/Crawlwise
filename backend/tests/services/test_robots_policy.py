@@ -6,26 +6,7 @@ import httpx
 import pytest
 
 from app.services import robots_policy
-
-
-class _FakeResponse:
-    def __init__(self, status_code: int, text: str = "") -> None:
-        self.status_code = status_code
-        self.text = text
-
-
-class _FakeAsyncClient:
-    def __init__(self, response_factory) -> None:
-        self._response_factory = response_factory
-
-    async def __aenter__(self) -> "_FakeAsyncClient":
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        return False
-
-    async def get(self, url: str) -> _FakeResponse:
-        return await self._response_factory(url)
+from tests.fixtures.http_mocks import FakeAsyncClient, FakeTextResponse
 
 
 def _patch_client(
@@ -35,7 +16,7 @@ def _patch_client(
     monkeypatch.setattr(
         robots_policy.httpx,
         "AsyncClient",
-        lambda **kwargs: _FakeAsyncClient(response_factory),
+        lambda **kwargs: FakeAsyncClient(response_factory),
     )
 
 
@@ -45,9 +26,9 @@ async def test_check_url_crawlability_allows_url_when_robots_allows(
 ) -> None:
     await robots_policy.reset_robots_policy_cache()
 
-    async def _response(url: str) -> _FakeResponse:
+    async def _response(url: str) -> FakeTextResponse:
         assert url == "https://example.com/robots.txt"
-        return _FakeResponse(200, "User-agent: *\nDisallow:")
+        return FakeTextResponse(200, "User-agent: *\nDisallow:")
 
     _patch_client(monkeypatch, _response)
 
@@ -64,9 +45,9 @@ async def test_check_url_crawlability_blocks_url_when_robots_disallows(
 ) -> None:
     await robots_policy.reset_robots_policy_cache()
 
-    async def _response(url: str) -> _FakeResponse:
+    async def _response(url: str) -> FakeTextResponse:
         del url
-        return _FakeResponse(200, "User-agent: *\nDisallow: /private")
+        return FakeTextResponse(200, "User-agent: *\nDisallow: /private")
 
     _patch_client(monkeypatch, _response)
 
@@ -82,9 +63,9 @@ async def test_check_url_crawlability_allows_missing_robots(
 ) -> None:
     await robots_policy.reset_robots_policy_cache()
 
-    async def _response(url: str) -> _FakeResponse:
+    async def _response(url: str) -> FakeTextResponse:
         del url
-        return _FakeResponse(404)
+        return FakeTextResponse(404)
 
     _patch_client(monkeypatch, _response)
 
@@ -100,7 +81,7 @@ async def test_check_url_crawlability_allows_when_robots_fetch_fails(
 ) -> None:
     await robots_policy.reset_robots_policy_cache()
 
-    async def _response(url: str) -> _FakeResponse:
+    async def _response(url: str) -> FakeTextResponse:
         del url
         request = httpx.Request("GET", "https://example.com/robots.txt")
         raise httpx.ReadTimeout("timeout", request=request)
@@ -120,9 +101,9 @@ async def test_check_url_crawlability_treats_forbidden_robots_as_disallow_all(
 ) -> None:
     await robots_policy.reset_robots_policy_cache()
 
-    async def _response(url: str) -> _FakeResponse:
+    async def _response(url: str) -> FakeTextResponse:
         del url
-        return _FakeResponse(403)
+        return FakeTextResponse(403)
 
     _patch_client(monkeypatch, _response)
 
@@ -139,12 +120,12 @@ async def test_check_url_crawlability_reuses_inflight_fetch_for_same_host(
     await robots_policy.reset_robots_policy_cache()
     calls = 0
 
-    async def _response(url: str) -> _FakeResponse:
+    async def _response(url: str) -> FakeTextResponse:
         nonlocal calls
         del url
         calls += 1
         await asyncio.sleep(0.05)
-        return _FakeResponse(200, "User-agent: *\nDisallow:")
+        return FakeTextResponse(200, "User-agent: *\nDisallow:")
 
     _patch_client(monkeypatch, _response)
 

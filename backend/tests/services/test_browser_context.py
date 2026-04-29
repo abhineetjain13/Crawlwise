@@ -12,6 +12,7 @@ from app.services.acquisition import browser_identity
 from app.services.acquisition import browser_proxy_bridge
 from app.services.acquisition import cookie_store
 from app.services.acquisition import host_protection_memory
+from app.services.acquisition.browser_proxy_config import build_browser_proxy_config
 from app.services.acquisition import browser_runtime as acquisition_browser_runtime
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import is_special_use_domain
@@ -612,6 +613,32 @@ def test_align_raw_fingerprint_to_browser_major_returns_original_when_navigator_
     )
 
     assert aligned is raw_fingerprint
+
+
+def test_align_raw_fingerprint_to_user_agent_platform_keeps_original_when_clone_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_fingerprint = SimpleNamespace(
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            platform="Linux x86_64",
+            userAgentData={"platform": "Linux"},
+        ),
+        headers={"sec-ch-ua-platform": '"Linux"'},
+    )
+
+    monkeypatch.setattr(browser_identity._copy, "deepcopy", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("deepcopy boom")))
+    monkeypatch.setattr(browser_identity._copy, "copy", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("copy boom")))
+
+    aligned = browser_identity._align_raw_fingerprint_to_user_agent_platform(raw_fingerprint)
+
+    assert aligned is raw_fingerprint
+    assert raw_fingerprint.navigator.platform == "Linux x86_64"
+    assert raw_fingerprint.navigator.userAgentData["platform"] == "Linux"
 
 
 @pytest.mark.asyncio
@@ -1853,6 +1880,22 @@ def test_display_proxy_masks_authenticated_proxy_credentials() -> None:
     assert acquisition_browser_runtime._display_proxy(
         "http://user-name:pass-word@31.58.9.4:6077"
     ) == "http://***:***@31.58.9.4:6077"
+
+
+def test_build_browser_proxy_config_normalizes_scheme_and_requires_username_for_password() -> None:
+    assert build_browser_proxy_config("HTTP://user:pass@31.58.9.4:6077") == {
+        "server": "http://31.58.9.4:6077",
+        "username": "user",
+        "password": "pass",
+    }
+
+
+def test_display_proxy_redacts_invalid_proxy_credentials() -> None:
+    assert acquisition_browser_runtime._display_proxy("user:pass@31.58.9.4:6077") == "REDACTED"
+
+
+def test_storage_state_entry_count_ignores_generators() -> None:
+    assert cookie_store._storage_state_entry_count((item for item in range(3))) == 0
 
 
 @pytest.mark.asyncio

@@ -609,7 +609,7 @@ def extract_urls(value: object, page_url: str) -> list[str]:
             return results
         if _looks_like_malformed_relative_url_candidate(text):
             return results
-        embedded_urls = re.findall(r"https?://[^\s,]+", text)
+        embedded_urls = re.findall(r"https?://(?:(?!https?://)[^\s,])+", text)
         if len(embedded_urls) >= 2:
             for candidate in embedded_urls:
                 absolute = absolute_url(

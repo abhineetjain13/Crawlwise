@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -374,6 +375,8 @@ def repair_ecommerce_detail_record_quality(
     )
     backfill_detail_price_from_html(record, html=html)
     normalize_detail_cent_prices_for_context(record, page_url=page_url)
+    _normalize_detail_money_precision(record)
+    _drop_invalid_detail_discounts(record)
     _repair_detail_variant_prices_and_identity(record)
 
 
@@ -399,7 +402,11 @@ def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
     for row in rows:
         if parent_price:
             row_price = text_or_none(row.get("price"))
-            if not row_price or _price_is_cents_copy(row_price, parent_price):
+            if (
+                not row_price
+                or _price_is_cents_copy(row_price, parent_price)
+                or _price_is_low_signal_copy(row_price, parent_price)
+            ):
                 row["price"] = parent_price
         if (
             parent_availability
@@ -458,6 +465,14 @@ def _price_is_cents_copy(value: str, parent_price: str) -> bool:
     return abs(value_number - (parent_number * 100)) < 0.01
 
 
+def _price_is_low_signal_copy(value: str, parent_price: str) -> bool:
+    value_number = _price_number(value)
+    parent_number = _price_number(parent_price)
+    if value_number is None or parent_number is None:
+        return False
+    return 0 < value_number <= 1 and parent_number >= 10
+
+
 def _price_number(value: object) -> float | None:
     text = text_or_none(value)
     if not text:
@@ -466,6 +481,58 @@ def _price_number(value: object) -> float | None:
         return float(re.sub(r"[^0-9.]+", "", text))
     except ValueError:
         return None
+
+
+def _normalize_detail_money_precision(record: dict[str, Any]) -> None:
+    for container in _detail_money_containers(record):
+        if not isinstance(container, dict):
+            continue
+        if not text_or_none(container.get("currency")):
+            continue
+        for field_name in ("price", "original_price"):
+            normalized = _money_two_decimals(container.get(field_name))
+            if normalized is not None:
+                container[field_name] = normalized
+
+
+def _detail_money_containers(record: dict[str, Any]) -> list[dict[str, Any]]:
+    containers = [record]
+    selected_variant = record.get("selected_variant")
+    if isinstance(selected_variant, dict):
+        containers.append(selected_variant)
+    variants = record.get("variants")
+    if isinstance(variants, list):
+        containers.extend(row for row in variants if isinstance(row, dict))
+    return containers
+
+
+def _money_two_decimals(value: object) -> str | None:
+    text = text_or_none(value)
+    if not text or not re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return None
+    try:
+        return f"{Decimal(text).quantize(Decimal('0.01'))}"
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _drop_invalid_detail_discounts(record: dict[str, Any]) -> None:
+    price = _price_number(record.get("price"))
+    original_price = _price_number(record.get("original_price"))
+    discount_amount = _price_number(record.get("discount_amount"))
+    discount_percentage = _price_number(record.get("discount_percentage"))
+    if discount_percentage is not None and not (0 < discount_percentage <= 100):
+        record.pop("discount_percentage", None)
+    if discount_amount is None:
+        return
+    if discount_amount <= 0:
+        record.pop("discount_amount", None)
+        return
+    if price is not None and discount_amount > max(price, 0):
+        record.pop("discount_amount", None)
+        return
+    if original_price is not None and discount_amount > max(original_price, 0):
+        record.pop("discount_amount", None)
 
 
 def _variant_title_is_low_signal(title: str) -> bool:
@@ -798,6 +865,7 @@ def _detail_image_family_tokens(url: str) -> set[str]:
         if len(segment) >= 4
     ]
     noise = {
+        "assets",
         "image",
         "images",
         "product",
@@ -818,6 +886,7 @@ def _detail_image_family_tokens(url: str) -> set[str]:
         "crop",
         "shop",
         "cdn",
+        "public",
     }
     return {part for part in parts if part not in noise}
 

@@ -71,6 +71,21 @@ _PROFILE_CONTROLLED_FIELDS = (
 )
 
 
+def _require_positive(name: str, value: object) -> None:
+    if float(value) <= 0:
+        raise ValueError(f"{name} must be > 0")
+
+
+def _require_non_negative(name: str, value: object) -> None:
+    if float(value) < 0:
+        raise ValueError(f"{name} must be >= 0")
+
+
+def _require_unit_interval(name: str, value: object) -> None:
+    if not 0.0 <= float(value) <= 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+
+
 class CrawlerRuntimeSettings(BaseSettings):
     """Typed env-backed runtime settings for acquisition, browser, and crawl flow."""
 
@@ -191,6 +206,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_capture_max_network_payload_bytes: int = 3000000
     browser_capture_total_network_payload_bytes: int = 12000000
     browser_capture_read_timeout_seconds: float = 5.0
+    browser_accessibility_snapshot_timeout_seconds: float = 0.5
     browser_capture_queue_join_timeout_ms: int = 2000
     browser_artifact_capture_timeout_ms: int = 4000
     browser_first_nav_pause_ms: int = 0
@@ -349,14 +365,15 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError(
                 "max_url_process_timeout_seconds must be >= url_process_timeout_seconds"
             )
-        if self.http_retry_backoff_base_ms < 0:
-            raise ValueError("http_retry_backoff_base_ms must be >= 0")
+        _require_non_negative("http_retry_backoff_base_ms", self.http_retry_backoff_base_ms)
         if self.http_retry_backoff_max_ms < self.http_retry_backoff_base_ms:
             raise ValueError(
                 "http_retry_backoff_max_ms must be >= http_retry_backoff_base_ms"
             )
-        if self.proxy_failure_cooldown_base_ms < 0:
-            raise ValueError("proxy_failure_cooldown_base_ms must be >= 0")
+        _require_non_negative(
+            "proxy_failure_cooldown_base_ms",
+            self.proxy_failure_cooldown_base_ms,
+        )
         if self.proxy_failure_cooldown_max_ms < self.proxy_failure_cooldown_base_ms:
             raise ValueError(
                 "proxy_failure_cooldown_max_ms must be >= proxy_failure_cooldown_base_ms"
@@ -365,30 +382,25 @@ class CrawlerRuntimeSettings(BaseSettings):
             self.min_max_pages = 1
         if self.max_max_pages < self.min_max_pages:
             self.max_max_pages = self.min_max_pages
-        if self.url_process_timeout_seconds <= 0:
-            raise ValueError("url_process_timeout_seconds must be > 0")
-        if self.url_process_timeout_buffer_seconds < 0:
-            raise ValueError("url_process_timeout_buffer_seconds must be >= 0")
-        if self.max_url_process_timeout_seconds <= 0:
-            raise ValueError("max_url_process_timeout_seconds must be > 0")
-        if self.browser_render_timeout_seconds <= 0:
-            raise ValueError("browser_render_timeout_seconds must be > 0")
-        if self.browser_capture_max_network_payloads <= 0:
-            raise ValueError("browser_capture_max_network_payloads must be > 0")
-        if self.browser_capture_max_network_payload_bytes <= 0:
-            raise ValueError("browser_capture_max_network_payload_bytes must be > 0")
-        if self.browser_capture_total_network_payload_bytes <= 0:
-            raise ValueError("browser_capture_total_network_payload_bytes must be > 0")
-        if self.browser_capture_read_timeout_seconds <= 0:
-            raise ValueError("browser_capture_read_timeout_seconds must be > 0")
-        if self.browser_capture_queue_join_timeout_ms <= 0:
-            raise ValueError("browser_capture_queue_join_timeout_ms must be > 0")
-        if self.browser_artifact_capture_timeout_ms <= 0:
-            raise ValueError("browser_artifact_capture_timeout_ms must be > 0")
-        if self.browser_post_block_cooldown_ms < 0:
-            raise ValueError("browser_post_block_cooldown_ms must be >= 0")
-        if self.browser_first_nav_pause_ms < 0:
-            raise ValueError("browser_first_nav_pause_ms must be >= 0")
+        for field_name in (
+            "url_process_timeout_seconds",
+            "max_url_process_timeout_seconds",
+            "browser_render_timeout_seconds",
+            "browser_capture_max_network_payloads",
+            "browser_capture_max_network_payload_bytes",
+            "browser_capture_total_network_payload_bytes",
+            "browser_capture_read_timeout_seconds",
+            "browser_capture_queue_join_timeout_ms",
+            "browser_artifact_capture_timeout_ms",
+        ):
+            _require_positive(field_name, getattr(self, field_name))
+        for field_name in (
+            "url_process_timeout_buffer_seconds",
+            "browser_post_block_cooldown_ms",
+            "browser_first_nav_pause_ms",
+            "browser_accessibility_snapshot_timeout_seconds",
+        ):
+            _require_non_negative(field_name, getattr(self, field_name))
         self.browser_behavior_scroll_steps = max(
             0, int(self.browser_behavior_scroll_steps)
         )
@@ -411,26 +423,19 @@ class CrawlerRuntimeSettings(BaseSettings):
         self.browser_behavior_typing_jitter_ms = max(
             0, int(self.browser_behavior_typing_jitter_ms)
         )
-        if self.platform_detection_html_search_limit <= 0:
-            raise ValueError("platform_detection_html_search_limit must be > 0")
-        if self.browser_runtime_pool_max_entries <= 0:
-            raise ValueError("browser_runtime_pool_max_entries must be > 0")
-        if self.browser_runtime_pool_idle_ttl_seconds < 0:
-            raise ValueError("browser_runtime_pool_idle_ttl_seconds must be >= 0")
-        if self.browser_proxy_bridge_connect_timeout_seconds <= 0:
-            raise ValueError(
-                "browser_proxy_bridge_connect_timeout_seconds must be > 0"
-            )
-        if self.browser_proxy_bridge_auth_timeout_seconds <= 0:
-            raise ValueError(
-                "browser_proxy_bridge_auth_timeout_seconds must be > 0"
-            )
-        if self.browser_proxy_bridge_first_byte_timeout_seconds <= 0:
-            raise ValueError(
-                "browser_proxy_bridge_first_byte_timeout_seconds must be > 0"
-            )
-        if self.browser_identity_min_chrome_version <= 0:
-            raise ValueError("browser_identity_min_chrome_version must be > 0")
+        for field_name in (
+            "platform_detection_html_search_limit",
+            "browser_runtime_pool_max_entries",
+            "browser_proxy_bridge_connect_timeout_seconds",
+            "browser_proxy_bridge_auth_timeout_seconds",
+            "browser_proxy_bridge_first_byte_timeout_seconds",
+            "browser_identity_min_chrome_version",
+        ):
+            _require_positive(field_name, getattr(self, field_name))
+        _require_non_negative(
+            "browser_runtime_pool_idle_ttl_seconds",
+            self.browser_runtime_pool_idle_ttl_seconds,
+        )
         if (
             self.browser_capture_total_network_payload_bytes
             < self.browser_capture_max_network_payload_bytes
@@ -438,22 +443,22 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError(
                 "browser_capture_total_network_payload_bytes must be >= browser_capture_max_network_payload_bytes"
             )
-        if self.acquisition_artifact_ttl_seconds < 0:
-            raise ValueError("acquisition_artifact_ttl_seconds must be >= 0")
-        if self.acquisition_artifact_cleanup_interval_seconds < 0:
-            raise ValueError(
-                "acquisition_artifact_cleanup_interval_seconds must be >= 0"
-            )
-        if not 0.0 <= float(self.llm_confidence_threshold) <= 1.0:
-            raise ValueError("llm_confidence_threshold must be between 0 and 1")
-        if not 0.0 <= float(self.selector_self_heal_min_confidence) <= 1.0:
-            raise ValueError("selector_self_heal_min_confidence must be between 0 and 1")
-        if self.detail_max_variant_axes <= 0:
-            raise ValueError("detail_max_variant_axes must be > 0")
-        if self.detail_max_variant_rows <= 0:
-            raise ValueError("detail_max_variant_rows must be > 0")
-        if self.detail_max_variant_matrix_cells <= 0:
-            raise ValueError("detail_max_variant_matrix_cells must be > 0")
+        for field_name in (
+            "acquisition_artifact_ttl_seconds",
+            "acquisition_artifact_cleanup_interval_seconds",
+        ):
+            _require_non_negative(field_name, getattr(self, field_name))
+        _require_unit_interval("llm_confidence_threshold", self.llm_confidence_threshold)
+        _require_unit_interval(
+            "selector_self_heal_min_confidence",
+            self.selector_self_heal_min_confidence,
+        )
+        for field_name in (
+            "detail_max_variant_axes",
+            "detail_max_variant_rows",
+            "detail_max_variant_matrix_cells",
+        ):
+            _require_positive(field_name, getattr(self, field_name))
         return self
 
     def coerce_url_timeout_seconds(self, value: object) -> float:

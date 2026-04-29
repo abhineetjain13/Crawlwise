@@ -147,6 +147,31 @@ DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES = frozenset(
         "criteoproductrail",
     }
 )
+ORACLE_HCM_CX_CONFIG_RE = re.compile(
+    r"(?:var\s+|window\.)?CX_CONFIG\s*=\s*(\{.*?\})\s*(?:;|</script>)",
+    re.DOTALL,
+)
+ORACLE_HCM_SITE_PATH_RE = re.compile(
+    r"/CandidateExperience/[^/?#]+/sites/([^/?#]+)(?:/|$)",
+    re.IGNORECASE,
+)
+ORACLE_HCM_LANG_PATH_RE = re.compile(
+    r"/CandidateExperience/([^/?#]+)/sites/",
+    re.IGNORECASE,
+)
+ORACLE_HCM_JOB_PATH_RE = re.compile(
+    r"/CandidateExperience/[^/?#]+/sites/[^/?#]+/job/([^/?#]+)(?:/|$)",
+    re.IGNORECASE,
+)
+ORACLE_HCM_DEFAULT_FACETS = (
+    "LOCATIONS;WORK_LOCATIONS;WORKPLACE_TYPES;TITLES;CATEGORIES;"
+    "ORGANIZATIONS;POSTING_DATES;FLEX_FIELDS"
+)
+ORACLE_HCM_LOCATION_LIST_KEYS = (
+    "workLocation",
+    "otherWorkLocations",
+    "secondaryLocations",
+)
 DETAIL_FULFILLMENT_LONG_TEXT_PATTERNS = (
     r"\b(?:shipping|delivery|pickup|pick\s*up)\b.{0,80}\b(?:checkout|options?|available)\b",
     r"\bget\s+it\s+today\b.{0,120}\b(?:shipping|delivery|pickup|pick\s*up)\b",
@@ -594,6 +619,12 @@ __all__ = sorted(
         'INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS',
         'JOB_ERROR_PAGE_HEADINGS',
         'JOB_ERROR_PAGE_TITLES',
+        'ORACLE_HCM_CX_CONFIG_RE',
+        'ORACLE_HCM_DEFAULT_FACETS',
+        'ORACLE_HCM_JOB_PATH_RE',
+        'ORACLE_HCM_LANG_PATH_RE',
+        'ORACLE_HCM_LOCATION_LIST_KEYS',
+        'ORACLE_HCM_SITE_PATH_RE',
         'JOB_FIELD_HINTS',
         'JOB_LISTING_DETAIL_PATH_MARKERS',
         'JOB_REDIRECT_SHELL_CANONICAL_URLS',

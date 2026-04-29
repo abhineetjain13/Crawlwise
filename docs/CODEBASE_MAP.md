@@ -94,9 +94,12 @@ Flow:
 | `acquisition/http_client.py` | Thin shared-client wrapper |
 | `acquisition/browser_runtime.py` | Shared Playwright runtime and limits |
 | `acquisition/browser_capture.py` | Screenshots and network payload capture |
+| `acquisition/browser_diagnostics.py` | Browser engine labels, profile diagnostics, and failed-fetch diagnostic contracts |
 | `acquisition/browser_identity.py` | Browser fingerprint generation |
 | `acquisition/browser_page_flow.py` | Page navigation and readiness probing |
+| `acquisition/browser_proxy_config.py` | Browser proxy URL parsing, redaction, and Playwright proxy config |
 | `acquisition/browser_readiness.py` | DOM readiness checks |
+| `acquisition/browser_stage_runner.py` | Bounded browser-stage execution, timeout cancellation, and page/context teardown |
 | `acquisition/traversal.py` | Listing pagination and load-more |
 | `acquisition/pacing.py` | Host-level rate limiting |
 | `acquisition/cookie_store.py` | Temp storage state plus domain cookie memory helpers |

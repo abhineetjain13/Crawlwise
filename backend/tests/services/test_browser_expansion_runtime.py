@@ -2162,46 +2162,42 @@ async def test_dom_detail_expansion_stops_after_click_exceeds_time_budget() -> N
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_aom_expansion_respects_interaction_cap() -> None:
-    original_limit = crawler_runtime_settings.detail_aom_expand_max_interactions
-    crawler_runtime_settings.detail_aom_expand_max_interactions = 1
-    try:
-        page = _FakeExpansionPage(
-            base_html="<html><body><h1>Widget Prime</h1><div>Overview</div></body></html>",
-            expanded_html="""
-            <html><body>
-              <h1>Widget Prime</h1>
-              <div>Specifications</div>
-              <div>Rubber outsole, reinforced toe cap.</div>
-            </body></html>
-            """,
-            labels=[{"label": "share"}],
-            accessibility_snapshot={
-                "role": "document",
-                "children": [
-                    {"role": "tab", "name": "Product specifications"},
-                    {"role": "tab", "name": "Product dimensions"},
-                ],
-            },
-            role_targets={("tab", "product specifications")},
-        )
+async def test_browser_fetch_aom_expansion_respects_interaction_cap(patch_settings) -> None:
+    patch_settings(detail_aom_expand_max_interactions=1)
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1><div>Overview</div></body></html>",
+        expanded_html="""
+        <html><body>
+          <h1>Widget Prime</h1>
+          <div>Specifications</div>
+          <div>Rubber outsole, reinforced toe cap.</div>
+        </body></html>
+        """,
+        labels=[{"label": "share"}],
+        accessibility_snapshot={
+            "role": "document",
+            "children": [
+                {"role": "tab", "name": "Product specifications"},
+                {"role": "tab", "name": "Product dimensions"},
+            ],
+        },
+        role_targets={("tab", "product specifications")},
+    )
 
-        async def _fake_runtime(**_kwargs):
-            return _FakeRuntime(page)
+    async def _fake_runtime(**_kwargs):
+        return _FakeRuntime(page)
 
-        result = await browser_runtime.browser_fetch(
-            "https://example.com/products/widget",
-            5,
-            surface="ecommerce_detail",
-            runtime_provider=_fake_runtime,
-        )
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        runtime_provider=_fake_runtime,
+    )
 
-        assert "Rubber outsole" in result.html
-        assert result.browser_diagnostics["detail_expansion"]["aom"]["limit"] == 1
-        assert result.browser_diagnostics["detail_expansion"]["aom"]["clicked_count"] == 1
-        assert result.browser_diagnostics["detail_expansion"]["aom"]["attempted"] is True
-    finally:
-        crawler_runtime_settings.detail_aom_expand_max_interactions = original_limit
+    assert "Rubber outsole" in result.html
+    assert result.browser_diagnostics["detail_expansion"]["aom"]["limit"] == 1
+    assert result.browser_diagnostics["detail_expansion"]["aom"]["clicked_count"] == 1
+    assert result.browser_diagnostics["detail_expansion"]["aom"]["attempted"] is True
 
 
 @pytest.mark.asyncio
@@ -2235,7 +2231,9 @@ async def test_expand_interactive_elements_via_accessibility_supports_locators_w
 
 
 @pytest.mark.asyncio
-async def test_expand_interactive_elements_via_accessibility_waits_for_visibility_with_configured_timeout() -> None:
+async def test_expand_interactive_elements_via_accessibility_waits_for_visibility_with_configured_timeout(
+    patch_settings,
+) -> None:
     page = _FakeExpansionPage(
         base_html="<html><body><h1>Widget Prime</h1></body></html>",
         accessibility_snapshot={
@@ -2245,25 +2243,21 @@ async def test_expand_interactive_elements_via_accessibility_waits_for_visibilit
         role_targets={("tab", "product specifications")},
     )
     locator = _WaitingRoleLocator(page, "tab", "product specifications")
-    original_timeout = crawler_runtime_settings.detail_expand_visibility_timeout_ms
-    crawler_runtime_settings.detail_expand_visibility_timeout_ms = 375
+    patch_settings(detail_expand_visibility_timeout_ms=375)
 
     def _get_by_role(role: str, *, name: str, exact: bool = True) -> _WaitingRoleLocator:
         del role, name, exact
         return locator
 
     page.get_by_role = _get_by_role
-    try:
-        diagnostics = await browser_detail.expand_interactive_elements_via_accessibility_impl(
-            page,
-            surface="ecommerce_detail",
-            requested_fields=None,
-            detail_expansion_keywords=browser_runtime.detail_expansion_keywords,
-            accessibility_expand_candidates=browser_runtime.accessibility_expand_candidates,
-            elapsed_ms=browser_runtime._elapsed_ms,
-        )
-    finally:
-        crawler_runtime_settings.detail_expand_visibility_timeout_ms = original_timeout
+    diagnostics = await browser_detail.expand_interactive_elements_via_accessibility_impl(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=None,
+        detail_expansion_keywords=browser_runtime.detail_expansion_keywords,
+        accessibility_expand_candidates=browser_runtime.accessibility_expand_candidates,
+        elapsed_ms=browser_runtime._elapsed_ms,
+    )
 
     assert locator.wait_for_calls == [("visible", 375)]
     assert diagnostics["clicked_count"] == 1
@@ -2452,35 +2446,31 @@ async def test_browser_capture_offloads_payload_decoding_to_thread(
 
 
 @pytest.mark.asyncio
-async def test_browser_capture_close_uses_bounded_queue_join_timeout() -> None:
-    original_timeout_ms = crawler_runtime_settings.browser_capture_queue_join_timeout_ms
-    crawler_runtime_settings.browser_capture_queue_join_timeout_ms = 50
-    try:
-        capture = BrowserNetworkCapture(
-            surface="ecommerce_detail",
-            should_capture_payload=lambda **_kwargs: True,
-            classify_endpoint=lambda **_kwargs: {"type": "api", "family": "generic"},
-            read_payload_body=lambda *_args, **_kwargs: browser_runtime.NetworkPayloadReadResult(
-                body=b'{"id":"captured"}',
-                outcome="ok",
-            ),
-        )
-        page = _FakeExpansionPage(base_html="<html><body></body></html>")
-        capture.attach(page)
+async def test_browser_capture_close_uses_bounded_queue_join_timeout(patch_settings) -> None:
+    patch_settings(browser_capture_queue_join_timeout_ms=50)
+    capture = BrowserNetworkCapture(
+        surface="ecommerce_detail",
+        should_capture_payload=lambda **_kwargs: True,
+        classify_endpoint=lambda **_kwargs: {"type": "api", "family": "generic"},
+        read_payload_body=lambda *_args, **_kwargs: browser_runtime.NetworkPayloadReadResult(
+            body=b'{"id":"captured"}',
+            outcome="ok",
+        ),
+    )
+    page = _FakeExpansionPage(base_html="<html><body></body></html>")
+    capture.attach(page)
 
-        async def _stalled_join() -> None:
-            await asyncio.sleep(1)
+    async def _stalled_join() -> None:
+        await asyncio.sleep(1)
 
-        capture._queue.join = _stalled_join  # type: ignore[method-assign]
+    capture._queue.join = _stalled_join  # type: ignore[method-assign]
 
-        started_at = asyncio.get_running_loop().time()
-        summary = await capture.close(page)
-        elapsed = asyncio.get_running_loop().time() - started_at
+    started_at = asyncio.get_running_loop().time()
+    summary = await capture.close(page)
+    elapsed = asyncio.get_running_loop().time() - started_at
 
-        assert summary.network_payload_count == 0
-        assert elapsed < 0.5
-    finally:
-        crawler_runtime_settings.browser_capture_queue_join_timeout_ms = original_timeout_ms
+    assert summary.network_payload_count == 0
+    assert elapsed < 0.5
 
 
 @pytest.mark.asyncio
@@ -2509,30 +2499,28 @@ async def test_browser_capture_close_awaits_sentinel_enqueue_when_queue_put_bloc
 
 
 @pytest.mark.asyncio
-async def test_browser_capture_close_cancels_workers_when_sentinel_enqueue_times_out() -> None:
-    original_timeout_ms = crawler_runtime_settings.browser_capture_queue_join_timeout_ms
-    crawler_runtime_settings.browser_capture_queue_join_timeout_ms = 50
-    try:
-        capture = BrowserNetworkCapture(surface="ecommerce_detail")
+async def test_browser_capture_close_cancels_workers_when_sentinel_enqueue_times_out(
+    patch_settings,
+) -> None:
+    patch_settings(browser_capture_queue_join_timeout_ms=50)
+    capture = BrowserNetworkCapture(surface="ecommerce_detail")
 
-        class _Queue:
-            async def join(self) -> None:
-                return None
+    class _Queue:
+        async def join(self) -> None:
+            return None
 
-            async def put(self, value: object) -> None:
-                del value
-                await asyncio.sleep(1)
+        async def put(self, value: object) -> None:
+            del value
+            await asyncio.sleep(1)
 
-        worker = asyncio.create_task(asyncio.sleep(1))
-        capture._queue = _Queue()  # type: ignore[assignment]
-        capture._workers = {worker}
+    worker = asyncio.create_task(asyncio.sleep(1))
+    capture._queue = _Queue()  # type: ignore[assignment]
+    capture._workers = {worker}
 
-        summary = await capture.close(_FakeExpansionPage(base_html="<html><body></body></html>"))
+    summary = await capture.close(_FakeExpansionPage(base_html="<html><body></body></html>"))
 
-        assert summary.network_payload_count == 0
-        assert worker.cancelled() or worker.done()
-    finally:
-        crawler_runtime_settings.browser_capture_queue_join_timeout_ms = original_timeout_ms
+    assert summary.network_payload_count == 0
+    assert worker.cancelled() or worker.done()
 
 
 @pytest.mark.asyncio
@@ -2603,27 +2591,25 @@ async def test_generate_page_markdown_tolerates_slow_accessibility_snapshots() -
 
 
 @pytest.mark.asyncio
-async def test_expand_all_interactive_elements_respects_small_interaction_cap() -> None:
-    original_limit = crawler_runtime_settings.detail_expand_max_interactions
-    crawler_runtime_settings.detail_expand_max_interactions = 1
-    try:
-        page = _FakeExpansionPage(
-            base_html="<html><body></body></html>",
-            labels=[
-                {"label": "product details"},
-                {"label": "product dimensions"},
-            ],
-        )
-        diagnostics = await browser_runtime.expand_all_interactive_elements(
-            page,
-            surface="ecommerce_detail",
-        )
+async def test_expand_all_interactive_elements_respects_small_interaction_cap(
+    patch_settings,
+) -> None:
+    patch_settings(detail_expand_max_interactions=1)
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {"label": "product details"},
+            {"label": "product dimensions"},
+        ],
+    )
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+    )
 
-        assert diagnostics["limit"] == 1
-        assert diagnostics["clicked_count"] == 1
-        assert diagnostics["expanded_elements"] == ["product details"]
-    finally:
-        crawler_runtime_settings.detail_expand_max_interactions = original_limit
+    assert diagnostics["limit"] == 1
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["product details"]
 
 
 @pytest.mark.asyncio
@@ -2778,6 +2764,25 @@ def test_build_failed_browser_diagnostics_marks_unsupported_proxy_explicitly() -
     assert diagnostics["failure_kind"] == "unsupported_proxy"
 
 
+@pytest.mark.asyncio
+async def test_browser_fetch_attaches_failure_diagnostics_to_direct_errors() -> None:
+    async def _failing_runtime(**_kwargs):
+        raise RuntimeError("runtime bootstrap failed")
+
+    with pytest.raises(RuntimeError, match="runtime bootstrap failed") as excinfo:
+        await browser_runtime.browser_fetch(
+            "https://example.com/products/widget",
+            5,
+            surface="ecommerce_detail",
+            browser_reason="http-escalation",
+            runtime_provider=_failing_runtime,
+        )
+
+    diagnostics = excinfo.value.browser_diagnostics
+    assert diagnostics["browser_outcome"] == "navigation_failed"
+    assert diagnostics["failure_kind"] == "navigation_error"
+
+
 def test_build_failed_browser_diagnostics_uses_exception_proxy_mode() -> None:
     exc = RuntimeError("proxied page failed")
     setattr(exc, "browser_proxy_mode", "page")
@@ -2878,11 +2883,9 @@ async def test_browser_fetch_surfaces_rendered_listing_evidence_counts() -> None
 async def test_browser_fetch_bounds_listing_artifact_capture_time(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    patch_settings,
 ) -> None:
-    original_timeout_ms = (
-        crawler_runtime_settings.browser_artifact_capture_timeout_ms
-    )
-    crawler_runtime_settings.browser_artifact_capture_timeout_ms = 50
+    patch_settings(browser_artifact_capture_timeout_ms=50)
     page = _FakeExpansionPage(
         base_html=(
             "<html><body>"
@@ -2917,17 +2920,12 @@ async def test_browser_fetch_bounds_listing_artifact_capture_time(
         "_capture_listing_visual_elements",
         _slow_listing_visual_elements,
     )
-    try:
-        with caplog.at_level("WARNING", logger=browser_page_flow.logger.name):
-            result = await browser_runtime.browser_fetch(
-                "https://example.com/collections/widgets",
-                5,
-                surface="ecommerce_listing",
-                runtime_provider=_fake_runtime,
-            )
-    finally:
-        crawler_runtime_settings.browser_artifact_capture_timeout_ms = (
-            original_timeout_ms
+    with caplog.at_level("WARNING", logger=browser_page_flow.logger.name):
+        result = await browser_runtime.browser_fetch(
+            "https://example.com/collections/widgets",
+            5,
+            surface="ecommerce_listing",
+            runtime_provider=_fake_runtime,
         )
 
     assert result.browser_diagnostics["rendered_listing_fragment_count"] == 0
@@ -3059,9 +3057,9 @@ async def test_emit_challenge_activity_randomizes_mouse_targets(
 @pytest.mark.asyncio
 async def test_emit_challenge_activity_ignores_negative_scroll(
     monkeypatch: pytest.MonkeyPatch,
+    patch_settings,
 ) -> None:
     wheel_calls: list[tuple[int, int]] = []
-    original_scroll_px = crawler_runtime_settings.challenge_activity_scroll_px
 
     class _Mouse:
         async def move(self, x: int, y: int, *, steps: int) -> None:
@@ -3081,11 +3079,8 @@ async def test_emit_challenge_activity_ignores_negative_scroll(
             del delay_ms
 
     monkeypatch.setattr(browser_recovery.secrets, "randbelow", lambda limit: 0)
-    crawler_runtime_settings.challenge_activity_scroll_px = -120
-    try:
-        await browser_recovery._emit_challenge_activity(_Page())
-    finally:
-        crawler_runtime_settings.challenge_activity_scroll_px = original_scroll_px
+    patch_settings(challenge_activity_scroll_px=-120)
+    await browser_recovery._emit_challenge_activity(_Page())
 
     assert wheel_calls == []
 
@@ -3308,11 +3303,10 @@ async def test_recover_browser_challenge_marks_retry_response_without_wrapping()
 
 
 @pytest.mark.asyncio
-async def test_get_page_html_falls_back_to_outer_html_after_driver_close() -> None:
-    original_attempts = crawler_runtime_settings.browser_error_retry_attempts
-    original_delay = crawler_runtime_settings.browser_error_retry_delay_ms
-    crawler_runtime_settings.browser_error_retry_attempts = 1
-    crawler_runtime_settings.browser_error_retry_delay_ms = 0
+async def test_get_page_html_falls_back_to_outer_html_after_driver_close(
+    patch_settings,
+) -> None:
+    patch_settings(browser_error_retry_attempts=1, browser_error_retry_delay_ms=0)
 
     class _Page:
         def __init__(self) -> None:
@@ -3327,21 +3321,16 @@ async def test_get_page_html_falls_back_to_outer_html_after_driver_close() -> No
                 return 0
             return "<html><body><main><h1>Recovered</h1></main></body></html>"
 
-    try:
-        html = await dom_runtime.get_page_html(_Page())
-    finally:
-        crawler_runtime_settings.browser_error_retry_attempts = original_attempts
-        crawler_runtime_settings.browser_error_retry_delay_ms = original_delay
+    html = await dom_runtime.get_page_html(_Page())
 
     assert "Recovered" in html
 
 
 @pytest.mark.asyncio
-async def test_get_page_html_outer_html_fallback_preserves_doctype() -> None:
-    original_attempts = crawler_runtime_settings.browser_error_retry_attempts
-    original_delay = crawler_runtime_settings.browser_error_retry_delay_ms
-    crawler_runtime_settings.browser_error_retry_attempts = 0
-    crawler_runtime_settings.browser_error_retry_delay_ms = 0
+async def test_get_page_html_outer_html_fallback_preserves_doctype(
+    patch_settings,
+) -> None:
+    patch_settings(browser_error_retry_attempts=0, browser_error_retry_delay_ms=0)
 
     class _Page:
         async def content(self) -> str:
@@ -3352,21 +3341,16 @@ async def test_get_page_html_outer_html_fallback_preserves_doctype() -> None:
                 return 0
             return "<!DOCTYPE html><html><body>Recovered</body></html>"
 
-    try:
-        html = await dom_runtime.get_page_html(_Page())
-    finally:
-        crawler_runtime_settings.browser_error_retry_attempts = original_attempts
-        crawler_runtime_settings.browser_error_retry_delay_ms = original_delay
+    html = await dom_runtime.get_page_html(_Page())
 
     assert html.startswith("<!DOCTYPE html>")
 
 
 @pytest.mark.asyncio
-async def test_page_has_location_interstitial_uses_resilient_html_fetch() -> None:
-    original_attempts = crawler_runtime_settings.browser_error_retry_attempts
-    original_delay = crawler_runtime_settings.browser_error_retry_delay_ms
-    crawler_runtime_settings.browser_error_retry_attempts = 0
-    crawler_runtime_settings.browser_error_retry_delay_ms = 0
+async def test_page_has_location_interstitial_uses_resilient_html_fetch(
+    patch_settings,
+) -> None:
+    patch_settings(browser_error_retry_attempts=0, browser_error_retry_delay_ms=0)
 
     class _Page:
         url = "https://example.com/product"
@@ -3383,11 +3367,7 @@ async def test_page_has_location_interstitial_uses_resilient_html_fetch() -> Non
                 "</body></html>"
             )
 
-    try:
-        detected = await browser_page_flow._page_has_location_interstitial(_Page())
-    finally:
-        crawler_runtime_settings.browser_error_retry_attempts = original_attempts
-        crawler_runtime_settings.browser_error_retry_delay_ms = original_delay
+    detected = await browser_page_flow._page_has_location_interstitial(_Page())
 
     assert detected is True
 

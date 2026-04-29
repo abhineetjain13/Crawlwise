@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from app.services import crawl_fetch_runtime
@@ -10,6 +8,7 @@ from app.services import detail_extractor
 from app.services.adapters.belk import BelkAdapter
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
+from tests.fixtures.loader import read_optional_artifact_text
 
 
 def test_listing_raw_json_max_records_does_not_trim_page_overshoot() -> None:
@@ -50,21 +49,6 @@ def _js_shell_html() -> str:
       </body>
     </html>
     """
-
-
-def _read_optional_artifact_text(path: str) -> str:
-    fixture = (
-        Path(__file__).resolve().parents[1]
-        / "fixtures"
-        / "artifact_html"
-        / Path(path).name
-    )
-    if fixture.exists():
-        return fixture.read_text(encoding="utf-8", errors="ignore")
-    artifact = Path(__file__).resolve().parents[2].joinpath(path)
-    if not artifact.exists():
-        raise AssertionError(f"artifact fixture missing: {fixture}")
-    return artifact.read_text(encoding="utf-8", errors="ignore")
 
 
 def _rendered_listing_fragment(
@@ -795,7 +779,10 @@ def test_extract_records_prefers_image_hint_over_brand_or_review_title_noise() -
 
 
 def test_extract_records_filters_blocked_detail_artifact_html() -> None:
-    html = _read_optional_artifact_text("artifacts/runs/20/pages/41f3046f3de7bf0e.html")
+    html = read_optional_artifact_text(
+        "artifacts/runs/20/pages/41f3046f3de7bf0e.html",
+        fixture_subdir="artifact_html",
+    )
 
     rows = extract_records(
         html,
@@ -808,7 +795,10 @@ def test_extract_records_filters_blocked_detail_artifact_html() -> None:
 
 
 def test_extract_records_cleans_titles_from_belk_listing_artifact() -> None:
-    html = _read_optional_artifact_text("artifacts/runs/19/pages/a0c2607fa750138d.html")
+    html = read_optional_artifact_text(
+        "artifacts/runs/19/pages/a0c2607fa750138d.html",
+        fixture_subdir="artifact_html",
+    )
 
     rows = extract_records(
         html,
@@ -826,7 +816,10 @@ def test_extract_records_cleans_titles_from_belk_listing_artifact() -> None:
 
 
 def test_extract_records_belk_listing_artifact_does_not_emit_currency_without_price() -> None:
-    html = _read_optional_artifact_text("artifacts/runs/22/pages/5e2f27bc09df481d.html")
+    html = read_optional_artifact_text(
+        "artifacts/runs/22/pages/5e2f27bc09df481d.html",
+        fixture_subdir="artifact_html",
+    )
 
     rows = extract_records(
         html,
@@ -894,7 +887,10 @@ def test_extract_records_drops_orphan_listing_currency_without_price() -> None:
 
 
 def test_extract_records_rejects_redirected_belk_detail_artifact_identity_mismatch() -> None:
-    html = _read_optional_artifact_text("artifacts/runs/23/pages/ee049a2bdeed124a.html")
+    html = read_optional_artifact_text(
+        "artifacts/runs/23/pages/ee049a2bdeed124a.html",
+        fixture_subdir="artifact_html",
+    )
     requested_url = (
         "https://www.belk.com/p/haggar-premium-stretch-no-iron-khaki-classic-fit-hidden-expandable-"
         "waistband-flat-front-pants/3200645HC10884.html?dwvar_3200645HC10884_color=251278239931"
@@ -913,7 +909,10 @@ def test_extract_records_rejects_redirected_belk_detail_artifact_identity_mismat
 
 
 def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_artifact() -> None:
-    html = _read_optional_artifact_text("artifacts/runs/23/pages/ee049a2bdeed124a.html")
+    html = read_optional_artifact_text(
+        "artifacts/runs/23/pages/ee049a2bdeed124a.html",
+        fixture_subdir="artifact_html",
+    )
     canonical_url = "https://www.belk.com/p/kenneth-cole-mens-reaction-urban-heather-dress-pants-/3200898KD00379.html"
 
     rows = extract_records(
@@ -935,7 +934,10 @@ def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_art
 
 
 def test_extract_records_normalizes_belk_run_26_detail_variants_without_duplicate_axes() -> None:
-    html = _read_optional_artifact_text("artifacts/runs/26/pages/612cf7570cdbf8e1.html")
+    html = read_optional_artifact_text(
+        "artifacts/runs/26/pages/612cf7570cdbf8e1.html",
+        fixture_subdir="artifact_html",
+    )
     canonical_url = (
         "https://www.belk.com/p/kim-rogers-womens-denim-capri-pants/180430334287262.html"
         "?dwvar_180430334287262_color=460475611850"
@@ -4796,7 +4798,7 @@ def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents(
     assert len(rows) == 1
     record = rows[0]
     assert record["price"] == "939.00"
-    assert record["original_price"] == "1565"
+    assert record["original_price"] == "1565.00"
 
 
 def test_extract_detail_keeps_shopify_variant_record_when_requested_url_has_product_code_prefix() -> None:

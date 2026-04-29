@@ -97,7 +97,6 @@ CONFIG_CONSTANT_NAME_MARKERS = (
 )
 ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("acquisition/browser_identity.py", "_HOST_OS_UA_TOKENS"),
-    ("acquisition/browser_page_flow.py", "_ACCESSIBILITY_SNAPSHOT_TIMEOUT_SECONDS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_COOKIE_VALUE_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_NAME_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS"),

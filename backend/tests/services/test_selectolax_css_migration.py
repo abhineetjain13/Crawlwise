@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from app.services.adapters.adp import ADPAdapter
@@ -15,13 +13,7 @@ from app.services.detail_extractor import build_detail_record, extract_detail_re
 from app.services.extraction_html_helpers import extract_job_sections
 from app.services.listing_extractor import extract_listing_records
 from app.services.xpath_service import extract_selector_value
-
-
-def _read_optional_artifact_text(path: str) -> str:
-    artifact = Path(__file__).resolve().parents[2].joinpath(path)
-    if not artifact.exists():
-        pytest.skip(f"artifact fixture missing: {artifact}")
-    return artifact.read_text(encoding="utf-8", errors="ignore")
+from tests.fixtures.loader import read_optional_artifact_text
 
 
 def test_detail_extractor_preserves_css_dom_field_output() -> None:
@@ -480,7 +472,7 @@ def test_listing_extractor_filters_acceptance_artifact_noise(
     surface: str,
     blocked_terms: tuple[str, ...],
 ) -> None:
-    html = _read_optional_artifact_text(artifact_path)
+    html = read_optional_artifact_text(artifact_path)
 
     rows = extract_listing_records(
         html,

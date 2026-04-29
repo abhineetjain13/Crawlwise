@@ -44,7 +44,8 @@ def backfill_detail_price_from_html(
     html: str,
 ) -> None:
     selected_variant = record.get("selected_variant")
-    needs_price = record.get("price") in (None, "", [], {}) or (
+    record_price_is_low_signal = _detail_price_value_is_low_signal(record.get("price"))
+    needs_price = record.get("price") in (None, "", [], {}) or record_price_is_low_signal or (
         isinstance(selected_variant, dict)
         and selected_variant.get("price") in (None, "", [], {})
     )
@@ -70,18 +71,29 @@ def backfill_detail_price_from_html(
     price = _detail_price_from_html(soup, currency=currency)
     if price in (None, "", [], {}):
         return
-    if record.get("price") in (None, "", [], {}):
+    if record.get("price") in (None, "", [], {}) or record_price_is_low_signal:
         record["price"] = price
         append_record_field_source(record, "price", "dom_text")
-    if isinstance(selected_variant, dict) and selected_variant.get("price") in (
-        None,
-        "",
-        [],
-        {},
+    if isinstance(selected_variant, dict) and (
+        selected_variant.get("price") in (None, "", [], {})
+        or _detail_price_value_is_low_signal(selected_variant.get("price"))
     ):
         selected_variant["price"] = price
         if currency and selected_variant.get("currency") in (None, "", [], {}):
             selected_variant["currency"] = currency
+    variants = record.get("variants")
+    if isinstance(variants, list):
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+            if (
+                variant.get("price") not in (None, "", [], {})
+                and not _detail_price_value_is_low_signal(variant.get("price"))
+            ):
+                continue
+            variant["price"] = price
+            if currency and variant.get("currency") in (None, "", [], {}):
+                variant["currency"] = currency
 
     original_price = _detail_original_price_from_html(soup, currency=currency)
     if original_price not in (None, "", [], {}) and record.get("original_price") in (
@@ -373,6 +385,17 @@ def _price_value_is_zero(value: object) -> bool:
 def _price_value_is_positive(value: object) -> bool:
     normalized = _normalized_price_value(value)
     return bool(normalized) and _coerce_float(normalized, default=0.0) > 0.0
+
+
+def _detail_price_value_is_low_signal(value: object) -> bool:
+    normalized = _normalized_price_value(value)
+    if not normalized:
+        return False
+    try:
+        price = float(normalized)
+    except ValueError:
+        return False
+    return 0.0 < price <= 1.0
 
 
 def _normalized_price_value(value: object) -> str | None:

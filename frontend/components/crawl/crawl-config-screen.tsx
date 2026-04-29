@@ -1003,7 +1003,7 @@ export function CrawlConfigScreen({
 
                 {singleUrlMode && savedProfileLoaded ? (
                   <div className="text-sm leading-[var(--leading-relaxed)] text-secondary">
-                    Saved domain profile active: <span className="font-medium text-foreground">{savedProfileDomain}</span> · {surfaceLabel(surface)}
+                    Saved domain profile active: <span className="type-mono-standard text-foreground">{savedProfileDomain}</span> · {surfaceLabel(surface)}
                   </div>
                 ) : null}
               </div>

@@ -14,6 +14,7 @@ from app.services.config._export_data import (
     validate_export_file,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.runtime_settings import CrawlerRuntimeSettings
 from app.services.exceptions import CrawlerConfigurationError
 from app.services.platform_policy import resolve_platform_runtime_policy
 from collections import Counter
@@ -128,6 +129,12 @@ def test_runtime_backed_defaults_remain_single_source_of_truth() -> None:
     assert plan.max_records == crawler_runtime_settings.default_max_records
     assert plan.sleep_ms == crawler_runtime_settings.min_request_delay_ms
     assert settings.max_records() == crawler_runtime_settings.default_max_records
+
+
+def test_runtime_settings_allow_zero_accessibility_snapshot_timeout() -> None:
+    settings = CrawlerRuntimeSettings(browser_accessibility_snapshot_timeout_seconds=0)
+
+    assert settings.browser_accessibility_snapshot_timeout_seconds == 0
 
 
 def test_invalid_traversal_mode_raises_configuration_error() -> None:

@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -474,11 +474,11 @@ def _storage_state_origin_count(storage_state: object) -> int:
 
 
 def _storage_state_entry_count(value: object) -> int:
-    if isinstance(value, Iterable) and not isinstance(
+    if isinstance(value, Collection) and not isinstance(
         value,
         (str, bytes, bytearray, Mapping),
     ):
-        return len(list(value))
+        return len(value)
     return len(_object_list(value))
 
 

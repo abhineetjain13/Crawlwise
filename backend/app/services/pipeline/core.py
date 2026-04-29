@@ -138,6 +138,25 @@ class _ExtractedURLStage:
     records: list[dict[str, object]]
 
 
+def _resolve_run_param(
+    plan_value: object | None,
+    config_value: object | None,
+    default_value: int,
+    *,
+    min_value: int = 1,
+) -> int:
+    for candidate in (plan_value, config_value):
+        if candidate is None:
+            continue
+        try:
+            resolved = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if resolved >= int(min_value):
+            return resolved
+    return int(default_value)
+
+
 def _resolved_url_processing_config(
     config: URLProcessingConfig | None,
     *,
@@ -151,22 +170,6 @@ def _resolved_url_processing_config(
     update_run_state: bool,
     persist_logs: bool,
 ) -> URLProcessingConfig:
-    def _resolve_positive_int(
-        primary: object | None,
-        secondary: object | None,
-        default: int,
-    ) -> int:
-        for candidate in (primary, secondary):
-            if candidate is None:
-                continue
-            try:
-                resolved = int(candidate)
-            except (TypeError, ValueError):
-                continue
-            if resolved > 0:
-                return resolved
-        return int(default)
-
     if config is not None:
         plan = config.resolved_acquisition_plan(surface=surface)
         resolved_proxy_list = list(plan.proxy_list or config.proxy_list or proxy_list or [])
@@ -180,15 +183,16 @@ def _resolved_url_processing_config(
         safety_iteration_cap = int(crawler_runtime_settings.traversal_max_iterations_cap)
         resolved_max_pages = safety_iteration_cap
         resolved_max_scrolls = safety_iteration_cap
-        resolved_max_records = _resolve_positive_int(
+        resolved_max_records = _resolve_run_param(
             plan.max_records,
             config.max_records,
             max_records,
         )
-        resolved_sleep_ms = _resolve_positive_int(
+        resolved_sleep_ms = _resolve_run_param(
             plan.sleep_ms,
             config.sleep_ms,
             sleep_ms,
+            min_value=0,
         )
         return URLProcessingConfig.from_acquisition_plan(
             AcquisitionPlan(

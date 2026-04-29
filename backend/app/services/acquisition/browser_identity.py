@@ -322,22 +322,29 @@ def _ua_bitness_from_user_agent(user_agent: str) -> str:
     return "32"
 
 
+def _safely_clone_fingerprint(raw_fingerprint: Any) -> Any:
+    try:
+        return _copy.deepcopy(raw_fingerprint)
+    except Exception:
+        try:
+            cloned_fingerprint = _copy.copy(raw_fingerprint)
+        except Exception:
+            return None
+        fallback_navigator = getattr(cloned_fingerprint, "navigator", None)
+        if fallback_navigator is not None:
+            try:
+                setattr(cloned_fingerprint, "navigator", _copy.copy(fallback_navigator))
+            except Exception:
+                return None
+        return cloned_fingerprint
+
+
 def _align_raw_fingerprint_to_user_agent_platform(raw_fingerprint: Any | None) -> Any | None:
     if raw_fingerprint is None:
         return None
-    try:
-        aligned_fingerprint = _copy.deepcopy(raw_fingerprint)
-    except Exception:
-        try:
-            aligned_fingerprint = _copy.copy(raw_fingerprint)
-        except Exception:
-            return raw_fingerprint
-        fallback_navigator = getattr(aligned_fingerprint, "navigator", None)
-        if fallback_navigator is not None:
-            try:
-                setattr(aligned_fingerprint, "navigator", _copy.copy(fallback_navigator))
-            except Exception:
-                return raw_fingerprint
+    aligned_fingerprint = _safely_clone_fingerprint(raw_fingerprint)
+    if aligned_fingerprint is None:
+        return raw_fingerprint
     navigator = getattr(aligned_fingerprint, "navigator", None)
     if navigator is None:
         return raw_fingerprint
@@ -371,19 +378,7 @@ def _align_raw_fingerprint_to_user_agent_platform(raw_fingerprint: Any | None) -
 def _align_raw_fingerprint_to_runtime_hardware(raw_fingerprint: Any | None) -> Any | None:
     if raw_fingerprint is None:
         return None
-    try:
-        aligned_fingerprint = _copy.deepcopy(raw_fingerprint)
-    except Exception:
-        try:
-            aligned_fingerprint = _copy.copy(raw_fingerprint)
-        except Exception:
-            return raw_fingerprint
-        fallback_navigator = getattr(aligned_fingerprint, "navigator", None)
-        if fallback_navigator is not None:
-            try:
-                setattr(aligned_fingerprint, "navigator", _copy.copy(fallback_navigator))
-            except Exception:
-                return raw_fingerprint
+    aligned_fingerprint = _safely_clone_fingerprint(raw_fingerprint)
     navigator = getattr(aligned_fingerprint, "navigator", None)
     if navigator is None:
         return raw_fingerprint
@@ -1034,19 +1029,7 @@ def _align_raw_fingerprint_to_browser_major(
         original_user_agent,
         resolved_major,
     )
-    try:
-        aligned_fingerprint = _copy.deepcopy(raw_fingerprint)
-    except Exception:
-        try:
-            aligned_fingerprint = _copy.copy(raw_fingerprint)
-        except Exception:
-            return raw_fingerprint
-        fallback_navigator = getattr(aligned_fingerprint, "navigator", None)
-        if fallback_navigator is not None:
-            try:
-                setattr(aligned_fingerprint, "navigator", _copy.copy(fallback_navigator))
-            except Exception:
-                return raw_fingerprint
+    aligned_fingerprint = _safely_clone_fingerprint(raw_fingerprint)
     aligned_navigator = getattr(aligned_fingerprint, "navigator", None)
     if aligned_navigator is None:
         return raw_fingerprint
@@ -1078,19 +1061,7 @@ def _align_raw_fingerprint_to_locale(
 ) -> Any | None:
     if raw_fingerprint is None:
         return None
-    try:
-        aligned_fingerprint = _copy.deepcopy(raw_fingerprint)
-    except Exception:
-        try:
-            aligned_fingerprint = _copy.copy(raw_fingerprint)
-        except Exception:
-            return raw_fingerprint
-        fallback_navigator = getattr(aligned_fingerprint, "navigator", None)
-        if fallback_navigator is not None:
-            try:
-                setattr(aligned_fingerprint, "navigator", _copy.copy(fallback_navigator))
-            except Exception:
-                return raw_fingerprint
+    aligned_fingerprint = _safely_clone_fingerprint(raw_fingerprint)
     navigator = getattr(aligned_fingerprint, "navigator", None)
     if navigator is None:
         return raw_fingerprint

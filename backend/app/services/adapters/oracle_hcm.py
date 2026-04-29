@@ -3,23 +3,22 @@ from __future__ import annotations
 
 import ast
 import json
-import re
 from html import unescape
 from urllib.parse import urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
+from app.services.config.extraction_rules import (
+    ORACLE_HCM_CX_CONFIG_RE,
+    ORACLE_HCM_DEFAULT_FACETS,
+    ORACLE_HCM_JOB_PATH_RE,
+    ORACLE_HCM_LANG_PATH_RE,
+    ORACLE_HCM_LOCATION_LIST_KEYS,
+    ORACLE_HCM_SITE_PATH_RE,
+)
 from app.services.extraction_html_helpers import html_to_text
 from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup
-
-
-_CX_CONFIG_RE = re.compile(r"var\s+CX_CONFIG\s*=\s*(\{.*?\})\s*;", re.DOTALL)
-_SITE_PATH_RE = re.compile(r"/sites/([^/?#]+)", re.IGNORECASE)
-_LANG_PATH_RE = re.compile(r"/CandidateExperience/([^/?#]+)/sites/", re.IGNORECASE)
-_JOB_PATH_RE = re.compile(r"/job/([^/?#]+)/?", re.IGNORECASE)
-_DEFAULT_FACETS = "LOCATIONS;WORK_LOCATIONS;WORKPLACE_TYPES;TITLES;CATEGORIES;ORGANIZATIONS;POSTING_DATES;FLEX_FIELDS"
-_LOCATION_LIST_KEYS = ("workLocation", "otherWorkLocations", "secondaryLocations")
 
 
 class OracleHCMAdapter(BaseAdapter):
@@ -123,7 +122,7 @@ class OracleHCMAdapter(BaseAdapter):
         self, *, base_url: str, site_number: str, limit: int, offset: int
     ) -> str:
         finder = (
-            f"findReqs;siteNumber={site_number},facetsList={_DEFAULT_FACETS},"
+            f"findReqs;siteNumber={site_number},facetsList={ORACLE_HCM_DEFAULT_FACETS},"
             f"offset={offset},limit={limit},sortBy=POSTING_DATES_DESC"
         )
         expand = (
@@ -191,7 +190,7 @@ class OracleHCMAdapter(BaseAdapter):
         }
 
     def _extract_site_number(self, url: str, html: str) -> str:
-        path_match = _SITE_PATH_RE.search(urlparse(str(url or "")).path)
+        path_match = ORACLE_HCM_SITE_PATH_RE.search(urlparse(str(url or "")).path)
         if path_match:
             return clean_text(path_match.group(1))
         config = self._extract_cx_config(html)
@@ -200,7 +199,7 @@ class OracleHCMAdapter(BaseAdapter):
         return clean_text(app.get("siteNumber"))
 
     def _extract_site_lang(self, url: str, html: str) -> str:
-        path_match = _LANG_PATH_RE.search(urlparse(str(url or "")).path)
+        path_match = ORACLE_HCM_LANG_PATH_RE.search(urlparse(str(url or "")).path)
         if path_match:
             return clean_text(path_match.group(1))
         config = self._extract_cx_config(html)
@@ -224,10 +223,10 @@ class OracleHCMAdapter(BaseAdapter):
         )
 
     def _extract_cx_config(self, html: str) -> dict:
-        match = _CX_CONFIG_RE.search(str(html or ""))
-        if not match:
+        match = ORACLE_HCM_CX_CONFIG_RE.search(str(html or ""))
+        raw = unescape(match.group(1)) if match else self._extract_cx_config_object(html)
+        if not raw:
             return {}
-        raw = unescape(match.group(1))
         try:
             parsed = ast.literal_eval(raw)
         except (SyntaxError, ValueError):
@@ -240,9 +239,48 @@ class OracleHCMAdapter(BaseAdapter):
                     return {}
         return parsed if isinstance(parsed, dict) else {}
 
+    def _extract_cx_config_object(self, html: str) -> str:
+        source = str(html or "")
+        marker = "CX_CONFIG"
+        marker_index = source.find(marker)
+        if marker_index < 0:
+            return ""
+        assignment_index = source.find("=", marker_index)
+        if assignment_index < 0:
+            return ""
+        fragment = source[assignment_index + 1 :]
+        start = fragment.find("{")
+        if start < 0:
+            return ""
+        depth = 0
+        in_string = False
+        escaped = False
+        for index, char in enumerate(fragment[start:], start=start):
+            if in_string:
+                if escaped:
+                    escaped = False
+                    continue
+                if char == "\\":
+                    escaped = True
+                    continue
+                if char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+                continue
+            if char == "{":
+                depth += 1
+                continue
+            if char == "}":
+                depth -= 1
+                if depth == 0:
+                    return fragment[start : index + 1]
+        return ""
+
     def _extract_job_id_from_url(self, url: str) -> str:
         path = urlparse(str(url or "")).path
-        match = _JOB_PATH_RE.search(path)
+        match = ORACLE_HCM_JOB_PATH_RE.search(path)
         return clean_text(match.group(1)) if match else ""
 
     def _format_location_item(self, item: dict) -> str:
@@ -258,7 +296,7 @@ class OracleHCMAdapter(BaseAdapter):
         primary = clean_text(requisition.get("PrimaryLocation"))
         if primary:
             yield primary
-        for key in _LOCATION_LIST_KEYS:
+        for key in ORACLE_HCM_LOCATION_LIST_KEYS:
             payload = requisition.get(key)
             if not isinstance(payload, list):
                 continue

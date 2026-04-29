@@ -199,7 +199,6 @@ function AuthShell({ children }: Readonly<{ children: ReactNode }>) {
                 <div className="auth-shell-header">
                     <div className="auth-shell-brand">
                         <LogoMark auth />
-                        <span>CrawlerAI</span>
                     </div>
                     <ThemeToggle compact />
                 </div>

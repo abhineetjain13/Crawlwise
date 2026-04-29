@@ -874,12 +874,6 @@ def _requires_dom_completion(
 ) -> bool:
     normalized_surface = str(surface or "").strip().lower()
     requested_missing_fields = _missing_requested_fields(record, requested_fields)
-    if (
-        normalized_surface == "ecommerce_detail"
-        and record.get("variant_axes") in (None, "", [], {})
-        and variant_dom_cues_present(soup)
-    ):
-        return True
     if normalized_surface == "ecommerce_detail" and variant_dom_cues_present(soup):
         if any(
             record.get(field_name) in (None, "", [], {})

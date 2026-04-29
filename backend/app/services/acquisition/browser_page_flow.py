@@ -42,7 +42,6 @@ from app.services.field_value_dom import requested_content_extractability
 from app.services.acquisition.runtime import classify_blocked_page_async, copy_headers
 from app.services.platform_policy import resolve_browser_readiness_policy, resolve_platform_runtime_policy
 logger = logging.getLogger(__name__)
-_ACCESSIBILITY_SNAPSHOT_TIMEOUT_SECONDS = 0.5
 @dataclass(slots=True)
 class BrowserFinalizeInput:
     page: Any
@@ -1190,7 +1189,7 @@ async def _generate_page_markdown(
         try:
             snapshot = await asyncio.wait_for(
                 snapshot_fn(),
-                timeout=_ACCESSIBILITY_SNAPSHOT_TIMEOUT_SECONDS,
+                timeout=crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds,
             )
         except Exception:
             snapshot = None

@@ -343,6 +343,18 @@ def test_extract_urls_trims_trailing_punctuation_from_embedded_urls() -> None:
     ]
 
 
+def test_extract_urls_splits_concatenated_absolute_urls() -> None:
+    urls = extract_urls(
+        "https://www.asos.com/us/foo/prd/1https://www.asos.com/us/bar/prd/2",
+        "https://www.asos.com/us/foo/prd/1",
+    )
+
+    assert urls == [
+        "https://www.asos.com/us/foo/prd/1",
+        "https://www.asos.com/us/bar/prd/2",
+    ]
+
+
 def test_extract_urls_preserves_balanced_parentheses_and_brackets() -> None:
     urls = extract_urls(
         "Docs: https://example.com/release_(2026), https://example.com/archive/[spring].",

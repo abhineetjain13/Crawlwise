@@ -28,28 +28,7 @@ from app.services.acquisition.runtime import (
     http_fetch,
     should_escalate_to_browser_async,
 )
-
-
-class _FakeResponse:
-    def __init__(
-        self,
-        body: bytes | None = None,
-        *,
-        error: Exception | None = None,
-        url: str = "https://example.com/api/data.json",
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        self._body = body
-        self._error = error
-        self.url = url
-        self.body_calls = 0
-        self.headers = headers or {}
-
-    async def body(self) -> bytes:
-        self.body_calls += 1
-        if self._error is not None:
-            raise self._error
-        return self._body
+from tests.fixtures.http_mocks import FakeBodyResponse
 
 
 def _default_fetch_context(
@@ -1316,7 +1295,7 @@ async def test_run_browser_attempts_treats_none_cooldown_as_zero(
 
 @pytest.mark.asyncio
 async def test_read_network_payload_body_rejects_oversized_body_before_decode() -> None:
-    response = _FakeResponse(b"x" * 3_500_000)
+    response = FakeBodyResponse(b"x" * 3_500_000)
 
     body = await read_network_payload_body(response)
 
@@ -1327,7 +1306,7 @@ async def test_read_network_payload_body_rejects_oversized_body_before_decode() 
 
 @pytest.mark.asyncio
 async def test_read_network_payload_body_rejects_oversized_declared_content_length_before_body_read() -> None:
-    response = _FakeResponse(
+    response = FakeBodyResponse(
         b"x",
         headers={"content-length": "3500000"},
     )
@@ -1341,7 +1320,7 @@ async def test_read_network_payload_body_rejects_oversized_declared_content_leng
 
 @pytest.mark.asyncio
 async def test_read_network_payload_body_accepts_large_but_in_budget_body() -> None:
-    response = _FakeResponse(b"x" * 600_000)
+    response = FakeBodyResponse(b"x" * 600_000)
 
     body = await read_network_payload_body(response)
 
@@ -1352,7 +1331,7 @@ async def test_read_network_payload_body_accepts_large_but_in_budget_body() -> N
 
 @pytest.mark.asyncio
 async def test_read_network_payload_body_accepts_high_value_large_body_with_scaled_budget() -> None:
-    response = _FakeResponse(
+    response = FakeBodyResponse(
         b"x" * 3_500_000,
         url="https://example.com/products/widget/product.js",
     )
@@ -1366,7 +1345,7 @@ async def test_read_network_payload_body_accepts_high_value_large_body_with_scal
 
 @pytest.mark.asyncio
 async def test_read_network_payload_body_marks_closed_page_failures_explicitly() -> None:
-    response = _FakeResponse(error=RuntimeError("Target closed"))
+    response = FakeBodyResponse(error=RuntimeError("Target closed"))
 
     result = await read_network_payload_body(response)
 
@@ -1377,7 +1356,7 @@ async def test_read_network_payload_body_marks_closed_page_failures_explicitly()
 
 @pytest.mark.asyncio
 async def test_read_network_payload_body_marks_generic_read_failures_explicitly() -> None:
-    response = _FakeResponse(error=RuntimeError("socket reset"))
+    response = FakeBodyResponse(error=RuntimeError("socket reset"))
 
     result = await read_network_payload_body(response)
 
@@ -1390,7 +1369,7 @@ async def test_read_network_payload_body_marks_generic_read_failures_explicitly(
 async def test_read_network_payload_body_maps_read_timeouts_to_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    response = _FakeResponse(b"x")
+    response = FakeBodyResponse(b"x")
 
     async def _fake_wait_for(awaitable, timeout: float):
         awaitable.close()
@@ -2580,3 +2559,4 @@ def test_create_browser_identity_builds_generator_lazily(
 
     assert identity.locale == "en-US"
     assert captured["locale"] == ["fr-FR"]
+

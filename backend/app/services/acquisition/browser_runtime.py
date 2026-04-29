@@ -30,6 +30,21 @@ from app.services.acquisition.browser_detail import (
     interactive_candidate_snapshot,
     requested_field_tokens,
 )
+from app.services.acquisition.browser_diagnostics import (
+    CHROMIUM_BROWSER_ENGINE as _CHROMIUM_BROWSER_ENGINE,
+    PATCHRIGHT_BROWSER_ENGINE as _PATCHRIGHT_BROWSER_ENGINE,
+    REAL_CHROME_BROWSER_ENGINE as _REAL_CHROME_BROWSER_ENGINE,
+    SUPPORTED_BROWSER_ENGINES as _SUPPORTED_BROWSER_ENGINES,
+    browser_failure_kind as _browser_failure_kind,
+    browser_launch_mode as _browser_launch_mode,
+    browser_profile as _browser_profile,
+    browser_profile_diagnostics as _browser_profile_diagnostics,
+    build_browser_diagnostics_contract,
+    build_failed_browser_diagnostics,
+    launch_headless_for_engine as _launch_headless_for_engine,
+    normalize_browser_engine as _normalize_browser_engine,
+    use_native_real_chrome_context as _use_native_real_chrome_context,
+)
 from app.services.acquisition.browser_identity import (
     PlaywrightContextSpec,
     build_playwright_context_spec,
@@ -56,6 +71,12 @@ from app.services.acquisition.browser_proxy_bridge import (
     Socks5AuthBridge,
     parse_socks5_upstream_proxy,
 )
+from app.services.acquisition.browser_proxy_config import (
+    build_browser_proxy_config as _build_browser_proxy_config,
+    display_proxy as _display_proxy,
+    normalized_proxy_value as _normalized_proxy_value,
+    proxy_scheme as _proxy_scheme,
+)
 from app.services.acquisition.browser_readiness import (
     classify_browser_outcome_impl,
     classify_low_content_reason_impl,
@@ -65,6 +86,9 @@ from app.services.acquisition.browser_readiness import (
 from app.services.acquisition.browser_recovery import (
     emit_browser_behavior_activity,
     recover_browser_challenge,
+)
+from app.services.acquisition.browser_stage_runner import (
+    run_browser_stage as _run_browser_stage,
 )
 from app.services.acquisition.dom_runtime import get_page_html
 from app.services.acquisition.runtime import (
@@ -105,15 +129,6 @@ logger = logging.getLogger(__name__)
 _RUN_STORAGE_PERSIST_ATTR = "_crawler_persist_run_storage_state"
 _DOMAIN_STORAGE_PERSIST_ATTR = "_crawler_persist_domain_storage_state"
 _BROWSERFORGE_ACTIVE_ATTR = "_crawler_browserforge_active"
-_CHROMIUM_BROWSER_ENGINE = "chromium"
-_PATCHRIGHT_BROWSER_ENGINE = "patchright"
-_REAL_CHROME_BROWSER_ENGINE = "real_chrome"
-_SUPPORTED_BROWSER_ENGINES = {
-    _CHROMIUM_BROWSER_ENGINE,
-    _PATCHRIGHT_BROWSER_ENGINE,
-    _REAL_CHROME_BROWSER_ENGINE,
-}
-
 _BROWSER_PREFERRED_HOST_TTL_SECONDS = 1800.0
 _BROWSER_PREFERRED_HOSTS: dict[str, float] = {}
 _BROWSER_PREFERRED_HOST_SUCCESSES: dict[str, tuple[int, float]] = {}
@@ -124,16 +139,6 @@ _POPUP_GUARD_TASKS: set[asyncio.Task[Any]] = set()
 _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {str(key): tuple(str(item) for item in list(value or [])) for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()}
 _DETAIL_READINESS_HINTS: dict[str, tuple[str, ...]] = {str(key): tuple(str(item) for item in list(value or [])) for key, value in dict(BROWSER_DETAIL_READINESS_HINTS or {}).items()}
 _AOM_EXPAND_ROLES = {"button", "tab"}
-_SUPPORTED_BROWSER_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
-
-
-def _normalize_browser_engine(value: object) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized in _SUPPORTED_BROWSER_ENGINES:
-        return normalized
-    return _PATCHRIGHT_BROWSER_ENGINE
-
-
 def _patchright_async_playwright_factory():
     from patchright.async_api import async_playwright as patchright_async_playwright
 
@@ -179,92 +184,6 @@ def real_chrome_browser_available() -> bool:
     return real_chrome_executable_path() is not None
 
 
-def _launch_headless_for_engine(engine: str) -> bool:
-    normalized_engine = _normalize_browser_engine(engine)
-    if (
-        normalized_engine == _REAL_CHROME_BROWSER_ENGINE
-        and crawler_runtime_settings.browser_real_chrome_force_headful
-    ):
-        return False
-    return bool(settings.playwright_headless)
-
-
-def _use_native_real_chrome_context(engine: str) -> bool:
-    return (
-        _normalize_browser_engine(engine) == _REAL_CHROME_BROWSER_ENGINE
-        and crawler_runtime_settings.browser_real_chrome_native_context
-    )
-
-
-def _browser_launch_mode(engine: str) -> str:
-    return "headless" if _launch_headless_for_engine(engine) else "headful"
-
-
-def _browser_profile(engine: str) -> str:
-    normalized_engine = _normalize_browser_engine(engine)
-    if normalized_engine == _PATCHRIGHT_BROWSER_ENGINE:
-        return "patchright_shaped"
-    if normalized_engine == _REAL_CHROME_BROWSER_ENGINE:
-        if _use_native_real_chrome_context(normalized_engine):
-            return "real_chrome_native"
-        return "real_chrome_shaped"
-    return "chromium_shaped"
-
-
-def _browser_profile_diagnostics(engine: str) -> dict[str, object]:
-    normalized_engine = _normalize_browser_engine(engine)
-    return {
-        "browser_profile": _browser_profile(normalized_engine),
-        "browser_launch_mode": _browser_launch_mode(normalized_engine),
-        "browser_headless": _launch_headless_for_engine(normalized_engine),
-        "browser_native_context": _use_native_real_chrome_context(
-            normalized_engine
-        ),
-        "browser_stealth_enabled": False,
-    }
-
-
-def build_browser_diagnostics_contract(
-    *,
-    diagnostics: dict[str, object] | None = None,
-    browser_reason: str | None = None,
-    browser_outcome: str | None = None,
-    browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
-    browser_binary: str | None = None,
-    failure_reason: str | None = None,
-    retry_reason: str | None = None,
-    phase_timings_ms: dict[str, int] | None = None,
-) -> dict[str, object]:
-    normalized_engine = _normalize_browser_engine(browser_engine)
-    payload = dict(diagnostics or {})
-    payload["browser_attempted"] = True
-    payload["browser_reason"] = str(browser_reason or "").strip().lower() or None
-    payload["browser_outcome"] = str(browser_outcome or "").strip().lower() or None
-    payload["failure_reason"] = str(failure_reason or "").strip().lower() or None
-    if retry_reason is not None:
-        normalized_retry = str(retry_reason or "").strip().lower() or None
-        if normalized_retry or "retry_reason" not in payload:
-            payload["retry_reason"] = normalized_retry
-    else:
-        payload.setdefault("retry_reason", None)
-    payload["browser_engine"] = normalized_engine
-    payload["browser_binary"] = str(browser_binary or normalized_engine)
-    profile = _browser_profile_diagnostics(normalized_engine)
-    for key, value in profile.items():
-        payload[key] = value
-    phase_timings_payload = payload.get("phase_timings_ms")
-    existing_timings: dict[str, object] = (
-        dict(phase_timings_payload)
-        if isinstance(phase_timings_payload, dict)
-        else {}
-    )
-    incoming_timings = dict(phase_timings_ms or {}) if phase_timings_ms is not None else {}
-    existing_timings.update(incoming_timings)
-    payload["phase_timings_ms"] = existing_timings
-    payload.setdefault("artifact_paths", {})
-    return payload
-
-
 def _should_run_behavior_realism(engine: str) -> bool:
     if not bool(crawler_runtime_settings.browser_behavior_realism_enabled):
         return False
@@ -302,64 +221,6 @@ def _async_playwright_manager_for_engine(engine: str):
         raise RuntimeError(
             "Patchright package is not available for real_chrome browser runtime"
         ) from exc
-
-
-def _proxy_host_port(parsed) -> str:
-    hostname = str(parsed.hostname or "").strip()
-    if ":" in hostname and not hostname.startswith("["):
-        hostname = f"[{hostname}]"
-    if parsed.port is not None:
-        hostname = f"{hostname}:{parsed.port}"
-    return hostname
-
-
-def _build_browser_proxy_config(proxy: str | None) -> dict[str, str] | None:
-    raw_proxy = str(proxy or "").strip()
-    if not raw_proxy:
-        return None
-    parsed = urlparse(raw_proxy)
-    if not parsed.scheme:
-        raise ValueError("Browser proxy must include a scheme such as http:// or socks5://")
-    normalized_scheme = str(parsed.scheme or "").strip().lower()
-    if normalized_scheme not in _SUPPORTED_BROWSER_PROXY_SCHEMES:
-        raise ValueError(
-            f"Unsupported browser proxy scheme: {normalized_scheme or parsed.scheme}"
-        )
-    if not parsed.hostname:
-        raise ValueError("Browser proxy must include a hostname")
-    server = f"{parsed.scheme}://{_proxy_host_port(parsed)}"
-    config = {"server": server}
-    if parsed.username:
-        config["username"] = parsed.username
-    if parsed.password is not None:
-        config["password"] = parsed.password
-    return config
-
-
-def _normalized_proxy_value(proxy: str | None) -> str | None:
-    value = str(proxy or "").strip()
-    return value or None
-
-
-def _proxy_scheme(proxy: str | None) -> str | None:
-    raw_proxy = _normalized_proxy_value(proxy)
-    if raw_proxy is None:
-        return None
-    parsed = urlparse(raw_proxy)
-    return str(parsed.scheme or "").strip().lower() or None
-
-
-def _display_proxy(proxy: str | None) -> str:
-    raw_proxy = str(proxy or "").strip()
-    if not raw_proxy:
-        return "direct"
-    parsed = urlparse(raw_proxy)
-    if not parsed.scheme or not parsed.hostname or (
-        parsed.username is None and parsed.password is None
-    ):
-        return raw_proxy
-    host_port = _proxy_host_port(parsed)
-    return f"{parsed.scheme}://***:***@{host_port}" if host_port else f"{parsed.scheme}://***:***"
 
 
 class SharedBrowserRuntime:
@@ -1327,13 +1188,19 @@ async def browser_fetch(
     normalized_domain = normalize_domain(url)
     normalized_engine = _normalize_browser_engine(browser_engine)
     resolved_proxy_rotation_mode = proxy_rotation_mode(proxy_profile)
+    phase_timings_ms: dict[str, int] = {}
+    runtime_engine = normalized_engine
+    runtime_binary = normalized_engine
     # Rotating proxies must not reuse cookies/localStorage from a prior IP identity.
     allow_storage_state = not _proxy_requires_fresh_browser_state(proxy_profile)
     browser_proxy_mode = _browser_proxy_mode(
         proxy=proxy,
         proxied_page_factory=proxied_page_factory,
     )
+    runtime_bridge_used = browser_proxy_mode == "page"
     runtime: SharedBrowserRuntime | None = None
+    payload_capture = None
+    popup_guard_registrations: list[tuple[Any, str, Any]] = []
     try:
         if proxy:
             if proxied_page_factory is temporary_browser_page:
@@ -1412,7 +1279,6 @@ async def browser_fetch(
                 traversal_mode=traversal_mode,
                 should_run_traversal=should_run_traversal,
             )
-            popup_guard_registrations: list[tuple[Any, str, Any]] = []
             try:
                 pre_nav_pause_ms = max(
                     0, int(crawler_runtime_settings.browser_first_nav_pause_ms)
@@ -1617,9 +1483,25 @@ async def browser_fetch(
                 )
             finally:
                 _remove_popup_guard(popup_guard_registrations)
-                await payload_capture.close(page)
+                if payload_capture is not None:
+                    await payload_capture.close(page)
     except Exception as exc:
         setattr(exc, "browser_proxy_mode", browser_proxy_mode)
+        setattr(exc, "browser_phase_timings_ms", dict(locals().get("phase_timings_ms") or {}))
+        setattr(
+            exc,
+            "browser_diagnostics",
+            build_failed_browser_diagnostics(
+                browser_reason=browser_reason,
+                exc=exc,
+                proxy=proxy,
+                browser_engine=runtime_engine,
+                browser_binary=runtime_binary,
+                bridge_used=runtime_bridge_used,
+                escalation_lane=escalation_lane,
+                host_policy_snapshot=host_policy_snapshot,
+            ),
+        )
         raise
 
 
@@ -1956,68 +1838,8 @@ def classify_low_content_reason(html: str, *, html_bytes: int) -> str | None:
     return classify_low_content_reason_impl(html, html_bytes=html_bytes)
 
 
-def build_failed_browser_diagnostics(
-    *,
-    browser_reason: str | None,
-    exc: Exception,
-    proxy: str | None = None,
-    proxy_attempt_index: int | None = None,
-    browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
-    browser_binary: str | None = None,
-    bridge_used: bool = False,
-    escalation_lane: str | None = None,
-    host_policy_snapshot: dict[str, object] | None = None,
-) -> dict[str, object]:
-    outcome = "render_timeout" if _is_timeout_error(exc) else "navigation_failed"
-    failure_kind = _browser_failure_kind(exc)
-    failure_stage = str(getattr(exc, "browser_failure_stage", "navigation") or "navigation")
-    normalized_engine = _normalize_browser_engine(browser_engine)
-    diagnostics = {
-        "failure_kind": failure_kind,
-        "failure_stage": failure_stage,
-        "timeout_phase": failure_stage if _is_timeout_error(exc) else None,
-        "proxy_url_redacted": _display_proxy(proxy),
-        "proxy_scheme": _proxy_scheme(proxy),
-        "browser_proxy_mode": str(
-            getattr(
-                exc,
-                "browser_proxy_mode",
-                "launch" if proxy else "direct",
-            )
-            or ("launch" if proxy else "direct")
-        ),
-        "proxy_attempt_index": proxy_attempt_index,
-        "bridge_used": bool(bridge_used),
-        "escalation_lane": str(escalation_lane or "").strip().lower() or None,
-        "host_policy_snapshot": dict(host_policy_snapshot or {}),
-        "error": f"{type(exc).__name__}: {exc}",
-        "navigation_strategy": getattr(exc, "browser_navigation_strategy", None),
-    }
-    return build_browser_diagnostics_contract(
-        diagnostics=diagnostics,
-        browser_reason=browser_reason,
-        browser_outcome=outcome,
-        browser_engine=normalized_engine,
-        browser_binary=browser_binary,
-        failure_reason=failure_kind,
-        phase_timings_ms=dict(getattr(exc, "browser_phase_timings_ms", {}) or {}),
-    )
-
-
 def _elapsed_ms(started_at: float) -> int:
     return max(0, int((time.perf_counter() - started_at) * 1000))
-
-
-def _annotate_browser_failure(
-    exc: Exception,
-    *,
-    phase_timings_ms: dict[str, int],
-    stage: str,
-) -> None:
-    setattr(exc, "browser_failure_stage", stage)
-    merged_timings = dict(getattr(exc, "browser_phase_timings_ms", {}) or {})
-    merged_timings.update(dict(phase_timings_ms or {}))
-    setattr(exc, "browser_phase_timings_ms", merged_timings)
 
 
 async def _emit_browser_event(on_event, level: str, message: str) -> None:
@@ -2080,169 +1902,6 @@ async def _close_unexpected_popup(page: Any, *, on_event=None) -> None:
             "info",
             f"Closed unexpected popup page: {popup_url}",
         )
-
-
-def _is_timeout_error(exc: Exception) -> bool:
-    class_name = type(exc).__name__.lower()
-    message = str(exc or "").lower()
-    return "timeout" in class_name or "timeout" in message
-
-
-async def _run_browser_stage(
-    *,
-    stage: str,
-    page: Any,
-    timeout_seconds: float,
-    phase_timings_ms: dict[str, int],
-    operation,
-):
-    stage_task = asyncio.create_task(operation())
-    bounded_timeout_seconds = max(0.1, float(timeout_seconds))
-    try:
-        done, _pending = await asyncio.wait(
-            {stage_task},
-            timeout=bounded_timeout_seconds,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-    except asyncio.CancelledError:
-        await _abort_browser_stage(
-            stage_task,
-            page=page,
-            stage=stage,
-            reason="cancelled",
-        )
-        raise
-    if stage_task not in done:
-        await _abort_browser_stage(
-            stage_task,
-            page=page,
-            stage=stage,
-            reason="timeout",
-        )
-        timeout_exc = TimeoutError(
-            f"Browser {stage} stage exceeded timeout_seconds={bounded_timeout_seconds:.2f}"
-        )
-        _annotate_browser_failure(
-            timeout_exc,
-            phase_timings_ms=phase_timings_ms,
-            stage=stage,
-        )
-        raise timeout_exc
-    try:
-        return stage_task.result()
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        _annotate_browser_failure(
-            exc,
-            phase_timings_ms=phase_timings_ms,
-            stage=stage,
-        )
-        raise
-
-
-async def _abort_browser_stage(
-    stage_task: asyncio.Task[Any],
-    *,
-    page: Any,
-    stage: str,
-    reason: str,
-) -> None:
-    if not stage_task.done():
-        stage_task.cancel()
-    await _force_close_browser_handles(page, stage=stage, reason=reason)
-    try:
-        await asyncio.wait_for(
-            asyncio.shield(stage_task),
-            timeout=_browser_stage_cleanup_timeout_seconds(),
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Browser %s stage did not exit within %.1fs after %s; continuing teardown",
-            stage,
-            _browser_stage_cleanup_timeout_seconds(),
-            reason,
-        )
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        logger.debug(
-            "Browser %s stage raised while unwinding after %s",
-            stage,
-            reason,
-            exc_info=True,
-        )
-
-
-def _browser_stage_cleanup_timeout_seconds() -> float:
-    return max(
-        0.1,
-        float(crawler_runtime_settings.browser_close_timeout_ms) / 1000,
-    )
-
-
-async def _force_close_browser_handles(
-    page: Any,
-    *,
-    stage: str,
-    reason: str,
-) -> None:
-    close_timeout_seconds = _browser_stage_cleanup_timeout_seconds()
-    page_close = getattr(page, "close", None)
-    if callable(page_close):
-        try:
-            await asyncio.wait_for(page_close(), timeout=close_timeout_seconds)
-            return
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.debug(
-                "Browser page close failed during %s %s teardown",
-                stage,
-                reason,
-                exc_info=True,
-            )
-    context = getattr(page, "context", None)
-    if callable(context):
-        with suppress(TypeError):
-            context = context()
-    context_close = getattr(context, "close", None)
-    if not callable(context_close):
-        return
-    try:
-        await asyncio.wait_for(context_close(), timeout=close_timeout_seconds)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.debug(
-            "Browser context close failed during %s %s teardown",
-            stage,
-            reason,
-            exc_info=True,
-        )
-
-
-def _browser_failure_kind(exc: Exception) -> str:
-    class_name = type(exc).__name__.lower()
-    message = str(exc or "").lower()
-    if "targetclosed" in class_name or "target closed" in message:
-        return "page_closed"
-    if "page closed" in message or "browser has been closed" in message:
-        return "page_closed"
-    if "connection closed while reading from the driver" in message:
-        return "browser_driver_closed"
-    if "real chrome executable is not available" in message:
-        return "engine_unavailable"
-    if "patchright package is not available" in message:
-        return "engine_unavailable"
-    if (
-        isinstance(exc, ValueError)
-        and "browser proxy" in message
-    ) or "socks5 proxy authentication" in message:
-        return "unsupported_proxy"
-    if _is_timeout_error(exc):
-        return "timeout"
-    return "navigation_error"
 
 
 __all__ = [
