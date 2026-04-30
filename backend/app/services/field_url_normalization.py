@@ -6,25 +6,18 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from w3lib.url import url_query_cleaner
 
+from app.services.config.extraction_rules import (
+    TRACKING_DETAIL_CONTEXT_EXACT_KEYS,
+    TRACKING_PARAM_EXACT_KEYS,
+    TRACKING_PARAM_PREFIXES,
+    TRACKING_PRESERVED_SHORT_QUERY_KEYS,
+    TRACKING_STRIP_URL_FIELDS,
+)
 from app.services.config.field_mappings import (
     PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_KEYS,
     PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_PREFIXES,
 )
 
-
-TRACKING_PARAM_EXACT_KEYS = {"fbclid", "gclid", "ref", "sid"}
-TRACKING_DETAIL_CONTEXT_EXACT_KEYS = {
-    "content_source",
-    "external",
-    "pf_from",
-    "qs",
-    "sr_prefetch",
-}
-
-
-TRACKING_PARAM_PREFIXES = ("utm_", "click_")
-TRACKING_STRIP_URL_FIELDS = {"apply_url", "canonical_url", "source_url", "url"}
-_PRESERVED_SHORT_QUERY_KEYS = {"id", "ids", "p", "page", "pid", "q", "sku", "v"}
 _SHORT_TRACKING_VALUE_RE = re.compile(r"^[a-z0-9_-]{0,8}$", re.I)
 
 
@@ -85,7 +78,7 @@ def _is_short_tracking_flag(
     has_detail_context_tracking: bool,
 ) -> bool:
     lowered = key.lower()
-    if not has_detail_context_tracking or lowered in _PRESERVED_SHORT_QUERY_KEYS:
+    if not has_detail_context_tracking or lowered in TRACKING_PRESERVED_SHORT_QUERY_KEYS:
         return False
     if len(lowered) > 3:
         return False

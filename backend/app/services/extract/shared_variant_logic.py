@@ -14,6 +14,7 @@ from app.services.config.extraction_rules import (
     VARIANT_GROUP_ATTR_NOISE_PATTERNS,
     VARIANT_GROUP_ATTR_NOISE_TOKENS,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
+    VARIANT_SIZE_ALIAS_SUFFIXES,
     VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SELECT_GROUP_SELECTOR,
 )
@@ -56,6 +57,11 @@ _VARIANT_SIZE_VALUE_PATTERNS = tuple(
 _VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
     str(token).strip().lower()
     for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
+    if str(token).strip()
+)
+_VARIANT_SIZE_ALIAS_SUFFIXES = tuple(
+    str(token).strip().lower()
+    for token in tuple(VARIANT_SIZE_ALIAS_SUFFIXES or ())
     if str(token).strip()
 )
 _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
@@ -732,6 +738,129 @@ def variant_identity(variant: dict[str, Any]) -> str | None:
     return None
 
 
+def _canonical_variant_axis_value(axis_name: object, value: object) -> str:
+    axis_key = normalized_variant_axis_key(axis_name)
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    if axis_key != "size":
+        return cleaned
+    lowered = cleaned.lower()
+    for suffix in _VARIANT_SIZE_ALIAS_SUFFIXES:
+        if lowered.endswith(suffix):
+            base = clean_text(cleaned[: -len(suffix)])
+            if base:
+                return base
+    return cleaned
+
+
+def variant_semantic_identity(variant: dict[str, Any]) -> str | None:
+    if not isinstance(variant, dict):
+        return None
+    option_values = variant.get("option_values")
+    normalized_pairs: list[tuple[str, str]] = []
+    if isinstance(option_values, dict) and option_values:
+        normalized_pairs = sorted(
+            (
+                axis_key,
+                canonical_value,
+            )
+            for axis_name, axis_value in option_values.items()
+            if (axis_key := normalized_variant_axis_key(axis_name))
+            and (canonical_value := _canonical_variant_axis_value(axis_name, axis_value))
+        )
+    else:
+        for axis_name in ("size", "color"):
+            canonical_value = _canonical_variant_axis_value(axis_name, variant.get(axis_name))
+            if canonical_value:
+                normalized_pairs.append((axis_name, canonical_value))
+        normalized_pairs.sort()
+    if not normalized_pairs:
+        return None
+    return "semantic:" + "|".join(
+        f"{axis_name}={axis_value}" for axis_name, axis_value in normalized_pairs
+    )
+
+
+def collapse_duplicate_size_aliases(record: dict[str, Any]) -> None:
+    canonical_targets = _duplicate_size_alias_targets(record)
+    if not canonical_targets:
+        return
+    variant_axes = record.get("variant_axes")
+    if isinstance(variant_axes, dict) and isinstance(variant_axes.get("size"), list):
+        rewritten_values = [
+            _canonicalize_size_alias(value, canonical_targets=canonical_targets)
+            for value in variant_axes["size"]
+        ]
+        variant_axes["size"] = list(
+            dict.fromkeys(value for value in rewritten_values if clean_text(value))
+        )
+    for row in [record.get("selected_variant"), *list(record.get("variants") or [])]:
+        _rewrite_variant_row_size_alias(row, canonical_targets=canonical_targets)
+
+
+def _duplicate_size_alias_targets(record: dict[str, Any]) -> dict[str, str]:
+    seen_values: dict[str, str] = {}
+    variant_axes = record.get("variant_axes")
+    if isinstance(variant_axes, dict):
+        for value in list(variant_axes.get("size") or []):
+            cleaned = clean_text(value)
+            if cleaned:
+                seen_values.setdefault(cleaned.casefold(), cleaned)
+    for row in [record.get("selected_variant"), *list(record.get("variants") or [])]:
+        if not isinstance(row, dict):
+            continue
+        for value in (
+            row.get("size"),
+            row.get("option_values", {}).get("size")
+            if isinstance(row.get("option_values"), dict)
+            else None,
+        ):
+            cleaned = clean_text(value)
+            if cleaned:
+                seen_values.setdefault(cleaned.casefold(), cleaned)
+    targets: dict[str, str] = {}
+    for lowered, cleaned in seen_values.items():
+        base_value = _canonical_variant_axis_value("size", cleaned)
+        if not base_value:
+            continue
+        base_lowered = base_value.casefold()
+        if base_lowered in seen_values and base_lowered != lowered:
+            targets[lowered] = seen_values[base_lowered]
+    return targets
+
+
+def _canonicalize_size_alias(
+    value: object,
+    *,
+    canonical_targets: dict[str, str],
+) -> str:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    return canonical_targets.get(cleaned.casefold(), cleaned)
+
+
+def _rewrite_variant_row_size_alias(
+    row: object,
+    *,
+    canonical_targets: dict[str, str],
+) -> None:
+    if not isinstance(row, dict):
+        return
+    canonical_size = _canonicalize_size_alias(row.get("size"), canonical_targets=canonical_targets)
+    if canonical_size:
+        row["size"] = canonical_size
+    option_values = row.get("option_values")
+    if isinstance(option_values, dict):
+        option_size = _canonicalize_size_alias(
+            option_values.get("size"),
+            canonical_targets=canonical_targets,
+        )
+        if option_size:
+            option_values["size"] = option_size
+
+
 def variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
     """Compare key for two rows that share an identity.
 
@@ -796,4 +925,24 @@ def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
                 else (current, row)
             )
             merged_by_identity[identity] = merge_variant_pair(primary, secondary)
-    return [merged_by_identity[key] for key in ordered_keys]
+    deduped_rows = [merged_by_identity[key] for key in ordered_keys]
+    merged_by_semantic: dict[str, dict[str, Any]] = {}
+    semantic_order: list[str] = []
+    passthrough_rows: list[dict[str, Any]] = []
+    for row in deduped_rows:
+        semantic_identity = variant_semantic_identity(row)
+        if not semantic_identity:
+            passthrough_rows.append(row)
+            continue
+        current = merged_by_semantic.get(semantic_identity)
+        if current is None:
+            merged_by_semantic[semantic_identity] = dict(row)
+            semantic_order.append(semantic_identity)
+            continue
+        primary, secondary = (
+            (row, current)
+            if variant_row_richness(row) > variant_row_richness(current)
+            else (current, row)
+        )
+        merged_by_semantic[semantic_identity] = merge_variant_pair(primary, secondary)
+    return [*passthrough_rows, *(merged_by_semantic[key] for key in semantic_order)]

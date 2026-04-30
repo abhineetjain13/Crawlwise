@@ -99,15 +99,13 @@ def test_score_record_confidence_marks_thin_job_sections_low() -> None:
     } >= {"description", "responsibilities", "qualifications"}
 
 
-def test_score_record_confidence_reports_raw_requested_field_counts() -> None:
+def test_score_record_confidence_uses_repaired_requested_field_matches() -> None:
     record = {
         "title": "Widget Prime",
         "materials": "Cotton blend",
-        "care": "Machine wash",
         "_field_sources": {
             "title": ["json_ld"],
             "materials": ["dom_sections"],
-            "care": ["dom_sections"],
         },
         "_source": "json_ld",
     }
@@ -115,11 +113,11 @@ def test_score_record_confidence_reports_raw_requested_field_counts() -> None:
     confidence = score_record_confidence(
         record,
         surface="ecommerce_detail",
-        requested_fields=["materials", "materials", "care instructions"],
+        requested_fields=["materials"],
     )
 
-    assert confidence["requested_fields_total"] == 3
-    assert confidence["requested_fields_found_best"] == 3
+    assert confidence["requested_fields_total"] == 1
+    assert confidence["requested_fields_found_best"] == 2
 
 
 def test_score_record_confidence_uses_default_ecommerce_repair_fields() -> None:
@@ -137,3 +135,19 @@ def test_score_record_confidence_uses_default_ecommerce_repair_fields() -> None:
     assert confidence["requested_fields_total"] > 0
     assert confidence["requested_fields_found_best"] == 2
     assert "image_url" in confidence["missing_fields"]
+
+
+def test_score_record_confidence_counts_alias_requested_fields_as_found() -> None:
+    confidence = score_record_confidence(
+        {
+            "title": "Widget Prime",
+            "materials": "Cotton blend",
+            "_field_sources": {"title": ["json_ld"], "materials": ["dom_sections"]},
+            "_source": "json_ld",
+        },
+        surface="ecommerce_detail",
+        requested_fields=["material"],
+    )
+
+    assert confidence["requested_fields_total"] == 1
+    assert confidence["requested_fields_found_best"] == 2

@@ -140,13 +140,6 @@
       "current_price",
       "displayPrice",
       "formattedPrice",
-      "lowPrice",
-      "highPrice",
-      "minPrice",
-      "maxPrice",
-      "minValue",
-      "maxValue",
-      "priceRange",
       "prices",
       "offers"
     ]
@@ -855,6 +848,54 @@
       "fbclid",
       "gclid",
       "mc_"
+    ]
+  },
+  "TRACKING_DETAIL_CONTEXT_EXACT_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "content_source",
+      "external",
+      "pf_from",
+      "qs",
+      "sr_prefetch"
+    ]
+  },
+  "TRACKING_PARAM_EXACT_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "fbclid",
+      "gclid",
+      "ref",
+      "sid"
+    ]
+  },
+  "TRACKING_PARAM_PREFIXES": {
+    "__type__": "tuple",
+    "items": [
+      "utm_",
+      "click_"
+    ]
+  },
+  "TRACKING_STRIP_URL_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "apply_url",
+      "canonical_url",
+      "source_url",
+      "url"
+    ]
+  },
+  "TRACKING_PRESERVED_SHORT_QUERY_KEYS": {
+    "__type__": "frozenset",
+    "items": [
+      "id",
+      "ids",
+      "p",
+      "page",
+      "pid",
+      "q",
+      "sku",
+      "v"
     ]
   },
   "CANDIDATE_UI_ICON_TOKEN_PATTERN": "(corporate_fare|bar_chart|home_pin|location_on|travel_explore|business_center|storefront|schedule|payments|school|work)(?=[A-Z]|\\b)|place(?=[A-Z])",
@@ -6058,6 +6099,31 @@
           "Advancing pagination"
         ]
       }
+    ]
+  },
+  "LISTING_EDITORIAL_URL_TOKENS": {
+    "__type__": "tuple",
+    "items": [
+      "/community",
+      "/equity",
+      "/mission",
+      "/photos",
+      "/reviews",
+      "/service/",
+      "/services/",
+      "/values"
+    ]
+  },
+  "LISTING_EDITORIAL_PATH_SEGMENTS": {
+    "__type__": "frozenset",
+    "items": [
+      "business",
+      "community",
+      "help",
+      "help_center",
+      "ink",
+      "mission",
+      "services"
     ]
   },
   "TRAVERSAL_PRICE_HINT_RE": {

@@ -1054,6 +1054,61 @@
       "dwvar_"
     ]
   },
+  "PUBLIC_RECORD_URL_BLOCKED_PATH_MARKERS": {
+    "__type__": "tuple",
+    "items": [
+      "/api/",
+      "/event/",
+      "/events/",
+      "/tracking/",
+      "/analytics/",
+      "/beacon/",
+      "/click"
+    ]
+  },
+  "PUBLIC_RECORD_URL_MAX_LENGTH": 2048,
+  "NORMALIZER_DECIMAL_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "discount_amount",
+      "discount_percentage",
+      "original_price",
+      "price",
+      "rating",
+      "sale_price",
+      "salary_max",
+      "salary_min"
+    ]
+  },
+  "NORMALIZER_INTEGER_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "image_count",
+      "job_id",
+      "number_of_keys",
+      "quantity",
+      "rating_count",
+      "review_count",
+      "stock_quantity",
+      "variant_count"
+    ]
+  },
+  "NORMALIZER_LIST_TEXT_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "additional_images",
+      "available_sizes",
+      "option1_values",
+      "option2_values",
+      "tags"
+    ]
+  },
+  "NORMALIZER_BOOLEAN_FIELDS": {
+    "__type__": "frozenset",
+    "items": [
+      "remote"
+    ]
+  },
   "VARIANT_DOM_FIELD_NAMES": {
     "__type__": "tuple",
     "items": [

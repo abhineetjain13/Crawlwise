@@ -1035,6 +1035,38 @@ def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_j
     assert "color" not in record["variants"][0]
 
 
+def test_extract_ecommerce_detail_ignores_newsletter_fields_inside_size_container() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Soft Rock Crewneck</h1>
+        <div class="size-selector" aria-label="Size">
+          <button type="button" aria-label="S"></button>
+          <button type="button" aria-label="M" class="selected"></button>
+          <button type="button" aria-label="L"></button>
+          <button type="button" aria-label="XL"></button>
+          <input type="email" value="Email" />
+          <button aria-label="Sign up for updates and promotions">Join</button>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.sneakersnstuff.com/products/dime-soft-rock-crewneck-dime2sp2542blk",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {"size": ["S", "M", "L", "XL"]}
+    assert record["selected_variant"]["option_values"] == {"size": "M"}
+    assert "Email" not in record["variant_axes"]["size"]
+    assert "Sign up for updates and promotions" not in record["variant_axes"]["size"]
+
+
 def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availability() -> None:
     html = """
     <html>
@@ -1906,6 +1938,35 @@ def test_variant_option_availability_does_not_treat_disabled_control_as_out_of_s
 
     assert availability is None
     assert stock_quantity is None
+
+
+def test_extract_detail_variants_from_plain_buttons_without_data_attributes() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Widget Prime</h1>
+          <div role="radiogroup" aria-label="Size">
+            <button type="button" aria-pressed="true">S</button>
+            <button type="button">M</button>
+            <button type="button">L</button>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {"size": ["S", "M", "L"]}
+    assert record["selected_variant"]["option_values"] == {"size": "S"}
 
 
 def test_extract_automobile_detail_ignores_irrelevant_video_json_ld_when_dom_title_exists() -> None:

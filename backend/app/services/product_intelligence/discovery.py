@@ -64,6 +64,8 @@ from app.services.product_intelligence.matching import normalize_brand, source_d
 
 logger = logging.getLogger(__name__)
 
+QueryRunner = Callable[[str, int], Awaitable[list["SearchResult"]]]
+
 
 @dataclass(slots=True)
 class DiscoveredCandidate:
@@ -121,6 +123,7 @@ async def discover_candidates(
     allowed_domains: list[str],
     excluded_domains: list[str],
     max_candidates: int,
+    run_query: QueryRunner | None = None,
 ) -> list[DiscoveredCandidate]:
     queries = build_search_queries(product, source_domain_value=source_domain_value)
     if not queries:
@@ -130,12 +133,23 @@ async def discover_candidates(
         max_candidates,
         max_candidates * product_intelligence_settings.discovery_pool_multiplier,
     )
-    async with _query_runner(provider_name) as run_query:
-        if run_query is None:
-            return []
+    if run_query is not None:
         return await _collect_candidates(
             queries=queries,
             run_query=run_query,
+            product=product,
+            source_domain_value=source_domain_value,
+            allowed_domains=allowed_domains,
+            excluded_domains=excluded_domains,
+            max_candidates=max_candidates,
+            pool_limit=pool_limit,
+        )
+    async with shared_query_runner(provider_name) as shared_run_query:
+        if shared_run_query is None:
+            return []
+        return await _collect_candidates(
+            queries=queries,
+            run_query=shared_run_query,
             product=product,
             source_domain_value=source_domain_value,
             allowed_domains=allowed_domains,
@@ -148,7 +162,7 @@ async def discover_candidates(
 async def _collect_candidates(
     *,
     queries: list[str],
-    run_query: Callable[[str, int], Awaitable[list[SearchResult]]],
+    run_query: QueryRunner,
     product: dict[str, object],
     source_domain_value: str,
     allowed_domains: list[str],
@@ -195,7 +209,7 @@ async def _collect_candidates(
 
 
 @contextlib.asynccontextmanager
-async def _query_runner(provider: str):
+async def shared_query_runner(provider: str):
     if provider == SEARCH_PROVIDER_GOOGLE_NATIVE:
         if not real_chrome_browser_available():
             logger.error(
@@ -211,6 +225,9 @@ async def _query_runner(provider: str):
         return await _search_results(provider, query, limit=limit)
 
     yield _http_run
+
+
+_query_runner = shared_query_runner
 
 
 def classify_source_type(domain: str, product: dict[str, object]) -> str:

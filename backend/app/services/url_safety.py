@@ -8,6 +8,14 @@ from dataclasses import dataclass
 from typing import cast
 from urllib.parse import urlparse
 
+from app.services.config.security_rules import (
+    ALLOWED_PROXY_SCHEMES,
+    ALLOWED_TARGET_SCHEMES,
+    BLOCKED_HOSTNAMES,
+    BLOCKED_HOST_SUFFIXES,
+    BLOCKED_IPS,
+    CGNAT_NETWORK,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.network_resolution import dns_resolution_families
 
@@ -18,23 +26,6 @@ class SecurityError(ValueError):
     existing `except ValueError` callers continue to work; security-aware
     callers can catch SecurityError specifically to distinguish SSRF
     rejections from generic input-validation failures."""
-
-
-_ALLOWED_SCHEMES = {"http", "https"}
-_ALLOWED_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
-_BLOCKED_HOSTNAMES = {
-    "instance-data",
-    "instance-data.ec2.internal",
-    "localhost",
-    "localhost.localdomain",
-    "metadata.azure.internal",
-    "metadata.google.internal",
-}
-_BLOCKED_SUFFIXES = (".local",)
-_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
-_BLOCKED_IPS = {
-    ipaddress.ip_address("168.63.129.16"),
-}
 
 
 @dataclass(frozen=True)
@@ -63,7 +54,7 @@ async def validate_public_target(url: str) -> ValidatedTarget:
     raw = str(url or "").strip()
     parsed = urlparse(raw)
     scheme = str(parsed.scheme or "").lower()
-    if scheme not in _ALLOWED_SCHEMES:
+    if scheme not in ALLOWED_TARGET_SCHEMES:
         if not scheme and raw and not raw.startswith(("/", "#")):
             raw = f"https://{raw}"
             parsed = urlparse(raw)
@@ -74,8 +65,8 @@ async def validate_public_target(url: str) -> ValidatedTarget:
     hostname = str(parsed.hostname or "").strip().lower()
     if not hostname:
         raise ValueError("Target URL must include a hostname")
-    if hostname in _BLOCKED_HOSTNAMES or any(
-        hostname.endswith(suffix) for suffix in _BLOCKED_SUFFIXES
+    if hostname in BLOCKED_HOSTNAMES or any(
+        hostname.endswith(suffix) for suffix in BLOCKED_HOST_SUFFIXES
     ):
         raise SecurityError(f"Target host is not allowed: {hostname}")
 
@@ -119,15 +110,15 @@ async def validate_public_target(url: str) -> ValidatedTarget:
 async def validate_proxy_endpoint(proxy_url: str) -> ValidatedTarget:
     parsed = urlparse(str(proxy_url or "").strip())
     scheme = str(parsed.scheme or "").lower()
-    if scheme not in _ALLOWED_PROXY_SCHEMES:
+    if scheme not in ALLOWED_PROXY_SCHEMES:
         raise ValueError(
             "Only http://, https://, socks5://, and socks5h:// proxy endpoints are allowed"
         )
     hostname = str(parsed.hostname or "").strip().lower()
     if not hostname:
         raise ValueError("Proxy URL must include a hostname")
-    if hostname in _BLOCKED_HOSTNAMES or any(
-        hostname.endswith(suffix) for suffix in _BLOCKED_SUFFIXES
+    if hostname in BLOCKED_HOSTNAMES or any(
+        hostname.endswith(suffix) for suffix in BLOCKED_HOST_SUFFIXES
     ):
         raise SecurityError(f"Proxy host is not allowed: {hostname}")
 
@@ -236,7 +227,7 @@ def _raise_if_non_public_ip(
     ip_value: ipaddress.IPv4Address | ipaddress.IPv6Address,
     host_label: str,
 ) -> None:
-    if ip_value in _BLOCKED_IPS:
+    if ip_value in BLOCKED_IPS:
         raise SecurityError(
             f"Target host resolves to a blocked platform IP address: {host_label} -> {ip_value}"
         )
@@ -245,7 +236,7 @@ def _raise_if_non_public_ip(
         or ip_value.is_loopback
         or ip_value.is_link_local
         or ip_value.is_reserved
-        or (isinstance(ip_value, ipaddress.IPv4Address) and ip_value in _CGNAT_NETWORK)
+        or (isinstance(ip_value, ipaddress.IPv4Address) and ip_value in CGNAT_NETWORK)
     ):
         raise SecurityError(
             f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}"

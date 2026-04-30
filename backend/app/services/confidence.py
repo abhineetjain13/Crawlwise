@@ -6,9 +6,8 @@ from typing import Any
 
 from app.services.config.extraction_rules import SOURCE_TIERS, SURFACE_WEIGHTS
 from app.services.field_policy import (
-    exact_requested_field_key,
+    get_surface_field_aliases,
     normalize_field_key,
-    normalize_requested_field,
     repair_target_fields_for_surface,
 )
 
@@ -72,35 +71,41 @@ def score_record_confidence(
         if " ".join(str(field_name or "").split()).strip()
     ]
     requested = repair_target_fields_for_surface(normalized_surface, raw_requested)
-    requested_found = [
-        field_name for field_name in requested if record.get(field_name) not in (None, "", [], {})
+    field_sources_by_key = {
+        normalize_field_key(field_name): field_name
+        for field_name in field_sources
+        if normalize_field_key(field_name)
+    }
+    alias_map = get_surface_field_aliases(normalized_surface)
+    requested_match_keys = _requested_match_keys(
+        requested=requested,
+        raw_requested=raw_requested,
+        alias_map=alias_map,
+    )
+    requested_matches = [
+        match
+        for field_name in requested_match_keys
+        if (match := _resolve_requested_field_match(
+            record,
+            field_name=field_name,
+            alias_map=alias_map,
+            field_sources_by_key=field_sources_by_key,
+        )) is not None
     ]
     for field_name in requested:
-        if record.get(field_name) in (None, "", [], {}) and field_name not in missing_fields:
+        if _resolve_requested_field_match(
+            record,
+            field_name=field_name,
+            alias_map=alias_map,
+            field_sources_by_key=field_sources_by_key,
+        ) is None and field_name not in missing_fields:
             missing_fields.append(field_name)
-    requested_found_total = sum(
-        1
-        for field_name in raw_requested
-        if any(
-            record.get(candidate) not in (None, "", [], {})
-            for candidate in dict.fromkeys(
-                candidate
-                for candidate in (
-                    normalize_field_key(field_name),
-                    exact_requested_field_key(field_name),
-                    normalize_requested_field(field_name),
-                )
-                if candidate
-            )
-        )
-    )
-    if not raw_requested and requested:
-        requested_found_total = len(requested_found)
+    requested_found_total = len(requested_matches)
     if requested:
         requested_bonus = 0.0
-        for field_name in requested_found:
+        for _requested_key, actual_field_name in requested_matches:
             source_quality, _ = _field_source_quality(
-                field_sources.get(field_name),
+                field_sources.get(actual_field_name),
                 fallback_source=record.get("_source"),
             )
             requested_bonus += source_quality / max(len(requested), 1)
@@ -126,6 +131,68 @@ def score_record_confidence(
         ],
         "source_tier": source_reasoning,
     }
+
+
+def _requested_match_keys(
+    *,
+    requested: list[str],
+    raw_requested: list[str],
+    alias_map: dict[str, list[str]],
+) -> list[str]:
+    alias_to_canonical: dict[str, str] = {}
+    for canonical, aliases in alias_map.items():
+        normalized_canonical = normalize_field_key(canonical)
+        if normalized_canonical:
+            alias_to_canonical.setdefault(normalized_canonical, normalized_canonical)
+        for alias in aliases or []:
+            normalized_alias = normalize_field_key(alias)
+            if normalized_alias:
+                alias_to_canonical.setdefault(normalized_alias, normalized_canonical)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for field_name in [*requested, *raw_requested]:
+        normalized = normalize_field_key(field_name)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+        canonical = alias_to_canonical.get(normalized)
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            ordered.append(canonical)
+        for alias in alias_map.get(normalized) or []:
+            normalized_alias = normalize_field_key(alias)
+            if normalized_alias and normalized_alias not in seen:
+                seen.add(normalized_alias)
+                ordered.append(normalized_alias)
+    return ordered
+
+
+def _resolve_requested_field_match(
+    record: dict[str, Any],
+    *,
+    field_name: str,
+    alias_map: dict[str, list[str]],
+    field_sources_by_key: dict[str, str],
+) -> tuple[str, str] | None:
+    candidate_keys = [
+        normalize_field_key(field_name),
+        *[
+            normalize_field_key(alias)
+            for alias in list(alias_map.get(normalize_field_key(field_name)) or [])
+        ],
+    ]
+    seen: set[str] = set()
+    for candidate_key in candidate_keys:
+        if not candidate_key or candidate_key in seen:
+            continue
+        seen.add(candidate_key)
+        if record.get(candidate_key) not in (None, "", [], {}):
+            return (field_name, candidate_key)
+        source_field_name = field_sources_by_key.get(candidate_key)
+        if source_field_name and record.get(source_field_name) not in (None, "", [], {}):
+            return (field_name, source_field_name)
+    return None
 
 
 def _normalized_field_sources(record: dict[str, Any]) -> dict[str, list[str]]:

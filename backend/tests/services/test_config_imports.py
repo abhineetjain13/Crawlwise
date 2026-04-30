@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import ast
 import importlib
 import json
 from pathlib import Path
 
 from app.models.crawl_settings import CrawlRunSettings
+from app.schemas.crawl import DomainRunAcquisitionContractSuccess
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.config._export_data import (
     EXPORT_PROVENANCE_KEY,
@@ -24,11 +24,16 @@ import pytest
 def test_static_config_exports_remain_import_stable() -> None:
     selectors = importlib.import_module("app.services.config.selectors")
     field_mappings = importlib.import_module("app.services.config.field_mappings")
+    network_payload_specs = importlib.import_module(
+        "app.services.config.network_payload_specs"
+    )
     original_card_selectors = selectors.CARD_SELECTORS
     original_canonical_schemas = field_mappings.CANONICAL_SCHEMAS
+    original_payload_specs = network_payload_specs.NETWORK_PAYLOAD_SPECS
 
     selectors_reloaded = importlib.reload(selectors)
     field_mappings_reloaded = importlib.reload(field_mappings)
+    network_payload_specs_reloaded = importlib.reload(network_payload_specs)
 
     assert "CARD_SELECTORS" in selectors_reloaded.__all__
     assert selectors_reloaded.CARD_SELECTORS == original_card_selectors
@@ -37,6 +42,10 @@ def test_static_config_exports_remain_import_stable() -> None:
     assert "CANONICAL_SCHEMAS" in field_mappings_reloaded.__all__
     assert field_mappings_reloaded.CANONICAL_SCHEMAS == original_canonical_schemas
     assert "job_detail" in field_mappings_reloaded.CANONICAL_SCHEMAS
+
+    assert "NETWORK_PAYLOAD_SPECS" in network_payload_specs_reloaded.__all__
+    assert network_payload_specs_reloaded.NETWORK_PAYLOAD_SPECS == original_payload_specs
+    assert "ecommerce_detail" in network_payload_specs_reloaded.NETWORK_PAYLOAD_SPECS
 
 
 def test_static_config_exports_have_provenance() -> None:
@@ -71,22 +80,22 @@ def test_location_interstitial_tokens_are_unique() -> None:
 
 
 def test_extraction_rules_export_keys_cover_module_references() -> None:
-    config_dir = Path(__file__).parents[2] / "app" / "services" / "config"
-    module_path = config_dir / "extraction_rules.py"
-    exports = load_export_data(str(config_dir / "extraction_rules.exports.json"))
-    tree = ast.parse(module_path.read_text(encoding="utf-8"))
-    referenced_keys = {
-        node.slice.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Subscript)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "_EXPORTS"
-        and isinstance(node.slice, ast.Constant)
-        and isinstance(node.slice.value, str)
-    }
+    extraction_rules = importlib.import_module("app.services.config.extraction_rules")
+    exports = load_export_data(
+        str(
+            Path(__file__).parents[2]
+            / "app"
+            / "services"
+            / "config"
+            / "extraction_rules.exports.json"
+        )
+    )
 
-    assert referenced_keys
-    assert referenced_keys <= set(exports)
+    assert "TRACKING_DETAIL_CONTEXT_EXACT_KEYS" in extraction_rules.__all__
+    assert "TRACKING_PRESERVED_SHORT_QUERY_KEYS" in extraction_rules.__all__
+    assert "LISTING_EDITORIAL_URL_TOKENS" in extraction_rules.__all__
+    assert "LISTING_EDITORIAL_PATH_SEGMENTS" in extraction_rules.__all__
+    assert set(exports) <= set(extraction_rules.__all__)
 
 
 def test_extraction_rules_exports_document_link_patterns_via___all__() -> None:
@@ -135,6 +144,29 @@ def test_runtime_settings_allow_zero_accessibility_snapshot_timeout() -> None:
     settings = CrawlerRuntimeSettings(browser_accessibility_snapshot_timeout_seconds=0)
 
     assert settings.browser_accessibility_snapshot_timeout_seconds == 0
+
+
+def test_crawl_run_settings_preserves_modeled_acquisition_contract_success() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "acquisition_contract": {
+                "last_quality_success": DomainRunAcquisitionContractSuccess(
+                    method="browser",
+                    record_count=2,
+                    field_coverage={"price": True},
+                )
+            }
+        }
+    )
+
+    assert settings.acquisition_contract()["last_quality_success"] == {
+        "method": "browser",
+        "browser_engine": None,
+        "record_count": 2,
+        "field_coverage": {"price": True},
+        "source_run_id": None,
+        "timestamp": None,
+    }
 
 
 def test_invalid_traversal_mode_raises_configuration_error() -> None:

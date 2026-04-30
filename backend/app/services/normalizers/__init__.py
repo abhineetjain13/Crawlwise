@@ -6,35 +6,12 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.services.config.extraction_rules import CURRENCY_CODES
-
-_DECIMAL_FIELDS = {
-    "discount_amount",
-    "discount_percentage",
-    "original_price",
-    "price",
-    "rating",
-    "sale_price",
-    "salary_max",
-    "salary_min",
-}
-_INTEGER_FIELDS = {
-    "image_count",
-    "job_id",
-    "number_of_keys",
-    "quantity",
-    "rating_count",
-    "review_count",
-    "stock_quantity",
-    "variant_count",
-}
-_LIST_TEXT_FIELDS = {
-    "additional_images",
-    "available_sizes",
-    "option1_values",
-    "option2_values",
-    "tags",
-}
-_BOOLEAN_FIELDS = {"remote"}
+from app.services.config.field_mappings import (
+    NORMALIZER_BOOLEAN_FIELDS,
+    NORMALIZER_DECIMAL_FIELDS,
+    NORMALIZER_INTEGER_FIELDS,
+    NORMALIZER_LIST_TEXT_FIELDS,
+)
 _NUMERIC_TEXT_RE = re.compile(r"[-+]?\d[\d.,]*")
 _CURRENCY_CODE_CONTEXT_PATTERN = "|".join(
     re.escape(str(code).lower())
@@ -204,16 +181,16 @@ def normalize_value(field_name: str, value: object) -> object:
         parsed = _unwrap_singleton_literal_list(value)
         if parsed is not None:
             value = parsed
-    if normalized_field in _LIST_TEXT_FIELDS:
+    if normalized_field in NORMALIZER_LIST_TEXT_FIELDS:
         return _normalize_text_list(value)
-    if normalized_field in _BOOLEAN_FIELDS:
+    if normalized_field in NORMALIZER_BOOLEAN_FIELDS:
         return _normalize_bool(value)
     if normalized_field == "availability":
         return _normalize_availability(value)
     if normalized_field == "rating":
         result = normalize_decimal_price(value)
         return _normalize_rating(result) if result is not None else ""
-    if normalized_field in _DECIMAL_FIELDS:
+    if normalized_field in NORMALIZER_DECIMAL_FIELDS:
         if isinstance(value, str):
             trimmed = value.strip()
             if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", trimmed):
@@ -226,7 +203,7 @@ def normalize_value(field_name: str, value: object) -> object:
                     return ""
         result = normalize_decimal_price(value)
         return result if result is not None else ""
-    if normalized_field.endswith("_count") or normalized_field in _INTEGER_FIELDS:
+    if normalized_field.endswith("_count") or normalized_field in NORMALIZER_INTEGER_FIELDS:
         return _normalize_int(value)
     if isinstance(value, str):
         return _normalize_text(value)

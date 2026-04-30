@@ -19,7 +19,15 @@ from cachetools import TTLCache
 import pytz  # type: ignore[import-untyped]
 from tzlocal import get_localzone_name as _get_localzone_name
 
-from app.services.config.runtime_settings import (
+from app.services.config.browser_fingerprint_profiles import (
+    DEVICE_MEMORY_BUCKETS,
+    HOST_OS_PLATFORM_LABELS,
+    HOST_OS_UA_TOKENS,
+    NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL,
+    TIMEZONE_ALIASES,
+    USER_AGENT_PLATFORM_LABELS,
+)
+from app.services.config.browser_init_scripts import (
     build_audio_fingerprint_init_script,
     build_canvas_fingerprint_init_script,
     build_chrome_runtime_init_script,
@@ -29,6 +37,8 @@ from app.services.config.runtime_settings import (
     build_permissions_coherence_init_script,
     build_performance_coherence_init_script,
     build_webgl_fingerprint_init_script,
+)
+from app.services.config.runtime_settings import (
     crawler_runtime_settings,
 )
 from app.services.network_resolution import _accept_language_for_locale
@@ -71,31 +81,6 @@ _HEADER_DROP_KEYS = {
     "sec-fetch-user",
     "user-agent",
 }
-_HOST_OS_UA_TOKENS = {
-    "windows": "windows nt",
-    "macos": "macintosh",
-    "linux": "linux",
-}
-_HOST_OS_PLATFORM_LABELS = {
-    "windows": "Windows",
-    "macos": "macOS",
-    "linux": "Linux",
-}
-_USER_AGENT_PLATFORM_LABELS = (
-    ("windows nt", "Windows"),
-    ("macintosh", "macOS"),
-    ("mac os x", "macOS"),
-    ("linux", "Linux"),
-)
-_NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL = {
-    "Windows": "Win32",
-    "macOS": "MacIntel",
-    "Linux": "Linux x86_64",
-}
-_TIMEZONE_ALIASES = {
-    "asia/calcutta": "Asia/Kolkata",
-}
-_DEVICE_MEMORY_BUCKETS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
 _TIMEZONE_TO_COUNTRY = {
     timezone_name: country_code
     for country_code, timezone_names in pytz.country_timezones.items()
@@ -110,12 +95,10 @@ _SUPPORTED_BROWSER_ENGINES = {
     _PATCHRIGHT_BROWSER_ENGINE,
     _REAL_CHROME_BROWSER_ENGINE,
 }
-MAX_BROWSER_IDENTITIES = 1024
-BROWSER_IDENTITY_TTL_SECONDS = 60 * 60
 # Bound per-run identities so stale run IDs age out and the cache cannot grow forever.
 _RUN_BROWSER_IDENTITIES: TTLCache[int, BrowserIdentity] = TTLCache(
-    maxsize=MAX_BROWSER_IDENTITIES,
-    ttl=BROWSER_IDENTITY_TTL_SECONDS,
+    maxsize=crawler_runtime_settings.browser_identity_cache_max_entries,
+    ttl=crawler_runtime_settings.browser_identity_cache_ttl_seconds,
 )
 _RUN_BROWSER_IDENTITIES_LOCK = _threading.Lock()
 
@@ -252,8 +235,8 @@ def _bucket_device_memory_gb(value: object) -> float | None:
     normalized = _positive_float(value)
     if normalized is None:
         return None
-    bucket = _DEVICE_MEMORY_BUCKETS[0]
-    for candidate in _DEVICE_MEMORY_BUCKETS:
+    bucket = DEVICE_MEMORY_BUCKETS[0]
+    for candidate in DEVICE_MEMORY_BUCKETS:
         if normalized >= candidate:
             bucket = candidate
         else:
@@ -291,10 +274,10 @@ def _resolved_hardware_concurrency(raw_value: object) -> int | None:
 
 def _platform_label_from_user_agent(user_agent: object) -> str:
     lowered = str(user_agent or "").strip().lower()
-    for token, label in _USER_AGENT_PLATFORM_LABELS:
+    for token, label in USER_AGENT_PLATFORM_LABELS:
         if token in lowered:
             return label
-    return _HOST_OS_PLATFORM_LABELS[_HOST_OS]
+    return HOST_OS_PLATFORM_LABELS[_HOST_OS]
 
 
 def _navigator_platform_from_user_agent(
@@ -304,7 +287,7 @@ def _navigator_platform_from_user_agent(
 ) -> str:
     platform_label = _platform_label_from_user_agent(user_agent)
     fallback_value = str(fallback or "").strip()
-    return _NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL.get(platform_label) or fallback_value or "Win32"
+    return NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL.get(platform_label) or fallback_value or "Win32"
 
 
 def _platform_version_for_platform_label(platform_label: str) -> str:
@@ -645,7 +628,7 @@ def _is_version_coherent(fingerprint) -> bool:
 
 
 def _generate_coherent_fingerprint() -> Any:
-    expected_token = _HOST_OS_UA_TOKENS[_HOST_OS]
+    expected_token = HOST_OS_UA_TOKENS[_HOST_OS]
     fallback_fingerprint = None
     for _ in range(3):
         fingerprint = _fingerprint_generator().generate()
@@ -764,7 +747,7 @@ def _coherent_sec_ch_headers(user_agent_data: dict[str, object]) -> dict[str, st
     headers = {
         "sec-ch-ua": sec_ch_ua,
         "sec-ch-ua-mobile": "?1" if bool(user_agent_data.get("mobile")) else "?0",
-        "sec-ch-ua-platform": f'"{user_agent_data.get("platform") or _HOST_OS_PLATFORM_LABELS[_HOST_OS]}"',
+        "sec-ch-ua-platform": f'"{user_agent_data.get("platform") or HOST_OS_PLATFORM_LABELS[_HOST_OS]}"',
     }
     platform_version = str(user_agent_data.get("platformVersion") or "").strip()
     if platform_version:
@@ -810,7 +793,7 @@ def _should_replace_client_hint_headers(
         "",
     }:
         return True
-    expected_platform = _HOST_OS_PLATFORM_LABELS[_HOST_OS].lower()
+    expected_platform = HOST_OS_PLATFORM_LABELS[_HOST_OS].lower()
     raw_platform = normalized_headers.get("sec-ch-ua-platform", "").strip('"').lower()
     if raw_platform and raw_platform != expected_platform:
         return True
@@ -882,7 +865,7 @@ def _normalize_timezone_id(value: object) -> str | None:
     normalized = str(value or "").strip()
     if not normalized:
         return None
-    alias = _TIMEZONE_ALIASES.get(normalized.lower())
+    alias = TIMEZONE_ALIASES.get(normalized.lower())
     candidate = alias or normalized
     if candidate in pytz.all_timezones_set:
         return candidate

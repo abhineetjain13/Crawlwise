@@ -1216,8 +1216,12 @@ async def _append_accessibility_markdown(page: Any, markdown: str) -> str:
         )
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except (asyncio.TimeoutError, PlaywrightTimeoutError):
         return markdown
+    except PlaywrightError as exc:
+        if is_response_closed_error(exc):
+            return markdown
+        raise
     aria_text = _serialize_accessibility_snapshot(snapshot)
     if not aria_text:
         return markdown

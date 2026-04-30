@@ -46,6 +46,7 @@ from app.services.crawl_service import dispatch_run
 from app.services.domain_utils import normalize_domain
 from app.services.llm_runtime import run_prompt_task
 from app.services.product_intelligence.discovery import discover_candidates
+from app.services.product_intelligence.discovery import shared_query_runner
 from app.services.product_intelligence.matching import (
     build_search_result_intelligence,
     extract_product_snapshot,
@@ -273,73 +274,75 @@ async def discover_product_intelligence_candidates(
     processed_source_count = 0
     resolved_snapshots: dict[int, dict[str, object]] = {}
     llm_enabled = bool(options.get("llm_enrichment_enabled"))
-    for index, row in enumerate(source_rows[:max_source_products]):
-        snapshot = await _resolve_source_snapshot(
-            session,
-            raw=_row_data_payload(row),
-            llm_enabled=llm_enabled,
-        )
-        resolved_snapshots[index] = snapshot
-        if is_private_label(snapshot.get("brand")) and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
-            continue
-        processed_source_count += 1
-        source_url_value = str(snapshot.get("url") or row.get("source_url") or "")
-        discovered = await discover_candidates(
-            snapshot,
-            source_domain_value=normalize_domain(source_url_value),
-            provider=str(options["search_provider"]),
-            allowed_domains=_string_list(options.get("allowed_domains")),
-            excluded_domains=_string_list(options.get("excluded_domains")),
-            max_candidates=_option_int(
-                options,
-                "max_candidates_per_product",
-                default=product_intelligence_settings.max_candidates_per_product,
-            ),
-        )
-        for candidate in discovered:
-            intelligence = build_search_result_intelligence(
-                source=snapshot,
-                candidate_payload=dict(candidate.payload or {}),
-                candidate_url=candidate.url,
-                candidate_domain=candidate.domain,
-                source_type=candidate.source_type,
-            )
-            intelligence = await _backfill_candidate_brand(
+    async with shared_query_runner(str(options["search_provider"])) as run_query:
+        for index, row in enumerate(source_rows[:max_source_products]):
+            snapshot = await _resolve_source_snapshot(
                 session,
-                source=snapshot,
-                intelligence=intelligence,
-                source_type=candidate.source_type,
+                raw=_row_data_payload(row),
                 llm_enabled=llm_enabled,
             )
-            intelligence = await _enrich_search_result_intelligence(
-                session,
-                options=options,
-                source_snapshot=snapshot,
-                candidate_payload=dict(candidate.payload or {}),
-                candidate_url=candidate.url,
-                candidate_domain=candidate.domain,
-                source_type=candidate.source_type,
-                intelligence=intelligence,
+            resolved_snapshots[index] = snapshot
+            if is_private_label(snapshot.get("brand")) and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
+                continue
+            processed_source_count += 1
+            source_url_value = str(snapshot.get("url") or row.get("source_url") or "")
+            discovered = await discover_candidates(
+                snapshot,
+                source_domain_value=normalize_domain(source_url_value),
+                provider=str(options["search_provider"]),
+                allowed_domains=_string_list(options.get("allowed_domains")),
+                excluded_domains=_string_list(options.get("excluded_domains")),
+                max_candidates=_option_int(
+                    options,
+                    "max_candidates_per_product",
+                    default=product_intelligence_settings.max_candidates_per_product,
+                ),
+                run_query=run_query,
             )
-            discovered_payloads.append(
-                {
-                    "source_record_id": _as_int(row.get("source_record_id")),
-                    "source_run_id": _as_int(row.get("source_run_id")),
-                    "source_url": source_url_value,
-                    "source_title": str(snapshot.get("title") or ""),
-                    "source_brand": str(snapshot.get("brand") or ""),
-                    "source_price": snapshot.get("price") if isinstance(snapshot.get("price"), float) else None,
-                    "source_currency": str(snapshot.get("currency") or ""),
-                    "source_index": index,
-                    "url": candidate.url,
-                    "domain": candidate.domain,
-                    "source_type": candidate.source_type,
-                    "query_used": candidate.query_used,
-                    "search_rank": candidate.search_rank,
-                    "payload": dict(candidate.payload or {}),
-                    "intelligence": intelligence,
-                }
-            )
+            for candidate in discovered:
+                intelligence = build_search_result_intelligence(
+                    source=snapshot,
+                    candidate_payload=dict(candidate.payload or {}),
+                    candidate_url=candidate.url,
+                    candidate_domain=candidate.domain,
+                    source_type=candidate.source_type,
+                )
+                intelligence = await _backfill_candidate_brand(
+                    session,
+                    source=snapshot,
+                    intelligence=intelligence,
+                    source_type=candidate.source_type,
+                    llm_enabled=llm_enabled,
+                )
+                intelligence = await _enrich_search_result_intelligence(
+                    session,
+                    options=options,
+                    source_snapshot=snapshot,
+                    candidate_payload=dict(candidate.payload or {}),
+                    candidate_url=candidate.url,
+                    candidate_domain=candidate.domain,
+                    source_type=candidate.source_type,
+                    intelligence=intelligence,
+                )
+                discovered_payloads.append(
+                    {
+                        "source_record_id": _as_int(row.get("source_record_id")),
+                        "source_run_id": _as_int(row.get("source_run_id")),
+                        "source_url": source_url_value,
+                        "source_title": str(snapshot.get("title") or ""),
+                        "source_brand": str(snapshot.get("brand") or ""),
+                        "source_price": snapshot.get("price") if isinstance(snapshot.get("price"), float) else None,
+                        "source_currency": str(snapshot.get("currency") or ""),
+                        "source_index": index,
+                        "url": candidate.url,
+                        "domain": candidate.domain,
+                        "source_type": candidate.source_type,
+                        "query_used": candidate.query_used,
+                        "search_rank": candidate.search_rank,
+                        "payload": dict(candidate.payload or {}),
+                        "intelligence": intelligence,
+                    }
+                )
     job = await _persist_discovery_job(
         session,
         user=user,
@@ -498,40 +501,42 @@ async def _run_job(session: AsyncSession, job: ProductIntelligenceJob) -> None:
             )
         ).all()
     )
-    for source in sources[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]:
-        if source.is_private_label and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
-            continue
-        source_payload = _source_product_payload(source)
-        source_domain_value = normalize_domain(source.source_url)
-        discovered = await discover_candidates(
-            source_payload,
-            source_domain_value=source_domain_value,
-            provider=str(options["search_provider"]),
-            allowed_domains=_string_list(options.get("allowed_domains")),
-            excluded_domains=_string_list(options.get("excluded_domains")),
-            max_candidates=_option_int(
-                options,
-                "max_candidates_per_product",
-                default=product_intelligence_settings.max_candidates_per_product,
-            ),
-        )
-        for discovered_candidate in discovered:
-            candidate = ProductIntelligenceCandidate(
-                job_id=job.id,
-                source_product_id=source.id,
-                url=discovered_candidate.url,
-                domain=discovered_candidate.domain,
-                source_type=discovered_candidate.source_type,
-                query_used=discovered_candidate.query_used,
-                search_rank=discovered_candidate.search_rank,
-                payload=dict(discovered_candidate.payload or {}),
+    async with shared_query_runner(str(options["search_provider"])) as run_query:
+        for source in sources[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]:
+            if source.is_private_label and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
+                continue
+            source_payload = _source_product_payload(source)
+            source_domain_value = normalize_domain(source.source_url)
+            discovered = await discover_candidates(
+                source_payload,
+                source_domain_value=source_domain_value,
+                provider=str(options["search_provider"]),
+                allowed_domains=_string_list(options.get("allowed_domains")),
+                excluded_domains=_string_list(options.get("excluded_domains")),
+                max_candidates=_option_int(
+                    options,
+                    "max_candidates_per_product",
+                    default=product_intelligence_settings.max_candidates_per_product,
+                ),
+                run_query=run_query,
             )
-            session.add(candidate)
-            await session.flush()
-            await _create_candidate_crawl(session, job, candidate, options=options)
-            await _poll_candidate_and_score(session, job, candidate)
-            await _update_job_summary(session, job)
-            await session.commit()
+            for discovered_candidate in discovered:
+                candidate = ProductIntelligenceCandidate(
+                    job_id=job.id,
+                    source_product_id=source.id,
+                    url=discovered_candidate.url,
+                    domain=discovered_candidate.domain,
+                    source_type=discovered_candidate.source_type,
+                    query_used=discovered_candidate.query_used,
+                    search_rank=discovered_candidate.search_rank,
+                    payload=dict(discovered_candidate.payload or {}),
+                )
+                session.add(candidate)
+                await session.flush()
+                await _create_candidate_crawl(session, job, candidate, options=options)
+                await _poll_candidate_and_score(session, job, candidate)
+                await _update_job_summary(session, job)
+                await session.commit()
     await _score_completed_candidates(session, job)
     job.status = PRODUCT_INTELLIGENCE_JOB_STATUS_COMPLETE
     job.completed_at = datetime.now(UTC)

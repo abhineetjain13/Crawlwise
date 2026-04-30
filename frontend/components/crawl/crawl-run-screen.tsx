@@ -20,10 +20,10 @@ import {
   SectionHeader,
   TabBar,
 } from "../ui/patterns";
-import { Badge, Button, Card, Dropdown, Field, Input, Textarea, Toggle, Tooltip } from "../ui/primitives";
+import { Badge, Button, Card, Textarea, Tooltip } from "../ui/primitives";
 import { api } from "../../lib/api";
 import { getApiWebSocketBaseUrl } from "../../lib/api/client";
-import type { CrawlLog, CrawlRecord, CrawlRun, DomainRunProfile, ResultSummaryQualityLevel } from "../../lib/api/types";
+import type { CrawlLog, CrawlRecord, CrawlRun, ResultSummaryQualityLevel } from "../../lib/api/types";
 import { CRAWL_DEFAULTS } from "../../lib/constants/crawl-defaults";
 import { ACTIVE_STATUSES } from "../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
@@ -67,77 +67,6 @@ function selectorWinnerLabel(selectorKind: string | null | undefined): string {
   if (normalized === "xpath") return "XPath winner";
   if (normalized === "css_selector") return "CSS selector winner";
   return `${selectorKind} winner`;
-}
-
-function defaultDomainRunProfile(): DomainRunProfile {
-  return {
-    version: 1,
-    fetch_profile: {
-      fetch_mode: "auto",
-      extraction_source: "raw_html",
-      js_mode: "auto",
-      include_iframes: false,
-      traversal_mode: null,
-      request_delay_ms: 500,
-    },
-    locality_profile: {
-      geo_country: "auto",
-      language_hint: null,
-      currency_hint: null,
-    },
-    diagnostics_profile: {
-      capture_html: true,
-      capture_screenshot: false,
-      capture_network: "matched_only",
-      capture_response_headers: true,
-      capture_browser_diagnostics: true,
-    },
-    acquisition_contract: {
-      preferred_browser_engine: "auto",
-      prefer_browser: false,
-      prefer_curl_handoff: false,
-      handoff_cookie_engine: "auto",
-      last_quality_success: null,
-      stale_after_failures: {
-        failure_count: 0,
-        stale: false,
-      },
-    },
-    source_run_id: null,
-    saved_at: null,
-  };
-}
-
-function cloneDomainRunProfile(profile: DomainRunProfile | null | undefined): DomainRunProfile {
-  const base = defaultDomainRunProfile();
-  if (!profile) {
-    return base;
-  }
-  return {
-    version: 1,
-    fetch_profile: {
-      ...base.fetch_profile,
-      ...(profile.fetch_profile ?? {}),
-    },
-    locality_profile: {
-      ...base.locality_profile,
-      ...(profile.locality_profile ?? {}),
-    },
-    diagnostics_profile: {
-      ...base.diagnostics_profile,
-      ...(profile.diagnostics_profile ?? {}),
-    },
-    acquisition_contract: {
-      ...base.acquisition_contract,
-      ...(profile.acquisition_contract ?? {}),
-      stale_after_failures: {
-        ...base.acquisition_contract.stale_after_failures,
-        ...(profile.acquisition_contract?.stale_after_failures ?? {}),
-      },
-    },
-    source_run_id: profile.source_run_id ?? null,
-    saved_at: profile.saved_at ?? null,
-  };
 }
 
 function mergeRecords(current: CrawlRecord[], incoming: CrawlRecord[]) {
@@ -210,8 +139,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
-  const [recipeProfileDraft, setRecipeProfileDraft] = useState<DomainRunProfile | null>(null);
-  const [recipeActionPending, setRecipeActionPending] = useState<"profile" | `field:${string}:${"keep" | "reject"}` | null>(null);
+  const [recipeActionPending, setRecipeActionPending] = useState<`field:${string}:${"keep" | "reject"}` | null>(null);
   const [recipeActionError, setRecipeActionError] = useState("");
   const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
   const [runActionPending, setRunActionPending] = useState<"kill" | null>(null);
@@ -246,9 +174,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     (run.status === "failed" || run.status === "proxy_exhausted") &&
     Number(run?.result_summary?.record_count ?? 0) === 0,
   );
+  const showRunLearningTab = Boolean(run?.run_type === "crawl" && terminal);
   const effectiveOutputTab =
     failedRunWithoutRecords && outputTab === "table"
       ? "logs"
+      : (outputTab === "learning" && !showRunLearningTab) || outputTab === "run_config"
+        ? "table"
       : outputTab;
   const shouldFetchTableRecords = Boolean(run) && effectiveOutputTab === "table";
   const shouldFetchJsonRecords = Boolean(run) && effectiveOutputTab === "json";
@@ -297,7 +228,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const domainRecipeQuery = useQuery({
     queryKey: ["crawl-domain-recipe", runId],
     queryFn: () => api.getDomainRecipe(runId),
-    enabled: Boolean(run) && terminal,
+    enabled: showRunLearningTab,
     refetchInterval: false,
     refetchOnMount: "always",
   });
@@ -323,11 +254,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const logCursorAfterId = logs.at(-1)?.id;
   const markdown = markdownQuery.data ?? "";
   const domainRecipe = domainRecipeQuery.data;
-  const savedRecipeProfile = useMemo(
-    () => cloneDomainRunProfile(domainRecipe?.saved_run_profile),
-    [domainRecipe?.saved_run_profile],
-  );
-  const recipeProfile = recipeProfileDraft ?? savedRecipeProfile;
   const logSocketOnline = shouldFetchLogs && logSocketConnected;
   const elapsedLabel = useMemo(() => {
     const elapsedMs = Math.max(0, localNow - effectiveStartMs);
@@ -631,11 +557,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     terminalRecordsExpected &&
     knownTableRecordsTotal < Math.max(1, summaryRecordsFromRun);
 
-  function updateRecipeProfile(updater: (current: DomainRunProfile) => DomainRunProfile) {
-    setRecipeActionError("");
-    setRecipeProfileDraft((current) => updater(cloneDomainRunProfile(current ?? recipeProfile)));
-  }
-
   useEffect(() => {
     if (!terminalRecordsNeedSync) {
       terminalRecordsRetryAttemptsRef.current = 0;
@@ -742,22 +663,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     router.replace("/product-intelligence");
   }
 
-  async function saveRecipeRunProfile() {
-    setRecipeActionPending("profile");
-    setRecipeActionError("");
-    try {
-      await api.saveDomainRunProfile(runId, {
-        profile: recipeProfile,
-      });
-      await refetchDomainRecipeQuery();
-      setRecipeProfileDraft(null);
-    } catch (error) {
-      setRecipeActionError(error instanceof Error ? error.message : "Unable to save the domain run profile.");
-    } finally {
-      setRecipeActionPending(null);
-    }
-  }
-
   async function applyFieldLearningAction(fieldName: string, action: "keep" | "reject", selectorKind?: string | null, selectorValue?: string | null, sourceRecordIds?: number[]) {
     const pendingKey = `field:${fieldName}:${action}` as const;
     setRecipeActionPending(pendingKey);
@@ -771,7 +676,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         source_record_ids: sourceRecordIds ?? [],
       });
       await refetchDomainRecipeQuery();
-      setRecipeProfileDraft(null);
     } catch (error) {
       setRecipeActionError(error instanceof Error ? error.message : `Unable to ${action} this field learning signal.`);
     } finally {
@@ -949,8 +853,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     { value: "json", label: "JSON" },
                     { value: "markdown", label: "Markdown" },
                     { value: "logs", label: "Logs" },
-                    { value: "learning", label: "Learning" },
-                    { value: "run_config", label: "Run Config" },
+                    ...(showRunLearningTab
+                      ? [{ value: "learning", label: "Learning" }]
+                      : []),
                   ]}
                 />
               }
@@ -1179,337 +1084,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         <DataRegionEmpty
                           title="No learning data available"
                           description="This run did not produce reusable field-learning evidence."
-                          className="px-0"
-                        />
-                      )}
-                    </div>
-                  ) : null}
-
-                  {effectiveOutputTab === "run_config" ? (
-                    <div className="space-y-4 min-h-[55vh]">
-                      {domainRecipeQuery.isLoading ? (
-                        <Card className="section-card">
-                          <SectionHeader title="Run Config" description="Loading saved run profile defaults for this domain." />
-                        </Card>
-                      ) : domainRecipe ? (
-                        <Card className="section-card space-y-4">
-                          <SectionHeader
-                            title="Run Config"
-                            description={`Edit and save the reusable fetch profile for ${domainRecipe.domain}. These defaults are applied to future single-URL runs on ${domainRecipe.surface}.`}
-                          />
-                          {recipeActionError ? <InlineAlert tone="danger" message={recipeActionError} /> : null}
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm leading-[var(--leading-relaxed)] text-secondary">
-                              Saved profile source run: {domainRecipe.saved_run_profile?.source_run_id ?? "—"} · Last saved: {domainRecipe.saved_run_profile?.saved_at ?? "Not saved yet"}
-                            </div>
-                            <Button
-                              variant="accent"
-                              type="button"
-                              onClick={() => void saveRecipeRunProfile()}
-                              disabled={recipeActionPending === "profile"}
-                            >
-                              {recipeActionPending === "profile" ? "Saving..." : "Save Run Profile"}
-                            </Button>
-                          </div>
-                          <div className="grid gap-3 md:grid-cols-3">
-                            <div className="grid gap-3 md:col-span-2 md:grid-cols-2 content-start">
-                              <Field label="Fetch Mode">
-                                <Dropdown
-                                  value={recipeProfile.fetch_profile.fetch_mode}
-                                  onChange={(value) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      fetch_profile: {
-                                        ...current.fetch_profile,
-                                        fetch_mode: value,
-                                      },
-                                    }))
-                                  }
-                                  options={[
-                                    { value: "auto", label: "Auto" },
-                                    { value: "http_only", label: "HTTP Only" },
-                                    { value: "browser_only", label: "Browser Only" },
-                                    { value: "http_then_browser", label: "HTTP Then Browser" },
-                                  ]}
-                                />
-                              </Field>
-                              <Field label="Extraction Source">
-                                <Dropdown
-                                  value={recipeProfile.fetch_profile.extraction_source}
-                                  onChange={(value) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      fetch_profile: {
-                                        ...current.fetch_profile,
-                                        extraction_source: value,
-                                      },
-                                    }))
-                                  }
-                                  options={[
-                                    { value: "raw_html", label: "Raw HTML" },
-                                    { value: "rendered_dom", label: "Rendered DOM" },
-                                    { value: "rendered_dom_visual", label: "Rendered DOM + Visual" },
-                                    { value: "network_payload_first", label: "Network Payload First" },
-                                  ]}
-                                />
-                              </Field>
-                              <Field label="JS Mode">
-                                <Dropdown
-                                  value={recipeProfile.fetch_profile.js_mode}
-                                  onChange={(value) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      fetch_profile: {
-                                        ...current.fetch_profile,
-                                        js_mode: value,
-                                      },
-                                    }))
-                                  }
-                                  options={[
-                                    { value: "auto", label: "Auto" },
-                                    { value: "enabled", label: "Enabled" },
-                                    { value: "disabled", label: "Disabled" },
-                                  ]}
-                                />
-                              </Field>
-                              <Field label="Traversal Mode">
-                                <Dropdown
-                                  value={recipeProfile.fetch_profile.traversal_mode ?? ""}
-                                  onChange={(value) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      fetch_profile: {
-                                        ...current.fetch_profile,
-                                        traversal_mode: value ? value : null,
-                                      },
-                                    }))
-                                  }
-                                  options={[
-                                    { value: "", label: "Off" },
-                                    { value: "auto", label: "Auto" },
-                                    { value: "scroll", label: "Scroll" },
-                                    { value: "load_more", label: "Load More" },
-                                    { value: "view_all", label: "View All" },
-                                    { value: "paginate", label: "Paginate" },
-                                  ]}
-                                />
-                              </Field>
-                              <Field label="Geo Country">
-                                <Input
-                                  aria-label="Geo Country"
-                                  value={recipeProfile.locality_profile.geo_country}
-                                  onChange={(event) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      locality_profile: {
-                                        ...current.locality_profile,
-                                        geo_country: event.target.value || "auto",
-                                      },
-                                    }))
-                                  }
-                                />
-                              </Field>
-                              <Field label="Language Hint">
-                                <Input
-                                  aria-label="Language Hint"
-                                  value={recipeProfile.locality_profile.language_hint ?? ""}
-                                  onChange={(event) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      locality_profile: {
-                                        ...current.locality_profile,
-                                        language_hint: event.target.value || null,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </Field>
-                              <Field label="Currency Hint">
-                                <Input
-                                  aria-label="Currency Hint"
-                                  value={recipeProfile.locality_profile.currency_hint ?? ""}
-                                  onChange={(event) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      locality_profile: {
-                                        ...current.locality_profile,
-                                        currency_hint: event.target.value || null,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </Field>
-                              <Field label="Network Capture">
-                                <Dropdown
-                                  value={recipeProfile.diagnostics_profile.capture_network}
-                                  onChange={(value) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      diagnostics_profile: {
-                                        ...current.diagnostics_profile,
-                                        capture_network: value,
-                                      },
-                                    }))
-                                  }
-                                  options={[
-                                    { value: "off", label: "Off" },
-                                    { value: "matched_only", label: "Matched Only" },
-                                    { value: "all_small_json", label: "All Small JSON" },
-                                  ]}
-                                />
-                              </Field>
-                              <Field label="Preferred Browser Engine">
-                                <Dropdown
-                                  value={recipeProfile.acquisition_contract.preferred_browser_engine}
-                                  onChange={(value) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      acquisition_contract: {
-                                        ...current.acquisition_contract,
-                                        preferred_browser_engine: value as "auto" | "patchright" | "real_chrome",
-                                      },
-                                    }))
-                                  }
-                                  options={[
-                                    { value: "auto", label: "Auto" },
-                                    { value: "patchright", label: "Patchright" },
-                                    { value: "real_chrome", label: "Real Chrome" },
-                                  ]}
-                                />
-                              </Field>
-                              <Field label="Handoff Cookie Engine">
-                                <Dropdown
-                                  value={recipeProfile.acquisition_contract.handoff_cookie_engine}
-                                  onChange={(value) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      acquisition_contract: {
-                                        ...current.acquisition_contract,
-                                        handoff_cookie_engine: value as "auto" | "patchright" | "real_chrome",
-                                      },
-                                    }))
-                                  }
-                                  options={[
-                                    { value: "auto", label: "Auto" },
-                                    { value: "patchright", label: "Patchright" },
-                                    { value: "real_chrome", label: "Real Chrome" },
-                                  ]}
-                                />
-                              </Field>
-                            </div>
-                            <div className="flex flex-col gap-3">
-                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
-                                <span className="text-sm font-medium">Prefer Browser</span>
-                                <Toggle
-                                  checked={recipeProfile.acquisition_contract.prefer_browser}
-                                  onChange={(checked) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      acquisition_contract: {
-                                        ...current.acquisition_contract,
-                                        prefer_browser: checked,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
-                                <span className="text-sm font-medium">Prefer Curl Handoff</span>
-                                <Toggle
-                                  checked={recipeProfile.acquisition_contract.prefer_curl_handoff}
-                                  onChange={(checked) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      acquisition_contract: {
-                                        ...current.acquisition_contract,
-                                        prefer_curl_handoff: checked,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
-                                <span className="text-sm font-medium">Include iframes</span>
-                                <Toggle
-                                  checked={recipeProfile.fetch_profile.include_iframes}
-                                  onChange={(checked) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      fetch_profile: {
-                                        ...current.fetch_profile,
-                                        include_iframes: checked,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
-                                <span className="text-sm font-medium">Capture HTML</span>
-                                <Toggle
-                                  checked={recipeProfile.diagnostics_profile.capture_html}
-                                  onChange={(checked) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      diagnostics_profile: {
-                                        ...current.diagnostics_profile,
-                                        capture_html: checked,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
-                                <span className="text-sm font-medium">Capture Screenshot</span>
-                                <Toggle
-                                  checked={recipeProfile.diagnostics_profile.capture_screenshot}
-                                  onChange={(checked) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      diagnostics_profile: {
-                                        ...current.diagnostics_profile,
-                                        capture_screenshot: checked,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
-                                <span className="text-sm font-medium">Capture Response Headers</span>
-                                <Toggle
-                                  checked={recipeProfile.diagnostics_profile.capture_response_headers}
-                                  onChange={(checked) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      diagnostics_profile: {
-                                        ...current.diagnostics_profile,
-                                        capture_response_headers: checked,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
-                                <span className="text-sm font-medium">Capture Browser Diagnostics</span>
-                                <Toggle
-                                  checked={recipeProfile.diagnostics_profile.capture_browser_diagnostics}
-                                  onChange={(checked) =>
-                                    updateRecipeProfile((current) => ({
-                                      ...current,
-                                      diagnostics_profile: {
-                                        ...current.diagnostics_profile,
-                                        capture_browser_diagnostics: checked,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        </Card>
-                      ) : (
-                        <DataRegionEmpty
-                          title="No run profile available"
-                          description="This run did not produce a domain profile payload."
                           className="px-0"
                         />
                       )}

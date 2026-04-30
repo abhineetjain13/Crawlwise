@@ -190,9 +190,7 @@ class CrawlRunSettings:
                 stored.get("handoff_cookie_engine") or "auto"
             ).strip().lower()
             or "auto",
-            "last_quality_success": stored.get("last_quality_success")
-            if isinstance(stored.get("last_quality_success"), Mapping)
-            else None,
+            "last_quality_success": _mapping(stored.get("last_quality_success")) or None,
             "stale_after_failures": {
                 "failure_count": _coerce_int(
                     stale.get("failure_count"),

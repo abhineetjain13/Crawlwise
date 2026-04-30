@@ -6,29 +6,6 @@ from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.services.config.browser_init_scripts import (
-    build_audio_fingerprint_init_script as _build_audio_fingerprint_init_script,
-    build_canvas_fingerprint_init_script as _build_canvas_fingerprint_init_script,
-    build_chrome_runtime_init_script as _build_chrome_runtime_init_script,
-    build_font_surface_init_script as _build_font_surface_init_script,
-    build_intl_coherence_init_script as _build_intl_coherence_init_script,
-    build_navigator_coherence_init_script as _build_navigator_coherence_init_script,
-    build_permissions_coherence_init_script as _build_permissions_coherence_init_script,
-    build_performance_coherence_init_script as _build_performance_coherence_init_script,
-    build_webgl_fingerprint_init_script as _build_webgl_fingerprint_init_script,
-)
-
-
-build_audio_fingerprint_init_script = _build_audio_fingerprint_init_script
-build_canvas_fingerprint_init_script = _build_canvas_fingerprint_init_script
-build_chrome_runtime_init_script = _build_chrome_runtime_init_script
-build_font_surface_init_script = _build_font_surface_init_script
-build_intl_coherence_init_script = _build_intl_coherence_init_script
-build_navigator_coherence_init_script = _build_navigator_coherence_init_script
-build_permissions_coherence_init_script = _build_permissions_coherence_init_script
-build_performance_coherence_init_script = _build_performance_coherence_init_script
-build_webgl_fingerprint_init_script = _build_webgl_fingerprint_init_script
-
 
 _BACKEND_DIR = Path(__file__).resolve().parents[3]
 _ENV_FILES = (str(_BACKEND_DIR.parent / ".env"), str(_BACKEND_DIR / ".env"))
@@ -210,6 +187,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_accessibility_snapshot_timeout_seconds: float = 0.5
     browser_capture_queue_join_timeout_ms: int = 2000
     browser_artifact_capture_timeout_ms: int = 4000
+    crawl_event_counter_ttl_seconds: int = 86400
     browser_first_nav_pause_ms: int = 0
     platform_detection_html_search_limit: int = 500000
     browser_real_chrome_enabled: bool = True
@@ -270,6 +248,8 @@ class CrawlerRuntimeSettings(BaseSettings):
     fingerprint_hardware_concurrency: int = 0
     fingerprint_device_memory_gb: float = 0.0
     browser_identity_min_chrome_version: int = 120
+    browser_identity_cache_max_entries: int = 1024
+    browser_identity_cache_ttl_seconds: int = 3600
     browser_desktop_viewport_reserved_height_px: int = 100
     browser_desktop_window_frame_width_px: int = 16
     browser_desktop_window_frame_height_px: int = 88

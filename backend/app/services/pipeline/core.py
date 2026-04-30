@@ -123,8 +123,6 @@ class _FetchedURLStage:
 class _ExtractedURLStage:
     fetched: _FetchedURLStage
     records: list[dict[str, object]]
-
-
 def _resolve_run_param(
     plan_value: object | None,
     config_value: object | None,
@@ -136,14 +134,12 @@ def _resolve_run_param(
         if candidate is None:
             continue
         try:
-            resolved = int(candidate)
+            resolved = int(float(candidate))
         except (TypeError, ValueError):
             continue
         if resolved >= int(min_value):
             return resolved
     return int(default_value)
-
-
 def _resolved_url_processing_config(
     config: URLProcessingConfig | None,
     *,
@@ -697,8 +693,6 @@ async def _retry_empty_extraction_with_browser(
     browser_result = await _acquire_browser_retry_result(context, fetched, retry_reason="empty_extraction")
     fetched.acquisition_result = browser_result
     return await _extract_records_for_acquisition(context, fetched)
-
-
 async def _retry_low_quality_extraction_with_browser(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -721,15 +715,19 @@ async def _retry_low_quality_extraction_with_browser(
     )
     if not retry_decision["should_retry"]:
         return records, selector_rules
+    raw_missing_fields = retry_decision.get("missing_fields")
+    missing_field_values = raw_missing_fields if isinstance(raw_missing_fields, list) else []
     missing_fields = [
         str(field_name)
-        for field_name in list(retry_decision.get("missing_fields") or [])
+        for field_name in missing_field_values
         if str(field_name).strip()
     ]
     if not missing_fields:
         return records, selector_rules
     remaining_budget_seconds = _remaining_url_budget_seconds(context)
-    min_remaining_seconds = float(crawler_runtime_settings.low_quality_browser_retry_min_remaining_seconds)
+    min_remaining_seconds = float(
+        crawler_runtime_settings.low_quality_browser_retry_min_remaining_seconds
+    )
     if remaining_budget_seconds < min_remaining_seconds:
         await _log_pipeline_event(
             context,
@@ -752,11 +750,8 @@ async def _retry_low_quality_extraction_with_browser(
     )
     fetched.acquisition_result = browser_result
     return await _extract_records_for_acquisition(context, fetched)
-
-
 def _remaining_url_budget_seconds(context: _URLProcessingContext) -> float:
     return max(0.0, float(context.url_timeout_seconds) - max(0.0, time.monotonic() - float(context.started_at_monotonic)))
-
 async def _acquire_browser_retry_result(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -842,8 +837,6 @@ async def _apply_extraction_post_processing(
         reason=None,
     )
     return records, selector_rules
-
-
 async def _extract_records_for_acquisition(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -1175,8 +1168,6 @@ async def _run_persistence_stage(
             record_count=persisted_count,
         ),
     )
-
-
 async def _update_acquisition_contract_memory(
     context: _URLProcessingContext,
     *,

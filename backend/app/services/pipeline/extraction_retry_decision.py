@@ -261,9 +261,13 @@ def _missing_fields_have_static_html_evidence(
         requested_fields=missing_fields,
         selector_rules=[],
     )
+    raw_matched_requested = extractability.get("matched_requested_fields")
+    matched_requested_values = (
+        list(raw_matched_requested) if isinstance(raw_matched_requested, list) else []
+    )
     matched_requested = {
         str(field_name).strip()
-        for field_name in list(extractability.get("matched_requested_fields") or [])
+        for field_name in matched_requested_values
         if str(field_name).strip()
     }
     if matched_requested:

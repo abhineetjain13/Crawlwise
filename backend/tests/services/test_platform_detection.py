@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app.services import platform_policy
-from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.platform_policy import (
     detect_platform_family,
     is_job_platform_signal,

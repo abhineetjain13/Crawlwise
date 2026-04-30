@@ -584,17 +584,28 @@ def _load_prune_preserved_script_ids() -> frozenset[str]:
     )
 
 
-_STRIP_ATTR_PATTERNS = (
-    re.compile(r"^on"),
-    re.compile(r"^data-(?!test|qa|sku|product|price|avail|component|section|field)"),
-)
+def _load_prune_strip_attr_prefixes() -> tuple[str, ...]:
+    return tuple(
+        prefix.strip().lower()
+        for prefix in llm_runtime_settings.html_prune_strip_attr_prefixes.split(",")
+        if prefix.strip()
+    )
 
+
+def _load_prune_preserved_data_attr_prefixes() -> tuple[str, ...]:
+    return tuple(
+        prefix.strip().lower()
+        for prefix in llm_runtime_settings.html_prune_preserved_data_attr_prefixes.split(",")
+        if prefix.strip()
+    )
 
 def _prune_html_for_llm(html_text: str) -> str:
     stripped_tags = _load_prune_stripped_tags()
     preserved_script_types = _load_prune_preserved_script_types()
     preserved_attrs = _load_prune_preserved_attrs()
+    preserved_data_prefixes = _load_prune_preserved_data_attr_prefixes()
     preserved_script_ids = _load_prune_preserved_script_ids()
+    strip_attr_prefixes = _load_prune_strip_attr_prefixes()
     soup = BeautifulSoup(html_text, "html.parser")
     for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
         comment.extract()
@@ -613,12 +624,32 @@ def _prune_html_for_llm(html_text: str) -> str:
             key: value
             for key, value in tag.attrs.items()
             if key in preserved_attrs
-            or not any(pat.match(key) for pat in _STRIP_ATTR_PATTERNS)
+            or not _should_strip_llm_attr(
+                key,
+                strip_attr_prefixes=strip_attr_prefixes,
+                preserved_data_prefixes=preserved_data_prefixes,
+            )
         }
         style = tag.get("style")
         if style:
             del tag["style"]
     return str(soup)
+
+
+def _should_strip_llm_attr(
+    attr_name: str,
+    *,
+    strip_attr_prefixes: tuple[str, ...],
+    preserved_data_prefixes: tuple[str, ...],
+) -> bool:
+    normalized = str(attr_name or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized.startswith("data-") and any(
+        normalized.startswith(prefix) for prefix in preserved_data_prefixes
+    ):
+        return False
+    return any(normalized.startswith(prefix) for prefix in strip_attr_prefixes)
 
 
 def _extract_structured_data(html_text: str) -> dict[str, object]:

@@ -46,7 +46,6 @@ from app.services.acquisition.pacing import (
     wait_for_host_slot,
 )
 from app.services.acquisition.runtime import (
-    NetworkPayloadReadResult,
     PageFetchResult,
     classify_block_from_headers,
     close_shared_http_client,

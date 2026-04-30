@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.redis import redis_fail_open, schedule_fail_open
 from app.models.crawl import CrawlLog, CrawlRun
+from app.services.config.runtime_settings import crawler_runtime_settings
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -24,8 +25,8 @@ _LEVEL_ORDER = {
     "critical": 50,
 }
 _URL_PROGRESS_PATTERN = re.compile(r"^Processing URL \d+/\d+: ")
-_COUNTER_TTL_SECONDS = 86400
 _REDIS_KEY_PREFIX = "crawl:events"
+_COUNTER_TTL_SECONDS = crawler_runtime_settings.crawl_event_counter_ttl_seconds
 _DETACHED_LOG_WRITE_CONCURRENCY = 8
 _DETACHED_LOG_WRITE_SEMAPHORE = asyncio.Semaphore(_DETACHED_LOG_WRITE_CONCURRENCY)
 

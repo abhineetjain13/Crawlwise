@@ -2591,6 +2591,22 @@ async def test_generate_page_markdown_tolerates_slow_accessibility_snapshots() -
 
 
 @pytest.mark.asyncio
+async def test_generate_page_markdown_raises_unexpected_accessibility_errors() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1></body></html>",
+        accessibility_snapshot={"role": "document", "children": []},
+    )
+
+    async def _broken_snapshot() -> dict[str, object]:
+        raise PlaywrightError("locator crashed unexpectedly")
+
+    page.accessibility = SimpleNamespace(snapshot=_broken_snapshot)
+
+    with pytest.raises(PlaywrightError, match="locator crashed unexpectedly"):
+        await _page_markdown_via_browser_fetch(page=page)
+
+
+@pytest.mark.asyncio
 async def test_expand_all_interactive_elements_respects_small_interaction_cap(
     patch_settings,
 ) -> None:

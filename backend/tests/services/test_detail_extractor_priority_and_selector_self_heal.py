@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extraction_runtime import extract_records
 from app.services.selector_self_heal import (
     _validated_xpath_rules,

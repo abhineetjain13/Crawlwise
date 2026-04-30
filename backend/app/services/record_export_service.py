@@ -342,8 +342,8 @@ def clean_export_data(data: dict) -> dict:
         for k, v in data.items()
         if (
             v not in (None, "", [], {})
-            and not str(k).startswith("_")
-            and str(k) not in PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS
+            and not str(k).strip().startswith("_")
+            and str(k).strip().lower() not in PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS
         )
     }
 

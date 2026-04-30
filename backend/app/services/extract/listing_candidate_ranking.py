@@ -5,39 +5,15 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from app.services.config.extraction_rules import (
+    LISTING_EDITORIAL_PATH_SEGMENTS,
+    LISTING_EDITORIAL_TITLE_PATTERNS,
+    LISTING_EDITORIAL_URL_TOKENS,
     LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.field_value_core import (
-    LISTING_UTILITY_TITLE_REGEXES,
-    clean_text,
-)
-_EDITORIAL_TITLE_REGEXES = (
-    re.compile(r"\bcustomer\s+(?:reviews?|photos?)\b", re.I),
-    re.compile(r"\b(?:corporate|branded)\s+(?:swag|merchandise)\b", re.I),
-    re.compile(r"\b(?:community|diversity|equity|inclusion|mission|values?)\b", re.I),
-)
-_EDITORIAL_URL_TOKENS = (
-    "/community",
-    "/equity",
-    "/mission",
-    "/photos",
-    "/reviews",
-    "/service/",
-    "/services/",
-    "/values",
-)
-_EDITORIAL_PATH_SEGMENTS = {
-    "business",
-    "community",
-    "help",
-    "help_center",
-    "ink",
-    "mission",
-    "services",
-}
+from app.services.field_value_core import LISTING_UTILITY_TITLE_REGEXES, clean_text
 
 
 def _metric_int(metrics: dict[str, object], key: str) -> int:
@@ -365,9 +341,9 @@ def _unsupported_non_detail_ecommerce_merchandise_hint(*, title: str, url: str) 
     normalized_url = str(url or "").strip().lower()
     if not normalized_title or not normalized_url:
         return False
-    if any(pattern.search(normalized_title) for pattern in _EDITORIAL_TITLE_REGEXES):
+    if any(pattern.search(normalized_title) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS):
         return False
-    if any(token in normalized_url for token in _EDITORIAL_URL_TOKENS):
+    if any(token in normalized_url for token in LISTING_EDITORIAL_URL_TOKENS):
         return False
     parsed = urlsplit(normalized_url)
     segments = [segment for segment in parsed.path.split("/") if segment]
@@ -378,7 +354,7 @@ def _unsupported_non_detail_ecommerce_merchandise_hint(*, title: str, url: str) 
         return False
     if any(segment in LISTING_NON_LISTING_PATH_TOKENS for segment in normalized_segments):
         return False
-    if any(segment in _EDITORIAL_PATH_SEGMENTS for segment in segments[:-1]):
+    if any(segment in LISTING_EDITORIAL_PATH_SEGMENTS for segment in segments[:-1]):
         return False
     terminal = segments[-1]
     terminal_tokens = [

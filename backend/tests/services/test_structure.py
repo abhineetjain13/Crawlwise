@@ -49,12 +49,10 @@ CONFIG_CONSTANT_NAME_MARKERS = (
     "PATH_MARKER",
 )
 ALLOWED_SERVICE_CONFIG_CONSTANTS = {
-    ("acquisition/browser_identity.py", "_HOST_OS_UA_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_COOKIE_VALUE_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_NAME_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS"),
     ("crawl_fetch_runtime.py", "_RETRY_SENTINEL"),
-    ("extract/listing_candidate_ranking.py", "_EDITORIAL_URL_TOKENS"),
     ("extract/detail_record_finalizer.py", "_VARIANT_OPTION_VALUE_NOISE_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_AXIS_ALLOWED_SINGLE_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_AXIS_GENERIC_TOKENS"),

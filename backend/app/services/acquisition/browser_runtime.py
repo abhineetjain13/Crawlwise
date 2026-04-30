@@ -34,7 +34,6 @@ from app.services.acquisition.browser_diagnostics import (
     CHROMIUM_BROWSER_ENGINE as _CHROMIUM_BROWSER_ENGINE,
     PATCHRIGHT_BROWSER_ENGINE as _PATCHRIGHT_BROWSER_ENGINE,
     REAL_CHROME_BROWSER_ENGINE as _REAL_CHROME_BROWSER_ENGINE,
-    SUPPORTED_BROWSER_ENGINES as _SUPPORTED_BROWSER_ENGINES,
     browser_failure_kind as _browser_failure_kind,
     browser_launch_mode as _browser_launch_mode,
     browser_profile as _browser_profile,
@@ -75,7 +74,6 @@ from app.services.acquisition.browser_proxy_config import (
     build_browser_proxy_config as _build_browser_proxy_config,
     display_proxy as _display_proxy,
     normalized_proxy_value as _normalized_proxy_value,
-    proxy_scheme as _proxy_scheme,
 )
 from app.services.acquisition.browser_readiness import (
     classify_browser_outcome_impl,
@@ -1269,7 +1267,7 @@ async def browser_fetch(
                 )
             started_at = time.perf_counter()
             _remaining = remaining_timeout_factory(started_at + float(timeout_seconds))
-            phase_timings_ms: dict[str, int] = {}
+            phase_timings_ms = {}
             normalized_surface = _normalize_surface(surface)
             payload_capture = _build_payload_capture(surface=normalized_surface)
             payload_capture.attach(page)

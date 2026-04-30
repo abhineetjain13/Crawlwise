@@ -7,6 +7,7 @@ from app.services.selectors_runtime import (
     _coerce_int,
     create_selector_record,
     fetch_selector_document,
+    list_selector_records,
     update_selector_record,
 )
 
@@ -116,6 +117,42 @@ async def test_update_selector_record_returns_committed_memory_timestamps(db_ses
     assert updated is not None
     assert memory is not None
     assert updated["updated_at"] == memory.updated_at
+
+
+@pytest.mark.asyncio
+async def test_list_selector_records_without_surface_returns_all_domain_surfaces(
+    db_session,
+) -> None:
+    await create_selector_record(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        payload={
+            "field_name": "title",
+            "css_selector": "h1",
+            "source": "manual",
+        },
+    )
+    await create_selector_record(
+        db_session,
+        domain="example.com",
+        surface="job_detail",
+        payload={
+            "field_name": "title",
+            "css_selector": ".job-title",
+            "source": "manual",
+        },
+    )
+
+    rows = await list_selector_records(
+        db_session,
+        domain="example.com",
+    )
+
+    assert {(row["surface"], row["field_name"]) for row in rows} == {
+        ("ecommerce_detail", "title"),
+        ("job_detail", "title"),
+    }
 
 
 def test_coerce_int_preserves_zero() -> None:

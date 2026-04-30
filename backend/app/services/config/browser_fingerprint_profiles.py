@@ -1,5 +1,36 @@
 from __future__ import annotations
 
+HOST_OS_UA_TOKENS: dict[str, str] = {
+    "windows": "windows nt",
+    "macos": "macintosh",
+    "linux": "linux",
+}
+
+HOST_OS_PLATFORM_LABELS: dict[str, str] = {
+    "windows": "Windows",
+    "macos": "macOS",
+    "linux": "Linux",
+}
+
+USER_AGENT_PLATFORM_LABELS: tuple[tuple[str, str], ...] = (
+    ("windows nt", "Windows"),
+    ("macintosh", "macOS"),
+    ("mac os x", "macOS"),
+    ("linux", "Linux"),
+)
+
+NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL: dict[str, str] = {
+    "Windows": "Win32",
+    "macOS": "MacIntel",
+    "Linux": "Linux x86_64",
+}
+
+TIMEZONE_ALIASES: dict[str, str] = {
+    "asia/calcutta": "Asia/Kolkata",
+}
+
+DEVICE_MEMORY_BUCKETS: tuple[float, ...] = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
+
 WEBGL_PROFILE_BY_PLATFORM: dict[str, dict[str, object]] = {
     "Windows": {
         "vendor": "Google Inc.",
@@ -260,3 +291,15 @@ FONT_ALLOWLIST_BY_PLATFORM: dict[str, tuple[str, ...]] = {
         "verdana",
     ),
 }
+
+
+__all__ = [
+    "DEVICE_MEMORY_BUCKETS",
+    "FONT_ALLOWLIST_BY_PLATFORM",
+    "HOST_OS_PLATFORM_LABELS",
+    "HOST_OS_UA_TOKENS",
+    "NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL",
+    "TIMEZONE_ALIASES",
+    "USER_AGENT_PLATFORM_LABELS",
+    "WEBGL_PROFILE_BY_PLATFORM",
+]

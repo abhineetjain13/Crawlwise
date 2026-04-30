@@ -1070,6 +1070,45 @@ async def test_belk_adapter_prefers_real_currency_fields_over_scalar_price_text(
 
 
 @pytest.mark.asyncio
+async def test_belk_adapter_ignores_aggregate_range_prices_in_state_payload() -> None:
+    result = await BelkAdapter().extract(
+        "https://www.belk.com/home/",
+        """
+        <html>
+          <body>
+            <script>
+              window.__INITIAL_STATE__ = {
+                "search": {
+                  "products": [
+                    {
+                      "productName": "Plus Size Ruffle Back Cropped Pants",
+                      "brand": {"name": "Crown & Ivy"},
+                      "maxPrice": 225,
+                      "image": {"url": "https://belk.scene7.com/is/image/Belk/35512462"},
+                      "productUrl": "/p/crown-ivy-plus-size-ruffle-back-cropped-pants/180415535512462.html"
+                    }
+                  ]
+                }
+              };
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_listing",
+    )
+
+    assert result.records == [
+        {
+            "title": "Plus Size Ruffle Back Cropped Pants",
+            "brand": "Crown & Ivy",
+            "image_url": "https://belk.scene7.com/is/image/Belk/35512462",
+            "url": "https://www.belk.com/p/crown-ivy-plus-size-ruffle-back-cropped-pants/180415535512462.html",
+            "_source": "belk_adapter",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_amazon_adapter_does_not_fabricate_multi_axis_twister_product() -> None:
     result = await AmazonAdapter().extract(
         "https://www.amazon.com/Under-Armour-Mens-Tech-Shorts/dp/B016APPQ4S",

@@ -14,7 +14,6 @@ from app.services.acquisition import cookie_store
 from app.services.acquisition import host_protection_memory
 from app.services.acquisition.browser_proxy_config import build_browser_proxy_config
 from app.services.acquisition import browser_runtime as acquisition_browser_runtime
-from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import is_special_use_domain
 
 

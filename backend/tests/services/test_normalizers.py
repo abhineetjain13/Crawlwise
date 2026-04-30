@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.services.extract.detail_record_finalizer import repair_ecommerce_detail_record_quality
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.normalizers import normalize_decimal_price, normalize_value
 
@@ -145,3 +146,131 @@ def test_normalize_variant_record_preserves_identity_less_selected_variant() -> 
 
     assert record["selected_variant"]["title"] == "Selected from adapter"
     assert record["selected_variant"]["option_values"] == {"size": "Large"}
+
+
+def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliases() -> None:
+    record = {
+        "variant_axes": {"size": ["3", "4", "8", "8 US"]},
+        "variants": [
+            {
+                "sku": "13875993",
+                "variant_id": "45140428423360",
+                "size": "3",
+                "price": "284.00",
+                "currency": "USD",
+                "availability": "out_of_stock",
+                "option_values": {"size": "3"},
+            },
+            {
+                "sku": "13875994",
+                "variant_id": "45140428456128",
+                "size": "4",
+                "price": "284.00",
+                "currency": "USD",
+                "availability": "out_of_stock",
+                "option_values": {"size": "4"},
+            },
+            {
+                "size": "3",
+                "price": "284.00",
+                "currency": "USD",
+                "availability": "in_stock",
+                "option_values": {"size": "3"},
+            },
+            {
+                "size": "4",
+                "price": "284.00",
+                "currency": "USD",
+                "availability": "in_stock",
+                "option_values": {"size": "4"},
+            },
+            {
+                "sku": "13876003",
+                "variant_id": "45140428619904",
+                "size": "8",
+                "price": "284.00",
+                "currency": "USD",
+                "availability": "out_of_stock",
+                "option_values": {"size": "8"},
+            },
+            {
+                "size": "8 US",
+                "price": "284.00",
+                "currency": "USD",
+                "availability": "in_stock",
+                "option_values": {"size": "8 US"},
+            },
+        ],
+        "selected_variant": {
+            "size": "4",
+            "price": "284.00",
+            "currency": "USD",
+            "availability": "in_stock",
+            "option_values": {"size": "4"},
+        },
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variant_axes"] == {"size": ["3", "4", "8"]}
+    assert [variant["option_values"]["size"] for variant in record["variants"]] == [
+        "3",
+        "4",
+        "8",
+    ]
+    assert record["variant_count"] == 3
+    assert record["selected_variant"]["option_values"] == {"size": "4"}
+    assert record["selected_variant"]["availability"] == "out_of_stock"
+
+
+def test_detail_record_quality_repairs_invalid_original_prices_and_selected_variant_availability() -> None:
+    record = {
+        "sku": "M20324",
+        "url": "https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+        "size": "4",
+        "price": "100.00",
+        "currency": "USD",
+        "availability": "out_of_stock",
+        "original_price": "1.00",
+        "title": "Stan Smith Shoes",
+        "variants": [
+            {
+                "size": "4",
+                "price": "100.00",
+                "currency": "USD",
+                "availability": "out_of_stock",
+                "option_values": {"size": "4"},
+                "original_price": "1.00",
+            },
+            {
+                "size": "4.5",
+                "price": "100.00",
+                "currency": "USD",
+                "availability": "out_of_stock",
+                "option_values": {"size": "4.5"},
+                "original_price": "1.00",
+            },
+        ],
+        "selected_variant": {
+            "sku": "M20324",
+            "size": "4",
+            "price": "100.00",
+            "currency": "USD",
+            "availability": "in_stock",
+            "option_values": {"size": "4"},
+            "original_price": "1.00",
+        },
+    }
+
+    normalize_variant_record(record)
+    repair_ecommerce_detail_record_quality(
+        record,
+        html="<html></html>",
+        page_url="https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+    )
+
+    assert record["original_price"] == "100.00"
+    assert record["selected_variant"]["option_values"] == {"size": "4"}
+    assert record["selected_variant"]["availability"] == "out_of_stock"
+    assert record["selected_variant"]["original_price"] == "100.00"
+    assert all(variant["original_price"] == "100.00" for variant in record["variants"])

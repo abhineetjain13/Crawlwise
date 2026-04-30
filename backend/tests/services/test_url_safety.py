@@ -5,6 +5,11 @@ import socket
 import pytest
 
 from app.services import url_safety
+from app.services.config.security_rules import (
+    BLOCKED_HOSTNAMES,
+    BLOCKED_IPS,
+    CGNAT_NETWORK,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -46,3 +51,31 @@ async def test_resolve_host_ips_falls_back_to_ipv4_after_unspec_failure(
 
     assert resolved == ["93.184.216.34"]
     assert calls == [socket.AF_UNSPEC, socket.AF_INET]
+
+
+@pytest.mark.asyncio
+async def test_validate_public_target_rejects_configured_blocked_hostname() -> None:
+    blocked_hostname = next(iter(BLOCKED_HOSTNAMES))
+
+    with pytest.raises(url_safety.SecurityError, match="Target host is not allowed"):
+        await url_safety.validate_public_target(f"https://{blocked_hostname}/")
+
+
+def test_raise_if_non_public_ip_rejects_configured_blocked_ip() -> None:
+    blocked_ip = next(iter(BLOCKED_IPS))
+
+    with pytest.raises(
+        url_safety.SecurityError,
+        match="Target host resolves to a blocked platform IP address",
+    ):
+        url_safety._raise_if_non_public_ip(blocked_ip, "blocked.example")
+
+
+def test_raise_if_non_public_ip_rejects_cgnat_range() -> None:
+    ip_value = next(CGNAT_NETWORK.hosts())
+
+    with pytest.raises(
+        url_safety.SecurityError,
+        match="Target host resolves to a non-public IP address",
+    ):
+        url_safety._raise_if_non_public_ip(ip_value, "cgnat.example")

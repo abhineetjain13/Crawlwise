@@ -11,6 +11,7 @@ const apiMock = vi.hoisted(() => ({
  listDomainCookieMemory: vi.fn(),
  listDomainFieldFeedback: vi.fn(),
  listCrawls: vi.fn(),
+ saveDomainRunProfile: vi.fn(),
  updateSelector: vi.fn(),
  deleteSelector: vi.fn(),
  deleteSelectorsByDomain: vi.fn(),
@@ -157,6 +158,44 @@ describe("DomainMemoryManagePage", () => {
  created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
  updated_at: new Date("2026-04-08T10:10:00Z").toISOString(),
  }));
+ apiMock.saveDomainRunProfile.mockResolvedValue({
+ version: 1,
+ fetch_profile: {
+ fetch_mode: "browser_only",
+ extraction_source: "rendered_dom",
+ js_mode: "enabled",
+ include_iframes: false,
+ traversal_mode: "paginate",
+ request_delay_ms: 1200,
+ max_pages: 8,
+ max_scrolls: 12,
+ },
+ locality_profile: {
+ geo_country: "US",
+ language_hint: "en-IN",
+ currency_hint: "INR",
+ },
+ diagnostics_profile: {
+ capture_html: true,
+ capture_screenshot: false,
+ capture_network: "matched_only",
+ capture_response_headers: true,
+ capture_browser_diagnostics: true,
+ },
+ acquisition_contract: {
+ preferred_browser_engine: "auto",
+ prefer_browser: false,
+ prefer_curl_handoff: false,
+ handoff_cookie_engine: "auto",
+ last_quality_success: null,
+ stale_after_failures: {
+ failure_count: 0,
+ stale: false,
+ },
+ },
+ source_run_id: 101,
+ saved_at: new Date("2026-04-08T10:05:00Z").toISOString(),
+ });
  apiMock.deleteSelector.mockResolvedValue(undefined);
  apiMock.deleteSelectorsByDomain.mockResolvedValue({ deleted: 1 });
  });
@@ -190,6 +229,33 @@ describe("DomainMemoryManagePage", () => {
  expect(screen.getByText("Recent Learning")).toBeInTheDocument();
 
  expect(screen.queryByText("owned-session-test.example.com")).not.toBeInTheDocument();
+ });
+
+ it("edits and saves a domain run profile from domain memory", async () => {
+ render(
+ <TopBarProvider>
+ <DomainMemoryManagePage />
+ </TopBarProvider>,
+ );
+
+ fireEvent.click(await screen.findByRole("button", { name: "Profiles (1)" }));
+ fireEvent.click(screen.getByRole("combobox", { name: "Fetch Mode" }));
+ fireEvent.click(await screen.findByRole("option", { name: "Browser Only" }));
+ fireEvent.change(screen.getByDisplayValue("IN"), { target: { value: "US" } });
+ fireEvent.click(screen.getByRole("button", { name: "Save Profile" }));
+
+ await waitFor(() => {
+ expect(apiMock.saveDomainRunProfile).toHaveBeenCalledWith(101, {
+ profile: expect.objectContaining({
+ fetch_profile: expect.objectContaining({
+ fetch_mode: "browser_only",
+ }),
+ locality_profile: expect.objectContaining({
+ geo_country: "US",
+ }),
+ }),
+ });
+ });
  });
 
  it("edits a saved selector from the domain memory workspace", async () => {

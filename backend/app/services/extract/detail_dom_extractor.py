@@ -13,6 +13,7 @@ from selectolax.lexbor import LexborHTMLParser
 from app.services.config.extraction_rules import (
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
+    VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_SIZE_VALUE_PATTERNS,
 )
@@ -64,6 +65,11 @@ _variant_option_value_suffix_noise_patterns = tuple(
 _variant_option_value_noise_tokens = frozenset(
     str(token).strip().lower()
     for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
+    if str(token).strip()
+)
+_variant_option_value_ui_noise_phrases = tuple(
+    str(token).strip().lower()
+    for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
     if str(token).strip()
 )
 
@@ -265,6 +271,7 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
         not value
         or re.sub(r"[^a-z0-9]+", "", lowered) in _variant_option_value_noise_tokens
         or lowered in {"select", "choose", "option", "size guide"}
+        or any(phrase in lowered for phrase in _variant_option_value_ui_noise_phrases)
         or ("size guide" in lowered and re.search(r"\b(?:please\s+)?select\b", lowered) is not None)
         or re.fullmatch(r"[-\s]*(?:click\s+to\s+)?(?:choose|select)\b.*", lowered) is not None
         or re.fullmatch(r"[-\s]+.+[-\s]+", lowered) is not None
@@ -450,7 +457,11 @@ def _collect_variant_choice_entries(container: Any, *, page_url: str) -> list[di
     axis_name = normalized_variant_axis_key(_resolve_dom_variant_group_name(container))
     entries_by_value: dict[str, dict[str, object]] = {}
     for node in container.select(
-        "[data-value], [data-option-value], [aria-label], input[value], [role='radio']"
+        "[role='radio'], "
+        "[role='option'], "
+        "button, "
+        "[data-value], [data-option-value], "
+        "[aria-pressed], [aria-selected], [data-state], [data-selected]"
     )[:24]:
         cleaned = text_or_none(
             coerce_field_value(
@@ -517,6 +528,7 @@ def _variant_choice_entry_value(
         or node.get("data-option-value")
         or node.get("aria-label")
         or node.get("value")
+        or (node.get_text(" ", strip=True) if hasattr(node, "get_text") else "")
     )
 
 

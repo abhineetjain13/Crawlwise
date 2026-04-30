@@ -22,7 +22,6 @@ from app.services.acquisition.browser_runtime import (
     read_network_payload_body,
     should_capture_network_payload,
 )
-from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.runtime import (
     PageFetchResult,
     http_fetch,

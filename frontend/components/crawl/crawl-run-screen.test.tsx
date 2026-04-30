@@ -23,7 +23,6 @@ const apiMock = vi.hoisted(() => ({
  killCrawl: vi.fn(),
  getDomainRecipe: vi.fn(),
  promoteDomainRecipeSelectors: vi.fn(),
- saveDomainRunProfile: vi.fn(),
  applyDomainRecipeFieldAction: vi.fn(),
  deleteSelector: vi.fn(),
  exportCsv: vi.fn(() =>"/export.csv"),
@@ -277,7 +276,6 @@ describe("CrawlRunScreen", () => {
  apiMock.killCrawl.mockResolvedValue({ run_id: 101, status:"killed"});
  apiMock.getDomainRecipe.mockResolvedValue(makeDomainRecipe());
  apiMock.promoteDomainRecipeSelectors.mockResolvedValue([]);
- apiMock.saveDomainRunProfile.mockResolvedValue(makeDomainRecipe().saved_run_profile);
  apiMock.applyDomainRecipeFieldAction.mockResolvedValue({});
  apiMock.deleteSelector.mockResolvedValue(undefined);
  });
@@ -434,15 +432,15 @@ describe("CrawlRunScreen", () => {
 
  renderRunScreen();
 
- expect(await screen.findByText("Time:")).toBeInTheDocument();
+ expect(await screen.findByText("TIME")).toBeInTheDocument();
  expect(screen.getByText("1m 5s")).toBeInTheDocument();
- expect(screen.getByText("Verdict:")).toBeInTheDocument();
- expect(screen.getByText("Success")).toBeInTheDocument();
- expect(screen.getByText("Quality:")).toBeInTheDocument();
- expect(screen.getByText("High")).toBeInTheDocument();
+ expect(screen.getByText("VERDICT")).toBeInTheDocument();
+ expect(screen.getByText("success")).toBeInTheDocument();
+ expect(screen.getByText("QUALITY")).toBeInTheDocument();
+ expect(screen.getByText("high")).toBeInTheDocument();
  });
 
- it("keeps the crawl step marked active after terminal completion", async () => {
+ it("keeps completed runs in the terminal workspace even without records", async () => {
  apiMock.getRecords.mockResolvedValue({
  items: [],
  meta: { page: 1, limit: 100, total: 0 },
@@ -450,19 +448,12 @@ describe("CrawlRunScreen", () => {
 
  renderRunScreen();
 
- await screen.findByText("completed");
- const crawlStep = screen.getAllByText("Crawl")
- .map((element) => element.closest("span"))
- .find((element) => element?.className.includes("rounded-[var(--radius-md)]"));
- const completeStep = screen.getAllByText("Complete")
- .map((element) => element.closest("span"))
- .find((element) => element?.className.includes("rounded-[var(--radius-md)]"));
-
- expect(crawlStep).toHaveClass("bg-accent-subtle","text-accent");
- expect(completeStep).toHaveClass("bg-accent-subtle","text-accent");
+ expect(await screen.findByRole("button", { name:"Excel (CSV)"})).toBeInTheDocument();
+ expect(screen.getByText("TIME")).toBeInTheDocument();
+ expect(screen.getByText("VERDICT")).toBeInTheDocument();
  });
 
- it("uses live table totals and current URL index for status-bar records/pages when summary counts are zero", async () => {
+ it("keeps the live workspace visible when summary counts are zero", async () => {
  apiMock.getCrawl.mockResolvedValue(runningRun(101));
  apiMock.getRecords.mockResolvedValue({
  items: [makeRecord(1), makeRecord(2)],
@@ -472,12 +463,8 @@ describe("CrawlRunScreen", () => {
  renderRunScreen();
 
  await screen.findByText("Live Log Stream");
- await waitFor(() => {
- const recordsLabel = screen.getByText("Records");
- const pagesLabel = screen.getByText("Pages");
- expect(recordsLabel.previousElementSibling).toHaveTextContent("2");
- expect(pagesLabel.previousElementSibling).toHaveTextContent("1");
- });
+ expect(screen.getByRole("button", { name:"Hard Kill"})).toBeInTheDocument();
+ expect(screen.getByText("activity_stream.log")).toBeInTheDocument();
  });
 
  it("supports progressive table loading for large result sets", async () => {
@@ -504,7 +491,7 @@ describe("CrawlRunScreen", () => {
  fireEvent.click(loadMoreButton);
 
  await waitFor(() => {
- expect(apiMock.getRecords).toHaveBeenCalledWith(101, { page: 2, limit: 100 });
+ expect(apiMock.getRecords).toHaveBeenCalledWith(101, { page: 1, limit: 200 });
  });
 
  await waitFor(() => {
@@ -899,19 +886,15 @@ describe("CrawlRunScreen", () => {
  expect(screen.getByRole("button", { name:"Excel (CSV)"})).toBeInTheDocument();
  });
 
- it("renders completed-run learning and run-config tabs", async () => {
+ it("renders completed-run learning tab without run-config tab", async () => {
  renderRunScreen();
 
  expect(await screen.findByRole("button", { name:"Learning"})).toBeInTheDocument();
- expect(screen.getByRole("button", { name:"Run Config"})).toBeInTheDocument();
+ expect(screen.queryByRole("button", { name:"Run Config"})).not.toBeInTheDocument();
 
  fireEvent.click(screen.getByRole("button", { name:"Learning"}));
  expect(await screen.findByRole("heading", { name:"Run Learning" })).toBeInTheDocument();
  expect(screen.getAllByRole("button", { name:"Keep" }).length).toBeGreaterThan(0);
-
- fireEvent.click(screen.getByRole("button", { name:"Run Config"}));
- expect(await screen.findByRole("heading", { name:"Run Config" })).toBeInTheDocument();
- expect(screen.getByRole("button", { name:"Save Run Profile"})).toBeInTheDocument();
  });
 
  it("renders learning as XPath winners without extracted values", async () => {
@@ -968,27 +951,16 @@ describe("CrawlRunScreen", () => {
  });
  });
 
- it("saves the edited domain run profile from the completed-run panel", async () => {
+ it("hides learning for batch runs", async () => {
+ apiMock.getCrawl.mockResolvedValue({
+ ...terminalRun(101),
+ run_type:"batch",
+ });
+
  renderRunScreen();
 
- fireEvent.click(await screen.findByRole("button", { name:"Run Config"}));
- expect(await screen.findByRole("heading", { name:"Run Config" })).toBeInTheDocument();
- fireEvent.click(screen.getByRole("combobox", { name:"Fetch Mode" }));
- fireEvent.click(await screen.findByRole("option", { name:"Browser Only" }));
- fireEvent.change(screen.getByRole("textbox", { name:"Geo Country" }), { target: { value:"US" } });
- fireEvent.click(screen.getByRole("button", { name:"Save Run Profile"}));
-
- await waitFor(() => {
- expect(apiMock.saveDomainRunProfile).toHaveBeenCalledWith(101, {
- profile: expect.objectContaining({
- fetch_profile: expect.objectContaining({
- fetch_mode:"browser_only",
- }),
- locality_profile: expect.objectContaining({
- geo_country:"US",
- }),
- }),
- });
- });
+ expect(await screen.findByRole("button", { name:/Table \(2\)/ })).toBeInTheDocument();
+ expect(screen.queryByRole("button", { name:"Learning"})).not.toBeInTheDocument();
+ expect(apiMock.getDomainRecipe).not.toHaveBeenCalled();
  });
 });

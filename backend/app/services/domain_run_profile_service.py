@@ -233,7 +233,8 @@ def normalize_domain_run_profile(
 def acquisition_contract_is_stale(profile: object) -> bool:
     payload = dict(profile or {}) if isinstance(profile, Mapping) else {}
     contract = normalize_acquisition_contract(payload.get("acquisition_contract"))
-    stale = dict(contract.get("stale_after_failures") or {})
+    stale_value = contract.get("stale_after_failures")
+    stale = dict(stale_value) if isinstance(stale_value, Mapping) else {}
     return bool(stale.get("stale"))
 
 
@@ -243,7 +244,8 @@ def apply_acquisition_contract_to_profile(
 ) -> dict[str, object]:
     profile = dict(acquisition_profile or {}) if isinstance(acquisition_profile, Mapping) else {}
     normalized = normalize_acquisition_contract(contract)
-    stale = dict(normalized.get("stale_after_failures") or {})
+    stale_value = normalized.get("stale_after_failures")
+    stale = dict(stale_value) if isinstance(stale_value, Mapping) else {}
     if bool(stale.get("stale")):
         profile["acquisition_contract_stale"] = True
         return profile
@@ -354,7 +356,8 @@ async def note_acquisition_contract_failure(
     contract = normalize_acquisition_contract(profile.get("acquisition_contract"))
     if contract.get("last_quality_success") is None:
         return profile
-    stale_payload = dict(contract.get("stale_after_failures") or {})
+    stale_value = contract.get("stale_after_failures")
+    stale_payload = dict(stale_value) if isinstance(stale_value, Mapping) else {}
     failure_count = int(stale_payload.get("failure_count") or 0) + 1
     contract["stale_after_failures"] = {
         "failure_count": failure_count,

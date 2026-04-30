@@ -16,6 +16,9 @@ from app.services.config.network_capture import (
     HIGH_VALUE_NETWORK_ENDPOINT_TYPES,
     HIGH_VALUE_NETWORK_PAYLOAD_BUDGET_MULTIPLIER,
     NETWORK_PAYLOAD_NOISE_URL_RE,
+    NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS,
+    NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES,
+    NETWORK_PAYLOAD_URL_HINTS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.platform_policy import classify_network_endpoint_family
@@ -33,19 +36,6 @@ _MAX_TOTAL_CAPTURED_NETWORK_PAYLOAD_BYTES = (
 )
 _NETWORK_CAPTURE_QUEUE_SIZE = _MAX_CAPTURED_NETWORK_PAYLOADS * 2
 _NETWORK_CAPTURE_WORKERS = 4
-_NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES = (
-    "text/x-component",
-)
-_NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS = (
-    "application/json",
-    "application/trpc+json",
-    "application/graphql-response+json",
-)
-_NETWORK_PAYLOAD_URL_HINTS = (
-    ".json",
-    "__flight__",
-    "_rsc=",
-)
 
 
 @dataclass(slots=True)
@@ -336,13 +326,13 @@ def _is_supported_network_payload_content_type(
     normalized_content_type = str(content_type or "").strip().lower()
     if "json" in normalized_content_type:
         return True
-    if any(token in normalized_content_type for token in _NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS):
+    if any(token in normalized_content_type for token in NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS):
         return True
-    if any(token in lowered_url for token in _NETWORK_PAYLOAD_URL_HINTS):
+    if any(token in lowered_url for token in NETWORK_PAYLOAD_URL_HINTS):
         return True
     return any(
         token in normalized_content_type
-        for token in _NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES
+        for token in NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES
     )
 
 
@@ -355,7 +345,7 @@ def _decode_network_payload(
     normalized_content_type = str(content_type or "").strip().lower()
     if any(
         token in normalized_content_type
-        for token in _NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES
+        for token in NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES
     ):
         return _decode_rsc_payload(text)
     try:

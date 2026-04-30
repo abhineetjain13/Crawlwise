@@ -8,6 +8,7 @@ from app.models.crawl import (
     CrawlRecord,
     ProductIntelligenceCandidate,
     ProductIntelligenceJob,
+    ProductIntelligenceMatch,
     ProductIntelligenceSourceProduct,
 )
 from app.schemas.product_intelligence import ProductIntelligenceDiscoveryRequest
@@ -25,6 +26,7 @@ from app.services.product_intelligence.discovery import (
     build_search_queries,
     classify_source_type,
     discover_candidates,
+    shared_query_runner,
 )
 from app.services.product_intelligence.matching import (
     build_search_result_intelligence,
@@ -1041,7 +1043,85 @@ async def test_product_intelligence_discovery_preview_returns_source_and_payload
     assert response["candidates"][0]["source_brand"] == "ralph lauren"
     assert response["candidates"][0]["payload"]["provider"] == "serpapi"
     assert response["candidates"][0]["intelligence"]["canonical_record"]["title"] == "Varick jean"
+    assert response["candidates"][0]["intelligence"]["canonical_record"]["price"] is None
     assert response["candidates"][0]["intelligence"]["confidence_score"] >= 0
+    persisted_match = await db_session.scalar(
+        select(ProductIntelligenceMatch).where(
+            ProductIntelligenceMatch.job_id == response["job_id"]
+        )
+    )
+    assert persisted_match is not None
+    assert persisted_match.candidate_price is None
+
+
+@pytest.mark.asyncio
+async def test_product_intelligence_discovery_reuses_one_query_runner_for_multiple_sources(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch,
+) -> None:
+    enter_count = 0
+    seen_queries: list[str] = []
+
+    class _Runner:
+        async def __aenter__(self):
+            nonlocal enter_count
+            enter_count += 1
+
+            async def _run(query: str, limit: int) -> list[SearchResult]:
+                del limit
+                seen_queries.append(query)
+                token = len(seen_queries)
+                return [
+                    SearchResult(
+                        url=f"https://www.levi.com/p/{token}.html",
+                        payload={"provider": "google_native", "title": f"Result {token}", "price": "$55.00"},
+                    )
+                ]
+
+            return _run
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.service.shared_query_runner",
+        lambda provider: _Runner(),
+    )
+
+    response = await discover_product_intelligence_candidates(
+        db_session,
+        user=test_user,
+        payload={
+            "source_records": [
+                {
+                    "source_url": "https://www.belk.com/p/one.html",
+                    "data": {
+                        "brand": "Levis",
+                        "title": "Product One 511 Jeans",
+                        "url": "https://www.belk.com/p/one.html",
+                    },
+                },
+                {
+                    "source_url": "https://www.belk.com/p/two.html",
+                    "data": {
+                        "brand": "Levis",
+                        "title": "Product Two 511 Jeans",
+                        "url": "https://www.belk.com/p/two.html",
+                    },
+                },
+            ],
+            "options": {
+                "max_source_products": 2,
+                "max_candidates_per_product": 1,
+                "search_provider": "google_native",
+            },
+        },
+    )
+
+    assert response["candidate_count"] == 2
+    assert enter_count == 1
+    assert len(seen_queries) >= 2
 
 
 @pytest.mark.asyncio

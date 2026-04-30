@@ -253,6 +253,18 @@ def test_clean_export_data_keeps_variant_payloads_but_hides_internal_markdown() 
     }
 
 
+def test_clean_export_data_hides_mis_cased_markdown_fields() -> None:
+    cleaned = record_export_service.clean_export_data(
+        {
+            "title": "Widget Prime",
+            " Page_Markdown ": "# internal",
+            "TABLE_MARKDOWN": "| a |",
+        }
+    )
+
+    assert cleaned == {"title": "Widget Prime"}
+
+
 def test_listing_adapter_records_use_shared_surface_normalization() -> None:
     rows = extract_records(
         "<html><body></body></html>",

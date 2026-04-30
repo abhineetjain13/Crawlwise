@@ -11,12 +11,14 @@ from app.services.config.extraction_rules import (
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import clean_text, text_or_none
 from app.services.extract.shared_variant_logic import (
+    collapse_duplicate_size_aliases,
     merge_variant_rows,
     normalized_variant_axis_display_name,
     normalized_variant_axis_key,
     split_variant_axes,
     variant_axis_name_is_semantic,
     variant_identity,
+    variant_semantic_identity,
 )
 
 _VARIANT_SIZE_VALUE_EXTRACT_PATTERNS = tuple(
@@ -30,7 +32,6 @@ _VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
     if str(pattern).strip()
 )
 
-
 def normalize_variant_record(record: dict[str, Any]) -> None:
     _backfill_selected_variant_from_record(record)
     _infer_variant_options_from_titles(record)
@@ -41,6 +42,7 @@ def normalize_variant_record(record: dict[str, Any]) -> None:
     _prune_non_selectable_variant_axes(record)
     _clean_variant_option_noise(record)
     _prune_placeholder_option_values(record)
+    collapse_duplicate_size_aliases(record)
     _dedupe_variant_rows(record)
     _enforce_variant_payload_limits(record)
     _align_top_level_variant_axis_fields(record)
@@ -496,20 +498,32 @@ def _dedupe_variant_rows(record: dict[str, Any]) -> None:
     if not isinstance(selected_variant, dict):
         return
     selected_id = variant_identity(selected_variant)
+    match = None
     if selected_id:
         match = next(
             (row for row in deduped_variants if variant_identity(row) == selected_id),
             None,
         )
-        if match is not None:
-            record["selected_variant"] = _merge_selected_variant_candidate(
-                selected_variant,
-                match,
+    if match is None:
+        selected_semantic_id = variant_semantic_identity(selected_variant)
+        if selected_semantic_id:
+            match = next(
+                (
+                    row
+                    for row in deduped_variants
+                    if variant_semantic_identity(row) == selected_semantic_id
+                ),
+                None,
             )
-            return
+    if match is not None:
+        record["selected_variant"] = _merge_selected_variant_candidate(
+            selected_variant,
+            match,
+        )
+        return
     # No identity match — only overwrite if current selected_variant has no
     # meaningful identity (preserve adapter-provided data like sku).
-    if not selected_id:
+    if not selected_id and not variant_semantic_identity(selected_variant):
         record["selected_variant"] = dict(deduped_variants[0])
 
 def _merge_selected_variant_candidate(

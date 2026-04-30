@@ -27,10 +27,9 @@ from app.services.config.extraction_rules import (
     LONG_TEXT_FIELDS,
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
     PAGE_URL_CURRENCY_HINTS_RAW,
-    PERCENT_RE,
     PRICE_VALUE_FIELDS,
     RATING_RE,
-    REVIEW_COUNT_RE,
+    REVIEW_COUNT_RE as _REVIEW_COUNT_RE,
     REVIEW_TITLE_RE,
     STRUCTURED_MULTI_FIELDS,
     STRUCTURED_OBJECT_FIELDS,
@@ -53,6 +52,7 @@ from app.services.field_policy import (
 from app.services.normalizers import normalize_record_fields
 
 strip_tracking_query_params = _strip_tracking_query_params
+REVIEW_COUNT_RE = _REVIEW_COUNT_RE
 
 PRODUCT_URL_HINTS = detail_path_hints("ecommerce_detail")
 JOB_URL_HINTS = detail_path_hints("job_detail")

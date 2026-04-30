@@ -70,6 +70,22 @@ GRAPHQL_PATH_TOKENS: Final[tuple[str, ...]] = (
     "graphql?",
 )
 
+NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES: Final[tuple[str, ...]] = (
+    "text/x-component",
+)
+
+NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS: Final[tuple[str, ...]] = (
+    "application/json",
+    "application/trpc+json",
+    "application/graphql-response+json",
+)
+
+NETWORK_PAYLOAD_URL_HINTS: Final[tuple[str, ...]] = (
+    ".json",
+    "__flight__",
+    "_rsc=",
+)
+
 HIGH_VALUE_NETWORK_ENDPOINT_TYPES: Final[frozenset[str]] = frozenset(
     {"graphql", "product_api", "job_api"}
 )
@@ -87,5 +103,8 @@ __all__ = [
     "NETWORK_PAYLOAD_NOISE_DOMAINS",
     "NETWORK_PAYLOAD_NOISE_KEYWORDS",
     "NETWORK_PAYLOAD_NOISE_URL_RE",
+    "NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS",
+    "NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES",
+    "NETWORK_PAYLOAD_URL_HINTS",
     "PROTECTED_CHALLENGE_ROUTE_TOKENS",
 ]

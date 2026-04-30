@@ -105,7 +105,7 @@ async def list_selector_records(
     session: AsyncSession,
     *,
     domain: str,
-    surface: str = "generic",
+    surface: str = "",
 ) -> list[dict[str, object]]:
     normalized_domain = str(domain or "").strip().lower()
     normalized_surface = str(surface or "").strip().lower()

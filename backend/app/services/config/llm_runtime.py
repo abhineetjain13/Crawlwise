@@ -38,6 +38,11 @@ class LLMRuntimeSettings(BaseSettings):
     html_prune_preserved_script_types: str = "application/ld+json,application/json"
     html_prune_preserved_attrs: str = "id,class,data-testid,data-test,data-qa,data-sku,data-product-id,data-price,data-availability,itemprop,itemtype,itemscope,itemref,aria-label,aria-labelledby,role,name,type,content,property,href,src,alt,title,value,data-component,data-section,data-field"
     html_prune_preserved_script_ids: str = "__NEXT_DATA__"
+    html_prune_strip_attr_prefixes: str = "on,data-"
+    html_prune_preserved_data_attr_prefixes: str = (
+        "data-test,data-qa,data-sku,data-product-id,data-price,"
+        "data-availability,data-component,data-section,data-field"
+    )
     groq_max_tokens: int = 1200
     groq_temperature: float = 0.1
     anthropic_max_tokens: int = 3000

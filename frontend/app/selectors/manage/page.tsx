@@ -30,6 +30,7 @@ import type {
  CrawlRun,
  DomainCookieMemoryRecord,
  DomainFieldFeedbackRecord,
+ DomainRunProfile,
  DomainRunProfileRecord,
  SelectorDomainSummary,
  SelectorRecord,
@@ -101,6 +102,81 @@ function profileSearchText(profile: DomainRunProfileRecord) {
  .toLowerCase();
 }
 
+function defaultDomainRunProfile(): DomainRunProfile {
+ return {
+ version: 1,
+ fetch_profile: {
+ fetch_mode: "auto",
+ extraction_source: "raw_html",
+ js_mode: "auto",
+ include_iframes: false,
+ traversal_mode: null,
+ request_delay_ms: 500,
+ },
+ locality_profile: {
+ geo_country: "auto",
+ language_hint: null,
+ currency_hint: null,
+ },
+ diagnostics_profile: {
+ capture_html: true,
+ capture_screenshot: false,
+ capture_network: "matched_only",
+ capture_response_headers: true,
+ capture_browser_diagnostics: true,
+ },
+ acquisition_contract: {
+ preferred_browser_engine: "auto",
+ prefer_browser: false,
+ prefer_curl_handoff: false,
+ handoff_cookie_engine: "auto",
+ last_quality_success: null,
+ stale_after_failures: {
+ failure_count: 0,
+ stale: false,
+ },
+ },
+ source_run_id: null,
+ saved_at: null,
+ };
+}
+
+function cloneDomainRunProfile(profile: DomainRunProfile | null | undefined): DomainRunProfile {
+ const base = defaultDomainRunProfile();
+ if (!profile) {
+ return base;
+ }
+ return {
+ version: 1,
+ fetch_profile: {
+ ...base.fetch_profile,
+ ...(profile.fetch_profile ?? {}),
+ },
+ locality_profile: {
+ ...base.locality_profile,
+ ...(profile.locality_profile ?? {}),
+ },
+ diagnostics_profile: {
+ ...base.diagnostics_profile,
+ ...(profile.diagnostics_profile ?? {}),
+ },
+ acquisition_contract: {
+ ...base.acquisition_contract,
+ ...(profile.acquisition_contract ?? {}),
+ stale_after_failures: {
+ ...base.acquisition_contract.stale_after_failures,
+ ...(profile.acquisition_contract?.stale_after_failures ?? {}),
+ },
+ },
+ source_run_id: profile.source_run_id ?? null,
+ saved_at: profile.saved_at ?? null,
+ };
+}
+
+function profileDraftKey(domain: string, surface: string) {
+ return `${domain}:${surface}`;
+}
+
 function feedbackSearchText(feedback: DomainFieldFeedbackRecord) {
  return [
  feedback.domain,
@@ -125,15 +201,6 @@ function formatTimestamp(value: string | null | undefined) {
  return "—";
  }
  return parsed.toLocaleString();
-}
-
-function runProfileSummary(profile: DomainRunProfileRecord) {
- return [
- { label: "Fetch", value: titleCaseToken(profile.profile.fetch_profile.fetch_mode) },
- { label: "JS", value: titleCaseToken(profile.profile.fetch_profile.js_mode) },
- { label: "Traversal", value: titleCaseToken(profile.profile.fetch_profile.traversal_mode ?? "off") },
- { label: "Network", value: titleCaseToken(profile.profile.diagnostics_profile.capture_network) },
- ];
 }
 
 function isInternalDomainMemoryArtifact(domain: string, surfaceCount: number, hasCookieMemory: boolean, learningCount: number, completedRunCount: number) {
@@ -184,6 +251,8 @@ export default function DomainMemoryManagePage() {
  const [searchQuery, setSearchQuery] = useState("");
  const [surfaceFilter, setSurfaceFilter] = useState("all");
  const [activeTab, setActiveTab] = useState("selectors");
+ const [profileDrafts, setProfileDrafts] = useState<Record<string, DomainRunProfile>>({});
+ const [profileSaveKey, setProfileSaveKey] = useState("");
  const deferredSearchQuery = useDeferredValue(searchQuery);
 
  function toLocalRecords(selectorData: SelectorRecord[]) {
@@ -560,7 +629,60 @@ export default function DomainMemoryManagePage() {
  }
  setSelectorSummaries((current) => current.filter((entry) => entry.domain !== domain));
  } catch (nextError) {
- setError(nextError instanceof Error ? nextError.message : "Unable to clear domain selectors.");
+  setError(nextError instanceof Error ? nextError.message : "Unable to clear domain selectors.");
+ }
+}
+
+ function profileDraftFor(domain: string, surfaceWorkspace: SurfaceWorkspace) {
+ const key = profileDraftKey(domain, surfaceWorkspace.surface);
+ return profileDrafts[key] ?? cloneDomainRunProfile(surfaceWorkspace.profile?.profile);
+ }
+
+ function updateProfileDraft(
+ domain: string,
+ surfaceWorkspace: SurfaceWorkspace,
+ updater: (current: DomainRunProfile) => DomainRunProfile,
+ ) {
+ setError("");
+ const key = profileDraftKey(domain, surfaceWorkspace.surface);
+ setProfileDrafts((current) => ({
+ ...current,
+ [key]: updater(current[key] ?? cloneDomainRunProfile(surfaceWorkspace.profile?.profile)),
+ }));
+ }
+
+ function latestCompletedRunId(surfaceWorkspace: SurfaceWorkspace) {
+ const latestRun = [...surfaceWorkspace.completedRuns].sort((left, right) => {
+ const leftTime = new Date(left.completed_at ?? left.updated_at ?? left.created_at).getTime();
+ const rightTime = new Date(right.completed_at ?? right.updated_at ?? right.created_at).getTime();
+ return rightTime - leftTime;
+ })[0];
+ return latestRun?.id ?? null;
+ }
+
+ async function saveProfile(domain: string, surfaceWorkspace: SurfaceWorkspace) {
+ const sourceRunId = latestCompletedRunId(surfaceWorkspace);
+ if (!sourceRunId) {
+ setError("No completed run available to save this profile.");
+ return;
+ }
+ const saveKey = profileDraftKey(domain, surfaceWorkspace.surface);
+ setProfileSaveKey(saveKey);
+ setError("");
+ try {
+ await api.saveDomainRunProfile(sourceRunId, {
+ profile: profileDraftFor(domain, surfaceWorkspace),
+ });
+ setProfileDrafts((current) => {
+ const next = { ...current };
+ delete next[saveKey];
+ return next;
+ });
+ await loadWorkspace(false);
+ } catch (nextError) {
+ setError(nextError instanceof Error ? nextError.message : "Unable to save run profile.");
+ } finally {
+ setProfileSaveKey("");
  }
  }
  return (
@@ -809,33 +931,349 @@ export default function DomainMemoryManagePage() {
  )}
 
  {/* ── Profiles tab ── */}
- {activeTab === "profiles" && (
+             {activeTab === "profiles" && (
  <SurfaceSection
  title="Run Profile Defaults"
- description="Saved fetch and diagnostics defaults that will be reused for future runs on this domain."
+ description="Edit and save reusable fetch defaults here. Domain Memory is the canonical home for saved run profiles."
  bodyClassName="space-y-3"
  >
- {selectedWorkspace.surfaces.some((surface) => surface.profile) ? (
+ {selectedWorkspace.surfaces.some((surface) => surface.profile || surface.completedRuns.length) ? (
  selectedWorkspace.surfaces
- .filter((surface) => surface.profile)
+ .filter((surface) => surface.profile || surface.completedRuns.length)
  .map((surface) => (
  <DetailRow key={`${selectedWorkspace.domain}:${surface.surface}:profile`}>
- <div className="flex items-center justify-between gap-2">
+ {(() => {
+ const profile = profileDraftFor(selectedWorkspace.domain, surface);
+ const sourceRunId = latestCompletedRunId(surface);
+ const saveKey = profileDraftKey(selectedWorkspace.domain, surface.surface);
+ return (
+ <>
+ <div className="flex flex-wrap items-center justify-between gap-2">
+ <div>
  <div className="text-sm font-medium text-foreground">{surfaceLabel(surface.surface)}</div>
- <div className="text-xs text-muted">Saved {formatTimestamp(surface.profile?.updated_at ?? null)}</div>
+ <div className="text-xs text-muted">
+ Saved {formatTimestamp(surface.profile?.updated_at ?? null)} · Source run {sourceRunId ?? "—"}
  </div>
- <div className="mt-3 grid gap-2 sm:grid-cols-2">
- {runProfileSummary(surface.profile!).map((item) => (
- <KVTile key={`${surface.surface}:${item.label}`} label={item.label} value={item.value} />
- ))}
  </div>
- <div className="mt-3 text-xs text-muted">
- Geo: {surface.profile?.profile.locality_profile.geo_country || "auto"} · Language: {surface.profile?.profile.locality_profile.language_hint || "—"} · Currency: {surface.profile?.profile.locality_profile.currency_hint || "—"}
+ <Button
+ type="button"
+ variant="accent"
+ size="sm"
+ disabled={!sourceRunId || profileSaveKey === saveKey}
+ onClick={() => void saveProfile(selectedWorkspace.domain, surface)}
+ >
+ <Save className="size-3.5" />
+ {profileSaveKey === saveKey ? "Saving..." : "Save Profile"}
+ </Button>
  </div>
+ <div className="mt-3 grid gap-3 md:grid-cols-3">
+ <div className="grid gap-3 md:col-span-2 md:grid-cols-2 content-start">
+ <label className="grid gap-1.5">
+ <span className="field-label">Fetch Mode</span>
+ <Dropdown
+ value={profile.fetch_profile.fetch_mode}
+ onChange={(value) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ fetch_mode: value,
+ },
+ }))
+ }
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "http_only", label: "HTTP Only" },
+ { value: "browser_only", label: "Browser Only" },
+ { value: "http_then_browser", label: "HTTP Then Browser" },
+ ]}
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Extraction Source</span>
+ <Dropdown
+ value={profile.fetch_profile.extraction_source}
+ onChange={(value) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ extraction_source: value,
+ },
+ }))
+ }
+ options={[
+ { value: "raw_html", label: "Raw HTML" },
+ { value: "rendered_dom", label: "Rendered DOM" },
+ { value: "rendered_dom_visual", label: "Rendered DOM + Visual" },
+ { value: "network_payload_first", label: "Network Payload First" },
+ ]}
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">JS Mode</span>
+ <Dropdown
+ value={profile.fetch_profile.js_mode}
+ onChange={(value) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ js_mode: value,
+ },
+ }))
+ }
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "enabled", label: "Enabled" },
+ { value: "disabled", label: "Disabled" },
+ ]}
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Traversal Mode</span>
+ <Dropdown
+ value={profile.fetch_profile.traversal_mode ?? ""}
+ onChange={(value) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ traversal_mode: value ? value : null,
+ },
+ }))
+ }
+ options={[
+ { value: "", label: "Off" },
+ { value: "auto", label: "Auto" },
+ { value: "scroll", label: "Scroll" },
+ { value: "load_more", label: "Load More" },
+ { value: "view_all", label: "View All" },
+ { value: "paginate", label: "Paginate" },
+ ]}
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Geo Country</span>
+ <Input
+ value={profile.locality_profile.geo_country}
+ onChange={(event) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ geo_country: event.target.value || "auto",
+ },
+ }))
+ }
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Language Hint</span>
+ <Input
+ value={profile.locality_profile.language_hint ?? ""}
+ onChange={(event) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ language_hint: event.target.value || null,
+ },
+ }))
+ }
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Currency Hint</span>
+ <Input
+ value={profile.locality_profile.currency_hint ?? ""}
+ onChange={(event) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ locality_profile: {
+ ...current.locality_profile,
+ currency_hint: event.target.value || null,
+ },
+ }))
+ }
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Network Capture</span>
+ <Dropdown
+ value={profile.diagnostics_profile.capture_network}
+ onChange={(value) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_network: value,
+ },
+ }))
+ }
+ options={[
+ { value: "off", label: "Off" },
+ { value: "matched_only", label: "Matched Only" },
+ { value: "all_small_json", label: "All Small JSON" },
+ ]}
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Preferred Browser Engine</span>
+ <Dropdown
+ value={profile.acquisition_contract.preferred_browser_engine}
+ onChange={(value) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ acquisition_contract: {
+ ...current.acquisition_contract,
+ preferred_browser_engine: value as "auto" | "patchright" | "real_chrome",
+ },
+ }))
+ }
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "patchright", label: "Patchright" },
+ { value: "real_chrome", label: "Real Chrome" },
+ ]}
+ />
+ </label>
+ <label className="grid gap-1.5">
+ <span className="field-label">Handoff Cookie Engine</span>
+ <Dropdown
+ value={profile.acquisition_contract.handoff_cookie_engine}
+ onChange={(value) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ acquisition_contract: {
+ ...current.acquisition_contract,
+ handoff_cookie_engine: value as "auto" | "patchright" | "real_chrome",
+ },
+ }))
+ }
+ options={[
+ { value: "auto", label: "Auto" },
+ { value: "patchright", label: "Patchright" },
+ { value: "real_chrome", label: "Real Chrome" },
+ ]}
+ />
+ </label>
+ </div>
+ <div className="flex flex-col gap-3">
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Prefer Browser</span>
+ <Toggle
+ checked={profile.acquisition_contract.prefer_browser}
+ onChange={(checked) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ acquisition_contract: {
+ ...current.acquisition_contract,
+ prefer_browser: checked,
+ },
+ }))
+ }
+ />
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Prefer Curl Handoff</span>
+ <Toggle
+ checked={profile.acquisition_contract.prefer_curl_handoff}
+ onChange={(checked) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ acquisition_contract: {
+ ...current.acquisition_contract,
+ prefer_curl_handoff: checked,
+ },
+ }))
+ }
+ />
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Include iframes</span>
+ <Toggle
+ checked={profile.fetch_profile.include_iframes}
+ onChange={(checked) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ fetch_profile: {
+ ...current.fetch_profile,
+ include_iframes: checked,
+ },
+ }))
+ }
+ />
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Capture HTML</span>
+ <Toggle
+ checked={profile.diagnostics_profile.capture_html}
+ onChange={(checked) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_html: checked,
+ },
+ }))
+ }
+ />
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Capture Screenshot</span>
+ <Toggle
+ checked={profile.diagnostics_profile.capture_screenshot}
+ onChange={(checked) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_screenshot: checked,
+ },
+ }))
+ }
+ />
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Capture Response Headers</span>
+ <Toggle
+ checked={profile.diagnostics_profile.capture_response_headers}
+ onChange={(checked) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_response_headers: checked,
+ },
+ }))
+ }
+ />
+ </div>
+ <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+ <span className="text-sm font-medium">Capture Browser Diagnostics</span>
+ <Toggle
+ checked={profile.diagnostics_profile.capture_browser_diagnostics}
+ onChange={(checked) =>
+ updateProfileDraft(selectedWorkspace.domain, surface, (current) => ({
+ ...current,
+ diagnostics_profile: {
+ ...current.diagnostics_profile,
+ capture_browser_diagnostics: checked,
+ },
+ }))
+ }
+ />
+ </div>
+ </div>
+ </div>
+ </>
+ );
+ })()}
  </DetailRow>
  ))
  ) : (
- <DataRegionEmpty title="No saved run profiles" description="Use the Run Config tab on a completed crawl to save reusable defaults for this domain." />
+ <DataRegionEmpty title="No saved run profiles" description="Complete a crawl for this domain, then save reusable defaults here." />
  )}
  </SurfaceSection>
  )}

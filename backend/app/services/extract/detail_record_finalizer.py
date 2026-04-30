@@ -345,8 +345,6 @@ def _sanitize_variant_row(variant: dict[str, Any], *, identity_url: str) -> bool
         and not _variant_title_can_be_option_label(variant, title=title)
     ):
         return False
-    if _detail_variant_row_is_low_signal_numeric_only(variant):
-        return False
     return any(
         variant.get(field_name) not in (None, "", [], {})
         for field_name in (
@@ -378,6 +376,7 @@ def repair_ecommerce_detail_record_quality(
     backfill_detail_price_from_html(record, html=html)
     normalize_detail_cent_prices_for_context(record, page_url=page_url)
     _normalize_detail_money_precision(record)
+    _repair_invalid_original_prices(record)
     _drop_invalid_detail_discounts(record)
     _repair_detail_variant_prices_and_identity(record)
 
@@ -535,6 +534,19 @@ def _drop_invalid_detail_discounts(record: dict[str, Any]) -> None:
         return
     if original_price is not None and discount_amount > max(original_price, 0):
         record.pop("discount_amount", None)
+
+
+def _repair_invalid_original_prices(record: dict[str, Any]) -> None:
+    for container in _detail_money_containers(record):
+        if not isinstance(container, dict):
+            continue
+        price = _price_number(container.get("price"))
+        original_price = _price_number(container.get("original_price"))
+        if price is None or original_price is None or original_price >= price:
+            continue
+        normalized_price = _money_two_decimals(container.get("price"))
+        if normalized_price is not None:
+            container["original_price"] = normalized_price
 
 
 def _variant_title_is_low_signal(title: str) -> bool:
