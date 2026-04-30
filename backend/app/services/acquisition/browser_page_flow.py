@@ -1214,7 +1214,9 @@ async def _append_accessibility_markdown(page: Any, markdown: str) -> str:
             snapshot_fn(),
             timeout=crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds,
         )
-    except (asyncio.TimeoutError, PlaywrightError):
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         return markdown
     aria_text = _serialize_accessibility_snapshot(snapshot)
     if not aria_text:

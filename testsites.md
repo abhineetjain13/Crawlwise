@@ -8,7 +8,6 @@ https://www.apple.com/shop/buy-iphone/iphone-16
 https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000
 https://www.farfetch.com/in/shopping/men/philipp-plein-leather-disco-biker-jacket-item-18497263.aspx
 https://www.ssense.com/en-us/men/product/willy-chavarria/brown-ruff-rider-leather-jacket/19072301
-https://www.nordstrom.com/s/treasure-and-bond-blouson-twill-utility-jacket/8045019?origin=category-personalizedsort&breadcrumb=Home%2FWomen%2FClothing%2FCoats%20%26%20Jackets&color=900
 https://www.costco.com/p/-/sleep-number-ultimate-12-mattress/4201005351?langId=-1
 https://www.target.com/p/tobago-stripe-duvet-cover-set-levtex-home/-/A-1002150739?preselect=1002150742#lnk=sametab
 https://www.walmart.com/ip/Apple-AirPods-with-Charging-Case-2nd-Generation/604342441

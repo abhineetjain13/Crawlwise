@@ -345,6 +345,24 @@ export type DomainRunProfile = {
  capture_response_headers: boolean;
  capture_browser_diagnostics: boolean;
  };
+ acquisition_contract: {
+ preferred_browser_engine: "auto"|"patchright"|"real_chrome";
+ prefer_browser: boolean;
+ prefer_curl_handoff: boolean;
+ handoff_cookie_engine: "auto"|"patchright"|"real_chrome";
+ last_quality_success: {
+ method: string | null;
+ browser_engine: "auto"|"patchright"|"real_chrome"| null;
+ record_count: number;
+ field_coverage: Record<string, unknown>;
+ source_run_id: number | null;
+ timestamp: string | null;
+ } | null;
+ stale_after_failures: {
+ failure_count: number;
+ stale: boolean;
+ };
+ };
  source_run_id?: number | null;
  saved_at?: string | null;
 };

@@ -33,6 +33,10 @@ def _coerce_sequence(value: object) -> list[object]:
 
 
 def _mapping(value: object) -> dict[str, Any]:
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump(mode="json")
+        return dict(dumped) if isinstance(dumped, Mapping) else {}
     return dict(value) if isinstance(value, Mapping) else {}
 
 
@@ -170,6 +174,33 @@ class CrawlRunSettings:
             "capture_browser_diagnostics": bool(
                 stored.get("capture_browser_diagnostics", True)
             ),
+        }
+
+    def acquisition_contract(self) -> dict[str, object]:
+        stored = _mapping(self.data.get("acquisition_contract"))
+        stale = _mapping(stored.get("stale_after_failures"))
+        return {
+            "preferred_browser_engine": str(
+                stored.get("preferred_browser_engine") or "auto"
+            ).strip().lower()
+            or "auto",
+            "prefer_browser": bool(stored.get("prefer_browser", False)),
+            "prefer_curl_handoff": bool(stored.get("prefer_curl_handoff", False)),
+            "handoff_cookie_engine": str(
+                stored.get("handoff_cookie_engine") or "auto"
+            ).strip().lower()
+            or "auto",
+            "last_quality_success": stored.get("last_quality_success")
+            if isinstance(stored.get("last_quality_success"), Mapping)
+            else None,
+            "stale_after_failures": {
+                "failure_count": _coerce_int(
+                    stale.get("failure_count"),
+                    0,
+                    0,
+                ),
+                "stale": bool(stale.get("stale", False)),
+            },
         }
 
     def advanced_enabled(self) -> bool:
@@ -324,6 +355,7 @@ class CrawlRunSettings:
         normalized["fetch_profile"] = self.fetch_profile()
         normalized["locality_profile"] = self.locality_profile()
         normalized["diagnostics_profile"] = self.diagnostics_profile()
+        normalized["acquisition_contract"] = self.acquisition_contract()
         normalized["max_pages"] = self.max_pages()
         normalized["max_scrolls"] = self.max_scrolls()
         normalized["sleep_ms"] = self.sleep_ms()

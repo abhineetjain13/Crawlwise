@@ -76,6 +76,7 @@ def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[s
             "source": str(record.get("_source") or "extraction"),
             "confidence": mapping_or_empty(record.get("_confidence")),
             "self_heal": mapping_or_empty(record.get("_self_heal")),
+            "field_repair": mapping_or_empty(record.get("_field_repair")),
             "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
             "review_bucket": _object_list(record.get("_review_bucket")),
             "semantic": mapping_or_empty(record.get("_semantic")),
@@ -231,6 +232,7 @@ async def persist_extracted_records(
                 key: value
                 for key, value in {
                     "confidence": mapping_or_empty(record.get("_confidence")),
+                    "field_repair": mapping_or_empty(record.get("_field_repair")),
                     "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
                     "semantic": mapping_or_empty(record.get("_semantic")),
                     "review_bucket": _object_list(record.get("_review_bucket")),

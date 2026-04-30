@@ -120,3 +120,20 @@ def test_score_record_confidence_reports_raw_requested_field_counts() -> None:
 
     assert confidence["requested_fields_total"] == 3
     assert confidence["requested_fields_found_best"] == 3
+
+
+def test_score_record_confidence_uses_default_ecommerce_repair_fields() -> None:
+    confidence = score_record_confidence(
+        {
+            "title": "Widget Prime",
+            "price": "19.99",
+            "_field_sources": {"title": ["json_ld"], "price": ["json_ld"]},
+            "_source": "json_ld",
+        },
+        surface="ecommerce_detail",
+        requested_fields=[],
+    )
+
+    assert confidence["requested_fields_total"] > 0
+    assert confidence["requested_fields_found_best"] == 2
+    assert "image_url" in confidence["missing_fields"]

@@ -1020,6 +1020,7 @@ def _finalize_dom_detail_record(
     js_state_objects: dict[str, Any],
 ) -> dict[str, Any]:
     backfill_detail_price_from_html(record, html=html)
+    drop_low_signal_zero_detail_price(record)
     _backfill_variants_from_dom_if_missing(
         record,
         soup=soup,
@@ -1242,6 +1243,13 @@ def build_detail_record(
         requested_fields=requested_fields,
         selector_rules=selector_rules,
     ):
+        if surface == "ecommerce_detail":
+            _promote_dom_detail_title(
+                record,
+                js_state_record=prepared.js_state_record,
+                page_url=page_url,
+            )
+            _fill_missing_dom_detail_title(record, page_url=page_url)
         return _finalize_early_detail_record(
             record,
             html=html,
@@ -1284,8 +1292,6 @@ def detail_record_rejection_reason(
     if _looks_like_site_shell_record(record, page_url=page_url):
         return "non_detail_seed"
     return None
-
-
 def infer_detail_failure_reason(
     html: str,
     page_url: str,
@@ -1316,7 +1322,6 @@ def infer_detail_failure_reason(
         page_url=page_url,
         requested_page_url=requested_page_url,
     )
-
 def extract_detail_records(
     html: str,
     page_url: str,

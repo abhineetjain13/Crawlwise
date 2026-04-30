@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 
 from app.models.crawl import CrawlRun
@@ -24,18 +25,17 @@ from app.services.domain_memory_service import (
 )
 from app.services.db_utils import mapping_or_empty
 from app.services.domain_utils import normalize_domain
+from app.services.domain_run_profile_service import (
+    apply_saved_acquisition_contract_for_url,
+    record_acquisition_contract_outcome,
+)
+from app.services.field_policy import repair_target_fields_for_surface
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.detail_extractor import (
     detail_record_rejection_reason,
     infer_detail_failure_reason,
 )
-from app.services.field_value_core import (
-    LONG_TEXT_FIELDS,
-    validate_record_for_surface,
-)
-from app.services.field_policy import (
-    normalize_requested_field,
-)
+from app.services.field_value_core import validate_record_for_surface
 from app.services.llm_config_service import resolve_run_config
 from app.services.llm_runtime import extract_records_directly as extract_records_directly_with_llm
 from app.services.pipeline.direct_record_fallback import (
@@ -62,7 +62,9 @@ from app.services.extraction_runtime import extract_records
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .extraction_retry_decision import (
+    annotate_field_repair as _annotate_field_repair,
     empty_extraction_browser_retry_decision as _empty_extraction_browser_retry_decision,
+    low_quality_extraction_browser_retry_decision as _low_quality_extraction_browser_retry_decision,
 )
 from .persistence import persist_acquisition_artifacts, persist_extracted_records
 from .runtime_helpers import (
@@ -77,6 +79,7 @@ from .runtime_helpers import (
     effective_blocked as _effective_blocked,
     mark_run_failed as _mark_run_failed,
     merge_browser_diagnostics as _merge_browser_diagnostics,
+    record_detail_expansion_extraction_outcome as _record_detail_expansion_extraction_outcome,
     screenshot_required as _screenshot_required,
     suppress_empty_downstream_record_logs as _suppress_empty_downstream_record_logs,
     log_event,
@@ -103,26 +106,10 @@ class _URLProcessingContext:
     run: CrawlRun
     url: str
     config: URLProcessingConfig
+    url_timeout_seconds: float
+    started_at_monotonic: float
     requested_fields: list[str] = field(default_factory=list)
     surface: str = ""
-
-    @classmethod
-    def build(
-        cls,
-        *,
-        session: AsyncSession,
-        run: CrawlRun,
-        url: str,
-        config: URLProcessingConfig,
-    ) -> "_URLProcessingContext":
-        return cls(
-            session=session,
-            run=run,
-            url=url,
-            config=config,
-            requested_fields=list(run.requested_fields or []),
-            surface=run.surface,
-        )
 
 
 @dataclass(slots=True)
@@ -243,7 +230,12 @@ async def process_single_url(
 ) -> URLProcessingResult:
     del checkpoint
     settings_view = run.settings_view
-    context = _URLProcessingContext.build(
+    url_timeout_seconds = (
+        settings_view.url_timeout_seconds()
+        if settings_view.get("url_timeout_seconds") not in (None, "")
+        else crawler_runtime_settings.default_url_process_timeout_seconds()
+    )
+    context = _URLProcessingContext(
         session=session,
         run=run,
         url=url,
@@ -259,6 +251,10 @@ async def process_single_url(
             update_run_state=update_run_state,
             persist_logs=persist_logs,
         ),
+        url_timeout_seconds=float(url_timeout_seconds),
+        started_at_monotonic=time.monotonic(),
+        requested_fields=list(run.requested_fields or []),
+        surface=run.surface,
     )
     await _enter_stage(context, STAGE_ACQUIRE)
     robots_result = await _run_robots_gate(context)
@@ -345,9 +341,16 @@ async def _run_robots_gate(
         return None
     return None
 
-def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionRequest:
+async def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionRequest:
     plan = context.config.resolved_acquisition_plan(surface=context.surface)
     acquisition_profile = dict(build_acquisition_profile(context.run.settings_view))
+    acquisition_profile = await apply_saved_acquisition_contract_for_url(
+        context.session,
+        url=context.url,
+        surface=context.surface,
+        settings_view=context.run.settings_view,
+        acquisition_profile=acquisition_profile,
+    )
     acquisition_profile.setdefault(
         "capture_page_markdown",
         bool(context.run.settings_view.llm_enabled()),
@@ -376,7 +379,7 @@ async def _run_acquisition_stage(
     *,
     prefetched_acquisition: AcquisitionResult | None,
 ) -> _FetchedURLStage:
-    acquisition_request = _build_acquisition_request(context)
+    acquisition_request = await _build_acquisition_request(context)
     acquisition_result = prefetched_acquisition or await acquire(acquisition_request)
     method = getattr(acquisition_result, "method", "unknown")
     if method == "browser":
@@ -449,11 +452,17 @@ async def _run_extraction_stage(
         fetched,
     )
     _record_detail_expansion_extraction_outcome(
-        context,
         acquisition_result,
         records,
+        requested_fields=list(context.requested_fields),
     )
     records, selector_rules = await _retry_empty_extraction_with_browser(
+        context,
+        fetched,
+        records=records,
+        selector_rules=selector_rules,
+    )
+    records, selector_rules = await _retry_low_quality_extraction_with_browser(
         context,
         fetched,
         records=records,
@@ -612,50 +621,6 @@ def _apply_detail_rejection_guard(
     fetched.url_metrics["failure_reason"] = rejection_reason
     return [], rejection_reason
 
-def _record_detail_expansion_extraction_outcome(
-    context: _URLProcessingContext,
-    acquisition_result: AcquisitionResult,
-    records: list[dict[str, object]],
-) -> None:
-    if str(getattr(acquisition_result, "method", "") or "").strip().lower() != "browser":
-        return
-    browser_diagnostics = mapping_or_empty(
-        getattr(acquisition_result, "browser_diagnostics", {})
-    )
-    detail_expansion = mapping_or_empty(browser_diagnostics.get("detail_expansion"))
-    try:
-        clicked_count = int(str(detail_expansion.get("clicked_count", 0) or 0))
-    except (TypeError, ValueError):
-        clicked_count = 0
-    if clicked_count <= 0:
-        return
-    requested_fields = {
-        normalized
-        for value in context.requested_fields
-        if (normalized := normalize_requested_field(value))
-    }
-    extracted_fields = sorted(
-        {
-            str(field_name).strip().lower()
-            for record in records
-            if isinstance(record, dict)
-            for field_name, value in record.items()
-            if (
-                not str(field_name).startswith("_")
-                and value not in (None, "", [], {})
-                and (
-                    not requested_fields
-                    or str(field_name).strip().lower() in requested_fields
-                    or str(field_name).strip().lower() in LONG_TEXT_FIELDS
-                )
-            )
-        }
-    )
-    detail_expansion["extraction_consumed"] = bool(extracted_fields or records)
-    detail_expansion["extracted_fields"] = extracted_fields
-    browser_diagnostics["detail_expansion"] = detail_expansion
-    acquisition_result.browser_diagnostics = browser_diagnostics
-
 async def _run_normalization_stage(
     context: _URLProcessingContext,
     extracted: _ExtractedURLStage,
@@ -733,6 +698,65 @@ async def _retry_empty_extraction_with_browser(
     fetched.acquisition_result = browser_result
     return await _extract_records_for_acquisition(context, fetched)
 
+
+async def _retry_low_quality_extraction_with_browser(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+    *,
+    records: list[dict[str, object]],
+    selector_rules: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    acquisition_result = fetched.acquisition_result
+    if "detail" not in context.surface:
+        return records, selector_rules
+    if getattr(acquisition_result, "method", "") == "browser":
+        return records, selector_rules
+    if not records or _effective_blocked(acquisition_result):
+        return records, selector_rules
+    retry_decision = _low_quality_extraction_browser_retry_decision(
+        acquisition_result,
+        records,
+        surface=context.surface,
+        requested_fields=list(context.requested_fields),
+    )
+    if not retry_decision["should_retry"]:
+        return records, selector_rules
+    missing_fields = [
+        str(field_name)
+        for field_name in list(retry_decision.get("missing_fields") or [])
+        if str(field_name).strip()
+    ]
+    if not missing_fields:
+        return records, selector_rules
+    remaining_budget_seconds = _remaining_url_budget_seconds(context)
+    min_remaining_seconds = float(crawler_runtime_settings.low_quality_browser_retry_min_remaining_seconds)
+    if remaining_budget_seconds < min_remaining_seconds:
+        await _log_pipeline_event(
+            context,
+            "info",
+            "Skipping low-quality browser retry for "
+            f"{context.url}: remaining URL budget {remaining_budget_seconds:.1f}s"
+            f" < required {min_remaining_seconds:.1f}s",
+        )
+        return records, selector_rules
+    await _log_pipeline_event(
+        context,
+        "info",
+        "Detail record missing high-value fields "
+        f"{', '.join(missing_fields)} via {acquisition_result.method}; retrying browser render for {context.url}",
+    )
+    browser_result = await _acquire_browser_retry_result(
+        context,
+        fetched,
+        retry_reason="low_quality_extraction",
+    )
+    fetched.acquisition_result = browser_result
+    return await _extract_records_for_acquisition(context, fetched)
+
+
+def _remaining_url_budget_seconds(context: _URLProcessingContext) -> float:
+    return max(0.0, float(context.url_timeout_seconds) - max(0.0, time.monotonic() - float(context.started_at_monotonic)))
+
 async def _acquire_browser_retry_result(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -747,7 +771,7 @@ async def _acquire_browser_retry_result(
     }
     if forced_browser_engine:
         profile_updates["forced_browser_engine"] = forced_browser_engine
-    retry_request = _build_acquisition_request(context).with_profile_updates(
+    retry_request = (await _build_acquisition_request(context)).with_profile_updates(
         **profile_updates
     )
     try:
@@ -782,6 +806,14 @@ async def _apply_extraction_post_processing(
     if not _browser_result_is_extractable(acquisition_result):
         return records, selector_rules
     if not context.run.settings_view.llm_enabled():
+        _annotate_field_repair(
+            records,
+            surface=context.surface,
+            requested_fields=list(context.requested_fields),
+            llm_enabled=False,
+            action="skipped",
+            reason="llm_disabled",
+        )
         return records, selector_rules
     records = await apply_direct_record_llm_fallback_impl(
         context.session,
@@ -801,7 +833,16 @@ async def _apply_extraction_post_processing(
             html=acquisition_result.html,
             records=records,
         )
+    _annotate_field_repair(
+        records,
+        surface=context.surface,
+        requested_fields=list(context.requested_fields),
+        llm_enabled=True,
+        action="checked",
+        reason=None,
+    )
     return records, selector_rules
+
 
 async def _extract_records_for_acquisition(
     context: _URLProcessingContext,
@@ -1114,12 +1155,59 @@ async def _run_persistence_stage(
         )
     if verdict == VERDICT_EMPTY and "listing" in context.surface and persisted_count == 0:
         verdict = VERDICT_LISTING_FAILED
-    return URLProcessingResult(
+    await _update_acquisition_contract_memory(
+        context,
+        acquisition_result=acquisition_result,
         records=extracted.records,
+        persisted_count=persisted_count,
+        verdict=verdict,
+    )
+    result_records = []
+    for record in extracted.records:
+        next_record = dict(record)
+        next_record.pop("_field_repair", None)
+        result_records.append(next_record)
+    return URLProcessingResult(
+        records=result_records,
         verdict=verdict,
         url_metrics=finalize_url_metrics(
             extracted.fetched.url_metrics,
             record_count=persisted_count,
         ),
+    )
+
+
+async def _update_acquisition_contract_memory(
+    context: _URLProcessingContext,
+    *,
+    acquisition_result,
+    records: list[dict[str, object]],
+    persisted_count: int,
+    verdict: str,
+) -> None:
+    domain = normalize_domain(getattr(acquisition_result, "final_url", "") or context.url)
+    if not domain:
+        return
+    diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    await record_acquisition_contract_outcome(
+        context.session,
+        domain=domain,
+        surface=context.surface,
+        source_run_id=int(context.run.id),
+        method=getattr(acquisition_result, "method", None),
+        browser_engine=str(diagnostics.get("browser_engine") or "").strip().lower(),
+        requested_fields=repair_target_fields_for_surface(
+            context.surface,
+            list(context.requested_fields),
+        ),
+        records=records,
+        persisted_count=persisted_count,
+        quality_success=(
+            persisted_count > 0
+            and not _effective_blocked(acquisition_result)
+            and verdict not in {VERDICT_BLOCKED, VERDICT_EMPTY}
+        ),
+        count_failure=verdict != VERDICT_LISTING_FAILED,
+        stale_threshold=int(crawler_runtime_settings.acquisition_contract_stale_failure_threshold),
     )
 

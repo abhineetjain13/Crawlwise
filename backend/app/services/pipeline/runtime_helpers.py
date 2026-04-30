@@ -7,6 +7,8 @@ from app.models.crawl import CrawlLog, CrawlRun
 from app.services.acquisition.acquirer import AcquisitionResult, PageEvidence
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
 from app.services.db_utils import mapping_or_empty
+from app.services.field_policy import normalize_requested_field
+from app.services.field_value_core import LONG_TEXT_FIELDS
 from app.services.publish import VERDICT_ERROR, is_effectively_blocked
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
@@ -100,6 +102,52 @@ def merge_browser_diagnostics(
     merged = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     merged.update(dict(diagnostics or {}))
     acquisition_result.browser_diagnostics = merged
+
+
+def record_detail_expansion_extraction_outcome(
+    acquisition_result: AcquisitionResult,
+    records: list[dict[str, object]],
+    *,
+    requested_fields: list[str],
+) -> None:
+    if str(getattr(acquisition_result, "method", "") or "").strip().lower() != "browser":
+        return
+    browser_diagnostics = mapping_or_empty(
+        getattr(acquisition_result, "browser_diagnostics", {})
+    )
+    detail_expansion = dict(mapping_or_empty(browser_diagnostics.get("detail_expansion")))
+    try:
+        clicked_count = int(str(detail_expansion.get("clicked_count", 0) or 0))
+    except (TypeError, ValueError):
+        clicked_count = 0
+    if clicked_count <= 0:
+        return
+    requested = {
+        normalized
+        for value in requested_fields
+        if (normalized := normalize_requested_field(value))
+    }
+    extracted_fields = sorted(
+        {
+            str(field_name).strip().lower()
+            for record in records
+            if isinstance(record, dict)
+            for field_name, value in record.items()
+            if (
+                not str(field_name).startswith("_")
+                and value not in (None, "", [], {})
+                and (
+                    not requested
+                    or str(field_name).strip().lower() in requested
+                    or str(field_name).strip().lower() in LONG_TEXT_FIELDS
+                )
+            )
+        }
+    )
+    detail_expansion["extraction_consumed"] = bool(extracted_fields or records)
+    detail_expansion["extracted_fields"] = extracted_fields
+    browser_diagnostics["detail_expansion"] = detail_expansion
+    acquisition_result.browser_diagnostics = browser_diagnostics
 
 
 

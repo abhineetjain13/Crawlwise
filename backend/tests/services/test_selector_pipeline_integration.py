@@ -238,6 +238,22 @@ async def test_process_run_self_heals_selectors_and_reuses_domain_memory_without
             final_url=request.url,
             html="""
             <html>
+              <head>
+                <script type="application/ld+json">
+                  {
+                    "@context": "https://schema.org",
+                    "@type": "Product",
+                    "name": "Self Heal Widget",
+                    "brand": {"@type": "Brand", "name": "Acme"},
+                    "image": "https://example.com/widget.jpg",
+                    "offers": {
+                      "@type": "Offer",
+                      "price": "19.99",
+                      "priceCurrency": "USD"
+                    }
+                  }
+                </script>
+              </head>
               <body>
                 <h1>Self Heal Widget</h1>
                 <div class="custom-specs">Rubber outsole, reinforced toe cap.</div>

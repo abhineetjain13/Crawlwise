@@ -6,10 +6,10 @@ from typing import Any
 
 from app.services.config.extraction_rules import SOURCE_TIERS, SURFACE_WEIGHTS
 from app.services.field_policy import (
-    canonical_requested_fields,
     exact_requested_field_key,
     normalize_field_key,
     normalize_requested_field,
+    repair_target_fields_for_surface,
 )
 
 _GENERIC_TITLE_RE = re.compile(
@@ -71,10 +71,13 @@ def score_record_confidence(
         for field_name in list(requested_fields or [])
         if " ".join(str(field_name or "").split()).strip()
     ]
-    requested = canonical_requested_fields(raw_requested)
+    requested = repair_target_fields_for_surface(normalized_surface, raw_requested)
     requested_found = [
         field_name for field_name in requested if record.get(field_name) not in (None, "", [], {})
     ]
+    for field_name in requested:
+        if record.get(field_name) in (None, "", [], {}) and field_name not in missing_fields:
+            missing_fields.append(field_name)
     requested_found_total = sum(
         1
         for field_name in raw_requested
@@ -91,6 +94,8 @@ def score_record_confidence(
             )
         )
     )
+    if not raw_requested and requested:
+        requested_found_total = len(requested_found)
     if requested:
         requested_bonus = 0.0
         for field_name in requested_found:
@@ -109,7 +114,7 @@ def score_record_confidence(
         "level": _confidence_level(normalized_score),
         "present_fields": present_fields,
         "missing_fields": missing_fields,
-        "requested_fields_total": len(raw_requested),
+        "requested_fields_total": len(raw_requested) if raw_requested else len(requested),
         "requested_fields_found_best": requested_found_total,
         "penalties": [
             {

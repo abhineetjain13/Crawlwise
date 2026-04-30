@@ -7,6 +7,8 @@ from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
     FIELD_ALIASES,
     INTERNAL_ONLY_FIELDS,
+    SURFACE_BROWSER_RETRY_TARGETS,
+    SURFACE_FIELD_REPAIR_TARGETS,
 )
 
 _NON_FIELD_RE = re.compile(r"[^a-z0-9.]+")
@@ -284,6 +286,49 @@ def expand_requested_fields(values: Iterable[str] | None) -> list[str]:
 
 def canonical_requested_fields(values: Iterable[str] | None) -> list[str]:
     return expand_requested_fields(values)
+
+
+def repair_target_fields_for_surface(
+    surface: str,
+    requested_fields: Iterable[str] | None,
+) -> list[str]:
+    normalized = str(surface or "").strip().lower()
+    requested = [
+        field_name
+        for field_name in canonical_requested_fields(requested_fields)
+        if field_allowed_for_surface(normalized, field_name)
+    ]
+    defaults = [
+        field_name
+        for field_name in list(SURFACE_FIELD_REPAIR_TARGETS.get(normalized) or [])
+        if field_allowed_for_surface(normalized, field_name)
+    ]
+    # Union: user-requested fields + surface canonical defaults.
+    # A setup crawl must discover selectors for both so domain memory is
+    # maximally useful on subsequent cheaper runs.
+    seen: set[str] = set(requested)
+    return requested + [f for f in defaults if f not in seen]
+
+
+def browser_retry_target_fields_for_surface(
+    surface: str,
+    requested_fields: Iterable[str] | None,
+) -> list[str]:
+    normalized = str(surface or "").strip().lower()
+    requested = [
+        field_name
+        for field_name in canonical_requested_fields(requested_fields)
+        if field_allowed_for_surface(normalized, field_name)
+    ]
+    defaults = [
+        field_name
+        for field_name in list(SURFACE_BROWSER_RETRY_TARGETS.get(normalized) or [])
+        if field_allowed_for_surface(normalized, field_name)
+    ]
+    # Union: if user asked for price+title but canonical retry targets include
+    # currency, we still upgrade to browser when currency is missing.
+    seen: set[str] = set(requested)
+    return requested + [f for f in defaults if f not in seen]
 
 
 def preserve_requested_fields(values: Iterable[str] | None) -> list[str]:

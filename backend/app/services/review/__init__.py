@@ -465,7 +465,12 @@ async def build_domain_recipe_payload(
                 for value in list(payload_map.get("sources") or [])
                 if str(value or "").strip()
             ]
-            if payload_map.get("status") == "found" and payload_map.get("value") not in (None, "", [], {}):
+            if (
+                payload_map.get("status") == "found"
+                and payload_map.get("value") not in (None, "", [], {})
+                and selector_kind == "xpath"
+                and selector_value
+            ):
                 learning_key = (
                     str(field_name or "").strip().lower(),
                     selector_kind,

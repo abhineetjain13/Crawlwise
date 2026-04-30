@@ -34,9 +34,8 @@ import { parseApiDate } from "../../lib/format/date";
 import { humanizeStatus, runsStatusTone as statusTone } from "../../lib/ui/status";
 import {
   ActionButton,
-  cleanRecord,
+  cleanRecordForDisplay,
   copyJson,
-  decodeUrlsForDisplay,
   extractRecordUrl,
   extractionVerdict,
   extractionVerdictTone,
@@ -62,6 +61,14 @@ type CrawlRunScreenProps = {
   runId: number;
 };
 
+function selectorWinnerLabel(selectorKind: string | null | undefined): string {
+  const normalized = String(selectorKind || "").trim().toLowerCase();
+  if (!normalized) return "Selector winner";
+  if (normalized === "xpath") return "XPath winner";
+  if (normalized === "css_selector") return "CSS selector winner";
+  return `${selectorKind} winner`;
+}
+
 function defaultDomainRunProfile(): DomainRunProfile {
   return {
     version: 1,
@@ -84,6 +91,17 @@ function defaultDomainRunProfile(): DomainRunProfile {
       capture_network: "matched_only",
       capture_response_headers: true,
       capture_browser_diagnostics: true,
+    },
+    acquisition_contract: {
+      preferred_browser_engine: "auto",
+      prefer_browser: false,
+      prefer_curl_handoff: false,
+      handoff_cookie_engine: "auto",
+      last_quality_success: null,
+      stale_after_failures: {
+        failure_count: 0,
+        stale: false,
+      },
     },
     source_run_id: null,
     saved_at: null,
@@ -109,29 +127,33 @@ function cloneDomainRunProfile(profile: DomainRunProfile | null | undefined): Do
       ...base.diagnostics_profile,
       ...(profile.diagnostics_profile ?? {}),
     },
+    acquisition_contract: {
+      ...base.acquisition_contract,
+      ...(profile.acquisition_contract ?? {}),
+      stale_after_failures: {
+        ...base.acquisition_contract.stale_after_failures,
+        ...(profile.acquisition_contract?.stale_after_failures ?? {}),
+      },
+    },
     source_run_id: profile.source_run_id ?? null,
     saved_at: profile.saved_at ?? null,
   };
 }
 
-function renderLearningValue(value: unknown) {
-  if (value == null) {
-    return "—";
-  }
-  if (
-    typeof value === "string"
-    || typeof value === "number"
-    || typeof value === "boolean"
-    || typeof value === "bigint"
-    || typeof value === "symbol"
-  ) {
-    return String(value);
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "[unserializable]";
-  }
+function mergeRecords(current: CrawlRecord[], incoming: CrawlRecord[]) {
+  const byId = new Map<number, CrawlRecord>();
+  for (const row of current) byId.set(row.id, row);
+  for (const row of incoming) byId.set(row.id, row);
+  return Array.from(byId.values()).sort((a, b) => a.id - b.id);
+}
+
+function mergeLogs(current: CrawlLog[], incoming: CrawlLog[]) {
+  const byId = new Map<number, CrawlLog>();
+  for (const row of current) byId.set(row.id, row);
+  for (const row of incoming) byId.set(row.id, row);
+  return Array.from(byId.values())
+    .sort((a, b) => a.id - b.id)
+    .slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS);
 }
 
 function isSafeHref(href: string) {
@@ -188,22 +210,19 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
-  const [recipeProfile, setRecipeProfile] = useState<DomainRunProfile>(() => defaultDomainRunProfile());
+  const [recipeProfileDraft, setRecipeProfileDraft] = useState<DomainRunProfile | null>(null);
   const [recipeActionPending, setRecipeActionPending] = useState<"profile" | `field:${string}:${"keep" | "reject"}` | null>(null);
   const [recipeActionError, setRecipeActionError] = useState("");
   const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
   const [runActionPending, setRunActionPending] = useState<"kill" | null>(null);
   const [runActionError, setRunActionError] = useState("");
   const [tablePage, setTablePage] = useState(1);
-  const [tableRecords, setTableRecords] = useState<CrawlRecord[]>([]);
-  const [tableTotal, setTableTotal] = useState(0);
   const [jsonVisibleCount, setJsonVisibleCount] = useState(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
-  const [logItems, setLogItems] = useState<CrawlLog[]>([]);
-  const [logCursorAfterId, setLogCursorAfterId] = useState<number | undefined>(undefined);
+  const [socketLogItems, setSocketLogItems] = useState<CrawlLog[]>([]);
   const [logSocketConnected, setLogSocketConnected] = useState(false);
-  const logCursorRef = useRef<number | undefined>(undefined);
   const logViewportRef = useRef<HTMLDivElement | null>(null);
-  const sessionStartMsRef = useRef<number>(Date.now());
+  const [sessionStartMs] = useState(() => Date.now());
+  const [localNow, setLocalNow] = useState(() => Date.now());
   const pollErrorEventKeysRef = useRef<Set<string>>(new Set());
   const terminalRecordsRetryAttemptsRef = useRef(0);
 
@@ -216,18 +235,25 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const { refetch: refetchRunQuery } = runQuery;
   const run = runQuery.data;
   const { live, terminal } = useRunStatusFlags(run);
-  const shouldFetchTableRecords = Boolean(run) && outputTab === "table";
-  const shouldFetchJsonRecords = Boolean(run) && outputTab === "json";
-  const shouldFetchLogs = Boolean(run) && (live || outputTab === "logs");
-  const shouldFetchMarkdown = Boolean(run) && terminal && outputTab === "markdown";
-
   const runCreatedMs = run?.created_at ? parseApiDate(run.created_at).getTime() : null;
-  const effectiveStartMs = runCreatedMs ?? sessionStartMsRef.current;
-  const [localNow, setLocalNow] = useState(Date.now());
+  const effectiveStartMs = runCreatedMs ?? sessionStartMs;
   const recordsFetchLimit = Math.min(
     800,
     Math.max(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 2, jsonVisibleCount),
   );
+  const failedRunWithoutRecords = Boolean(
+    run &&
+    (run.status === "failed" || run.status === "proxy_exhausted") &&
+    Number(run?.result_summary?.record_count ?? 0) === 0,
+  );
+  const effectiveOutputTab =
+    failedRunWithoutRecords && outputTab === "table"
+      ? "logs"
+      : outputTab;
+  const shouldFetchTableRecords = Boolean(run) && effectiveOutputTab === "table";
+  const shouldFetchJsonRecords = Boolean(run) && effectiveOutputTab === "json";
+  const shouldFetchLogs = Boolean(run) && (live || effectiveOutputTab === "logs");
+  const shouldFetchMarkdown = Boolean(run) && terminal && effectiveOutputTab === "markdown";
 
   useEffect(() => {
     if (!live) return;
@@ -235,9 +261,10 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     return () => clearInterval(interval);
   }, [live]);
 
+  const tableRecordsLimit = CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4 * tablePage;
   const tableRecordsQuery = useQuery({
-    queryKey: ["crawl-records-table", runId, tablePage],
-    queryFn: () => api.getRecords(runId, { page: tablePage, limit: CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4 }),
+    queryKey: ["crawl-records-table", runId, tableRecordsLimit],
+    queryFn: () => api.getRecords(runId, { page: 1, limit: tableRecordsLimit }),
     enabled: shouldFetchTableRecords,
     refetchInterval: false,
     refetchOnMount: "always",
@@ -255,7 +282,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
   const logsQuery = useQuery({
     queryKey: ["crawl-logs", runId],
-    queryFn: () => api.getCrawlLogs(runId, { afterId: logCursorRef.current, limit: CRAWL_DEFAULTS.MAX_LIVE_LOGS }),
+    queryFn: () => api.getCrawlLogs(runId, { limit: CRAWL_DEFAULTS.MAX_LIVE_LOGS }),
     enabled: shouldFetchLogs,
     refetchInterval: false,
   });
@@ -281,6 +308,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     () => records.length >= recordsFetchLimit && recordsFetchLimit >= 800,
     [records, recordsFetchLimit],
   );
+  const tableRecords = useMemo(() => tableRecordsQuery.data?.items ?? [], [tableRecordsQuery.data?.items]);
+  const tableTotal = tableRecordsQuery.data?.meta?.total ?? tableRecords.length;
   const recordsTotal = jsonRecordsQuery.data?.meta?.total ?? records.length;
   const jsonRecords = useMemo(
     () => records.slice(0, Math.min(records.length, jsonVisibleCount)),
@@ -290,15 +319,29 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const hasMoreTableRecords = tableRecords.length < tableTotal;
   const hasMoreJsonRecords =
     jsonRecords.length < records.length || (records.length < recordsTotal && !recordsFetchCapReached);
-  const logs = useMemo(() => logItems.slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS), [logItems]);
+  const logs = useMemo(() => mergeLogs(logsQuery.data ?? [], socketLogItems), [logsQuery.data, socketLogItems]);
+  const logCursorAfterId = logs.at(-1)?.id;
   const markdown = markdownQuery.data ?? "";
   const domainRecipe = domainRecipeQuery.data;
+  const savedRecipeProfile = useMemo(
+    () => cloneDomainRunProfile(domainRecipe?.saved_run_profile),
+    [domainRecipe?.saved_run_profile],
+  );
+  const recipeProfile = recipeProfileDraft ?? savedRecipeProfile;
+  const logSocketOnline = shouldFetchLogs && logSocketConnected;
+  const elapsedLabel = useMemo(() => {
+    const elapsedMs = Math.max(0, localNow - effectiveStartMs);
+    const totalS = Math.floor(elapsedMs / 1000);
+    const m = Math.floor(totalS / 60);
+    const s = totalS % 60;
+    return `${m}m ${String(s).padStart(2, "0")}s`;
+  }, [effectiveStartMs, localNow]);
   const recordsJson = useMemo(
     () =>
-      outputTab === "json"
-        ? JSON.stringify(deferredJsonRecords.map((record) => decodeUrlsForDisplay(cleanRecord(record))), null, 2)
+      effectiveOutputTab === "json"
+        ? JSON.stringify(deferredJsonRecords.map(cleanRecordForDisplay), null, 2)
         : "",
-    [deferredJsonRecords, outputTab],
+    [deferredJsonRecords, effectiveOutputTab],
   );
   const showRunLoadingState = runQuery.isLoading && !run;
   const panelRefreshErrors = useMemo(() => [
@@ -359,66 +402,16 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     refetchDomainRecipeQuery,
   ]);
 
-  useEffect(() => {
-    if (!domainRecipe) {
-      return;
-    }
-    setRecipeProfile(cloneDomainRunProfile(domainRecipe.saved_run_profile));
-    setRecipeActionError("");
-  }, [domainRecipe]);
-
   useTerminalSync(run, terminal, [runQuery, tableRecordsQuery, jsonRecordsQuery, logsQuery, markdownQuery]);
-
-  useEffect(() => {
-    if (!tableRecordsQuery.data) {
-      return;
-    }
-    const nextItems = tableRecordsQuery.data.items ?? [];
-    const nextTotal = tableRecordsQuery.data.meta?.total ?? nextItems.length;
-    setTableTotal(nextTotal);
-    setTableRecords((current) => {
-      if (tablePage === 1) {
-        return nextItems;
-      }
-      const byId = new Map<number, CrawlRecord>();
-      for (const row of current) byId.set(row.id, row);
-      for (const row of nextItems) byId.set(row.id, row);
-      return Array.from(byId.values()).sort((a, b) => a.id - b.id);
-    });
-  }, [tableRecordsQuery.data, tablePage]);
-
-  useEffect(() => {
-    if (!logsQuery.data || !logsQuery.data.length) {
-      return;
-    }
-    setLogItems((current) => {
-      const byId = new Map<number, CrawlLog>();
-      for (const row of current) byId.set(row.id, row);
-      for (const row of logsQuery.data) byId.set(row.id, row);
-      return Array.from(byId.values())
-        .sort((a, b) => a.id - b.id)
-        .slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS);
-    });
-    const latest = logsQuery.data.at(-1);
-    if (latest?.id !== undefined) {
-      setLogCursorAfterId((current) => (current && current > latest.id ? current : latest.id));
-    }
-  }, [logsQuery.data]);
-
-  useEffect(() => {
-    logCursorRef.current = logCursorAfterId;
-  }, [logCursorAfterId]);
 
   useEffect(() => {
     const isJsdom = typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent);
     if (!shouldFetchLogs || typeof window === "undefined" || typeof WebSocket === "undefined" || isJsdom) {
-      setLogSocketConnected(false);
       return;
     }
-    const socketCursor = logCursorRef.current;
     const query = new URLSearchParams();
-    if (socketCursor !== undefined) {
-      query.set("after_id", String(socketCursor));
+    if (logCursorAfterId !== undefined) {
+      query.set("after_id", String(logCursorAfterId));
     }
     const queryString = query.toString();
     const wsUrl = `${getApiWebSocketBaseUrl()}/api/crawls/${runId}/logs/ws${queryString ? `?${queryString}` : ""}`;
@@ -439,21 +432,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         if (!parsed || typeof parsed.id !== "number") {
           return;
         }
-        setLogItems((current) => {
-          const byId = new Map<number, CrawlLog>();
-          for (const row of current) byId.set(row.id, row);
-          byId.set(parsed.id, parsed);
-          return Array.from(byId.values())
-            .sort((a, b) => a.id - b.id)
-            .slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS);
-        });
-        setLogCursorAfterId((current) => (current && current > parsed.id ? current : parsed.id));
+        setSocketLogItems((current) => mergeLogs(current, [parsed]));
       } catch {
         // Ignore malformed websocket payloads and rely on polling fallback.
       }
     };
     return () => ws.close();
-  }, [refetchLogsQuery, refetchRunQuery, runId, shouldFetchLogs]);
+  }, [logCursorAfterId, refetchLogsQuery, refetchRunQuery, runId, shouldFetchLogs]);
 
   useEffect(() => {
     if (!live) {
@@ -468,7 +453,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       if (shouldFetchJsonRecords) {
         tasks.push(refetchJsonRecords());
       }
-      if (shouldFetchLogs && !logSocketConnected) {
+      if (shouldFetchLogs && !logSocketOnline) {
         tasks.push(refetchLogsQuery());
       }
       if (shouldFetchMarkdown) {
@@ -481,7 +466,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     return () => window.clearInterval(intervalId);
   }, [
     live,
-    logSocketConnected,
+    logSocketOnline,
     shouldFetchLogs,
     shouldFetchJsonRecords,
     shouldFetchMarkdown,
@@ -540,19 +525,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     Number(run?.result_summary?.record_count ?? 0) || 0,
   );
 
-  useEffect(() => {
-    if (!run) {
-      return;
-    }
-    if (
-      (run.status === "failed" || run.status === "proxy_exhausted") &&
-      outputTab === "table" &&
-      terminalRecordCount === 0
-    ) {
-      setOutputTab("logs");
-    }
-  }, [outputTab, run, terminalRecordCount]);
-
   const visibleColumns = useMemo(() => {
     const columns = new Set<string>();
     for (const record of [...tableRecords, ...records]) {
@@ -568,23 +540,18 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   }, [tableRecords, records]);
 
   const filteredTableRecords = tableRecords;
-
-  useEffect(() => {
-    const availableRecordIds = new Set(
-      (outputTab === "table" ? filteredTableRecords : records).map((record) => record.id),
-    );
-    setSelectedIds((current) => {
-      const next = current.filter((id) => availableRecordIds.has(id));
-      if (next.length === current.length && next.every((id, index) => id === current[index])) {
-        return current;
-      }
-      return next;
-    });
-  }, [filteredTableRecords, outputTab, records]);
+  const visibleRecordIds = useMemo(
+    () => new Set((effectiveOutputTab === "table" ? filteredTableRecords : records).map((record) => record.id)),
+    [effectiveOutputTab, filteredTableRecords, records],
+  );
+  const visibleSelectedIds = useMemo(
+    () => selectedIds.filter((id) => visibleRecordIds.has(id)),
+    [selectedIds, visibleRecordIds],
+  );
 
   const selectedRecords = useMemo(
-    () => (outputTab === "table" ? filteredTableRecords : records).filter((record) => selectedIds.includes(record.id)),
-    [filteredTableRecords, outputTab, records, selectedIds],
+    () => (effectiveOutputTab === "table" ? filteredTableRecords : records).filter((record) => visibleSelectedIds.includes(record.id)),
+    [effectiveOutputTab, filteredTableRecords, records, visibleSelectedIds],
   );
   const batchSourceRecords = useMemo(
     () => (tableRecords.length ? tableRecords : records),
@@ -663,6 +630,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const terminalRecordsNeedSync =
     terminalRecordsExpected &&
     knownTableRecordsTotal < Math.max(1, summaryRecordsFromRun);
+
+  function updateRecipeProfile(updater: (current: DomainRunProfile) => DomainRunProfile) {
+    setRecipeActionError("");
+    setRecipeProfileDraft((current) => updater(cloneDomainRunProfile(current ?? recipeProfile)));
+  }
 
   useEffect(() => {
     if (!terminalRecordsNeedSync) {
@@ -778,6 +750,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         profile: recipeProfile,
       });
       await refetchDomainRecipeQuery();
+      setRecipeProfileDraft(null);
     } catch (error) {
       setRecipeActionError(error instanceof Error ? error.message : "Unable to save the domain run profile.");
     } finally {
@@ -798,6 +771,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         source_record_ids: sourceRecordIds ?? [],
       });
       await refetchDomainRecipeQuery();
+      setRecipeProfileDraft(null);
     } catch (error) {
       setRecipeActionError(error instanceof Error ? error.message : `Unable to ${action} this field learning signal.`);
     } finally {
@@ -882,19 +856,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
           <header className="cs-panel-header">
             <span className="cs-panel-title flex items-center gap-2">
               Live Log Stream
-              {logSocketConnected ? <span className="cs-live-dot is-success" /> : <span className="cs-live-dot" />}
+              {logSocketOnline ? <span className="cs-live-dot is-success" /> : <span className="cs-live-dot" />}
             </span>
             <div className="flex items-center gap-3">
               {run ? (
                 <span className="inline-flex items-center gap-1.5 rounded border border-divider bg-background-elevated px-2.5 py-1 font-mono text-sm tabular-nums text-foreground">
                   <Clock className="size-3.5" />
-                  {(() => {
-                    const elapsedMs = Math.max(0, localNow - effectiveStartMs);
-                    const totalS = Math.floor(elapsedMs / 1000);
-                    const m = Math.floor(totalS / 60);
-                    const s = totalS % 60;
-                    return `${m}m ${String(s).padStart(2, "0")}s`;
-                  })()}
+                  {elapsedLabel}
                 </span>
               ) : null}
 
@@ -973,7 +941,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
               }
               tabs={
                 <TabBar
-                  value={outputTab}
+                  value={effectiveOutputTab}
                   variant="underline"
                   onChange={(value) => setOutputTab(value as OutputTabKey)}
                   options={[
@@ -994,7 +962,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 />
               } content={
                 <>
-                  {outputTab === "table" ? (
+                  {effectiveOutputTab === "table" ? (
                     <div className="space-y-3 min-h-[55vh]">
                       {tableRecordsQuery.isLoading && !tableRecords.length ? (
                         <DataRegionLoading count={5} className="px-0" />
@@ -1003,7 +971,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           <RecordsTable
                             records={filteredTableRecords}
                             visibleColumns={visibleColumns}
-                            selectedIds={selectedIds}
+                            selectedIds={visibleSelectedIds}
                             onSelectAll={(checked) => setSelectedIds(checked ? filteredTableRecords.map((record) => record.id) : [])}
                             onToggleRow={(id, checked) =>
                               setSelectedIds((current) =>
@@ -1042,7 +1010,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     </div>
                   ) : null}
 
-                  {outputTab === "json" ? (
+                  {effectiveOutputTab === "json" ? (
                     <div className="relative min-h-[55vh]">
                       <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
                         <Button variant="ghost" type="button" onClick={() => void copyJson(records)}>
@@ -1076,7 +1044,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     </div>
                   ) : null}
 
-                  {outputTab === "markdown" ? (
+                  {effectiveOutputTab === "markdown" ? (
                     <div className="relative min-h-[55vh]">
                       <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
                         <Button
@@ -1121,13 +1089,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     </div>
                   ) : null}
 
-                  {outputTab === "logs" ? (
+                  {effectiveOutputTab === "logs" ? (
                     <div className="min-h-[55vh]">
                       <LogTerminal logs={logs} records={batchSourceRecords} requestedFields={run?.requested_fields ?? []} viewportRef={logViewportRef} />
                     </div>
                   ) : null}
 
-                  {outputTab === "learning" ? (
+                  {effectiveOutputTab === "learning" ? (
                     <div className="space-y-4 min-h-[55vh]">
                       {domainRecipeQuery.isLoading ? (
                         <Card className="section-card">
@@ -1182,7 +1150,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                               {item.feedback ? <Badge tone={item.feedback.action === "reject" ? "warning" : "success"}>{item.feedback.action}</Badge> : null}
                                             </div>
                                             <div className="mt-1 text-xs text-muted">
-                                              Value: {renderLearningValue(item.value)} · Sources: {item.source_labels.join(", ") || "—"}
+                                              {selectorWinnerLabel(item.selector_kind)} · Sources: {item.source_labels.join(", ") || "—"}
                                             </div>
                                             {item.selector_value ? <code className="mt-2 block truncate text-xs">{item.selector_value}</code> : null}
                                           </div>
@@ -1217,7 +1185,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     </div>
                   ) : null}
 
-                  {outputTab === "run_config" ? (
+                  {effectiveOutputTab === "run_config" ? (
                     <div className="space-y-4 min-h-[55vh]">
                       {domainRecipeQuery.isLoading ? (
                         <Card className="section-card">
@@ -1249,7 +1217,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Dropdown
                                   value={recipeProfile.fetch_profile.fetch_mode}
                                   onChange={(value) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       fetch_profile: {
                                         ...current.fetch_profile,
@@ -1269,7 +1237,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Dropdown
                                   value={recipeProfile.fetch_profile.extraction_source}
                                   onChange={(value) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       fetch_profile: {
                                         ...current.fetch_profile,
@@ -1289,7 +1257,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Dropdown
                                   value={recipeProfile.fetch_profile.js_mode}
                                   onChange={(value) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       fetch_profile: {
                                         ...current.fetch_profile,
@@ -1308,7 +1276,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Dropdown
                                   value={recipeProfile.fetch_profile.traversal_mode ?? ""}
                                   onChange={(value) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       fetch_profile: {
                                         ...current.fetch_profile,
@@ -1331,7 +1299,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                   aria-label="Geo Country"
                                   value={recipeProfile.locality_profile.geo_country}
                                   onChange={(event) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       locality_profile: {
                                         ...current.locality_profile,
@@ -1346,7 +1314,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                   aria-label="Language Hint"
                                   value={recipeProfile.locality_profile.language_hint ?? ""}
                                   onChange={(event) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       locality_profile: {
                                         ...current.locality_profile,
@@ -1361,7 +1329,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                   aria-label="Currency Hint"
                                   value={recipeProfile.locality_profile.currency_hint ?? ""}
                                   onChange={(event) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       locality_profile: {
                                         ...current.locality_profile,
@@ -1375,7 +1343,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Dropdown
                                   value={recipeProfile.diagnostics_profile.capture_network}
                                   onChange={(value) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       diagnostics_profile: {
                                         ...current.diagnostics_profile,
@@ -1390,14 +1358,82 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                   ]}
                                 />
                               </Field>
+                              <Field label="Preferred Browser Engine">
+                                <Dropdown
+                                  value={recipeProfile.acquisition_contract.preferred_browser_engine}
+                                  onChange={(value) =>
+                                    updateRecipeProfile((current) => ({
+                                      ...current,
+                                      acquisition_contract: {
+                                        ...current.acquisition_contract,
+                                        preferred_browser_engine: value as "auto" | "patchright" | "real_chrome",
+                                      },
+                                    }))
+                                  }
+                                  options={[
+                                    { value: "auto", label: "Auto" },
+                                    { value: "patchright", label: "Patchright" },
+                                    { value: "real_chrome", label: "Real Chrome" },
+                                  ]}
+                                />
+                              </Field>
+                              <Field label="Handoff Cookie Engine">
+                                <Dropdown
+                                  value={recipeProfile.acquisition_contract.handoff_cookie_engine}
+                                  onChange={(value) =>
+                                    updateRecipeProfile((current) => ({
+                                      ...current,
+                                      acquisition_contract: {
+                                        ...current.acquisition_contract,
+                                        handoff_cookie_engine: value as "auto" | "patchright" | "real_chrome",
+                                      },
+                                    }))
+                                  }
+                                  options={[
+                                    { value: "auto", label: "Auto" },
+                                    { value: "patchright", label: "Patchright" },
+                                    { value: "real_chrome", label: "Real Chrome" },
+                                  ]}
+                                />
+                              </Field>
                             </div>
                             <div className="flex flex-col gap-3">
+                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+                                <span className="text-sm font-medium">Prefer Browser</span>
+                                <Toggle
+                                  checked={recipeProfile.acquisition_contract.prefer_browser}
+                                  onChange={(checked) =>
+                                    updateRecipeProfile((current) => ({
+                                      ...current,
+                                      acquisition_contract: {
+                                        ...current.acquisition_contract,
+                                        prefer_browser: checked,
+                                      },
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
+                                <span className="text-sm font-medium">Prefer Curl Handoff</span>
+                                <Toggle
+                                  checked={recipeProfile.acquisition_contract.prefer_curl_handoff}
+                                  onChange={(checked) =>
+                                    updateRecipeProfile((current) => ({
+                                      ...current,
+                                      acquisition_contract: {
+                                        ...current.acquisition_contract,
+                                        prefer_curl_handoff: checked,
+                                      },
+                                    }))
+                                  }
+                                />
+                              </div>
                               <div className="surface-muted flex h-[var(--control-height)] items-center justify-between rounded-[var(--radius-md)] px-3 py-1.5 shadow-sm">
                                 <span className="text-sm font-medium">Include iframes</span>
                                 <Toggle
                                   checked={recipeProfile.fetch_profile.include_iframes}
                                   onChange={(checked) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       fetch_profile: {
                                         ...current.fetch_profile,
@@ -1412,7 +1448,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Toggle
                                   checked={recipeProfile.diagnostics_profile.capture_html}
                                   onChange={(checked) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       diagnostics_profile: {
                                         ...current.diagnostics_profile,
@@ -1427,7 +1463,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Toggle
                                   checked={recipeProfile.diagnostics_profile.capture_screenshot}
                                   onChange={(checked) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       diagnostics_profile: {
                                         ...current.diagnostics_profile,
@@ -1442,7 +1478,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Toggle
                                   checked={recipeProfile.diagnostics_profile.capture_response_headers}
                                   onChange={(checked) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       diagnostics_profile: {
                                         ...current.diagnostics_profile,
@@ -1457,7 +1493,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 <Toggle
                                   checked={recipeProfile.diagnostics_profile.capture_browser_diagnostics}
                                   onChange={(checked) =>
-                                    setRecipeProfile((current) => ({
+                                    updateRecipeProfile((current) => ({
                                       ...current,
                                       diagnostics_profile: {
                                         ...current.diagnostics_profile,

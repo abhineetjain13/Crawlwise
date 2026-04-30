@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Code2, Download, ExternalLink, ImageOff, Info, Layers, Play, Search, Settings, X } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { DataRegionEmpty, InlineAlert, PageHeader } from "../../components/ui/patterns";
 import {
@@ -40,6 +40,11 @@ type PrefillPayload = {
   records?: ProductIntelligenceSourceRecordInput[];
 };
 
+type PrefillLoadResult = {
+  error: string;
+  payload: PrefillPayload;
+};
+
 const DEFAULT_OPTIONS: ProductIntelligenceOptions = {
   max_source_products: 10,
   max_candidates_per_product: 2,
@@ -53,21 +58,48 @@ const DEFAULT_OPTIONS: ProductIntelligenceOptions = {
 
 const MAX_SOURCE_PRODUCTS_LIMIT = 500;
 const MAX_CANDIDATES_PER_PRODUCT_LIMIT = 25;
+
+function loadPrefillPayload(): PrefillLoadResult {
+  if (typeof window === "undefined") {
+    return { error: "", payload: {} };
+  }
+
+  const stored = window.sessionStorage.getItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL);
+  if (!stored) {
+    return { error: "", payload: {} };
+  }
+
+  try {
+    const parsed = JSON.parse(stored) as PrefillPayload;
+    return {
+      error: "",
+      payload: {
+        source_run_id: typeof parsed.source_run_id === "number" ? parsed.source_run_id : null,
+        source_domain: parsed.source_domain ?? "",
+        records: Array.isArray(parsed.records) ? parsed.records : [],
+      },
+    };
+  } catch {
+    return { error: "Unable to read Product Intelligence prefill.", payload: {} };
+  } finally {
+    window.sessionStorage.removeItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL);
+  }
+}
 export default function ProductIntelligencePage() {
   const router = useRouter();
-  const [prefill, setPrefill] = useState<PrefillPayload>({});
+  const [initialPrefill] = useState(loadPrefillPayload);
+  const prefill = initialPrefill.payload;
   const [options, setOptions] = useState<ProductIntelligenceOptions>(DEFAULT_OPTIONS);
   const [allowedDomainsText, setAllowedDomainsText] = useState("");
   const [excludedDomainsText, setExcludedDomainsText] = useState("");
-  const [discovery, setDiscovery] = useState<ProductIntelligenceDiscoveryResponse | null>(null);
+  const [discoveryOverride, setDiscoveryOverride] = useState<ProductIntelligenceDiscoveryResponse | null>(null);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialPrefill.error);
   const [selectedUrls, setSelectedUrls] = useState<string[]>([]);
   const [jsonModalCandidate, setJsonModalCandidate] = useState<ProductIntelligenceDiscoveryResponse["candidates"][number] | null>(null);
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [optionsEdited, setOptionsEdited] = useState(false);
-  const [prefillChecked, setPrefillChecked] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [confidenceFilter, setConfidenceFilter] = useState<"all" | "high" | "medium" | "low">("all");
 
@@ -75,63 +107,22 @@ export default function ProductIntelligencePage() {
     queryKey: ["product-intelligence-jobs"],
     queryFn: () => api.listProductIntelligenceJobs({ limit: 20 }),
   });
-  const detailQuery = useQuery({
-    queryKey: ["product-intelligence-job", activeJobId],
-    queryFn: () => api.getProductIntelligenceJob(activeJobId ?? 0),
-    enabled: activeJobId !== null,
-  });
-
-  useEffect(() => {
-    const stored = window.sessionStorage.getItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL);
-    if (!stored) {
-      setPrefillChecked(true);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(stored) as PrefillPayload;
-      setPrefill({
-        source_run_id: typeof parsed.source_run_id === "number" ? parsed.source_run_id : null,
-        source_domain: parsed.source_domain ?? "",
-        records: Array.isArray(parsed.records) ? parsed.records : [],
-      });
-      if (Array.isArray(parsed.records) && parsed.records.length > 0) {
-        setActiveJobId(null);
-        setDiscovery(null);
-      }
-    } catch {
-      setError("Unable to read Product Intelligence prefill.");
-    } finally {
-      window.sessionStorage.removeItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL);
-      setPrefillChecked(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!detailQuery.data) {
-      return;
-    }
-    const hydrated = detailToDiscovery(detailQuery.data);
-    setDiscovery(hydrated);
-    if (optionsEdited) {
-      return;
-    }
-    const hydratedOptions = detailOptions(detailQuery.data.job.options);
-    setOptions((current) => ({ ...hydratedOptions, search_provider: current.search_provider }));
-    setAllowedDomainsText(hydratedOptions.allowed_domains.join("\n"));
-    setExcludedDomainsText(hydratedOptions.excluded_domains.join("\n"));
-    setSelectedUrls([]);
-  }, [detailQuery.data, optionsEdited]);
-
-  // Auto-select most recent job on initial load
-  useEffect(() => {
-    if (!prefillChecked) return;
-    if ((prefill.records ?? []).length > 0) return;
-    if (activeJobId !== null || discovery !== null) return;
-    if (!jobsQuery.data?.length) return;
-    setActiveJobId(jobsQuery.data[0].id);
-  }, [jobsQuery.data, activeJobId, discovery, prefill.records, prefillChecked]);
-
   const sourceRecords = prefill.records ?? [];
+  const defaultJobId = sourceRecords.length ? null : jobsQuery.data?.[0]?.id ?? null;
+  const resolvedActiveJobId = activeJobId ?? defaultJobId;
+  const detailQuery = useQuery({
+    queryKey: ["product-intelligence-job", resolvedActiveJobId],
+    queryFn: () => api.getProductIntelligenceJob(resolvedActiveJobId ?? 0),
+    enabled: resolvedActiveJobId !== null,
+  });
+  const detailHydratedOptions = useMemo(
+    () => (detailQuery.data ? detailOptions(detailQuery.data.job.options) : DEFAULT_OPTIONS),
+    [detailQuery.data],
+  );
+  const discovery = discoveryOverride ?? (detailQuery.data ? detailToDiscovery(detailQuery.data) : null);
+  const effectiveOptions = optionsEdited || !detailQuery.data ? options : detailHydratedOptions;
+  const effectiveAllowedDomainsText = optionsEdited ? allowedDomainsText : detailHydratedOptions.allowed_domains.join("\n");
+  const effectiveExcludedDomainsText = optionsEdited ? excludedDomainsText : detailHydratedOptions.excluded_domains.join("\n");
   const visibleSourceRecords = sourceRecords.length
     ? sourceRecords
     : detailQuery.data
@@ -149,7 +140,10 @@ export default function ProductIntelligencePage() {
       ?? visibleSourceRecords.find((record) => typeof record.run_id === "number")?.run_id
       ?? prefill.source_run_id
       ?? null;
-  const uniqueSelectedUrls = useMemo(() => Array.from(new Set(selectedUrls)), [selectedUrls]);
+  const uniqueSelectedUrls = useMemo(
+    () => Array.from(new Set(selectedUrls)).filter((url) => (discovery?.candidates ?? []).some((candidate) => candidate.url === url)),
+    [discovery, selectedUrls],
+  );
   const allCandidateUrls = useMemo(
     () => Array.from(new Set((discovery?.candidates ?? []).map((candidate) => candidate.url).filter(Boolean))),
     [discovery],
@@ -215,7 +209,7 @@ export default function ProductIntelligencePage() {
     }
     setPending(true);
     setError("");
-    setDiscovery(null);
+    setDiscoveryOverride(null);
     setSelectedUrls([]);
     try {
       const sourceRecordIds = visibleSourceRecords
@@ -223,10 +217,10 @@ export default function ProductIntelligencePage() {
         .filter((value): value is number => typeof value === "number");
       const canUseRecordIds = sourceRecordIds.length === visibleSourceRecords.length;
       const submittedOptions = {
-        ...options,
-        search_provider: searchProvider(options.search_provider),
-        allowed_domains: parseDomainLines(allowedDomainsText),
-        excluded_domains: parseDomainLines(excludedDomainsText),
+        ...effectiveOptions,
+        search_provider: searchProvider(effectiveOptions.search_provider),
+        allowed_domains: parseDomainLines(effectiveAllowedDomainsText),
+        excluded_domains: parseDomainLines(effectiveExcludedDomainsText),
       };
       const response = await api.discoverProductIntelligence({
         source_run_id: activeSourceRunId,
@@ -238,9 +232,12 @@ export default function ProductIntelligencePage() {
       if (echoedProvider !== submittedOptions.search_provider) {
         setError(`Provider mismatch: submitted ${searchProviderLabel(submittedOptions.search_provider)}, backend used ${searchProviderLabel(echoedProvider)}.`);
       }
-      setDiscovery(response);
+      setDiscoveryOverride(response);
       setActiveJobId(response.job_id);
-      setOptions(detailOptions(response.options));
+      const nextOptions = detailOptions(response.options);
+      setOptions(nextOptions);
+      setAllowedDomainsText(nextOptions.allowed_domains.join("\n"));
+      setExcludedDomainsText(nextOptions.excluded_domains.join("\n"));
       setOptionsEdited(false);
       await jobsQuery.refetch();
     } catch (caught) {
@@ -278,6 +275,13 @@ export default function ProductIntelligencePage() {
     } else {
       setSelectedUrls((current) => Array.from(new Set([...current, ...filteredUrls])));
     }
+  }
+
+  function openJob(jobId: number) {
+    setActiveJobId(jobId);
+    setDiscoveryOverride(null);
+    setSelectedUrls([]);
+    setOptionsEdited(false);
   }
 
   return (
@@ -320,9 +324,9 @@ export default function ProductIntelligencePage() {
       {error ? <InlineAlert tone="danger" message={error} /> : null}
       {pending ? (
         <DiscoveryStatus
-          provider={options.search_provider}
+          provider={effectiveOptions.search_provider}
           sourceCount={visibleSourceRecords.length}
-          maxCandidates={options.max_candidates_per_product}
+          maxCandidates={effectiveOptions.max_candidates_per_product}
         />
       ) : null}
 
@@ -466,6 +470,8 @@ export default function ProductIntelligencePage() {
                         const intelligence = isRecord(candidate.intelligence) ? candidate.intelligence : {};
                         const record = isRecord(intelligence.canonical_record) ? intelligence.canonical_record : {};
                         const imageUrl = stringField(record.image_url);
+                        const recordPrice = stringField(record.price);
+                        const recordCurrency = stringField(record.currency);
                         
                         return (
                           <div
@@ -519,9 +525,9 @@ export default function ProductIntelligencePage() {
                                   </div>
                                   
                                   <div className="flex flex-col gap-1">
-                                    {record.price && record.price !== "--" && (
+                                    {recordPrice && recordPrice !== "--" && (
                                       <div className="text-sm font-bold text-foreground">
-                                        {formatExtractedPrice(record.price, record.currency)}
+                                        {formatExtractedPrice(recordPrice, recordCurrency)}
                                       </div>
                                     )}
                                     {(stringField(record.brand) || candidate.source_brand) && (
@@ -663,8 +669,8 @@ export default function ProductIntelligencePage() {
                       <ProductIntelligenceJobRow
                         key={job.id}
                         job={job}
-                        active={activeJobId === job.id}
-                        onOpen={() => setActiveJobId(job.id)}
+                        active={resolvedActiveJobId === job.id}
+                        onOpen={() => openJob(job.id)}
                       />
                     ))}
                   </TableBody>
@@ -678,17 +684,17 @@ export default function ProductIntelligencePage() {
       <SettingsDrawer
         open={configOpen}
         onClose={() => setConfigOpen(false)}
-        options={options}
+        options={effectiveOptions}
         onOptionsChange={(patch) => {
           setOptionsEdited(true);
           setOptions((current) => ({ ...current, ...patch }));
         }}
-        allowedDomainsText={allowedDomainsText}
+        allowedDomainsText={effectiveAllowedDomainsText}
         onAllowedDomainsTextChange={(value) => {
           setOptionsEdited(true);
           setAllowedDomainsText(value);
         }}
-        excludedDomainsText={excludedDomainsText}
+        excludedDomainsText={effectiveExcludedDomainsText}
         onExcludedDomainsTextChange={(value) => {
           setOptionsEdited(true);
           setExcludedDomainsText(value);

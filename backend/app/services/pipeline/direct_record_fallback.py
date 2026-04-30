@@ -8,7 +8,10 @@ from app.services.confidence import score_record_confidence
 from app.services.config.llm_runtime import llm_runtime_settings
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
-from app.services.field_policy import canonical_requested_fields, field_allowed_for_surface
+from app.services.field_policy import (
+    field_allowed_for_surface,
+    repair_target_fields_for_surface,
+)
 from app.services.db_utils import mapping_or_empty
 from app.services.field_value_core import (
     IMAGE_FIELDS,
@@ -104,7 +107,10 @@ async def apply_direct_record_llm_fallback(
         surface=run.surface,
         html_text=html,
         markdown_text=page_markdown,
-        requested_fields=canonical_requested_fields(run.requested_fields or []),
+        requested_fields=repair_target_fields_for_surface(
+            run.surface,
+            run.requested_fields or [],
+        ),
         existing_records=records,
     )
     if not payload:
@@ -119,11 +125,17 @@ async def apply_direct_record_llm_fallback(
     if _record_set_quality_signature(
         candidate_records,
         surface=run.surface,
-        requested_fields=canonical_requested_fields(run.requested_fields or []),
+        requested_fields=repair_target_fields_for_surface(
+            run.surface,
+            run.requested_fields or [],
+        ),
     ) <= _record_set_quality_signature(
         records,
         surface=run.surface,
-        requested_fields=canonical_requested_fields(run.requested_fields or []),
+        requested_fields=repair_target_fields_for_surface(
+            run.surface,
+            run.requested_fields or [],
+        ),
     ):
         return records
     return candidate_records
@@ -254,7 +266,10 @@ def _normalize_direct_llm_records(
         canonical_record["_confidence"] = score_record_confidence(
             canonical_record,
             surface=run.surface,
-            requested_fields=canonical_requested_fields(run.requested_fields or []),
+            requested_fields=repair_target_fields_for_surface(
+                run.surface,
+                run.requested_fields or [],
+            ),
         )
         canonical_record["_self_heal"] = {
             "enabled": True,
@@ -275,29 +290,19 @@ async def apply_llm_fallback(
 ) -> list[dict[str, object]]:
     updated_records: list[dict[str, object]] = []
     domain = normalize_domain(page_url)
-    requested_fields = canonical_requested_fields(run.requested_fields or [])
+    requested_fields = repair_target_fields_for_surface(
+        run.surface,
+        run.requested_fields or [],
+    )
     for record in records:
         next_record = dict(record)
-        confidence = mapping_or_empty(next_record.get("_confidence"))
-        self_heal = mapping_or_empty(next_record.get("_self_heal"))
         missing_fields = [
             field_name
             for field_name in requested_fields
             if field_allowed_for_surface(run.surface, field_name)
             and next_record.get(field_name) in (None, "", [], {})
         ]
-        raw_score = confidence.get("score", 1.0)
-        try:
-            float_score = float(str(raw_score)) if raw_score is not None else 1.0
-        except (TypeError, ValueError):
-            float_score = 1.0
-        low_confidence = (
-            float_score < crawler_runtime_settings.llm_confidence_threshold
-        )
-        selector_heal_rerun = str(self_heal.get("mode") or "").strip().lower() == "selector_synthesis"
-        should_run = bool(missing_fields) or (
-            low_confidence and not selector_heal_rerun
-        )
+        should_run = bool(missing_fields)
         if not should_run:
             updated_records.append(next_record)
             continue

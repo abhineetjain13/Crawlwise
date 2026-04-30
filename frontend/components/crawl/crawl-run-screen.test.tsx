@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from"@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from"@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from"vitest";
 
-import type { CrawlRecord, CrawlRun, DomainRecipe } from"../../lib/api/types";
+import type { CrawlLog, CrawlRecord, CrawlRun, DomainRecipe } from"../../lib/api/types";
 import { POLLING_INTERVALS } from"../../lib/constants/timing";
 import { TopBarProvider } from"../layout/top-bar-context";
 import { CrawlRunScreen, storeProductIntelligencePrefill } from"./crawl-run-screen";
@@ -92,6 +92,15 @@ function makeRecord(id: number): CrawlRecord {
  };
 }
 
+function makeLog(id: number, message: string, level = "info"): CrawlLog {
+ return {
+ id,
+ level,
+ message,
+ created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
+ };
+}
+
 function makeDomainRecipe(): DomainRecipe {
  return {
  run_id: 101,
@@ -112,26 +121,17 @@ function makeDomainRecipe(): DomainRecipe {
  },
  cookie_memory_available: true,
  },
- field_learning: [
- {
- field_name:"price",
- value:"Rs. 999",
- source_labels: ["dom_selector"],
- selector_kind:"css_selector",
- selector_value:".price",
- source_record_ids: [1],
- feedback: null,
- },
- {
- field_name:"brand",
- value:"Acme",
- source_labels: ["json_ld"],
- selector_kind: null,
- selector_value: null,
- source_record_ids: [1],
- feedback: null,
- },
- ],
+  field_learning: [
+  {
+  field_name:"price",
+  value:"Rs. 999",
+  source_labels: ["dom_selector"],
+  selector_kind:"xpath",
+  selector_value:"//span[@class='price']/text()",
+  source_record_ids: [1],
+  feedback: null,
+  },
+  ],
  selector_candidates: [
  {
  candidate_key:"price|css_selector|.price",
@@ -168,7 +168,7 @@ function makeDomainRecipe(): DomainRecipe {
  iframe_promotion: null,
  browser_required: true,
  },
- saved_selectors: [
+  saved_selectors: [
  {
  id: 22,
  domain:"example.com",
@@ -185,7 +185,7 @@ function makeDomainRecipe(): DomainRecipe {
  created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
  updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
  },
- ],
+  ],
  saved_run_profile: {
  version: 1,
  fetch_profile: {
@@ -208,9 +208,20 @@ function makeDomainRecipe(): DomainRecipe {
  capture_screenshot: false,
  capture_network:"matched_only",
  capture_response_headers: true,
- capture_browser_diagnostics: true,
- },
- source_run_id: 101,
+  capture_browser_diagnostics: true,
+  },
+  acquisition_contract: {
+  preferred_browser_engine:"real_chrome",
+  prefer_browser:true,
+  prefer_curl_handoff:true,
+  handoff_cookie_engine:"real_chrome",
+  last_quality_success:null,
+  stale_after_failures: {
+  failure_count:0,
+  stale:false,
+  },
+  },
+  source_run_id: 101,
  saved_at:"2026-04-08T10:05:00Z",
  },
  };
@@ -735,6 +746,45 @@ describe("CrawlRunScreen", () => {
  expect(screen.queryByText(/%E0%B8%AA%E0%B8%B5%E0%B8%94%E0%B8%B3/)).not.toBeInTheDocument();
  });
 
+ it("keeps payload peek limited to the cleaned JSON record", async () => {
+ apiMock.getRecords.mockResolvedValue({
+ items: [
+ {
+ ...makeRecord(1),
+ data: {
+ title:"Item 1",
+ url:"https://example.com/p/1",
+ _internal_metric:"hidden",
+ },
+ raw_data: {
+ _confidence: { score: 0.4 },
+ page_markdown:"hidden markdown",
+ },
+ source_trace: {
+ acquisition: { final_url:"https://example.com/p/1" },
+ },
+ },
+ ],
+ meta: { page: 1, limit: 100, total: 1 },
+ });
+ apiMock.getCrawlLogs.mockResolvedValue([
+ makeLog(1,"Starting crawl run for https://example.com/p/1 (1/1)"),
+ makeLog(2,"Persisted 1 record(s) for https://example.com/p/1"),
+ ]);
+
+ renderRunScreen();
+
+ fireEvent.click(await screen.findByRole("button", { name:"Logs"}));
+ fireEvent.click(await screen.findByRole("button", { name:"Peek"}));
+
+ expect(await screen.findByText("Payload Peek")).toBeInTheDocument();
+ expect(screen.getByText(/"title": "Item 1"/)).toBeInTheDocument();
+ expect(screen.queryByText(/raw_record/)).not.toBeInTheDocument();
+ expect(screen.queryByText(/source_trace/)).not.toBeInTheDocument();
+ expect(screen.queryByText(/_confidence/)).not.toBeInTheDocument();
+ expect(screen.queryByText(/_internal_metric/)).not.toBeInTheDocument();
+ });
+
  it("prefills batch crawl with the originating jobs domain from listing runs", async () => {
  apiMock.getCrawl.mockResolvedValue({
  ...terminalRun(101),
@@ -864,27 +914,28 @@ describe("CrawlRunScreen", () => {
  expect(screen.getByRole("button", { name:"Save Run Profile"})).toBeInTheDocument();
  });
 
- it("renders structured learning values with JSON serialization", async () => {
- apiMock.getDomainRecipe.mockResolvedValue({
- ...makeDomainRecipe(),
- field_learning: [
- {
- field_name:"variant_axes",
- value: { Size: ["S","M"] },
- source_labels: ["dom_selector"],
- selector_kind:"css_selector",
- selector_value:".sizes",
- source_record_ids: [1],
- feedback: null,
- },
+ it("renders learning as XPath winners without extracted values", async () => {
+  apiMock.getDomainRecipe.mockResolvedValue({
+  ...makeDomainRecipe(),
+  field_learning: [
+  {
+  field_name:"variant_axes",
+  value: { Size: ["S","M"] },
+  source_labels: ["dom_selector"],
+  selector_kind:"xpath",
+  selector_value:"//select[@name='size']",
+  source_record_ids: [1],
+  feedback: null,
+  },
  ],
  });
 
  renderRunScreen();
 
- fireEvent.click(await screen.findByRole("button", { name:"Learning"}));
- expect(await screen.findByText(/Value: \{"Size":\["S","M"\]\}/)).toBeInTheDocument();
- });
+  fireEvent.click(await screen.findByRole("button", { name:"Learning"}));
+  expect(await screen.findByText(/XPath winner/)).toBeInTheDocument();
+  expect(screen.queryByText(/Value:/)).not.toBeInTheDocument();
+  });
 
  it("applies keep and reject field learning actions from the completed-run panel", async () => {
  renderRunScreen();
@@ -896,24 +947,24 @@ describe("CrawlRunScreen", () => {
 
  fireEvent.click(keepButtons[0]);
  await waitFor(() => {
- expect(apiMock.applyDomainRecipeFieldAction).toHaveBeenCalledWith(101, {
- field_name:"price",
- action:"keep",
- selector_kind:"css_selector",
- selector_value:".price",
- source_record_ids: [1],
- });
+  expect(apiMock.applyDomainRecipeFieldAction).toHaveBeenCalledWith(101, {
+  field_name:"price",
+  action:"keep",
+  selector_kind:"xpath",
+  selector_value:"//span[@class='price']/text()",
+  source_record_ids: [1],
+  });
  });
 
- fireEvent.click(rejectButtons[1]);
- await waitFor(() => {
- expect(apiMock.applyDomainRecipeFieldAction).toHaveBeenCalledWith(101, {
- field_name:"brand",
- action:"reject",
- selector_kind: null,
- selector_value: null,
- source_record_ids: [1],
- });
+  fireEvent.click(rejectButtons[0]);
+  await waitFor(() => {
+  expect(apiMock.applyDomainRecipeFieldAction).toHaveBeenCalledWith(101, {
+  field_name:"price",
+  action:"reject",
+  selector_kind:"xpath",
+  selector_value:"//span[@class='price']/text()",
+  source_record_ids: [1],
+  });
  });
  });
 

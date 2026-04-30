@@ -95,7 +95,7 @@ FILE_LOC_BUDGETS = {
     # JS state mapping stays centralized to avoid adapter-specific drift.
     Path("app/services/js_state_mapper.py"): 1060,
     # Pipeline core still owns the per-URL orchestration boundary.
-    Path("app/services/pipeline/core.py"): 1160,
+    Path("app/services/pipeline/core.py"): 1210,
     # Product Intelligence service owns job + discovery orchestration with brand and enrichment LLM helpers.
     Path("app/services/product_intelligence/service.py"): 1160,
 }

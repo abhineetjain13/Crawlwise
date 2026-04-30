@@ -138,6 +138,17 @@ function defaultRunProfile(): DomainRunProfile {
       currency_hint: null,
     },
     diagnostics_profile: { ...DIAGNOSTICS_PRESETS.standard },
+    acquisition_contract: {
+      preferred_browser_engine: "auto",
+      prefer_browser: false,
+      prefer_curl_handoff: false,
+      handoff_cookie_engine: "auto",
+      last_quality_success: null,
+      stale_after_failures: {
+        failure_count: 0,
+        stale: false,
+      },
+    },
     source_run_id: null,
     saved_at: null,
   };
@@ -161,6 +172,14 @@ function cloneRunProfile(profile: DomainRunProfile | null | undefined): DomainRu
     diagnostics_profile: {
       ...base.diagnostics_profile,
       ...(profile.diagnostics_profile ?? {}),
+    },
+    acquisition_contract: {
+      ...base.acquisition_contract,
+      ...(profile.acquisition_contract ?? {}),
+      stale_after_failures: {
+        ...base.acquisition_contract.stale_after_failures,
+        ...(profile.acquisition_contract?.stale_after_failures ?? {}),
+      },
     },
     source_run_id: profile.source_run_id ?? null,
     saved_at: profile.saved_at ?? null,

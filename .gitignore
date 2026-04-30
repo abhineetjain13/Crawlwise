@@ -1,6 +1,8 @@
 .env
 .vscode/
 .windsurf/
+.venv/
+node_modules/
 
 .hypothesis/
 .scannerwork/
@@ -60,10 +62,7 @@ tmp_*.json
 knowledge/
 
 # Docs subfolders (keep root docs/*.md tracked)
-docs/agent/
 docs/archive/
-docs/audits/
-docs/plans/
 docs/prompts/
 
 # HTML test fixture folder

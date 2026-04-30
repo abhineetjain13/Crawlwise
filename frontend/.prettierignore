@@ -1,0 +1,18 @@
+# Build artifacts
+.next/
+dist/
+
+# Dependencies
+node_modules/
+
+# Generated
+package-lock.json
+next-env.d.ts
+*.log
+
+# Coverage
+coverage/
+
+# Playwright
+test-results/
+playwright-report/

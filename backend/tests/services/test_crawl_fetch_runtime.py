@@ -496,6 +496,138 @@ def test_browser_engine_attempts_escalates_from_patchright_to_real_chrome(
     assert attempts == ["patchright", "real_chrome"]
 
 
+def test_saved_real_chrome_contract_skips_patchright(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        crawl_fetch_runtime.crawler_runtime_settings,
+        "browser_real_chrome_enabled",
+        True,
+    )
+    monkeypatch.setattr(crawl_fetch_runtime, "real_chrome_browser_available", lambda: True)
+    context = _default_fetch_context(forced_browser_engine="real_chrome")
+
+    attempts = crawl_fetch_runtime._browser_engine_attempts(
+        context=context,
+        host_policy=HostProtectionPolicy(host="example.com"),
+    )
+
+    assert attempts == ["real_chrome"]
+
+
+@pytest.mark.asyncio
+async def test_real_chrome_cookie_contract_tries_curl_cffi_handoff_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+    url = "https://example.com/products/widget"
+    calls: list[dict[str, object]] = []
+
+    async def _export_cookie_header_for_domain(request_url, **kwargs):
+        calls.append({"url": request_url, "engine": kwargs.get("browser_engine")})
+        return "session=ok"
+
+    async def _curl_fetch(request_url, timeout_seconds, *, proxy=None, cookie_header=None):
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body>ok</body></html>",
+            status_code=200,
+            method="curl_cffi",
+            blocked=False,
+        )
+
+    async def _browser_unexpected(*_args, **_kwargs):
+        raise AssertionError("browser should not run when handoff succeeds")
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        AsyncMock(return_value=HostProtectionPolicy(host="example.com")),
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "export_cookie_header_for_domain",
+        _export_cookie_header_for_domain,
+    )
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _curl_fetch)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _browser_unexpected)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "_should_escalate_to_browser_async",
+        AsyncMock(return_value=False),
+    )
+
+    result = await crawl_fetch_runtime.fetch_page(
+        url,
+        surface="ecommerce_detail",
+        prefer_curl_handoff=True,
+        handoff_cookie_engine="real_chrome",
+        forced_browser_engine="real_chrome",
+    )
+
+    assert result.method == "curl_cffi"
+    assert result.browser_diagnostics["browser_http_handoff"] is True
+    assert calls == [{"url": url, "engine": "real_chrome"}]
+
+
+@pytest.mark.asyncio
+async def test_curl_handoff_failure_falls_back_to_real_chrome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+    url = "https://example.com/products/widget"
+    engines: list[str] = []
+
+    async def _export_cookie_header_for_domain(*_args, **_kwargs):
+        return "session=bad"
+
+    async def _curl_fetch(request_url, timeout_seconds, *, proxy=None, cookie_header=None):
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body>blocked</body></html>",
+            status_code=403,
+            method="curl_cffi",
+            blocked=True,
+        )
+
+    async def _browser_fetch(request_url, timeout_seconds, **kwargs):
+        engines.append(str(kwargs.get("browser_engine")))
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body>rendered</body></html>",
+            status_code=200,
+            method="browser",
+            browser_diagnostics={"browser_engine": kwargs.get("browser_engine")},
+        )
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        AsyncMock(return_value=HostProtectionPolicy(host="example.com")),
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "export_cookie_header_for_domain",
+        _export_cookie_header_for_domain,
+    )
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _curl_fetch)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _browser_fetch)
+
+    result = await crawl_fetch_runtime.fetch_page(
+        url,
+        surface="ecommerce_detail",
+        prefer_curl_handoff=True,
+        handoff_cookie_engine="real_chrome",
+        forced_browser_engine="real_chrome",
+    )
+
+    assert result.method == "browser"
+    assert engines == ["real_chrome"]
+
+
 @pytest.mark.asyncio
 async def test_fetch_page_preserves_requested_fields_on_http_to_browser_escalation(
     monkeypatch: pytest.MonkeyPatch,
@@ -786,7 +918,7 @@ async def test_fetch_page_preserves_proxy_list_on_browser_first_path(
         proxy_list=["http://proxy-one", "http://proxy-two"],
     )
 
-    assert sorted(captured_proxies or []) == ["http://proxy-one", "http://proxy-two"]
+    assert (captured_proxies or []) == ["http://proxy-one", "http://proxy-two"]
 
 
 def test_resolve_proxy_attempts_preserves_order_and_deduplicates() -> None:
@@ -1305,7 +1437,7 @@ async def test_read_network_payload_body_rejects_oversized_body_before_decode() 
 
 
 @pytest.mark.asyncio
-async def test_read_network_payload_body_rejects_oversized_declared_content_length_before_body_read() -> None:
+async def test_read_network_payload_body_accepts_small_body_when_content_length_too_large() -> None:
     response = FakeBodyResponse(
         b"x",
         headers={"content-length": "3500000"},

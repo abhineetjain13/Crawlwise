@@ -6,6 +6,7 @@ from app.services.selector_self_heal import (
     _validated_xpath_rules,
     _selector_heal_improved_record,
     reduce_html_for_selector_synthesis,
+    selector_self_heal_targets,
 )
 
 
@@ -232,6 +233,21 @@ def test_selector_self_heal_config_falls_back_to_runtime_enabled_when_missing(
         "triggered": False,
         "threshold": 0.77,
     }
+
+
+def test_selector_self_heal_targets_default_ecommerce_fields_when_requested_empty() -> None:
+    class _Run:
+        surface = "ecommerce_detail"
+        requested_fields: list[str] = []
+
+    targets = selector_self_heal_targets(
+        run=_Run(),  # type: ignore[arg-type]
+        record={"title": "Widget Prime", "price": ""},
+    )
+
+    assert "price" in targets
+    assert "image_url" in targets
+    assert "variants" not in targets
 
 
 def test_reduce_html_for_selector_synthesis_keeps_valid_content_focused_html() -> None:

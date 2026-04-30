@@ -154,6 +154,14 @@ async def test_crawls_domain_recipe_routes_round_trip(
                     "capture_response_headers": True,
                     "capture_browser_diagnostics": True,
                 },
+                "acquisition_contract": {
+                    "preferred_browser_engine": "real_chrome",
+                    "prefer_browser": True,
+                    "prefer_curl_handoff": True,
+                    "handoff_cookie_engine": "real_chrome",
+                    "last_quality_success": None,
+                    "stale_after_failures": {"failure_count": 0, "stale": False},
+                },
                 "proxy_profile": {
                     "enabled": True,
                     "proxy_list": [
@@ -167,6 +175,8 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert save_profile_response.status_code == 200
     saved_profile = save_profile_response.json()
     assert saved_profile["fetch_profile"]["fetch_mode"] == "http_then_browser"
+    assert saved_profile["acquisition_contract"]["preferred_browser_engine"] == "real_chrome"
+    assert saved_profile["acquisition_contract"]["prefer_curl_handoff"] is True
     assert saved_profile["locality_profile"]["geo_country"] == "IN"
     assert saved_profile["source_run_id"] == run.id
     assert "proxy_profile" not in saved_profile
@@ -297,3 +307,60 @@ async def test_crawls_domain_recipe_routes_round_trip(
         "selector_value": ".run-price",
         "source_record_ids": [1],
     }
+
+
+@pytest.mark.asyncio
+async def test_domain_run_profile_contract_autosaves_real_chrome_success(
+    crawls_api_client: AsyncClient,
+    db_session,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/real-chrome-widget",
+            "surface": "ecommerce_detail",
+            "requested_fields": ["title"],
+            "settings": {},
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body><h1>Real Chrome Widget</h1></body></html>",
+            method="browser",
+            status_code=200,
+            browser_diagnostics={
+                "browser_reason": "acquisition-contract",
+                "browser_engine": "real_chrome",
+            },
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+
+    await process_run(db_session, run.id)
+
+    lookup = await crawls_api_client.get(
+        "/api/crawls/domain-run-profile",
+        params={
+            "url": "https://example.com/products/real-chrome-widget",
+            "surface": "ecommerce_detail",
+        },
+    )
+    assert lookup.status_code == 200
+    contract = lookup.json()["saved_run_profile"]["acquisition_contract"]
+    assert contract["preferred_browser_engine"] == "real_chrome"
+    assert contract["prefer_browser"] is True
+    assert contract["prefer_curl_handoff"] is True
+    assert contract["handoff_cookie_engine"] == "real_chrome"
+    assert contract["last_quality_success"]["field_coverage"] == {
+        "requested": ["title", "price", "currency", "brand", "image_url"],
+        "found": ["title"],
+        "missing": ["price", "currency", "brand", "image_url"],
+    }
+    assert contract["stale_after_failures"] == {"failure_count": 0, "stale": False}

@@ -230,6 +230,24 @@
       ]
     }
   },
+  "SURFACE_FIELD_REPAIR_TARGETS": {
+    "ecommerce_detail": [
+      "price",
+      "title",
+      "currency",
+      "brand",
+      "image_url"
+    ]
+  },
+  "SURFACE_BROWSER_RETRY_TARGETS": {
+    "ecommerce_detail": [
+      "price",
+      "title",
+      "currency",
+      "brand",
+      "image_url"
+    ]
+  },
   "ECOMMERCE_DETAIL_JS_STATE_FIELDS": {
     "__type__": "frozenset",
     "items": [

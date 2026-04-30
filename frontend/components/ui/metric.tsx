@@ -21,7 +21,7 @@ export function Metric({
       {loading ? (
         <div className="skeleton h-7 w-20" aria-hidden />
       ) : (
-        <div className="mono-body text-[var(--text-3xl)] font-semibold leading-none text-foreground tabular-nums">{value}</div>
+        <div className="mono-body font-semibold leading-none text-foreground tabular-nums" style={{ fontSize: "var(--text-3xl)" }}>{value}</div>
       )}
     </div>
   );
@@ -61,7 +61,7 @@ export function StatCard({
       {loading ? (
         <div className="mt-2.5 skeleton h-9 w-28" aria-hidden />
       ) : (
-        <div className="mono-body mt-2 text-[var(--text-3xl)] font-semibold leading-none text-foreground tabular-nums">{value}</div>
+        <div className="mono-body mt-2 font-semibold leading-none text-foreground tabular-nums" style={{ fontSize: "var(--text-3xl)" }}>{value}</div>
       )}
       {sub && !loading ? <div className="mt-1.5 text-sm leading-[var(--leading-normal)] text-muted">{sub}</div> : null}
     </div>

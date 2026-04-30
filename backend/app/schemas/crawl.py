@@ -232,11 +232,37 @@ class DomainRunDiagnosticsProfile(BaseModel):
     capture_browser_diagnostics: bool = True
 
 
+class DomainRunAcquisitionContractStaleness(BaseModel):
+    failure_count: int = 0
+    stale: bool = False
+
+
+class DomainRunAcquisitionContractSuccess(BaseModel):
+    method: str | None = None
+    browser_engine: Literal["auto", "patchright", "real_chrome"] | None = None
+    record_count: int = 0
+    field_coverage: dict = Field(default_factory=dict)
+    source_run_id: int | None = None
+    timestamp: datetime | None = None
+
+
+class DomainRunAcquisitionContract(BaseModel):
+    preferred_browser_engine: Literal["auto", "patchright", "real_chrome"] = "auto"
+    prefer_browser: bool = False
+    prefer_curl_handoff: bool = False
+    handoff_cookie_engine: Literal["auto", "patchright", "real_chrome"] = "auto"
+    last_quality_success: DomainRunAcquisitionContractSuccess | None = None
+    stale_after_failures: DomainRunAcquisitionContractStaleness = Field(
+        default_factory=DomainRunAcquisitionContractStaleness
+    )
+
+
 class DomainRunProfilePayload(BaseModel):
     version: int = 1
     fetch_profile: DomainRunFetchProfile = Field(default_factory=DomainRunFetchProfile)
     locality_profile: DomainRunLocalityProfile = Field(default_factory=DomainRunLocalityProfile)
     diagnostics_profile: DomainRunDiagnosticsProfile = Field(default_factory=DomainRunDiagnosticsProfile)
+    acquisition_contract: DomainRunAcquisitionContract = Field(default_factory=DomainRunAcquisitionContract)
     source_run_id: int | None = None
     saved_at: datetime | None = None
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+import logging
 from typing import Any
 
 import httpx
@@ -12,6 +13,8 @@ from app.services.adapters.registry import normalize_adapter_acquisition_url
 from app.services.crawl_fetch_runtime import fetch_page
 from app.services.exceptions import ProxyPoolExhaustedError
 from app.services.platform_policy import resolve_platform_runtime_policy
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -173,6 +176,10 @@ async def _emit_event(on_event: Any, level: str, message: str) -> None:
     try:
         await on_event(level, message)
     except Exception:
+        logger.exception(
+            "Acquisition event callback failed",
+            extra={"event_level": level, "event_message": message},
+        )
         return
 
 
@@ -230,15 +237,21 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             capture_screenshot=bool(
                 acquisition_profile.get("capture_screenshot", False)
             ),
+            prefer_curl_handoff=bool(
+                acquisition_profile.get("prefer_curl_handoff", False)
+            ),
+            handoff_cookie_engine=str(
+                acquisition_profile.get("handoff_cookie_engine") or ""
+            ).strip() or None,
             forced_browser_engine=str(
                 acquisition_profile.get("forced_browser_engine") or ""
             ).strip() or None,
             on_event=request.on_event,
         )
-    except (httpx.HTTPError, TimeoutError, OSError) as exc:
-        if not request.proxy_list:
-            raise
-        raise ProxyPoolExhausted("No usable proxies remained for acquisition") from exc
+    except ProxyPoolExhausted:
+        raise
+    except (httpx.HTTPError, TimeoutError, OSError):
+        raise
     return AcquisitionResult(
         request=request,
         final_url=result.final_url,

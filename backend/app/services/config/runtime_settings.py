@@ -195,6 +195,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_error_retry_attempts: int = 1
     browser_error_retry_delay_ms: int = 1000
     browser_post_block_cooldown_ms: int = 500
+    low_quality_browser_retry_methods: tuple[str, ...] = ("curl_cffi", "httpx")
     browser_navigation_networkidle_timeout_ms: int = 30000
     browser_navigation_load_timeout_ms: int = 15000
     browser_navigation_domcontentloaded_timeout_ms: int = 15000
@@ -337,6 +338,8 @@ class CrawlerRuntimeSettings(BaseSettings):
     selector_synthesis_max_html_chars: int = 200000
     raw_json_surface_field_overlap_ratio: float = 0.25
     raw_json_surface_field_overlap_absolute: int = 2
+    low_quality_browser_retry_min_remaining_seconds: float = 85.0
+    acquisition_contract_stale_failure_threshold: int = 2
     detail_max_variant_axes: int = 3
     detail_max_variant_rows: int = 100
     detail_max_variant_matrix_cells: int = 200

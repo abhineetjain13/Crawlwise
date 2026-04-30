@@ -14,11 +14,16 @@ from app.services.acquisition.acquirer import (
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
 from app.services.pipeline.core import (
+    _URLProcessingContext,
     _best_adapter_result,
     _empty_extraction_browser_retry_decision,
     _resolved_url_processing_config,
     apply_llm_fallback,
     process_single_url,
+)
+from app.services.pipeline.extraction_retry_decision import (
+    low_quality_extraction_browser_retry_decision,
+    records_missing_repair_fields,
 )
 from app.services.pipeline.persistence import persist_acquisition_artifacts
 from app.services.pipeline.types import URLProcessingConfig
@@ -113,6 +118,181 @@ def test_empty_extraction_retry_skips_static_detail_price_html() -> None:
         "should_retry": False,
         "reason": "static_detail_extractable",
     }
+
+
+def test_low_quality_detail_retry_targets_real_non_browser_fetches() -> None:
+    request = AcquisitionRequest(
+        run_id=1,
+        url="https://example.com/products/widget-prime",
+        plan=AcquisitionPlan(surface="ecommerce_detail"),
+    )
+    acquisition_result = AcquisitionResult(
+        request=request,
+        final_url=request.url,
+        html="""
+        <html>
+          <head>
+            <script>window.__NEXT_DATA__ = {"props":{"pageProps":{"product":{"id":"123"}}}};</script>
+          </head>
+          <body>
+            <div id="__next"></div>
+            <noscript>Please enable JavaScript to continue.</noscript>
+          </body>
+        </html>
+        """,
+        method="curl_cffi",
+        status_code=200,
+    )
+
+    decision = low_quality_extraction_browser_retry_decision(
+        acquisition_result,
+        [{"title": "Widget Prime"}],
+        surface="ecommerce_detail",
+        requested_fields=[],
+    )
+
+    assert decision["should_retry"] is True
+    assert "price" in decision["missing_fields"]
+
+    acquisition_result.method = "test"
+    assert low_quality_extraction_browser_retry_decision(
+        acquisition_result,
+        [{"title": "Widget Prime"}],
+        surface="ecommerce_detail",
+        requested_fields=[],
+    ) == {"should_retry": False, "reason": "method_not_retryable"}
+
+
+def test_low_quality_detail_retry_skips_when_limited_canonical_fields_complete() -> None:
+    request = AcquisitionRequest(
+        run_id=1,
+        url="https://example.com/products/widget-prime",
+        plan=AcquisitionPlan(surface="ecommerce_detail"),
+    )
+    acquisition_result = AcquisitionResult(
+        request=request,
+        final_url=request.url,
+        html=_detail_html(),
+        method="curl_cffi",
+        status_code=200,
+    )
+
+    decision = low_quality_extraction_browser_retry_decision(
+        acquisition_result,
+        [
+            {
+                "title": "Widget Prime",
+                "price": "19.99",
+                "currency": "USD",
+                "brand": "Acme",
+                "image_url": "https://example.com/widget.jpg",
+            }
+        ],
+        surface="ecommerce_detail",
+        requested_fields=[],
+    )
+
+    assert decision == {
+        "should_retry": False,
+        "reason": "repair_fields_complete",
+    }
+
+
+@pytest.mark.asyncio
+async def test_missing_repair_fields_uses_default_ecommerce_targets(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {},
+        },
+    )
+    context = _URLProcessingContext(
+        session=db_session,
+        run=run,
+        url=run.url,
+        config=URLProcessingConfig(),
+        url_timeout_seconds=30.0,
+        started_at_monotonic=0.0,
+        requested_fields=list(run.requested_fields or []),
+        surface=run.surface,
+    )
+
+    missing = records_missing_repair_fields(
+        surface=context.surface,
+        requested_fields=list(context.requested_fields),
+        records=[{"title": "Widget Prime", "price": "19.99"}],
+    )
+
+    assert "price" not in missing
+    assert missing == ["currency", "brand", "image_url"]
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_skips_low_quality_browser_retry_when_budget_low(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "respect_robots_txt": False,
+                "url_timeout_seconds": 5,
+            },
+        },
+    )
+    acquire_calls: list[dict[str, object]] = []
+
+    async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
+        acquire_calls.append(dict(request.acquisition_profile))
+        return _fake_acquire_result(
+            request,
+            html="""
+            <html>
+              <head>
+                <script>window.__NEXT_DATA__ = {"props":{"pageProps":{"product":{"id":"123"}}}};</script>
+              </head>
+              <body>
+                <div id="__next"></div>
+                <noscript>Please enable JavaScript to continue.</noscript>
+              </body>
+            </html>
+            """,
+            method="curl_cffi",
+        )
+
+    async def _fake_run_adapter(*_args, **_kwargs):
+        return None
+
+    def _fake_extract_records(*_args, **_kwargs):
+        return [{"title": "Widget Prime"}]
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _fake_run_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _fake_extract_records)
+    monkeypatch.setattr(
+        "app.services.pipeline.core._remaining_url_budget_seconds",
+        lambda _context: 4.5,
+    )
+
+    result = await process_single_url(db_session, run, run.url)
+    logs = await get_run_logs(db_session, run.id)
+
+    assert result.records
+    assert len(acquire_calls) == 1
+    assert any("Skipping low-quality browser retry" in log.message for log in logs)
 
 
 @pytest.mark.asyncio
@@ -1387,6 +1567,52 @@ async def test_apply_llm_fallback_re_normalizes_llm_values_before_return(
 
 
 @pytest.mark.asyncio
+async def test_apply_llm_fallback_skips_when_contract_fields_complete(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"llm_enabled": True},
+        },
+    )
+
+    async def _unexpected_extract_missing_fields(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("LLM should not run when contract fields are complete")
+
+    monkeypatch.setattr(
+        "app.services.pipeline.direct_record_fallback.extract_missing_fields",
+        _unexpected_extract_missing_fields,
+    )
+
+    rows = await apply_llm_fallback(
+        db_session,
+        run=run,
+        page_url="https://example.com/products/widget-prime",
+        html=_detail_html(),
+        records=[
+            {
+                "title": "Widget Prime",
+                "price": "19.99",
+                "currency": "USD",
+                "brand": "Acme",
+                "image_url": "https://example.com/widget.jpg",
+                "_confidence": {"score": 0.1},
+            }
+        ],
+    )
+
+    assert rows[0]["title"] == "Widget Prime"
+
+
+@pytest.mark.asyncio
 async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_non_numeric(
     db_session: AsyncSession,
     test_user,
@@ -2127,7 +2353,6 @@ async def test_process_single_url_rejects_detail_challenge_shell_and_marks_block
     assert result.url_metrics["failure_reason"] == "challenge_shell"
     assert result.url_metrics["blocked"] is True
     assert [log.message for log in logs] == [
-        "[ROBOTS] Ignoring robots.txt for https://example.com/products/widget-prime",
         "Extraction yielded 0 records (generic extraction path)",
         "Rejected detail extraction for https://example.com/products/widget-prime: challenge_shell",
     ]
@@ -2184,7 +2409,6 @@ async def test_process_single_url_raises_when_browser_retry_fails(
 
     assert len(acquire_calls) == 2
     assert [log.message for log in logs] == [
-        "[ROBOTS] Ignoring robots.txt for https://example.com/category/widgets",
         "Acquired payload via curl_cffi (status=200)",
         "Extraction yielded 0 records (generic extraction path)",
         "No records via curl_cffi; retrying browser render for https://example.com/category/widgets",
@@ -2252,7 +2476,6 @@ async def test_process_single_url_persists_live_acquisition_events(
     logs = await get_run_logs(db_session, run.id)
 
     assert [log.message for log in logs] == [
-        "[ROBOTS] Ignoring robots.txt for https://example.com/category/widgets",
         "Detected listing layout, pagination: scroll",
         "Scroll 1/3 - 24 -> 48 records",
         "Extracted 1 records using generic extraction path",

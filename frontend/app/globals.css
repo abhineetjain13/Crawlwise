@@ -341,7 +341,6 @@ body {
   color: var(--text-primary);
   font-family: var(--font-primary-family);
   font-size: var(--text-sm);
-  letter-spacing: -0.008em;
 
   font-feature-settings: "ss01" 1, "ss02" 1, "cv01" 1;
   -webkit-font-smoothing: antialiased;
@@ -1175,7 +1174,7 @@ html:not([data-theme="dark"]) .compact-data-table {
   color: var(--text-secondary);
   text-decoration: none;
   font-family: var(--font-mono-family);
-  font-size: var(--font-mono-size);
+  font-size: var(--table-font-size);
   font-weight: var(--weight-normal);
 }
 

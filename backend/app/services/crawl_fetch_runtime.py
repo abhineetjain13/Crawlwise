@@ -95,6 +95,8 @@ class _FetchRuntimeContext:
     runtime_policy: dict[str, object]
     capture_screenshot: bool = False
     forced_browser_engine: str | None = None
+    prefer_curl_handoff: bool = False
+    handoff_cookie_engine: str | None = None
     locality_profile: dict[str, object] = field(default_factory=dict)
     last_browser_attempt_diagnostics: dict[str, object] = field(default_factory=dict)
     last_error: Exception | None = None
@@ -228,6 +230,8 @@ async def fetch_page(
     listing_recovery_mode: str | None = None,
     capture_page_markdown: bool = False,
     capture_screenshot: bool = False,
+    prefer_curl_handoff: bool = False,
+    handoff_cookie_engine: str | None = None,
     forced_browser_engine: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = 1,
@@ -259,6 +263,8 @@ async def fetch_page(
         requested_fields=list(requested_fields or []),
         listing_recovery_mode=str(listing_recovery_mode or "").strip() or None,
         capture_screenshot=bool(capture_screenshot),
+        prefer_curl_handoff=bool(prefer_curl_handoff),
+        handoff_cookie_engine=str(handoff_cookie_engine or "").strip().lower() or None,
         proxies=_resolve_proxy_attempts(
             proxy_list,
             run_id=run_id,
@@ -443,6 +449,7 @@ def _browser_first_decision(
         return _hard_browser_requirement(context=context)
     return (
         prefer_browser
+        or context.prefer_curl_handoff
         or host_preference_enabled
         or _hard_browser_requirement(context=context)
     )
@@ -658,9 +665,13 @@ async def _try_browser_http_handoff(
         host_policy.prefer_browser
         or host_policy.patchright_success
         or host_policy.real_chrome_success
+        or context.prefer_curl_handoff
     ):
         return None
-    engines = _handoff_cookie_engines(host_policy)
+    engines = _handoff_cookie_engines(
+        host_policy,
+        preferred_engine=context.handoff_cookie_engine,
+    )
     for proxy in context.proxies:
         if proxy is not None:
             continue
@@ -700,16 +711,23 @@ async def _try_browser_http_handoff(
     return None
 
 
-def _handoff_cookie_engines(host_policy: HostProtectionPolicy) -> tuple[str, ...]:
+def _handoff_cookie_engines(
+    host_policy: HostProtectionPolicy,
+    *,
+    preferred_engine: str | None = None,
+) -> tuple[str, ...]:
     configured = tuple(
         str(engine or "").strip().lower()
         for engine in tuple(crawler_runtime_settings.browser_http_handoff_cookie_engines or ())
         if str(engine or "").strip()
     )
     preferred: list[str] = []
-    if host_policy.real_chrome_success:
+    normalized_preferred = str(preferred_engine or "").strip().lower()
+    if normalized_preferred in {"real_chrome", "patchright"}:
+        preferred.append(normalized_preferred)
+    if host_policy.real_chrome_success and "real_chrome" not in preferred:
         preferred.append("real_chrome")
-    if host_policy.patchright_success:
+    if host_policy.patchright_success and "patchright" not in preferred:
         preferred.append("patchright")
     for engine in configured:
         if engine in {"real_chrome", "patchright"} and engine not in preferred:
@@ -989,6 +1007,8 @@ def _browser_engine_attempts(
         or not real_chrome_browser_available()
     ):
         return engines
+    if host_policy.real_chrome_success:
+        return ["real_chrome"]
     if host_policy.patchright_blocked or host_policy.request_blocked or host_policy.prefer_browser or host_policy.last_block_vendor:
         return _append_engine_once(engines, "real_chrome")
     return engines

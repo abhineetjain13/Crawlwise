@@ -19,7 +19,9 @@ from app.services.crawl_crud import (
 )
 from app.services.domain_run_profile_service import (
     load_domain_run_profile,
+    note_acquisition_contract_failure,
     normalize_domain_run_profile,
+    record_acquisition_contract_outcome,
     save_domain_run_profile,
 )
 from app.services.crawl_state import get_control_request, update_run_status
@@ -164,6 +166,12 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
                 "capture_response_headers": True,
                 "capture_browser_diagnostics": True,
             },
+            "acquisition_contract": {
+                "preferred_browser_engine": "real_chrome",
+                "prefer_browser": True,
+                "prefer_curl_handoff": True,
+                "handoff_cookie_engine": "real_chrome",
+            },
             "proxy_profile": {
                 "enabled": True,
                 "proxy_list": ["http://proxy-a", "http://proxy-b"],
@@ -193,12 +201,59 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
     assert run.settings["fetch_profile"]["request_delay_ms"] == 900
     assert run.settings["locality_profile"]["geo_country"] == "IN"
     assert run.settings["diagnostics_profile"]["capture_network"] == "matched_only"
+    assert run.settings["acquisition_contract"]["preferred_browser_engine"] == "real_chrome"
+    assert run.settings["acquisition_contract"]["prefer_curl_handoff"] is True
     assert run.settings["proxy_enabled"] is False
     assert run.settings["proxy_list"] == []
     assert run.settings["proxy_profile"] == {
         "enabled": False,
         "proxy_list": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_explicit_forced_engine_overrides_saved_contract(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    await save_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        profile={
+            "acquisition_contract": {
+                "preferred_browser_engine": "real_chrome",
+                "prefer_browser": True,
+                "prefer_curl_handoff": True,
+                "handoff_cookie_engine": "real_chrome",
+            },
+        },
+        source_run_id=91,
+    )
+    await db_session.commit()
+
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/product/widget",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "acquisition_contract": {
+                    "preferred_browser_engine": "patchright",
+                    "prefer_browser": True,
+                    "prefer_curl_handoff": False,
+                    "handoff_cookie_engine": "patchright",
+                },
+            },
+        },
+    )
+
+    contract = run.settings["acquisition_contract"]
+    assert contract["preferred_browser_engine"] == "patchright"
+    assert contract["prefer_curl_handoff"] is False
+    assert contract["handoff_cookie_engine"] == "patchright"
 
 
 @pytest.mark.asyncio
@@ -225,6 +280,112 @@ async def test_create_crawl_run_disables_auto_traversal_when_advanced_mode_is_of
     assert run.settings["advanced_enabled"] is False
     assert run.settings["traversal_mode"] is None
     assert run.settings["fetch_profile"]["traversal_mode"] is None
+
+
+@pytest.mark.asyncio
+async def test_contract_marks_stale_after_repeated_quality_failures(
+    db_session: AsyncSession,
+) -> None:
+    await save_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        profile={
+            "acquisition_contract": {
+                "preferred_browser_engine": "real_chrome",
+                "prefer_browser": True,
+                "prefer_curl_handoff": True,
+                "handoff_cookie_engine": "real_chrome",
+                "last_quality_success": {
+                    "method": "browser",
+                    "browser_engine": "real_chrome",
+                    "record_count": 1,
+                    "field_coverage": {"requested": ["title"], "found": ["title"], "missing": []},
+                    "source_run_id": 12,
+                    "timestamp": "2026-04-30T00:00:00+00:00",
+                },
+            },
+        },
+        source_run_id=12,
+    )
+    await db_session.commit()
+
+    first = await note_acquisition_contract_failure(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        threshold=2,
+    )
+    second = await note_acquisition_contract_failure(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        threshold=2,
+    )
+
+    assert first["acquisition_contract"]["stale_after_failures"] == {
+        "failure_count": 1,
+        "stale": False,
+    }
+    assert second["acquisition_contract"]["stale_after_failures"] == {
+        "failure_count": 2,
+        "stale": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_contract_outcome_can_skip_non_acquisition_failures(
+    db_session: AsyncSession,
+) -> None:
+    await save_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        profile={
+            "acquisition_contract": {
+                "preferred_browser_engine": "real_chrome",
+                "prefer_browser": True,
+                "prefer_curl_handoff": True,
+                "handoff_cookie_engine": "real_chrome",
+                "last_quality_success": {
+                    "method": "browser",
+                    "browser_engine": "real_chrome",
+                    "record_count": 1,
+                    "field_coverage": {"requested": ["title"], "found": ["title"], "missing": []},
+                    "source_run_id": 12,
+                    "timestamp": "2026-04-30T00:00:00+00:00",
+                },
+            },
+        },
+        source_run_id=12,
+    )
+    await db_session.commit()
+
+    await record_acquisition_contract_outcome(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        source_run_id=13,
+        method="browser",
+        browser_engine="real_chrome",
+        requested_fields=["title"],
+        records=[],
+        persisted_count=0,
+        quality_success=False,
+        count_failure=False,
+        stale_threshold=1,
+    )
+
+    row = await load_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+    )
+    assert row is not None
+    assert row.profile["acquisition_contract"]["stale_after_failures"] == {
+        "failure_count": 0,
+        "stale": False,
+    }
 
 
 def test_normalize_domain_run_profile_rejects_invalid_source_run_id() -> None:

@@ -517,7 +517,7 @@ export function qualityLevelFromScore(score: number): QualityLevel {
 }
 
 export function copyJson(records: CrawlRecord[]) {
-  void navigator.clipboard.writeText(JSON.stringify(records.map(cleanRecord), null, 2));
+  void navigator.clipboard.writeText(JSON.stringify(records.map(cleanRecordForDisplay), null, 2));
 }
 
 export function cleanRecord(record: CrawlRecord) {
@@ -526,6 +526,10 @@ export function cleanRecord(record: CrawlRecord) {
       ([key, value]) => !key.startsWith("_") && value !== null && value !== "" && !(Array.isArray(value) && value.length === 0),
     ),
   );
+}
+
+export function cleanRecordForDisplay(record: CrawlRecord) {
+  return decodeUrlsForDisplay(cleanRecord(record));
 }
 
 export function scrollViewportToBottom(ref: RefObject<HTMLDivElement | null>) {
@@ -654,35 +658,35 @@ export const STAGE_CONFIG: Record<LogStage, LogStageConfig> = {
     label: "Acquire",
     borderClass: "border-indigo-200 dark:border-indigo-500/30",
     chipClass: "bg-indigo-600 text-white font-medium",
-    textOnlyClass: "text-indigo-600 dark:text-indigo-400 font-bold",
+    textOnlyClass: "text-info font-medium",
     panelClass: "border-indigo-200 dark:border-indigo-500/20 bg-indigo-50/50 dark:bg-indigo-500/[0.05]",
   },
   extraction: {
     label: "Extract",
     borderClass: "border-violet-200 dark:border-violet-500/30",
     chipClass: "bg-violet-600 text-white font-medium",
-    textOnlyClass: "text-violet-600 dark:text-violet-400 font-bold",
+    textOnlyClass: "text-accent font-medium",
     panelClass: "border-violet-200 dark:border-violet-500/20 bg-violet-50/50 dark:bg-violet-500/[0.05]",
   },
   normalize: {
     label: "Normalize",
     borderClass: "border-amber-200 dark:border-amber-500/30",
     chipClass: "bg-amber-600 text-white font-medium",
-    textOnlyClass: "text-amber-600 dark:text-amber-400 font-bold",
+    textOnlyClass: "text-warning font-medium",
     panelClass: "border-amber-200 dark:border-amber-500/20 bg-amber-50/50 dark:bg-amber-500/[0.05]",
   },
   persistence: {
     label: "Persist",
     borderClass: "border-emerald-200 dark:border-emerald-500/30",
     chipClass: "bg-emerald-600 text-white font-medium",
-    textOnlyClass: "text-emerald-600 dark:text-emerald-400 font-bold",
+    textOnlyClass: "text-success font-medium",
     panelClass: "border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/[0.05]",
   },
   system: {
     label: "Run",
     borderClass: "border-slate-300 dark:border-white/10",
     chipClass: "bg-slate-600 text-white font-medium",
-    textOnlyClass: "text-slate-600 dark:text-slate-400 font-bold",
+    textOnlyClass: "text-muted font-medium",
     panelClass: "border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-white/[0.03]",
   },
 };
@@ -912,17 +916,17 @@ export function buildLogSiteGroups(logs: CrawlLog[], records: CrawlRecord[] = []
   });
 }
 
-function severityTone(group: LogSiteGroup) {
+function severityTone(group: LogSiteGroup, index: number) {
   if (group.hasError) {
-    return "border-rose-200 dark:border-rose-500/40 bg-rose-50/30 dark:bg-rose-500/5";
+    return "bg-rose-50/60 dark:bg-rose-500/10";
   }
   if (group.hasWarning) {
-    return "border-amber-200 dark:border-amber-500/40 bg-amber-50/30 dark:bg-amber-500/5";
+    return "bg-amber-50/60 dark:bg-amber-500/10";
   }
   if (group.recordCount > 0 || group.stageLogs.persistence.length > 0) {
-    return "border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/40 dark:bg-emerald-500/[0.06]";
+    return "bg-emerald-50/50 dark:bg-emerald-500/10";
   }
-  return "border-[color:var(--terminal-border)] bg-slate-50/20 dark:bg-white/[0.02]";
+  return index % 2 === 0 ? "bg-black/[0.02] dark:bg-white/[0.02]" : "bg-transparent";
 }
 
 function severityLabel(group: LogSiteGroup) {
@@ -943,19 +947,9 @@ function payloadSnapshot(group: LogSiteGroup) {
     return "";
   }
   const payload = group.records.length === 1
-    ? {
-      public_record: cleanRecord(group.records[0]),
-      raw_record: group.records[0].raw_data ?? {},
-      source_trace: group.records[0].source_trace ?? {},
-    }
-    : group.records.map((record) => ({
-      record_id: record.id,
-      source_url: record.source_url,
-      public_record: cleanRecord(record),
-      raw_record: record.raw_data ?? {},
-      source_trace: record.source_trace ?? {},
-    }));
-  return JSON.stringify(decodeUrlsForDisplay(payload), null, 2);
+    ? cleanRecordForDisplay(group.records[0])
+    : group.records.map(cleanRecordForDisplay);
+  return JSON.stringify(payload, null, 2);
 }
 
 function publicFieldNames(record: CrawlRecord) {
@@ -1182,35 +1176,40 @@ export const LogTerminal = memo(function LogTerminal({
   const peekPanelRef = useRef<HTMLDivElement | null>(null);
   const [peekedGroupKey, setPeekedGroupKey] = useState<string | null>(null);
   const [peekedRecordIndex, setPeekedRecordIndex] = useState(0);
-  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
+  const [expandedGroupPreference, setExpandedGroupPreference] = useState<string | null | "__auto__">("__auto__");
   const [triageCursor, setTriageCursor] = useState(0);
   const groups = useMemo(() => buildLogSiteGroups(logs, records), [logs, records]);
   const issueGroups = useMemo(
     () => groups.filter((group) => group.hasError || group.hasWarning),
     [groups],
   );
-  const peekedGroup = useMemo(
-    () => groups.find((group) => group.key === peekedGroupKey) ?? null,
+  const activePeekedGroupKey = useMemo(
+    () => (peekedGroupKey && groups.some((group) => group.key === peekedGroupKey) ? peekedGroupKey : null),
     [groups, peekedGroupKey],
   );
+  const peekedGroup = useMemo(
+    () => groups.find((group) => group.key === activePeekedGroupKey) ?? null,
+    [activePeekedGroupKey, groups],
+  );
+  const expandedGroupKey = useMemo(() => {
+    if (live && groups.length > 0) {
+      return groups[groups.length - 1].key;
+    }
+    if (expandedGroupPreference && expandedGroupPreference !== "__auto__" && groups.some((group) => group.key === expandedGroupPreference)) {
+      return expandedGroupPreference;
+    }
+    if (expandedGroupPreference === null) {
+      return null;
+    }
+    return issueGroups[0]?.key ?? groups[0]?.key ?? null;
+  }, [expandedGroupPreference, groups, issueGroups, live]);
+  const safePeekedRecordIndex = peekedGroup
+    ? Math.min(peekedRecordIndex, Math.max(peekedGroup.records.length - 1, 0))
+    : 0;
+  const safeTriageCursor = issueGroups.length ? Math.min(triageCursor, issueGroups.length - 1) : 0;
 
   useEffect(() => {
-    setExpandedGroupKey((current) => {
-      if (live && groups.length > 0) {
-        return groups[groups.length - 1].key;
-      }
-      if (current && groups.some((group) => group.key === current)) {
-        return current;
-      }
-      return issueGroups[0]?.key ?? groups[0]?.key ?? null;
-    });
-    setPeekedGroupKey((current) => (current && groups.some((group) => group.key === current) ? current : null));
-    setPeekedRecordIndex(0);
-    setTriageCursor((current) => (issueGroups.length ? Math.min(current, issueGroups.length - 1) : 0));
-  }, [groups, issueGroups, live]);
-
-  useEffect(() => {
-    if (!peekedGroupKey) {
+    if (!activePeekedGroupKey) {
       return;
     }
     const handlePointerDown = (event: MouseEvent) => {
@@ -1224,7 +1223,7 @@ export const LogTerminal = memo(function LogTerminal({
     };
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [peekedGroupKey]);
+  }, [activePeekedGroupKey]);
 
   const timelineTicks = useMemo(() => {
     if (!groups.length) {
@@ -1251,14 +1250,14 @@ export const LogTerminal = memo(function LogTerminal({
       el.classList.add("log-entry-highlight");
       setTimeout(() => el.classList.remove("log-entry-highlight"), 2000);
     }
-    setExpandedGroupKey(groupKey);
+    setExpandedGroupPreference(groupKey);
   };
 
   const toggleGroup = (groupKey: string) => {
     if (live && groups.length > 0 && groupKey === groups[groups.length - 1].key) {
       return;
     }
-    setExpandedGroupKey((current) => (current === groupKey ? null : groupKey));
+    setExpandedGroupPreference((current) => (current === groupKey ? null : groupKey));
   };
 
   const navigateTriage = (dir: "next" | "prev") => {
@@ -1266,15 +1265,23 @@ export const LogTerminal = memo(function LogTerminal({
       return;
     }
     const delta = dir === "next" ? 1 : -1;
-    const nextIndex = (triageCursor + delta + issueGroups.length) % issueGroups.length;
+    const nextIndex = (safeTriageCursor + delta + issueGroups.length) % issueGroups.length;
     setTriageCursor(nextIndex);
     jumpToGroup(issueGroups[nextIndex].key);
   };
 
   return (
-    <div className="relative flex flex-col overflow-hidden rounded-xl border border-[color:var(--terminal-border)] bg-[color:var(--terminal-bg)] text-[color:var(--terminal-fg)] shadow-[var(--terminal-shadow)] group/terminal">
-      <div className="flex h-9 items-center justify-between border-b border-[color:var(--terminal-border)] bg-black/[0.05] dark:bg-white/[0.05] px-4">
-        <span className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-40">activity_stream.log</span>
+    <div
+      className="group/terminal relative flex flex-col overflow-hidden rounded-xl border"
+      style={{
+        borderColor: "var(--terminal-border)",
+        backgroundColor: "var(--terminal-bg)",
+        color: "var(--terminal-fg)",
+        boxShadow: "var(--terminal-shadow)",
+      }}
+    >
+      <div className="flex h-9 items-center justify-between border-b bg-black/[0.05] px-4 dark:bg-white/[0.05]" style={{ borderColor: "var(--terminal-border)" }}>
+        <span className="text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-muted">activity_stream.log</span>
         <div className="flex items-center gap-2">
           <div className="flex h-3 w-32 items-center px-1 bg-black/10 dark:bg-white/10 rounded-full relative group/scrubber cursor-crosshair">
             {timelineTicks.map((tick) => (
@@ -1341,11 +1348,11 @@ export const LogTerminal = memo(function LogTerminal({
                     }
                   }}
                   className={cn(
-                    "grid w-full grid-cols-[32px_minmax(280px,2fr)_80px_100px_auto_minmax(200px,1.2fr)_80px_60px] items-center gap-3 px-4 py-2.5 text-left transition-colors cursor-pointer outline-none group/row border-b border-[color:var(--terminal-border)] focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset",
-                    severityTone(group)
+                    "grid w-full grid-cols-[32px_minmax(280px,2fr)_80px_100px_auto_minmax(200px,1.2fr)_80px_60px] items-center gap-3 px-4 py-2.5 text-left transition-colors cursor-pointer outline-none group/row focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset",
+                    severityTone(group, index)
                   )}
                 >
-                  <div className="text-[11px] font-mono opacity-60 tabular-nums">
+                  <div className="text-[12px] font-mono font-medium tabular-nums text-muted">
                     {(index + 1).toString().padStart(2, "0")}
                   </div>
                   <div className="min-w-0">
@@ -1355,14 +1362,14 @@ export const LogTerminal = memo(function LogTerminal({
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="truncate block text-[13px] font-medium text-blue-700 dark:text-blue-400 hover:underline underline-offset-2"
+                        className="truncate block text-[12px] font-mono font-medium text-blue-600 dark:text-blue-400 hover:underline underline-offset-2"
                         title={group.url}
                       >
                         {formatShortUrlLabel(group.url)}
                       </a>
                     ) : (
                       <span
-                        className="truncate block text-[13px] font-medium opacity-90"
+                        className="truncate block text-[12px] font-mono font-medium text-secondary"
                         title={group.label}
                         onClick={(e) => e.stopPropagation()}
                       >
@@ -1370,12 +1377,12 @@ export const LogTerminal = memo(function LogTerminal({
                       </span>
                     )}
                   </div>
-                  <div className="text-[13px] tabular-nums whitespace-nowrap opacity-90">
-                    <span className="opacity-60 mr-1 text-[10px] uppercase font-bold tracking-wider">F:</span>
+                  <div className="text-[12px] font-mono font-medium tabular-nums whitespace-nowrap text-secondary">
+                    <span className="text-muted mr-1.5 text-[10px] uppercase font-sans font-bold tracking-wider">F:</span>
                     {coverage.foundCount}/{coverage.totalCount || 0}
                   </div>
-                  <div className={cn("text-[13px] tabular-nums whitespace-nowrap", confidence ? toneForConfidence(confidence.level) : "opacity-50")}>
-                    <span className="opacity-60 mr-1 text-[10px] uppercase font-bold tracking-wider">C:</span>
+                  <div className={cn("text-[12px] font-mono font-medium tabular-nums whitespace-nowrap", confidence ? toneForConfidence(confidence.level) : "text-muted")}>
+                    <span className="text-muted mr-1.5 text-[10px] uppercase font-sans font-bold tracking-wider">C:</span>
                     {confidence ? `${Math.round(confidence.score * 100)}%` : "--"}
                   </div>
                   <div className="flex items-center justify-center">
@@ -1386,7 +1393,7 @@ export const LogTerminal = memo(function LogTerminal({
                     )}
                   </div>
                   <div className="min-w-0">
-                    <div className="truncate text-[13px] opacity-60" title={summaryLog?.message || ""}>
+                    <div className="truncate text-[12px] font-mono font-medium text-secondary" title={summaryLog?.message || ""}>
                       {summaryLog ? sanitizeLogMessage(summaryLog.message) : TERMINAL_STRINGS.PENDING}
                     </div>
                   </div>
@@ -1408,31 +1415,31 @@ export const LogTerminal = memo(function LogTerminal({
                     ) : <span className="text-[11px] opacity-25">--</span>}
                   </div>
                   <div className="text-right pr-2">
-                    <div className="text-[11px] font-bold uppercase tracking-tight opacity-40 group-hover/row:opacity-100 transition-opacity">
+                    <div className="text-[11px] font-medium uppercase tracking-tight text-muted group-hover/row:text-secondary transition-colors">
                       {live && groups.length > 0 && group.key === groups[groups.length - 1].key ? "Active" : expanded ? "Less" : "More"}
                     </div>
                   </div>
                 </div>
 
                 {expanded ? (
-                  <div className="border-t border-[color:var(--terminal-border)]">
-                    <div className="overflow-hidden bg-[color:var(--terminal-code-bg)]">
-                      {expandedRows.length ? expandedRows.map((row, index) => {
+                  <div className="bg-black/[0.03] dark:bg-white/[0.03] shadow-[inset_0_4px_12px_rgba(0,0,0,0.03)] dark:shadow-[inset_0_4px_12px_rgba(0,0,0,0.15)]">
+                    <div className="overflow-hidden">
+                      {expandedRows.length ? expandedRows.map((row, expandedIndex) => {
                         return (
                           <div
                             key={row.key}
                             className={cn(
-                              "grid grid-cols-[72px_92px_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5 text-[13px]",
-                              index > 0 && "border-t border-[color:var(--terminal-border)]",
+                              "grid grid-cols-[64px_84px_minmax(0,1fr)_auto] items-center gap-4 px-4 py-2 text-[13px]",
+                              expandedIndex % 2 === 0 ? "bg-black/[0.015] dark:bg-white/[0.015]" : "bg-transparent",
                             )}
                           >
-                            <span className="text-[12px] opacity-65 tabular-nums">
+                            <span className="text-[11px] font-medium tabular-nums font-mono text-muted">
                               {row.createdAt ? formatTimeHms(row.createdAt) : "--"}
                             </span>
-                            <span className={cn("inline-flex text-[11px] uppercase tracking-[0.14em]", STAGE_CONFIG[row.stage].textOnlyClass)}>
+                            <span className={cn("inline-flex text-[11px] uppercase tracking-wider font-semibold", STAGE_CONFIG[row.stage].textOnlyClass)}>
                               {STAGE_CONFIG[row.stage].label}
                             </span>
-                            <span className="min-w-0 break-words text-[14px] leading-6 opacity-90">
+                            <span className="min-w-0 break-words text-[13px] font-mono font-medium leading-relaxed text-secondary">
                               {!row.createdAt ? row.message : renderLogContent(row.message, row.stage === "system")}
                             </span>
                             <span className="flex items-center gap-2">
@@ -1469,13 +1476,19 @@ export const LogTerminal = memo(function LogTerminal({
           )}
       </div>
 
-      {peekedGroupKey ? (
+      {activePeekedGroupKey ? (
         <div className="absolute inset-0 z-40 bg-black/10 dark:bg-black/20">
           <div
             ref={peekPanelRef}
-            className="absolute inset-y-0 right-0 z-50 w-[32rem] max-w-full animate-in slide-in-from-right duration-300 border-l border-[color:var(--terminal-border)] bg-[color:var(--terminal-code-bg)] text-[color:var(--terminal-fg)] shadow-[var(--terminal-shadow)]"
+            className="absolute inset-y-0 right-0 z-50 w-[32rem] max-w-full animate-in slide-in-from-right duration-300 border-l"
+            style={{
+              borderColor: "var(--terminal-border)",
+              backgroundColor: "var(--terminal-code-bg)",
+              color: "var(--terminal-fg)",
+              boxShadow: "var(--terminal-shadow)",
+            }}
           >
-            <div className="flex items-center justify-between border-b border-[color:var(--terminal-border)] bg-[color:var(--terminal-bg)] px-4 py-3">
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: "var(--terminal-border)", backgroundColor: "var(--terminal-bg)" }}>
               <div>
                 <div className="text-[11px] uppercase tracking-[0.16em] text-accent">{TERMINAL_STRINGS.PAYLOAD_PEEK}</div>
                 <div className="mt-1 text-[13px] opacity-55">
@@ -1506,7 +1519,7 @@ export const LogTerminal = memo(function LogTerminal({
                     Prev
                   </Button>
                   <span className="text-[13px] opacity-55">
-                    {peekedGroup ? `${Math.min(peekedRecordIndex + 1, peekedGroup.records.length)}/${peekedGroup.records.length}` : "0/0"}
+                  {peekedGroup ? `${Math.min(safePeekedRecordIndex + 1, peekedGroup.records.length)}/${peekedGroup.records.length}` : "0/0"}
                   </span>
                   <Button
                     type="button"
@@ -1533,17 +1546,13 @@ export const LogTerminal = memo(function LogTerminal({
                     if (!peekedGroup) {
                       return;
                     }
-                    const currentRecord = peekedGroup.records[peekedRecordIndex] ?? peekedGroup.records[0];
+                    const currentRecord = peekedGroup.records[safePeekedRecordIndex] ?? peekedGroup.records[0];
                     if (!currentRecord) {
                       return;
                     }
                     void navigator.clipboard.writeText(
                       JSON.stringify(
-                        decodeUrlsForDisplay({
-                          public_record: cleanRecord(currentRecord),
-                          raw_record: currentRecord.raw_data ?? {},
-                          source_trace: currentRecord.source_trace ?? {},
-                        }),
+                        cleanRecordForDisplay(currentRecord),
                         null,
                         2,
                       ),
@@ -1554,13 +1563,9 @@ export const LogTerminal = memo(function LogTerminal({
                 </Button>
               </div>
               <pre className="text-[14px] leading-7 whitespace-pre-wrap">
-                {peekedGroup && peekedGroup.records[peekedRecordIndex]
+                {peekedGroup && peekedGroup.records[safePeekedRecordIndex]
                   ? JSON.stringify(
-                    decodeUrlsForDisplay({
-                      public_record: cleanRecord(peekedGroup.records[peekedRecordIndex]),
-                      raw_record: peekedGroup.records[peekedRecordIndex].raw_data ?? {},
-                      source_trace: peekedGroup.records[peekedRecordIndex].source_trace ?? {},
-                    }),
+                    cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
                     null,
                     2,
                   )
@@ -2091,7 +2096,7 @@ export const RecordsTable = memo(function RecordsTable({
         );
       }
     }
-    return <span className="block max-w-[260px] truncate text-[var(--table-font-size)] leading-[var(--leading-snug)] text-secondary font-normal">{raw}</span>;
+    return <span className="block max-w-[260px] truncate leading-[var(--leading-snug)] text-secondary font-normal" style={{ fontSize: "var(--table-font-size)" }}>{raw}</span>;
   }
 
   return (

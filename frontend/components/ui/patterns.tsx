@@ -86,7 +86,7 @@ export function SectionHeader({
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-center gap-2">
           {Icon && <Icon className="size-3.5 shrink-0 text-muted" />}
-          <h2 className="m-0 text-[var(--text-md)] font-medium leading-[var(--leading-tight)] text-foreground">{title}</h2>
+          <h2 className="m-0 font-medium leading-[var(--leading-tight)] text-foreground" style={{ fontSize: "var(--text-md)" }}>{title}</h2>
         </div>
         {description ? (
           <div className="w-full text-sm leading-[var(--leading-relaxed)] text-secondary">{description}</div>
@@ -503,8 +503,8 @@ export function NavList<T>({
           >
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="truncate text-[var(--text-sm)] font-medium leading-[var(--leading-snug)] text-foreground">{renderLabel(item)}</div>
-                {renderMeta ? <div className="mt-2 flex flex-wrap gap-2 text-[var(--text-xs)] leading-[var(--leading-snug)] text-muted">{renderMeta(item)}</div> : null}
+                <div className="truncate font-medium leading-[var(--leading-snug)] text-foreground" style={{ fontSize: "var(--text-sm)" }}>{renderLabel(item)}</div>
+                {renderMeta ? <div className="mt-2 flex flex-wrap gap-2 leading-[var(--leading-snug)] text-muted" style={{ fontSize: "var(--text-xs)" }}>{renderMeta(item)}</div> : null}
               </div>
               {renderBadge ? renderBadge(item) : null}
             </div>

@@ -33,7 +33,19 @@ export function TableRow({
 }
 
 export function TableHead({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
-  return <th className={cn("h-9 px-4 text-left align-middle font-[family:var(--table-header-font-family)] text-[var(--table-header-font-size)] font-[var(--table-header-weight)] uppercase tracking-[var(--table-header-tracking)] text-muted", className)}>{children}</th>;
+  return (
+    <th
+      className={cn("h-9 px-4 text-left align-middle uppercase text-muted", className)}
+      style={{
+        fontFamily: "var(--table-header-font-family)",
+        fontSize: "var(--table-header-font-size)",
+        fontWeight: "var(--table-header-weight)",
+        letterSpacing: "var(--table-header-tracking)",
+      }}
+    >
+      {children}
+    </th>
+  );
 }
 
 export function TableCell({
@@ -42,7 +54,7 @@ export function TableCell({
   colSpan,
 }: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
   return (
-    <td className={cn("p-4 align-middle text-[var(--table-font-size)] font-normal leading-[1.5] text-secondary", className)} colSpan={colSpan}>
+    <td className={cn("p-4 align-middle font-normal leading-[1.5] text-secondary", className)} style={{ fontSize: "var(--table-font-size)" }} colSpan={colSpan}>
       {children}
     </td>
   );

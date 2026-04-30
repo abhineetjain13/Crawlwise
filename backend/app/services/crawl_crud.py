@@ -156,6 +156,13 @@ def _merge_saved_run_profile(
         },
         legacy_aliases={},
     )
+    saved_contract = dict(saved.get("acquisition_contract") or {})
+    explicit_contract = dict(merged.get("acquisition_contract") or {})
+    if saved_contract or explicit_contract:
+        merged["acquisition_contract"] = {
+            **saved_contract,
+            **explicit_contract,
+        }
     return merged
 
 
