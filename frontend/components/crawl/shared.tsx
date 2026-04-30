@@ -4,7 +4,10 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
+  Copy,
   Database,
   Dot,
   Globe,
@@ -22,11 +25,11 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import React, { memo, useCallback, useEffect, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement, ReactNode, RefObject } from "react";
 
 import { Badge, Button, Input, Textarea, Tooltip, Toggle as PrimitiveToggle } from "../ui/primitives";
-import type { CrawlDomain, CrawlRecord, CrawlRun, CrawlSurface } from "../../lib/api/types";
+import type { CrawlDomain, CrawlLog, CrawlRecord, CrawlRun, CrawlSurface } from "../../lib/api/types";
 import { formatTimeHms, parseApiDate } from "../../lib/format/date";
 import { cn } from "../../lib/utils";
 
@@ -432,6 +435,22 @@ export function scoreRecordQuality(record: CrawlRecord, visibleColumns: string[]
   return score;
 }
 
+export function scoreFieldQuality(records: CrawlRecord[], field: string) {
+  if (!records.length) {
+    return 0;
+  }
+  const informativeValues = records
+    .map((record) => readRecordValue(record, field))
+    .filter((value) => isInformativeValue(value));
+  if (!informativeValues.length) {
+    return 0;
+  }
+  const coverage = informativeValues.length / records.length;
+  const uniqueValues = new Set(informativeValues.map((value) => stringifyCell(value).trim().toLowerCase()).filter(Boolean)).size;
+  const diversity = Math.min(1, uniqueValues / Math.min(3, informativeValues.length));
+  return coverage * 0.75 + diversity * 0.25;
+}
+
 
 export function estimateDataQuality(records: CrawlRecord[], visibleColumns: string[]): QualitySnapshot {
   if (!records.length || !visibleColumns.length) {
@@ -574,32 +593,32 @@ function getLogIconStyle(level: string, message: string): { iconCls: string; bgC
   const isError = logMessageIsError(level, message);
   const hasUrl = /https?:\/\//i.test(message);
 
-  if (isError) return { iconCls: "text-danger", bgCls: "bg-danger/10" };
-  if (level === "warning" || level === "warn") return { iconCls: "text-warning", bgCls: "bg-warning/10" };
+  if (isError) return { iconCls: "text-rose-600 dark:text-rose-400", bgCls: "bg-rose-500/10" };
+  if (level === "warning" || level === "warn") return { iconCls: "text-orange-600 dark:text-orange-400", bgCls: "bg-orange-500/10" };
 
-  if (msg.includes("starting crawl")) return { iconCls: "text-sky-500", bgCls: "bg-sky-500/10" };
-  if (msg.includes("ignoring robots.txt")) return { iconCls: "text-orange-400", bgCls: "bg-orange-400/10" };
-  if (msg.includes("resolved")) return { iconCls: "text-slate-400", bgCls: "bg-slate-400/10" };
-  if (msg.includes("acquired")) return { iconCls: "text-indigo-400", bgCls: "bg-indigo-400/10" };
-  if (msg.includes("extracted")) return { iconCls: "text-emerald-400", bgCls: "bg-emerald-400/12" };
-  if (msg.includes("normalized") || msg.includes("normalised")) return { iconCls: "text-amber-400", bgCls: "bg-amber-400/12" };
-  if (msg.includes("persisted")) return { iconCls: "text-fuchsia-400", bgCls: "bg-fuchsia-400/12" };
+  if (msg.includes("starting crawl")) return { iconCls: "text-sky-600 dark:text-sky-400", bgCls: "bg-sky-500/10" };
+  if (msg.includes("ignoring robots.txt")) return { iconCls: "text-orange-600 dark:text-orange-400", bgCls: "bg-orange-500/10" };
+  if (msg.includes("resolved")) return { iconCls: "text-slate-600 dark:text-slate-400", bgCls: "bg-slate-500/10" };
+  if (msg.includes("acquired")) return { iconCls: "text-indigo-600 dark:text-indigo-400", bgCls: "bg-indigo-500/10" };
+  if (msg.includes("extracted")) return { iconCls: "text-emerald-600 dark:text-emerald-400", bgCls: "bg-emerald-500/12" };
+  if (msg.includes("normalized") || msg.includes("normalised")) return { iconCls: "text-amber-600 dark:text-amber-400", bgCls: "bg-amber-500/12" };
+  if (msg.includes("persisted")) return { iconCls: "text-fuchsia-600 dark:text-fuchsia-400", bgCls: "bg-fuchsia-500/12" };
   if (msg.includes("page loaded") || msg.includes("page load"))
-    return { iconCls: "text-amber-400", bgCls: "bg-amber-400/12" };
+    return { iconCls: "text-amber-600 dark:text-amber-400", bgCls: "bg-amber-500/12" };
   if (msg.includes("challenge") || msg.includes("blocked") || msg.includes("captcha") || msg.includes("bot check"))
-    return { iconCls: "text-orange-400", bgCls: "bg-orange-400/12" };
+    return { iconCls: "text-orange-600 dark:text-orange-400", bgCls: "bg-orange-500/12" };
   if (msg.includes("acquiring") || msg.includes("fetching"))
-    return { iconCls: "text-indigo-400", bgCls: "bg-indigo-400/12" };
+    return { iconCls: "text-indigo-600 dark:text-indigo-400", bgCls: "bg-indigo-500/12" };
   if (msg.includes("browser") || msg.includes("patchright") || msg.includes("playwright") || msg.includes("headless"))
-    return { iconCls: "text-violet-400", bgCls: "bg-violet-400/12" };
-  if (msg.includes("record")) return { iconCls: "text-emerald-400", bgCls: "bg-emerald-400/12" };
-  if (hasUrl) return { iconCls: "text-indigo-400", bgCls: "bg-indigo-400/12" };
+    return { iconCls: "text-violet-600 dark:text-violet-400", bgCls: "bg-violet-500/12" };
+  if (msg.includes("record")) return { iconCls: "text-emerald-600 dark:text-emerald-400", bgCls: "bg-emerald-500/12" };
+  if (hasUrl) return { iconCls: "text-indigo-600 dark:text-indigo-400", bgCls: "bg-indigo-500/12" };
   if (msg.includes("complete") || msg.includes("success") || msg.includes("done") || msg.includes("finished"))
-    return { iconCls: "text-emerald-500", bgCls: "bg-emerald-500/10" };
+    return { iconCls: "text-emerald-600 dark:text-emerald-400", bgCls: "bg-emerald-500/10" };
   if (msg.includes("retry") || msg.includes("retrying"))
-    return { iconCls: "text-sky-400", bgCls: "bg-sky-400/12" };
-  if (level === "debug") return { iconCls: "text-white/20", bgCls: "bg-transparent" };
-  return { iconCls: "text-white/40", bgCls: "bg-white/5" };
+    return { iconCls: "text-sky-600 dark:text-sky-400", bgCls: "bg-sky-500/12" };
+  if (level === "debug") return { iconCls: "text-muted/40 dark:text-white/20", bgCls: "bg-transparent" };
+  return { iconCls: "text-muted/60 dark:text-white/40", bgCls: "bg-black/[0.03] dark:bg-white/5" };
 }
 
 function logMessageIsError(level: string, message: string): boolean {
@@ -618,6 +637,464 @@ function logMessageIsError(level: string, message: string): boolean {
   return /^\s*(error|failed)\b/i.test(text);
 }
 
+export type LogStage = "acquisition" | "extraction" | "normalize" | "persistence" | "system";
+
+export interface LogStageConfig {
+  label: string;
+  borderClass: string;
+  chipClass: string;
+  textOnlyClass: string;
+  panelClass: string;
+};
+
+const DISPLAY_LOG_STAGES: LogStage[] = ["acquisition", "extraction", "normalize", "persistence"];
+
+export const STAGE_CONFIG: Record<LogStage, LogStageConfig> = {
+  acquisition: {
+    label: "Acquire",
+    borderClass: "border-indigo-200 dark:border-indigo-500/30",
+    chipClass: "bg-indigo-600 text-white font-medium",
+    textOnlyClass: "text-indigo-600 dark:text-indigo-400 font-bold",
+    panelClass: "border-indigo-200 dark:border-indigo-500/20 bg-indigo-50/50 dark:bg-indigo-500/[0.05]",
+  },
+  extraction: {
+    label: "Extract",
+    borderClass: "border-violet-200 dark:border-violet-500/30",
+    chipClass: "bg-violet-600 text-white font-medium",
+    textOnlyClass: "text-violet-600 dark:text-violet-400 font-bold",
+    panelClass: "border-violet-200 dark:border-violet-500/20 bg-violet-50/50 dark:bg-violet-500/[0.05]",
+  },
+  normalize: {
+    label: "Normalize",
+    borderClass: "border-amber-200 dark:border-amber-500/30",
+    chipClass: "bg-amber-600 text-white font-medium",
+    textOnlyClass: "text-amber-600 dark:text-amber-400 font-bold",
+    panelClass: "border-amber-200 dark:border-amber-500/20 bg-amber-50/50 dark:bg-amber-500/[0.05]",
+  },
+  persistence: {
+    label: "Persist",
+    borderClass: "border-emerald-200 dark:border-emerald-500/30",
+    chipClass: "bg-emerald-600 text-white font-medium",
+    textOnlyClass: "text-emerald-600 dark:text-emerald-400 font-bold",
+    panelClass: "border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/[0.05]",
+  },
+  system: {
+    label: "Run",
+    borderClass: "border-slate-300 dark:border-white/10",
+    chipClass: "bg-slate-600 text-white font-medium",
+    textOnlyClass: "text-slate-600 dark:text-slate-400 font-bold",
+    panelClass: "border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-white/[0.03]",
+  },
+};
+
+export const TERMINAL_STRINGS = {
+  FIELDS: "Fields",
+  CONFIDENCE: "Confidence",
+  RUN_EVENTS: "Run Events",
+  PENDING: "Pending...",
+  SITE_PAYLOAD: "Site payload",
+  PAYLOAD_PEEK: "Payload Peek",
+  NO_LOGS: "No logs.",
+  NO_PAYLOAD: "No persisted payload for this site yet.",
+} as const;
+
+export const LOG_PATTERNS = {
+  STARTING_CRAWL: /^Starting crawl run for (https?:\/\/\S+?)(?: \((\d+)\/(\d+)\))?$/i,
+  ROBOTS_IGNORE: /ignoring robots\.txt/i,
+  PERSISTENCE_SUMMARY: /\bpersisted\s+\d+\s+record/i,
+  ROBOTS_PREFIX: /^\[ROBOTS\]\s*/i,
+  HEADLESS_BROWSER: /launched headless browser \(([^,]+),[^)]+\)/i,
+  URL: /https?:\/\/[^\s]+/g,
+  COUNTER: /\(\d+\/\d+\)/,
+} as const;
+
+export function getLogStage(message: string): LogStage {
+  const text = message.toLowerCase();
+  if (
+    text.includes("persisted") ||
+    text.includes("persisting") ||
+    text.includes("committed")
+  ) {
+    return "persistence";
+  }
+  if (
+    text.includes("normalized") ||
+    text.includes("normalised") ||
+    text.includes("schema validation cleaned")
+  ) {
+    return "normalize";
+  }
+  if (
+    text.includes("extracted") ||
+    text.includes("extraction yielded") ||
+    text.includes("rejected detail extraction") ||
+    text.includes("traversal yielded") ||
+    text.includes("selector self-heal")
+  ) {
+    return "extraction";
+  }
+  if (
+    text.includes("acquiring") ||
+    text.includes("robots") ||
+    text.includes("proxy") ||
+    text.includes("browser") ||
+    text.includes("navigation") ||
+    text.includes("page loaded") ||
+    text.includes("acquired payload")
+  ) {
+    return "acquisition";
+  }
+  if (
+    text.includes("starting crawl") ||
+    text.includes("resolved") ||
+    text.includes("pipeline finished") ||
+    text.includes("stopped after reaching") ||
+    text.includes("run paused") ||
+    text.includes("run killed")
+  ) {
+    return "system";
+  }
+  return "system";
+}
+
+type LogSiteGroup = {
+  key: string;
+  label: string;
+  url: string;
+  index: number | null;
+  total: number | null;
+  logs: CrawlLog[];
+  stageLogs: Record<LogStage, CrawlLog[]>;
+  records: CrawlRecord[];
+  hasError: boolean;
+  hasWarning: boolean;
+  lastStage: LogStage;
+  recordCount: number;
+};
+
+
+function parseStartingLog(message: string) {
+  const match = sanitizeLogMessage(message).match(LOG_PATTERNS.STARTING_CRAWL);
+  if (!match) {
+    return null;
+  }
+  const [, url, indexValue, totalValue] = match;
+  return {
+    url,
+    index: indexValue ? Number.parseInt(indexValue, 10) : null,
+    total: totalValue ? Number.parseInt(totalValue, 10) : null,
+  };
+}
+
+function isWarningLog(log: CrawlLog) {
+  const level = String(log.level || "").toLowerCase();
+  if (level === "warn" || level === "warning") {
+    return true;
+  }
+  const text = log.message.toLowerCase();
+  return (
+    text.includes("partial") ||
+    text.includes("yielded 0 records") ||
+    text.includes("retrying") ||
+    text.includes("rejected detail extraction")
+  );
+}
+
+function isHiddenLogMessage(message: string) {
+  return LOG_PATTERNS.ROBOTS_IGNORE.test(String(message || ""));
+}
+
+function isPersistenceSummaryLog(message: string) {
+  return LOG_PATTERNS.PERSISTENCE_SUMMARY.test(String(message || ""));
+}
+
+function matchesSiteUrl(record: CrawlRecord, siteUrl: string) {
+  const candidates = new Set<string>();
+  for (const value of [
+    record.source_url,
+    record.data?.url,
+    record.raw_data?.url,
+    record.source_trace?.acquisition && typeof record.source_trace.acquisition === "object"
+      ? (record.source_trace.acquisition as Record<string, unknown>).final_url
+      : null,
+  ]) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (text) {
+      candidates.add(text);
+    }
+  }
+  return candidates.has(siteUrl);
+}
+
+function siteLabel(url: string, index: number | null, total: number | null) {
+  const prefix = index && total ? `${index}/${total}` : index ? String(index) : null;
+  return prefix ? `${prefix} ${url}` : url;
+}
+
+function siteDomId(groupKey: string) {
+  return `site-log-${groupKey.replace(/[^a-z0-9_-]+/gi, "-")}`;
+}
+
+export function buildLogSiteGroups(logs: CrawlLog[], records: CrawlRecord[] = []): LogSiteGroup[] {
+  const groups: Array<Omit<LogSiteGroup, "records" | "hasError" | "hasWarning" | "lastStage" | "recordCount">> = [];
+  let currentGroup: (typeof groups)[number] | null = null;
+  let untitledCounter = 0;
+
+  for (const log of logs) {
+    if (isHiddenLogMessage(log.message)) {
+      continue;
+    }
+    const start = parseStartingLog(log.message);
+    if (start) {
+      currentGroup = {
+        key: `site:${start.index ?? logs.indexOf(log)}:${start.url}`,
+        label: siteLabel(start.url, start.index, start.total),
+        url: start.url,
+        index: start.index,
+        total: start.total,
+        logs: [],
+        stageLogs: {
+          acquisition: [],
+          extraction: [],
+          normalize: [],
+          persistence: [],
+          system: [],
+        },
+      };
+      groups.push(currentGroup);
+    }
+
+    if (!currentGroup) {
+      untitledCounter += 1;
+      currentGroup = {
+        key: `run:${untitledCounter}`,
+        label: TERMINAL_STRINGS.RUN_EVENTS,
+        url: "",
+        index: null,
+        total: null,
+        logs: [],
+        stageLogs: {
+          acquisition: [],
+          extraction: [],
+          normalize: [],
+          persistence: [],
+          system: [],
+        },
+      };
+      groups.push(currentGroup);
+    }
+
+    const stage = start ? "system" : getLogStage(log.message);
+    currentGroup.logs.push(log);
+    currentGroup.stageLogs[stage].push(log);
+  }
+
+  return groups.map((group) => {
+    const matchedRecords = group.url
+      ? records.filter((record) => matchesSiteUrl(record, group.url))
+      : [];
+    let lastStage: LogStage = "system";
+    for (const stage of [...DISPLAY_LOG_STAGES, "system"] as LogStage[]) {
+      if (group.stageLogs[stage].length > 0) {
+        lastStage = stage;
+      }
+    }
+    const hasError = group.logs.some((log) => logMessageIsError(log.level, log.message));
+    const hasWarning = !hasError && group.logs.some(isWarningLog);
+    return {
+      ...group,
+      records: matchedRecords,
+      hasError,
+      hasWarning,
+      lastStage,
+      recordCount: matchedRecords.length,
+    };
+  });
+}
+
+function severityTone(group: LogSiteGroup) {
+  if (group.hasError) {
+    return "border-rose-200 dark:border-rose-500/40 bg-rose-50/30 dark:bg-rose-500/5";
+  }
+  if (group.hasWarning) {
+    return "border-amber-200 dark:border-amber-500/40 bg-amber-50/30 dark:bg-amber-500/5";
+  }
+  if (group.recordCount > 0 || group.stageLogs.persistence.length > 0) {
+    return "border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/40 dark:bg-emerald-500/[0.06]";
+  }
+  return "border-[color:var(--terminal-border)] bg-slate-50/20 dark:bg-white/[0.02]";
+}
+
+function severityLabel(group: LogSiteGroup) {
+  if (group.hasError) {
+    return "Error";
+  }
+  if (group.hasWarning) {
+    return "Warning";
+  }
+  if (group.recordCount > 0 || group.stageLogs.persistence.length > 0) {
+    return "Persisted";
+  }
+  return "Running";
+}
+
+function payloadSnapshot(group: LogSiteGroup) {
+  if (!group.records.length) {
+    return "";
+  }
+  const payload = group.records.length === 1
+    ? {
+      public_record: cleanRecord(group.records[0]),
+      raw_record: group.records[0].raw_data ?? {},
+      source_trace: group.records[0].source_trace ?? {},
+    }
+    : group.records.map((record) => ({
+      record_id: record.id,
+      source_url: record.source_url,
+      public_record: cleanRecord(record),
+      raw_record: record.raw_data ?? {},
+      source_trace: record.source_trace ?? {},
+    }));
+  return JSON.stringify(decodeUrlsForDisplay(payload), null, 2);
+}
+
+function publicFieldNames(record: CrawlRecord) {
+  return Object.entries(record.data ?? {})
+    .filter(([key, value]) => !key.startsWith("_") && isInformativeValue(value))
+    .map(([key]) => key);
+}
+
+function recordConfidence(record: CrawlRecord): { score: number; level: string } | null {
+  const rawConfidence = (
+    (record.raw_data && typeof record.raw_data === "object" ? (record.raw_data as Record<string, unknown>)._confidence : null)
+    || (record.discovered_data && typeof record.discovered_data === "object" ? (record.discovered_data as Record<string, unknown>).confidence : null)
+  );
+  if (!rawConfidence || typeof rawConfidence !== "object") {
+    return null;
+  }
+  const payload = rawConfidence as Record<string, unknown>;
+  const score = Number(payload.score);
+  if (!Number.isFinite(score)) {
+    return null;
+  }
+  return {
+    score,
+    level: String(payload.level || qualityLevelFromScore(score)).trim().toLowerCase() || "unknown",
+  };
+}
+
+function groupConfidence(group: LogSiteGroup): { score: number; level: string } | null {
+  const scores = group.records
+    .map(recordConfidence)
+    .filter((value): value is { score: number; level: string } => value !== null);
+  if (!scores.length) {
+    return null;
+  }
+  const average = scores.reduce((total, item) => total + item.score, 0) / scores.length;
+  return {
+    score: average,
+    level: String(qualityLevelFromScore(average)),
+  };
+}
+
+function groupFieldCoverage(group: LogSiteGroup, requestedFields: string[]) {
+  const requested = uniqueRequestedFields(requestedFields);
+  const normalizedRequested = requested.map(normalizeField);
+  const foundNormalized = new Set<string>();
+  const foundOriginal = new Map<string, string>();
+
+  for (const record of group.records) {
+    for (const field of publicFieldNames(record)) {
+      const normalized = normalizeField(field);
+      foundNormalized.add(normalized);
+      if (!foundOriginal.has(normalized)) {
+        foundOriginal.set(normalized, field);
+      }
+    }
+  }
+
+  if (requested.length) {
+    const covered = requested.filter((field, index) => foundNormalized.has(normalizedRequested[index]) || foundNormalized.has(field));
+    return {
+      foundCount: covered.length,
+      totalCount: requested.length,
+      labels: covered,
+    };
+  }
+
+  const labels = Array.from(foundOriginal.values());
+  return {
+    foundCount: labels.length,
+    totalCount: labels.length,
+    labels,
+  };
+}
+
+function toneForConfidence(level: string) {
+  if (level === "high") return "text-emerald-600 dark:text-emerald-400";
+  if (level === "medium") return "text-amber-600 dark:text-amber-400";
+  if (level === "low") return "text-rose-600 dark:text-rose-400";
+  return "text-slate-500 dark:text-white/50";
+}
+
+type ExpandedLogRow = {
+  key: string;
+  stage: LogStage;
+  level: string;
+  message: string;
+  createdAt?: string | null;
+  payloadAction?: boolean;
+};
+
+function buildExpandedRows(
+  group: LogSiteGroup,
+  coverage: ReturnType<typeof groupFieldCoverage>,
+  confidence: ReturnType<typeof groupConfidence>,
+): ExpandedLogRow[] {
+  const rows: ExpandedLogRow[] = group.logs.map((log) => ({
+    key: `log-${log.id}`,
+    stage: parseStartingLog(log.message) ? "system" : getLogStage(log.message),
+    level: log.level,
+    message: log.message,
+    createdAt: log.created_at,
+  }));
+
+  if (coverage.totalCount > 0 || coverage.labels.length > 0 || confidence) {
+    const parts: string[] = [];
+    if (coverage.totalCount > 0) {
+      const labels = coverage.labels.length ? coverage.labels.map(humanizeFieldName).join(", ") : "none";
+      parts.push(`${TERMINAL_STRINGS.FIELDS} ${coverage.foundCount}/${coverage.totalCount}: ${labels}`);
+    }
+    if (confidence) {
+      parts.push(`${TERMINAL_STRINGS.CONFIDENCE} ${Math.round(confidence.score * 100)}%`);
+    }
+    rows.push({
+      key: `${group.key}-fields`,
+      stage: "persistence",
+      level: "info",
+      message: parts.join(" | "),
+      payloadAction: group.records.length > 0,
+    });
+  }
+
+  return rows;
+}
+
+function formatShortUrlLabel(url: string) {
+  try {
+    const parsed = new URL(url);
+    const domain = parsed.hostname.replace(/^www\./, "");
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const lastPart = parts.at(-1) || "";
+    if (parts.length > 1) {
+      return `${domain}/.../${lastPart}`;
+    }
+    return domain + (lastPart ? `/${lastPart}` : "");
+  } catch {
+    return url.length > 40 ? url.slice(0, 40) + "…" : url;
+  }
+}
+
 function sanitizeLogMessage(message: string) {
   return String(message || "")
     .replace(/\s*\[corr=[^\]]+\]/gi, "")
@@ -626,43 +1103,28 @@ function sanitizeLogMessage(message: string) {
 }
 
 function ShortenedUrl({ url }: { url: string }) {
-  let display = url;
-  try {
-    const parsed = new URL(url);
-    const domain = parsed.hostname.replace(/^www\./, "");
-    const parts = parsed.pathname.split("/").filter(Boolean);
-    const lastPart = parts.at(-1) || "";
-    if (parts.length > 1) {
-      display = `${domain}/.../${lastPart}`;
-    } else {
-      display = domain + (lastPart ? `/${lastPart}` : "");
-    }
-  } catch {
-    display = url.length > 40 ? url.slice(0, 40) + "…" : url;
-  }
-
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-blue-400/60 hover:text-blue-400 underline underline-offset-2 decoration-blue-400/20 transition-colors"
+      className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 underline underline-offset-2 decoration-blue-500/20 transition-colors"
       title={url}
       onClick={(e) => e.stopPropagation()}
     >
-      {display}
+      {formatShortUrlLabel(url)}
     </a>
   );
 }
 
 function renderLogContent(message: string, isStartingCrawl: boolean): React.ReactNode {
-  let text = sanitizeLogMessage(message).replace(/^\[ROBOTS\]\s*/i, "");
+  let text = sanitizeLogMessage(message).replace(LOG_PATTERNS.ROBOTS_PREFIX, "");
   text = text.replace(
-    /launched headless browser \(([^,]+),[^)]+\)/i,
+    LOG_PATTERNS.HEADLESS_BROWSER,
     (_, engine) => `Launched ${engine.trim()} browser`,
   );
 
-  const urlRegex = /https?:\/\/[^\s]+/g;
+  const urlRegex = LOG_PATTERNS.URL;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match;
@@ -683,14 +1145,14 @@ function renderLogContent(message: string, isStartingCrawl: boolean): React.Reac
   if (isStartingCrawl) {
     return baseContent.map((part, i) => {
       if (typeof part === "string") {
-        const counterMatch = part.match(/\(\d+\/\d+\)/);
+        const counterMatch = part.match(LOG_PATTERNS.COUNTER);
         if (counterMatch && counterMatch.index !== undefined) {
           const before = part.slice(0, counterMatch.index);
           const after = part.slice(counterMatch.index + counterMatch[0].length);
           return (
             <React.Fragment key={i}>
               {before}
-              <span className="text-blue-400/70 font-extrabold">{counterMatch[0]}</span>
+              <span className="text-blue-400/70">{counterMatch[0]}</span>
               {after}
             </React.Fragment>
           );
@@ -705,76 +1167,409 @@ function renderLogContent(message: string, isStartingCrawl: boolean): React.Reac
 
 export const LogTerminal = memo(function LogTerminal({
   logs,
+  records = [],
+  requestedFields = [],
   live = false,
   viewportRef,
 }: Readonly<{
-  logs: Array<{ id: number; level: string; message: string; created_at: string }>;
+  logs: CrawlLog[];
+  records?: CrawlRecord[];
+  requestedFields?: string[];
   live?: boolean;
   viewportRef?: RefObject<HTMLDivElement | null>;
 }>) {
   const ref = useLogViewport(logs.length, viewportRef);
-  const lastId = logs.length > 0 ? logs[logs.length - 1].id : null;
+  const peekPanelRef = useRef<HTMLDivElement | null>(null);
+  const [peekedGroupKey, setPeekedGroupKey] = useState<string | null>(null);
+  const [peekedRecordIndex, setPeekedRecordIndex] = useState(0);
+  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null);
+  const [triageCursor, setTriageCursor] = useState(0);
+  const groups = useMemo(() => buildLogSiteGroups(logs, records), [logs, records]);
+  const issueGroups = useMemo(
+    () => groups.filter((group) => group.hasError || group.hasWarning),
+    [groups],
+  );
+  const peekedGroup = useMemo(
+    () => groups.find((group) => group.key === peekedGroupKey) ?? null,
+    [groups, peekedGroupKey],
+  );
+
+  useEffect(() => {
+    setExpandedGroupKey((current) => {
+      if (live && groups.length > 0) {
+        return groups[groups.length - 1].key;
+      }
+      if (current && groups.some((group) => group.key === current)) {
+        return current;
+      }
+      return issueGroups[0]?.key ?? groups[0]?.key ?? null;
+    });
+    setPeekedGroupKey((current) => (current && groups.some((group) => group.key === current) ? current : null));
+    setPeekedRecordIndex(0);
+    setTriageCursor((current) => (issueGroups.length ? Math.min(current, issueGroups.length - 1) : 0));
+  }, [groups, issueGroups, live]);
+
+  useEffect(() => {
+    if (!peekedGroupKey) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      const panel = peekPanelRef.current;
+      if (!panel) {
+        return;
+      }
+      if (!panel.contains(event.target as Node)) {
+        setPeekedGroupKey(null);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [peekedGroupKey]);
+
+  const timelineTicks = useMemo(() => {
+    if (!groups.length) {
+      return [];
+    }
+    const start = parseApiDate(groups[0].logs[0]?.created_at ?? new Date().toISOString()).getTime();
+    const end = parseApiDate(groups[groups.length - 1].logs.at(-1)?.created_at ?? groups[0].logs[0]?.created_at ?? new Date().toISOString()).getTime();
+    const range = Math.max(1, end - start);
+    return groups.map((group) => {
+      const createdAt = group.logs[0]?.created_at ?? new Date().toISOString();
+      const percent = ((parseApiDate(createdAt).getTime() - start) / range) * 100;
+      return {
+        key: group.key,
+        percent,
+        tone: group.hasError ? "bg-danger" : group.hasWarning ? "bg-warning" : group.recordCount > 0 ? "bg-emerald-400" : "bg-white/15",
+      };
+    });
+  }, [groups]);
+
+  const jumpToGroup = (groupKey: string) => {
+    const el = document.getElementById(siteDomId(groupKey));
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("log-entry-highlight");
+      setTimeout(() => el.classList.remove("log-entry-highlight"), 2000);
+    }
+    setExpandedGroupKey(groupKey);
+  };
+
+  const toggleGroup = (groupKey: string) => {
+    if (live && groups.length > 0 && groupKey === groups[groups.length - 1].key) {
+      return;
+    }
+    setExpandedGroupKey((current) => (current === groupKey ? null : groupKey));
+  };
+
+  const navigateTriage = (dir: "next" | "prev") => {
+    if (!issueGroups.length) {
+      return;
+    }
+    const delta = dir === "next" ? 1 : -1;
+    const nextIndex = (triageCursor + delta + issueGroups.length) % issueGroups.length;
+    setTriageCursor(nextIndex);
+    jumpToGroup(issueGroups[nextIndex].key);
+  };
 
   return (
-    <div className="flex flex-col rounded-xl border border-white/5 bg-[var(--terminal-code-bg)] shadow-2xl overflow-hidden">
-      {/* Terminal Header */}
-      <div className="flex items-center gap-1.5 px-4 py-2 border-b border-white/5 bg-white/5">
-        <div className="size-2.5 rounded-full bg-red-500/20 border border-red-500/40" />
-        <div className="size-2.5 rounded-full bg-amber-500/20 border border-amber-500/40" />
-        <div className="size-2.5 rounded-full bg-emerald-500/20 border border-emerald-500/40" />
-        <span className="ml-2 text-[10px] font-bold uppercase tracking-widest text-[var(--terminal-fg)] opacity-40 font-mono">activity_stream.log</span>
+    <div className="relative flex flex-col overflow-hidden rounded-xl border border-[color:var(--terminal-border)] bg-[color:var(--terminal-bg)] text-[color:var(--terminal-fg)] shadow-[var(--terminal-shadow)] group/terminal">
+      <div className="flex h-9 items-center justify-between border-b border-[color:var(--terminal-border)] bg-black/[0.05] dark:bg-white/[0.05] px-4">
+        <span className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-40">activity_stream.log</span>
+        <div className="flex items-center gap-2">
+          <div className="flex h-3 w-32 items-center px-1 bg-black/10 dark:bg-white/10 rounded-full relative group/scrubber cursor-crosshair">
+            {timelineTicks.map((tick) => (
+              <div
+                key={tick.key}
+                role="button"
+                tabIndex={0}
+                aria-label={`Jump to ${tick.key}`}
+                onClick={() => jumpToGroup(tick.key)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    jumpToGroup(tick.key);
+                  }
+                }}
+                className={cn(
+                  "absolute h-2 w-0.5 rounded-full transition-transform hover:scale-y-150 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:scale-y-150",
+                  tick.tone,
+                )}
+                style={{ left: `${tick.percent}%` }}
+              />
+            ))}
+          </div>
+          <div className="flex items-center gap-2 opacity-60 group-hover/terminal:opacity-100 transition-opacity">
+            <button onClick={() => navigateTriage("prev")} className="text-[10px] uppercase font-bold hover:text-blue-500 focus-visible:outline-none focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 rounded">Prev</button>
+            <span className="opacity-20">/</span>
+            <button onClick={() => navigateTriage("next")} className="text-[10px] uppercase font-bold hover:text-blue-500 focus-visible:outline-none focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 rounded">Next</button>
+          </div>
+        </div>
       </div>
 
       <div
         ref={ref}
-        className="crawl-activity-log min-h-[50vh] max-h-[72vh] overflow-y-auto p-2"
+        className="crawl-activity-log min-h-[50vh] max-h-[72vh] overflow-y-auto"
         role="log"
         aria-live={live ? "polite" : "off"}
         aria-atomic="false"
       >
-        {logs.length
-          ? logs.map((log) => {
-              const Icon = getLogIcon(log.level, log.message);
-              const { iconCls, bgCls } = getLogIconStyle(log.level, log.message);
-              const isStartingCrawl = log.message.toLowerCase().includes("starting crawl");
-              const isNewest = log.id === lastId;
-              const displayMessage = renderLogContent(log.message, isStartingCrawl);
-
-              return (
+        {groups.length
+          ? groups.map((group, index) => {
+            const expanded = expandedGroupKey === group.key;
+            const payload = payloadSnapshot(group);
+            const confidence = groupConfidence(group);
+            const coverage = groupFieldCoverage(group, requestedFields);
+            const lastLog = group.logs.at(-1);
+            const summaryLog = [...group.logs].reverse().find((log) => !isPersistenceSummaryLog(log.message)) ?? lastLog;
+            const expandedRows = buildExpandedRows(group, coverage, confidence);
+            return (
+              <section
+                key={group.key}
+                id={siteDomId(group.key)}
+                className="overflow-hidden"
+              >
                 <div
-                  key={log.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expanded}
+                  aria-label={`${expanded ? "Collapse" : "Expand"} logs for ${group.url || group.label}`}
+                  onClick={() => toggleGroup(group.key)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggleGroup(group.key);
+                    }
+                  }}
                   className={cn(
-                    "group flex items-start gap-3 px-3 py-1 font-mono transition-colors rounded-md",
-                    "hover:bg-white/5",
-                    isStartingCrawl && "bg-white/[0.04] my-1",
-                    isNewest && live && "log-entry-animate",
+                    "grid w-full grid-cols-[32px_minmax(280px,2fr)_80px_100px_auto_minmax(200px,1.2fr)_80px_60px] items-center gap-3 px-4 py-2.5 text-left transition-colors cursor-pointer outline-none group/row border-b border-[color:var(--terminal-border)] focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset",
+                    severityTone(group)
                   )}
-                  title={log.message}
                 >
-                  <span className="w-[72px] shrink-0 text-[11px] tabular-nums text-[var(--terminal-fg)] opacity-40 mt-0.5">
-                    {formatTimeHms(log.created_at)}
-                  </span>
-                  <div className={cn(
-                    "flex size-4 shrink-0 items-center justify-center rounded-sm mt-0.5",
-                    bgCls,
-                  )}>
-                    <Icon className={cn("size-2.5", iconCls)} aria-hidden="true" />
+                  <div className="text-[11px] font-mono opacity-60 tabular-nums">
+                    {(index + 1).toString().padStart(2, "0")}
                   </div>
-                  <span className={cn(
-                    "min-w-0 flex-1 text-[13px] leading-relaxed break-words",
-                    isStartingCrawl ? "text-[var(--terminal-fg)] opacity-100" : "text-[var(--terminal-fg)] opacity-85"
-                  )}>
-                    {displayMessage}
-                  </span>
+                  <div className="min-w-0">
+                    {group.url ? (
+                      <a
+                        href={group.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="truncate block text-[13px] font-medium text-blue-700 dark:text-blue-400 hover:underline underline-offset-2"
+                        title={group.url}
+                      >
+                        {formatShortUrlLabel(group.url)}
+                      </a>
+                    ) : (
+                      <span
+                        className="truncate block text-[13px] font-medium opacity-90"
+                        title={group.label}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {group.label}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[13px] tabular-nums whitespace-nowrap opacity-90">
+                    <span className="opacity-60 mr-1 text-[10px] uppercase font-bold tracking-wider">F:</span>
+                    {coverage.foundCount}/{coverage.totalCount || 0}
+                  </div>
+                  <div className={cn("text-[13px] tabular-nums whitespace-nowrap", confidence ? toneForConfidence(confidence.level) : "opacity-50")}>
+                    <span className="opacity-60 mr-1 text-[10px] uppercase font-bold tracking-wider">C:</span>
+                    {confidence ? `${Math.round(confidence.score * 100)}%` : "--"}
+                  </div>
+                  <div className="flex items-center justify-center">
+                    {group.lastStage !== "system" && (
+                      <div className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider", STAGE_CONFIG[group.lastStage].chipClass)}>
+                        {STAGE_CONFIG[group.lastStage].label}
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-[13px] opacity-60" title={summaryLog?.message || ""}>
+                      {summaryLog ? sanitizeLogMessage(summaryLog.message) : TERMINAL_STRINGS.PENDING}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end">
+                    {payload ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-[12px] font-medium px-2"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setPeekedGroupKey(group.key);
+                          setPeekedRecordIndex(0);
+                        }}
+                      >
+                        Peek
+                      </Button>
+                    ) : <span className="text-[11px] opacity-25">--</span>}
+                  </div>
+                  <div className="text-right pr-2">
+                    <div className="text-[11px] font-bold uppercase tracking-tight opacity-40 group-hover/row:opacity-100 transition-opacity">
+                      {live && groups.length > 0 && group.key === groups[groups.length - 1].key ? "Active" : expanded ? "Less" : "More"}
+                    </div>
+                  </div>
                 </div>
-              );
-            })
+
+                {expanded ? (
+                  <div className="border-t border-[color:var(--terminal-border)]">
+                    <div className="overflow-hidden bg-[color:var(--terminal-code-bg)]">
+                      {expandedRows.length ? expandedRows.map((row, index) => {
+                        return (
+                          <div
+                            key={row.key}
+                            className={cn(
+                              "grid grid-cols-[72px_92px_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5 text-[13px]",
+                              index > 0 && "border-t border-[color:var(--terminal-border)]",
+                            )}
+                          >
+                            <span className="text-[12px] opacity-65 tabular-nums">
+                              {row.createdAt ? formatTimeHms(row.createdAt) : "--"}
+                            </span>
+                            <span className={cn("inline-flex text-[11px] uppercase tracking-[0.14em]", STAGE_CONFIG[row.stage].textOnlyClass)}>
+                              {STAGE_CONFIG[row.stage].label}
+                            </span>
+                            <span className="min-w-0 break-words text-[14px] leading-6 opacity-90">
+                              {!row.createdAt ? row.message : renderLogContent(row.message, row.stage === "system")}
+                            </span>
+                            <span className="flex items-center gap-2">
+                              {row.payloadAction ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-auto px-0 py-0 text-[14px] font-normal"
+                                  onClick={() => {
+                                    setPeekedGroupKey(group.key);
+                                    setPeekedRecordIndex(0);
+                                  }}
+                                >
+                                  Peek payload
+                                </Button>
+                              ) : null}
+                            </span>
+                          </div>
+                        );
+                      }) : (
+                        <div className="px-3 py-2 text-[13px] opacity-40">{TERMINAL_STRINGS.NO_LOGS}</div>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            );
+          })
           : (
-            <div className="px-4 py-8 text-center text-sm text-muted font-mono italic">
+            <div className="px-4 py-8 text-center text-[14px] italic opacity-55">
               {live ? "Waiting for log stream..." : "No log activity recorded"}
             </div>
           )}
       </div>
+
+      {peekedGroupKey ? (
+        <div className="absolute inset-0 z-40 bg-black/10 dark:bg-black/20">
+          <div
+            ref={peekPanelRef}
+            className="absolute inset-y-0 right-0 z-50 w-[32rem] max-w-full animate-in slide-in-from-right duration-300 border-l border-[color:var(--terminal-border)] bg-[color:var(--terminal-code-bg)] text-[color:var(--terminal-fg)] shadow-[var(--terminal-shadow)]"
+          >
+            <div className="flex items-center justify-between border-b border-[color:var(--terminal-border)] bg-[color:var(--terminal-bg)] px-4 py-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-accent">{TERMINAL_STRINGS.PAYLOAD_PEEK}</div>
+                <div className="mt-1 text-[13px] opacity-55">
+                  {peekedGroup?.label ?? TERMINAL_STRINGS.SITE_PAYLOAD}
+                </div>
+              </div>
+              <button onClick={() => setPeekedGroupKey(null)} className="text-[13px] opacity-60 transition-colors hover:opacity-100">
+                Close
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto max-h-[calc(100%-48px)]">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={!peekedGroup || peekedGroup.records.length <= 1}
+                    onClick={() =>
+                      setPeekedRecordIndex((current) => {
+                        if (!peekedGroup || peekedGroup.records.length <= 1) {
+                          return 0;
+                        }
+                        return (current - 1 + peekedGroup.records.length) % peekedGroup.records.length;
+                      })
+                    }
+                  >
+                    Prev
+                  </Button>
+                  <span className="text-[13px] opacity-55">
+                    {peekedGroup ? `${Math.min(peekedRecordIndex + 1, peekedGroup.records.length)}/${peekedGroup.records.length}` : "0/0"}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={!peekedGroup || peekedGroup.records.length <= 1}
+                    onClick={() =>
+                      setPeekedRecordIndex((current) => {
+                        if (!peekedGroup || peekedGroup.records.length <= 1) {
+                          return 0;
+                        }
+                        return (current + 1) % peekedGroup.records.length;
+                      })
+                    }
+                  >
+                    Next
+                  </Button>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    if (!peekedGroup) {
+                      return;
+                    }
+                    const currentRecord = peekedGroup.records[peekedRecordIndex] ?? peekedGroup.records[0];
+                    if (!currentRecord) {
+                      return;
+                    }
+                    void navigator.clipboard.writeText(
+                      JSON.stringify(
+                        decodeUrlsForDisplay({
+                          public_record: cleanRecord(currentRecord),
+                          raw_record: currentRecord.raw_data ?? {},
+                          source_trace: currentRecord.source_trace ?? {},
+                        }),
+                        null,
+                        2,
+                      ),
+                    );
+                  }}
+                >
+                  Copy
+                </Button>
+              </div>
+              <pre className="text-[14px] leading-7 whitespace-pre-wrap">
+                {peekedGroup && peekedGroup.records[peekedRecordIndex]
+                  ? JSON.stringify(
+                    decodeUrlsForDisplay({
+                      public_record: cleanRecord(peekedGroup.records[peekedRecordIndex]),
+                      raw_record: peekedGroup.records[peekedRecordIndex].raw_data ?? {},
+                      source_trace: peekedGroup.records[peekedRecordIndex].source_trace ?? {},
+                    }),
+                    null,
+                    2,
+                  )
+                  : TERMINAL_STRINGS.NO_PAYLOAD}
+              </pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -933,7 +1728,7 @@ export function AdditionalFieldInput({
     }
     const validationError = validateAdditionalFieldName(cleaned);
     if (validationError) {
-      setValidationHint(`Skipped "${cleaned}": ${validationError}`);      return;
+      setValidationHint(`Skipped "${cleaned}": ${validationError}`); return;
     }
     onCommit(cleaned);
   }

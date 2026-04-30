@@ -2,9 +2,11 @@ import { describe, expect, it } from"vitest";
 
 import type { CrawlRecord } from"../../lib/api/types";
 import {
+ buildLogSiteGroups,
  decodeUrlsForDisplay,
  estimateDataQuality,
  formatCellDisplay,
+ getLogStage,
  scoreFieldQuality,
  scoreRecordQuality,
  validateAdditionalFieldName,
@@ -20,6 +22,15 @@ function makeRecord(id: number, data: Record<string, unknown>): CrawlRecord {
  discovered_data: {},
  source_trace: {},
  raw_html_path: null,
+ created_at:"2026-01-01T00:00:00Z",
+ };
+}
+
+function makeLog(id: number, message: string, level = "info") {
+ return {
+ id,
+ level,
+ message,
  created_at:"2026-01-01T00:00:00Z",
  };
 }
@@ -141,5 +152,44 @@ describe("decodeUrlsForDisplay", () => {
  url:"https://www.shop.ving.run/product/สีดำ",
  images: ["https://cdn.example.com/a.jpg"],
  });
+ });
+});
+
+describe("getLogStage", () => {
+ it("keeps normalize and persistence distinct from extraction", () => {
+ expect(getLogStage("Extracted 1 records using nike adapter")).toBe("extraction");
+ expect(getLogStage("Normalized 1 record(s) for persistence")).toBe("normalize");
+ expect(getLogStage("Persisted 1 record(s) for https://example.com/p/1")).toBe("persistence");
+ });
+});
+
+describe("buildLogSiteGroups", () => {
+ it("groups logs per site and assigns fixed stages", () => {
+ const records = [
+ makeRecord(1, { title:"Trail Shoe", url:"https://example.com/p/1" }),
+ makeRecord(2, { title:"Road Shoe", url:"https://example.com/p/2" }),
+ ];
+ const logs = [
+ makeLog(1,"Starting crawl run for https://example.com/p/1 (1/2)"),
+ makeLog(2,"Acquiring https://example.com/p/1"),
+ makeLog(3,"Extracted 1 records using generic extraction path"),
+ makeLog(4,"Normalized 1 record(s) for persistence"),
+ makeLog(5,"Persisted 1 record(s) for https://example.com/p/1"),
+ makeLog(6,"Starting crawl run for https://example.com/p/2 (2/2)"),
+ makeLog(7,"Acquiring https://example.com/p/2"),
+ makeLog(8,"Extraction yielded 0 records (generic extraction path)","warning"),
+ ];
+
+ const groups = buildLogSiteGroups(logs, records);
+
+ expect(groups).toHaveLength(2);
+ expect(groups[0].url).toBe("https://example.com/p/1");
+ expect(groups[0].stageLogs.acquisition).toHaveLength(1);
+ expect(groups[0].stageLogs.extraction).toHaveLength(1);
+ expect(groups[0].stageLogs.normalize).toHaveLength(1);
+ expect(groups[0].stageLogs.persistence).toHaveLength(1);
+ expect(groups[0].recordCount).toBe(1);
+ expect(groups[1].hasWarning).toBe(true);
+ expect(groups[1].recordCount).toBe(1);
  });
 });

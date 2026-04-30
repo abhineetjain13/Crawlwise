@@ -343,11 +343,6 @@ async def _run_robots_gate(
                 f"[ROBOTS] robots.txt check failed for {context.url}; continuing",
             )
         return None
-    await _log_pipeline_event(
-        context,
-        "info",
-        f"[ROBOTS] Ignoring robots.txt for {context.url}",
-    )
     return None
 
 def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionRequest:

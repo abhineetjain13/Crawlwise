@@ -71,6 +71,7 @@
 }
 
 @keyframes cs-pulse {
+
   0%,
   100% {
     opacity: 1;

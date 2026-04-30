@@ -61,9 +61,8 @@ def browser_launch_log_message(acquisition_result: AcquisitionResult) -> str:
     launch_mode = str(diagnostics.get("browser_launch_mode") or "").strip().lower()
     if not launch_mode:
         launch_mode = "headless"
-    proxy_label = str(diagnostics.get("proxy_url_redacted") or "direct").strip() or "direct"
     profile = str(diagnostics.get("browser_profile") or "").strip()
-    details = [engine, f"proxy: {proxy_label}"]
+    details = [engine]
     if profile:
         details.append(f"profile: {profile}")
     return f"Launched {launch_mode} browser ({', '.join(details)})"

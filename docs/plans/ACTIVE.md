@@ -1,9 +1,11 @@
 # Active Plan
 
-No active plan.
+Self-Healing Extraction & Field Robustness Plan -> `docs/plans/self_healing_extraction.md`
 
-**Last completed:** V6 Crawl Quality Remediation -> `docs/plans/v6-crawl-quality-remediation-plan.md`
-**Completed:** 2026-04-29
+**Status:** IN PROGRESS
+
+**Last completed:** Vibrant Log View Color Improvements -> `docs/plans/log_view_color_improvement.md`
+**Completed:** 2026-04-30
 
 ## Queue
 1. Docker Compose evaluation setup - not yet started

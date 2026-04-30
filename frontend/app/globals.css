@@ -50,8 +50,8 @@
   --font-primary-family: var(--font-primary-source, "Outfit"), "SF Pro Display", "Geist Sans", "Helvetica Neue", system-ui, sans-serif;
   --font-mono-family: var(--font-jetbrains-mono, "JetBrains Mono"), ui-monospace, Menlo, Consolas, monospace;
   --font-serif: "Instrument Serif", "Newsreader", "Playfair Display", Georgia, serif;
-  --font-mono-size: 13px;
-  --font-mono-line-height: 1.43;
+  --font-mono-size: 14px;
+  --font-mono-line-height: 1.58;
 
   /* Canvas / Surfaces — SenstoSales/Fiori */
   --bg-base: #f5f5f5;
@@ -118,11 +118,11 @@
   --tab-active-fg: #ffffff;
   --slider-value-bg: var(--accent-subtle);
   --slider-thumb-border: #ffffff;
-  --terminal-bg: #1c1c1c;
-  --terminal-fg: #e5e5e5;
-  --terminal-code-bg: #1c1c1c;
-  --terminal-border: #2e2e2e;
-  --terminal-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.22);
+  --terminal-bg: #fbfbfa;
+  --terminal-fg: var(--text-primary);
+  --terminal-code-bg: #f5f7f8;
+  --terminal-border: #dadce0;
+  --terminal-shadow: none;
   --alert-success-bg: var(--success-bg);
   --alert-success-border: color-mix(in srgb, var(--success) 24%, transparent);
   --alert-success-text: var(--success);
@@ -540,6 +540,7 @@ select:focus-visible:not(.focus-ring) {
   word-break: break-word;
   tab-size: 2;
   line-height: var(--font-mono-line-height);
+  font-size: var(--font-mono-size);
 }
 
 .crawl-activity-log {
@@ -551,11 +552,22 @@ select:focus-visible:not(.focus-ring) {
 .crawl-terminal *,
 .crawl-activity-log,
 .crawl-activity-log * {
+  font-stretch: normal;
+  font-synthesis: none;
+}
+
+.crawl-terminal,
+.crawl-terminal * {
   font-family: var(--font-mono-family);
   line-height: var(--font-mono-line-height);
   letter-spacing: 0;
-  font-stretch: normal;
-  font-synthesis: none;
+}
+
+.crawl-activity-log,
+.crawl-activity-log * {
+  font-family: var(--font-primary-family);
+  line-height: var(--leading-normal);
+  letter-spacing: normal;
 }
 
 @keyframes log-entry-in {
