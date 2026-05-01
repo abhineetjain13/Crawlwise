@@ -61,7 +61,9 @@ class BrowserNetworkCapture:
         read_payload_body: Any | None = None,
     ) -> None:
         self._surface = surface
-        self._should_capture_payload = should_capture_payload or should_capture_network_payload
+        self._should_capture_payload = (
+            should_capture_payload or should_capture_network_payload
+        )
         self._classify_endpoint = classify_endpoint or classify_network_endpoint
         self._read_payload_body = read_payload_body or read_network_payload_body
         self._lock = asyncio.Lock()
@@ -80,6 +82,8 @@ class BrowserNetworkCapture:
         self._oversized_payloads = 0
         self._payload_read_timeouts = 0
         self._captured_bytes = 0
+        self._pending_payloads = 0
+        self._reserved_bytes = 0
         self._dropped_payload_events = 0
 
     def attach(self, page: Any) -> None:
@@ -109,7 +113,9 @@ class BrowserNetworkCapture:
                 remove_listener("response", self._schedule_capture)
             except Exception as exc:
                 if is_response_closed_error(exc):
-                    logger.debug("Browser response listener detach skipped (page already closed)")
+                    logger.debug(
+                        "Browser response listener detach skipped (page already closed)"
+                    )
                 else:
                     logger.warning(
                         "Failed to detach browser response listener: %s: %s",
@@ -205,49 +211,58 @@ class BrowserNetworkCapture:
             response_url=response.url,
             surface=self._surface,
         )
-        if not self._should_capture_payload(
-            url=response.url,
+        reserved_bytes = await self._reserve_capture_budget(
+            response=response,
             content_type=content_type,
-            headers=response.headers,
-            captured_count=len(self._payloads),
-            captured_bytes=self._captured_bytes,
-            surface=self._surface,
-            endpoint_info=endpoint_info,
-        ):
-            return
-        body_result = await self._read_payload_body(
-            response,
-            surface=self._surface,
             endpoint_info=endpoint_info,
         )
+        if reserved_bytes is None:
+            return
+        try:
+            body_result = await self._read_payload_body(
+                response,
+                surface=self._surface,
+                endpoint_info=endpoint_info,
+            )
+        except Exception:
+            await self._release_capture_budget(reserved_bytes)
+            raise
         if body_result.outcome == "response_closed":
+            await self._release_capture_budget(reserved_bytes)
             async with self._lock:
                 self._payload_closed_failures += 1
             return
         if body_result.outcome == "too_large":
+            await self._release_capture_budget(reserved_bytes)
             async with self._lock:
                 self._oversized_payloads += 1
             return
         if body_result.outcome == "timeout":
+            await self._release_capture_budget(reserved_bytes)
             async with self._lock:
                 self._payload_read_timeouts += 1
             return
         if body_result.outcome == "read_error":
+            await self._release_capture_budget(reserved_bytes)
             async with self._lock:
                 self._payload_read_failures += 1
             return
         body_bytes = body_result.body
         if body_bytes is None:
+            await self._release_capture_budget(reserved_bytes)
             return
         payload = _decode_network_payload(
             body_bytes,
             content_type=content_type,
         )
         if payload is None:
+            await self._release_capture_budget(reserved_bytes)
             async with self._lock:
                 self._malformed_payloads += 1
             return
         async with self._lock:
+            self._pending_payloads = max(0, self._pending_payloads - 1)
+            self._reserved_bytes = max(0, self._reserved_bytes - reserved_bytes)
             if not self._should_capture_payload(
                 url=response.url,
                 content_type=content_type,
@@ -277,6 +292,38 @@ class BrowserNetworkCapture:
             )
             self._captured_bytes += len(body_bytes)
 
+    async def _reserve_capture_budget(
+        self,
+        *,
+        response: Any,
+        content_type: str,
+        endpoint_info: dict[str, str],
+    ) -> int | None:
+        reserved_bytes = (
+            0
+            if has_chunked_transfer_encoding(response.headers)
+            else max(0, int(coerce_content_length(response.headers) or 0))
+        )
+        async with self._lock:
+            if not self._should_capture_payload(
+                url=response.url,
+                content_type=content_type,
+                headers=response.headers,
+                captured_count=len(self._payloads) + self._pending_payloads,
+                captured_bytes=self._captured_bytes + self._reserved_bytes,
+                surface=self._surface,
+                endpoint_info=endpoint_info,
+            ):
+                return None
+            self._pending_payloads += 1
+            self._reserved_bytes += reserved_bytes
+            return reserved_bytes
+
+    async def _release_capture_budget(self, reserved_bytes: int) -> None:
+        async with self._lock:
+            self._pending_payloads = max(0, self._pending_payloads - 1)
+            self._reserved_bytes = max(0, self._reserved_bytes - reserved_bytes)
+
 
 def should_capture_network_payload(
     *,
@@ -304,7 +351,9 @@ def should_capture_network_payload(
         endpoint_info=endpoint_info,
     )
     content_length = (
-        None if has_chunked_transfer_encoding(headers) else coerce_content_length(headers)
+        None
+        if has_chunked_transfer_encoding(headers)
+        else coerce_content_length(headers)
     )
     if content_length is not None and content_length > payload_budget:
         return False
@@ -326,7 +375,10 @@ def _is_supported_network_payload_content_type(
     normalized_content_type = str(content_type or "").strip().lower()
     if "json" in normalized_content_type:
         return True
-    if any(token in normalized_content_type for token in NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS):
+    if any(
+        token in normalized_content_type
+        for token in NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS
+    ):
         return True
     if any(token in lowered_url for token in NETWORK_PAYLOAD_URL_HINTS):
         return True
@@ -352,6 +404,7 @@ def _decode_network_payload(
         return json.loads(text)
     except json.JSONDecodeError:
         return None
+
 
 def _decode_rsc_payload(text: str) -> object | None:
     decoder = json.JSONDecoder()
@@ -383,7 +436,7 @@ def _decode_rsc_line(
             candidates.append(suffix)
     for candidate in candidates:
         start_index = next(
-            (index for index, char in enumerate(candidate) if char in "[{\""),
+            (index for index, char in enumerate(candidate) if char in '[{"'),
             -1,
         )
         if start_index < 0:
@@ -448,6 +501,8 @@ async def read_network_payload_body(
     if len(body_bytes) > payload_budget:
         return NetworkPayloadReadResult(body=None, outcome="too_large")
     return NetworkPayloadReadResult(body=body_bytes, outcome="read")
+
+
 async def capture_browser_screenshot(page: Any) -> str:
     """Capture a browser screenshot to a temporary PNG file and return its path.
 

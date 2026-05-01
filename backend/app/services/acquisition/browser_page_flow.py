@@ -37,9 +37,14 @@ from app.services.config.selectors import (
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.dom_runtime import get_page_html
+from app.services.acquisition.browser_readiness import analyze_html
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_value_dom import requested_content_extractability
-from app.services.acquisition.runtime import classify_blocked_page_async, copy_headers
+from app.services.acquisition.runtime import (
+    BlockPageClassification,
+    classify_blocked_page_async,
+    copy_headers,
+)
 from app.services.platform_policy import resolve_browser_readiness_policy, resolve_platform_runtime_policy
 logger = logging.getLogger(__name__)
 @dataclass(slots=True)
@@ -106,18 +111,34 @@ class BrowserAcquisitionResultBuilder:
         payload_capture_started_at = time.perf_counter()
         capture_summary = await payload.payload_capture.close(payload.page)
         payload.phase_timings_ms["payload_capture"] = self.elapsed_ms(payload_capture_started_at)
-        blocked_classification = await self.classify_blocked_page_async(payload.html, status_code)
-        blocked = bool(
-            blocked_classification.blocked
-            or await self.blocked_html_checker(payload.html, status_code)
-        )
         html_bytes = len(payload.html.encode("utf-8"))
-        challenge_evidence = list(blocked_classification.evidence or [])
-        low_content_reason = self.classify_low_content_reason(
-            payload.html,
-            html_bytes=html_bytes,
+        fast_finalize = _ready_probe_supports_fast_finalize(
+            payload.readiness_probes,
+            surface=payload.surface,
+            status_code=status_code,
+            expansion_diagnostics=payload.expansion_diagnostics,
         )
-        location_interstitial_present = location_interstitial_detected(payload.html)
+        if fast_finalize:
+            blocked_classification = BlockPageClassification(
+                blocked=False,
+                outcome="ok",
+            )
+            blocked = False
+            challenge_evidence: list[str] = []
+            low_content_reason = None
+            location_interstitial_present = False
+        else:
+            blocked_classification = await self.classify_blocked_page_async(payload.html, status_code)
+            blocked = bool(
+                blocked_classification.blocked
+                or await self.blocked_html_checker(payload.html, status_code)
+            )
+            challenge_evidence = list(blocked_classification.evidence or [])
+            low_content_reason = self.classify_low_content_reason(
+                payload.html,
+                html_bytes=html_bytes,
+            )
+            location_interstitial_present = location_interstitial_detected(payload.html)
         browser_outcome = self.classify_browser_outcome(
             html=payload.html,
             html_bytes=html_bytes,
@@ -938,8 +959,9 @@ def _string_config_list(value: object) -> list[str]:
 
 
 def location_interstitial_detected(html: str) -> bool:
-    soup = BeautifulSoup(str(html or ""), "html.parser")
-    text = " ".join(soup.get_text(" ", strip=True).lower().split())
+    analysis = analyze_html(str(html or ""))
+    soup = analysis.soup
+    text = analysis.normalized_text.lower()
     tokens = _string_config_list(LOCATION_INTERSTITIAL_TEXT_TOKENS)
     matched_tokens = [
         token.lower()
@@ -960,6 +982,53 @@ def location_interstitial_detected(html: str) -> bool:
         if any(token in node_text for token in matched_tokens):
             return True
     return len(matched_tokens) >= 2
+
+
+def _ready_probe_supports_fast_finalize(
+    readiness_probes: list[dict[str, object]],
+    *,
+    surface: str | None,
+    status_code: int,
+    expansion_diagnostics: dict[str, object] | None = None,
+) -> bool:
+    if int(status_code or 0) in {401, 403, 429}:
+        return False
+    normalized_surface = str(surface or "").strip().lower()
+    min_visible_text = int(crawler_runtime_settings.browser_readiness_visible_text_min)
+    min_detail_hints = int(crawler_runtime_settings.detail_field_signal_min_count)
+    min_listing_items = int(crawler_runtime_settings.listing_min_items)
+    extractability = (
+        dict(expansion_diagnostics.get("extractability"))
+        if isinstance(expansion_diagnostics, dict)
+        and isinstance(expansion_diagnostics.get("extractability"), dict)
+        else {}
+    )
+    matched_requested_fields = extractability.get("matched_requested_fields")
+    extractable_fields = extractability.get("extractable_fields")
+    if bool(extractability.get("verified")) and (
+        bool(matched_requested_fields) or bool(extractable_fields)
+    ):
+        return True
+    for probe in readiness_probes:
+        if not isinstance(probe, dict) or not bool(probe.get("is_ready")):
+            continue
+        visible_text_length = int(probe.get("visible_text_length") or 0)
+        if visible_text_length < min_visible_text:
+            continue
+        if "detail" in normalized_surface:
+            if bool(probe.get("structured_data_present")):
+                return True
+            if int(probe.get("detail_hint_count") or 0) >= min_detail_hints:
+                return True
+            continue
+        if "listing" in normalized_surface:
+            if int(probe.get("listing_card_count") or 0) >= min_listing_items:
+                return True
+            if int(probe.get("matched_listing_selectors") or 0) > 0:
+                return True
+            continue
+        return True
+    return False
 
 
 async def dismiss_safe_location_interstitial(page: Any) -> dict[str, object]:

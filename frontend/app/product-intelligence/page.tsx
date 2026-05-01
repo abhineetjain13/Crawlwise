@@ -6,6 +6,7 @@ import {
   Code2,
   Download,
   ExternalLink,
+  History,
   ImageOff,
   Info,
   Layers,
@@ -18,8 +19,10 @@ import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
+import { HistoryDrawer, type HistoryItem } from '../../components/ui/history-drawer';
+
 import { DataRegionEmpty, InlineAlert, PageHeader } from '../../components/ui/patterns';
-import { Badge, Button, Dropdown, Input, TableBody } from '../../components/ui/primitives';
+import { Badge, Button, Dropdown, Input } from '../../components/ui/primitives';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import type {
@@ -34,7 +37,6 @@ import {
   DiscoveryTableLoading,
   ExternalCandidateImage,
   JsonModal,
-  ProductIntelligenceJobRow,
   SEARCH_PROVIDER_OPTIONS,
   SettingsDrawer,
   searchProviderLabel,
@@ -108,6 +110,7 @@ export default function ProductIntelligencePage() {
   >(null);
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [optionsEdited, setOptionsEdited] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [confidenceFilter, setConfidenceFilter] = useState<'all' | 'high' | 'medium' | 'low'>(
@@ -118,6 +121,16 @@ export default function ProductIntelligencePage() {
     queryKey: ['product-intelligence-jobs'],
     queryFn: () => api.listProductIntelligenceJobs({ limit: 20 }),
   });
+
+  const historyItems: HistoryItem[] = useMemo(() => {
+    return (jobsQuery.data ?? []).map((job) => ({
+      id: job.id,
+      status: job.status,
+      created_at: job.created_at,
+      label: job.source_run_id ? `From Run #${job.source_run_id}` : 'Direct Input',
+      meta: `${Number(job.summary?.candidate_count ?? 0)} URLs found`,
+    }));
+  }, [jobsQuery.data]);
   const sourceRecords = prefill.records ?? [];
   const defaultJobId = sourceRecords.length ? null : (jobsQuery.data?.[0]?.id ?? null);
   const resolvedActiveJobId = activeJobId ?? defaultJobId;
@@ -443,6 +456,16 @@ export default function ProductIntelligencePage() {
                 >
                   <Settings className="size-4" />
                 </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setHistoryOpen(true)}
+                  aria-label="Run History"
+                  className="text-muted hover:text-foreground h-8 w-8"
+                >
+                  <History className="size-4" />
+                </Button>
                 <div className="flex items-center gap-1">
                   <Button
                     type="button"
@@ -727,41 +750,7 @@ export default function ProductIntelligencePage() {
         </div>
       </div>
 
-      {/* ── Session History (collapsible) ── */}
-      <section className="border-border bg-panel shadow-card overflow-hidden rounded-[var(--radius-xl)] border">
-        <details className="group" open>
-          <summary className="text-foreground hover:bg-background-alt flex cursor-pointer items-center justify-between px-4 py-2.5 text-xs font-medium select-none">
-            <span>Session History</span>
-            <ChevronDown className="text-muted size-3.5 transition-transform group-open:rotate-180" />
-          </summary>
-          <div className="border-divider max-h-[240px] overflow-auto border-t">
-            {(() => {
-              if (jobsQuery.isError)
-                return (
-                  <div className="text-danger p-4 text-center text-xs">Error loading history</div>
-                );
-              if (jobsQuery.isLoading)
-                return <div className="text-muted p-4 text-center text-xs">Loading history...</div>;
-              if (!jobsQuery.data?.length)
-                return <div className="text-muted p-4 text-center text-xs">No sessions.</div>;
-              return (
-                <table className="compact-data-table">
-                  <TableBody>
-                    {jobsQuery.data.map((job) => (
-                      <ProductIntelligenceJobRow
-                        key={job.id}
-                        job={job}
-                        active={resolvedActiveJobId === job.id}
-                        onOpen={() => openJob(job.id)}
-                      />
-                    ))}
-                  </TableBody>
-                </table>
-              );
-            })()}
-          </div>
-        </details>
-      </section>
+
 
       <SettingsDrawer
         open={configOpen}
@@ -790,6 +779,14 @@ export default function ProductIntelligencePage() {
       {jsonModalCandidate && (
         <JsonModal candidate={jsonModalCandidate} onClose={() => setJsonModalCandidate(null)} />
       )}
+      <HistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        items={historyItems}
+        activeId={resolvedActiveJobId}
+        onSelect={(id) => openJob(id)}
+        title="Intelligence History"
+      />
     </div>
   );
 }

@@ -88,6 +88,9 @@ class BaseAdapter(ABC):
     def normalize_acquisition_url(self, url: str | None) -> str | None:
         return url
 
+    async def resolve_acquisition_url(self, url: str | None) -> str | None:
+        return self.normalize_acquisition_url(url)
+
     def _result(
         self,
         records: AdapterRecords,

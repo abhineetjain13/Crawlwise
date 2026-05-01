@@ -36,6 +36,7 @@ from app.services.field_value_dom import (
     extract_heading_sections,
     extract_page_images,
 )
+from app.services.extract.detail_raw_signals import breadcrumb_category_from_dom, gender_from_detail_context
 from app.services.js_state_helpers import select_variant
 from app.services.extract.shared_variant_logic import (
     infer_variant_group_name_from_values,
@@ -54,23 +55,19 @@ logger = logging.getLogger(__name__)
 
 _detail_variant_size_value_patterns = tuple(
     re.compile(str(pattern), re.I)
-    for pattern in VARIANT_SIZE_VALUE_PATTERNS
-    if str(pattern).strip()
+    for pattern in VARIANT_SIZE_VALUE_PATTERNS if str(pattern).strip()
 )
 _variant_option_value_suffix_noise_patterns = tuple(
     re.compile(str(pattern), re.I)
-    for pattern in VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS
-    if str(pattern).strip()
+    for pattern in VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS if str(pattern).strip()
 )
 _variant_option_value_noise_tokens = frozenset(
     str(token).strip().lower()
-    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
-    if str(token).strip()
+    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS if str(token).strip()
 )
 _variant_option_value_ui_noise_phrases = tuple(
     str(token).strip().lower()
-    for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
-    if str(token).strip()
+    for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ()) if str(token).strip()
 )
 
 
@@ -196,6 +193,29 @@ def apply_dom_fallbacks(
                 normalized,
                 coerce_field_value(normalized, value, page_url),
                 source="dom_sections",
+            )
+    breadcrumb_category = breadcrumb_category_from_dom(soup)
+    if "category" in fields and breadcrumb_category and not candidates.get("category"):
+        add_sourced_candidate(
+            candidates,
+            candidate_sources,
+            field_sources,
+            selector_trace_candidates,
+            "category",
+            breadcrumb_category,
+            source="dom_breadcrumb",
+        )
+    if "gender" in fields and not candidates.get("gender"):
+        gender = gender_from_detail_context(breadcrumb_category, title, urlsplit(page_url).path)
+        if gender:
+            add_sourced_candidate(
+                candidates,
+                candidate_sources,
+                field_sources,
+                selector_trace_candidates,
+                "gender",
+                gender,
+                source="dom_text",
             )
     body_node = dom_parser.body
     body_text = clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""

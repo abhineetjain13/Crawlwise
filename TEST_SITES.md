@@ -1,160 +1,154 @@
-# CrawlerAI Test Corpus — Commerce & Jobs Only
-
-**Version:** 3.0
-**Scope:** Real-world commerce + job sites only
-**Primary Issue:** Output data coverage & quality  
-**Focus:** E-commerce listing/detail, Job listing/detail, Traversal
-
-> **Maintenance rules**
-> - `†` = spot-check before running (job detail URLs expire, refurbished SKUs rotate)
-> - No per-domain hacks. Any fix that makes one site pass must generalise.
-
----
-
 ## Section S — Commerce Sandboxes
 
-Deterministic commerce test fixtures. No bot protection.
-
-| # | URL | Surface | What It Tests |
-|---|---|---|---|
-| S01 | `https://web-scraping.dev/products` | Listing | JSON-LD Product, data attributes, pagination, variant selectors |
-| S02 | `https://web-scraping.dev/product/1` | Detail | Rich PDP — price, rating, reviews, JSON-LD, hidden DOM fields |
-| S05 | `https://books.toscrape.com/catalogue/page-1.html` | Listing | Static HTML paginated listing, rating encoded as CSS class |
-| S06 | `https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html` | Detail | Static PDP — price, availability, UPC in table, no JS needed |
-| S11 | `https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops` | Listing | Paginated e-commerce listing, price + rating in card DOM |
-| S12 | `https://webscraper.io/test-sites/e-commerce/ajax/computers/laptops` | AJAX listing | Same listing loaded via AJAX — tests XHR interception |
-| S13 | `https://webscraper.io/test-sites/e-commerce/scroll/computers/laptops` | Infinite scroll | Scroll-triggered load-more |
-| S18 | `https://sandbox.oxylabs.io/products` | Listing | Oxylabs sandbox — JSON-LD, data-* attrs, pagination, no auth |
-| S19 | `https://sandbox.oxylabs.io/products/1` | Detail | Oxylabs PDP — specs, multi-source fields |
-| S20 | `https://scrapingcourse.com/ecommerce/` | Listing | Infinite scroll e-commerce, price/rating in DOM |
-| S21 | `https://scrapingcourse.com/ecommerce/products/chaz-kangeroo-hoodie` | Detail | PDP with size/color variant matrix |
-| S22 | `https://practicesoftwaretesting.com` | SPA Listing | Angular SPA — full JS render required, faceted filters |
-| S23 | `https://practicesoftwaretesting.com/product/01HB` | SPA Detail | SPA product detail, tabbed specs, reviews |
-
----
+https://web-scraping.dev/products
+https://web-scraping.dev/product/1
+https://books.toscrape.com/catalogue/page-1.html
+https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html
+https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops
+https://webscraper.io/test-sites/e-commerce/ajax/computers/laptops
+https://webscraper.io/test-sites/e-commerce/scroll/computers/laptops
+https://sandbox.oxylabs.io/products
+https://sandbox.oxylabs.io/products/1
+https://scrapingcourse.com/ecommerce/
+https://scrapingcourse.com/ecommerce/products/chaz-kangeroo-hoodie
+https://practicesoftwaretesting.com
+https://practicesoftwaretesting.com/product/01HB
 
 ## Section TC — Traversal Canaries (Commerce only)
 
-| # | URL | Surface | Traversal Mode | What It Tests |
-|---|---|---|---|---|
-| TC01 | `https://books.toscrape.com/` | Listing | `paginate` | Classic numbered pagination from root path |
-| TC02 | `https://www.myntra.com/hand-towels` | Listing | `paginate` | Real commerce pagination, duplicate-page suppression |
-| TC03 | `https://in.puma.com/in/en/mens/mens-shoes/mens-shoes-sneakers` | Listing | `scroll` | Real infinite scroll, async settling, item-growth stop conditions |
-| TC05 | `https://webscraper.io/test-sites/e-commerce/scroll/computers/laptops` | Infinite scroll | `scroll` / `load_more` | Scroll-triggered growth with repeatable sandbox behavior |
-
----
+https://books.toscrape.com/
+https://www.myntra.com/hand-towels
+https://in.puma.com/in/en/mens/mens-shoes/mens-shoes-sneakers
+https://webscraper.io/test-sites/e-commerce/scroll/computers/laptops
 
 ## Section LC — Listing Commerce
 
-| # | URL | Engine | Complexity | What Makes It Interesting |
-|---|---|---|---|---|
-| LC01 | `https://www.reverb.com/marketplace?product_type=electric-guitars` | Browser | Medium | Marketplace infinite scroll, condition + price facets |
-| LC02 | `https://www.discogs.com/sell/list?genre=Electronic` | Browser | Medium | Vinyl marketplace, seller metadata, paginated |
-| LC03 | `https://www.musiciansfriend.com/snare-drum-heads` | HTTP | Medium | Paginated catalog, JSON-LD ProductList, faceted filters |
-| LC06 | `https://www.uline.com/BL_8421/Boxes` | HTTP | Medium | Packaging catalog, table-based layout, variant data in DOM |
-| LC08 | `https://www.autozone.com/filters-and-pcv/oil-filter` | Browser | Medium | Auto parts, vehicle fitment filter, nested window state JSON |
-| LC10 | `https://www.chewy.com/b/dry-dog-food-294` | Browser | Medium | JS-rendered product cards, ingredient previews in listing |
-| LC12 | `https://www.backmarket.com/en-us/l/iphone/e8724fea-197e-4815-85ce-21b8068020cc` | Browser | Medium | Refurbished marketplace, grade taxonomy, JSON-LD ProductList |
-| LC13 | `https://www.ifixit.com/Parts` | HTTP | Easy | Repair parts tree, device compatibility hierarchy, clean HTML |
-| LC14 | `https://www.abebooks.com/servlet/SearchResults?kn=python&pt=book` | HTTP | Medium | Used books, multi-seller listing per title, ISBN-keyed |
-| LC15 | `https://www.thriftbooks.com/browse/?b.search=science` | HTTP | Easy | Book reseller, edition + condition variants in card, pagination |
-| LC17 | `https://www.thomann.de/gb/guitars.html` | HTTP | Medium | EU music retailer, numbered pages, JSON-LD structured |
-| LC18 | `https://www.rockler.com/wood/exotic-lumber` | HTTP | Medium | Specialty retail, category facets, inline JSON product data |
-| LC19 | `https://www.govplanet.com/for-sale/equipment` | Browser | Hard | Gov't surplus heavy equipment — auction site, JS listing |
-
----
+https://www.reverb.com/marketplace?product_type=electric-guitars
+https://www.discogs.com/sell/list?genre=Electronic
+https://www.musiciansfriend.com/snare-drum-heads
+https://www.uline.com/BL_8421/Boxes
+https://www.autozone.com/filters-and-pcv/oil-filter
+https://www.chewy.com/b/dry-dog-food-294
+https://www.backmarket.com/en-us/l/iphone/e8724fea-197e-4815-85ce-21b8068020cc
+https://www.ifixit.com/Parts
+https://www.abebooks.com/servlet/SearchResults?kn=python&pt=book
+https://www.thriftbooks.com/browse/?b.search=science
+https://www.thomann.de/gb/guitars.html
+https://www.rockler.com/wood/exotic-lumber
+https://www.govplanet.com/for-sale/equipment
 
 ## Section LJ — Listing Jobs
 
-| # | URL | Platform | Complexity | Notes |
-|---|---|---|---|---|
-| LJ01 | `https://boards.greenhouse.io/embed/job_board?for=airbnb` | Greenhouse | Easy | Department grouping |
-| LJ02 | `https://boards.greenhouse.io/embed/job_board?for=shopify` | Greenhouse | Easy | Large board, many departments |
-| LJ03 | `https://boards.greenhouse.io/embed/job_board?for=discord` | Greenhouse | Easy | Flat listing, team taxonomy |
-| LJ04 | `https://boards.greenhouse.io/embed/job_board?for=palantir` | Greenhouse | Easy | Unusual role taxonomy |
-| LJ10 | `https://startup.jobs/` | Custom | Medium | JS-rendered, startup categorisation, equity + stage tags |
-| LJ11 | `https://www.idealist.org/en/jobs` | Custom | Medium | Non-profit sector, cause tags |
-| LJ12 | `https://www.usajobs.gov/search/results/?k=software+engineer&p=1` | Government | Hard | JS-rendered, government schema, pay grade |
-| LJ13 | `https://www.governmentjobs.com/careers/california` | NeoGov | Medium | State govt jobs, paginated, benefits structured |
-| LJ14 | `https://www.higheredjobs.com/admin/search.cfm?JobCat=108` | Custom | Easy | Academic jobs, rank + tenure fields, salary band |
-| LJ16 | `https://dynamitejobs.com/remote-jobs` | Custom | Medium | Remote listing, async-work tags |
-| LJ17 | `https://jobicy.com/` | Custom | Easy | JSON-LD JobPosting heavy, clean remote board |
-| LJ18 | `https://jobs.80000hours.org/jobs` | Custom | Medium | Impact jobs — cause area taxonomy |
-| LJ19 | `https://cryptocurrencyjobs.co/` | Custom | Easy | Web3 domain, token comp fields |
-| LJ20 | `https://euremotejobs.com/` | Custom | Easy | EU jurisdiction flag, GDPR-explicit |
+https://boards.greenhouse.io/embed/job_board?for=airbnb
+https://boards.greenhouse.io/embed/job_board?for=shopify
+https://boards.greenhouse.io/embed/job_board?for=discord
+https://boards.greenhouse.io/embed/job_board?for=palantir
+https://startup.jobs/
+https://www.idealist.org/en/jobs
+https://www.usajobs.gov/search/results/?k=software+engineer&p=1
+https://www.governmentjobs.com/careers/california
+https://www.higheredjobs.com/admin/search.cfm?JobCat=108
+https://dynamitejobs.com/remote-jobs
+https://jobicy.com/
+https://jobs.80000hours.org/jobs
+https://cryptocurrencyjobs.co/
+https://euremotejobs.com/
 https://www.instahyre.com/search-jobs
----
 
 ## Section DC — Detail Commerce
 
-| # | URL | Engine | Complexity | What Makes It Interesting |
-|---|---|---|---|---|
-| DC02 | `https://www.thomann.de/gb/akg_k702.htm` | HTTP | Medium | Headphone FR data in DOM, tabbed specs, multi-warehouse stock |
-| DC04 | `https://www.discogs.com/release/249504` | HTTP | Medium | Label / barcode / matrix / pressing data, multi-format |
-| DC10 | `https://www.ifixit.com/products/iphone-14-battery` | HTTP | Easy | Repair part — compatibility list, schema.org Product |
-| DC11 | `https://www.ifixit.com/products/macbook-pro-15-inch-retina-display-mid-2015-battery` | HTTP | Easy | Version compatibility matrix in DOM, conditional specs |
-| DC12 | `https://www.vitacost.com/vitacost-vitamin-d3-mini-gels` | HTTP | Medium | Supplement Facts panel, size variant selector |
-| DC14 | `https://www.thriftbooks.com/w/the-pragmatic-programmer_david-thomas_andrew-hunt/286697/` | HTTP | Easy | Multi-edition price compare, ISBN-13, condition grading |
-| DC15 | `https://www.abebooks.com/9780132350884/Clean-Code-Handbook-Agile-Software-0132350882/plp` | HTTP | Medium | Multi-seller table, shipping region data, condition descriptions |
-| DC17 | `https://www.rockler.com/jessem-mast-r-lift-ii-excel-router-lift` | HTTP | Medium | Compatibility chart, spec table, router size matrix |
-| DC20 | `https://www.backmarket.com/en-us/p/iphone-14-128-gb-midnight/dba71a89-1e8e-4278-967e-0ef1c0d05f31` | Browser | Medium | Refurbished grade taxonomy, warranty terms, JSON-LD Product† |
-
----
+https://www.thomann.de/gb/akg_k702.htm
+https://www.discogs.com/release/249504
+https://www.ifixit.com/products/iphone-16-plus-battery
+https://www.vitacost.com/vitacost-vitamin-d3-mini-gels
+https://www.thriftbooks.com/w/the-pragmatic-programmer_david-thomas_andrew-hunt/286697/
+https://www.abebooks.com/9780132350884/Clean-Code-Handbook-Agile-Software-0132350882/plp
+https://www.rockler.com/rockler-table-saw-crosscut-sled
+https://www.backmarket.com/en-us/p/iphone-15-plus
+https://31philliplim.com/collections/the-luna-bag-1/products/luna-1
+https://zadig-et-voltaire.com/eu/uk/p/JMTS01771443/t-shirt-teddyx-blue-sixtine
+https://ar.puma.com/pd/zapatillas-mostro-ecstasy-unisex/397328.html?color=07
+https://www.karenmillen.com/eu/product/karen-millen-cotton-utility-button-detail-barrel-leg-trouser_bkk28382?colour=ivory
+https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail
+https://www.kitchenaid.com/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html
 
 ## Section DJ — Detail Jobs
 
-> ⚠️ Job detail URLs expire when roles close. Government URLs are most stable.
-
-| # | URL | Platform | Stability | Structured Data |
-|---|---|---|---|---|
-| DJ01 | `https://www.usajobs.gov/job/836178100` | USAJOBS | High | Gov job schema, salary bands, OPM series code, duty station |
-| DJ02 | `https://www.usajobs.gov/job/836402700` | USAJOBS | High | Federal — grade range, clearance level, travel requirement |
-| DJ10 | `https://startup.jobs/senior-backend-engineer-at-vercel` | Startup.jobs | Medium | Equity range, company stage, team size structured† |
-| DJ11 | `https://boards.greenhouse.io/airbnb/jobs/6290875` | Greenhouse | Medium | GH job detail — department, location, req ID |
-| DJ12 | `https://boards.greenhouse.io/shopify/jobs/6318200` | Greenhouse | Medium | Multi-location Greenhouse, GDPR consent section |
-| DJ13 | `https://jobs.lever.co/stripe/36fc41dd-3de0-4b5a-9efa-a28b13a16ffe` | Lever | Medium | Lever job detail — team, commitment, work type† |
-| DJ16 | `https://cryptocurrencyjobs.co/engineering/stripe-backend-engineer/` | Crypto Jobs | Medium | Token compensation field† |
-| DJ17 | `https://euremotejobs.com/job/senior-fullstack-developer-remote-europe` | EURemoteJobs | Low | EUR salary, jurisdiction field† |
-| DJ19 | `https://dynamitejobs.com/remote-jobs/backend-engineer` | Dynamite | Low | Async-first culture fields† |
-| DJ20 | `https://www.workingnomads.com/jobs?category=development` | WorkingNomads | Medium | Timezone overlap field, nomad-specific perks† |
-
----
+https://www.usajobs.gov/job/836178100
+https://www.usajobs.gov/job/836402700
+https://startup.jobs/senior-backend-engineer-at-vercel
+https://boards.greenhouse.io/airbnb/jobs/6290875
+https://boards.greenhouse.io/shopify/jobs/6318200
+https://jobs.lever.co/stripe/36fc41dd-3de0-4b5a-9efa-a28b13a16ffe
+https://cryptocurrencyjobs.co/engineering/stripe-backend-engineer/
+https://euremotejobs.com/job/senior-fullstack-developer-remote-europe
+https://dynamitejobs.com/remote-jobs/backend-engineer
+https://www.workingnomads.com/jobs?category=development
 
 ## Section ATS — Enterprise ATS Boards
 
-| # | URL | Platform | Notes |
-|---|---|---|---|
-| ATS01 | `https://www.vc5partners.com/jobs/` | Custom | Small VC firm jobs |
-| ATS02 | `https://www.klingspor.com/jobs` | Custom | Manufacturing jobs |
-| ATS03 | `https://ehccareers-emory.icims.com/jobs/search?pr=0&searchRelation=keyword_all` | iCIMS | Healthcare ATS |
-| ATS04 | `https://careers.clarkassociatesinc.biz/` | Custom | Hospitality careers |
-| ATS05 | `https://atlasmedstaff.com/job-search/` | Custom | Medical staffing |
-| ATS06 | `https://smithnephew.wd5.myworkdayjobs.com/External` | Workday | MedTech enterprise |
-| ATS07 | `https://ats.rippling.com/en-GB/inhance-technologies/jobs` | Rippling | HR platform ATS |
-| ATS08 | `https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs?mode=location` | Oracle HCM | Enterprise HCM |
-| ATS09 | `https://www.paycomonline.net/v4/ats/web.php/portal/8EC14E985B45C7F52C531F487F62A2B8/career-page` | Paycom | Payroll/HR platform |
-| ATS10 | `https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b0cec4162/?q=&o=postedDateDesc` | UKG Ultipro | Enterprise HR |
-| ATS11 | `https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=14fa7571-bfac-427f-aa18-9488391d4c5e&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings` | ADP Workforce Now | Enterprise payroll |
-
----
+https://www.vc5partners.com/jobs/
+https://www.klingspor.com/jobs
+https://ehccareers-emory.icims.com/jobs/search?pr=0&searchRelation=keyword_all
+https://careers.clarkassociatesinc.biz/
+https://atlasmedstaff.com/job-search/
+https://smithnephew.wd5.myworkdayjobs.com/External
+https://ats.rippling.com/en-GB/inhance-technologies/jobs
+https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs?mode=location
+https://www.paycomonline.net/v4/ats/web.php/portal/8EC14E985B45C7F52C531F487F62A2B8/career-page
+https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b0cec4162/?q=&o=postedDateDesc
+https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=14fa7571-bfac-427f-aa18-9488391d4c5e&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings
 
 ## Section CE — Commerce Extended
 
-| # | URL | Surface | Notes |
-|---|---|---|---|
-| CE01 | `https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127` | Listing | Luxury fashion, JS-rendered cards |
-| CE02 | `https://31philliplim.com/collections` | Listing | Designer fashion, Shopify-like |
-| CE04 | `https://ar.puma.com/lo-mas-vendido` | Listing | Puma LATAM, Spanish locale |
-| CE05 | `https://www.karenmillen.com/eu/categories/womens-trousers` | Listing | Fashion retailer |
-| CE06 | `https://www.ganni.com/en-gb/trainers/` | Listing | Scandinavian fashion |
-| CE07 | `https://www.phase-eight.com/clothing/dresses/` | Listing | UK fashion retailer |
-| CE08 | `https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos` | Listing | Menswear, Shopify |
-| CE09 | `https://savannahs.com/collections/all-boots` | Listing | Luxury shoes, Shopify |
-| CE10 | `https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products` | Listing | Appliances, enterprise commerce |
-| CE11 | `https://www.dyson.in/vacuum-cleaners/cord-free` | Listing | Dyson India, JS-rendered |
-| CE12 | `https://www.grailed.com/categories/womenswear/blazers` | Listing | Fashion marketplace |
-| CE13 | `https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating` | Listing | Marketplace search results |
-| CE14 | `https://www.firstcry.com/sets-and--suits/6/166?scat=166&gender=girl,unisex&ref2=menu_dd_girl-fashion_sets-and-suits_H` | Listing | Kids fashion category |
-| CE15 | `https://www.stadiumgoods.com/collections/adidas-shoes` | Listing | Sneaker retail, browser-heavy |
+https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127
+https://31philliplim.com/collections
+https://ar.puma.com/lo-mas-vendido
+https://www.karenmillen.com/eu/categories/womens-trousers
+https://www.ganni.com/en-gb/trainers/
+https://www.phase-eight.com/clothing/dresses/
+https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos
+https://savannahs.com/collections/all-boots
+https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products
+https://www.dyson.in/vacuum-cleaners/cord-free
+https://www.grailed.com/categories/womenswear/blazers
+https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating
+https://www.firstcry.com/sets-and--suits/6/166?scat=166&gender=girl,unisex&ref2=menu_dd_girl-fashion_sets-and-suits_H
+https://www.stadiumgoods.com/collections/adidas-shoes
 https://www2.hm.com/en_in/men/shoes/view-all.html
 https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html?trksrc=navbar&trkid=l2
+
+https://www.sneakersnstuff.com/products/dime-soft-rock-crewneck-dime2sp2542blk
+https://www.samsclub.com/ip/Scotch-Heavy-Duty-Shipping-Packaging-Tape-Dispensers-1-88-x-27-7-yd-6-Pack/5113185138?classType=REGULAR
+https://www.goat.com/sneakers/dunk-low-black-white-dd1391-100
+https://stockx.com/nike-dunk-low-retro-white-black-2021
+https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111
+https://www.amazon.com/dp/B08J5F3G18
+https://www.apple.com/shop/buy-iphone/iphone-16
+https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000
+https://www.farfetch.com/in/shopping/men/philipp-plein-leather-disco-biker-jacket-item-18497263.aspx
+https://www.ssense.com/en-us/men/product/willy-chavarria/brown-ruff-rider-leather-jacket/19072301
+https://www.costco.com/p/-/sleep-number-ultimate-12-mattress/4201005351?langId=-1
+https://www.target.com/p/tobago-stripe-duvet-cover-set-levtex-home/-/A-1002150739?preselect=1002150742#lnk=sametab
+https://www.walmart.com/ip/Apple-AirPods-with-Charging-Case-2nd-Generation/604342441
+https://www.lowes.com/pd/Minka-Lavery-Lansdale-Sand-Black-Transitional-Opal-Glass-Lantern-Pendant-Light/1001420790
+https://www.homedepot.com/p/MSI-Yellow-Pebbles-12-in-x-12-in-Polished-Quartzite-Floor-and-Wall-Tile-10-sq-ft-case-LPEBMYEL1212POL/202515091
+https://www.ulta.com/p/shape-tape-concealer-xlsImpprod14251035
+https://www.dickssportinggoods.com/p/birkenstock-womens-arizona-big-buckle-soft-footbed-sandals-25birwcasuwrznbgbcegp/25birwcasuwrznbgbcegp?color=Sandcastle
+https://www.jdsports.co.uk/product/pink-adidas-originals-classic-shorts/19741988/
+https://shop.lululemon.com/p/men-joggers/ABC-Jogger/_/prod8530240
+https://in.puma.com/in/en/pd/speedcat-sneakers/406329?swatch=02
+https://www.adidas.com/us/stan-smith-shoes/M20324.html
+https://www.sephora.com/product/colorful-eyeshadow-P515026?skuId=2820108&icid2=products%20grid:p515026:product
+https://www.zappos.com/kratos/p/womens-hoka-bondi-9-berry-jam-berry-patch/product/9984296/color/318988?zlfid=191&ref=pd_search_nr-1-bqcp_1
+https://www.macys.com/shop/product/tommy-hilfiger-mens-hiday-casualized-hybrid-oxfords?ID=19116329&swatchColor=Black
+https://www.bhphotovideo.com/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html
+https://www.asos.com/us/asos-curve/asos-design-curve-lightweight-pull-on-barrel-pants-in-darkwash/prd/210397084#colourWayId-210397088
+https://www.wayfair.com/furniture/pdp/flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html?piid=94673717&auctionId=db4b38eb-7955-4fc9-8d81-0dae00f68111&trackingId={%22adType%22:%22WSP%22,%22auctionId%22:%22db4b38eb-7955-4fc9-8d81-0dae00f68111%22}&adTypeId=1
+https://www.zara.com/us/en/rustic-cotton-t-shirt-p04424306.html?v1=527078510
+https://us.frankbody.com/products/original-coffee-scrub
+https://colourpop.com/products/going-coconuts-eyeshadow-palette
+https://www.fashionnova.com/products/just-vibes-strapless-pant-set-yellow?recommendationAttributionId=error-nosto-1-fallback-nosto-1-copy-1720644688978
+https://www.puravidabracelets.com/products/black-seascape-stretch-bracelet?pr_prod_strat=e5_desc&pr_rec_id=3ef961ba9&pr_rec_pid=7216396632150&pr_ref_pid=7559267778646&pr_seq=uniform&variant=41298450153558
+https://www.untuckit.com/collections/shirts/products/cameron-wr-2
+https://www.decathlon.co.uk/p/pressurised-padel-balls-pb-speed-tri-pack/347273/m8804642

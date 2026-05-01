@@ -94,40 +94,7 @@ export function JsonModal({
   );
 }
 
-export function ProductIntelligenceJobRow({
-  job,
-  active,
-  onOpen,
-}: Readonly<{
-  job: {
-    id: number;
-    status: string;
-    summary: Record<string, unknown>;
-    created_at: string;
-  };
-  active: boolean;
-  onOpen: () => void;
-}>) {
-  const candidateCount = Number(job.summary?.candidate_count ?? 0);
-  return (
-    <tr className={cn("border-b border-divider last:border-0 hover:bg-background-alt transition-colors", active && "bg-background-alt")}>
-      <td className="p-0">
-        <button type="button" onClick={onOpen} className="flex w-full flex-col text-left gap-1.5 p-2.5 focus:outline-none">
-          <div className="flex w-full items-center justify-between">
-            <span className="font-mono text-sm font-normal text-accent hover:underline">#{job.id}</span>
-            <Badge tone={job.status === "complete" ? "success" : job.status === "failed" ? "danger" : "neutral"} className="scale-90 origin-right">
-              {job.status}
-            </Badge>
-          </div>
-          <div className="flex w-full items-center justify-between text-xs text-muted">
-            <span>{candidateCount} URLs found</span>
-            <span className="font-mono">{formatShortDate(job.created_at)}</span>
-          </div>
-        </button>
-      </td>
-    </tr>
-  );
-}
+
 
 export function DiscoveryStatus({
   provider,

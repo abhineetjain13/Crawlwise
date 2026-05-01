@@ -32,6 +32,7 @@ _ADAPTER_FACTORIES: dict[str, tuple[str, str]] = {
     "remotive": ("app.services.adapters.remotive", "RemotiveAdapter"),
     "remoteok": ("app.services.adapters.remoteok", "RemoteOkAdapter"),
     "shopify": ("app.services.adapters.shopify", "ShopifyAdapter"),
+    "thriftbooks": ("app.services.adapters.thriftbooks", "ThriftBooksAdapter"),
 }
 
 
@@ -85,7 +86,7 @@ async def normalize_adapter_acquisition_url(url: str | None) -> str | None:
     adapter = await resolve_adapter(requested_url, "")
     if adapter is None:
         return url
-    return adapter.normalize_acquisition_url(url)
+    return await adapter.resolve_acquisition_url(url)
 
 
 async def run_adapter(

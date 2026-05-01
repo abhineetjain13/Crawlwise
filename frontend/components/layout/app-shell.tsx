@@ -18,6 +18,7 @@ import {
     Menu,
     Search,
     Settings2,
+    Sparkles,
     ShieldCheck,
     Trash2,
     X,
@@ -44,6 +45,7 @@ const navGroups = [
             { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
             { href: "/crawl", label: "Crawl Studio", icon: Globe },
             { href: "/runs", label: "History", icon: History },
+            { href: "/data-enrichment", label: "Data Enrichment", icon: Sparkles },
             { href: "/product-intelligence", label: "Product Intelligence", icon: Brain },
             { href: "/selectors", label: "Selector Tool", icon: Search, exactMatch: true },
             { href: "/selectors/manage", label: "Domain Memory", icon: Database },
@@ -472,6 +474,7 @@ function MobileNav({
 function getFallbackHeader(pathname: string): TopBarState {
     if (pathname.startsWith("/dashboard")) return { title: "Dashboard", description: "Overview of crawler activity across your workspace." };
     if (pathname.startsWith("/crawl")) return { title: "Crawl Studio", description: "Configure sources, run jobs, and monitor execution." };
+    if (pathname.startsWith("/data-enrichment")) return { title: "Data Enrichment", description: "Normalize ecommerce detail records into discovery fields." };
     if (pathname.startsWith("/product-intelligence")) return { title: "Product Intelligence", description: "Find matching product pages and compare prices." };
     if (pathname.startsWith("/runs/")) return { title: "Run Details", description: "Inspect a crawl run, logs, and extracted output." };
     if (pathname.startsWith("/runs")) return { title: "Run History", description: "Review and manage previously submitted crawls." };

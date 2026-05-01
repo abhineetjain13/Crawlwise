@@ -107,7 +107,8 @@ def normalize_decimal_price(
         decimal = Decimal(candidate)
     except (InvalidOperation, ValueError):
         return None
-    if interpret_integral_as_cents and "." not in candidate and len(candidate) >= 3:
+    digit_count = sum(1 for char in candidate if char.isdigit())
+    if interpret_integral_as_cents and "." not in candidate and digit_count >= 3:
         decimal = decimal / Decimal("100")
     return format(decimal, "f")
 

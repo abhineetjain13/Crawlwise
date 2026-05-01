@@ -1,15 +1,30 @@
-"use client";
+'use client';
 
-import "./crawl.module.css";
+import './crawl.module.css';
 
-import { useQuery } from "@tanstack/react-query";
-import { ArrowRightCircle, Brain, Check, ChevronsDown, Clock, Copy, Download, Info, Plus, Search } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useQuery } from '@tanstack/react-query';
+import {
+  ArrowRightCircle,
+  Brain,
+  Check,
+  ChevronsDown,
+  Clock,
+  Copy,
+  Download,
+  History,
+  Info,
+  Plus,
+  RefreshCcw,
+  Search,
+} from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
-import { cn } from "../../lib/utils";
+import { HistoryDrawer, type HistoryItem } from '../ui/history-drawer';
+
+import { cn } from '../../lib/utils';
 import {
   DataRegionEmpty,
   DataRegionLoading,
@@ -19,19 +34,24 @@ import {
   RunWorkspaceShell,
   SectionHeader,
   TabBar,
-} from "../ui/patterns";
-import { Badge, Button, Card, Textarea, Tooltip } from "../ui/primitives";
-import { api } from "../../lib/api";
-import { getApiWebSocketBaseUrl } from "../../lib/api/client";
-import type { CrawlLog, CrawlRecord, CrawlRun, ResultSummaryQualityLevel } from "../../lib/api/types";
-import { CRAWL_DEFAULTS } from "../../lib/constants/crawl-defaults";
-import { ACTIVE_STATUSES } from "../../lib/constants/crawl-statuses";
-import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
-import { POLLING_INTERVALS, RETRY_LIMITS } from "../../lib/constants/timing";
-import { getDomain } from "../../lib/format/domain";
-import { telemetryErrorPayload, trackEvent } from "../../lib/telemetry/events";
-import { parseApiDate } from "../../lib/format/date";
-import { humanizeStatus, runsStatusTone as statusTone } from "../../lib/ui/status";
+} from '../ui/patterns';
+import { Badge, Button, Card, Textarea, Tooltip } from '../ui/primitives';
+import { api } from '../../lib/api';
+import { getApiWebSocketBaseUrl } from '../../lib/api/client';
+import type {
+  CrawlLog,
+  CrawlRecord,
+  CrawlRun,
+  ResultSummaryQualityLevel,
+} from '../../lib/api/types';
+import { CRAWL_DEFAULTS } from '../../lib/constants/crawl-defaults';
+import { ACTIVE_STATUSES } from '../../lib/constants/crawl-statuses';
+import { STORAGE_KEYS } from '../../lib/constants/storage-keys';
+import { POLLING_INTERVALS, RETRY_LIMITS } from '../../lib/constants/timing';
+import { getDomain } from '../../lib/format/domain';
+import { telemetryErrorPayload, trackEvent } from '../../lib/telemetry/events';
+import { parseApiDate } from '../../lib/format/date';
+import { humanizeStatus, runsStatusTone as statusTone } from '../../lib/ui/status';
 import {
   ActionButton,
   cleanRecordForDisplay,
@@ -54,18 +74,20 @@ import {
   scrollViewportToBottom,
   uniqueNumbers,
   uniqueStrings,
-} from "./shared";
-import { useRunStatusFlags, useTerminalSync } from "./use-run-polling";
+} from './shared';
+import { useRunStatusFlags, useTerminalSync } from './use-run-polling';
 
 type CrawlRunScreenProps = {
   runId: number;
 };
 
 function selectorWinnerLabel(selectorKind: string | null | undefined): string {
-  const normalized = String(selectorKind || "").trim().toLowerCase();
-  if (!normalized) return "Selector winner";
-  if (normalized === "xpath") return "XPath winner";
-  if (normalized === "css_selector") return "CSS selector winner";
+  const normalized = String(selectorKind || '')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return 'Selector winner';
+  if (normalized === 'xpath') return 'XPath winner';
+  if (normalized === 'css_selector') return 'CSS selector winner';
   return `${selectorKind} winner`;
 }
 
@@ -87,9 +109,9 @@ function mergeLogs(current: CrawlLog[], incoming: CrawlLog[]) {
 
 function isSafeHref(href: string) {
   try {
-    const base = typeof window === "undefined" ? "http://localhost" : window.location.origin;
+    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
     const url = new URL(href, base);
-    return url.protocol === "http:" || url.protocol === "https:";
+    return url.protocol === 'http:' || url.protocol === 'https:';
   } catch {
     return false;
   }
@@ -98,7 +120,12 @@ function isSafeHref(href: string) {
 type ProductIntelligencePrefillPayload = {
   source_run_id: number | null;
   source_domain: string;
-  records: Array<Pick<CrawlRecord, "id" | "run_id" | "source_url" | "data">>;
+  records: Array<Pick<CrawlRecord, 'id' | 'run_id' | 'source_url' | 'data'>>;
+};
+
+type DataEnrichmentPrefillPayload = {
+  source_run_id: number | null;
+  records: Array<Pick<CrawlRecord, 'id' | 'run_id' | 'source_url' | 'data'>>;
 };
 
 export function storeProductIntelligencePrefill(
@@ -106,44 +133,74 @@ export function storeProductIntelligencePrefill(
   storage: Storage = window.sessionStorage,
 ) {
   try {
-    storage.setItem(
-      STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL,
-      JSON.stringify(payload),
-    );
+    storage.setItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL, JSON.stringify(payload));
   } catch (error) {
-    console.error("Unable to store full Product Intelligence prefill.", error);
+    console.error('Unable to store full Product Intelligence prefill.', error);
     const reducedPayload = {
       ...payload,
-      records: payload.records
-        .slice(0, CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4)
-        .map((record) => ({
-          id: record.id,
-          run_id: record.run_id,
-          source_url: record.source_url,
-          data: {},
-        })),
+      records: payload.records.slice(0, CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4).map((record) => ({
+        id: record.id,
+        run_id: record.run_id,
+        source_url: record.source_url,
+        data: {},
+      })),
     };
     try {
-      storage.setItem(
-        STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL,
-        JSON.stringify(reducedPayload),
-      );
+      storage.setItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL, JSON.stringify(reducedPayload));
     } catch (fallbackError) {
-      console.error("Unable to store reduced Product Intelligence prefill.", fallbackError);
+      console.error('Unable to store reduced Product Intelligence prefill.', fallbackError);
       storage.removeItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL);
     }
   }
 }
 
+export function storeDataEnrichmentPrefill(
+  payload: DataEnrichmentPrefillPayload,
+  storage: Storage = window.sessionStorage,
+) {
+  const serializedPayload = JSON.stringify(payload);
+  try {
+    storage.setItem(STORAGE_KEYS.DATA_ENRICHMENT_PREFILL, serializedPayload);
+  } catch (error) {
+    console.error(
+      'Unable to store Data Enrichment prefill for triggerDataEnrichmentFromResults.',
+      error,
+    );
+    if (isStorageQuotaError(error)) {
+      try {
+        storage.removeItem(STORAGE_KEYS.PRODUCT_INTELLIGENCE_PREFILL);
+        storage.removeItem(STORAGE_KEYS.BULK_PREFILL);
+        storage.setItem(STORAGE_KEYS.DATA_ENRICHMENT_PREFILL, serializedPayload);
+        return;
+      } catch (fallbackError) {
+        console.error(
+          'Unable to store Data Enrichment prefill after clearing older keys.',
+          fallbackError,
+        );
+      }
+    }
+    storage.removeItem(STORAGE_KEYS.DATA_ENRICHMENT_PREFILL);
+  }
+}
+
+function isStorageQuotaError(error: unknown) {
+  return (
+    error instanceof DOMException &&
+    (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED')
+  );
+}
+
 export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const router = useRouter();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
-  const [recipeActionPending, setRecipeActionPending] = useState<`field:${string}:${"keep" | "reject"}` | null>(null);
-  const [recipeActionError, setRecipeActionError] = useState("");
+  const [outputTab, setOutputTab] = useState<OutputTabKey>('table');
+  const [recipeActionPending, setRecipeActionPending] = useState<
+    `field:${string}:${'keep' | 'reject'}` | null
+  >(null);
+  const [recipeActionError, setRecipeActionError] = useState('');
   const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
-  const [runActionPending, setRunActionPending] = useState<"kill" | null>(null);
-  const [runActionError, setRunActionError] = useState("");
+  const [runActionPending, setRunActionPending] = useState<'kill' | null>(null);
+  const [runActionError, setRunActionError] = useState('');
   const [tablePage, setTablePage] = useState(1);
   const [jsonVisibleCount, setJsonVisibleCount] = useState(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
   const [socketLogItems, setSocketLogItems] = useState<CrawlLog[]>([]);
@@ -155,10 +212,10 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const terminalRecordsRetryAttemptsRef = useRef(0);
 
   const runQuery = useQuery({
-    queryKey: ["crawl-run", runId],
+    queryKey: ['crawl-run', runId],
     queryFn: () => api.getCrawl(runId),
     refetchInterval: false,
-    refetchOnMount: "always",
+    refetchOnMount: 'always',
   });
   const { refetch: refetchRunQuery } = runQuery;
   const run = runQuery.data;
@@ -171,20 +228,20 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   );
   const failedRunWithoutRecords = Boolean(
     run &&
-    (run.status === "failed" || run.status === "proxy_exhausted") &&
+    (run.status === 'failed' || run.status === 'proxy_exhausted') &&
     Number(run?.result_summary?.record_count ?? 0) === 0,
   );
-  const showRunLearningTab = Boolean(run?.run_type === "crawl" && terminal);
+  const showRunLearningTab = Boolean(run?.run_type === 'crawl' && terminal);
   const effectiveOutputTab =
-    failedRunWithoutRecords && outputTab === "table"
-      ? "logs"
-      : (outputTab === "learning" && !showRunLearningTab) || outputTab === "run_config"
-        ? "table"
-      : outputTab;
-  const shouldFetchTableRecords = Boolean(run) && effectiveOutputTab === "table";
-  const shouldFetchJsonRecords = Boolean(run) && effectiveOutputTab === "json";
-  const shouldFetchLogs = Boolean(run) && (live || effectiveOutputTab === "logs");
-  const shouldFetchMarkdown = Boolean(run) && terminal && effectiveOutputTab === "markdown";
+    failedRunWithoutRecords && outputTab === 'table'
+      ? 'logs'
+      : (outputTab === 'learning' && !showRunLearningTab) || outputTab === 'run_config'
+        ? 'table'
+        : outputTab;
+  const shouldFetchTableRecords = Boolean(run) && effectiveOutputTab === 'table';
+  const shouldFetchJsonRecords = Boolean(run) && effectiveOutputTab === 'json';
+  const shouldFetchLogs = Boolean(run) && (live || effectiveOutputTab === 'logs');
+  const shouldFetchMarkdown = Boolean(run) && terminal && effectiveOutputTab === 'markdown';
 
   useEffect(() => {
     if (!live) return;
@@ -194,52 +251,72 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
   const tableRecordsLimit = CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4 * tablePage;
   const tableRecordsQuery = useQuery({
-    queryKey: ["crawl-records-table", runId, tableRecordsLimit],
+    queryKey: ['crawl-records-table', runId, tableRecordsLimit],
     queryFn: () => api.getRecords(runId, { page: 1, limit: tableRecordsLimit }),
     enabled: shouldFetchTableRecords,
     refetchInterval: false,
-    refetchOnMount: "always",
+    refetchOnMount: 'always',
   });
   const { refetch: refetchTableRecords } = tableRecordsQuery;
 
   const jsonRecordsQuery = useQuery({
-    queryKey: ["crawl-records-json", runId, recordsFetchLimit],
+    queryKey: ['crawl-records-json', runId, recordsFetchLimit],
     queryFn: () => api.getRecords(runId, { limit: recordsFetchLimit }),
     enabled: shouldFetchJsonRecords,
     refetchInterval: false,
-    refetchOnMount: "always",
+    refetchOnMount: 'always',
   });
   const { refetch: refetchJsonRecords } = jsonRecordsQuery;
 
   const logsQuery = useQuery({
-    queryKey: ["crawl-logs", runId],
+    queryKey: ['crawl-logs', runId],
     queryFn: () => api.getCrawlLogs(runId, { limit: CRAWL_DEFAULTS.MAX_LIVE_LOGS }),
     enabled: shouldFetchLogs,
     refetchInterval: false,
   });
   const { refetch: refetchLogsQuery } = logsQuery;
   const markdownQuery = useQuery({
-    queryKey: ["crawl-markdown", runId],
+    queryKey: ['crawl-markdown', runId],
     queryFn: () => api.getMarkdown(runId),
     enabled: shouldFetchMarkdown,
     refetchInterval: false,
   });
   const { refetch: refetchMarkdownQuery } = markdownQuery;
   const domainRecipeQuery = useQuery({
-    queryKey: ["crawl-domain-recipe", runId],
+    queryKey: ['crawl-domain-recipe', runId],
     queryFn: () => api.getDomainRecipe(runId),
     enabled: showRunLearningTab,
     refetchInterval: false,
-    refetchOnMount: "always",
+    refetchOnMount: 'always',
   });
   const { refetch: refetchDomainRecipeQuery } = domainRecipeQuery;
+
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  const runsQuery = useQuery({
+    queryKey: ['crawl-runs'],
+    queryFn: () => api.listCrawls({ limit: 20 }),
+  });
+
+  const historyItems: HistoryItem[] = useMemo(() => {
+    return (runsQuery.data?.items ?? []).map((run) => ({
+      id: run.id,
+      status: run.status,
+      created_at: run.created_at,
+      label: run.url ? getDomain(run.url) : 'Untitled Run',
+      meta: `${run.run_type} · ${run.result_summary?.record_count ?? 0} records`,
+    }));
+  }, [runsQuery.data]);
 
   const records = useMemo(() => jsonRecordsQuery.data?.items ?? [], [jsonRecordsQuery.data?.items]);
   const recordsFetchCapReached = useMemo(
     () => records.length >= recordsFetchLimit && recordsFetchLimit >= 800,
     [records, recordsFetchLimit],
   );
-  const tableRecords = useMemo(() => tableRecordsQuery.data?.items ?? [], [tableRecordsQuery.data?.items]);
+  const tableRecords = useMemo(
+    () => tableRecordsQuery.data?.items ?? [],
+    [tableRecordsQuery.data?.items],
+  );
   const tableTotal = tableRecordsQuery.data?.meta?.total ?? tableRecords.length;
   const recordsTotal = jsonRecordsQuery.data?.meta?.total ?? records.length;
   const jsonRecords = useMemo(
@@ -249,10 +326,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const deferredJsonRecords = useDeferredValue(jsonRecords);
   const hasMoreTableRecords = tableRecords.length < tableTotal;
   const hasMoreJsonRecords =
-    jsonRecords.length < records.length || (records.length < recordsTotal && !recordsFetchCapReached);
-  const logs = useMemo(() => mergeLogs(logsQuery.data ?? [], socketLogItems), [logsQuery.data, socketLogItems]);
+    jsonRecords.length < records.length ||
+    (records.length < recordsTotal && !recordsFetchCapReached);
+  const logs = useMemo(
+    () => mergeLogs(logsQuery.data ?? [], socketLogItems),
+    [logsQuery.data, socketLogItems],
+  );
   const logCursorAfterId = logs.at(-1)?.id;
-  const markdown = markdownQuery.data ?? "";
+  const markdown = markdownQuery.data ?? '';
   const domainRecipe = domainRecipeQuery.data;
   const logSocketOnline = shouldFetchLogs && logSocketConnected;
   const elapsedLabel = useMemo(() => {
@@ -260,87 +341,102 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     const totalS = Math.floor(elapsedMs / 1000);
     const m = Math.floor(totalS / 60);
     const s = totalS % 60;
-    return `${m}m ${String(s).padStart(2, "0")}s`;
+    return `${m}m ${String(s).padStart(2, '0')}s`;
   }, [effectiveStartMs, localNow]);
   const recordsJson = useMemo(
     () =>
-      effectiveOutputTab === "json"
+      effectiveOutputTab === 'json'
         ? JSON.stringify(deferredJsonRecords.map(cleanRecordForDisplay), null, 2)
-        : "",
+        : '',
     [deferredJsonRecords, effectiveOutputTab],
   );
   const showRunLoadingState = runQuery.isLoading && !run;
-  const panelRefreshErrors = useMemo(() => [
-    {
-      key: "run",
-      label: "run",
-      error: runQuery.error,
-      refetch: refetchRunQuery,
-    },
-    {
-      key: "records",
-      label: "records",
-      error: tableRecordsQuery.error ?? jsonRecordsQuery.error,
-      refetch: async () => {
-        const tasks: Array<Promise<unknown>> = [];
-        if (tableRecordsQuery.error) {
-          tasks.push(refetchTableRecords());
-        }
-        if (jsonRecordsQuery.error) {
-          tasks.push(refetchJsonRecords());
-        }
-        if (!tasks.length) {
-          tasks.push(refetchTableRecords(), refetchJsonRecords());
-        }
-        await Promise.allSettled(tasks);
-      },
-    },
-    {
-      key: "logs",
-      label: "logs",
-      error: logsQuery.error,
-      refetch: refetchLogsQuery,
-    },
-    {
-      key: "markdown",
-      label: "markdown",
-      error: markdownQuery.error,
-      refetch: refetchMarkdownQuery,
-    },
-    {
-      key: "domain-recipe",
-      label: "domain recipe",
-      error: domainRecipeQuery.error,
-      refetch: refetchDomainRecipeQuery,
-    },
-  ].filter((panel) => panel.error), [
-    runQuery.error,
-    tableRecordsQuery.error,
-    jsonRecordsQuery.error,
-    logsQuery.error,
-    markdownQuery.error,
-    domainRecipeQuery.error,
-    refetchRunQuery,
-    refetchTableRecords,
-    refetchJsonRecords,
-    refetchLogsQuery,
-    refetchMarkdownQuery,
-    refetchDomainRecipeQuery,
+  const panelRefreshErrors = useMemo(
+    () =>
+      [
+        {
+          key: 'run',
+          label: 'run',
+          error: runQuery.error,
+          refetch: refetchRunQuery,
+        },
+        {
+          key: 'records',
+          label: 'records',
+          error: tableRecordsQuery.error ?? jsonRecordsQuery.error,
+          refetch: async () => {
+            const tasks: Array<Promise<unknown>> = [];
+            if (tableRecordsQuery.error) {
+              tasks.push(refetchTableRecords());
+            }
+            if (jsonRecordsQuery.error) {
+              tasks.push(refetchJsonRecords());
+            }
+            if (!tasks.length) {
+              tasks.push(refetchTableRecords(), refetchJsonRecords());
+            }
+            await Promise.allSettled(tasks);
+          },
+        },
+        {
+          key: 'logs',
+          label: 'logs',
+          error: logsQuery.error,
+          refetch: refetchLogsQuery,
+        },
+        {
+          key: 'markdown',
+          label: 'markdown',
+          error: markdownQuery.error,
+          refetch: refetchMarkdownQuery,
+        },
+        {
+          key: 'domain-recipe',
+          label: 'domain recipe',
+          error: domainRecipeQuery.error,
+          refetch: refetchDomainRecipeQuery,
+        },
+      ].filter((panel) => panel.error),
+    [
+      runQuery.error,
+      tableRecordsQuery.error,
+      jsonRecordsQuery.error,
+      logsQuery.error,
+      markdownQuery.error,
+      domainRecipeQuery.error,
+      refetchRunQuery,
+      refetchTableRecords,
+      refetchJsonRecords,
+      refetchLogsQuery,
+      refetchMarkdownQuery,
+      refetchDomainRecipeQuery,
+    ],
+  );
+
+  useTerminalSync(run, terminal, [
+    runQuery,
+    tableRecordsQuery,
+    jsonRecordsQuery,
+    logsQuery,
+    markdownQuery,
   ]);
 
-  useTerminalSync(run, terminal, [runQuery, tableRecordsQuery, jsonRecordsQuery, logsQuery, markdownQuery]);
-
   useEffect(() => {
-    const isJsdom = typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent);
-    if (!shouldFetchLogs || typeof window === "undefined" || typeof WebSocket === "undefined" || isJsdom) {
+    const isJsdom = typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
+    if (
+      !shouldFetchLogs ||
+      typeof window === 'undefined' ||
+      typeof WebSocket === 'undefined' ||
+      isJsdom
+    ) {
       return;
     }
     const query = new URLSearchParams();
     if (logCursorAfterId !== undefined) {
-      query.set("after_id", String(logCursorAfterId));
+      query.set('after_id', String(logCursorAfterId));
     }
     const queryString = query.toString();
-    const wsUrl = `${getApiWebSocketBaseUrl()}/api/crawls/${runId}/logs/ws${queryString ? `?${queryString}` : ""}`;
+    const wsUrl = `${getApiWebSocketBaseUrl()}/api/crawls/${runId}/logs/ws${queryString ? `?${queryString}` : ''}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => setLogSocketConnected(true);
@@ -355,7 +451,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     ws.onmessage = (event) => {
       try {
         const parsed = JSON.parse(event.data) as CrawlLog;
-        if (!parsed || typeof parsed.id !== "number") {
+        if (!parsed || typeof parsed.id !== 'number') {
           return;
         }
         setSocketLogItems((current) => mergeLogs(current, [parsed]));
@@ -406,14 +502,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
   useEffect(() => {
     for (const panel of panelRefreshErrors) {
-      const message = panel.error instanceof Error ? panel.error.message : "Unknown error";
+      const message = panel.error instanceof Error ? panel.error.message : 'Unknown error';
       const eventKey = `${runId}:${panel.key}:${message}`;
       if (pollErrorEventKeysRef.current.has(eventKey)) {
         continue;
       }
       pollErrorEventKeysRef.current.add(eventKey);
       trackEvent(
-        "run_screen_poll_error_rate",
+        'run_screen_poll_error_rate',
         telemetryErrorPayload(panel.error, {
           run_id: runId,
           panel: panel.key,
@@ -456,7 +552,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     for (const record of [...tableRecords, ...records]) {
       for (const source of [record.data, record.raw_data]) {
         Object.keys(source ?? {}).forEach((key) => {
-          if (!key.startsWith("_")) {
+          if (!key.startsWith('_')) {
             columns.add(key);
           }
         });
@@ -467,7 +563,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
   const filteredTableRecords = tableRecords;
   const visibleRecordIds = useMemo(
-    () => new Set((effectiveOutputTab === "table" ? filteredTableRecords : records).map((record) => record.id)),
+    () =>
+      new Set(
+        (effectiveOutputTab === 'table' ? filteredTableRecords : records).map(
+          (record) => record.id,
+        ),
+      ),
     [effectiveOutputTab, filteredTableRecords, records],
   );
   const visibleSelectedIds = useMemo(
@@ -476,7 +577,10 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   );
 
   const selectedRecords = useMemo(
-    () => (effectiveOutputTab === "table" ? filteredTableRecords : records).filter((record) => visibleSelectedIds.includes(record.id)),
+    () =>
+      (effectiveOutputTab === 'table' ? filteredTableRecords : records).filter((record) =>
+        visibleSelectedIds.includes(record.id),
+      ),
     [effectiveOutputTab, filteredTableRecords, records, visibleSelectedIds],
   );
   const batchSourceRecords = useMemo(
@@ -492,12 +596,15 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     [selectedRecords],
   );
   const listingRun = useMemo(() => isListingRun(run), [run]);
+  const ecommerceDetailRun = String(run?.surface ?? '') === 'ecommerce_detail';
   const verdict = extractionVerdict(run);
   const runErrorMessage =
-    typeof run?.result_summary?.error === "string" ? run.result_summary.error : "";
+    typeof run?.result_summary?.error === 'string' ? run.result_summary.error : '';
   const persistedQualityLevel = useMemo(() => {
-    const level = String(run?.result_summary?.quality_summary?.level ?? "").trim().toLowerCase();
-    if (level === "high" || level === "medium" || level === "low" || level === "unknown") {
+    const level = String(run?.result_summary?.quality_summary?.level ?? '')
+      .trim()
+      .toLowerCase();
+    if (level === 'high' || level === 'medium' || level === 'low' || level === 'unknown') {
       return level as ResultSummaryQualityLevel;
     }
     return null;
@@ -507,15 +614,17 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     [tableRecords, records, visibleColumns],
   );
   const completedQualityLevel = terminal ? (persistedQualityLevel ?? quality.level) : quality.level;
-  const emptyRecordsState = verdict === "blocked"
-    ? {
-      title: "Access blocked",
-      description: "The target site blocked acquisition for this run. Check Logs or browser diagnostics for challenge details.",
-    }
-    : {
-      title: "No records captured yet",
-      description: "Records will appear here once extraction returns rows.",
-    };
+  const emptyRecordsState =
+    verdict === 'blocked'
+      ? {
+          title: 'Access blocked',
+          description:
+            'The target site blocked acquisition for this run. Check Logs or browser diagnostics for challenge details.',
+        }
+      : {
+          title: 'No records captured yet',
+          description: 'Records will appear here once extraction returns rows.',
+        };
   const batchFromResultsUrls = selectedResultUrls.length ? selectedResultUrls : resultUrls;
   const batchFromResultsLabel = selectedResultUrls.length
     ? `Batch Crawl Selected (${selectedResultUrls.length})`
@@ -524,6 +633,10 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const productIntelligenceLabel = selectedRecords.length
     ? `Product Intelligence Selected (${selectedRecords.length})`
     : `Product Intelligence (${productIntelligenceRecords.length})`;
+  const dataEnrichmentRecords = selectedRecords.length ? selectedRecords : batchSourceRecords;
+  const dataEnrichmentLabel = selectedRecords.length
+    ? `Enrich Selected (${selectedRecords.length})`
+    : `Enrich Records (${dataEnrichmentRecords.length})`;
 
   const summaryRecordsFromRun = Number(run?.result_summary?.record_count ?? 0) || 0;
   const summaryRecordsFromTable =
@@ -547,15 +660,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       ),
   };
 
-  const knownTableRecordsTotal = Math.max(
-    tableTotal,
-    tableRecordsQuery.data?.meta?.total ?? 0,
-  );
+  const knownTableRecordsTotal = Math.max(tableTotal, tableRecordsQuery.data?.meta?.total ?? 0);
   const terminalRecordsExpected =
-    terminal && (summaryRecordsFromRun > 0 || verdict === "success" || verdict === "partial");
+    terminal && (summaryRecordsFromRun > 0 || verdict === 'success' || verdict === 'partial');
   const terminalRecordsNeedSync =
-    terminalRecordsExpected &&
-    knownTableRecordsTotal < Math.max(1, summaryRecordsFromRun);
+    terminalRecordsExpected && knownTableRecordsTotal < Math.max(1, summaryRecordsFromRun);
 
   useEffect(() => {
     if (!terminalRecordsNeedSync) {
@@ -564,10 +673,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     }
 
     const intervalId = window.setInterval(() => {
-      if (
-        terminalRecordsRetryAttemptsRef.current >=
-        RETRY_LIMITS.TERMINAL_RECORDS_RETRY_LIMIT
-      ) {
+      if (terminalRecordsRetryAttemptsRef.current >= RETRY_LIMITS.TERMINAL_RECORDS_RETRY_LIMIT) {
         window.clearInterval(intervalId);
         return;
       }
@@ -578,31 +684,31 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     return () => window.clearInterval(intervalId);
   }, [refetchJsonRecords, refetchTableRecords, terminalRecordsNeedSync]);
 
-  function downloadExport(kind: "csv" | "json" | "markdown") {
-    setRunActionError("");
-    const filename = `run-${runId}.${kind === "markdown" ? "md" : kind}`;
+  function downloadExport(kind: 'csv' | 'json' | 'markdown') {
+    setRunActionError('');
+    const filename = `run-${runId}.${kind === 'markdown' ? 'md' : kind}`;
     try {
       const href =
-        kind === "csv"
+        kind === 'csv'
           ? api.exportCsv(runId)
-          : kind === "json"
+          : kind === 'json'
             ? api.exportJson(runId)
             : api.exportMarkdown(runId);
-      const anchor = document.createElement("a");
+      const anchor = document.createElement('a');
       anchor.href = href;
       anchor.download = filename;
-      anchor.style.display = "none";
+      anchor.style.display = 'none';
       document.body.append(anchor);
       anchor.click();
       anchor.remove();
     } catch (error) {
-      setRunActionError(error instanceof Error ? error.message : "Unable to download export.");
+      setRunActionError(error instanceof Error ? error.message : 'Unable to download export.');
     }
   }
 
   async function runControl() {
-    setRunActionPending("kill");
-    setRunActionError("");
+    setRunActionPending('kill');
+    setRunActionError('');
     try {
       await api.killCrawl(runId);
       await Promise.all([
@@ -613,14 +719,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         markdownQuery.refetch(),
       ]);
     } catch (error) {
-      setRunActionError(error instanceof Error ? error.message : "Unable to kill crawl.");
+      setRunActionError(error instanceof Error ? error.message : 'Unable to kill crawl.');
     } finally {
       setRunActionPending(null);
     }
   }
 
   function resetToConfig() {
-    router.replace("/crawl?module=category&mode=single");
+    router.replace('/crawl?module=category&mode=single');
   }
 
   async function retryFailedPanels() {
@@ -635,7 +741,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     if (!urls.length) {
       return;
     }
-    const domain = inferDomainFromSurface(run?.surface) ?? "commerce";
+    const domain = inferDomainFromSurface(run?.surface) ?? 'commerce';
     window.sessionStorage.setItem(
       STORAGE_KEYS.BULK_PREFILL,
       JSON.stringify({
@@ -643,7 +749,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         urls,
       }),
     );
-    router.replace("/crawl?module=pdp&mode=batch");
+    router.replace('/crawl?module=pdp&mode=batch');
   }
 
   function triggerProductIntelligenceFromResults() {
@@ -652,7 +758,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     }
     storeProductIntelligencePrefill({
       source_run_id: run?.id ?? null,
-      source_domain: run?.url ?? "",
+      source_domain: run?.url ?? '',
       records: productIntelligenceRecords.map((record) => ({
         id: record.id,
         run_id: record.run_id,
@@ -660,13 +766,35 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         data: record.data,
       })),
     });
-    router.replace("/product-intelligence");
+    router.replace('/product-intelligence');
   }
 
-  async function applyFieldLearningAction(fieldName: string, action: "keep" | "reject", selectorKind?: string | null, selectorValue?: string | null, sourceRecordIds?: number[]) {
+  function triggerDataEnrichmentFromResults() {
+    if (!dataEnrichmentRecords.length) {
+      return;
+    }
+    storeDataEnrichmentPrefill({
+      source_run_id: run?.id ?? null,
+      records: dataEnrichmentRecords.map((record) => ({
+        id: record.id,
+        run_id: record.run_id,
+        source_url: record.source_url,
+        data: record.data,
+      })),
+    });
+    router.replace('/data-enrichment');
+  }
+
+  async function applyFieldLearningAction(
+    fieldName: string,
+    action: 'keep' | 'reject',
+    selectorKind?: string | null,
+    selectorValue?: string | null,
+    sourceRecordIds?: number[],
+  ) {
     const pendingKey = `field:${fieldName}:${action}` as const;
     setRecipeActionPending(pendingKey);
-    setRecipeActionError("");
+    setRecipeActionError('');
     try {
       await api.applyDomainRecipeFieldAction(runId, {
         field_name: fieldName,
@@ -677,7 +805,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       });
       await refetchDomainRecipeQuery();
     } catch (error) {
-      setRecipeActionError(error instanceof Error ? error.message : `Unable to ${action} this field learning signal.`);
+      setRecipeActionError(
+        error instanceof Error ? error.message : `Unable to ${action} this field learning signal.`,
+      );
     } finally {
       setRecipeActionPending(null);
     }
@@ -689,16 +819,26 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         <PageHeader
           title="Crawl Studio"
           actions={
-            <Button variant="primary" type="button" className="h-[var(--control-height)]" onClick={resetToConfig}>
+            <Button
+              variant="primary"
+              type="button"
+              className="h-[var(--control-height)]"
+              onClick={resetToConfig}
+            >
               <Plus className="size-3.5" />
               New Crawl
             </Button>
           }
         />
         <Card className="space-y-3 px-6 py-8">
-          <SectionHeader title="Unable to Load Crawl" description="The run workspace could not be restored." />
-          <div className="text-sm leading-[var(--leading-relaxed)] text-danger">
-            {runQuery.error instanceof Error ? runQuery.error.message : "Unknown crawl loading error."}
+          <SectionHeader
+            title="Unable to Load Crawl"
+            description="The run workspace could not be restored."
+          />
+          <div className="text-danger text-sm leading-[var(--leading-relaxed)]">
+            {runQuery.error instanceof Error
+              ? runQuery.error.message
+              : 'Unknown crawl loading error.'}
           </div>
         </Card>
       </div>
@@ -708,25 +848,45 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   return (
     <div className="page-stack gap-4">
       <PageHeader
-        title={run?.url ? (
-          <span className="flex items-center gap-1.5">
-            Run Details: <a href={run.url} target="_blank" rel="noreferrer" className="type-mono-standard text-accent underline-offset-2 hover:underline">{getDomain(run.url)}</a>
-          </span>
-        ) : "Crawl Results"}
+        title={
+          run?.url ? (
+            <span className="flex items-center gap-1.5">
+              Run Details:{' '}
+              <a
+                href={run.url}
+                target="_blank"
+                rel="noreferrer"
+                className="type-mono-standard text-accent underline-offset-2 hover:underline"
+              >
+                {getDomain(run.url)}
+              </a>
+            </span>
+          ) : (
+            'Crawl Results'
+          )
+        }
         actions={
-          <Button variant="primary" type="button" className="h-[var(--control-height)]" onClick={resetToConfig}>
+          <Button
+            variant="primary"
+            type="button"
+            className="h-[var(--control-height)]"
+            onClick={resetToConfig}
+          >
             <Plus className="size-3.5" />
             New Crawl
           </Button>
         }
       />
 
-
-
       {showRunLoadingState ? (
         <Card className="space-y-3 px-6 py-8">
-          <SectionHeader title="Loading Crawl" description="Fetching run details and restoring the workspace." />
-          <div className="text-sm leading-[var(--leading-relaxed)] text-muted">Run #{runId} is loading.</div>
+          <SectionHeader
+            title="Loading Crawl"
+            description="Fetching run details and restoring the workspace."
+          />
+          <div className="text-muted text-sm leading-[var(--leading-relaxed)]">
+            Run #{runId} is loading.
+          </div>
         </Card>
       ) : null}
 
@@ -737,19 +897,24 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             description="Data may be stale until these requests recover."
           />
           <InlineAlert
-            message={(
+            message={
               <div className="space-y-1">
                 {panelRefreshErrors.map((panel) => (
                   <div key={panel.key}>
-                    Unable to refresh {panel.label}:{""}
-                    {panel.error instanceof Error ? panel.error.message : "Unknown error."}
+                    Unable to refresh {panel.label}:{' '}
+                    {panel.error instanceof Error ? panel.error.message : 'Unknown error.'}
                   </div>
                 ))}
               </div>
-            )}
+            }
           />
           <div>
-            <Button variant="secondary" type="button" className="h-[var(--control-height)]" onClick={() => void retryFailedPanels()}>
+            <Button
+              variant="secondary"
+              type="button"
+              className="h-[var(--control-height)]"
+              onClick={() => void retryFailedPanels()}
+            >
               Retry failed panels
             </Button>
           </div>
@@ -760,11 +925,15 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
           <header className="cs-panel-header">
             <span className="cs-panel-title flex items-center gap-2">
               Live Log Stream
-              {logSocketOnline ? <span className="cs-live-dot is-success" /> : <span className="cs-live-dot" />}
+              {logSocketOnline ? (
+                <span className="cs-live-dot is-success" />
+              ) : (
+                <span className="cs-live-dot" />
+              )}
             </span>
             <div className="flex items-center gap-3">
               {run ? (
-                <span className="inline-flex items-center gap-1.5 rounded border border-divider bg-background-elevated px-2.5 py-1 font-mono text-sm tabular-nums text-foreground">
+                <span className="border-divider bg-background-elevated text-foreground inline-flex items-center gap-1.5 rounded border px-2.5 py-1 font-mono text-sm tabular-nums">
                   <Clock className="size-3.5" />
                   {elapsedLabel}
                 </span>
@@ -777,21 +946,27 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     scrollViewportToBottom(logViewportRef);
                     setLiveJumpAvailable(false);
                   }}
-                  className="bg-background-alt rounded-lg shadow-card inline-flex items-center gap-1 px-2.5 py-1.5 text-sm leading-[var(--leading-normal)]"
+                  className="bg-background-alt shadow-card inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm leading-[var(--leading-normal)]"
                 >
                   <ChevronsDown className="size-3.5" aria-hidden="true" />
                   Jump to Latest
                 </button>
               ) : null}
               <ActionButton
-                label={runActionPending === "kill" ? "Killing..." : "Hard Kill"}
+                label={runActionPending === 'kill' ? 'Killing...' : 'Hard Kill'}
                 onClick={() => void runControl()}
                 disabled={!run || !ACTIVE_STATUSES.has(run.status) || runActionPending !== null}
                 danger
               />
             </div>
           </header>
-          <LogTerminal logs={logs} records={batchSourceRecords} requestedFields={run?.requested_fields ?? []} live viewportRef={logViewportRef} />
+          <LogTerminal
+            logs={logs}
+            records={batchSourceRecords}
+            requestedFields={run?.requested_fields ?? []}
+            live
+            viewportRef={logViewportRef}
+          />
         </Card>
       ) : null}
 
@@ -812,7 +987,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     {run.url}
                   </a>
                 ) : (
-                  <p className="text-sm leading-[var(--leading-relaxed)] text-muted">Waiting for completed run data.</p>
+                  <p className="text-muted text-sm leading-[var(--leading-relaxed)]">
+                    Waiting for completed run data.
+                  </p>
                 )
               }
               actions={
@@ -824,22 +1001,57 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     </Button>
                   ) : null}
                   {listingRun && productIntelligenceRecords.length ? (
-                    <Button variant="secondary" type="button" onClick={triggerProductIntelligenceFromResults}>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      onClick={triggerProductIntelligenceFromResults}
+                    >
                       <Brain className="size-3.5" />
                       {productIntelligenceLabel}
                     </Button>
                   ) : null}
-                  <Button variant="secondary" type="button" onClick={() => void downloadExport("csv")}>
+                  {ecommerceDetailRun && dataEnrichmentRecords.length ? (
+                    <Button
+                      variant="accent"
+                      type="button"
+                      onClick={triggerDataEnrichmentFromResults}
+                    >
+                      <Brain className="size-3.5" />
+                      {dataEnrichmentLabel}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    onClick={() => void downloadExport('csv')}
+                  >
                     <Download className="size-3.5" />
                     Excel (CSV)
                   </Button>
-                  <Button variant="secondary" type="button" onClick={() => void downloadExport("json")}>
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    onClick={() => void downloadExport('json')}
+                  >
                     <Download className="size-3.5" />
                     JSON
                   </Button>
-                  <Button variant="secondary" type="button" onClick={() => void downloadExport("markdown")}>
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    onClick={() => void downloadExport('markdown')}
+                  >
                     <Download className="size-3.5" />
                     Markdown
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    onClick={() => setHistoryOpen(true)}
+                    className="h-[var(--control-height)] px-3"
+                  >
+                    <History className="size-3.5" />
+                    History
                   </Button>
                 </>
               }
@@ -849,13 +1061,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   variant="underline"
                   onChange={(value) => setOutputTab(value as OutputTabKey)}
                   options={[
-                    { value: "table", label: `Table (${summary.records})` },
-                    { value: "json", label: "JSON" },
-                    { value: "markdown", label: "Markdown" },
-                    { value: "logs", label: "Logs" },
-                    ...(showRunLearningTab
-                      ? [{ value: "learning", label: "Learning" }]
-                      : []),
+                    { value: 'table', label: `Table (${summary.records})` },
+                    { value: 'json', label: 'JSON' },
+                    { value: 'markdown', label: 'Markdown' },
+                    { value: 'logs', label: 'Logs' },
+                    ...(showRunLearningTab ? [{ value: 'learning', label: 'Learning' }] : []),
                   ]}
                 />
               }
@@ -865,10 +1075,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   verdict={humanizeVerdict(verdict).toLowerCase()}
                   quality={humanizeQuality(completedQualityLevel).toLowerCase()}
                 />
-              } content={
+              }
+              content={
                 <>
-                  {effectiveOutputTab === "table" ? (
-                    <div className="space-y-3 min-h-[55vh]">
+                  {effectiveOutputTab === 'table' ? (
+                    <div className="min-h-[55vh] space-y-3">
                       {tableRecordsQuery.isLoading && !tableRecords.length ? (
                         <DataRegionLoading count={5} className="px-0" />
                       ) : tableRecords.length ? (
@@ -877,15 +1088,21 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                             records={filteredTableRecords}
                             visibleColumns={visibleColumns}
                             selectedIds={visibleSelectedIds}
-                            onSelectAll={(checked) => setSelectedIds(checked ? filteredTableRecords.map((record) => record.id) : [])}
+                            onSelectAll={(checked) =>
+                              setSelectedIds(
+                                checked ? filteredTableRecords.map((record) => record.id) : [],
+                              )
+                            }
                             onToggleRow={(id, checked) =>
                               setSelectedIds((current) =>
-                                checked ? uniqueNumbers([...current, id]) : current.filter((value) => value !== id),
+                                checked
+                                  ? uniqueNumbers([...current, id])
+                                  : current.filter((value) => value !== id),
                               )
                             }
                           />
                           {hasMoreTableRecords ? (
-                            <div className="surface-muted flex items-center justify-between rounded-lg px-3 py-2 text-sm leading-[var(--leading-normal)] text-muted">
+                            <div className="surface-muted text-muted flex items-center justify-between rounded-lg px-3 py-2 text-sm leading-[var(--leading-normal)]">
                               <span>
                                 Showing {tableRecords.length} of {tableTotal} records
                               </span>
@@ -915,26 +1132,34 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     </div>
                   ) : null}
 
-                  {effectiveOutputTab === "json" ? (
+                  {effectiveOutputTab === 'json' ? (
                     <div className="relative min-h-[55vh]">
-                      <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
-                        <Button variant="ghost" type="button" onClick={() => void copyJson(records)}>
+                      <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          type="button"
+                          onClick={() => void copyJson(records)}
+                        >
                           <Copy className="size-3.5" />
                           Copy
                         </Button>
                       </div>
-                      <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto pt-14 pb-4">
+                      <pre className="crawl-terminal crawl-terminal-json max-h-[72vh] min-h-[55vh] overflow-y-auto pt-14 pb-4">
                         {recordsJson}
                       </pre>
                       {hasMoreJsonRecords ? (
-                        <div className="surface-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-sm leading-[var(--leading-normal)] text-muted">
+                        <div className="surface-muted text-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-sm leading-[var(--leading-normal)]">
                           <span>
                             JSON previewing {jsonRecords.length} of {recordsTotal} records
                           </span>
                           <Button
                             variant="secondary"
                             type="button"
-                            onClick={() => setJsonVisibleCount((current) => current + CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4)}
+                            onClick={() =>
+                              setJsonVisibleCount(
+                                (current) => current + CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4,
+                              )
+                            }
                           >
                             Load More JSON
                           </Button>
@@ -949,9 +1174,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     </div>
                   ) : null}
 
-                  {effectiveOutputTab === "markdown" ? (
+                  {effectiveOutputTab === 'markdown' ? (
                     <div className="relative min-h-[55vh]">
-                      <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+                      <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
                         <Button
                           variant="ghost"
                           type="button"
@@ -963,13 +1188,16 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         </Button>
                       </div>
                       {markdownQuery.isLoading && !markdown ? (
-                        <div className="surface-muted space-y-2 rounded-lg px-3 pb-3 pt-12">
+                        <div className="surface-muted space-y-2 rounded-lg px-3 pt-12 pb-3">
                           {Array.from({ length: 8 }, (_, index) => (
-                            <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]" />
+                            <div
+                              key={index}
+                              className="skeleton h-5 w-full rounded-[var(--radius-md)]"
+                            />
                           ))}
                         </div>
                       ) : markdown ? (
-                        <div className="surface-muted min-h-[55vh] max-h-[72vh] rounded-lg overflow-y-auto px-3 pb-3 pt-12">
+                        <div className="surface-muted max-h-[72vh] min-h-[55vh] overflow-y-auto rounded-lg px-3 pt-12 pb-3">
                           <article className="markdown-document max-w-none">
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
@@ -987,84 +1215,163 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           </article>
                         </div>
                       ) : (
-                        <div className="surface-muted grid min-h-40 place-items-center rounded-lg border-dashed text-sm leading-[var(--leading-relaxed)] text-muted">
+                        <div className="surface-muted text-muted grid min-h-40 place-items-center rounded-lg border-dashed text-sm leading-[var(--leading-relaxed)]">
                           No markdown is available for this run.
                         </div>
                       )}
                     </div>
                   ) : null}
 
-                  {effectiveOutputTab === "logs" ? (
+                  {effectiveOutputTab === 'logs' ? (
                     <div className="min-h-[55vh]">
-                      <LogTerminal logs={logs} records={batchSourceRecords} requestedFields={run?.requested_fields ?? []} viewportRef={logViewportRef} />
+                      <LogTerminal
+                        logs={logs}
+                        records={batchSourceRecords}
+                        requestedFields={run?.requested_fields ?? []}
+                        viewportRef={logViewportRef}
+                      />
                     </div>
                   ) : null}
 
-                  {effectiveOutputTab === "learning" ? (
-                    <div className="space-y-4 min-h-[55vh]">
+                  {effectiveOutputTab === 'learning' ? (
+                    <div className="min-h-[55vh] space-y-4">
                       {domainRecipeQuery.isLoading ? (
                         <Card className="section-card">
-                          <SectionHeader title="Run Learning" description="Loading keep and reject recommendations for this run." />
+                          <SectionHeader
+                            title="Run Learning"
+                            description="Loading keep and reject recommendations for this run."
+                          />
                         </Card>
                       ) : domainRecipe ? (
                         <div className="space-y-4">
-                          {recipeActionError ? <InlineAlert tone="danger" message={recipeActionError} /> : null}
+                          {recipeActionError ? (
+                            <InlineAlert tone="danger" message={recipeActionError} />
+                          ) : null}
                           <Card className="section-card space-y-4">
                             <SectionHeader
                               title="Run Learning"
                               description={`Review extraction evidence for ${domainRecipe.domain} on ${domainRecipe.surface}. Keep what should compound, reject what should not.`}
                             />
                             <div className="grid gap-3 md:grid-cols-2">
-                              <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[var(--leading-relaxed)] text-secondary">
+                              <div className="surface-muted text-secondary rounded-lg px-3 py-3 text-sm leading-[var(--leading-relaxed)]">
                                 <div className="field-label mb-1">Requested Coverage</div>
-                                Requested: {domainRecipe.requested_field_coverage.requested.join(", ") || "None"}
+                                Requested:{' '}
+                                {domainRecipe.requested_field_coverage.requested.join(', ') ||
+                                  'None'}
                                 <br />
-                                Found: {domainRecipe.requested_field_coverage.found.join(", ") || "None"}
+                                Found:{' '}
+                                {domainRecipe.requested_field_coverage.found.join(', ') || 'None'}
                                 <br />
-                                Missing: {domainRecipe.requested_field_coverage.missing.join(", ") || "None"}
+                                Missing:{' '}
+                                {domainRecipe.requested_field_coverage.missing.join(', ') || 'None'}
                               </div>
-                              <div className="surface-muted rounded-lg px-3 py-3 text-sm leading-[var(--leading-relaxed)] text-secondary">
+                              <div className="surface-muted text-secondary rounded-lg px-3 py-3 text-sm leading-[var(--leading-relaxed)]">
                                 <div className="field-label mb-1">Acquisition Evidence</div>
-                                Method: {domainRecipe.acquisition_evidence.actual_fetch_method || "—"}
+                                Method:{' '}
+                                {domainRecipe.acquisition_evidence.actual_fetch_method || '—'}
                                 <br />
-                                Browser Used: {domainRecipe.acquisition_evidence.browser_used ? "Yes" : "No"}
+                                Browser Used:{' '}
+                                {domainRecipe.acquisition_evidence.browser_used ? 'Yes' : 'No'}
                                 <br />
-                                Browser Reason: {domainRecipe.acquisition_evidence.browser_reason || "—"}
+                                Browser Reason:{' '}
+                                {domainRecipe.acquisition_evidence.browser_reason || '—'}
                                 <br />
-                                Cookie Memory: {domainRecipe.acquisition_evidence.cookie_memory_available ? "Saved" : domainRecipe.acquisition_evidence.browser_used ? "No reusable state observed" : "Not applicable"}
+                                Cookie Memory:{' '}
+                                {domainRecipe.acquisition_evidence.cookie_memory_available
+                                  ? 'Saved'
+                                  : domainRecipe.acquisition_evidence.browser_used
+                                    ? 'No reusable state observed'
+                                    : 'Not applicable'}
                               </div>
                             </div>
 
                             <div className="space-y-3">
                               <div>
                                 <div className="field-label mb-0">Field Learning</div>
-                                <p className="mt-1 text-sm leading-[var(--leading-normal)] text-secondary">Keep accepted field evidence or reject bad field evidence for future runs on this domain and surface.</p>
+                                <p className="text-secondary mt-1 text-sm leading-[var(--leading-normal)]">
+                                  Keep accepted field evidence or reject bad field evidence for
+                                  future runs on this domain and surface.
+                                </p>
                               </div>
                               {domainRecipe.field_learning.length ? (
                                 <div className="space-y-2">
                                   {domainRecipe.field_learning.map((item) => {
-                                    const keepPending = recipeActionPending === `field:${item.field_name}:keep`;
-                                    const rejectPending = recipeActionPending === `field:${item.field_name}:reject`;
+                                    const keepPending =
+                                      recipeActionPending === `field:${item.field_name}:keep`;
+                                    const rejectPending =
+                                      recipeActionPending === `field:${item.field_name}:reject`;
                                     return (
-                                      <div key={`${item.field_name}:${item.selector_kind ?? "source"}:${item.selector_value ?? item.source_labels.join(",")}`} className="rounded-lg border border-divider bg-background px-3 py-3 text-sm">
+                                      <div
+                                        key={`${item.field_name}:${item.selector_kind ?? 'source'}:${item.selector_value ?? item.source_labels.join(',')}`}
+                                        className="border-divider bg-background rounded-lg border px-3 py-3 text-sm"
+                                      >
                                         <div className="flex flex-wrap items-start justify-between gap-3">
                                           <div className="min-w-0 flex-1">
                                             <div className="flex flex-wrap items-center gap-2">
-                                              <span className="font-medium text-foreground">{item.field_name}</span>
-                                              {item.selector_kind ? <Badge tone="info">{item.selector_kind}</Badge> : <Badge tone="neutral">non-selector</Badge>}
-                                              {item.feedback ? <Badge tone={item.feedback.action === "reject" ? "warning" : "success"}>{item.feedback.action}</Badge> : null}
+                                              <span className="text-foreground font-medium">
+                                                {item.field_name}
+                                              </span>
+                                              {item.selector_kind ? (
+                                                <Badge tone="info">{item.selector_kind}</Badge>
+                                              ) : (
+                                                <Badge tone="neutral">non-selector</Badge>
+                                              )}
+                                              {item.feedback ? (
+                                                <Badge
+                                                  tone={
+                                                    item.feedback.action === 'reject'
+                                                      ? 'warning'
+                                                      : 'success'
+                                                  }
+                                                >
+                                                  {item.feedback.action}
+                                                </Badge>
+                                              ) : null}
                                             </div>
-                                            <div className="mt-1 text-xs text-muted">
-                                              {selectorWinnerLabel(item.selector_kind)} · Sources: {item.source_labels.join(", ") || "—"}
+                                            <div className="text-muted mt-1 text-xs">
+                                              {selectorWinnerLabel(item.selector_kind)} · Sources:{' '}
+                                              {item.source_labels.join(', ') || '—'}
                                             </div>
-                                            {item.selector_value ? <code className="mt-2 block truncate text-xs">{item.selector_value}</code> : null}
+                                            {item.selector_value ? (
+                                              <code className="mt-2 block truncate text-xs">
+                                                {item.selector_value}
+                                              </code>
+                                            ) : null}
                                           </div>
                                           <div className="flex flex-wrap gap-2">
-                                            <Button variant="secondary" type="button" size="sm" disabled={recipeActionPending !== null} onClick={() => void applyFieldLearningAction(item.field_name, "keep", item.selector_kind, item.selector_value, item.source_record_ids)}>
-                                              {keepPending ? "Keeping..." : "Keep"}
+                                            <Button
+                                              variant="secondary"
+                                              type="button"
+                                              size="sm"
+                                              disabled={recipeActionPending !== null}
+                                              onClick={() =>
+                                                void applyFieldLearningAction(
+                                                  item.field_name,
+                                                  'keep',
+                                                  item.selector_kind,
+                                                  item.selector_value,
+                                                  item.source_record_ids,
+                                                )
+                                              }
+                                            >
+                                              {keepPending ? 'Keeping...' : 'Keep'}
                                             </Button>
-                                            <Button variant="ghost" type="button" size="sm" disabled={recipeActionPending !== null} onClick={() => void applyFieldLearningAction(item.field_name, "reject", item.selector_kind, item.selector_value, item.source_record_ids)}>
-                                              {rejectPending ? "Rejecting..." : "Reject"}
+                                            <Button
+                                              variant="ghost"
+                                              type="button"
+                                              size="sm"
+                                              disabled={recipeActionPending !== null}
+                                              onClick={() =>
+                                                void applyFieldLearningAction(
+                                                  item.field_name,
+                                                  'reject',
+                                                  item.selector_kind,
+                                                  item.selector_value,
+                                                  item.source_record_ids,
+                                                )
+                                              }
+                                            >
+                                              {rejectPending ? 'Rejecting...' : 'Reject'}
                                             </Button>
                                           </div>
                                         </div>
@@ -1073,7 +1380,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                   })}
                                 </div>
                               ) : (
-                                <div className="surface-muted rounded-lg border-dashed px-3 py-3 text-sm leading-[var(--leading-relaxed)] text-secondary">
+                                <div className="surface-muted text-secondary rounded-lg border-dashed px-3 py-3 text-sm leading-[var(--leading-relaxed)]">
                                   No field learning signals were captured for this run.
                                 </div>
                               )}
@@ -1095,7 +1402,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
           </Card>
         </div>
       ) : null}
+      <HistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        items={historyItems}
+        activeId={runId}
+        onSelect={(id) => router.push(`/crawl?run_id=${id}`)}
+        title="Crawl History"
+      />
     </div>
   );
 }
-

@@ -41,6 +41,7 @@ Routers registered in `backend/app/main.py`:
 - `/api/review`
 - `/api/selectors`
 - `/api/llm`
+- `/api/data-enrichment`
 - `/api/health`
 - `/api/metrics`
 
@@ -51,6 +52,7 @@ Important route groups:
 - `api/review.py`: review payload, artifact HTML, save review mapping
 - `api/selectors.py`: selector CRUD, cross-surface listing by domain, suggestion, test, preview HTML
 - `api/llm.py`: provider catalog, config CRUD, connection test, cost log
+- `api/data_enrichment.py`: on-demand ecommerce detail enrichment jobs and enriched product row lookup
 
 Domain-recipe routes now live under `api/crawls.py`:
 
@@ -157,6 +159,7 @@ Primary files:
 - `pipeline/extraction_retry_decision.py`
 - `pipeline/types.py`
 - `pipeline/runtime_helpers.py`
+- `data_enrichment/service.py`
 
 Responsibilities:
 
@@ -165,6 +168,7 @@ Responsibilities:
 - dispatch and recover runs
 - process URLs
 - persist records and summary state
+- create on-demand enrichment jobs from persisted ecommerce detail records
 - emit logs and progress
 
 Current live behavior:
@@ -176,6 +180,7 @@ Current live behavior:
 - acceptance reports now distinguish transport verdicts from output quality through `quality_verdict`, `observed_failure_mode`, and `quality_checks`, so runs that technically succeed but return shell pages, promo pages, chrome-heavy listings, or broken variant semantics no longer look healthy
 - reusable domain execution defaults are persisted separately from selector memory in `DomainRunProfile`, then merged into single-URL run creation before `CrawlRun.settings` is snapshotted
 - `pipeline/core.py` stays the per-URL orchestrator; direct-record LLM fallback, empty-extraction browser retry decisions, browser diagnostics merge, and failure-state persistence live in dedicated pipeline helper modules
+- Data Enrichment is separate from the crawl pipeline: it reads persisted ecommerce detail `CrawlRecord` rows, writes `EnrichedProduct` rows, and only updates source-record enrichment status metadata.
 
 ### 6.3 Acquisition and browser runtime
 
@@ -439,6 +444,8 @@ Primary models:
 - `DomainCookieMemory`
 - `DomainFieldFeedback`
 - `ReviewPromotion`
+- `DataEnrichmentJob`
+- `EnrichedProduct`
 - `LLMConfig`
 - `LLMCostLog`
 - `DomainMemory`
@@ -448,6 +455,7 @@ Notable current schema direction:
 - durable queue lease support
 - max-records trigger support
 - URL identity keys on records
+- enrichment status metadata on crawl records, with derived enrichment data stored separately in `enriched_products`
 - domain-memory storage
 - split crawl-data reset versus domain-memory reset, so destructive cleanup no longer wipes learned selectors/profiles/cookies by default
 

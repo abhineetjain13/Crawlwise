@@ -57,26 +57,36 @@ REVIEW_COUNT_RE = _REVIEW_COUNT_RE
 PRODUCT_URL_HINTS = detail_path_hints("ecommerce_detail")
 JOB_URL_HINTS = detail_path_hints("job_detail")
 _FIELD_ALIASES = FIELD_ALIASES
-_CURRENCY_SYMBOL_PATTERN = "|".join(
-    re.escape(str(symbol))
-    for symbol in sorted(
-        (str(symbol) for symbol in dict(CURRENCY_SYMBOL_MAP or {}).keys() if symbol),
-        key=len,
-        reverse=True,
+_CURRENCY_SYMBOL_PATTERN = (
+    "|".join(
+        re.escape(str(symbol))
+        for symbol in sorted(
+            (
+                str(symbol)
+                for symbol in dict(CURRENCY_SYMBOL_MAP or {}).keys()
+                if symbol
+            ),
+            key=len,
+            reverse=True,
+        )
     )
-) or r"(?!)"  # Never-matching pattern if no symbols defined
-_CURRENCY_CODE_PATTERN = "|".join(
-    re.escape(str(code))
-    for code in sorted(
-        (
-            str(code)
-            for code in tuple(CURRENCY_CODES or ())
-            if isinstance(code, str) and len(str(code)) == 3
-        ),
-        key=len,
-        reverse=True,
+    or r"(?!)"
+)  # Never-matching pattern if no symbols defined
+_CURRENCY_CODE_PATTERN = (
+    "|".join(
+        re.escape(str(code))
+        for code in sorted(
+            (
+                str(code)
+                for code in tuple(CURRENCY_CODES or ())
+                if isinstance(code, str) and len(str(code)) == 3
+            ),
+            key=len,
+            reverse=True,
+        )
     )
-) or r"(?!)"
+    or r"(?!)"
+)
 PRICE_RE = re.compile(
     rf"(?:(?:{_CURRENCY_SYMBOL_PATTERN})\s*\d[\d.,]*|\d[\d.,]*\s*(?:{_CURRENCY_SYMBOL_PATTERN}))"
 )
@@ -108,6 +118,8 @@ _NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
     for key in tuple(NOISY_PRODUCT_ATTRIBUTE_KEYS or ())
     if str(key or "").strip()
 ) | {"availability", "available", "in_stock", "stock_status"}
+
+
 def _object_list(value: object) -> list:
     return list(value) if isinstance(value, list) else []
 
@@ -175,7 +187,9 @@ def is_title_noise(title: object) -> bool:
         return True
     if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
         return True
-    if any(lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES):
+    if any(
+        lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES
+    ):
         return True
     if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
         return True
@@ -215,9 +229,7 @@ def text_or_none(value: object) -> str | None:
 
 def slug_tokens(value: object) -> list[str]:
     return [
-        token
-        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
-        if token
+        token for token in re.split(r"[^a-z0-9]+", str(value or "").casefold()) if token
     ]
 
 
@@ -225,7 +237,9 @@ def infer_brand_from_title_marker(title: object) -> str | None:
     text = clean_text(title)
     if not text:
         return None
-    leading_marker = next((marker for marker in ("\u2122", "\u00ae") if text.startswith(marker)), "")
+    leading_marker = next(
+        (marker for marker in ("\u2122", "\u00ae") if text.startswith(marker)), ""
+    )
     if leading_marker:
         leading_token = clean_text(text[len(leading_marker) :]).split(" ", 1)[0].strip()
         brand = clean_text(f"{leading_marker}{leading_token}") if leading_token else ""
@@ -233,9 +247,7 @@ def infer_brand_from_title_marker(title: object) -> str | None:
             return None
         return brand
     marker_positions = [
-        index
-        for marker in ("\u2122", "\u00ae")
-        if (index := text.find(marker)) >= 0
+        index for marker in ("\u2122", "\u00ae") if (index := text.find(marker)) >= 0
     ]
     if not marker_positions:
         return None
@@ -350,7 +362,9 @@ def validate_record_for_surface(
     requested_fields: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     logical_fields = {
-        key: value for key, value in dict(record).items() if not str(key).startswith("_")
+        key: value
+        for key, value in dict(record).items()
+        if not str(key).startswith("_")
     }
     internal_fields = {
         key: value for key, value in dict(record).items() if str(key).startswith("_")
@@ -383,7 +397,9 @@ def surface_fields(surface: str, requested_fields: list[str] | None) -> list[str
         if (
             exact_field
             and exact_field not in fields
-            and (exact_field in allowed_fields or exact_field not in ALL_CANONICAL_FIELDS)
+            and (
+                exact_field in allowed_fields or exact_field not in ALL_CANONICAL_FIELDS
+            )
         ):
             fields.append(exact_field)
     for field_name in expand_requested_fields(list(requested_fields or [])):
@@ -400,6 +416,7 @@ def surface_alias_lookup(
     surface: str,
     requested_fields: list[str] | None,
 ) -> dict[str, str]:
+    """Build aliases with exact canonical field keys taking precedence."""
     fields = surface_fields(surface, requested_fields)
     aliases = get_surface_field_aliases(surface)
     lookup: dict[str, str] = {}
@@ -422,7 +439,7 @@ def surface_alias_lookup(
         for alias in canonical_aliases:
             normalized_alias = normalize_field_key(alias)
             if normalized_alias:
-                lookup[normalized_alias] = canonical
+                lookup.setdefault(normalized_alias, canonical)
     return lookup
 
 
@@ -437,7 +454,9 @@ def direct_record_to_surface_fields(
     shaped = dict(base_fields or {})
     source_fields = surface_fields(surface, requested_fields)
     for field_name in source_fields:
-        value = coerce_field_value(field_name, dict(record or {}).get(field_name), page_url)
+        value = coerce_field_value(
+            field_name, dict(record or {}).get(field_name), page_url
+        )
         if value not in (None, "", [], {}):
             shaped[field_name] = value
     return finalize_record(shaped, surface=surface)
@@ -533,7 +552,9 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
             cleaned = clean_text(match.group(1))
         cleaned = re.sub(r"^color\s*:\s*", "", cleaned, flags=re.I)
         cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
-        cleaned = re.split(r"\bsize(?:\s*\([^)]*\))?\b", cleaned, maxsplit=1, flags=re.I)[0]
+        cleaned = re.split(
+            r"\bsize(?:\s*\([^)]*\))?\b", cleaned, maxsplit=1, flags=re.I
+        )[0]
         cleaned = clean_text(cleaned)
         if not cleaned or re.search(r"\d+\s*x\s*\d+", cleaned):
             return None
@@ -598,9 +619,7 @@ def salary_from_json(value: object) -> str | None:
             if not numbers:
                 numbers = amount or ""
             if numbers:
-                return " ".join(
-                    piece for piece in (currency, numbers, unit) if piece
-                )
+                return " ".join(piece for piece in (currency, numbers, unit) if piece)
         text = coerce_text(value.get("value"))
         if text:
             return f"{currency} {text}".strip() if currency else text
@@ -714,7 +733,9 @@ def _product_attribute_key_is_noise(value: object) -> bool:
 
 
 def _product_attribute_row_is_noise(value: dict[str, object]) -> bool:
-    row_id = value.get("Id") or value.get("id") or value.get("name") or value.get("label")
+    row_id = (
+        value.get("Id") or value.get("id") or value.get("name") or value.get("label")
+    )
     return _product_attribute_key_is_noise(row_id)
 
 
@@ -729,7 +750,8 @@ def _clean_product_attribute_value(value: object) -> object | None:
         rows = [
             cleaned
             for item in value
-            if (cleaned := _clean_product_attribute_value(item)) not in (None, "", [], {})
+            if (cleaned := _clean_product_attribute_value(item))
+            not in (None, "", [], {})
         ]
         return rows or None
     return value
@@ -794,12 +816,21 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         value,
         dict,
     ):
-        return coerce_text(value.get("name") or value.get("title") or value.get("value"))
+        return coerce_text(
+            value.get("name") or value.get("title") or value.get("value")
+        )
     if field_name == "category" and isinstance(value, dict):
         return coerce_text(
             value.get("name")
             or value.get("title")
             or value.get("slug")
+            or value.get("value")
+        )
+    if field_name == "gender" and isinstance(value, dict):
+        return coerce_text(
+            value.get("name")
+            or value.get("title")
+            or value.get("label")
             or value.get("value")
         )
     if field_name in {"color", "size"}:
@@ -822,7 +853,12 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         if text and not re.search(r"\d", text):
             return None
         return text or None
-    if field_name in {"price", "sale_price", "original_price", "discount_amount"} and isinstance(value, dict):
+    if field_name in {
+        "price",
+        "sale_price",
+        "original_price",
+        "discount_amount",
+    } and isinstance(value, dict):
         for key in (
             "price",
             "amount",
@@ -851,7 +887,13 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
                 return coerce_text(value.get(key))
         return None
     if field_name == "review_count" and isinstance(value, dict):
-        for key in ("reviewCount", "ratingCount", "count", "totalCount", "numberOfReviews"):
+        for key in (
+            "reviewCount",
+            "ratingCount",
+            "count",
+            "totalCount",
+            "numberOfReviews",
+        ):
             if value.get(key) not in (None, "", [], {}):
                 return coerce_text(value.get(key))
         return None

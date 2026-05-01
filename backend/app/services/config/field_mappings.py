@@ -1,3 +1,8 @@
+"""Static field mappings.
+
+Alias consumers prefer exact canonical field keys before alias fallbacks.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,14 +25,41 @@ for _name, _value in _STATIC_EXPORTS.items():
 JS_STATE_GLOM_SKIP: tuple[object, ...] = ("", [], {})
 JS_STATE_PRODUCT_FIELD_SPEC = {
     "title": Coalesce("title", "name", default=None, skip=JS_STATE_GLOM_SKIP),
-    "brand": Coalesce("brand.name", "brand", "vendor.name", "vendor", default=None, skip=JS_STATE_GLOM_SKIP),
+    "brand": Coalesce(
+        "brand.name",
+        "brand",
+        "vendor.name",
+        "vendor",
+        default=None,
+        skip=JS_STATE_GLOM_SKIP,
+    ),
     "vendor": Coalesce("vendor.name", "vendor", default=None, skip=JS_STATE_GLOM_SKIP),
     "handle": Coalesce("handle", "slug", default=None, skip=JS_STATE_GLOM_SKIP),
-    "description": Coalesce("description", "body_html", "descriptionHtml", default=None, skip=JS_STATE_GLOM_SKIP),
-    "product_id": Coalesce("id", "product_id", "productId", "legacyResourceId", default=None, skip=JS_STATE_GLOM_SKIP),
+    "description": Coalesce(
+        "description",
+        "body_html",
+        "descriptionHtml",
+        default=None,
+        skip=JS_STATE_GLOM_SKIP,
+    ),
+    "product_id": Coalesce(
+        "id",
+        "product_id",
+        "productId",
+        "legacyResourceId",
+        default=None,
+        skip=JS_STATE_GLOM_SKIP,
+    ),
     "category": Coalesce("category", default=None, skip=JS_STATE_GLOM_SKIP),
-    "product_type": Coalesce("product_type", "productType", "type", default=None, skip=JS_STATE_GLOM_SKIP),
-    "sku": Coalesce("sku", "productId", "product_id", default=None, skip=JS_STATE_GLOM_SKIP),
+    "product_type": Coalesce(
+        "product_type", "productType", "type", default=None, skip=JS_STATE_GLOM_SKIP
+    ),
+    "gender": Coalesce(
+        "gender", "target_gender", "targetGender", default=None, skip=JS_STATE_GLOM_SKIP
+    ),
+    "sku": Coalesce(
+        "sku", "productId", "product_id", default=None, skip=JS_STATE_GLOM_SKIP
+    ),
     "barcode": Coalesce("barcode", default=None, skip=JS_STATE_GLOM_SKIP),
     "currency": Coalesce(
         "currency",
@@ -91,7 +123,13 @@ JS_STATE_PRODUCT_FIELD_SPEC = {
         default=None,
         skip=JS_STATE_GLOM_SKIP,
     ),
-    "availability": Coalesce("availability", "inventory.status", "availableForSale", default=None, skip=JS_STATE_GLOM_SKIP),
+    "availability": Coalesce(
+        "availability",
+        "inventory.status",
+        "availableForSale",
+        default=None,
+        skip=JS_STATE_GLOM_SKIP,
+    ),
     "tags": Coalesce("tags", default=None, skip=JS_STATE_GLOM_SKIP),
     "created_at": Coalesce("created_at", default=None, skip=JS_STATE_GLOM_SKIP),
     "updated_at": Coalesce("updated_at", default=None, skip=JS_STATE_GLOM_SKIP),
@@ -149,7 +187,9 @@ JS_STATE_VARIANT_FIELD_SPEC = {
         default=None,
         skip=JS_STATE_GLOM_SKIP,
     ),
-    "sku": Coalesce("sku", "productId", "product_id", default=None, skip=JS_STATE_GLOM_SKIP),
+    "sku": Coalesce(
+        "sku", "productId", "product_id", default=None, skip=JS_STATE_GLOM_SKIP
+    ),
     "barcode": Coalesce("barcode", default=None, skip=JS_STATE_GLOM_SKIP),
 }
 PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS = frozenset(

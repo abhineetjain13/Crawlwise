@@ -30,6 +30,7 @@ This is intentionally about behavior, not implementation detail.
 | Extraction bugs are fixed upstream | extraction owners, not `publish/*` | Bad records must be prevented in acquisition/extraction; persistence/verdict code must not compensate for them | Same bug reappears under new sites with more downstream clutter |
 | Generic code stays generic | `acquisition/*`, `listing_extractor.py`, `detail_extractor.py` | Site behavior belongs in adapters/config only when it is truly platform-specific | Shared runtime turns into a pile of per-site branches |
 | LLM is optional | `llm_runtime.py`, `crawl_crud.py` | LLM flows only run when enabled by run settings and active config | Silent behavior drift and non-deterministic extraction |
+| Data enrichment is separate from crawl output | `api/data_enrichment.py`, `data_enrichment/service.py`, `models/crawl.py` | Enrichment reads successful ecommerce detail records, writes derived rows to `enriched_products`, and only updates `crawl_records.enrichment_status` / `enriched_at` on source records | Raw crawl data and derived semantic fields become mixed, making recrawl and re-enrichment lifecycles ambiguous |
 
 ---
 
@@ -41,6 +42,7 @@ This is intentionally about behavior, not implementation detail.
 | Run snapshots freeze runtime config | `crawl_crud.py`, `llm_config_service.py`, `run_config_snapshot.py` | LLM config and extraction runtime settings are stamped onto the run at creation time | Mid-run config drift changes outcomes for the same run |
 | Single-URL run creation resolves saved execution defaults before snapshotting | `crawl_crud.py`, `domain_run_profile_service.py`, `models/crawl_settings.py` | For single-URL runs only, resolved settings are `UI defaults -> saved DomainRunProfile -> explicit form edits -> backend normalization/snapshot`; bulk/batch/CSV do not auto-load saved domain profiles | Repeat runs ignore saved domain defaults, or batch-style jobs silently inherit single-URL domain tuning |
 | Per-URL pipeline order is fixed | `pipeline/core.py` | Acquire -> extract -> normalize -> persist | Debugging becomes impossible because downstream code mutates upstream semantics |
+| Data enrichment runs on demand | `api/data_enrichment.py`, `data_enrichment/service.py` | Users create enrichment jobs from selected ecommerce detail records or a detail run; foundation creates pending enriched rows and skips records already `enriched` or `degraded` | Main crawl starts doing hidden enrichment work, or already-processed records are duplicated |
 | Listing zero-record outcome | `publish/verdict.py`, `pipeline/core.py` | Listing pages with zero records become `listing_detection_failed`, not a fake detail success | Listing failures get counted as success or empty detail pages |
 | Log label for non-adapter extraction | `pipeline/core.py` | When no adapter matches, logs must say `generic extraction path`, not pretend a `generic adapter` exists | Operators waste time debugging adapter selection when no adapter ran |
 

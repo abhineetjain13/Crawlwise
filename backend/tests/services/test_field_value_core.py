@@ -124,6 +124,20 @@ def test_persistence_schema_firewall_drops_unknown_and_internal_fields() -> None
     assert rejected == {"debug_payload": "field_not_allowed_for_surface"}
 
 
+def test_persistence_schema_firewall_keeps_ecommerce_gender() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Linen Dress",
+            "gender": "women",
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/linen-dress",
+    )
+
+    assert data == {"title": "Linen Dress", "gender": "women"}
+    assert rejected == {}
+
+
 def test_persistence_schema_firewall_drops_default_ecommerce_schema_pollution() -> None:
     data, rejected = public_record_data_for_surface(
         {

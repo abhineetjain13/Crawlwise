@@ -11,10 +11,12 @@ from app.models.crawl import (
     CrawlLog,
     CrawlRecord,
     CrawlRun,
+    DataEnrichmentJob,
     DomainCookieMemory,
     DomainFieldFeedback,
     DomainMemory,
     DomainRunProfile,
+    EnrichedProduct,
     HostProtectionMemory,
     ProductIntelligenceCandidate,
     ProductIntelligenceJob,
@@ -115,11 +117,13 @@ async def reset_application_data(session: AsyncSession) -> dict:
         crawl_reset = await _reset_crawl_data_db(session)
         memory_reset = await _reset_domain_memory_db(session)
         intelligence_reset = await _reset_product_intelligence_db(session)
+        enrichment_reset = await _reset_data_enrichment_db(session)
     return {
         **crawl_reset,
         **await _reset_crawl_runtime_state(),
         **memory_reset,
         **intelligence_reset,
+        **enrichment_reset,
     }
 
 
@@ -140,6 +144,11 @@ async def reset_domain_memory(session: AsyncSession) -> dict:
 async def reset_product_intelligence(session: AsyncSession) -> dict:
     async with _session_transaction(session):
         return await _reset_product_intelligence_db(session)
+
+
+async def reset_data_enrichment(session: AsyncSession) -> dict:
+    async with _session_transaction(session):
+        return await _reset_data_enrichment_db(session)
 
 
 async def _reset_crawl_data_db(session: AsyncSession) -> dict:
@@ -186,6 +195,18 @@ async def _reset_product_intelligence_db(session: AsyncSession) -> dict:
         ],
     )
     await _reset_product_intelligence_tables(session)
+    return counts
+
+
+async def _reset_data_enrichment_db(session: AsyncSession) -> dict:
+    counts = await _reset_bucket_db(
+        session,
+        [
+            ("data_enrichment_jobs_deleted", DataEnrichmentJob),
+            ("enriched_products_deleted", EnrichedProduct),
+        ],
+    )
+    await _reset_data_enrichment_tables(session)
     return counts
 
 
@@ -281,6 +302,15 @@ async def _reset_product_intelligence_tables(session: AsyncSession) -> None:
         "product_intelligence_candidates",
         "product_intelligence_source_products",
         "product_intelligence_jobs",
+    )
+
+
+async def _reset_data_enrichment_tables(session: AsyncSession) -> None:
+    await _reset_bucket_tables(
+        session,
+        [EnrichedProduct, DataEnrichmentJob],
+        "enriched_products",
+        "data_enrichment_jobs",
     )
 
 

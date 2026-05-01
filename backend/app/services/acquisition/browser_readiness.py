@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from bs4 import BeautifulSoup, Comment
@@ -25,7 +26,11 @@ class HtmlAnalysis:
 
 
 def analyze_html(html: str) -> HtmlAnalysis:
-    text = str(html or "")
+    return _analyze_html_cached(str(html or ""))
+
+
+@lru_cache(maxsize=8)
+def _analyze_html_cached(text: str) -> HtmlAnalysis:
     soup = BeautifulSoup(text, "html.parser")
     visible_text = visible_text_from_soup(soup)
     return HtmlAnalysis(

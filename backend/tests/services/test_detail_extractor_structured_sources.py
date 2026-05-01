@@ -417,6 +417,72 @@ def test_extract_ecommerce_detail_from_array_style_nuxt_payload() -> None:
     assert record["_source"] == "js_state"
 
 
+def test_extract_ecommerce_detail_gender_from_explicit_structured_attribute() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Linen Midi Dress",
+          "additionalProperty": [
+            {"@type": "PropertyValue", "name": "Gender", "value": "Women"}
+          ]
+        }
+        </script>
+      </head>
+      <body><h1>Linen Midi Dress</h1></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/linen-midi-dress",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["gender"] == "Women"
+
+
+def test_extract_ecommerce_detail_category_from_breadcrumblist_json_ld() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "BreadcrumbList",
+          "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Home"},
+            {"@type": "ListItem", "position": 2, "name": "Women"},
+            {"@type": "ListItem", "position": 3, "name": "Dresses"},
+            {"@type": "ListItem", "position": 4, "name": "Linen Midi Dress"}
+          ]
+        }
+        </script>
+        <script type="application/ld+json">
+        {"@context": "https://schema.org", "@type": "Product", "name": "Linen Midi Dress"}
+        </script>
+      </head>
+      <body><h1>Linen Midi Dress</h1></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/linen-midi-dress",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["category"] == "Women > Dresses"
+    assert rows[0]["gender"] == "women"
+
+
 def test_extract_ecommerce_detail_from_nuxt_payload_with_self_referential_wrapper() -> None:
     html = """
     <html>

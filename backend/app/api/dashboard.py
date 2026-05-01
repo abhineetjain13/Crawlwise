@@ -11,6 +11,7 @@ from app.services.dashboard_service import (
     build_operational_metrics,
     reset_application_data,
     reset_crawl_data,
+    reset_data_enrichment,
     reset_domain_memory,
     reset_product_intelligence,
 )
@@ -65,6 +66,14 @@ async def dashboard_reset_product_intelligence(
     _: Annotated[User, Depends(require_admin)],
 ) -> dict:
     return await reset_product_intelligence(session)
+
+
+@router.post("/reset-data-enrichment")
+async def dashboard_reset_data_enrichment(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_admin)],
+) -> dict:
+    return await reset_data_enrichment(session)
 
 
 @router.get("/metrics")

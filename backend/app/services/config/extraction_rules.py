@@ -40,6 +40,20 @@ DETAIL_LOW_SIGNAL_TITLE_VALUES = frozenset(
     }
 )
 DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES = frozenset({"criteoproductrail"})
+DETAIL_BREADCRUMB_ROOT_LABELS = frozenset({"home", "shop", "store"})
+DETAIL_BREADCRUMB_SELECTORS = (
+    "[aria-label*='breadcrumb' i] li",
+    "[class*='breadcrumb' i] li",
+    "[aria-label*='breadcrumb' i] a",
+    "[class*='breadcrumb' i] a",
+)
+DETAIL_GENDER_TERMS = {
+    "women": ("women", "womens", "women's", "woman", "ladies", "female"),
+    "men": ("men", "mens", "men's", "man", "male"),
+    "girls": ("girls", "girl"),
+    "boys": ("boys", "boy"),
+    "unisex": ("unisex", "all gender", "all-gender", "gender neutral", "gender-neutral"),
+}
 ORACLE_HCM_CX_CONFIG_RE = re.compile(
     r"(?:var\s+|window\.)?CX_CONFIG\s*=\s*(\{.*?\})\s*(?:;|</script>)",
     re.DOTALL,
@@ -197,6 +211,9 @@ _EXTRA_EXPORTS = [
     "DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX",
     "DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES",
     "DETAIL_LOW_SIGNAL_TITLE_VALUES",
+    "DETAIL_BREADCRUMB_ROOT_LABELS",
+    "DETAIL_BREADCRUMB_SELECTORS",
+    "DETAIL_GENDER_TERMS",
     "DETAIL_TITLE_DIMENSION_SIZE_PATTERN",
     "DYNAMIC_FIELD_NAME_MAX_TOKENS",
     "EXPORT_IMAGE_URL_SUFFIXES",

@@ -26,9 +26,21 @@ _LEVEL_ORDER = {
 }
 _URL_PROGRESS_PATTERN = re.compile(r"^Processing URL \d+/\d+: ")
 _REDIS_KEY_PREFIX = "crawl:events"
-_COUNTER_TTL_SECONDS = crawler_runtime_settings.crawl_event_counter_ttl_seconds
 _DETACHED_LOG_WRITE_CONCURRENCY = 8
-_DETACHED_LOG_WRITE_SEMAPHORE = asyncio.Semaphore(_DETACHED_LOG_WRITE_CONCURRENCY)
+_detached_log_write_semaphore: asyncio.Semaphore | None = None
+
+
+def get_counter_ttl_seconds() -> int:
+    return int(crawler_runtime_settings.crawl_event_counter_ttl_seconds)
+
+
+def get_detached_log_write_semaphore() -> asyncio.Semaphore:
+    global _detached_log_write_semaphore
+    if _detached_log_write_semaphore is None:
+        _detached_log_write_semaphore = asyncio.Semaphore(
+            _DETACHED_LOG_WRITE_CONCURRENCY
+        )
+    return _detached_log_write_semaphore
 
 
 def clear_url_progress_counter(run_id: int) -> None:
@@ -118,14 +130,14 @@ async def _should_persist_log(level: str, run_id: int, message: str) -> bool:
             counter = int(await redis.incr(_url_progress_counter_key(run_id)))
             if counter == 1:
                 await redis.expire(
-                    _url_progress_counter_key(run_id), _COUNTER_TTL_SECONDS
+                    _url_progress_counter_key(run_id), get_counter_ttl_seconds()
                 )
             return counter % sample_rate == 1
 
         max_rows = max(1, int(settings.crawl_log_db_max_rows_per_run or 1))
         db_count = int(await redis.incr(_db_log_counter_key(run_id)))
         if db_count == 1:
-            await redis.expire(_db_log_counter_key(run_id), _COUNTER_TTL_SECONDS)
+            await redis.expire(_db_log_counter_key(run_id), get_counter_ttl_seconds())
         return db_count <= max_rows
 
     return await redis_fail_open(
@@ -227,7 +239,7 @@ async def append_log_event(
         await session.flush()
         return serialize_log_event(row)
 
-    async with _DETACHED_LOG_WRITE_SEMAPHORE:
+    async with get_detached_log_write_semaphore():
         async with SessionLocal() as new_session:
             try:
                 new_session.add(row)

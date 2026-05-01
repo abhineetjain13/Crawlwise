@@ -42,11 +42,14 @@ async def ensure_public_crawl_targets(urls: Iterable[str]) -> list[str]:
     normalized: list[str] = []
     for raw_url in urls:
         candidate = str(raw_url or "").strip()
-        if not candidate or candidate in seen:
+        if not candidate:
             continue
-        seen.add(candidate)
         result = await validate_public_target(candidate)
-        normalized.append(_rebuild_url(candidate, result))
+        normalized_url = _rebuild_url(candidate, result)
+        if normalized_url in seen:
+            continue
+        seen.add(normalized_url)
+        normalized.append(normalized_url)
     return normalized
 
 

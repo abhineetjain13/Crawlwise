@@ -60,6 +60,8 @@ class CrawlRecordResponse(BaseModel):
     raw_data: dict
     discovered_data: dict
     source_trace: dict
+    enrichment_status: str = "unenriched"
+    enriched_at: datetime | None = None
     review_bucket: list[UnverifiedAttribute] = Field(default_factory=list)
     provenance_available: bool = False
     raw_html_path: str | None = None
@@ -347,6 +349,8 @@ class CrawlRecordProvenanceResponse(BaseModel):
     raw_data: dict
     discovered_data: dict
     source_trace: dict
+    enrichment_status: str = "unenriched"
+    enriched_at: datetime | None = None
     manifest_trace: dict = Field(default_factory=dict)
     raw_html_path: str | None = None
     created_at: datetime

@@ -108,6 +108,50 @@ def test_location_interstitial_detects_text_only_fallback() -> None:
     assert browser_page_flow.location_interstitial_detected(html) is True
 
 
+def test_ready_probe_supports_fast_finalize_for_strong_detail_page() -> None:
+    assert browser_page_flow._ready_probe_supports_fast_finalize(
+        [
+            {
+                "is_ready": True,
+                "visible_text_length": 5000,
+                "structured_data_present": True,
+                "detail_hint_count": 4,
+            }
+        ],
+        surface="ecommerce_detail",
+        status_code=200,
+    ) is True
+
+
+def test_ready_probe_fast_finalize_rejects_for_forced_block_status() -> None:
+    assert browser_page_flow._ready_probe_supports_fast_finalize(
+        [
+            {
+                "is_ready": True,
+                "visible_text_length": 5000,
+                "structured_data_present": True,
+                "detail_hint_count": 4,
+            }
+        ],
+        surface="ecommerce_detail",
+        status_code=403,
+    ) is False
+
+
+def test_fast_finalize_accepts_verified_extractability_without_probe_payload() -> None:
+    assert browser_page_flow._ready_probe_supports_fast_finalize(
+        [],
+        surface="ecommerce_detail",
+        status_code=200,
+        expansion_diagnostics={
+            "extractability": {
+                "verified": True,
+                "matched_requested_fields": ["title", "image_url"],
+            }
+        },
+    ) is True
+
+
 @pytest.mark.asyncio
 async def test_location_interstitial_dismisses_by_safe_text_token() -> None:
     class _MissingLocator:

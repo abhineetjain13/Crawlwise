@@ -9,6 +9,7 @@ from app.models.crawl import CrawlRun
 from app.models.llm import LLMConfig
 from app.services.config.field_mappings import PROMPT_REGISTRY
 from app.services.config.llm_runtime import SUPPORTED_LLM_PROVIDERS
+from app.services.config.data_enrichment import DATA_ENRICHMENT_PROMPT_REGISTRY
 from app.services.config.product_intelligence import PRODUCT_INTELLIGENCE_PROMPT_REGISTRY
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +22,11 @@ _LEGACY_PROMPTS_DIR = (
 
 def get_prompt_task(task_type: str) -> dict | None:
     normalized = str(task_type or "").strip()
-    task = PRODUCT_INTELLIGENCE_PROMPT_REGISTRY.get(normalized) or PROMPT_REGISTRY.get(normalized)
+    task = (
+        DATA_ENRICHMENT_PROMPT_REGISTRY.get(normalized)
+        or PRODUCT_INTELLIGENCE_PROMPT_REGISTRY.get(normalized)
+        or PROMPT_REGISTRY.get(normalized)
+    )
     return dict(task) if isinstance(task, dict) else None
 
 
@@ -87,6 +92,7 @@ async def snapshot_active_configs(
         "schema_inference",
         "product_intelligence_enrichment",
         "product_intelligence_brand_inference",
+        "data_enrichment_semantic",
     ]:
         config = await resolve_active_config(session, task_type)
         if config is not None:

@@ -9,6 +9,8 @@ from app.services.acquisition_plan import AcquisitionPlan
 from app.services.crawl_utils import normalize_target_url, resolve_traversal_mode
 from app.services.config.runtime_settings import crawler_runtime_settings
 
+_BROWSER_ENGINE_VALUES = {"auto", "patchright", "real_chrome"}
+
 
 def _coerce_int(
     value: object, default: int, minimum: int, maximum: int | None = None
@@ -45,6 +47,16 @@ def _proxy_username(proxy_url: object) -> str:
         return str(urlparse(str(proxy_url or "").strip()).username or "").strip()
     except Exception:
         return ""
+
+
+def _clean_str(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _coerce_optional_choice(value: object, allowed: set[str]) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in allowed else None
 
 
 def _infer_proxy_rotation(
@@ -133,9 +145,14 @@ class CrawlRunSettings:
         traversal_mode = self.traversal_mode()
         if stored:
             return {
-                "fetch_mode": str(stored.get("fetch_mode") or "auto").strip().lower() or "auto",
-                "extraction_source": str(stored.get("extraction_source") or "raw_html").strip().lower() or "raw_html",
-                "js_mode": str(stored.get("js_mode") or "auto").strip().lower() or "auto",
+                "fetch_mode": str(stored.get("fetch_mode") or "auto").strip().lower()
+                or "auto",
+                "extraction_source": str(stored.get("extraction_source") or "raw_html")
+                .strip()
+                .lower()
+                or "raw_html",
+                "js_mode": str(stored.get("js_mode") or "auto").strip().lower()
+                or "auto",
                 "include_iframes": bool(stored.get("include_iframes", False)),
                 "traversal_mode": traversal_mode,
                 "request_delay_ms": self.sleep_ms(),
@@ -163,7 +180,9 @@ class CrawlRunSettings:
 
     def diagnostics_profile(self) -> dict[str, object]:
         stored = _mapping(self.data.get("diagnostics_profile"))
-        capture_network = str(stored.get("capture_network") or "off").strip().lower() or "off"
+        capture_network = (
+            str(stored.get("capture_network") or "off").strip().lower() or "off"
+        )
         return {
             "capture_html": bool(stored.get("capture_html", True)),
             "capture_screenshot": bool(stored.get("capture_screenshot", False)),
@@ -179,18 +198,50 @@ class CrawlRunSettings:
     def acquisition_contract(self) -> dict[str, object]:
         stored = _mapping(self.data.get("acquisition_contract"))
         stale = _mapping(stored.get("stale_after_failures"))
+        last_quality_success = _mapping(stored.get("last_quality_success"))
+        normalized_success: dict[str, object] | None = None
+        if last_quality_success:
+            normalized_success = dict(last_quality_success)
+            normalized_success.update(
+                {
+                    "method": _clean_str(last_quality_success.get("method")),
+                    "browser_engine": _coerce_optional_choice(
+                        last_quality_success.get("browser_engine"),
+                        _BROWSER_ENGINE_VALUES,
+                    ),
+                    "record_count": _coerce_int(
+                        last_quality_success.get("record_count"),
+                        0,
+                        0,
+                    ),
+                    "field_coverage": dict(
+                        last_quality_success.get("field_coverage") or {}
+                    )
+                    if isinstance(last_quality_success.get("field_coverage"), Mapping)
+                    else {},
+                    "source_run_id": _coerce_int(
+                        last_quality_success.get("source_run_id"),
+                        0,
+                        0,
+                    )
+                    or None,
+                    "timestamp": _clean_str(last_quality_success.get("timestamp")),
+                }
+            )
         return {
             "preferred_browser_engine": str(
                 stored.get("preferred_browser_engine") or "auto"
-            ).strip().lower()
+            )
+            .strip()
+            .lower()
             or "auto",
             "prefer_browser": bool(stored.get("prefer_browser", False)),
             "prefer_curl_handoff": bool(stored.get("prefer_curl_handoff", False)),
-            "handoff_cookie_engine": str(
-                stored.get("handoff_cookie_engine") or "auto"
-            ).strip().lower()
+            "handoff_cookie_engine": str(stored.get("handoff_cookie_engine") or "auto")
+            .strip()
+            .lower()
             or "auto",
-            "last_quality_success": _mapping(stored.get("last_quality_success")) or None,
+            "last_quality_success": normalized_success,
             "stale_after_failures": {
                 "failure_count": _coerce_int(
                     stale.get("failure_count"),
@@ -313,8 +364,12 @@ class CrawlRunSettings:
                 "capture_html": diagnostics_profile["capture_html"],
                 "capture_screenshot": diagnostics_profile["capture_screenshot"],
                 "capture_network": diagnostics_profile["capture_network"],
-                "capture_response_headers": diagnostics_profile["capture_response_headers"],
-                "capture_browser_diagnostics": diagnostics_profile["capture_browser_diagnostics"],
+                "capture_response_headers": diagnostics_profile[
+                    "capture_response_headers"
+                ],
+                "capture_browser_diagnostics": diagnostics_profile[
+                    "capture_browser_diagnostics"
+                ],
             }
         )
         proxy_profile = self.proxy_profile()

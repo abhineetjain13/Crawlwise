@@ -24,12 +24,19 @@ from app.services.config.product_intelligence import (
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_DISCOVERED,
     PRODUCT_INTELLIGENCE_REVIEW_PENDING,
 )
+from app.services.config.data_enrichment import (
+    DATA_ENRICHMENT_STATUS_PENDING,
+    DATA_ENRICHMENT_STATUS_UNENRICHED,
+)
 from app.services.run_summary import as_int, merge_run_summary_patch
 
 CRAWL_RUN_FK = "crawl_runs.id"
 
+
 def _string_list(value: object) -> list[str]:
-    return [str(item or "").strip() for item in value] if isinstance(value, list) else []
+    return (
+        [str(item or "").strip() for item in value] if isinstance(value, list) else []
+    )
 
 
 class CrawlRun(Base):
@@ -196,7 +203,12 @@ class BatchRunProgressState:
             total_urls=total_urls,
             url_domain=str(url_domain or ""),
             url_verdicts=raw_verdicts,
-            verdict_counts={str(key): as_int(value) for key, value in mapping_or_empty(summary.get("verdict_counts")).items()},
+            verdict_counts={
+                str(key): as_int(value)
+                for key, value in mapping_or_empty(
+                    summary.get("verdict_counts")
+                ).items()
+            },
             acquisition_summary=mapping_or_empty(summary.get("acquisition_summary")),
             quality_summary=mapping_or_empty(summary.get("quality_summary")),
             persisted_record_count=max(0, as_int(persisted_record_count)),
@@ -286,7 +298,10 @@ def _merge_run_acquisition_metrics(
     url_metrics: dict[str, object],
 ) -> dict[str, object]:
     current = mapping_or_empty(existing)
-    methods = {str(key): as_int(value) for key, value in mapping_or_empty(current.get("methods")).items()}
+    methods = {
+        str(key): as_int(value)
+        for key, value in mapping_or_empty(current.get("methods")).items()
+    }
     method = str(url_metrics.get("method") or "").strip()
     if method:
         methods[method] = as_int(methods.get(method, 0)) + 1
@@ -296,14 +311,18 @@ def _merge_run_acquisition_metrics(
     }
     platform_family = str(url_metrics.get("platform_family") or "").strip()
     if platform_family:
-        platform_families[platform_family] = as_int(platform_families.get(platform_family, 0)) + 1
+        platform_families[platform_family] = (
+            as_int(platform_families.get(platform_family, 0)) + 1
+        )
     failure_reasons = {
         str(key): as_int(value)
         for key, value in mapping_or_empty(current.get("failure_reasons")).items()
     }
     failure_reason = str(url_metrics.get("failure_reason") or "").strip()
     if failure_reason:
-        failure_reasons[failure_reason] = as_int(failure_reasons.get(failure_reason, 0)) + 1
+        failure_reasons[failure_reason] = (
+            as_int(failure_reasons.get(failure_reason, 0)) + 1
+        )
 
     summary = {
         "methods": methods,
@@ -340,11 +359,17 @@ def _merge_run_acquisition_metrics(
         + as_int(url_metrics.get("browser_decision_ms", 0)),
         "browser_launch_ms_total": as_int(current.get("browser_launch_ms_total", 0))
         + as_int(url_metrics.get("browser_launch_ms", 0)),
-        "browser_origin_warm_ms_total": as_int(current.get("browser_origin_warm_ms_total", 0))
+        "browser_origin_warm_ms_total": as_int(
+            current.get("browser_origin_warm_ms_total", 0)
+        )
         + as_int(url_metrics.get("browser_origin_warm_ms", 0)),
-        "browser_navigation_ms_total": as_int(current.get("browser_navigation_ms_total", 0))
+        "browser_navigation_ms_total": as_int(
+            current.get("browser_navigation_ms_total", 0)
+        )
         + as_int(url_metrics.get("browser_navigation_ms", 0)),
-        "browser_challenge_wait_ms_total": as_int(current.get("browser_challenge_wait_ms_total", 0))
+        "browser_challenge_wait_ms_total": as_int(
+            current.get("browser_challenge_wait_ms_total", 0)
+        )
         + as_int(url_metrics.get("browser_challenge_wait_ms", 0)),
         "browser_total_ms_total": as_int(current.get("browser_total_ms_total", 0))
         + as_int(url_metrics.get("browser_total_ms", 0)),
@@ -352,7 +377,9 @@ def _merge_run_acquisition_metrics(
         + as_int(url_metrics.get("request_wait_ms", 0)),
         "host_fetch_ms_total": as_int(current.get("host_fetch_ms_total", 0))
         + as_int(url_metrics.get("host_fetch_ms", 0)),
-        "host_browser_first_ms_total": as_int(current.get("host_browser_first_ms_total", 0))
+        "host_browser_first_ms_total": as_int(
+            current.get("host_browser_first_ms_total", 0)
+        )
         + as_int(url_metrics.get("host_browser_first_ms", 0)),
         "host_total_ms_total": as_int(current.get("host_total_ms_total", 0))
         + as_int(url_metrics.get("host_total_ms", 0)),
@@ -373,14 +400,18 @@ def _merge_run_acquisition_metrics(
     if traversal_mode:
         traversal_modes_used = {
             str(key): as_int(value)
-            for key, value in mapping_or_empty(current.get("traversal_modes_used")).items()
+            for key, value in mapping_or_empty(
+                current.get("traversal_modes_used")
+            ).items()
         }
         summary["traversal_modes_used"] = {
             **traversal_modes_used,
             traversal_mode: as_int(traversal_modes_used.get(traversal_mode, 0)) + 1,
         }
     elif current.get("traversal_modes_used"):
-        summary["traversal_modes_used"] = mapping_or_empty(current.get("traversal_modes_used"))
+        summary["traversal_modes_used"] = mapping_or_empty(
+            current.get("traversal_modes_used")
+        )
 
     return summary
 
@@ -406,7 +437,10 @@ def _merge_run_quality_summary(
     if not url_quality:
         return current
 
-    level_counts = {str(key): as_int(value) for key, value in mapping_or_empty(current.get("level_counts")).items()}
+    level_counts = {
+        str(key): as_int(value)
+        for key, value in mapping_or_empty(current.get("level_counts")).items()
+    }
     url_level = str(url_quality.get("level") or "").strip().lower()
     if url_level in {"high", "medium", "low", "unknown"}:
         level_counts[url_level] = int(level_counts.get(url_level, 0) or 0) + 1
@@ -492,6 +526,17 @@ class CrawlRecord(Base):
     discovered_data: Mapped[dict] = mapped_column(JSONB, default=dict)
     source_trace: Mapped[dict] = mapped_column(JSONB, default=dict)
     raw_html_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enrichment_status: Mapped[str] = mapped_column(
+        String(32),
+        default=DATA_ENRICHMENT_STATUS_UNENRICHED,
+        server_default=DATA_ENRICHMENT_STATUS_UNENRICHED,
+        nullable=False,
+        index=True,
+    )
+    enriched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -696,6 +741,95 @@ class ProductIntelligenceMatch(Base):
     candidate_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
     score_reasons: Mapped[dict] = mapped_column(JSONB, default=dict)
     llm_enrichment: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class DataEnrichmentJob(Base):
+    __tablename__ = "data_enrichment_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    source_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=DATA_ENRICHMENT_STATUS_PENDING,
+        index=True,
+    )
+    options: Mapped[dict] = mapped_column(JSONB, default=dict)
+    summary: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class EnrichedProduct(Base):
+    __tablename__ = "enriched_products"
+    __table_args__ = (
+        Index(
+            "uq_enriched_products_source_record",
+            "source_record_id",
+            unique=True,
+            postgresql_where=text("source_record_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("data_enrichment_jobs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    source_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crawl_records.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=DATA_ENRICHMENT_STATUS_PENDING,
+        index=True,
+    )
+    price_normalized: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    color_family: Mapped[str | None] = mapped_column(Text, nullable=True)
+    size_normalized: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    size_system: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    gender_normalized: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    materials_normalized: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    availability_normalized: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    seo_keywords: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    category_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intent_attributes: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    audience: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    style_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    ai_discovery_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    suggested_bundles: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    diagnostics: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

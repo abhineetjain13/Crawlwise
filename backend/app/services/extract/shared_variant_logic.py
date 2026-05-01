@@ -927,17 +927,13 @@ def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
             merged_by_identity[identity] = merge_variant_pair(primary, secondary)
     deduped_rows = [merged_by_identity[key] for key in ordered_keys]
     merged_by_semantic: dict[str, dict[str, Any]] = {}
-    semantic_order: list[str] = []
-    passthrough_rows: list[dict[str, Any]] = []
     for row in deduped_rows:
         semantic_identity = variant_semantic_identity(row)
         if not semantic_identity:
-            passthrough_rows.append(row)
             continue
         current = merged_by_semantic.get(semantic_identity)
         if current is None:
             merged_by_semantic[semantic_identity] = dict(row)
-            semantic_order.append(semantic_identity)
             continue
         primary, secondary = (
             (row, current)
@@ -945,4 +941,18 @@ def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
             else (current, row)
         )
         merged_by_semantic[semantic_identity] = merge_variant_pair(primary, secondary)
-    return [*passthrough_rows, *(merged_by_semantic[key] for key in semantic_order)]
+    merged_rows: list[dict[str, Any]] = []
+    emitted_semantic: set[str] = set()
+    for row in deduped_rows:
+        semantic_identity = variant_semantic_identity(row)
+        if not semantic_identity:
+            merged_rows.append(row)
+            continue
+        if semantic_identity in emitted_semantic:
+            continue
+        merged = merged_by_semantic.get(semantic_identity)
+        if merged is None:
+            continue
+        emitted_semantic.add(semantic_identity)
+        merged_rows.append(merged)
+    return merged_rows

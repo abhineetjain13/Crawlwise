@@ -729,6 +729,31 @@ def test_detail_extractor_normalizes_category_objects_from_network_payloads() ->
     assert record["category"] == "Pliers"
 
 
+def test_detail_extractor_reads_category_from_dom_breadcrumbs() -> None:
+    record = build_detail_record(
+        """
+        <html>
+          <body>
+            <ol aria-label="breadcrumb">
+              <li><a href="/">Home</a></li>
+              <li><a href="/women">Women</a></li>
+              <li><a href="/women/dresses">Dresses</a></li>
+              <li>Linen Midi Dress</li>
+            </ol>
+            <main><h1>Linen Midi Dress</h1></main>
+          </body>
+        </html>
+        """,
+        "https://example.com/products/linen-midi-dress",
+        "ecommerce_detail",
+        ["title", "category", "gender"],
+    )
+
+    assert record["title"] == "Linen Midi Dress"
+    assert record["category"] == "Women > Dresses"
+    assert record["gender"] == "women"
+
+
 def test_listing_extractor_prefers_structured_name_over_item_position_for_title() -> None:
     html = """
     <html>

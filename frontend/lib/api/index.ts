@@ -7,6 +7,9 @@ import type {
  CrawlRecordProvenance,
  CrawlRun,
  CrawlSurface,
+ DataEnrichmentJob,
+ DataEnrichmentJobCreatePayload,
+ DataEnrichmentJobDetail,
  Dashboard,
  DomainRecipe,
  DomainCookieMemoryRecord,
@@ -111,6 +114,15 @@ export const api = {
  },
  getProductIntelligenceJob: (jobId: number) =>
  apiClient.get<ProductIntelligenceJobDetail>(`/api/product-intelligence/jobs/${jobId}`),
+ createDataEnrichmentJob: (payload: DataEnrichmentJobCreatePayload) =>
+ apiClient.post<DataEnrichmentJob>("/api/data-enrichment/jobs", payload),
+ listDataEnrichmentJobs: (params?: { limit?: number }) => {
+ const query = new URLSearchParams();
+ if (params?.limit !== undefined) query.set("limit", String(params.limit));
+ return apiClient.get<DataEnrichmentJob[]>(withQuery("/api/data-enrichment/jobs", query));
+ },
+ getDataEnrichmentJob: (jobId: number) =>
+ apiClient.get<DataEnrichmentJobDetail>(`/api/data-enrichment/jobs/${jobId}`),
  reviewProductIntelligenceMatch: (
  jobId: number,
  matchId: number,

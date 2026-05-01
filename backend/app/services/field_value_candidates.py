@@ -4,6 +4,8 @@ import json
 from typing import Any
 
 from app.services.config.extraction_rules import (
+    DETAIL_BREADCRUMB_ROOT_LABELS,
+    DETAIL_GENDER_TERMS,
     DETAIL_IRRELEVANT_JSON_LD_TYPES,
     INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS,
     INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS,
@@ -53,6 +55,56 @@ def add_candidate(
         bucket.append(item)
         added += 1
     return added
+
+
+def _normalized_text_token(value: object) -> str:
+    return " ".join(str(value or "").replace("&", " ").split()).strip().lower()
+
+
+def _gender_from_text(value: object) -> str | None:
+    text = _normalized_text_token(value)
+    if not text:
+        return None
+    padded = f" {text.replace('-', ' ')} "
+    matches: list[str] = []
+    for canonical, terms in DETAIL_GENDER_TERMS.items():
+        if any(f" {str(term).lower().replace('-', ' ')} " in padded for term in terms):
+            matches.append(str(canonical))
+    return matches[0] if len(set(matches)) == 1 else None
+
+
+def _breadcrumb_item_name(item: object) -> str | None:
+    if isinstance(item, str):
+        return text_or_none(item)
+    if not isinstance(item, dict):
+        return None
+    source = item.get("item")
+    if isinstance(source, dict):
+        name = source.get("name") or source.get("title")
+        if name not in (None, "", [], {}):
+            return text_or_none(name)
+    return text_or_none(item.get("name") or item.get("title"))
+
+
+def _breadcrumb_names(payload: dict[str, object]) -> list[str]:
+    raw_items = payload.get("itemListElement")
+    if not isinstance(raw_items, list):
+        return []
+    names = [
+        name
+        for item in raw_items
+        if (name := _breadcrumb_item_name(item)) not in (None, "")
+    ]
+    if names and names[0].strip().lower() in DETAIL_BREADCRUMB_ROOT_LABELS:
+        names = names[1:]
+    if len(names) >= 2:
+        names = names[:-1]
+    return [name for name in names if name.strip()]
+
+
+def _breadcrumb_category_path(payload: dict[str, object]) -> str | None:
+    names = _breadcrumb_names(payload)
+    return " > ".join(names) if names else None
 
 
 def _structured_variant_rows(variants: object, page_url: str) -> list[dict[str, object]]:
@@ -365,6 +417,13 @@ def collect_structured_candidates(
                         canonical,
                         coerce_field_value(canonical, item.get("value"), page_url),
                     )
+        if breadcrumb_list:
+            category_path = _breadcrumb_category_path(payload)
+            if category_path:
+                add_candidate(candidates, "category", category_path)
+                gender = _gender_from_text(category_path)
+                if gender:
+                    add_candidate(candidates, "gender", gender)
         if {
             normalize_field_key(str(key or ""))
             for key in payload.keys()
@@ -466,6 +525,7 @@ def collect_structured_candidates(
             add_candidate(candidates, "rating", coerce_field_value("rating", aggregate, page_url))
             add_candidate(candidates, "review_count", coerce_field_value("review_count", aggregate, page_url))
             add_candidate(candidates, "category", coerce_text(payload.get("category")))
+            add_candidate(candidates, "gender", coerce_field_value("gender", payload.get("gender"), page_url))
             add_candidate(candidates, "color", coerce_field_value("color", payload.get("color"), page_url))
             add_candidate(candidates, "size", coerce_field_value("size", payload.get("size"), page_url))
             add_candidate(candidates, "materials", coerce_text(payload.get("material")))

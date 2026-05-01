@@ -12,6 +12,7 @@ from fastapi.responses import Response
 
 from app.api.auth import router as auth_router
 from app.api.crawls import router as crawls_router
+from app.api.data_enrichment import router as data_enrichment_router
 from app.api.dashboard import router as dashboard_router
 from app.api.jobs import router as jobs_router
 from app.api.llm import router as llm_router
@@ -141,6 +142,7 @@ for router in [
     users_router,
     dashboard_router,
     crawls_router,
+    data_enrichment_router,
     records_router,
     jobs_router,
     review_router,

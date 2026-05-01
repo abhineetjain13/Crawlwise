@@ -8,6 +8,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from app.services import crawl_fetch_runtime
@@ -247,6 +248,35 @@ def test_should_capture_network_payload_accepts_chunked_json_without_content_len
         content_type="application/json",
         headers={"transfer-encoding": "chunked"},
         captured_count=0,
+    )
+
+
+def test_content_aware_http_blocking_ignores_vendor_headers_when_detail_signals_exist() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Widget Prime",
+          "offers": {
+            "price": "19.99",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Widget Prime</h1>
+      </body>
+    </html>
+    """
+
+    assert not acquisition_runtime._content_aware_http_blocked(
+        httpx.Headers({"akamai-grn": "0.abc"}),
+        html,
+        200,
     )
 
 

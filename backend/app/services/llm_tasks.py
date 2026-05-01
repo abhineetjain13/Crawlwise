@@ -33,7 +33,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-
 def _require_present_value(value: Any) -> Any:
     if value in (None, "", [], {}):
         raise ValueError("must not be empty")
@@ -156,6 +155,7 @@ _PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "schema_inference": TypeAdapter(_SchemaInferencePayload),
     "product_intelligence_enrichment": TypeAdapter(_ProductIntelligenceEnrichmentPayload),
     "product_intelligence_brand_inference": TypeAdapter(_ProductIntelligenceBrandInferencePayload),
+    "data_enrichment_semantic": TypeAdapter(dict[str, Any]),
 }
 
 

@@ -42,7 +42,9 @@ def _field_path_map(value: object) -> FieldPathMap:
     return normalized
 
 
-def _payload_mapping_specs(value: object) -> tuple[PayloadMappingSpec, ...]:
+def _payload_mapping_specs(
+    value: object,
+) -> tuple[tuple[str, tuple[PayloadMappingSpec, ...]], ...]:
     if not isinstance(value, dict):
         return ()
     normalized_specs: dict[str, tuple[PayloadMappingSpec, ...]] = {}

@@ -154,6 +154,7 @@ _REQUESTED_FIELD_ALIAS_BASES = {
         "importer name and address",
     ],
     "color_variants": _FIELD_ALIASES.get("color_variants", []),
+    "gender": _FIELD_ALIASES.get("gender", []),
 }
 _REQUESTED_FIELD_ALIAS_EXTRAS = {
     "responsibilities": (

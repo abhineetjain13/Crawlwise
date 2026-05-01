@@ -70,6 +70,7 @@
         "review_count",
         "category",
         "product_type",
+        "gender",
         "color",
         "size",
         "available_sizes",
@@ -601,7 +602,18 @@
       "items": [
         "category",
         "type",
-        "product_type"
+        "product_type",
+        "breadcrumb",
+        "breadcrumbs",
+        "category_path"
+      ]
+    },
+    "gender": {
+      "__type__": "list",
+      "items": [
+        "gender",
+        "target_gender",
+        "targetGender"
       ]
     },
     "department": {

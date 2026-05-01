@@ -20,6 +20,7 @@ _APP_TABLES = frozenset(
 )
 _QUEUE_LEASE_BASELINE = "20260406_0007"
 _CRAWL_RECORDS_INDEX_BASELINE = "20260410_0009"
+_DATA_ENRICHMENT_BASELINE = "20260426_0018"
 
 
 def build_alembic_config() -> Config:
@@ -63,6 +64,8 @@ def _resolve_legacy_start_revision_sync(connection) -> str | None:
         return _QUEUE_LEASE_BASELINE
     if "url_identity_key" not in crawl_records_columns:
         return _CRAWL_RECORDS_INDEX_BASELINE
+    if {"enrichment_status", "enriched_at"} - crawl_records_columns:
+        return _DATA_ENRICHMENT_BASELINE
     return "head"
 
 

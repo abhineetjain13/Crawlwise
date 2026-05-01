@@ -25,6 +25,7 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `selectors.py` | Selector CRUD, suggest, test, preview |
 | `llm.py` | LLM provider catalog, config, connection test, cost log |
 | `product_intelligence.py` | Product matching jobs, source products, candidates, match review |
+| `data_enrichment.py` | On-demand ecommerce detail enrichment jobs and enriched product rows |
 | `auth.py` | Login, register, `/me` |
 | `users.py`, `dashboard.py`, `jobs.py`, `health.py`, `metrics.py` | Named route modules |
 
@@ -53,11 +54,12 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `DomainFieldFeedback` | `crawl.py` | per-field keep/reject learning history |
 | `ReviewPromotion` | `crawl.py` | approved review schema snapshot |
 | `ProductIntelligenceJob`, `ProductIntelligenceSourceProduct`, `ProductIntelligenceCandidate`, `ProductIntelligenceMatch` | `crawl.py` | web product matching and price comparison jobs |
+| `DataEnrichmentJob`, `EnrichedProduct` | `crawl.py` | on-demand ecommerce detail enrichment jobs and derived enriched product rows |
 | `LLMConfig`, `LLMCostLog` | `llm.py` | LLM config and cost tracking |
 
 ### `schemas/` — request and response DTOs
 
-`crawl.py`, `user.py`, `llm.py`, `selectors.py`, `common.py`
+`crawl.py`, `user.py`, `llm.py`, `selectors.py`, `data_enrichment.py`, `common.py`
 
 ---
 
@@ -71,6 +73,7 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `domain_run_profile_service.py` | Load/save reusable execution defaults |
 | `crawl_events.py` | WebSocket log emission |
 | `product_intelligence/*` | Product web discovery, candidate crawl orchestration, deterministic match scoring |
+| `data_enrichment/*` | On-demand enrichment job setup for ecommerce detail records |
 | `_batch_runtime.py` | URL loop, progress, pause, kill checks |
 | `tasks.py` | Celery task entry |
 | `pipeline/core.py` | Per-URL orchestration: acquire -> extract -> normalize -> persist |
@@ -139,6 +142,7 @@ Canonical config owner:
 | `extract/listing_card_fragments.py` | Canonical listing-fragment discovery, scoring, and listing-card heuristics shared by traversal, browser artifact capture, and listing extraction |
 | `extract/listing_candidate_ranking.py` | Shared candidate-set ranking and canonical utility-record filtering for listing rows |
 | `extract/detail_dom_extractor.py` | Detail DOM context selection, DOM fallback fields, and DOM variant recovery |
+| `extract/detail_raw_signals.py` | Raw detail breadcrumb category and deterministic gender signal helpers |
 | `extract/detail_price_extractor.py` | Detail price, currency reconciliation, and visible PDP price backfill |
 | `extract/detail_record_finalizer.py` | Detail record image dedupe, field cleanup, variant row repair, and final quality normalization |
 | `extract/detail_text_sanitizer.py` | Detail long-text pollution filters, fulfillment copy cleanup, and low-signal scalar checks |
@@ -156,6 +160,7 @@ Canonical config owners:
 | `config/selectors.py` | DOM selectors |
 | `config/platforms.json` | adapter metadata, signatures, JS mappings, readiness selectors |
 | `config/network_payload_specs.py` | payload specs and endpoint tokens |
+| `config/data_enrichment.py` | data enrichment statuses, limits, and taxonomy file path |
 
 ---
 

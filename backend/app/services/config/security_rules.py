@@ -21,7 +21,12 @@ BLOCKED_HOSTNAMES: Final[frozenset[str]] = frozenset(
 BLOCKED_HOST_SUFFIXES: Final[tuple[str, ...]] = (".local",)
 CGNAT_NETWORK: Final[ipaddress.IPv4Network] = ipaddress.ip_network("100.64.0.0/10")
 BLOCKED_IPS: Final[frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address]] = (
-    frozenset({ipaddress.ip_address("168.63.129.16")})
+    frozenset(
+        {
+            ipaddress.ip_address("168.63.129.16"),
+            ipaddress.ip_address("169.254.169.254"),
+        }
+    )
 )
 
 

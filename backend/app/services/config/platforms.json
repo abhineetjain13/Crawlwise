@@ -398,6 +398,22 @@
       ]
     },
     {
+      "family": "thriftbooks",
+      "domain_patterns": [
+        "thriftbooks.com"
+      ],
+      "html_contains": [
+        "thriftbooks.com",
+        "/browse/?b.search=",
+        "/w/"
+      ],
+      "adapter_names": [
+        "thriftbooks"
+      ],
+      "job_platform": false,
+      "requires_browser": false
+    },
+    {
       "family": "belk",
       "domain_patterns": [
         "belk.com"

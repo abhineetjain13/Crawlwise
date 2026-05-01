@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import inspect
 import logging
 import threading
 import time
@@ -113,7 +114,10 @@ from app.services.config.network_capture import (
     BLOCKED_BROWSER_ROUTE_TOKENS,
     PROTECTED_CHALLENGE_ROUTE_TOKENS,
 )
-from app.services.config.runtime_settings import crawler_runtime_settings, proxy_rotation_mode
+from app.services.config.runtime_settings import (
+    crawler_runtime_settings,
+    proxy_rotation_mode,
+)
 from app.services.config.selectors import CARD_SELECTORS
 from app.services.domain_utils import normalize_domain
 from app.services.field_value_core import clean_text
@@ -134,9 +138,17 @@ _DIRECT_BROWSER_RUNTIMES: dict[str, SharedBrowserRuntime] = {}
 _PROXIED_BROWSER_RUNTIMES: dict[tuple[str, str], SharedBrowserRuntime] = {}
 _BROWSER_RUNTIME_LOCK = asyncio.Lock()
 _POPUP_GUARD_TASKS: set[asyncio.Task[Any]] = set()
-_DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {str(key): tuple(str(item) for item in list(value or [])) for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()}
-_DETAIL_READINESS_HINTS: dict[str, tuple[str, ...]] = {str(key): tuple(str(item) for item in list(value or [])) for key, value in dict(BROWSER_DETAIL_READINESS_HINTS or {}).items()}
+_DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
+    str(key): tuple(str(item) for item in list(value or []))
+    for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
+}
+_DETAIL_READINESS_HINTS: dict[str, tuple[str, ...]] = {
+    str(key): tuple(str(item) for item in list(value or []))
+    for key, value in dict(BROWSER_DETAIL_READINESS_HINTS or {}).items()
+}
 _AOM_EXPAND_ROLES = {"button", "tab"}
+
+
 def _patchright_async_playwright_factory():
     from patchright.async_api import async_playwright as patchright_async_playwright
 
@@ -186,9 +198,8 @@ def _should_run_behavior_realism(engine: str) -> bool:
     if not bool(crawler_runtime_settings.browser_behavior_realism_enabled):
         return False
     normalized_engine = _normalize_browser_engine(engine)
-    return (
-        normalized_engine == _REAL_CHROME_BROWSER_ENGINE
-        or not bool(crawler_runtime_settings.browser_behavior_real_chrome_only)
+    return normalized_engine == _REAL_CHROME_BROWSER_ENGINE or not bool(
+        crawler_runtime_settings.browser_behavior_real_chrome_only
     )
 
 
@@ -244,7 +255,9 @@ class SharedBrowserRuntime:
         )
         self.launch_proxy = _normalized_proxy_value(launch_proxy)
         self.launch_proxy_config = _build_browser_proxy_config(self.launch_proxy)
-        self._authenticated_socks5_proxy = parse_socks5_upstream_proxy(self.launch_proxy)
+        self._authenticated_socks5_proxy = parse_socks5_upstream_proxy(
+            self.launch_proxy
+        )
         self._socks5_auth_bridge: Socks5AuthBridge | None = None
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
@@ -263,9 +276,7 @@ class SharedBrowserRuntime:
             return False
         if not getattr(self._browser, "is_connected", lambda: True)():
             return True
-        max_contexts = int(
-            crawler_runtime_settings.browser_max_contexts_before_recycle
-        )
+        max_contexts = int(crawler_runtime_settings.browser_max_contexts_before_recycle)
         if max_contexts > 0 and self._total_contexts_created >= max_contexts:
             return True
         max_lifetime = int(crawler_runtime_settings.browser_max_lifetime_seconds)
@@ -289,9 +300,7 @@ class SharedBrowserRuntime:
                 await self._close_locked()
             if self._browser is not None:
                 return
-            async_playwright = _async_playwright_manager_for_engine(
-                self.browser_engine
-            )
+            async_playwright = _async_playwright_manager_for_engine(self.browser_engine)
             self._playwright = await async_playwright().start()
             launch_args = [
                 str(value).strip()
@@ -375,7 +384,9 @@ class SharedBrowserRuntime:
         if self._authenticated_socks5_proxy is None:
             return dict(self.launch_proxy_config)
         if self._socks5_auth_bridge is None:
-            self._socks5_auth_bridge = Socks5AuthBridge(self._authenticated_socks5_proxy)
+            self._socks5_auth_bridge = Socks5AuthBridge(
+                self._authenticated_socks5_proxy
+            )
         bridge_proxy = await self._socks5_auth_bridge.start()
         bridge_proxy_config = _build_browser_proxy_config(bridge_proxy)
         if bridge_proxy_config is None:
@@ -525,9 +536,7 @@ class SharedBrowserRuntime:
                     ),
                     persist_domain_storage_state=bool(
                         allow_domain_storage_state
-                        and bool(
-                            getattr(context, _DOMAIN_STORAGE_PERSIST_ATTR, True)
-                        )
+                        and bool(getattr(context, _DOMAIN_STORAGE_PERSIST_ATTR, True))
                     ),
                     timeout_seconds=_browser_context_timeout_seconds(),
                 )
@@ -634,9 +643,8 @@ async def _block_unneeded_route(route: Any) -> None:
                 exc_info=True,
             )
             return
-    should_abort = (
-        resource_type in BLOCKED_BROWSER_RESOURCE_TYPES
-        or any(token in request_url for token in BLOCKED_BROWSER_ROUTE_TOKENS)
+    should_abort = resource_type in BLOCKED_BROWSER_RESOURCE_TYPES or any(
+        token in request_url for token in BLOCKED_BROWSER_ROUTE_TOKENS
     )
     if should_abort:
         try:
@@ -690,6 +698,7 @@ async def temporary_browser_page(
     ) as page:
         yield page
 
+
 async def _evict_idle_browser_runtimes_locked() -> None:
     idle_ttl_seconds = max(
         0, int(crawler_runtime_settings.browser_runtime_pool_idle_ttl_seconds)
@@ -714,9 +723,7 @@ async def _evict_idle_browser_runtimes_locked() -> None:
                     continue
                 candidates.append((pool_name, normalized_key, runtime))
     while sum(len(pool) for _pool_name, pool in pools) - len(candidates) >= max_entries:
-        candidate_keys = {
-            (pool_name, key) for pool_name, key, _runtime in candidates
-        }
+        candidate_keys = {(pool_name, key) for pool_name, key, _runtime in candidates}
         remaining: list[tuple[str, str | tuple[str, str], SharedBrowserRuntime]] = []
         for pool_name, pool in pools:
             for key, runtime in list(pool.items()):
@@ -822,9 +829,7 @@ def shutdown_browser_runtime_sync() -> None:
         try:
             future.result(timeout=_browser_shutdown_timeout_seconds())
         except concurrent.futures.TimeoutError:
-            logger.warning(
-                "Timed out waiting for browser runtime shutdown to complete"
-            )
+            logger.warning("Timed out waiting for browser runtime shutdown to complete")
         except Exception:
             logger.exception("Browser runtime shutdown task failed")
         return
@@ -854,8 +859,12 @@ def browser_runtime_snapshot() -> dict[str, int | bool]:
             "capacity": max_size,
         }
     snapshots = [runtime.snapshot() for runtime in runtimes]
-    max_size = sum(_snapshot_count(snapshot, "max_size", "capacity") for snapshot in snapshots)
-    capacity = sum(_snapshot_count(snapshot, "capacity", "max_size") for snapshot in snapshots)
+    max_size = sum(
+        _snapshot_count(snapshot, "max_size", "capacity") for snapshot in snapshots
+    )
+    capacity = sum(
+        _snapshot_count(snapshot, "capacity", "max_size") for snapshot in snapshots
+    )
     return {
         "ready": any(bool(snapshot.get("ready")) for snapshot in snapshots),
         "size": sum(_int_or_zero(snapshot.get("size")) for snapshot in snapshots),
@@ -921,7 +930,11 @@ async def _persist_context_storage_state(
         )
         return
     except Exception:
-        logger.debug("Failed to capture browser storage state for run_id=%s", run_id, exc_info=True)
+        logger.debug(
+            "Failed to capture browser storage state for run_id=%s",
+            run_id,
+            exc_info=True,
+        )
         return
     if run_id is not None and persist_run_storage_state:
         try:
@@ -1035,7 +1048,9 @@ def _browser_close_timeout_seconds() -> float:
 
 def _browser_shutdown_timeout_seconds() -> float:
     try:
-        return max(0.1, float(crawler_runtime_settings.browser_shutdown_timeout_seconds))
+        return max(
+            0.1, float(crawler_runtime_settings.browser_shutdown_timeout_seconds)
+        )
     except (TypeError, ValueError):
         logger.warning(
             "Invalid browser_shutdown_timeout_seconds=%r; using 10.0s",
@@ -1102,7 +1117,9 @@ def _int_or_zero(value: object) -> int:
         return 0
 
 
-def _proxy_requires_fresh_browser_state(proxy_profile: dict[str, object] | None) -> bool:
+def _proxy_requires_fresh_browser_state(
+    proxy_profile: dict[str, object] | None,
+) -> bool:
     return proxy_rotation_mode(proxy_profile) == "rotating"
 
 
@@ -1133,8 +1150,27 @@ async def _resolve_runtime_provider(
     runtime_provider,
     *,
     browser_engine: str,
+    proxy: str | None = None,
 ):
+    if proxy is not None and _callable_accepts_keyword(runtime_provider, "proxy"):
+        return await runtime_provider(proxy=proxy, browser_engine=browser_engine)
     return await runtime_provider(browser_engine=browser_engine)
+
+
+def _callable_accepts_keyword(candidate: Any, keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(candidate).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or (
+            parameter.kind
+            in {inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+            and parameter.name == keyword
+        )
+        for parameter in parameters
+    )
 
 
 def _resolve_proxied_page_factory(
@@ -1202,9 +1238,10 @@ async def browser_fetch(
     try:
         if proxy:
             if proxied_page_factory is temporary_browser_page:
-                runtime = await get_browser_runtime(
-                    proxy=proxy,
+                runtime = await _resolve_runtime_provider(
+                    runtime_provider,
                     browser_engine=normalized_engine,
+                    proxy=proxy,
                 )
                 page_context = runtime.page(
                     run_id=run_id,
@@ -1245,11 +1282,11 @@ async def browser_fetch(
                 else ""
             ) or runtime_engine
             bridge_flag = (
-                getattr(runtime, "bridge_used", None)
-                if runtime is not None
-                else None
+                getattr(runtime, "bridge_used", None) if runtime is not None else None
             )
-            runtime_bridge_used = bool(bridge_flag()) if callable(bridge_flag) else False
+            runtime_bridge_used = (
+                bool(bridge_flag()) if callable(bridge_flag) else False
+            )
             await _emit_browser_event(
                 on_event,
                 "info",
@@ -1267,15 +1304,16 @@ async def browser_fetch(
                 )
             started_at = time.perf_counter()
             _remaining = remaining_timeout_factory(started_at + float(timeout_seconds))
-            phase_timings_ms = {}
             normalized_surface = _normalize_surface(surface)
             payload_capture = _build_payload_capture(surface=normalized_surface)
             payload_capture.attach(page)
-            traversal_active, readiness_policy, readiness_override = resolve_browser_fetch_policy_impl(
-                url=url,
-                surface=normalized_surface,
-                traversal_mode=traversal_mode,
-                should_run_traversal=should_run_traversal,
+            traversal_active, readiness_policy, readiness_override = (
+                resolve_browser_fetch_policy_impl(
+                    url=url,
+                    surface=normalized_surface,
+                    traversal_mode=traversal_mode,
+                    should_run_traversal=should_run_traversal,
+                )
             )
             try:
                 pre_nav_pause_ms = max(
@@ -1293,7 +1331,9 @@ async def browser_fetch(
                     timeout_seconds=_remaining(),
                     phase_timings_ms=phase_timings_ms,
                 )
-                popup_guard_registrations = _install_popup_guard(page, on_event=on_event)
+                popup_guard_registrations = _install_popup_guard(
+                    page, on_event=on_event
+                )
                 response, navigation_strategy = await _run_browser_stage(
                     stage="navigation",
                     page=page,
@@ -1321,7 +1361,9 @@ async def browser_fetch(
                     ),
                 )
                 interstitial_started_at = time.perf_counter()
-                interstitial_diagnostics = await dismiss_safe_location_interstitial(page)
+                interstitial_diagnostics = await dismiss_safe_location_interstitial(
+                    page
+                )
                 phase_timings_ms["interstitial_dismissal"] = _elapsed_ms(
                     interstitial_started_at
                 )
@@ -1375,7 +1417,9 @@ async def browser_fetch(
                     page=page,
                     timeout_seconds=max(
                         _remaining(),
-                        float(crawler_runtime_settings.browser_capture_read_timeout_seconds),
+                        float(
+                            crawler_runtime_settings.browser_capture_read_timeout_seconds
+                        ),
                     ),
                     phase_timings_ms=phase_timings_ms,
                     operation=lambda: _serialize_browser_page_content(
@@ -1398,7 +1442,9 @@ async def browser_fetch(
                     page=page,
                     timeout_seconds=max(
                         _remaining(),
-                        float(crawler_runtime_settings.browser_capture_read_timeout_seconds),
+                        float(
+                            crawler_runtime_settings.browser_capture_read_timeout_seconds
+                        ),
                     ),
                     phase_timings_ms=phase_timings_ms,
                     operation=lambda: finalize_browser_fetch(
@@ -1446,21 +1492,26 @@ async def browser_fetch(
                         **finalized_diagnostics,
                         "bridge_used": runtime_bridge_used,
                         "browser_proxy_mode": browser_proxy_mode,
-                        "escalation_lane": str(escalation_lane or "").strip().lower() or None,
+                        "escalation_lane": str(escalation_lane or "").strip().lower()
+                        or None,
                         "host_policy_snapshot": dict(host_policy_snapshot or {}),
                         "proxy_rotation_mode": resolved_proxy_rotation_mode,
                         "browser_state_reuse_allowed": allow_storage_state,
                         "behavior_realism": dict(behavior_diagnostics),
                     },
                     browser_reason=browser_reason,
-                    browser_outcome=str(finalized_diagnostics.get("browser_outcome") or ""),
+                    browser_outcome=str(
+                        finalized_diagnostics.get("browser_outcome") or ""
+                    ),
                     browser_engine=runtime_engine,
                     browser_binary=runtime_binary,
                 )
                 _mark_storage_state_persist_policy(
                     page,
-                    persist_run_storage_state=allow_storage_state and not bool(finalized["blocked"]),
-                    persist_domain_storage_state=allow_storage_state and not bool(finalized["blocked"]),
+                    persist_run_storage_state=allow_storage_state
+                    and not bool(finalized["blocked"]),
+                    persist_domain_storage_state=allow_storage_state
+                    and not bool(finalized["blocked"]),
                 )
                 return PageFetchResult(
                     url=url,
@@ -1485,7 +1536,11 @@ async def browser_fetch(
                     await payload_capture.close(page)
     except Exception as exc:
         setattr(exc, "browser_proxy_mode", browser_proxy_mode)
-        setattr(exc, "browser_phase_timings_ms", dict(locals().get("phase_timings_ms") or {}))
+        setattr(
+            exc,
+            "browser_phase_timings_ms",
+            dict(locals().get("phase_timings_ms") or {}),
+        )
         setattr(
             exc,
             "browser_diagnostics",
@@ -1552,7 +1607,10 @@ async def _maybe_warm_origin_before_navigation(
             context = context()
     new_page = getattr(context, "new_page", None)
     if not callable(new_page):
-        logger.debug("Skipping origin warmup for %s because page context cannot spawn a sibling page", url)
+        logger.debug(
+            "Skipping origin warmup for %s because page context cannot spawn a sibling page",
+            url,
+        )
         return
     warm_page = None
     try:
@@ -1570,7 +1628,9 @@ async def _maybe_warm_origin_before_navigation(
             timeout_seconds=max(1.0, warm_budget_ms / 1000),
             phase_timings_ms=warm_phase_timings_ms,
             challenge_wait_max_seconds=min(
-                max(0.0, float(crawler_runtime_settings.challenge_wait_max_seconds or 0)),
+                max(
+                    0.0, float(crawler_runtime_settings.challenge_wait_max_seconds or 0)
+                ),
                 max(1.0, warm_budget_ms / 1000),
             ),
             challenge_poll_interval_ms=int(
@@ -1726,10 +1786,16 @@ async def probe_browser_readiness(
 
 
 async def listing_card_signal_count(page: Any, *, surface: str) -> int:
-    selector_group = "jobs" if str(surface or "").strip().lower().startswith("job_") else "ecommerce"
-    selectors = CARD_SELECTORS.get(selector_group) if isinstance(CARD_SELECTORS, dict) else []
+    selector_group = (
+        "jobs" if str(surface or "").strip().lower().startswith("job_") else "ecommerce"
+    )
+    selectors = (
+        CARD_SELECTORS.get(selector_group) if isinstance(CARD_SELECTORS, dict) else []
+    )
     normalized_selectors = [
-        str(selector).strip() for selector in list(selectors or []) if str(selector).strip()
+        str(selector).strip()
+        for selector in list(selectors or [])
+        if str(selector).strip()
     ]
     if not normalized_selectors:
         return 0
@@ -1827,6 +1893,7 @@ def classify_browser_outcome(
         traversal_result=traversal_result,
         looks_like_low_content_shell=looks_like_low_content_shell,
     )
+
 
 def looks_like_low_content_shell(html: str, *, html_bytes: int) -> bool:
     return classify_low_content_reason(html, html_bytes=html_bytes) is not None

@@ -1,0 +1,15 @@
+Product:
+$product_json
+
+Taxonomy rule:
+$taxonomy_hint
+
+Return only this JSON object:
+{
+  "category_path": "Google Product Category path, or the JSON null value (null) when no category exists",
+  "intent_attributes": ["3-8 short product intent phrases"],
+  "audience": ["2-5 audience descriptors"],
+  "style_tags": ["2-5 style adjectives"],
+  "ai_discovery_tags": ["3-8 hyphenated discovery slugs"],
+  "suggested_bundles": ["3-5 complementary product types"]
+}

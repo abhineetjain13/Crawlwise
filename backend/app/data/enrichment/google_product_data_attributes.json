@@ -1,0 +1,173 @@
+{
+  "source": "Google Merchant Center product data specification",
+  "normalization_terms": {
+    "availability_terms": {
+      "in_stock": ["in stock", "available", "ready to ship", "ships now", "add to cart", "preorder available"],
+      "out_of_stock": ["out of stock", "sold out", "unavailable", "notify me", "currently unavailable"],
+      "preorder": ["preorder", "pre-order", "pre order"],
+      "backorder": ["backorder", "back order"]
+    },
+    "color_families": {
+      "black": ["black", "charcoal", "ebony", "jet"],
+      "blue": ["blue", "aqua", "azure", "cobalt", "indigo", "navy", "teal", "turquoise"],
+      "brown": ["brown", "camel", "chocolate", "coffee", "tan", "taupe"],
+      "gold": ["gold", "champagne"],
+      "green": ["green", "emerald", "forest", "khaki", "lime", "mint", "olive", "sage"],
+      "gray": ["gray", "grey", "graphite", "silver"],
+      "multi": ["multi", "multicolor", "multi-color", "assorted"],
+      "orange": ["orange", "coral", "peach"],
+      "pink": ["pink", "blush", "fuchsia", "magenta", "rose"],
+      "purple": ["purple", "lavender", "lilac", "plum", "violet"],
+      "red": ["red", "burgundy", "crimson", "maroon", "wine"],
+      "white": ["white", "cream", "ivory", "off white"],
+      "yellow": ["yellow", "mustard", "lemon"]
+    },
+    "gender_terms": {
+      "female": ["female", "women", "woman", "womens", "women's", "ladies", "girl", "girls"],
+      "male": ["male", "men", "man", "mens", "men's", "boy", "boys"],
+      "unisex": ["unisex", "all gender", "gender neutral"]
+    },
+    "material_terms": {
+      "acrylic": ["acrylic"],
+      "aluminum": ["aluminum", "aluminium"],
+      "bamboo": ["bamboo"],
+      "brass": ["brass"],
+      "canvas": ["canvas"],
+      "cashmere": ["cashmere"],
+      "ceramic": ["ceramic"],
+      "cotton": ["cotton"],
+      "denim": ["denim"],
+      "glass": ["glass"],
+      "gold": ["gold"],
+      "leather": ["leather", "suede", "nubuck"],
+      "linen": ["linen", "flax"],
+      "metal": ["metal", "steel", "stainless steel", "iron"],
+      "nylon": ["nylon", "polyamide"],
+      "paper": ["paper", "cardboard"],
+      "plastic": ["plastic", "polycarbonate", "polypropylene", "pvc"],
+      "polyester": ["polyester"],
+      "rayon": ["rayon", "viscose", "modal", "lyocell"],
+      "rubber": ["rubber"],
+      "silk": ["silk"],
+      "silver": ["silver", "sterling silver"],
+      "spandex": ["spandex", "elastane", "lycra"],
+      "stone": ["stone", "marble", "granite"],
+      "wool": ["wool", "merino"],
+      "wood": ["wood", "oak", "walnut", "pine", "maple"]
+    },
+    "seo_stopwords": [
+      "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it", "new",
+      "of", "on", "or", "sale", "the", "to", "with", "your"
+    ],
+    "size_systems": {
+      "aliases": {
+        "extra small": "XS",
+        "small": "S",
+        "medium": "M",
+        "large": "L",
+        "extra large": "XL",
+        "one size": "OS",
+        "one size fits all": "OS"
+      },
+      "systems": {
+        "alpha": ["xxs", "xs", "s", "m", "l", "xl", "xxl", "xxxl", "os"],
+        "baby_months": ["0-3m", "3-6m", "6-9m", "9-12m", "12-18m", "18-24m"],
+        "children": ["2t", "3t", "4t", "5t", "6", "7", "8", "10", "12", "14", "16"],
+        "eu": ["32", "34", "36", "38", "40", "42", "44", "46", "48", "50", "52"],
+        "us": ["00", "0", "2", "4", "6", "8", "10", "12", "14", "16", "18", "20"]
+      }
+    }
+  },
+  "attribute_rules": {
+    "base_required": ["title", "description", "link", "image_link", "availability", "price"],
+    "base_recommended": [
+      "brand", "gtin", "mpn", "identifier_exists", "condition", "google_product_category",
+      "product_type", "additional_image_link", "sale_price", "mobile_link"
+    ],
+    "category_rules": {
+      "Apparel & Accessories": {
+        "required": ["age_group", "color", "gender", "size"],
+        "recommended": ["material", "pattern", "size_type", "size_system", "item_group_id"]
+      },
+      "Media": {
+        "recommended": ["gtin", "brand", "mpn"]
+      },
+      "Software": {
+        "recommended": ["gtin", "brand", "mpn"]
+      },
+      "Electronics": {
+        "recommended": ["gtin", "brand", "mpn", "condition", "energy_efficiency_class"]
+      },
+      "Furniture": {
+        "recommended": ["material", "color", "shipping_weight", "shipping_length", "shipping_width", "shipping_height"]
+      }
+    }
+  },
+  "attributes": {
+    "additional_image_link": {"crawl_fields": ["additional_images", "images"]},
+    "adult": {"crawl_fields": ["adult"]},
+    "ads_redirect": {"crawl_fields": ["ads_redirect"]},
+    "age_group": {"crawl_fields": ["age_group", "gender", "category", "product_type", "title"]},
+    "availability": {"crawl_fields": ["availability", "stock_status", "variants", "selected_variant"]},
+    "availability_date": {"crawl_fields": ["availability_date", "preorder_date"]},
+    "brand": {"crawl_fields": ["brand", "vendor", "manufacturer"]},
+    "certification": {"crawl_fields": ["certification", "certifications", "product_attributes"]},
+    "color": {"crawl_fields": ["color", "variant_axes", "selected_variant", "title"]},
+    "condition": {"crawl_fields": ["condition"]},
+    "cost_of_goods_sold": {"crawl_fields": ["cost_of_goods_sold"]},
+    "custom_label_0": {"crawl_fields": ["custom_label_0"]},
+    "custom_label_1": {"crawl_fields": ["custom_label_1"]},
+    "custom_label_2": {"crawl_fields": ["custom_label_2"]},
+    "custom_label_3": {"crawl_fields": ["custom_label_3"]},
+    "custom_label_4": {"crawl_fields": ["custom_label_4"]},
+    "description": {"crawl_fields": ["description", "short_description", "summary"]},
+    "energy_efficiency_class": {"crawl_fields": ["energy_efficiency_class", "product_attributes"]},
+    "excluded_destination": {"crawl_fields": ["excluded_destination"]},
+    "expiration_date": {"crawl_fields": ["expiration_date"]},
+    "gender": {"crawl_fields": ["gender", "department", "category", "product_type", "title"]},
+    "google_product_category": {"crawl_fields": ["category", "product_type"]},
+    "gtin": {"crawl_fields": ["gtin", "barcode", "ean", "isbn", "upc"]},
+    "id": {"crawl_fields": ["sku", "id", "product_id"]},
+    "identifier_exists": {"crawl_fields": ["identifier_exists", "gtin", "barcode", "mpn", "sku", "brand"]},
+    "image_link": {"crawl_fields": ["image_url", "image", "thumbnail"]},
+    "included_destination": {"crawl_fields": ["included_destination"]},
+    "installment": {"crawl_fields": ["installment"]},
+    "is_bundle": {"crawl_fields": ["is_bundle", "bundle"]},
+    "item_group_id": {"crawl_fields": ["item_group_id", "product_id", "parent_sku", "variant_axes", "variants"]},
+    "link": {"crawl_fields": ["canonical_url", "source_url", "url"]},
+    "loyalty_points": {"crawl_fields": ["loyalty_points"]},
+    "material": {"crawl_fields": ["materials", "material", "product_attributes", "description"]},
+    "max_energy_efficiency_class": {"crawl_fields": ["max_energy_efficiency_class", "product_attributes"]},
+    "max_handling_time": {"crawl_fields": ["max_handling_time", "shipping"]},
+    "min_energy_efficiency_class": {"crawl_fields": ["min_energy_efficiency_class", "product_attributes"]},
+    "min_handling_time": {"crawl_fields": ["min_handling_time", "shipping"]},
+    "mobile_link": {"crawl_fields": ["mobile_link", "canonical_url", "source_url"]},
+    "mpn": {"crawl_fields": ["mpn", "part_number", "model", "sku"]},
+    "multipack": {"crawl_fields": ["multipack", "pack_size"]},
+    "pattern": {"crawl_fields": ["pattern", "product_attributes", "description", "title"]},
+    "pause": {"crawl_fields": ["pause"]},
+    "price": {"crawl_fields": ["price", "original_price"]},
+    "product_detail": {"crawl_fields": ["product_attributes", "specifications", "details"]},
+    "product_highlight": {"crawl_fields": ["highlights", "features", "bullets"]},
+    "product_type": {"crawl_fields": ["product_type", "category"]},
+    "promotion_id": {"crawl_fields": ["promotion_id", "promotions"]},
+    "sale_price": {"crawl_fields": ["sale_price"]},
+    "sale_price_effective_date": {"crawl_fields": ["sale_price_effective_date"]},
+    "shipping": {"crawl_fields": ["shipping"]},
+    "shipping_height": {"crawl_fields": ["shipping_height", "dimensions", "shipping"]},
+    "shipping_label": {"crawl_fields": ["shipping_label", "shipping"]},
+    "shipping_length": {"crawl_fields": ["shipping_length", "dimensions", "shipping"]},
+    "shipping_weight": {"crawl_fields": ["shipping_weight", "weight", "shipping"]},
+    "shipping_width": {"crawl_fields": ["shipping_width", "dimensions", "shipping"]},
+    "size": {"crawl_fields": ["size", "available_sizes", "variant_axes", "selected_variant"]},
+    "size_system": {"crawl_fields": ["size_system", "size", "available_sizes"]},
+    "size_type": {"crawl_fields": ["size_type", "fit", "size", "title"]},
+    "subscription_cost": {"crawl_fields": ["subscription_cost"]},
+    "tax": {"crawl_fields": ["tax"]},
+    "tax_category": {"crawl_fields": ["tax_category"]},
+    "title": {"crawl_fields": ["title", "name"]},
+    "transit_time_label": {"crawl_fields": ["transit_time_label", "shipping"]},
+    "unit_pricing_base_measure": {"crawl_fields": ["unit_pricing_base_measure"]},
+    "unit_pricing_measure": {"crawl_fields": ["unit_pricing_measure"]}
+  }
+}

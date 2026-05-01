@@ -139,7 +139,12 @@ def classify_block_from_headers(headers: Any) -> str | None:
     return None
 
 
-def classify_blocked_page(html: str, status_code: int) -> BlockPageClassification:
+def classify_blocked_page(
+    html: str,
+    status_code: int,
+    *,
+    analysis: HtmlAnalysis | None = None,
+) -> BlockPageClassification:
     code = int(status_code or 0)
     forced_blocked = False
     forced_outcome = ""
@@ -168,7 +173,7 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
             )
         return BlockPageClassification(blocked=False, outcome="empty")
 
-    analysis = analyze_html(html)
+    analysis = analysis or analyze_html(html)
     soup = analysis.soup
     visible_text = analysis.visible_text.lower()
     title_text = analysis.title_text.lower()
@@ -305,6 +310,42 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
     )
 
 
+def _http_content_is_extractable(
+    html: str,
+    *,
+    analysis: HtmlAnalysis | None = None,
+) -> bool:
+    parsed = analysis or analyze_html(html)
+    return _has_extractable_detail_signals(
+        html,
+        analysis=parsed,
+    ) or _has_extractable_listing_signals(
+        html,
+        analysis=parsed,
+    )
+
+
+def _content_aware_http_blocked(
+    headers: Any,
+    html: str,
+    status_code: int,
+) -> bool:
+    analysis = analyze_html(html)
+    blocked_page = classify_blocked_page(
+        html,
+        status_code,
+        analysis=analysis,
+    )
+    if blocked_page.blocked:
+        return True
+    if not classify_block_from_headers(headers):
+        return False
+    return not _http_content_is_extractable(
+        html,
+        analysis=analysis,
+    )
+
+
 def should_escalate_to_browser(
     result: PageFetchResult,
     *,
@@ -422,11 +463,14 @@ async def http_fetch(
     response = await client.get(url, timeout=timeout_seconds)
     html = response.text or ""
     headers = copy_headers(response.headers)
-    vendor = classify_block_from_headers(headers)
     blocked_result = blocked_html_checker(html, response.status_code)
     if inspect.isawaitable(blocked_result):
         blocked_result = await blocked_result
-    blocked = bool(vendor) or bool(blocked_result)
+    blocked = bool(blocked_result) or _content_aware_http_blocked(
+        headers,
+        html,
+        response.status_code,
+    )
     runtime_policy = resolve_platform_runtime_policy(str(response.url), html)
     return PageFetchResult(
         url=url,
@@ -496,8 +540,11 @@ def _curl_fetch_sync(
     )
     html = response.text or ""
     response_headers = copy_headers(response.headers)
-    vendor = classify_block_from_headers(response_headers)
-    blocked = bool(vendor) or is_blocked_html(html, response.status_code)
+    blocked = _content_aware_http_blocked(
+        response_headers,
+        html,
+        response.status_code,
+    )
     runtime_policy = resolve_platform_runtime_policy(str(response.url), html)
     return PageFetchResult(
         url=url,

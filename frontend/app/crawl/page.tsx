@@ -12,7 +12,7 @@ import {
 
 export default function CrawlPage() {
  const searchParams = useSearchParams();
- const runId = Number(searchParams.get("run_id") || searchParams.get("runId") || 0) || null;
+ const runId = Number(searchParams.get("run_id") || searchParams.get("runId") || searchParams.get("runid") || 0) || null;
 
  if (runId !== null) {
  return <CrawlRunScreen key={runId} runId={runId} />;

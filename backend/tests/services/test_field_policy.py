@@ -49,7 +49,14 @@ def test_canonical_requested_fields_normalizes_aliases_for_runtime_matching() ->
 
 def test_field_allowed_for_surface_rejects_unknown_fields() -> None:
     assert field_allowed_for_surface("ecommerce_detail", "title") is True
+    assert field_allowed_for_surface("ecommerce_detail", "gender") is True
+    assert field_allowed_for_surface("job_detail", "gender") is False
     assert field_allowed_for_surface("ecommerce_detail", "random_garbage_key") is False
+
+
+def test_normalize_requested_field_accepts_ecommerce_gender_aliases() -> None:
+    assert normalize_requested_field("target gender") == "gender"
+    assert normalize_requested_field("gender") == "gender"
 
 
 def test_ecommerce_repair_targets_union_user_fields_with_limited_defaults() -> None:

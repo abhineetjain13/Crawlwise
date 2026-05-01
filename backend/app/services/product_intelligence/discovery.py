@@ -321,6 +321,8 @@ async def _google_native_session():
             await emit_browser_behavior_activity(page)
         except Exception as exc:
             logger.warning("Product intelligence native Google session setup failed: %s", exc)
+            yield None
+            return
 
         async def _run(query: str, limit: int) -> list[SearchResult]:
             normalized_query = str(query or "").strip()

@@ -1,3 +1,9 @@
+"""Runtime LLM settings exports.
+
+This module exports ``LLMRuntimeSettings``, ``SUPPORTED_LLM_PROVIDERS``, and the
+``llm_runtime_settings`` instance. Older derived ``LLM_*`` constants were removed.
+"""
+
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings
@@ -8,7 +14,7 @@ SUPPORTED_LLM_PROVIDERS = frozenset({"groq", "anthropic", "nvidia"})
 
 
 class LLMRuntimeSettings(BaseSettings):
-    """LLM_* exports strip the LLM_ prefix before resolving settings attributes."""
+    """Runtime LLM settings loaded from ``CRAWLER_LLM_`` environment variables."""
 
     model_config = _settings_config(env_prefix="CRAWLER_LLM_")
 
