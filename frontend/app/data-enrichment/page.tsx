@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, History, Play, RefreshCcw } from 'lucide-react';
+import { ExternalLink, History, Loader2, Play, RefreshCcw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { HistoryDrawer, type HistoryItem } from '../../components/ui/history-drawer';
@@ -14,6 +14,7 @@ import {
 } from '../../components/ui/patterns';
 import { Badge, Button } from '../../components/ui/primitives';
 import { api } from '../../lib/api';
+import { EnrichmentStatus, EnrichmentTableLoading } from './enrichment-components';
 import type {
   DataEnrichmentJob,
   DataEnrichmentSourceRecordInput,
@@ -103,6 +104,8 @@ export default function DataEnrichmentPage() {
   });
   const activeJob =
     detailQuery.data?.job ?? jobsQuery.data?.find((job) => job.id === resolvedJobId) ?? null;
+  const isRunning = activeJob?.status === 'pending' || activeJob?.status === 'running';
+
   const products = detailQuery.data?.enriched_products ?? [];
   const completedCount = products.filter((product) => product.status === 'enriched').length;
   const semanticCount = products.filter((product) =>
@@ -152,7 +155,7 @@ export default function DataEnrichmentPage() {
         title="Data Enrichment"
         description={descriptionText}
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center justify-end gap-2">
             <label className="border-border bg-background-elevated text-foreground hover:bg-background-alt inline-flex h-[var(--control-height)] cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 text-sm transition-colors">
               <input
                 type="checkbox"
@@ -166,11 +169,11 @@ export default function DataEnrichmentPage() {
               type="button"
               variant="accent"
               className="h-[var(--control-height)] px-4"
-              disabled={!sourceRecordIds.length || createMutation.isPending}
+              disabled={!sourceRecordIds.length || createMutation.isPending || isRunning}
               onClick={() => createMutation.mutate()}
             >
-              <Play className="mr-1.5 size-3.5" />
-              {createMutation.isPending ? 'Starting...' : 'Enrich Selected'}
+              <Play className="size-3.5" />
+              {createMutation.isPending || isRunning ? (activeJob?.status === 'pending' ? 'Starting...' : 'Enriching...') : 'Enrich Selected'}
             </Button>
           </div>
         }
@@ -178,14 +181,20 @@ export default function DataEnrichmentPage() {
 
       {error ? <InlineAlert tone="danger" message={error} /> : null}
 
-      {/* ── Main Results ── */}
+      {isRunning ? (
+        <EnrichmentStatus
+          sourceCount={activeJob?.summary?.accepted_count ?? sourceRecords.length}
+          llmEnabled={Boolean(activeJob?.options?.llm_enabled)}
+        />
+      ) : null}
+
       {/* ── Main Results ── */}
       <div className="mb-8">
-        <section className="border-divider bg-panel overflow-hidden border-y sm:border sm:rounded-sm">
-          <header className="border-divider bg-background-alt/30 flex flex-wrap items-center justify-between gap-4 border-b px-4 py-3">
+        <section className="border-border bg-panel shadow-card overflow-hidden rounded-[var(--radius-xl)] border">
+          <header className="border-divider flex flex-wrap items-center justify-between gap-4 border-b px-4 py-3">
             <div className="flex items-center gap-3">
-              <h2 className="type-label text-muted text-[10px] font-medium tracking-widest uppercase">
-                {products.length > 0 ? 'Enriched Output' : 'Selected Records'}
+              <h2 className="type-label text-muted text-[10px] font-normal tracking-widest uppercase">
+                {products.length > 0 ? 'ENRICHED OUTPUT' : 'SELECTED RECORDS'}
               </h2>
             </div>
             <div className="flex items-center gap-2">
@@ -195,32 +204,34 @@ export default function DataEnrichmentPage() {
                 size="sm"
                 onClick={() => void detailQuery.refetch()}
                 disabled={!resolvedJobId || detailQuery.isFetching}
-                className="text-muted hover:text-foreground h-8 px-2 text-xs font-bold tracking-tight uppercase"
+                className="text-muted hover:text-foreground h-8 px-2 text-[10px] font-bold tracking-tight uppercase"
               >
-                <RefreshCcw className="mr-1.5 size-3.5" />
+                <RefreshCcw className="mr-1.5 size-3" />
                 Refresh
               </Button>
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
+                size="icon"
                 onClick={() => setHistoryOpen(true)}
-                className="text-muted hover:text-foreground h-8 px-2 text-xs font-bold tracking-tight uppercase"
+                aria-label="Enrichment History"
+                className="text-muted hover:text-foreground h-8 w-8"
               >
-                <History className="mr-1.5 size-3.5" />
-                History
+                <History className="size-4" />
               </Button>
             </div>
           </header>
 
-          {detailQuery.isLoading ? (
-            <DataRegionLoading count={5} className="px-0" />
+          {isRunning && completedCount === 0 ? (
+            <EnrichmentTableLoading llmEnabled={Boolean(activeJob?.options?.llm_enabled)} />
+          ) : detailQuery.isLoading && !isRunning ? (
+            <DataRegionLoading count={8} className="px-0" />
           ) : products.length ? (
-            <div className="commerce-table surface-muted max-h-[70vh] overflow-auto rounded-lg">
-              <table className="compact-data-table min-w-[960px]">
+            <div className="commerce-table surface-muted max-h-[70vh] overflow-auto">
+              <table className="compact-data-table min-w-[1200px]">
                 <thead>
-                  <tr>
-                    <th className="w-[180px]">Record</th>
+                  <tr className="bg-background-alt/50">
+                    <th className="w-[180px] sticky left-0 z-10 bg-background-alt">Record</th>
                     {ENRICHED_FIELD_LABELS.map(([key, label]) => (
                       <th key={String(key)}>
                         <div className="flex items-center gap-1 min-w-0">
@@ -230,7 +241,7 @@ export default function DataEnrichmentPage() {
                     ))}
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-divider">
                   {products.map((product) => (
                     <EnrichedProductRow key={product.id} product={product} />
                   ))}
@@ -238,17 +249,17 @@ export default function DataEnrichmentPage() {
               </table>
             </div>
           ) : sourceRecords.length ? (
-            <div className="divide-y divide-[var(--divider)]">
+            <div className="divide-y divide-divider">
               {sourceRecords.map((record, index) => {
                 const badgeValue = record.id ?? record.source_url;
                 return (
                   <div
                     key={record.id ?? record.source_url ?? index}
-                    className="hover:bg-background-alt flex items-center gap-3 px-4 py-3 transition-colors"
+                    className="hover:bg-background-alt/50 flex items-center gap-3 px-4 py-2.5 transition-colors"
                   >
-                    <span className="text-muted w-6 shrink-0 font-mono text-xs">{index + 1}</span>
+                    <span className="text-muted w-6 shrink-0 font-mono text-[10px]">{index + 1}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-foreground truncate text-sm font-medium">
+                      <div className="text-foreground truncate text-sm font-medium tracking-tight">
                         {recordTitle(record)}
                       </div>
                       <div className="text-muted flex items-center gap-2 text-xs">
@@ -257,7 +268,7 @@ export default function DataEnrichmentPage() {
                             href={record.source_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-accent truncate hover:underline"
+                            className="text-accent truncate hover:underline opacity-80"
                             title={record.source_url}
                           >
                             {record.source_url}
@@ -266,7 +277,7 @@ export default function DataEnrichmentPage() {
                       </div>
                     </div>
                     {badgeValue ? (
-                      <Badge tone="neutral" className="h-5 shrink-0 px-1.5 text-xs">
+                      <Badge tone="neutral" className="h-5 shrink-0 px-1.5 text-[10px] font-mono opacity-60">
                         #{badgeValue}
                       </Badge>
                     ) : null}
@@ -277,11 +288,12 @@ export default function DataEnrichmentPage() {
           ) : (
             <DataRegionEmpty
               title="No records selected"
-              description="Open an ecommerce detail run and send selected records here."
+              description="Open an ecommerce detail run and send selected records here to begin enrichment."
             />
           )}
         </section>
       </div>
+
 
 
       <HistoryDrawer
@@ -300,21 +312,21 @@ export default function DataEnrichmentPage() {
 
 function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>) {
   return (
-    <tr key={product.id}>
-      <td>
-        <div className="flex items-center gap-2 py-1">
-          <span className="text-foreground font-mono text-[11px] font-bold shrink-0">
+    <tr key={product.id} className="group/row hover:bg-background-alt/30 transition-colors">
+      <td className="sticky left-0 z-10 bg-panel group-hover/row:bg-background-alt/50 transition-colors">
+        <div className="flex items-center gap-2 py-1.5">
+          <Badge tone="neutral" className="font-mono text-[10px] shrink-0 h-5 px-1.5 opacity-70">
             #{product.source_record_id}
-          </span>
+          </Badge>
           {product.source_url ? (
             <a
               href={product.source_url}
               target="_blank"
               rel="noreferrer"
-              className="ct-url block max-w-[140px] truncate transition-colors hover:underline"
+              className="text-accent block max-w-[140px] truncate transition-colors hover:underline text-[12px] font-medium"
               title={product.source_url}
             >
-              {product.source_url}
+              {product.source_url.replace(/^https?:\/\/(www\.)?/, '')}
             </a>
           ) : null}
         </div>
@@ -322,14 +334,26 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
       {ENRICHED_FIELD_LABELS.map(([key]) => {
         const value = product[key];
         const display = formatValue(value);
+        const isEnriched = product.status === 'enriched' && Boolean(display && display !== '--');
+        const isProcessing = product.status === 'pending' || product.status === 'running';
+        
         return (
           <td key={String(key)}>
-            {display ? (
-              <span className="block max-w-[260px] truncate leading-[var(--leading-snug)] text-secondary font-normal" style={{ fontSize: "var(--table-font-size)" }} title={display}>
+            {isEnriched ? (
+              <span 
+                className="block max-w-[260px] truncate leading-relaxed text-foreground font-normal tracking-tight" 
+                style={{ fontSize: "var(--table-font-size)" }} 
+                title={display}
+              >
                 {display}
               </span>
+            ) : isProcessing ? (
+              <div className="flex items-center gap-1.5 opacity-40">
+                <Loader2 className="size-3 animate-spin text-accent" />
+                <span className="text-[10px] font-medium tracking-wide uppercase">Processing</span>
+              </div>
             ) : (
-              <span className="ct-muted">--</span>
+              <span className="text-muted/40 font-mono text-[10px]">--</span>
             )}
           </td>
         );
@@ -338,19 +362,27 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
   );
 }
 
-
-
 function recordTitle(record: DataEnrichmentSourceRecordInput) {
   const title = record.data?.title;
   return typeof title === 'string' && title.trim()
     ? title
-    : record.source_url || `Record #${record.id}`;
+    : record.source_url?.replace(/^https?:\/\/(www\.)?/, '') || `Record #${record.id}`;
 }
 
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '';
   if (Array.isArray(value)) return value.join(', ');
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'object') {
+    // Handle price object from EnrichmentStatus
+    if ('amount' in value || 'price_min' in value) {
+      const p = value as Record<string, unknown>;
+      const amount = p.amount ?? p.price_min;
+      const currency = (p.currency as string) || '';
+      if (typeof amount === 'number') {
+        return `${currency} ${amount.toFixed(2)}`.trim();
+      }
+    }
+    return JSON.stringify(value);
+  }
   return String(value);
 }
-

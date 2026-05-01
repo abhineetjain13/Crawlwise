@@ -61,7 +61,6 @@ https://www.thomann.de/gb/akg_k702.htm
 https://www.discogs.com/release/249504
 https://www.ifixit.com/products/iphone-16-plus-battery
 https://www.vitacost.com/vitacost-vitamin-d3-mini-gels
-https://www.thriftbooks.com/w/the-pragmatic-programmer_david-thomas_andrew-hunt/286697/
 https://www.abebooks.com/9780132350884/Clean-Code-Handbook-Agile-Software-0132350882/plp
 https://www.rockler.com/rockler-table-saw-crosscut-sled
 https://www.backmarket.com/en-us/p/iphone-15-plus
@@ -71,6 +70,12 @@ https://ar.puma.com/pd/zapatillas-mostro-ecstasy-unisex/397328.html?color=07
 https://www.karenmillen.com/eu/product/karen-millen-cotton-utility-button-detail-barrel-leg-trouser_bkk28382?colour=ivory
 https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail
 https://www.kitchenaid.com/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html
+https://www.phase-eight.com/product/lucinda-spot-midi-dress-10015500806.html
+https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-seersucker-sutton-suit-2
+https://savannahs.com/collections/all-boots/products/pavlova-100-lace-up-blush-satin-boots-cl28517s
+https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants?g_aidx=Listing_by_listing_quality_production&g_aqid=dcff41da6c7483961c0b500769d4c7bc
+https://www.desertcart.in/products/808107894-hormone-healthy-eats-100-recipes-to-balance-your-hormones-support?source=search
+https://www2.hm.com/en_in/productpage.1317259001.html
 
 ## Section DJ — Detail Jobs
 

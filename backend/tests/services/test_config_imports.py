@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from app.models.crawl_settings import CrawlRunSettings
+from app.core import migrations
 from app.schemas.crawl import DomainRunAcquisitionContractSuccess
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.config._export_data import (
@@ -167,6 +168,52 @@ def test_crawl_run_settings_preserves_modeled_acquisition_contract_success() -> 
         "source_run_id": None,
         "timestamp": None,
     }
+
+
+def test_crawl_run_settings_preserves_zero_source_run_id() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "acquisition_contract": {
+                "last_quality_success": {
+                    "method": "browser",
+                    "record_count": 0,
+                    "field_coverage": {},
+                    "source_run_id": 0,
+                }
+            }
+        }
+    )
+
+    assert settings.acquisition_contract()["last_quality_success"]["source_run_id"] == 0
+
+
+def test_legacy_migration_start_detects_missing_data_enrichment_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Inspector:
+        def get_table_names(self) -> list[str]:
+            return ["users", "crawl_runs", "crawl_records"]
+
+        def get_columns(self, table_name: str) -> list[dict[str, str]]:
+            if table_name == "crawl_runs":
+                return [{"name": "queue_owner"}]
+            if table_name == "crawl_records":
+                return [
+                    {"name": "url_identity_key"},
+                    {"name": "enrichment_status"},
+                    {"name": "enriched_at"},
+                ]
+            return []
+
+    monkeypatch.setattr(migrations, "inspect", lambda _connection: Inspector())
+    monkeypatch.setattr(
+        migrations.Base.metadata,
+        "create_all",
+        lambda *args, **kwargs: None,
+    )
+
+    assert (
+        migrations._resolve_legacy_start_revision_sync(object())
+        == migrations._DATA_ENRICHMENT_BASELINE
+    )
 
 
 def test_invalid_traversal_mode_raises_configuration_error() -> None:

@@ -24,7 +24,7 @@ for _name, _value in _STATIC_EXPORTS.items():
 
 JS_STATE_GLOM_SKIP: tuple[object, ...] = ("", [], {})
 JS_STATE_PRODUCT_FIELD_SPEC = {
-    "title": Coalesce("title", "name", default=None, skip=JS_STATE_GLOM_SKIP),
+    "title": Coalesce("title", "name", "pn", default=None, skip=JS_STATE_GLOM_SKIP),
     "brand": Coalesce(
         "brand.name",
         "brand",
@@ -39,6 +39,7 @@ JS_STATE_PRODUCT_FIELD_SPEC = {
         "description",
         "body_html",
         "descriptionHtml",
+        "pd",
         default=None,
         skip=JS_STATE_GLOM_SKIP,
     ),
@@ -46,6 +47,7 @@ JS_STATE_PRODUCT_FIELD_SPEC = {
         "id",
         "product_id",
         "productId",
+        "pid",
         "legacyResourceId",
         default=None,
         skip=JS_STATE_GLOM_SKIP,
@@ -120,6 +122,7 @@ JS_STATE_PRODUCT_FIELD_SPEC = {
         "prices.base.amount",
         "compareAtPriceRange.minVariantPrice.amount",
         "compareAtPriceRange.maxVariantPrice.amount",
+        "mrp",
         default=None,
         skip=JS_STATE_GLOM_SKIP,
     ),

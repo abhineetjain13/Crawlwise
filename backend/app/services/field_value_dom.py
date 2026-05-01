@@ -603,25 +603,28 @@ def extract_page_images(
 
 
 def extract_label_value_pairs(root: BeautifulSoup | Tag) -> list[tuple[str, str]]:
+    def node_text(node: BeautifulSoup | Tag) -> str:
+        return clean_text(node.get_text(" ", strip=True))
+
     rows: list[tuple[str, str]] = []
     for tr in root.find_all("tr"):
         cells = tr.find_all(["th", "td"], recursive=False)
         if len(cells) < 2:
             continue
-        label = clean_text(cells[0].get_text(" ", strip=True))
-        value = clean_text(cells[1].get_text(" ", strip=True))
+        label = node_text(cells[0])
+        value = node_text(cells[1])
         if label and value:
             rows.append((label, value))
     for dt in root.find_all("dt"):
         dd = dt.find_next_sibling("dd")
         if dd is None:
             continue
-        label = clean_text(dt.get_text(" ", strip=True))
-        value = clean_text(dd.get_text(" ", strip=True))
+        label = node_text(dt)
+        value = node_text(dd)
         if label and value:
             rows.append((label, value))
     for node in root.find_all(["li", "p", "div", "span"]):
-        text = clean_text(node.get_text(" ", strip=True))
+        text = node_text(node)
         if ":" not in text:
             continue
         label, value = text.split(":", 1)

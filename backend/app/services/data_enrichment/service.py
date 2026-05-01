@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import SessionLocal
@@ -165,29 +166,38 @@ async def build_data_enrichment_job_payload(
 
 async def _run_job(session: AsyncSession, job: DataEnrichmentJob) -> None:
     now = datetime.now(UTC)
+    job_id = int(job.id)
     job.status = DATA_ENRICHMENT_STATUS_RUNNING
     job.summary = {**dict(job.summary or {}), "started_at": now.isoformat()}
     products = list(
         (
             await session.scalars(
                 select(EnrichedProduct)
-                .where(EnrichedProduct.job_id == job.id)
+                .where(EnrichedProduct.job_id == job_id)
                 .order_by(EnrichedProduct.id)
             )
         ).all()
     )
+    product_refs = [
+        (int(product.id), int(product.source_record_id)) for product in products
+    ]
     await session.flush()
 
     enriched_count = 0
     failed_count = 0
     llm_enabled = bool((job.options or {}).get("llm_enabled"))
-    for product in products:
-        record = await session.get(CrawlRecord, product.source_record_id)
-        if record is None:
+    for product_id, source_record_id in product_refs:
+        product = await session.get(EnrichedProduct, product_id)
+        record = await session.get(CrawlRecord, source_record_id)
+        if product is None or record is None:
+            if product is None:
+                failed_count += 1
+                continue
             product.status = DATA_ENRICHMENT_STATUS_FAILED
             product.diagnostics = {"error": "source_record_missing"}
             failed_count += 1
             continue
+        record_id = record.id
         try:
             await _enrich_product(
                 session,
@@ -197,6 +207,13 @@ async def _run_job(session: AsyncSession, job: DataEnrichmentJob) -> None:
                 llm_enabled=llm_enabled,
             )
         except Exception as exc:  # pragma: no cover - defensive job isolation
+            if isinstance(exc, SQLAlchemyError):
+                await session.rollback()
+                job = await session.get(DataEnrichmentJob, job_id)
+                product = await session.get(EnrichedProduct, product_id)
+                record = await session.get(CrawlRecord, record_id)
+                if job is None or product is None or record is None:
+                    raise
             product.status = DATA_ENRICHMENT_STATUS_FAILED
             product.diagnostics = {"error": str(exc)}
             record.enrichment_status = DATA_ENRICHMENT_STATUS_FAILED
@@ -255,6 +272,8 @@ async def _enrich_product(
             source_data=data,
         )
         diagnostics["llm"] = llm_result
+        if llm_result.get("category_applied"):
+            diagnostics["category_source"] = "llm"
     else:
         product.intent_attributes = None
         product.audience = None
@@ -272,15 +291,21 @@ def _build_deterministic_enrichment(
     repository = _load_attribute_repository()
     terms = _repository_terms(repository)
     color_family = _normalize_from_terms(
-        _candidate_values(
-            data,
-            "color",
-            "title",
-            "category",
-            "product_type",
-            "variant_axes",
-            "selected_variant",
-        ),
+        [
+            *_candidate_values(
+                data,
+                "color",
+                "title",
+                "category",
+                "product_type",
+            ),
+            *_targeted_candidate_values(
+                data,
+                {"color", "colour", "shade", "finish", "tone"},
+                "variant_axes",
+                "selected_variant",
+            ),
+        ],
         _term_dict(terms, "color_families"),
     )
     size_normalized, size_system = _normalize_sizes(data, terms=terms)
@@ -290,22 +315,18 @@ def _build_deterministic_enrichment(
     )
     materials_normalized = _normalize_materials(data, terms=terms)
     availability_normalized = _normalize_from_terms(
-        _candidate_values(
-            data, "availability", "variants", "selected_variant", "product_attributes"
-        ),
+        [
+            *_candidate_values(data, "availability", "product_attributes"),
+            *_targeted_candidate_values(
+                data,
+                {"availability", "stock", "status", "inventory"},
+                "variants",
+                "selected_variant",
+            ),
+        ],
         _term_dict(terms, "availability_terms"),
     )
-    category_match = _match_category_path(
-        _candidate_values(
-            data,
-            "category",
-            "product_type",
-            "title",
-            "brand",
-            "materials",
-            "product_attributes",
-        )
-    )
+    category_match = _match_category_path(data)
     category_path = category_match.get("category_path") if category_match else None
     seo_keywords = _build_seo_keywords(
         data,
@@ -358,18 +379,21 @@ async def _run_llm_enrichment(
             "error_category": str(result.error_category or ""),
         }
     payload = result.payload if isinstance(result.payload, dict) else {}
-    _apply_llm_payload(product, payload)
+    category_applied = _apply_llm_payload(product, payload)
     return {
         "applied": bool(payload),
+        "category_applied": category_applied,
         "provider": result.provider or "",
         "model": result.model or "",
     }
 
 
-def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> None:
+def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> bool:
     category_path = text_or_none(payload.get("category_path"))
-    if category_path and _taxonomy_contains(category_path):
+    category_applied = False
+    if category_path:
         product.category_path = category_path
+        category_applied = True
     for field_name in (
         "intent_attributes",
         "audience",
@@ -379,6 +403,7 @@ def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> 
     ):
         values = _string_list(payload.get(field_name), max_items=10, max_chars=60)
         setattr(product, field_name, values or None)
+    return category_applied
 
 
 async def _upsert_enriched_product(
@@ -487,15 +512,23 @@ def _normalize_sizes(
         for system, values in dict(size_config.get("systems") or {}).items()
         if isinstance(values, list)
     }
-    values = _candidate_values(
-        data, "size", "available_sizes", "variant_axes", "selected_variant"
-    )
+    values = [
+        *_candidate_values(data, "size", "available_sizes"),
+        *_targeted_candidate_values(
+            data,
+            {"size", "width"},
+            "variant_axes",
+            "selected_variant",
+        ),
+    ]
     normalized: list[str] = []
     seen: set[str] = set()
     detected_system = None
     for value in _split_values(values):
         cleaned = clean_text(value).strip()
         if not cleaned:
+            continue
+        if not _plausible_size_value(cleaned, aliases=aliases, systems=systems):
             continue
         canonical = aliases.get(
             cleaned.casefold(), cleaned.upper() if len(cleaned) <= 4 else cleaned
@@ -508,6 +541,20 @@ def _normalize_sizes(
         if detected_system is None:
             detected_system = _detect_size_system(canonical, systems)
     return (normalized or None), detected_system
+
+
+def _plausible_size_value(
+    value: str,
+    *,
+    aliases: dict[str, str],
+    systems: dict[str, set[str]],
+) -> bool:
+    normalized = clean_text(value).casefold()
+    if normalized in aliases:
+        return True
+    if any(normalized in values for values in systems.values()):
+        return True
+    return bool(re.fullmatch(r"\d+(?:\.\d+)?(?:\s*(?:m|t|w|y|us|uk|eu))?", normalized))
 
 
 def _detect_size_system(value: str, systems: dict[str, set[str]]) -> str | None:
@@ -553,62 +600,79 @@ def _normalize_from_terms(values: list[object], terms: dict[str, object]) -> str
     return None
 
 
-def _match_category_path(values: list[object]) -> dict[str, object] | None:
-    categories = _load_taxonomy()
-    if not categories:
+def _match_category_path(data: dict[str, object]) -> dict[str, object] | None:
+    raw_category = _first_present(data, "category", "product_type")
+    category_path = _source_category_path(raw_category, title=data.get("title"))
+    if not category_path:
         return None
-    normalized_lookup = {
-        _normalize_category_path(category_path): item
-        for item in categories
-        if isinstance(item, dict)
-        for category_path in [item.get("category_path")]
-        if category_path
+    match = {
+        "category_id": "",
+        "category_path": category_path,
+        "score": 1.0,
+        "source": "source_category",
     }
+    gpc_reference = _gpc_reference_for_category(category_path)
+    if gpc_reference:
+        match["gpc_reference"] = gpc_reference
+    return match
+
+
+def _exact_category_match(
+    values: list[object],
+    categories: list[dict[str, object]],
+    normalized_lookup: dict[str, dict[str, object]],
+    scores: tuple[float, float, float],
+) -> dict[str, object] | None:
     for value in values:
         normalized = _normalize_category_path(clean_text(value))
         if normalized in normalized_lookup:
             return _category_match_payload(
-                normalized_lookup[normalized], score=1.0, source="exact_path"
+                normalized_lookup[normalized], score=scores[0], source="exact_path"
             )
-        if normalized:
-            for item in categories:
-                path = str(item.get("category_path") or "")
-                leaf = _normalize_category_path(path.rsplit(">", 1)[-1])
-                if normalized == leaf:
-                    return _category_match_payload(item, score=0.9, source="leaf")
-                aliases = [
-                    _normalize_category_path(alias)
-                    for alias in list(item.get("aliases") or [])
-                ]
-                if normalized in aliases:
-                    return _category_match_payload(item, score=0.86, source="alias")
-    source_tokens = set(_tokens(" ".join(clean_text(value) for value in values)))
-    if not source_tokens:
-        return None
-    best_item: dict[str, object] | None = None
-    best_score = 0.0
-    for item in categories:
-        path = str(item.get("category_path") or "")
-        aliases = " ".join(str(alias) for alias in list(item.get("aliases") or []))
-        haystack = f"{path} {aliases}"
-        path_tokens = set(_tokens(path))
-        all_tokens = set(_tokens(haystack))
-        if not path_tokens:
+        if not normalized:
             continue
-        overlap = source_tokens & all_tokens
-        score = len(overlap) / max(1, len(source_tokens))
-        leaf_tokens = set(_tokens(path.rsplit(">", 1)[-1]))
-        if leaf_tokens & source_tokens:
-            score += 0.25
-        if score > best_score:
-            best_score = score
-            best_item = item
-    if (
-        best_item is None
-        or best_score < data_enrichment_settings.category_match_threshold
-    ):
+        for item in categories:
+            path = str(item.get("category_path") or "")
+            leaf = _normalize_category_path(path.rsplit(">", 1)[-1])
+            if normalized == leaf:
+                return _category_match_payload(item, score=scores[1], source="leaf")
+            aliases = [
+                _normalize_category_path(alias)
+                for alias in list(item.get("aliases") or [])
+            ]
+            if normalized in aliases:
+                return _category_match_payload(item, score=scores[2], source="alias")
+    return None
+
+
+def _source_category_path(value: object, *, title: object) -> str | None:
+    text = clean_text(value)
+    if not text:
         return None
-    return _category_match_payload(best_item, score=best_score, source="scored")
+    if _normalize_category_path(text) == _normalize_category_path(title):
+        return None
+    parts = [
+        clean_text(part)
+        for part in re.split(r"\s*>\s*", text)
+        if clean_text(part)
+    ]
+    return " > ".join(parts) if parts else None
+
+
+def _gpc_reference_for_category(category_path: str) -> dict[str, object] | None:
+    categories = _load_taxonomy()
+    if not categories:
+        return None
+    normalized_lookup = {
+        _normalize_category_path(path): item
+        for item in categories
+        if isinstance(item, dict)
+        for path in [item.get("category_path")]
+        if path
+    }
+    return _exact_category_match(
+        [category_path], categories, normalized_lookup, (1.0, 0.9, 0.86)
+    )
 
 
 def _build_seo_keywords(
@@ -639,13 +703,9 @@ def _build_seo_keywords(
     ]
     keywords: list[str] = []
     seen: set[str] = set()
-    title_tokens = [
-        token
-        for token in _tokens(data.get("title"))
-        if len(token) >= 3 and token not in stopwords
-    ]
+    title_tokens = _keyword_tokens(data.get("title"), stopwords)
     for token in [
-        *_tokens(" ".join(clean_text(part) for part in raw_parts)),
+        *_keyword_tokens(" ".join(clean_text(part) for part in raw_parts), stopwords),
         *list(_bigrams(title_tokens)),
     ]:
         cleaned = clean_text(token).casefold()
@@ -688,19 +748,8 @@ def _llm_prompt_context(
 
 def _taxonomy_hint(category_path: str | None) -> str:
     if category_path:
-        return f"Existing deterministic category: {category_path}"
-    return "Choose a category only if it exactly matches the Google Product Category taxonomy."
-
-
-def _taxonomy_contains(category_path: str) -> bool:
-    normalized = _normalize_category_path(category_path)
-    return normalized in {
-        _normalize_category_path(item_category_path)
-        for item in _load_taxonomy()
-        if isinstance(item, dict)
-        for item_category_path in [item.get("category_path")]
-        if item_category_path
-    }
+        return f"Existing source category: {category_path}"
+    return "Infer a plain ecommerce category path only if product evidence is strong."
 
 
 def _source_record_ids(payload: dict[str, object]) -> list[int]:
@@ -768,7 +817,12 @@ def _product_attribute_diagnostics(
     recommended = [str(item) for item in list(rules.get("base_recommended") or [])]
     if category_match:
         category_rules = dict(rules.get("category_rules") or {})
-        path = str(category_match.get("category_path") or "")
+        gpc_reference = category_match.get("gpc_reference")
+        path = str(
+            dict(gpc_reference).get("category_path")
+            if isinstance(gpc_reference, dict)
+            else category_match.get("category_path") or ""
+        )
         matched_keys = [
             key
             for key in category_rules
@@ -835,6 +889,24 @@ def _candidate_values(data: dict[str, object], *keys: str) -> list[object]:
     return values
 
 
+def _targeted_candidate_values(
+    data: dict[str, object], target_keys: set[str], *keys: str
+) -> list[object]:
+    normalized_targets = {str(key).casefold() for key in target_keys}
+    values: list[object] = []
+    for key in keys:
+        value = data.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, dict):
+            values.extend(_flatten_targeted_dict_values(value, normalized_targets))
+        elif isinstance(value, list):
+            values.extend(_flatten_targeted_list_values(value, normalized_targets))
+        else:
+            values.append(value)
+    return values
+
+
 def _flatten_dict_values(value: dict[str, object]) -> list[object]:
     values: list[object] = []
     for item in value.values():
@@ -859,6 +931,38 @@ def _flatten_list_values(value: list[object]) -> list[object]:
     return values
 
 
+def _flatten_targeted_dict_values(
+    value: dict[str, object], target_keys: set[str]
+) -> list[object]:
+    values: list[object] = []
+    for key, item in value.items():
+        if str(key).casefold() in target_keys and item not in (None, "", [], {}):
+            if isinstance(item, dict):
+                values.extend(_flatten_dict_values(item))
+            elif isinstance(item, list):
+                values.extend(_flatten_list_values(item))
+            else:
+                values.append(item)
+            continue
+        if isinstance(item, dict):
+            values.extend(_flatten_targeted_dict_values(item, target_keys))
+        elif isinstance(item, list):
+            values.extend(_flatten_targeted_list_values(item, target_keys))
+    return values
+
+
+def _flatten_targeted_list_values(
+    value: list[object], target_keys: set[str]
+) -> list[object]:
+    values: list[object] = []
+    for item in value:
+        if isinstance(item, dict):
+            values.extend(_flatten_targeted_dict_values(item, target_keys))
+        elif isinstance(item, list):
+            values.extend(_flatten_targeted_list_values(item, target_keys))
+    return values
+
+
 def _split_values(values: list[object]) -> list[str]:
     rows: list[str] = []
     for value in values:
@@ -876,6 +980,14 @@ def _tokens(value: object) -> list[str]:
         token
         for token in _token_re.findall(clean_text(strip_html_tags(value)).casefold())
         if token
+    ]
+
+
+def _keyword_tokens(value: object, stopwords: set[str]) -> list[str]:
+    return [
+        token
+        for token in _tokens(value)
+        if len(token) >= 3 and token not in stopwords
     ]
 
 

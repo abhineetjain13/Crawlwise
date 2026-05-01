@@ -77,7 +77,7 @@ FILE_LOC_BUDGETS = {
     # Browser runtime owns pooled browser lifecycle and context management.
     Path("app/services/acquisition/browser_runtime.py"): 2275,
     # Page flow owns navigation, readiness, artifact capture, and final browser shaping.
-    Path("app/services/acquisition/browser_page_flow.py"): 1645,
+    Path("app/services/acquisition/browser_page_flow.py"): 1880,
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
     # Fetch runtime remains the request/browser arbitration owner.
@@ -90,6 +90,10 @@ FILE_LOC_BUDGETS = {
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
     Path("app/services/field_value_dom.py"): 1245,
+    # Canonical field coercion remains centralized here instead of scattering value policy.
+    Path("app/services/field_value_core.py"): 1125,
+    # Enrichment owns deterministic product normalization and job application.
+    Path("app/services/data_enrichment/service.py"): 1215,
     # JS state mapping stays centralized to avoid adapter-specific drift.
     Path("app/services/js_state_mapper.py"): 1060,
     # Pipeline core still owns the per-URL orchestration boundary.

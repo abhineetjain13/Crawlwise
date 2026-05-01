@@ -25,8 +25,10 @@ from app.services.llm_config_service import (
     resolve_run_config,
 )
 from app.services.llm_provider_client import call_provider_with_retry, estimate_cost_usd
+from app.services.extraction_html_helpers import prune_html_tree
 from app.services.llm_types import LLMTaskResult
-from bs4 import BeautifulSoup, Comment, Tag
+from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
+from bs4 import BeautifulSoup, Tag
 from app.services.record_export_service import render_markdown_block
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -606,32 +608,27 @@ def _prune_html_for_llm(html_text: str) -> str:
     preserved_data_prefixes = _load_prune_preserved_data_attr_prefixes()
     preserved_script_ids = _load_prune_preserved_script_ids()
     strip_attr_prefixes = _load_prune_strip_attr_prefixes()
-    soup = BeautifulSoup(html_text, "html.parser")
-    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
-        comment.extract()
-    for tag in list(soup.find_all(stripped_tags)):
-        if tag.name == "script":
-            script_type = str(tag.get("type") or "").strip().lower()
-            if script_type in preserved_script_types:
-                continue
-            if str(tag.get("id") or "") in preserved_script_ids:
-                continue
-        tag.decompose()
+    def _preserve_tag(tag: Tag) -> bool:
+        if tag.name != "script":
+            return False
+        script_type = str(tag.get("type") or "").strip().lower()
+        return script_type in preserved_script_types or str(tag.get("id") or "") in preserved_script_ids
+
+    def _keep_attr(key: str, _value: object) -> bool:
+        return key in preserved_attrs or not _should_strip_llm_attr(
+            key,
+            strip_attr_prefixes=strip_attr_prefixes,
+            preserved_data_prefixes=preserved_data_prefixes,
+        )
+
+    soup = prune_html_tree(
+        BeautifulSoup(html_text, "html.parser"),
+        drop_tags=stripped_tags,
+        attr_filter=_keep_attr,
+        preserve_tag=_preserve_tag,
+    )
     for tag in soup.find_all(True):
-        if not isinstance(tag, Tag):
-            continue
-        tag.attrs = {
-            key: value
-            for key, value in tag.attrs.items()
-            if key in preserved_attrs
-            or not _should_strip_llm_attr(
-                key,
-                strip_attr_prefixes=strip_attr_prefixes,
-                preserved_data_prefixes=preserved_data_prefixes,
-            )
-        }
-        style = tag.get("style")
-        if style:
+        if tag.get("style"):
             del tag["style"]
     return str(soup)
 
@@ -663,34 +660,13 @@ def _extract_structured_data(html_text: str) -> dict[str, object]:
         else:
             structured[type_name] = [item]
 
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = parse_json(script.string or "")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(data, dict):
-            graph = data.get("@graph")
-            if isinstance(graph, list):
-                for item in graph:
-                    if isinstance(item, dict) and item.get("@type"):
-                        type_name = str(item["@type"]).split("/")[-1]
-                        _append_structured_item(type_name, item)
-            elif data.get("@type"):
-                type_name = str(data["@type"]).split("/")[-1]
-                _append_structured_item(type_name, data)
-        elif isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and item.get("@type"):
-                    type_name = str(item["@type"]).split("/")[-1]
-                    _append_structured_item(type_name, item)
-    next_data_script = soup.find("script", id="__NEXT_DATA__")
-    if next_data_script:
-        try:
-            next_data = parse_json(next_data_script.string or "")
-            if isinstance(next_data, dict):
-                structured["__NEXT_DATA__"] = next_data
-        except (json.JSONDecodeError, TypeError):
-            logger.debug("Failed to parse __NEXT_DATA__ script tag as JSON")
+    for item in parse_json_ld(soup):
+        if isinstance(item, dict) and item.get("@type"):
+            type_name = str(item["@type"]).split("/")[-1]
+            _append_structured_item(type_name, item)
+    for key, value in harvest_js_state_objects(soup, html_text).items():
+        if key == "__NEXT_DATA__" and isinstance(value, dict):
+            structured[key] = value
     return structured
 
 

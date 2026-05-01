@@ -71,6 +71,7 @@ from app.services.field_value_candidates import (
 from app.services.field_value_dom import apply_selector_fallbacks
 
 logger = logging.getLogger(__name__)
+_LISTING_STRUCTURE_NEGATIVE_HINTS = frozenset(LISTING_STRUCTURE_NEGATIVE_HINTS)
 def _path_segment_tokens(value: str) -> set[str]:
     return {
         token
@@ -202,31 +203,33 @@ def _listing_payload_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]
     return candidates
 
 
+def _normalized_payload_type(payload: dict[str, Any]) -> str:
+    raw_type = payload.get("@type")
+    return (" ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")).lower()
+
+
+def _typed_listing_payloads(payloads: list[dict[str, Any]]):
+    for payload in payloads:
+        for candidate in _listing_payload_candidates(payload):
+            if not isinstance(candidate, dict):
+                continue
+            normalized_type = _normalized_payload_type(candidate)
+            if any(token in normalized_type for token in ("product", "jobposting")):
+                yield candidate
+
+
 def _allow_standalone_typed_listing_payloads(
     payloads: list[dict[str, Any]],
 ) -> bool:
     typed_candidates = 0
     threshold = max(2, int(crawler_runtime_settings.listing_min_items))
-    for payload in payloads:
-        for candidate in _listing_payload_candidates(payload):
-            if not isinstance(candidate, dict):
-                continue
-            raw_type = candidate.get("@type")
-            normalized_type = (
-                " ".join(raw_type)
-                if isinstance(raw_type, list)
-                else str(raw_type or "")
-            ).lower()
-            if not any(
-                token in normalized_type for token in ("product", "jobposting")
-            ):
-                continue
-            title = coerce_text(candidate.get("name") or candidate.get("title"))
-            url = candidate.get("url") or candidate.get("link") or candidate.get("href")
-            if title and url:
-                typed_candidates += 1
-                if typed_candidates >= threshold:
-                    return True
+    for candidate in _typed_listing_payloads(payloads):
+        title = coerce_text(candidate.get("name") or candidate.get("title"))
+        url = candidate.get("url") or candidate.get("link") or candidate.get("href")
+        if title and url:
+            typed_candidates += 1
+            if typed_candidates >= threshold:
+                return True
     return False
 
 
@@ -235,10 +238,7 @@ def _allow_embedded_json_listing_payloads(payloads: list[dict[str, Any]]) -> boo
     for payload in payloads:
         if not isinstance(payload, dict):
             continue
-        raw_type = payload.get("@type")
-        normalized_type = (
-            " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
-        ).lower()
+        normalized_type = _normalized_payload_type(payload)
         if "itemlist" in normalized_type:
             return True
         if isinstance(payload.get("itemListElement"), list) and payload.get("itemListElement"):
@@ -248,12 +248,7 @@ def _allow_embedded_json_listing_payloads(payloads: list[dict[str, Any]]) -> boo
         main_entity = payload.get("mainEntity")
         if not isinstance(main_entity, dict):
             continue
-        main_entity_type = main_entity.get("@type")
-        normalized_main_entity_type = (
-            " ".join(main_entity_type)
-            if isinstance(main_entity_type, list)
-            else str(main_entity_type or "")
-        ).lower()
+        normalized_main_entity_type = _normalized_payload_type(main_entity)
         if "itemlist" in normalized_main_entity_type:
             return True
         if isinstance(main_entity.get("itemListElement"), list) and main_entity.get("itemListElement"):
@@ -878,7 +873,7 @@ def _label_value_pair_is_noise(label: str) -> bool:
     normalized = clean_text(label).lower()
     if not normalized:
         return True
-    if any(token in normalized for token in LISTING_STRUCTURE_NEGATIVE_HINTS):
+    if any(token in normalized for token in _LISTING_STRUCTURE_NEGATIVE_HINTS):
         return True
     return any(token in normalized for token in LISTING_LABEL_NOISE_TOKENS)
 

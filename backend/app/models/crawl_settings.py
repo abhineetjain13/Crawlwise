@@ -24,6 +24,23 @@ def _coerce_int(
         return default
 
 
+def _coerce_optional_int(
+    value: object, minimum: int = 0, maximum: int | None = None
+) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        result = max(minimum, int(text))
+        if maximum is not None:
+            result = min(result, maximum)
+        return result
+    except (TypeError, ValueError):
+        return None
+
+
 def _coerce_sequence(value: object) -> list[object]:
     if value is None:
         return []
@@ -219,12 +236,10 @@ class CrawlRunSettings:
                     )
                     if isinstance(last_quality_success.get("field_coverage"), Mapping)
                     else {},
-                    "source_run_id": _coerce_int(
+                    "source_run_id": _coerce_optional_int(
                         last_quality_success.get("source_run_id"),
                         0,
-                        0,
-                    )
-                    or None,
+                    ),
                     "timestamp": _clean_str(last_quality_success.get("timestamp")),
                 }
             )

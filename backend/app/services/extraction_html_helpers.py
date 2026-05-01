@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from bs4 import BeautifulSoup
-from bs4.element import NavigableString, PageElement, Tag
+from bs4.element import Comment, NavigableString, PageElement, Tag
 
 from app.services.field_policy import HTML_SECTION_FIELDS, normalize_requested_field
 
@@ -11,6 +11,40 @@ from app.services.field_policy import HTML_SECTION_FIELDS, normalize_requested_f
 def html_to_text(value: str) -> str:
     soup = BeautifulSoup(str(value or ""), "html.parser")
     return " ".join(soup.get_text(" ", strip=True).split()).strip()
+
+
+def prune_html_tree(
+    soup: BeautifulSoup,
+    *,
+    drop_tags: tuple[str, ...] | set[str],
+    allowed_attrs: tuple[str, ...] | set[str] | None = None,
+    attr_filter=None,
+    preserve_tag=None,
+) -> BeautifulSoup:
+    allowed_attr_set = set(allowed_attrs or ())
+    drop_tag_set = {str(tag).lower() for tag in drop_tags}
+    for node in list(soup.find_all(string=lambda value: isinstance(value, Comment))):
+        node.extract()
+    for tag in list(soup.find_all(True)):
+        tag_name = str(tag.name or "").lower()
+        if tag_name in drop_tag_set and not (preserve_tag and preserve_tag(tag)):
+            tag.decompose()
+            continue
+        attrs = getattr(tag, "attrs", None)
+        if not isinstance(attrs, dict):
+            tag.attrs = {}
+            continue
+        tag.attrs = {
+            key: value
+            for key, value in attrs.items()
+            if (
+                key in allowed_attr_set
+                if allowed_attrs is not None
+                else True
+            )
+            and (attr_filter(key, value) if attr_filter else True)
+        }
+    return soup
 
 
 def extract_job_sections(html: str) -> dict[str, str]:

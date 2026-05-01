@@ -335,11 +335,14 @@ def _looks_like_product_payload(value: Any) -> bool:
             "id",
             "product_id",
             "productId",
+            "pid",
+            "mrp",
+            "Img",
             "offers",
             "images",
             "image",
         )
-    ) and any(key in value for key in ("title", "name"))
+    ) and any(key in value for key in ("title", "name", "pn"))
 
 def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict[str, Any] | None:
     if depth > limit:
@@ -395,6 +398,9 @@ def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
         "productId",
         "product_id",
         "id",
+        "pid",
+        "mrp",
+        "Img",
         "offers",
         "images",
         "image",
@@ -481,10 +487,15 @@ def _map_product_payload(
     price = variant_attribute(selected_variant, "price")
     if price in (None, "", [], {}):
         raw_current_price = _raw_current_price_value(product)
-        price = raw_current_price if raw_current_price is not None else normalize_price(
-            base.get("price"),
-            interpret_integral_as_cents=shopify_like,
-        )
+        if raw_current_price is not None:
+            price = raw_current_price
+        else:
+            price = normalize_price(
+                base.get("price"),
+                interpret_integral_as_cents=shopify_like,
+            )
+    if price in (None, "", [], {}):
+        price = _discounted_percentage_price(product)
     original_price = variant_attribute(
         selected_variant,
         "original_price",
@@ -595,8 +606,23 @@ def _raw_original_price_value(product: dict[str, Any]) -> str | None:
             ("prices", "initialPrice"),
             ("fullPrice",),
             ("pricing_information", "listPrice"),
+            ("mrp",),
         ),
     )
+
+
+def _discounted_percentage_price(product: dict[str, Any]) -> str | None:
+    list_price = _raw_numeric_value(product, (("mrp",),))
+    discount_percent = _raw_numeric_value(product, (("Dis",),))
+    if list_price is None or discount_percent is None:
+        return None
+    try:
+        discounted = float(list_price) * (100.0 - float(discount_percent)) / 100.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    if discounted <= 0:
+        return None
+    return f"{discounted:.2f}".rstrip("0").rstrip(".") or None
 
 def _contextual_numeric_value(
     product: dict[str, Any],

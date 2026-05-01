@@ -75,6 +75,9 @@ When structured data lacks price but the rendered detail DOM exposes a product d
 **Canonical field quality is extraction-owned.**
 For ecommerce detail, missing high-value fields such as `price`, `title`, and `image_url` are not acceptable just because one source tier had high total confidence. If the run requested deeper fields such as `brand`, `sku`, `variants`, or `availability`, those requested fields join the contract. Extraction must either repair contract fields, mark a diagnostic reason they are not public/extractable, or leave a visible missing-field diagnostic before persistence.
 
+**Enrichment is not extraction cleanup.**
+Data enrichment consumes persisted `record.data` as the upstream extraction contract. It must not add blocklists, URL-token cleanup, UI-title suppression, category/source correction, or field-specific compensations for polluted canonical fields. If enrichment output exposes garbage such as URL tokens in `brand`, UI copy in `title`, impossible `size` values, or breadcrumb/category pollution, fix the acquisition/extraction candidate, coercion, ranking, or finalization path before persistence.
+
 **LLM is an explicit repair tier, not forbidden.**
 When `llm_enabled=True` and active config allows the relevant LLM workflow, LLM must be considered for missing requested/default canonical fields after deterministic/browser evidence has been used. It may fill empty fields with provenance and validation. It must not silently overwrite populated deterministic values.
 
@@ -91,6 +94,7 @@ When `llm_enabled=True` and active config allows the relevant LLM workflow, LLM 
 - Fixing missing visible PDP prices in persistence/export instead of `detail_extractor.py`
 - Suppressing LLM repair when `llm_enabled=True`, config allows it, high-value fields are missing, and deterministic/browser evidence did not fill them
 - Letting LLM replace a populated adapter / structured / network / JS / DOM value without an explicit conflict-review workflow
+- Adding enrichment-side blocklists or cleanup to hide polluted extracted `title`, `brand`, `category`, `size`, `material`, or other canonical source fields
 
 ---
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from bs4 import BeautifulSoup
-from bs4.element import Comment, NavigableString, Tag
+from bs4.element import NavigableString, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRun
@@ -27,24 +27,16 @@ from app.services.field_policy import (
     repair_target_fields_for_surface,
 )
 from app.services.field_value_core import safe_int as _safe_int
+from app.services.extraction_html_helpers import prune_html_tree
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import extract_selector_value, validate_or_convert_xpath
 
 def reduce_html_for_selector_synthesis(html: str) -> str:
-    soup = BeautifulSoup(str(html or ""), "html.parser")
-    for comment_node in soup.find_all(string=lambda value: isinstance(value, Comment)):
-        comment_node.extract()
-    for drop_tag in list(soup.find_all(SELECTOR_SYNTHESIS_DROP_TAGS)):
-        drop_tag.decompose()
-    for low_value_tag in list(soup.find_all(SELECTOR_SYNTHESIS_LOW_VALUE_TAGS)):
-        low_value_tag.decompose()
-    for tag in list(soup.find_all(True)):
-        allowed_attrs = {
-            key: value
-            for key, value in tag.attrs.items()
-            if key in SELECTOR_SYNTHESIS_ALLOWED_ATTRS
-        }
-        tag.attrs = allowed_attrs
+    soup = prune_html_tree(
+        BeautifulSoup(str(html or ""), "html.parser"),
+        drop_tags=tuple(SELECTOR_SYNTHESIS_DROP_TAGS) + tuple(SELECTOR_SYNTHESIS_LOW_VALUE_TAGS),
+        allowed_attrs=SELECTOR_SYNTHESIS_ALLOWED_ATTRS,
+    )
     reduced = BeautifulSoup("<html><body></body></html>", "html.parser")
     source_root = soup.body or soup
     target_root = reduced.body or reduced

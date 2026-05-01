@@ -277,29 +277,36 @@ def _extract_generic_assignment_payloads(html: str) -> list[Any]:
     max_matches_per_script = (
         crawler_runtime_settings.structured_source_generic_assignment_max_matches_per_script
     )
+    assignment_patterns = _generic_assignment_patterns()
     for node in iter_script_text_nodes(html):
         raw = node.text
         if len(raw) > max_script_chars:
             continue
         script_matches = 0
-        for name in EMBEDDED_ASSIGNMENT_NAMES:
-            for pattern in _assignment_patterns(name, declarations_only=True):
-                for match in pattern.finditer(raw):
-                    script_matches += 1
-                    if script_matches > max_matches_per_script:
-                        break
-                    fragment = _balanced_json_fragment(raw[match.end() :])
-                    if not fragment:
-                        continue
-                    try:
-                        payloads.append(json.loads(fragment))
-                    except json.JSONDecodeError:
-                        continue
+        for pattern in assignment_patterns:
+            for match in pattern.finditer(raw):
+                script_matches += 1
                 if script_matches > max_matches_per_script:
                     break
+                fragment = _balanced_json_fragment(raw[match.end() :])
+                if not fragment:
+                    continue
+                try:
+                    payloads.append(json.loads(fragment))
+                except json.JSONDecodeError:
+                    continue
             if script_matches > max_matches_per_script:
                 break
     return payloads
+
+
+@lru_cache(maxsize=1)
+def _generic_assignment_patterns() -> tuple[re.Pattern[str], ...]:
+    return tuple(
+        pattern
+        for name in EMBEDDED_ASSIGNMENT_NAMES
+        for pattern in _assignment_patterns(name, declarations_only=True)
+    )
 
 
 @lru_cache(maxsize=64)
@@ -317,6 +324,7 @@ def _assignment_patterns(
                 re.S,
             ),
             re.compile(rf"(?:var|let|const)\s+{escaped}\s*=\s*", re.S),
+            re.compile(rf"(?:^|[;,])\s*{escaped}\s*=\s*", re.S),
         )
     return (re.compile(rf"(?:var|let|const)\s+{escaped}\s*=\s*", re.S),)
 

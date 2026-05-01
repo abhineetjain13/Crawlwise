@@ -284,9 +284,8 @@ def _ordered_candidates_for_field(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
 ) -> list[tuple[str | None, object]]:
-    values = list(candidates.get(field_name, []))
-    sources = list(candidate_sources.get(field_name, []))
-    indexed_entries = [
+    sources = candidate_sources.get(field_name, [])
+    indexed_entries = sorted(
         (
             _field_source_rank(
                 surface,
@@ -297,20 +296,9 @@ def _ordered_candidates_for_field(
             sources[index] if index < len(sources) else None,
             value,
         )
-        for index, value in enumerate(values)
-    ]
-    indexed_entries.sort(key=lambda row: (row[0], row[1]))
-    return [(source, value) for _, _, source, value in indexed_entries]
-def _winning_candidates_for_field(
-    ordered_candidates: list[tuple[str | None, object]],
-) -> tuple[list[object], str | None]:
-    if not ordered_candidates:
-        return [], None
-    winning_source = ordered_candidates[0][0]
-    return (
-        [value for source, value in ordered_candidates if source == winning_source],
-        winning_source,
+        for index, value in enumerate(candidates.get(field_name, []))
     )
+    return [(source, value) for _, _, source, value in indexed_entries]
 
 def _selector_self_heal_config(
     extraction_runtime_snapshot: dict[str, object] | None,
@@ -399,7 +387,10 @@ def _materialize_record(
             candidates,
             candidate_sources,
         )
-        winning_values, selected_source = _winning_candidates_for_field(ordered_candidates)
+        selected_source = ordered_candidates[0][0] if ordered_candidates else None
+        winning_values = [
+            value for source, value in ordered_candidates if source == selected_source
+        ]
         finalized = (
             finalize_candidate_value(field_name, [value for _, value in ordered_candidates])
             if field_name in STRUCTURED_OBJECT_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS

@@ -12,6 +12,8 @@ from app.services.config.extraction_rules import (
     DETAIL_CURRENT_PRICE_SELECTORS,
     DETAIL_CURRENCY_JSONLD_PATTERN,
     DETAIL_CURRENCY_META_SELECTORS,
+    DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA,
+    DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO,
     DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES,
     DETAIL_ORIGINAL_PRICE_SELECTORS,
     DETAIL_PRICE_JSONLD_PATTERN,
@@ -45,11 +47,7 @@ def backfill_detail_price_from_html(
 ) -> None:
     selected_variant = record.get("selected_variant")
     record_price_is_low_signal = _detail_price_value_is_low_signal(record.get("price"))
-    needs_price = record.get("price") in (None, "", [], {}) or record_price_is_low_signal or (
-        isinstance(selected_variant, dict)
-        and selected_variant.get("price") in (None, "", [], {})
-    )
-    if not needs_price or not str(html or "").strip():
+    if not str(html or "").strip():
         return
 
     soup = BeautifulSoup(str(html or ""), "html.parser")
@@ -71,7 +69,11 @@ def backfill_detail_price_from_html(
     price = _detail_price_from_html(soup, currency=currency)
     if price in (None, "", [], {}):
         return
-    if record.get("price") in (None, "", [], {}) or record_price_is_low_signal:
+    if (
+        record.get("price") in (None, "", [], {})
+        or record_price_is_low_signal
+        or _detail_price_is_visible_outlier(record.get("price"), price)
+    ):
         record["price"] = price
         append_record_field_source(record, "price", "dom_text")
     if isinstance(selected_variant, dict) and (
@@ -398,10 +400,22 @@ def _detail_price_value_is_low_signal(value: object) -> bool:
     return 0.0 < price <= 1.0
 
 
+def _detail_price_is_visible_outlier(value: object, visible_value: object) -> bool:
+    current = _coerce_float(_normalized_price_value(value), default=0.0)
+    visible = _coerce_float(_normalized_price_value(visible_value), default=0.0)
+    if current <= 0 or visible <= 0 or visible <= current:
+        return False
+    if visible - current < float(DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA):
+        return False
+    return current <= visible * float(DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO)
+
+
 def _normalized_price_value(value: object) -> str | None:
     text = text_or_none(value)
     if not text:
         return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return text
     return normalize_decimal_price(text, interpret_integral_as_cents=False)
 
 

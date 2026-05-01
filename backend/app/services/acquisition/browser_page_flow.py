@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 import logging
 import re
@@ -37,7 +38,7 @@ from app.services.config.selectors import (
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.dom_runtime import get_page_html
-from app.services.acquisition.browser_readiness import analyze_html
+from app.services.acquisition.browser_readiness import HtmlAnalysis, analyze_html
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_value_dom import requested_content_extractability
 from app.services.acquisition.runtime import (
@@ -129,10 +130,7 @@ class BrowserAcquisitionResultBuilder:
             location_interstitial_present = False
         else:
             blocked_classification = await self.classify_blocked_page_async(payload.html, status_code)
-            blocked = bool(
-                blocked_classification.blocked
-                or await self.blocked_html_checker(payload.html, status_code)
-            )
+            blocked = bool(blocked_classification.blocked)
             challenge_evidence = list(blocked_classification.evidence or [])
             low_content_reason = self.classify_low_content_reason(
                 payload.html,
@@ -843,6 +841,7 @@ async def serialize_browser_page_content_impl(
             page,
             html=rendered_html or html,
             surface=surface,
+            analysis=analyze_html(rendered_html or html),
         )
         phase_timings_ms["page_markdown"] = elapsed_ms(markdown_started_at)
     else:
@@ -1206,9 +1205,14 @@ async def _generate_page_markdown(
     *,
     html: str,
     surface: str | None = None,
+    analysis: HtmlAnalysis | None = None,
 ) -> str:
     detail_surface = "detail" in str(surface or "").strip().lower()
-    soup = _prepare_markdown_soup(html, detail_surface=detail_surface)
+    soup = _prepare_markdown_soup(
+        html,
+        detail_surface=detail_surface,
+        soup=deepcopy(analysis.soup) if analysis is not None else None,
+    )
     markdown, _link_lines = _choose_markdown_payload(
         soup,
         detail_surface=detail_surface,
@@ -1217,8 +1221,13 @@ async def _generate_page_markdown(
     return markdown.strip()
 
 
-def _prepare_markdown_soup(html: str, *, detail_surface: bool) -> BeautifulSoup:
-    soup = BeautifulSoup(str(html or ""), "html.parser")
+def _prepare_markdown_soup(
+    html: str,
+    *,
+    detail_surface: bool,
+    soup: BeautifulSoup | None = None,
+) -> BeautifulSoup:
+    soup = soup if soup is not None else BeautifulSoup(str(html or ""), "html.parser")
     for node in list(soup.find_all(True)):
         if not isinstance(getattr(node, "attrs", None), dict):
             node.attrs = {}

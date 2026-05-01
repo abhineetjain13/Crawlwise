@@ -1192,14 +1192,14 @@ export const LogTerminal = memo(function LogTerminal({
     [activePeekedGroupKey, groups],
   );
   const expandedGroupKey = useMemo(() => {
-    if (live && groups.length > 0) {
-      return groups[groups.length - 1].key;
-    }
     if (expandedGroupPreference && expandedGroupPreference !== "__auto__" && groups.some((group) => group.key === expandedGroupPreference)) {
       return expandedGroupPreference;
     }
     if (expandedGroupPreference === null) {
       return null;
+    }
+    if (live && groups.length > 0) {
+      return groups[groups.length - 1].key;
     }
     return issueGroups[0]?.key ?? groups[0]?.key ?? null;
   }, [expandedGroupPreference, groups, issueGroups, live]);
@@ -1322,7 +1322,8 @@ export const LogTerminal = memo(function LogTerminal({
       >
         {groups.length
           ? groups.map((group, index) => {
-            const expanded = expandedGroupKey === group.key;
+            const activeKey = live && groups.length > 0 ? groups[groups.length - 1].key : null;
+            const expanded = expandedGroupKey === group.key || group.key === activeKey;
             const payload = payloadSnapshot(group);
             const confidence = groupConfidence(group);
             const coverage = groupFieldCoverage(group, requestedFields);

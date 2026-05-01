@@ -24,6 +24,7 @@ from app.services.domain_memory_service import (
     selector_payload_from_rules,
     selector_rules_from_memory,
 )
+from app.services.extraction_html_helpers import html_to_text
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import normalize_field_key
 from app.services.field_value_core import PRICE_RE, clean_text, coerce_int as _coerce_int
@@ -68,8 +69,8 @@ async def fetch_selector_document(url: str) -> dict[str, object]:
         if not candidate_url or candidate_url in visited:
             break
         iframe_result = await fetch_page(candidate_url, prefer_browser=False)
-        iframe_text = clean_text(BeautifulSoup(iframe_result.html, "html.parser").get_text(" ", strip=True))
-        page_text = clean_text(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
+        iframe_text = html_to_text(iframe_result.html)
+        page_text = html_to_text(html)
         if len(iframe_text) <= len(page_text):
             break
         final_url = iframe_result.final_url
@@ -581,7 +582,7 @@ def _selector_rule_count(value: object) -> int:
 
 def _primary_iframe_candidate(page_url: str, html: str) -> str:
     soup = BeautifulSoup(str(html or ""), "html.parser")
-    page_text = clean_text(soup.get_text(" ", strip=True))
+    page_text = html_to_text(html)
     if len(page_text) > 400:
         return ""
     for frame in soup.select("iframe[src]"):

@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRecord, EnrichedProduct
 from app.schemas.data_enrichment import DataEnrichmentJobDetailResponse
 from app.services.llm_types import LLMTaskResult
 from app.services.config.data_enrichment import (
+    DATA_ENRICHMENT_STATUS_DEGRADED,
     DATA_ENRICHMENT_STATUS_ENRICHED,
+    DATA_ENRICHMENT_STATUS_FAILED,
     DATA_ENRICHMENT_STATUS_PENDING,
 )
 from app.services.data_enrichment.service import (
+    _build_deterministic_enrichment,
     _llm_prompt_context,
     _run_job,
     build_data_enrichment_job_payload,
@@ -212,8 +216,12 @@ async def test_data_enrichment_deterministic_job_populates_enriched_fields(
     assert product.materials_normalized == ["linen"]
     assert product.availability_normalized == "in_stock"
     assert product.category_path
-    assert product.category_path == "Apparel & Accessories > Clothing > Dresses"
-    assert product.diagnostics["product_category"]["category_path"] == "Apparel & Accessories > Clothing > Dresses"
+    assert product.category_path == "Dresses"
+    assert product.diagnostics["product_category"]["category_path"] == "Dresses"
+    assert (
+        product.diagnostics["product_category"]["gpc_reference"]["category_path"]
+        == "Apparel & Accessories > Clothing > Dresses"
+    )
     assert "material" in product.diagnostics["product_attributes"]["present_attributes"]
     assert "image_link" in product.diagnostics["product_attributes"]["null_attributes"]
     assert "linen" in product.seo_keywords
@@ -322,6 +330,147 @@ def test_data_enrichment_llm_prompt_context_excludes_raw_artifacts() -> None:
     assert context["description_excerpt"] == "Clean description"
 
 
+def test_data_enrichment_variant_dict_values_do_not_pollute_sizes_or_availability() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Cotton Shirt",
+            "category": "Shirts",
+            "selected_variant": {
+                "size": "medium",
+                "color": "blue",
+                "sku": "CD",
+                "image": "https://example.com/image.jpg",
+            },
+        },
+        source_url="https://example.com/products/shirt",
+    )
+
+    assert enrichment["size_normalized"] == ["M"]
+    assert enrichment["color_family"] == "blue"
+    assert enrichment["availability_normalized"] is None
+
+
+def test_data_enrichment_variant_fit_does_not_become_size() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Cotton Trouser",
+            "category": "Pants",
+            "selected_variant": {
+                "size": "medium",
+                "fit": "regular fit",
+                "width": "wide",
+            },
+        },
+        source_url="https://example.com/products/trouser",
+    )
+
+    assert enrichment["size_normalized"] == ["M"]
+
+
+def test_data_enrichment_category_uses_primary_category_before_title_noise() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "KitchenAid 13-cup food processor",
+            "brand": "KitchenAid",
+            "category": "Kitchen Appliances",
+        },
+        source_url="https://example.com/products/food-processor",
+    )
+
+    assert enrichment["category_path"] == "Kitchen Appliances"
+    assert "Cup Sleeves" not in str(enrichment["category_path"])
+
+
+def test_data_enrichment_seo_keywords_filter_stopwords_from_all_sources() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Navy Linen Dress",
+            "brand": "Acme",
+            "category": "Sale Dresses With Linen",
+            "materials": "linen",
+        },
+        source_url="https://example.com/products/dress",
+    )
+
+    keywords = set(enrichment["seo_keywords"] or [])
+    assert "sale" not in keywords
+    assert "with" not in keywords
+    assert "linen" in keywords
+
+
+@pytest.mark.asyncio
+async def test_data_enrichment_rolls_back_after_sqlalchemy_product_failure(
+    db_session: AsyncSession,
+    create_test_run,
+    test_user,
+    monkeypatch,
+) -> None:
+    run = await create_test_run(
+        url="https://example.com/products/batch",
+        surface="ecommerce_detail",
+    )
+    bad_record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/products/bad",
+        data={"title": "Bad Shirt", "category": "Shirts"},
+    )
+    good_record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/products/good",
+        data={"title": "Good Shirt", "category": "Shirts"},
+    )
+    db_session.add_all([bad_record, good_record])
+    await db_session.commit()
+    await db_session.refresh(bad_record)
+    await db_session.refresh(good_record)
+    job = await create_data_enrichment_job(
+        db_session,
+        user=test_user,
+        payload={"source_record_ids": [bad_record.id, good_record.id]},
+    )
+    calls = 0
+    original_rollback = db_session.rollback
+    rollbacks = 0
+
+    async def counted_rollback() -> None:
+        nonlocal rollbacks
+        rollbacks += 1
+        await original_rollback()
+
+    async def fake_enrich_product(session, *, job, product, record, llm_enabled):
+        nonlocal calls
+        del session, job, llm_enabled
+        calls += 1
+        if calls == 1:
+            raise PendingRollbackError("flush failed earlier")
+        product.category_path = "Apparel & Accessories > Clothing > Shirts"
+        product.diagnostics = {"deterministic": True}
+
+    monkeypatch.setattr(db_session, "rollback", counted_rollback)
+    monkeypatch.setattr(
+        "app.services.data_enrichment.service._enrich_product",
+        fake_enrich_product,
+    )
+
+    await _run_job(db_session, job)
+    products = list(
+        (
+            await db_session.scalars(
+                select(EnrichedProduct)
+                .where(EnrichedProduct.job_id == job.id)
+                .order_by(EnrichedProduct.id)
+            )
+        ).all()
+    )
+
+    assert rollbacks == 1
+    assert job.status == DATA_ENRICHMENT_STATUS_DEGRADED
+    assert [product.status for product in products] == [
+        DATA_ENRICHMENT_STATUS_FAILED,
+        DATA_ENRICHMENT_STATUS_ENRICHED,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_data_enrichment_llm_enabled_applies_valid_payload(
     db_session: AsyncSession,
@@ -336,7 +485,7 @@ async def test_data_enrichment_llm_enabled_applies_valid_payload(
         captured["variables"] = variables
         return LLMTaskResult(
             payload={
-                "category_path": "Apparel & Accessories > Clothing > Dresses",
+                "category_path": "Clothing > Dresses",
                 "intent_attributes": ["cocktail"],
                 "audience": ["women"],
                 "style_tags": ["classic"],
@@ -378,12 +527,13 @@ async def test_data_enrichment_llm_enabled_applies_valid_payload(
 
     assert captured["task_type"] == "data_enrichment_semantic"
     assert "product_json" in captured["variables"]
+    assert product.category_path == "Clothing > Dresses"
     assert product.intent_attributes == ["cocktail"]
     assert product.ai_discovery_tags == ["linen-dress"]
 
 
 @pytest.mark.asyncio
-async def test_data_enrichment_llm_rejects_invalid_taxonomy_category(
+async def test_data_enrichment_llm_applies_plain_category_when_source_missing(
     db_session: AsyncSession,
     create_test_run,
     test_user,
@@ -392,7 +542,7 @@ async def test_data_enrichment_llm_rejects_invalid_taxonomy_category(
     async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
         return LLMTaskResult(
             payload={
-                "category_path": "Not A Real Taxonomy Path",
+                "category_path": "Hardware > Plinths",
                 "intent_attributes": ["useful"],
                 "audience": [],
                 "style_tags": [],
@@ -430,5 +580,5 @@ async def test_data_enrichment_llm_rejects_invalid_taxonomy_category(
         )
     ).one()
 
-    assert product.category_path is None
+    assert product.category_path == "Hardware > Plinths"
     assert product.intent_attributes == ["useful"]

@@ -6,6 +6,8 @@ from app.services import crawl_fetch_runtime
 from app.services.acquisition.host_protection_memory import HostProtectionPolicy
 from app.services import detail_extractor
 from app.services.adapters.belk import BelkAdapter
+from app.services.extract.detail_identity import detail_url_is_utility
+from app.services.extract.detail_price_extractor import backfill_detail_price_from_html
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
 from tests.fixtures.loader import read_optional_artifact_text
@@ -36,6 +38,77 @@ def test_listing_raw_json_max_records_does_not_trim_page_overshoot() -> None:
         "Product 4",
         "Product 5",
     ]
+
+
+def test_detail_product_url_with_support_slug_is_not_utility() -> None:
+    assert (
+        detail_url_is_utility(
+            "https://example.com/products/123-hormone-healthy-eats-support?source=search"
+        )
+        is False
+    )
+
+
+def test_detail_price_backfill_replaces_visible_outlier_price() -> None:
+    record = {
+        "url": "https://www.thomann.co.uk/akg_k702.htm",
+        "price": "3.95",
+        "currency": "GBP",
+        "_field_sources": {"price": ["dom_selector"]},
+    }
+    html = """
+    <html>
+      <head>
+        <meta itemprop="priceCurrency" content="GBP">
+        <meta itemprop="price" content="154">
+      </head>
+      <body>
+        <main>
+          <h1>AKG K-702</h1>
+          <div class="shipping-price">Shipping GBP 3.95</div>
+          <div class="product-price">GBP 154</div>
+        </main>
+      </body>
+    </html>
+    """
+
+    backfill_detail_price_from_html(record, html=html)
+
+    assert record["price"] == "154"
+    assert "dom_text" in record["_field_sources"]["price"]
+
+
+def test_extract_detail_keeps_encoded_cdn_image_url() -> None:
+    image_url = (
+        "https://i.example-cdn.com/rs:fit/g:sm/q:90/h:600/w:600/"
+        "czM6Ly9pbWFnZXM/LmpwZWc.jpeg"
+    )
+    rows = extract_records(
+        f"""
+        <html>
+          <head>
+            <meta property="og:title" content="Never Gonna Give You Up">
+            <meta property="og:image" content="{image_url}">
+            <meta property="og:url" content="https://www.discogs.com/release/249504">
+            <script type="application/ld+json">{{
+              "@context": "https://schema.org",
+              "@type": "Product",
+              "name": "Never Gonna Give You Up",
+              "image": "{image_url}",
+              "url": "https://www.discogs.com/release/249504",
+              "offers": {{"@type": "Offer", "price": "0.68", "priceCurrency": "USD"}}
+            }}</script>
+          </head>
+          <body><h1>Never Gonna Give You Up</h1></body>
+        </html>
+        """,
+        "https://www.discogs.com/release/249504",
+        "ecommerce_detail",
+        max_records=5,
+        requested_page_url="https://www.discogs.com/release/249504",
+    )
+
+    assert rows[0]["image_url"] == image_url
 
 
 def _js_shell_html() -> str:
@@ -3287,6 +3360,48 @@ def test_extract_ecommerce_detail_rejects_placeholder_not_found_title_without_pr
     )
 
     assert rows == []
+
+
+def test_extract_ecommerce_detail_recovers_firstcry_static_js_state_price() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Buy Babyhug Denim Woven Sleeveless Top &amp; Pant Set With Floral Print - Blue for Girls (3-4 Years) Online in India, Shop at FirstCry.com - 22346676" />
+        <meta property="og:image" content="https://cdn.fcglcdn.com/brainbees/images/products/438x531/22346676a.webp" />
+        <meta property="og:url" content="https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail" />
+        <script>
+          var CurrentProductID=22346676,CurrentProductDetailJSON={
+            "22346676":{
+              "pid":22346676,
+              "pn":"Babyhug Denim Woven Sleeveless Top & Pant Set With Floral Print - Blue",
+              "pd":"Babyhug Sets & Suits Female 3-4Y BLUE/BLUE",
+              "mrp":1099,
+              "Dis":21,
+              "Img":"22346676a.jpg;22346676b.jpg;"
+            }
+          };
+        </script>
+      </head>
+      <body>
+        <h1>product detail</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail",
+        "ecommerce_detail",
+        max_records=1,
+        requested_page_url="https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail",
+        requested_fields=["title", "price", "image_url"],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Babyhug Denim Woven Sleeveless Top & Pant Set With Floral Print - Blue"
+    assert record["price"] == "868.21"
+    assert record["image_url"] == "https://cdn.fcglcdn.com/brainbees/images/products/438x531/22346676a.webp"
 
 
 def test_extract_ecommerce_detail_rejects_brand_shell_with_tracking_pixel_image() -> None:

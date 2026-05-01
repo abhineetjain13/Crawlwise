@@ -64,7 +64,10 @@ def _resolve_legacy_start_revision_sync(connection) -> str | None:
         return _QUEUE_LEASE_BASELINE
     if "url_identity_key" not in crawl_records_columns:
         return _CRAWL_RECORDS_INDEX_BASELINE
-    if {"enrichment_status", "enriched_at"} - crawl_records_columns:
+    if (
+        {"enrichment_status", "enriched_at"} - crawl_records_columns
+        or {"data_enrichment_jobs", "enriched_products"} - tables
+    ):
         return _DATA_ENRICHMENT_BASELINE
     return "head"
 

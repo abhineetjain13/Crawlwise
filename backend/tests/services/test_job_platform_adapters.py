@@ -147,55 +147,6 @@ async def test_platform_owned_adp_acquisition_normalization_uses_configured_doma
 
 
 @pytest.mark.asyncio
-async def test_thriftbooks_acquisition_normalization_recovers_stale_work_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.services.adapters.thriftbooks import ThriftBooksAdapter
-
-    adapter = ThriftBooksAdapter()
-
-    async def _fake_curl_fetch(url: str, timeout_seconds: float, **kwargs) -> HttpFetchResult:
-        del timeout_seconds, kwargs
-        assert "browse/?b.search=" in url
-        return HttpFetchResult(
-            url=url,
-            final_url=url,
-            text="""
-            <html><body>
-              <a href="/w/the-pragmatic-programmer-from-journeyman-to-master_david-thomas_andrew-hunt/246058/?resultid=1#isbn=8131722422">
-                The Pragmatic Programmer
-              </a>
-              <a href="/w/programming-ruby-the-pragmatic-programmers-guide_dave-thomas_chad-fowler/285011/?resultid=2#isbn=1937785491">
-                Programming Ruby: The Pragmatic Programmers' Guide
-              </a>
-            </body></html>
-            """,
-            status_code=200,
-            headers=httpx.Headers({"content-type": "text/html"}),
-            json_data=None,
-        )
-
-    monkeypatch.setattr(
-        "app.services.adapters.thriftbooks.curl_fetch",
-        _fake_curl_fetch,
-    )
-    monkeypatch.setattr(
-        "app.services.adapters.registry.registered_adapters",
-        lambda: (adapter,),
-    )
-
-    normalized = await normalize_adapter_acquisition_url(
-        "https://www.thriftbooks.com/w/the-pragmatic-programmer_david-thomas_andrew-hunt/286697/"
-    )
-
-    assert normalized == (
-        "https://www.thriftbooks.com/w/"
-        "the-pragmatic-programmer-from-journeyman-to-master_"
-        "david-thomas_andrew-hunt/246058/?resultid=1#isbn=8131722422"
-    )
-
-
-@pytest.mark.asyncio
 async def test_ats_adapter_request_timeout_comes_from_runtime_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

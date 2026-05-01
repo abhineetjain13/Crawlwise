@@ -52,6 +52,35 @@ def test_reconcile_detail_currency_with_url_tracks_nested_currency_sources() -> 
     assert "url_currency_hint" in record["_field_sources"]["variants[0].currency"]
 
 
+def test_extract_ecommerce_detail_rejects_url_like_structured_brand() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Vitamin D3 Mini Gels",
+          "brand": "https://www.vitacost.com/brand/vitacost",
+          "offers": {"price": "10.99", "priceCurrency": "USD"}
+        }
+        </script>
+      </head>
+      <body><h1>Vitamin D3 Mini Gels</h1></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.vitacost.com/vitacost-vitamin-d3-mini-gels",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert "brand" not in rows[0]
+
+
 def test_extract_ecommerce_detail_from_microdata() -> None:
     html = """
     <html>
@@ -1437,6 +1466,35 @@ def test_extract_ecommerce_detail_ignores_review_qa_controls_and_payment_icons()
     assert "option1_name" not in record
     assert "variant_axes" not in record
     assert "variants" not in record
+
+
+def test_extract_ecommerce_detail_does_not_use_bundle_upsell_as_title() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Rockler Table Saw Crosscut Sled</title>
+      </head>
+      <body>
+        <main>
+          <h1>Frequently Bought Together</h1>
+          <div class="price">$249.99</div>
+          <img src="https://cdn.example.com/products/table-saw-sled.jpg" alt="Table saw crosscut sled" />
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/rockler-table-saw-crosscut-sled",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Rockler Table Saw Crosscut Sled"
+    assert record["title"] != "Frequently Bought Together"
 
 
 def test_extract_ecommerce_detail_ignores_sort_filter_and_availability_controls_as_variants() -> None:

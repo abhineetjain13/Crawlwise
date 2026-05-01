@@ -804,6 +804,8 @@ def _detail_image_title_from_url(url: str) -> str | None:
     stem = re.sub(r"\.(?:avif|gif|jpe?g|png|svg|tiff?|webp)$", "", filename, flags=re.I)
     if not stem or re.fullmatch(r"img\d+", stem, re.I):
         return None
+    if _detail_image_stem_looks_encoded(stem):
+        return None
     normalized = clean_text(
         re.sub(
             r"[_-]+",
@@ -812,6 +814,25 @@ def _detail_image_title_from_url(url: str) -> str | None:
         )
     )
     return normalized or None
+
+
+def _detail_image_stem_looks_encoded(stem: str) -> bool:
+    compact = re.sub(r"[^A-Za-z0-9_-]+", "", str(stem or ""))
+    alpha = re.sub(r"[^A-Za-z]+", "", compact)
+    if (
+        6 <= len(compact) < 24
+        and re.search(r"[A-Z]", compact)
+        and re.search(r"[a-z]", compact)
+        and not re.search(r"[aeiou]{2,}", alpha, re.I)
+    ):
+        return True
+    if len(compact) < 24:
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", compact):
+        return False
+    if not (re.search(r"[A-Z]", compact) and re.search(r"[a-z]", compact)):
+        return False
+    return len(re.findall(r"[A-Z]", compact)) >= 3 and len(re.findall(r"\d", compact)) >= 2
 
 
 def _detail_image_title_has_identity_signal(title: str) -> bool:

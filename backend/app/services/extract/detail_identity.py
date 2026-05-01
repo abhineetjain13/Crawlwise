@@ -237,6 +237,26 @@ def _detail_title_from_url(page_url: str) -> str | None:
     path_segments = _detail_url_path_segments(page_url)
     if not path_segments:
         return None
+    generic_terminal_tokens = {
+        "color",
+        "colors",
+        "detail",
+        "dp",
+        "job",
+        "jobs",
+        "p",
+        "product",
+        "products",
+        "release",
+        "size",
+        "sizes",
+        "style",
+        "styles",
+        "variant",
+        "variants",
+        "width",
+        "widths",
+    }
     for index in range(len(path_segments) - 1, -1, -1):
         segment = path_segments[index]
         terminal = re.sub(r"\.(html?|htm)$", "", segment, flags=re.I)
@@ -253,25 +273,10 @@ def _detail_title_from_url(page_url: str) -> str | None:
             continue
         if re.fullmatch(r"[a-f0-9]{8,}(?:-[a-f0-9]{4,}){2,}", terminal, re.I):
             continue
-        if terminal in {
-            "p",
-            "dp",
-            "product",
-            "products",
-            "job",
-            "jobs",
-            "release",
-            "color",
-            "colors",
-            "size",
-            "sizes",
-            "width",
-            "widths",
-            "style",
-            "styles",
-            "variant",
-            "variants",
-        }:
+        terminal_tokens = _path_segment_tokens(terminal)
+        if terminal in generic_terminal_tokens or (
+            terminal_tokens and terminal_tokens <= generic_terminal_tokens
+        ):
             continue
         title = clean_text(re.sub(r"[-_]+", " ", terminal))
         if title and not is_title_noise(title):
@@ -364,6 +369,8 @@ def _detail_url_is_utility(url: str) -> bool:
         for token in re.split(r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower())
         if token
     }
+    if any(token in path_tokens for token in DETAIL_PRODUCT_PATH_TOKENS):
+        return False
     if any(token in path_tokens for token in DETAIL_UTILITY_PATH_TOKENS):
         return True
     query_keys = {

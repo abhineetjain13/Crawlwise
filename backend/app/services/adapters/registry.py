@@ -32,7 +32,6 @@ _ADAPTER_FACTORIES: dict[str, tuple[str, str]] = {
     "remotive": ("app.services.adapters.remotive", "RemotiveAdapter"),
     "remoteok": ("app.services.adapters.remoteok", "RemoteOkAdapter"),
     "shopify": ("app.services.adapters.shopify", "ShopifyAdapter"),
-    "thriftbooks": ("app.services.adapters.thriftbooks", "ThriftBooksAdapter"),
 }
 
 

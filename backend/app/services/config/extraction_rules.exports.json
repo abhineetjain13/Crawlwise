@@ -3477,7 +3477,8 @@
       "__DATA__",
       "__myx",
       "__STORE__",
-      "__APP_STATE__"
+      "__APP_STATE__",
+      "CurrentProductDetailJSON"
     ]
   },
   "NON_STATE_ASSIGNMENT_PATTERNS": {

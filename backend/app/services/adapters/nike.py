@@ -14,6 +14,7 @@ from app.services.field_value_core import (
     finalize_record,
     text_or_none,
 )
+from app.services.extraction_html_helpers import html_to_text
 from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
@@ -209,7 +210,7 @@ def _next_data_product_details(product_info: dict[str, Any]) -> str | None:
             else:
                 text = text_or_none(item)
             if text:
-                parts.append(clean_text(BeautifulSoup(text, "html.parser").get_text(" ", strip=True)))
+                parts.append(html_to_text(text))
     combined = clean_text(" ".join(parts))
     return combined or None
 
@@ -293,7 +294,7 @@ def _product_details(product: dict[str, Any]) -> str | None:
     raw = text_or_none(product.get("view_product_details"))
     if not raw:
         return None
-    return clean_text(BeautifulSoup(raw, "html.parser").get_text(" ", strip=True))
+    return html_to_text(raw)
 
 
 def _color_name(product: dict[str, Any]) -> str | None:

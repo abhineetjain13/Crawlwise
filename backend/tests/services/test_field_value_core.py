@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.services.field_value_core import (
     absolute_url,
     clean_text,
+    coerce_field_value,
     extract_currency_code,
     extract_urls,
     infer_brand_from_product_url,
@@ -29,6 +30,33 @@ def test_absolute_url_does_not_promote_hosts_with_edge_hyphen_labels() -> None:
     assert absolute_url("https://example.com/base/", "bad-.example/path") == (
         "https://example.com/base/bad-.example/path"
     )
+
+
+def test_coerce_brand_rejects_url_like_values() -> None:
+    assert (
+        coerce_field_value(
+            "brand",
+            "https://www.vitacost.com/brand",
+            "https://www.vitacost.com/p/x",
+        )
+        is None
+    )
+    assert (
+        coerce_field_value(
+            "brand",
+            {"@type": "Brand", "name": "https://www.example.com/brand/acme"},
+            "https://www.example.com/p/x",
+        )
+        is None
+    )
+    assert (
+        coerce_field_value("brand", {"name": "Acme"}, "https://example.com/p/x")
+        == "Acme"
+    )
+
+
+def test_frequently_bought_together_is_title_noise() -> None:
+    assert is_title_noise("Frequently Bought Together") is True
 
 
 def test_validate_and_clean_drops_fields_outside_surface_schema() -> None:

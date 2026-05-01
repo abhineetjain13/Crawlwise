@@ -6,13 +6,14 @@ from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
+from app.services.extraction_html_helpers import html_to_text
 from app.services.config.extraction_rules import (
     BARE_HOST_URL_RE,
     CSS_NOISE_PATTERN,
     CURRENCY_ALIAS_PATTERNS,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
+    DETAIL_LOW_SIGNAL_TITLE_VALUES,
     IMAGE_FIELDS,
     INTEGER_VALUE_FIELDS,
     LISTING_ACTION_NOISE_PATTERNS,
@@ -184,6 +185,8 @@ def is_title_noise(title: object) -> bool:
     if "star" in lowered and RATING_RE.search(lowered) and len(cleaned.split()) <= 4:
         return True
     if lowered in LISTING_TITLE_CTA_TITLES:
+        return True
+    if lowered in DETAIL_LOW_SIGNAL_TITLE_VALUES:
         return True
     if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
         return True
@@ -465,9 +468,7 @@ def direct_record_to_surface_fields(
 def coerce_text(value: object) -> str | None:
     if isinstance(value, str):
         if "<" in value or "&" in value:
-            return text_or_none(
-                BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
-            )
+            return text_or_none(html_to_text(value))
         return text_or_none(value)
     return text_or_none(value)
 
@@ -816,9 +817,11 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         value,
         dict,
     ):
-        return coerce_text(
+        return _coerce_brand_text(
             value.get("name") or value.get("title") or value.get("value")
         )
+    if field_name in {"brand", "company", "dealer_name", "vendor"}:
+        return _coerce_brand_text(value)
     if field_name == "category" and isinstance(value, dict):
         return coerce_text(
             value.get("name")
@@ -930,6 +933,18 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
     if field_name in LONG_TEXT_FIELDS:
         return coerce_text(value)
     return coerce_text(value)
+
+
+def _coerce_brand_text(value: object) -> str | None:
+    text = coerce_text(value)
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme or parsed.netloc:
+        return None
+    if _BARE_HOST_URL_RE.search(text):
+        return None
+    return text
 
 
 def finalize_record(
