@@ -1,20 +1,19 @@
-import "./globals.css";
-import { AppShell } from "../components/layout/app-shell";
-import { QueryProvider } from "../components/ui/query-provider";
-import { Outfit, JetBrains_Mono } from "next/font/google";
-
+import './globals.css';
+import { AppShell } from '../components/layout/app-shell';
+import { QueryProvider } from '../components/ui/query-provider';
+import { Outfit, JetBrains_Mono } from 'next/font/google';
 
 const mainFont = Outfit({
-  subsets: ["latin"],
-  variable: "--font-primary-source",
-  weight: ["300", "400", "500", "600", "700"],
+  subsets: ['latin'],
+  variable: '--font-primary-source',
+  weight: ['300', '400', '500', '600', '700'],
 });
 
 const monoFont = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jetbrains-mono",
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
+  subsets: ['latin'],
+  variable: '--font-jetbrains-mono',
+  weight: ['400', '500', '600', '700'],
+  display: 'swap',
 });
 
 // Runs before first paint to set theme and prevent FOUC

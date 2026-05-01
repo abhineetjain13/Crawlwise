@@ -1,15 +1,15 @@
-"use client";
+'use client';
 
-import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, XCircle } from "lucide-react";
-import type { ComponentType } from "react";
-import { useState } from "react";
+import { useQuery } from '@tanstack/react-query';
+import { RefreshCw, XCircle } from 'lucide-react';
+import type { ComponentType } from 'react';
+import { useState } from 'react';
 
-import { api } from "../../lib/api";
-import type { ActiveJob } from "../../lib/api/types";
-import { formatJobsTimestamp as formatTimestamp, formatTimeHms } from "../../lib/format/date";
-import { humanizeStatus, jobsStatusTone as statusTone } from "../../lib/ui/status";
-import { cn } from "../../lib/utils";
+import { api } from '../../lib/api';
+import type { ActiveJob } from '../../lib/api/types';
+import { formatJobsTimestamp as formatTimestamp, formatTimeHms } from '../../lib/format/date';
+import { humanizeStatus, jobsStatusTone as statusTone } from '../../lib/ui/status';
+import { cn } from '../../lib/utils';
 import {
   DataRegionEmpty,
   DataRegionError,
@@ -19,14 +19,14 @@ import {
   ProgressBar,
   SectionCard,
   TableSurface,
-} from "../../components/ui/patterns";
-import { Badge, Button } from "../../components/ui/primitives";
+} from '../../components/ui/patterns';
+import { Badge, Button } from '../../components/ui/primitives';
 
 export default function JobsPage() {
-  const [pendingAction, setPendingAction] = useState("");
-  const [actionError, setActionError] = useState("");
+  const [pendingAction, setPendingAction] = useState('');
+  const [actionError, setActionError] = useState('');
   const jobsQuery = useQuery({
-    queryKey: ["jobs"],
+    queryKey: ['jobs'],
     queryFn: api.listJobs,
     refetchInterval: 5000,
   });
@@ -34,19 +34,19 @@ export default function JobsPage() {
   const jobs = jobsQuery.data ?? [];
   const lastRefreshed = jobsQuery.dataUpdatedAt
     ? formatTimeHms(new Date(jobsQuery.dataUpdatedAt).toISOString())
-    : "--";
+    : '--';
 
   async function runAction(runId: number) {
-    const action = "kill";
+    const action = 'kill';
     setPendingAction(`${action}:${runId}`);
     try {
-      setActionError("");
+      setActionError('');
       await api.killCrawl(runId);
       await jobsQuery.refetch();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : `Unable to ${action} run ${runId}.`);
     } finally {
-      setPendingAction("");
+      setPendingAction('');
     }
   }
 
@@ -55,15 +55,22 @@ export default function JobsPage() {
       <PageHeader
         title="Jobs"
         description="Live run state for the local dev runner."
-        actions={(
+        actions={
           <div className="flex items-center gap-2">
-            <span className="text-sm leading-[var(--leading-normal)] text-muted">Last refreshed {lastRefreshed}</span>
-            <Button variant="secondary" type="button" className="h-[var(--control-height)]" onClick={() => void jobsQuery.refetch()}>
+            <span className="text-muted text-sm leading-[var(--leading-normal)]">
+              Last refreshed {lastRefreshed}
+            </span>
+            <Button
+              variant="secondary"
+              type="button"
+              className="h-[var(--control-height)]"
+              onClick={() => void jobsQuery.refetch()}
+            >
               <RefreshCw className="size-3.5" />
               Refresh
             </Button>
           </div>
-        )}
+        }
       />
 
       <SectionCard
@@ -81,13 +88,13 @@ export default function JobsPage() {
           <TableSurface className="table-surface-flat">
             <table className="compact-data-table min-w-[960px]">
               <colgroup>
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "30%" }} />
-                <col style={{ width: "15%" }} />
-                <col style={{ width: "15%" }} />
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "10%" }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '30%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '10%' }} />
               </colgroup>
               <thead>
                 <tr>
@@ -103,15 +110,24 @@ export default function JobsPage() {
               <tbody>
                 {jobs.map((job) => (
                   <tr key={job.run_id}>
-                    <td className="mono-body text-sm leading-[1.5] text-foreground">{job.run_id}</td>
-                    <td className="text-sm leading-[var(--leading-relaxed)] text-muted">{formatJobType(job.type)}</td>
-                    <td className="mono-body max-w-[320px] truncate text-sm leading-[var(--leading-relaxed)] text-foreground" title={job.url}>
+                    <td className="mono-body text-foreground text-sm leading-[1.5]">
+                      {job.run_id}
+                    </td>
+                    <td className="text-muted text-sm leading-[var(--leading-relaxed)]">
+                      {formatJobType(job.type)}
+                    </td>
+                    <td
+                      className="mono-body text-foreground max-w-[320px] truncate text-sm leading-[var(--leading-relaxed)]"
+                      title={job.url}
+                    >
                       {job.url}
                     </td>
                     <td>
                       <ProgressBar percent={job.progress} />
                     </td>
-                    <td className="text-sm leading-[var(--leading-relaxed)] text-muted">{formatTimestamp(job.started_at)}</td>
+                    <td className="text-muted text-sm leading-[var(--leading-relaxed)]">
+                      {formatTimestamp(job.started_at)}
+                    </td>
                     <td>
                       <StatusPill status={job.status} />
                     </td>
@@ -120,7 +136,13 @@ export default function JobsPage() {
                         <ActionButton
                           icon={XCircle}
                           label="Hard Kill"
-                          disabled={!(job.status === "pending" || job.status === "running" || job.status === "paused") || Boolean(pendingAction)}
+                          disabled={
+                            !(
+                              job.status === 'pending' ||
+                              job.status === 'running' ||
+                              job.status === 'paused'
+                            ) || Boolean(pendingAction)
+                          }
                           onClick={() => void runAction(job.run_id)}
                           danger
                         />
@@ -132,14 +154,17 @@ export default function JobsPage() {
             </table>
           </TableSurface>
         ) : (
-          <DataRegionEmpty title="No active jobs" description="Start a crawl to see live workers here." />
+          <DataRegionEmpty
+            title="No active jobs"
+            description="Start a crawl to see live workers here."
+          />
         )}
       </SectionCard>
     </div>
   );
 }
 
-function StatusPill({ status }: Readonly<{ status: ActiveJob["status"] }>) {
+function StatusPill({ status }: Readonly<{ status: ActiveJob['status'] }>) {
   const tone = statusTone(status);
   return <Badge tone={tone}>{humanizeStatus(status)}</Badge>;
 }
@@ -161,9 +186,12 @@ function ActionButton({
     <Button
       type="button"
       onClick={onClick}
-      variant={danger ? "ghost" : "secondary"}
+      variant={danger ? 'ghost' : 'secondary'}
       disabled={disabled}
-      className={cn("h-7 px-2.5 text-sm leading-[var(--leading-normal)]", danger && "text-danger hover:bg-danger/10 hover:text-danger")}
+      className={cn(
+        'h-7 px-2.5 text-sm leading-[var(--leading-normal)]',
+        danger && 'text-danger hover:bg-danger/10 hover:text-danger',
+      )}
       title={label}
     >
       <Icon className="size-3.5" />

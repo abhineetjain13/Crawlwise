@@ -1,335 +1,340 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { TopBarProvider, useTopBarHeader } from "../layout/top-bar-context";
-import DomainMemoryManagePage from "../../app/selectors/manage/page";
+import { TopBarProvider, useTopBarHeader } from '../layout/top-bar-context';
+import DomainMemoryManagePage from '../../app/selectors/manage/page';
 
 const apiMock = vi.hoisted(() => ({
- listSelectorSummaries: vi.fn(),
- listSelectors: vi.fn(),
- listDomainRunProfiles: vi.fn(),
- listDomainCookieMemory: vi.fn(),
- listDomainFieldFeedback: vi.fn(),
- listCrawls: vi.fn(),
- saveDomainRunProfile: vi.fn(),
- updateSelector: vi.fn(),
- deleteSelector: vi.fn(),
- deleteSelectorsByDomain: vi.fn(),
+  listSelectorSummaries: vi.fn(),
+  listSelectors: vi.fn(),
+  listDomainRunProfiles: vi.fn(),
+  listDomainCookieMemory: vi.fn(),
+  listDomainFieldFeedback: vi.fn(),
+  listCrawls: vi.fn(),
+  saveDomainRunProfile: vi.fn(),
+  updateSelector: vi.fn(),
+  deleteSelector: vi.fn(),
+  deleteSelectorsByDomain: vi.fn(),
 }));
 
-vi.mock("../../lib/api", () => ({
- api: apiMock,
+vi.mock('../../lib/api', () => ({
+  api: apiMock,
 }));
 
 function HeaderActions() {
- const header = useTopBarHeader();
- return <>{header?.actions ?? null}</>;
+  const header = useTopBarHeader();
+  return <>{header?.actions ?? null}</>;
 }
 
-describe("DomainMemoryManagePage", () => {
- beforeEach(() => {
- vi.clearAllMocks();
- apiMock.listSelectorSummaries.mockResolvedValue([
- {
- domain: "example.com",
- surface: "ecommerce_detail",
- selector_count: 1,
- updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
- },
- ]);
- apiMock.listSelectors.mockResolvedValue([
- {
- id: 11,
- domain: "example.com",
- surface: "ecommerce_detail",
- field_name: "price",
- css_selector: ".price",
- xpath: null,
- regex: null,
- status: "validated",
- sample_value: "$19.99",
- source: "domain_recipe",
- source_run_id: 101,
- is_active: true,
- created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
- updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
- },
- ]);
- apiMock.listDomainRunProfiles.mockResolvedValue([
- {
- id: 7,
- domain: "example.com",
- surface: "ecommerce_detail",
- profile: {
- version: 1,
- fetch_profile: {
- fetch_mode: "http_then_browser",
- extraction_source: "rendered_dom",
- js_mode: "enabled",
- include_iframes: false,
- traversal_mode: "paginate",
- request_delay_ms: 1200,
- max_pages: 8,
- max_scrolls: 12,
- },
- locality_profile: {
- geo_country: "IN",
- language_hint: "en-IN",
- currency_hint: "INR",
- },
- diagnostics_profile: {
- capture_html: true,
- capture_screenshot: false,
- capture_network: "matched_only",
- capture_response_headers: true,
- capture_browser_diagnostics: true,
- },
- source_run_id: 101,
- saved_at: new Date("2026-04-08T10:05:00Z").toISOString(),
- },
- created_at: new Date("2026-04-08T10:05:00Z").toISOString(),
- updated_at: new Date("2026-04-08T10:05:00Z").toISOString(),
- },
- ]);
- apiMock.listDomainCookieMemory.mockResolvedValue([
- {
- id: 4,
- domain: "example.com",
- cookie_count: 3,
- origin_count: 1,
- updated_at: new Date("2026-04-08T10:05:00Z").toISOString(),
- },
- {
- id: 5,
- domain: "owned-session-test.example.com",
- cookie_count: 1,
- origin_count: 0,
- updated_at: new Date("2026-04-08T10:05:00Z").toISOString(),
- },
- ]);
- apiMock.listDomainFieldFeedback.mockResolvedValue([
- {
- id: 5,
- domain: "example.com",
- surface: "ecommerce_detail",
- field_name: "price",
- action: "keep",
- source_kind: "selector",
- source_value: ".price",
- source_run_id: 101,
- selector_kind: "css_selector",
- selector_value: ".price",
- source_record_ids: [1],
- created_at: new Date("2026-04-08T10:06:00Z").toISOString(),
- },
- ]);
- apiMock.listCrawls.mockResolvedValue({
- items: [
- {
- id: 101,
- user_id: 1,
- run_type: "crawl",
- url: "https://example.com/products/widget",
- status: "completed",
- surface: "ecommerce_detail",
- settings: {},
- requested_fields: [],
- result_summary: { domain: "example.com" },
- created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
- updated_at: new Date("2026-04-08T10:10:00Z").toISOString(),
- completed_at: new Date("2026-04-08T10:10:00Z").toISOString(),
- },
- ],
- meta: { page: 1, limit: 200, total: 1 },
- });
- apiMock.updateSelector.mockImplementation(async (_id: number, payload: Record<string, unknown>) => ({
- id: 11,
- domain: "example.com",
- surface: "ecommerce_detail",
- field_name: String(payload.field_name ?? "price"),
- css_selector: payload.css_selector ?? ".price",
- xpath: payload.xpath ?? null,
- regex: payload.regex ?? null,
- status: "validated",
- sample_value: "$19.99",
- source: String(payload.source ?? "domain_recipe"),
- source_run_id: 101,
- is_active: Boolean(payload.is_active ?? true),
- created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
- updated_at: new Date("2026-04-08T10:10:00Z").toISOString(),
- }));
- apiMock.saveDomainRunProfile.mockResolvedValue({
- version: 1,
- fetch_profile: {
- fetch_mode: "browser_only",
- extraction_source: "rendered_dom",
- js_mode: "enabled",
- include_iframes: false,
- traversal_mode: "paginate",
- request_delay_ms: 1200,
- max_pages: 8,
- max_scrolls: 12,
- },
- locality_profile: {
- geo_country: "US",
- language_hint: "en-IN",
- currency_hint: "INR",
- },
- diagnostics_profile: {
- capture_html: true,
- capture_screenshot: false,
- capture_network: "matched_only",
- capture_response_headers: true,
- capture_browser_diagnostics: true,
- },
- acquisition_contract: {
- preferred_browser_engine: "auto",
- prefer_browser: false,
- prefer_curl_handoff: false,
- handoff_cookie_engine: "auto",
- last_quality_success: null,
- stale_after_failures: {
- failure_count: 0,
- stale: false,
- },
- },
- source_run_id: 101,
- saved_at: new Date("2026-04-08T10:05:00Z").toISOString(),
- });
- apiMock.deleteSelector.mockResolvedValue(undefined);
- apiMock.deleteSelectorsByDomain.mockResolvedValue({ deleted: 1 });
- });
+describe('DomainMemoryManagePage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMock.listSelectorSummaries.mockResolvedValue([
+      {
+        domain: 'example.com',
+        surface: 'ecommerce_detail',
+        selector_count: 1,
+        updated_at: new Date('2026-04-08T10:00:00Z').toISOString(),
+      },
+    ]);
+    apiMock.listSelectors.mockResolvedValue([
+      {
+        id: 11,
+        domain: 'example.com',
+        surface: 'ecommerce_detail',
+        field_name: 'price',
+        css_selector: '.price',
+        xpath: null,
+        regex: null,
+        status: 'validated',
+        sample_value: '$19.99',
+        source: 'domain_recipe',
+        source_run_id: 101,
+        is_active: true,
+        created_at: new Date('2026-04-08T10:00:00Z').toISOString(),
+        updated_at: new Date('2026-04-08T10:00:00Z').toISOString(),
+      },
+    ]);
+    apiMock.listDomainRunProfiles.mockResolvedValue([
+      {
+        id: 7,
+        domain: 'example.com',
+        surface: 'ecommerce_detail',
+        profile: {
+          version: 1,
+          fetch_profile: {
+            fetch_mode: 'http_then_browser',
+            extraction_source: 'rendered_dom',
+            js_mode: 'enabled',
+            include_iframes: false,
+            traversal_mode: 'paginate',
+            request_delay_ms: 1200,
+            max_pages: 8,
+            max_scrolls: 12,
+          },
+          locality_profile: {
+            geo_country: 'IN',
+            language_hint: 'en-IN',
+            currency_hint: 'INR',
+          },
+          diagnostics_profile: {
+            capture_html: true,
+            capture_screenshot: false,
+            capture_network: 'matched_only',
+            capture_response_headers: true,
+            capture_browser_diagnostics: true,
+          },
+          source_run_id: 101,
+          saved_at: new Date('2026-04-08T10:05:00Z').toISOString(),
+        },
+        created_at: new Date('2026-04-08T10:05:00Z').toISOString(),
+        updated_at: new Date('2026-04-08T10:05:00Z').toISOString(),
+      },
+    ]);
+    apiMock.listDomainCookieMemory.mockResolvedValue([
+      {
+        id: 4,
+        domain: 'example.com',
+        cookie_count: 3,
+        origin_count: 1,
+        updated_at: new Date('2026-04-08T10:05:00Z').toISOString(),
+      },
+      {
+        id: 5,
+        domain: 'owned-session-test.example.com',
+        cookie_count: 1,
+        origin_count: 0,
+        updated_at: new Date('2026-04-08T10:05:00Z').toISOString(),
+      },
+    ]);
+    apiMock.listDomainFieldFeedback.mockResolvedValue([
+      {
+        id: 5,
+        domain: 'example.com',
+        surface: 'ecommerce_detail',
+        field_name: 'price',
+        action: 'keep',
+        source_kind: 'selector',
+        source_value: '.price',
+        source_run_id: 101,
+        selector_kind: 'css_selector',
+        selector_value: '.price',
+        source_record_ids: [1],
+        created_at: new Date('2026-04-08T10:06:00Z').toISOString(),
+      },
+    ]);
+    apiMock.listCrawls.mockResolvedValue({
+      items: [
+        {
+          id: 101,
+          user_id: 1,
+          run_type: 'crawl',
+          url: 'https://example.com/products/widget',
+          status: 'completed',
+          surface: 'ecommerce_detail',
+          settings: {},
+          requested_fields: [],
+          result_summary: { domain: 'example.com' },
+          created_at: new Date('2026-04-08T10:00:00Z').toISOString(),
+          updated_at: new Date('2026-04-08T10:10:00Z').toISOString(),
+          completed_at: new Date('2026-04-08T10:10:00Z').toISOString(),
+        },
+      ],
+      meta: { page: 1, limit: 200, total: 1 },
+    });
+    apiMock.updateSelector.mockImplementation(
+      async (_id: number, payload: Record<string, unknown>) => ({
+        id: 11,
+        domain: 'example.com',
+        surface: 'ecommerce_detail',
+        field_name: String(payload.field_name ?? 'price'),
+        css_selector: payload.css_selector ?? '.price',
+        xpath: payload.xpath ?? null,
+        regex: payload.regex ?? null,
+        status: 'validated',
+        sample_value: '$19.99',
+        source: String(payload.source ?? 'domain_recipe'),
+        source_run_id: 101,
+        is_active: Boolean(payload.is_active ?? true),
+        created_at: new Date('2026-04-08T10:00:00Z').toISOString(),
+        updated_at: new Date('2026-04-08T10:10:00Z').toISOString(),
+      }),
+    );
+    apiMock.saveDomainRunProfile.mockResolvedValue({
+      version: 1,
+      fetch_profile: {
+        fetch_mode: 'browser_only',
+        extraction_source: 'rendered_dom',
+        js_mode: 'enabled',
+        include_iframes: false,
+        traversal_mode: 'paginate',
+        request_delay_ms: 1200,
+        max_pages: 8,
+        max_scrolls: 12,
+      },
+      locality_profile: {
+        geo_country: 'US',
+        language_hint: 'en-IN',
+        currency_hint: 'INR',
+      },
+      diagnostics_profile: {
+        capture_html: true,
+        capture_screenshot: false,
+        capture_network: 'matched_only',
+        capture_response_headers: true,
+        capture_browser_diagnostics: true,
+      },
+      acquisition_contract: {
+        preferred_browser_engine: 'auto',
+        prefer_browser: false,
+        prefer_curl_handoff: false,
+        handoff_cookie_engine: 'auto',
+        last_quality_success: null,
+        stale_after_failures: {
+          failure_count: 0,
+          stale: false,
+        },
+      },
+      source_run_id: 101,
+      saved_at: new Date('2026-04-08T10:05:00Z').toISOString(),
+    });
+    apiMock.deleteSelector.mockResolvedValue(undefined);
+    apiMock.deleteSelectorsByDomain.mockResolvedValue({ deleted: 1 });
+  });
 
- it("renders the selected domain memory workspace and recent learning", async () => {
- render(
- <TopBarProvider>
- <DomainMemoryManagePage />
- </TopBarProvider>,
- );
+  it('renders the selected domain memory workspace and recent learning', async () => {
+    render(
+      <TopBarProvider>
+        <DomainMemoryManagePage />
+      </TopBarProvider>,
+    );
 
- expect(await screen.findByText("Selector Memory")).toBeInTheDocument();
- await waitFor(() => {
- expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: "example.com" });
- });
- expect(screen.getAllByText("example.com").length).toBeGreaterThan(0);
- expect(screen.getAllByText("price").length).toBeGreaterThan(0);
+    expect(await screen.findByText('Selector Memory')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: 'example.com' });
+    });
+    expect(screen.getAllByText('example.com').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('price').length).toBeGreaterThan(0);
 
- expect(screen.getByRole("button", { name: "Selectors (1)" })).toBeInTheDocument();
- expect(screen.getByRole("button", { name: "Profiles (1)" })).toBeInTheDocument();
- expect(screen.getByRole("button", { name: "Cookies (3)" })).toBeInTheDocument();
- expect(screen.getByRole("button", { name: "Learning (1)" })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Selectors (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Profiles (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cookies (3)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Learning (1)' })).toBeInTheDocument();
 
- fireEvent.click(screen.getByRole("button", { name: "Profiles (1)" }));
- expect(screen.getByText("Run Profile Defaults")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Profiles (1)' }));
+    expect(screen.getByText('Run Profile Defaults')).toBeInTheDocument();
 
- fireEvent.click(screen.getByRole("button", { name: "Cookies (3)" }));
- expect(screen.getByText("Saved Domain Cookies")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cookies (3)' }));
+    expect(screen.getByText('Saved Domain Cookies')).toBeInTheDocument();
 
- fireEvent.click(screen.getByRole("button", { name: "Learning (1)" }));
- expect(screen.getByText("Recent Learning")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Learning (1)' }));
+    expect(screen.getByText('Recent Learning')).toBeInTheDocument();
 
- expect(screen.queryByText("owned-session-test.example.com")).not.toBeInTheDocument();
- });
+    expect(screen.queryByText('owned-session-test.example.com')).not.toBeInTheDocument();
+  });
 
- it("edits and saves a domain run profile from domain memory", async () => {
- render(
- <TopBarProvider>
- <DomainMemoryManagePage />
- </TopBarProvider>,
- );
+  it('edits and saves a domain run profile from domain memory', async () => {
+    render(
+      <TopBarProvider>
+        <DomainMemoryManagePage />
+      </TopBarProvider>,
+    );
 
- fireEvent.click(await screen.findByRole("button", { name: "Profiles (1)" }));
- fireEvent.click(screen.getByRole("combobox", { name: "Fetch Mode" }));
- fireEvent.click(await screen.findByRole("option", { name: "Browser Only" }));
- fireEvent.change(screen.getByDisplayValue("IN"), { target: { value: "US" } });
- fireEvent.click(screen.getByRole("button", { name: "Save Profile" }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Profiles (1)' }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Fetch Mode' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Browser Only' }));
+    fireEvent.change(screen.getByDisplayValue('IN'), { target: { value: 'US' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Profile' }));
 
- await waitFor(() => {
- expect(apiMock.saveDomainRunProfile).toHaveBeenCalledWith(101, {
- profile: expect.objectContaining({
- fetch_profile: expect.objectContaining({
- fetch_mode: "browser_only",
- }),
- locality_profile: expect.objectContaining({
- geo_country: "US",
- }),
- }),
- });
- });
- });
+    await waitFor(() => {
+      expect(apiMock.saveDomainRunProfile).toHaveBeenCalledWith(101, {
+        profile: expect.objectContaining({
+          fetch_profile: expect.objectContaining({
+            fetch_mode: 'browser_only',
+          }),
+          locality_profile: expect.objectContaining({
+            geo_country: 'US',
+          }),
+        }),
+      });
+    });
+  });
 
- it("edits a saved selector from the domain memory workspace", async () => {
- render(
- <TopBarProvider>
- <DomainMemoryManagePage />
- </TopBarProvider>,
- );
+  it('edits a saved selector from the domain memory workspace', async () => {
+    render(
+      <TopBarProvider>
+        <DomainMemoryManagePage />
+      </TopBarProvider>,
+    );
 
- const editButton = await screen.findByRole("button", { name: "Edit selector" });
- fireEvent.click(editButton);
- fireEvent.change(screen.getByDisplayValue(".price"), { target: { value: ".sale-price" } });
- fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const editButton = await screen.findByRole('button', { name: 'Edit selector' });
+    fireEvent.click(editButton);
+    fireEvent.change(screen.getByDisplayValue('.price'), { target: { value: '.sale-price' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
- await waitFor(() => {
- expect(apiMock.updateSelector).toHaveBeenCalledWith(11, expect.objectContaining({
- css_selector: ".sale-price",
- }));
- });
- });
+    await waitFor(() => {
+      expect(apiMock.updateSelector).toHaveBeenCalledWith(
+        11,
+        expect.objectContaining({
+          css_selector: '.sale-price',
+        }),
+      );
+    });
+  });
 
- it("reloads selectors for the resolved domain after workspace refresh", async () => {
- apiMock.listSelectors.mockImplementation(async ({ domain }: { domain?: string }) => [
- {
- id: domain === "other.com" ? 22 : 11,
- domain: domain ?? "example.com",
- surface: "ecommerce_detail",
- field_name: "price",
- css_selector: domain === "other.com" ? ".other-price" : ".price",
- xpath: null,
- regex: null,
- status: "validated",
- sample_value: "$19.99",
- source: "domain_recipe",
- source_run_id: 101,
- is_active: true,
- created_at: new Date("2026-04-08T10:00:00Z").toISOString(),
- updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
- },
- ]);
+  it('reloads selectors for the resolved domain after workspace refresh', async () => {
+    apiMock.listSelectors.mockImplementation(async ({ domain }: { domain?: string }) => [
+      {
+        id: domain === 'other.com' ? 22 : 11,
+        domain: domain ?? 'example.com',
+        surface: 'ecommerce_detail',
+        field_name: 'price',
+        css_selector: domain === 'other.com' ? '.other-price' : '.price',
+        xpath: null,
+        regex: null,
+        status: 'validated',
+        sample_value: '$19.99',
+        source: 'domain_recipe',
+        source_run_id: 101,
+        is_active: true,
+        created_at: new Date('2026-04-08T10:00:00Z').toISOString(),
+        updated_at: new Date('2026-04-08T10:00:00Z').toISOString(),
+      },
+    ]);
 
- render(
- <TopBarProvider>
- <HeaderActions />
- <DomainMemoryManagePage />
- </TopBarProvider>,
- );
+    render(
+      <TopBarProvider>
+        <HeaderActions />
+        <DomainMemoryManagePage />
+      </TopBarProvider>,
+    );
 
- await waitFor(() => {
- expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: "example.com" });
- });
+    await waitFor(() => {
+      expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: 'example.com' });
+    });
 
- apiMock.listSelectors.mockClear();
- apiMock.listSelectorSummaries.mockResolvedValueOnce([
- {
- domain: "other.com",
- surface: "ecommerce_detail",
- selector_count: 1,
- updated_at: new Date("2026-04-08T10:00:00Z").toISOString(),
- },
- ]);
- apiMock.listDomainRunProfiles.mockResolvedValueOnce([]);
- apiMock.listDomainCookieMemory.mockResolvedValueOnce([]);
- apiMock.listDomainFieldFeedback.mockResolvedValueOnce([]);
- apiMock.listCrawls.mockResolvedValueOnce({
- items: [],
- meta: { page: 1, limit: 200, total: 0 },
- });
+    apiMock.listSelectors.mockClear();
+    apiMock.listSelectorSummaries.mockResolvedValueOnce([
+      {
+        domain: 'other.com',
+        surface: 'ecommerce_detail',
+        selector_count: 1,
+        updated_at: new Date('2026-04-08T10:00:00Z').toISOString(),
+      },
+    ]);
+    apiMock.listDomainRunProfiles.mockResolvedValueOnce([]);
+    apiMock.listDomainCookieMemory.mockResolvedValueOnce([]);
+    apiMock.listDomainFieldFeedback.mockResolvedValueOnce([]);
+    apiMock.listCrawls.mockResolvedValueOnce({
+      items: [],
+      meta: { page: 1, limit: 200, total: 0 },
+    });
 
- fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
- await waitFor(() => {
- expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: "other.com" });
- });
- expect(apiMock.listSelectors).not.toHaveBeenCalledWith({ domain: "example.com" });
- });
+    await waitFor(() => {
+      expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: 'other.com' });
+    });
+    expect(apiMock.listSelectors).not.toHaveBeenCalledWith({ domain: 'example.com' });
+  });
 });

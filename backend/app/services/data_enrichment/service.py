@@ -179,7 +179,9 @@ async def _run_job(session: AsyncSession, job: DataEnrichmentJob) -> None:
         ).all()
     )
     product_refs = [
-        (int(product.id), int(product.source_record_id)) for product in products
+        (int(product.id), int(product.source_record_id))
+        for product in products
+        if product.id is not None and product.source_record_id is not None
     ]
     await session.flush()
 
@@ -209,11 +211,18 @@ async def _run_job(session: AsyncSession, job: DataEnrichmentJob) -> None:
         except Exception as exc:  # pragma: no cover - defensive job isolation
             if isinstance(exc, SQLAlchemyError):
                 await session.rollback()
-                job = await session.get(DataEnrichmentJob, job_id)
-                product = await session.get(EnrichedProduct, product_id)
-                record = await session.get(CrawlRecord, record_id)
-                if job is None or product is None or record is None:
+                refreshed_job = await session.get(DataEnrichmentJob, job_id)
+                refreshed_product = await session.get(EnrichedProduct, product_id)
+                refreshed_record = await session.get(CrawlRecord, record_id)
+                if (
+                    refreshed_job is None
+                    or refreshed_product is None
+                    or refreshed_record is None
+                ):
                     raise
+                job = refreshed_job
+                product = refreshed_product
+                record = refreshed_record
             product.status = DATA_ENRICHMENT_STATUS_FAILED
             product.diagnostics = {"error": str(exc)}
             record.enrichment_status = DATA_ENRICHMENT_STATUS_FAILED
@@ -327,7 +336,11 @@ def _build_deterministic_enrichment(
         _term_dict(terms, "availability_terms"),
     )
     category_match = _match_category_path(data)
-    category_path = category_match.get("category_path") if category_match else None
+    category_path = (
+        text_or_none(category_match.get("category_path"))
+        if category_match
+        else None
+    )
     seo_keywords = _build_seo_keywords(
         data,
         color_family=color_family,
@@ -503,13 +516,14 @@ def _normalize_sizes(
     data: dict[str, object], *, terms: dict[str, object]
 ) -> tuple[list[str] | None, str | None]:
     size_config = _term_dict(terms, "size_systems")
-    aliases = {
-        str(k).casefold(): str(v)
-        for k, v in dict(size_config.get("aliases") or {}).items()
-    }
+    aliases_value = size_config.get("aliases")
+    aliases_dict = aliases_value if isinstance(aliases_value, dict) else {}
+    aliases = {str(k).casefold(): str(v) for k, v in aliases_dict.items()}
+    systems_value = size_config.get("systems")
+    systems_dict = systems_value if isinstance(systems_value, dict) else {}
     systems = {
         str(system): {str(item).casefold() for item in list(values or [])}
-        for system, values in dict(size_config.get("systems") or {}).items()
+        for system, values in systems_dict.items()
         if isinstance(values, list)
     }
     values = [
@@ -578,7 +592,9 @@ def _normalize_materials(
         for canonical, tokens in material_terms.items():
             if canonical in seen:
                 continue
-            if any(_term_present(lowered, token) for token in list(tokens or [])):
+            if isinstance(tokens, list) and any(
+                _term_present(lowered, token) for token in tokens
+            ):
                 found.append(str(canonical))
                 seen.add(str(canonical))
     return found or None
@@ -595,7 +611,9 @@ def _normalize_from_terms(values: list[object], terms: dict[str, object]) -> str
             if isinstance(tokens, str):
                 if _term_present(lowered, canonical) or _term_present(lowered, tokens):
                     return tokens
-            elif any(_term_present(lowered, token) for token in list(tokens or [])):
+            elif isinstance(tokens, list) and any(
+                _term_present(lowered, token) for token in tokens
+            ):
                 return str(canonical)
     return None
 
@@ -636,10 +654,12 @@ def _exact_category_match(
             leaf = _normalize_category_path(path.rsplit(">", 1)[-1])
             if normalized == leaf:
                 return _category_match_payload(item, score=scores[1], source="leaf")
-            aliases = [
-                _normalize_category_path(alias)
-                for alias in list(item.get("aliases") or [])
-            ]
+            aliases_value = item.get("aliases")
+            aliases = (
+                [_normalize_category_path(alias) for alias in aliases_value]
+                if isinstance(aliases_value, list)
+                else []
+            )
             if normalized in aliases:
                 return _category_match_payload(item, score=scores[2], source="alias")
     return None
@@ -671,7 +691,7 @@ def _gpc_reference_for_category(category_path: str) -> dict[str, object] | None:
         if path
     }
     return _exact_category_match(
-        [category_path], categories, normalized_lookup, (1.0, 0.9, 0.86)
+        [category_path], list(categories), normalized_lookup, (1.0, 0.9, 0.86)
     )
 
 
@@ -686,8 +706,8 @@ def _build_seo_keywords(
 ) -> list[str] | None:
     stopwords = {
         str(item).casefold()
-        for item in list(
-            _repository_terms(_load_attribute_repository()).get("seo_stopwords") or []
+        for item in _object_list(
+            _repository_terms(_load_attribute_repository()).get("seo_stopwords")
         )
     }
     raw_parts = [
@@ -812,14 +832,14 @@ def _product_attribute_diagnostics(
     category_match: dict[str, object] | None,
 ) -> dict[str, object]:
     repository = _load_attribute_repository()
-    rules = dict(repository.get("attribute_rules") or {})
-    required = [str(item) for item in list(rules.get("base_required") or [])]
-    recommended = [str(item) for item in list(rules.get("base_recommended") or [])]
+    rules = _object_dict(repository.get("attribute_rules"))
+    required = [str(item) for item in _object_list(rules.get("base_required"))]
+    recommended = [str(item) for item in _object_list(rules.get("base_recommended"))]
     if category_match:
-        category_rules = dict(rules.get("category_rules") or {})
+        category_rules = _object_dict(rules.get("category_rules"))
         gpc_reference = category_match.get("gpc_reference")
         path = str(
-            dict(gpc_reference).get("category_path")
+            _object_dict(gpc_reference).get("category_path")
             if isinstance(gpc_reference, dict)
             else category_match.get("category_path") or ""
         )
@@ -830,10 +850,10 @@ def _product_attribute_diagnostics(
             and _normalize_category_path(key) in _normalize_category_path(path)
         ]
         for key in matched_keys:
-            rule = dict(category_rules.get(key) or {})
-            required.extend(str(item) for item in list(rule.get("required") or []))
+            rule = _object_dict(category_rules.get(key))
+            required.extend(str(item) for item in _object_list(rule.get("required")))
             recommended.extend(
-                str(item) for item in list(rule.get("recommended") or [])
+                str(item) for item in _object_list(rule.get("recommended"))
             )
     attributes = [
         str(item) for item in [*required, *recommended] if str(item or "").strip()
@@ -855,9 +875,9 @@ def _product_attribute_diagnostics(
 
 
 def _product_attribute_value(data: dict[str, object], attribute: str) -> object | None:
-    attributes = dict(_load_attribute_repository().get("attributes") or {})
-    config = dict(attributes.get(attribute) or {})
-    keys = tuple(str(item) for item in list(config.get("crawl_fields") or [])) or (
+    attributes = _object_dict(_load_attribute_repository().get("attributes"))
+    config = _object_dict(attributes.get(attribute))
+    keys = tuple(str(item) for item in _object_list(config.get("crawl_fields"))) or (
         attribute,
     )
     return _first_present(data, *keys)
@@ -1038,6 +1058,14 @@ def _without_empty(value: dict[str, object]) -> dict[str, object]:
     return {key: item for key, item in value.items() if item not in (None, "", [], {})}
 
 
+def _object_dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _object_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
 def _string_list(value: object, *, max_items: int, max_chars: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -1102,8 +1130,8 @@ def _term_dict(terms: dict[str, object], key: str) -> dict[str, object]:
 
 
 @lru_cache(maxsize=1)
-def _load_taxonomy() -> tuple[dict[str, str], ...]:
-    rows: list[dict[str, str]] = []
+def _load_taxonomy() -> tuple[dict[str, object], ...]:
+    rows: list[dict[str, object]] = []
     with Path(data_enrichment_settings.taxonomy_path).open(
         "r", encoding="utf-8"
     ) as handle:

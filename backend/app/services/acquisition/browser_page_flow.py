@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
+import inspect
 import logging
 import re
 import time
@@ -130,7 +131,16 @@ class BrowserAcquisitionResultBuilder:
             location_interstitial_present = False
         else:
             blocked_classification = await self.classify_blocked_page_async(payload.html, status_code)
-            blocked = bool(blocked_classification.blocked)
+            blocked_result = self.blocked_html_checker(payload.html, status_code)
+            if inspect.isawaitable(blocked_result):
+                blocked_result = await blocked_result
+            blocked = bool(blocked_classification.blocked) or bool(blocked_result)
+            if blocked and not blocked_classification.blocked:
+                blocked_classification = BlockPageClassification(
+                    blocked=True,
+                    outcome="challenge_page",
+                    evidence=["blocked_html_checker"],
+                )
             challenge_evidence = list(blocked_classification.evidence or [])
             low_content_reason = self.classify_low_content_reason(
                 payload.html,
@@ -997,7 +1007,7 @@ def _ready_probe_supports_fast_finalize(
     min_detail_hints = int(crawler_runtime_settings.detail_field_signal_min_count)
     min_listing_items = int(crawler_runtime_settings.listing_min_items)
     extractability = (
-        dict(expansion_diagnostics.get("extractability"))
+        cast(dict[str, object], expansion_diagnostics.get("extractability"))
         if isinstance(expansion_diagnostics, dict)
         and isinstance(expansion_diagnostics.get("extractability"), dict)
         else {}
@@ -1011,23 +1021,34 @@ def _ready_probe_supports_fast_finalize(
     for probe in readiness_probes:
         if not isinstance(probe, dict) or not bool(probe.get("is_ready")):
             continue
-        visible_text_length = int(probe.get("visible_text_length") or 0)
+        visible_text_length = _object_int(probe.get("visible_text_length"))
         if visible_text_length < min_visible_text:
             continue
         if "detail" in normalized_surface:
             if bool(probe.get("structured_data_present")):
                 return True
-            if int(probe.get("detail_hint_count") or 0) >= min_detail_hints:
+            if _object_int(probe.get("detail_hint_count")) >= min_detail_hints:
                 return True
             continue
         if "listing" in normalized_surface:
-            if int(probe.get("listing_card_count") or 0) >= min_listing_items:
+            if _object_int(probe.get("listing_card_count")) >= min_listing_items:
                 return True
-            if int(probe.get("matched_listing_selectors") or 0) > 0:
+            if _object_int(probe.get("matched_listing_selectors")) > 0:
                 return True
             continue
         return True
     return False
+
+
+def _object_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(str(value or default))
+    except (TypeError, ValueError):
+        return default
 
 
 async def dismiss_safe_location_interstitial(page: Any) -> dict[str, object]:

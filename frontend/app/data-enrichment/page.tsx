@@ -173,7 +173,13 @@ export default function DataEnrichmentPage() {
               onClick={() => createMutation.mutate()}
             >
               <Play className="size-3.5" />
-              {createMutation.isPending || isRunning ? (activeJob?.status === 'pending' ? 'Starting...' : 'Enriching...') : 'Enrich Selected'}
+              {createMutation.isPending
+                ? 'Starting...'
+                : isRunning
+                  ? activeJob?.status === 'pending'
+                    ? 'Starting...'
+                    : 'Enriching...'
+                  : 'Enrich Selected'}
             </Button>
           </div>
         }
@@ -231,17 +237,17 @@ export default function DataEnrichmentPage() {
               <table className="compact-data-table min-w-[1200px]">
                 <thead>
                   <tr className="bg-background-alt/50">
-                    <th className="w-[180px] sticky left-0 z-10 bg-background-alt">Record</th>
+                    <th className="bg-background-alt sticky left-0 z-10 w-[180px]">Record</th>
                     {ENRICHED_FIELD_LABELS.map(([key, label]) => (
                       <th key={String(key)}>
-                        <div className="flex items-center gap-1 min-w-0">
+                        <div className="flex min-w-0 items-center gap-1">
                           <span className="flex-1 truncate">{label.toUpperCase()}</span>
                         </div>
                       </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-divider">
+                <tbody className="divide-divider divide-y">
                   {products.map((product) => (
                     <EnrichedProductRow key={product.id} product={product} />
                   ))}
@@ -249,7 +255,7 @@ export default function DataEnrichmentPage() {
               </table>
             </div>
           ) : sourceRecords.length ? (
-            <div className="divide-y divide-divider">
+            <div className="divide-divider divide-y">
               {sourceRecords.map((record, index) => {
                 const badgeValue = record.id ?? record.source_url;
                 return (
@@ -257,7 +263,9 @@ export default function DataEnrichmentPage() {
                     key={record.id ?? record.source_url ?? index}
                     className="hover:bg-background-alt/50 flex items-center gap-3 px-4 py-2.5 transition-colors"
                   >
-                    <span className="text-muted w-6 shrink-0 font-mono text-[10px]">{index + 1}</span>
+                    <span className="text-muted w-6 shrink-0 font-mono text-[10px]">
+                      {index + 1}
+                    </span>
                     <div className="min-w-0 flex-1">
                       <div className="text-foreground truncate text-sm font-medium tracking-tight">
                         {recordTitle(record)}
@@ -268,7 +276,7 @@ export default function DataEnrichmentPage() {
                             href={record.source_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-accent truncate hover:underline opacity-80"
+                            className="text-accent truncate opacity-80 hover:underline"
                             title={record.source_url}
                           >
                             {record.source_url}
@@ -277,7 +285,10 @@ export default function DataEnrichmentPage() {
                       </div>
                     </div>
                     {badgeValue ? (
-                      <Badge tone="neutral" className="h-5 shrink-0 px-1.5 text-[10px] font-mono opacity-60">
+                      <Badge
+                        tone="neutral"
+                        className="h-5 shrink-0 px-1.5 font-mono text-[10px] opacity-60"
+                      >
                         #{badgeValue}
                       </Badge>
                     ) : null}
@@ -294,8 +305,6 @@ export default function DataEnrichmentPage() {
         </section>
       </div>
 
-
-
       <HistoryDrawer
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
@@ -308,14 +317,12 @@ export default function DataEnrichmentPage() {
   );
 }
 
-
-
 function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>) {
   return (
     <tr key={product.id} className="group/row hover:bg-background-alt/30 transition-colors">
-      <td className="sticky left-0 z-10 bg-panel group-hover/row:bg-background-alt/50 transition-colors">
+      <td className="bg-panel group-hover/row:bg-background-alt/50 sticky left-0 z-10 transition-colors">
         <div className="flex items-center gap-2 py-1.5">
-          <Badge tone="neutral" className="font-mono text-[10px] shrink-0 h-5 px-1.5 opacity-70">
+          <Badge tone="neutral" className="h-5 shrink-0 px-1.5 font-mono text-[10px] opacity-70">
             #{product.source_record_id}
           </Badge>
           {product.source_url ? (
@@ -323,7 +330,7 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
               href={product.source_url}
               target="_blank"
               rel="noreferrer"
-              className="text-accent block max-w-[140px] truncate transition-colors hover:underline text-[12px] font-medium"
+              className="text-accent block max-w-[140px] truncate text-[12px] font-medium transition-colors hover:underline"
               title={product.source_url}
             >
               {product.source_url.replace(/^https?:\/\/(www\.)?/, '')}
@@ -336,20 +343,20 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
         const display = formatValue(value);
         const isEnriched = product.status === 'enriched' && Boolean(display && display !== '--');
         const isProcessing = product.status === 'pending' || product.status === 'running';
-        
+
         return (
           <td key={String(key)}>
             {isEnriched ? (
-              <span 
-                className="block max-w-[260px] truncate leading-relaxed text-foreground font-normal tracking-tight" 
-                style={{ fontSize: "var(--table-font-size)" }} 
+              <span
+                className="text-foreground block max-w-[260px] truncate leading-relaxed font-normal tracking-tight"
+                style={{ fontSize: 'var(--table-font-size)' }}
                 title={display}
               >
                 {display}
               </span>
             ) : isProcessing ? (
               <div className="flex items-center gap-1.5 opacity-40">
-                <Loader2 className="size-3 animate-spin text-accent" />
+                <Loader2 className="text-accent size-3 animate-spin" />
                 <span className="text-[10px] font-medium tracking-wide uppercase">Processing</span>
               </div>
             ) : (

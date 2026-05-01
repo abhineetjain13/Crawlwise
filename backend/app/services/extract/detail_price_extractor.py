@@ -29,6 +29,7 @@ from app.services.field_value_core import (
 from app.services.normalizers import normalize_decimal_price
 
 _LOW_SIGNAL_ZERO_PRICE_SOURCES = frozenset(DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES)
+_AUTHORITATIVE_PRICE_SOURCES = frozenset({"adapter", "network_payload"})
 _CENT_BASED_CURRENCIES = frozenset(DETAIL_CENT_BASED_PRICE_CURRENCIES)
 _CENT_PRICE_HOST_SUFFIXES = tuple(
     str(host).strip().lower()
@@ -69,10 +70,10 @@ def backfill_detail_price_from_html(
     price = _detail_price_from_html(soup, currency=currency)
     if price in (None, "", [], {}):
         return
-    if (
-        record.get("price") in (None, "", [], {})
-        or record_price_is_low_signal
-        or _detail_price_is_visible_outlier(record.get("price"), price)
+    if _should_override_record_price_from_dom(
+        record=record,
+        dom_price=price,
+        record_price_is_low_signal=record_price_is_low_signal,
     ):
         record["price"] = price
         append_record_field_source(record, "price", "dom_text")
@@ -240,6 +241,23 @@ def append_record_field_source(
         return
     if normalized_source not in source_bucket:
         source_bucket.append(normalized_source)
+
+
+def _should_override_record_price_from_dom(
+    *,
+    record: dict[str, Any],
+    dom_price: object,
+    record_price_is_low_signal: bool,
+) -> bool:
+    current_price = record.get("price")
+    if current_price in (None, "", [], {}):
+        return True
+    if record_price_is_low_signal:
+        return True
+    if not _detail_price_is_visible_outlier(current_price, dom_price):
+        return False
+    current_sources = record_field_sources(record, "price")
+    return not bool(current_sources & _AUTHORITATIVE_PRICE_SOURCES)
 
 
 def detail_currency_hint_is_host_level(

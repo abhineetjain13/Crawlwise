@@ -134,7 +134,7 @@ def _resolve_run_param(
         if candidate is None:
             continue
         try:
-            resolved = int(float(candidate))
+            resolved = int(float(candidate) if isinstance(candidate, (int, float)) else float(str(candidate)))
         except (TypeError, ValueError):
             continue
         if resolved >= int(min_value):

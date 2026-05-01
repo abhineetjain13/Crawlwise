@@ -26,7 +26,6 @@ from app.services.product_intelligence.discovery import (
     build_search_queries,
     classify_source_type,
     discover_candidates,
-    shared_query_runner,
 )
 from app.services.product_intelligence.matching import (
     build_search_result_intelligence,

@@ -1,21 +1,24 @@
-"use client";
+'use client';
 
-import * as React from "react";
-import { useId } from "react";
-import { createPortal } from "react-dom";
-import type { ReactNode } from "react";
-import { cn } from "../../lib/utils";
+import * as React from 'react';
+import { useId } from 'react';
+import { createPortal } from 'react-dom';
+import type { ReactNode } from 'react';
+import { cn } from '../../lib/utils';
 
-export { Badge, badgeVariants } from "./badge";
-export { Button, buttonVariants } from "./button";
-export { Card, cardVariants } from "./card";
-export { Input, Textarea, inputVariants, textareaVariants } from "./input";
-export { Metric, StatCard } from "./metric";
-export { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./table";
+export { Badge, badgeVariants } from './badge';
+export { Button, buttonVariants } from './button';
+export { Card, cardVariants } from './card';
+export { Input, Textarea, inputVariants, textareaVariants } from './input';
+export { Metric, StatCard } from './metric';
+export { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './table';
 
 function sanitizeIdSegment(value: string) {
-  const normalized = String(value).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
-  return normalized.replace(/^-+|-+$/g, "") || "option";
+  const normalized = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-');
+  return normalized.replace(/^-+|-+$/g, '') || 'option';
 }
 
 /* ─── Title / Subtitle ───────────────────────────────────────────────────── */
@@ -25,13 +28,9 @@ export function Title({
   className,
 }: Readonly<{ children: ReactNode; kicker?: string; className?: string }>) {
   return (
-    <div className={cn("space-y-1", className)}>
-      {kicker ? (
-        <p className="m-0 mb-1.5 text-sm font-medium text-accent">
-          {kicker}
-        </p>
-      ) : null}
-      <h1 className="m-0 text-[clamp(1.75rem,1.45rem+0.8vw,2rem)] font-semibold leading-[var(--leading-tight)] text-foreground type-heading">
+    <div className={cn('space-y-1', className)}>
+      {kicker ? <p className="text-accent m-0 mb-1.5 text-sm font-medium">{kicker}</p> : null}
+      <h1 className="text-foreground type-heading m-0 text-[clamp(1.75rem,1.45rem+0.8vw,2rem)] leading-[var(--leading-tight)] font-semibold">
         {children}
       </h1>
     </div>
@@ -39,7 +38,11 @@ export function Title({
 }
 
 export function Subtitle({ children }: Readonly<{ children: ReactNode }>) {
-  return <p className="mt-1.5 max-w-2xl text-sm leading-[var(--leading-relaxed)] text-secondary">{children}</p>;
+  return (
+    <p className="text-secondary mt-1.5 max-w-2xl text-sm leading-[var(--leading-relaxed)]">
+      {children}
+    </p>
+  );
 }
 
 /* ─── Field ──────────────────────────────────────────────────────────────── */
@@ -65,7 +68,7 @@ export function Dropdown<T extends string>({
   ariaLabel,
   className,
   disabled = false,
-  align = "left",
+  align = 'left',
 }: Readonly<{
   value: T;
   onChange: (value: T) => void;
@@ -73,14 +76,18 @@ export function Dropdown<T extends string>({
   ariaLabel?: string;
   className?: string;
   disabled?: boolean;
-  align?: "left" | "center";
+  align?: 'left' | 'center';
 }>) {
   const [open, setOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const listboxRef = React.useRef<HTMLDivElement>(null);
-  const [listboxPosition, setListboxPosition] = React.useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 0 });
+  const [listboxPosition, setListboxPosition] = React.useState<{
+    top: number;
+    left: number;
+    width: number;
+  }>({ top: 0, left: 0, width: 0 });
   const closeTimerRef = React.useRef<number | undefined>(undefined);
-  const dropdownId = useId().replace(/[^a-zA-Z0-9_-]+/g, "") || "dropdown";
+  const dropdownId = useId().replace(/[^a-zA-Z0-9_-]+/g, '') || 'dropdown';
   const activeIndex = options.findIndex((o) => o.value === value);
   const listboxId = `${dropdownId}-listbox`;
   const activeDescendant =
@@ -88,7 +95,7 @@ export function Dropdown<T extends string>({
       ? `${dropdownId}-option-${activeIndex}-${sanitizeIdSegment(options[activeIndex].value)}`
       : undefined;
 
-  if (process.env.NODE_ENV === "development" && activeIndex === -1 && options.length > 0) {
+  if (process.env.NODE_ENV === 'development' && activeIndex === -1 && options.length > 0) {
     console.warn(`Dropdown: value "${value}" not found in options`);
   }
 
@@ -118,11 +125,11 @@ export function Dropdown<T extends string>({
       updatePosition();
       const handleResize = () => updatePosition();
       const handleScroll = () => updatePosition();
-      window.addEventListener("resize", handleResize);
-      window.addEventListener("scroll", handleScroll, true);
+      window.addEventListener('resize', handleResize);
+      window.addEventListener('scroll', handleScroll, true);
       return () => {
-        window.removeEventListener("resize", handleResize);
-        window.removeEventListener("scroll", handleScroll, true);
+        window.removeEventListener('resize', handleResize);
+        window.removeEventListener('scroll', handleScroll, true);
       };
     }
   }, [open, updatePosition]);
@@ -136,37 +143,42 @@ export function Dropdown<T extends string>({
   React.useEffect(() => {
     if (!open) return;
     function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node) && listboxRef.current && !listboxRef.current.contains(e.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node) &&
+        listboxRef.current &&
+        !listboxRef.current.contains(e.target as Node)
+      ) {
         setOpen(false);
       }
     }
     function handleEscape(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === 'Escape') setOpen(false);
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEscape);
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
     };
   }, [open]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (!open && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
+    if (!open && (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown')) {
       e.preventDefault();
       setOpen(true);
       return;
     }
     if (!open) return;
-    if (e.key === "ArrowDown") {
+    if (e.key === 'ArrowDown') {
       e.preventDefault();
       const next = (activeIndex + 1) % options.length;
       onChange(options[next].value);
-    } else if (e.key === "ArrowUp") {
+    } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       const prev = (activeIndex - 1 + options.length) % options.length;
       onChange(options[prev].value);
-    } else if (e.key === "Enter" || e.key === " ") {
+    } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       setOpen(false);
     }
@@ -177,7 +189,7 @@ export function Dropdown<T extends string>({
   return (
     <div
       ref={containerRef}
-      className={cn("relative", className)}
+      className={cn('relative', className)}
       onMouseEnter={() => {
         if (!disabled) {
           cancelClose();
@@ -200,16 +212,16 @@ export function Dropdown<T extends string>({
         disabled={disabled}
         onKeyDown={handleKeyDown}
         className={cn(
-          "focus-ring flex h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-background-elevated px-3 text-sm font-medium leading-[1.4] text-foreground shadow-sm transition-[background-color,border-color,box-shadow] hover:bg-background-alt focus:border-accent focus:shadow-[0_0_0_3px_var(--accent-subtle)]",
-          align === "center" ? "justify-center text-center" : "justify-between text-left",
+          'focus-ring border-border-strong bg-background-elevated text-foreground hover:bg-background-alt focus:border-accent flex h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-md)] border px-3 text-sm leading-[1.4] font-medium shadow-sm transition-[background-color,border-color,box-shadow] focus:shadow-[0_0_0_3px_var(--accent-subtle)]',
+          align === 'center' ? 'justify-center text-center' : 'justify-between text-left',
         )}
       >
         <span className="truncate">{selectedLabel}</span>
         <svg
           className={cn(
-            "size-3.5 shrink-0 text-muted transition-transform duration-150",
-            open && "rotate-180",
-            align === "center" ? "absolute right-3" : "relative",
+            'text-muted size-3.5 shrink-0 transition-transform duration-150',
+            open && 'rotate-180',
+            align === 'center' ? 'absolute right-3' : 'relative',
           )}
           viewBox="0 0 16 16"
           fill="none"
@@ -221,48 +233,50 @@ export function Dropdown<T extends string>({
           <path d="M4 6l4 4 4-4" />
         </svg>
       </button>
-      {open && typeof document !== "undefined" ? createPortal(
-        <div
-          ref={listboxRef}
-          id={listboxId}
-          role="listbox"
-          onMouseEnter={cancelClose}
-          onMouseLeave={scheduleClose}
-          className="fixed z-[300] w-max rounded-[var(--radius-lg)] border border-border bg-background-elevated py-1 shadow-lg animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)]"
-          style={{
-            top: `${listboxPosition.top}px`,
-            left: `${listboxPosition.left}px`,
-            minWidth: `${listboxPosition.width}px`,
-          }}
-        >
-          {options.map((option, index) => {
-            const optionId = `${dropdownId}-option-${index}-${sanitizeIdSegment(option.value)}`;
-            return (
-              <button
-                key={option.value}
-                id={optionId}
-                role="option"
-                aria-selected={option.value === value}
-                onClick={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                }}
-                onMouseDown={(e) => e.preventDefault()}
-                className={cn(
-                  "flex w-full items-center py-2 text-sm leading-[var(--leading-snug)] transition-colors",
-                  align === "center" ? "justify-center px-8" : "justify-start px-3",
-                  option.value === value
-                    ? "bg-accent-subtle text-accent font-medium"
-                    : "text-foreground hover:bg-background-alt",
-                )}
-              >
-                {option.label}
-              </button>
-            );
-          })}
-        </div>,
-        document.body
-      ) : null}
+      {open && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={listboxRef}
+              id={listboxId}
+              role="listbox"
+              onMouseEnter={cancelClose}
+              onMouseLeave={scheduleClose}
+              className="border-border bg-background-elevated fixed z-[300] w-max animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)] rounded-[var(--radius-lg)] border py-1 shadow-lg"
+              style={{
+                top: `${listboxPosition.top}px`,
+                left: `${listboxPosition.left}px`,
+                minWidth: `${listboxPosition.width}px`,
+              }}
+            >
+              {options.map((option, index) => {
+                const optionId = `${dropdownId}-option-${index}-${sanitizeIdSegment(option.value)}`;
+                return (
+                  <button
+                    key={option.value}
+                    id={optionId}
+                    role="option"
+                    aria-selected={option.value === value}
+                    onClick={() => {
+                      onChange(option.value);
+                      setOpen(false);
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    className={cn(
+                      'flex w-full items-center py-2 text-sm leading-[var(--leading-snug)] transition-colors',
+                      align === 'center' ? 'justify-center px-8' : 'justify-start px-3',
+                      option.value === value
+                        ? 'bg-accent-subtle text-accent font-medium'
+                        : 'text-foreground hover:bg-background-alt',
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -281,14 +295,14 @@ export function Toggle({
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={cn(
-        "focus-ring relative inline-flex h-[20px] w-[36px] shrink-0 cursor-pointer items-center rounded-full transition-colors",
-        checked ? "bg-accent" : "bg-border-strong",
+        'focus-ring relative inline-flex h-[20px] w-[36px] shrink-0 cursor-pointer items-center rounded-full transition-colors',
+        checked ? 'bg-accent' : 'bg-border-strong',
       )}
     >
       <span
         className={cn(
-          "inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-          checked ? "translate-x-[16px]" : "translate-x-[2px]"
+          'inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform',
+          checked ? 'translate-x-[16px]' : 'translate-x-[2px]',
         )}
       />
     </button>
@@ -297,7 +311,7 @@ export function Toggle({
 
 /* ─── Skeleton ───────────────────────────────────────────────────────────── */
 export function Skeleton({ className }: Readonly<{ className?: string }>) {
-  return <div className={cn("skeleton", className)} aria-hidden="true" />;
+  return <div className={cn('skeleton', className)} aria-hidden="true" />;
 }
 
 /* ─── Tooltip ────────────────────────────────────────────────────────────── */
@@ -305,16 +319,26 @@ export function Tooltip({
   children,
   content,
   className,
-  align = "center",
-}: Readonly<{ children: ReactNode; content: string; className?: string; align?: "center" | "start" }>) {
+  align = 'center',
+}: Readonly<{
+  children: ReactNode;
+  content: string;
+  className?: string;
+  align?: 'center' | 'start';
+}>) {
   const tooltipId = useId();
   const child = React.Children.only(children);
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const tooltipRef = React.useRef<HTMLDivElement>(null);
   const [open, setOpen] = React.useState(false);
-  const [position, setPosition] = React.useState<{ left: number; top: number }>({ left: 0, top: 0 });
+  const [position, setPosition] = React.useState<{ left: number; top: number }>({
+    left: 0,
+    top: 0,
+  });
   const enhancedChild = React.isValidElement(child)
-    ? React.cloneElement(child, { "aria-describedby": tooltipId } as React.HTMLAttributes<HTMLElement>)
+    ? React.cloneElement(child, {
+        'aria-describedby': tooltipId,
+      } as React.HTMLAttributes<HTMLElement>)
     : child;
 
   const updatePosition = React.useCallback(() => {
@@ -325,7 +349,7 @@ export function Tooltip({
     const tooltipRect = tooltipRef.current.getBoundingClientRect();
     const margin = 12;
     const idealLeft =
-      align === "start"
+      align === 'start'
         ? anchorRect.left
         : anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2;
     const maxLeft = window.innerWidth - tooltipRect.width - margin;
@@ -346,18 +370,18 @@ export function Tooltip({
       return;
     }
     const handleLayout = () => updatePosition();
-    window.addEventListener("resize", handleLayout);
-    window.addEventListener("scroll", handleLayout, true);
+    window.addEventListener('resize', handleLayout);
+    window.addEventListener('scroll', handleLayout, true);
     return () => {
-      window.removeEventListener("resize", handleLayout);
-      window.removeEventListener("scroll", handleLayout, true);
+      window.removeEventListener('resize', handleLayout);
+      window.removeEventListener('scroll', handleLayout, true);
     };
   }, [open, updatePosition]);
 
   return (
     <div
       ref={anchorRef}
-      className={cn("relative flex items-center", className)}
+      className={cn('relative flex items-center', className)}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}
@@ -368,35 +392,31 @@ export function Tooltip({
       }}
     >
       {enhancedChild}
-      {open && typeof document !== "undefined"
+      {open && typeof document !== 'undefined'
         ? createPortal(
-          <div
-            ref={tooltipRef}
-            id={tooltipId}
-            role="tooltip"
-            className={cn(
-              "pointer-events-none fixed w-max max-w-[min(420px,calc(100vw-24px))]",
-              "tooltip-surface rounded-[var(--radius-md)] bg-panel px-2 py-1.5 shadow-lg",
-              "text-sm font-medium leading-normal text-foreground z-[200] break-words",
-            )}
-            style={{ left: `${position.left}px`, top: `${position.top}px` }}
-          >
-            {content}
             <div
-              className="absolute -bottom-[6px] size-2.5 border-b border-r border-border-strong bg-panel"
-              style={{
-                left:
-                  align === "start"
-                    ? "12px"
-                    : "50%",
-                transform: align === "start" ? "rotate(45deg)" : "translateX(-50%) rotate(45deg)",
-              }}
-            />
-          </div>,
-          document.body,
-        )
+              ref={tooltipRef}
+              id={tooltipId}
+              role="tooltip"
+              className={cn(
+                'pointer-events-none fixed w-max max-w-[min(420px,calc(100vw-24px))]',
+                'tooltip-surface bg-panel rounded-[var(--radius-md)] px-2 py-1.5 shadow-lg',
+                'text-foreground z-[200] text-sm leading-normal font-medium break-words',
+              )}
+              style={{ left: `${position.left}px`, top: `${position.top}px` }}
+            >
+              {content}
+              <div
+                className="border-border-strong bg-panel absolute -bottom-[6px] size-2.5 border-r border-b"
+                style={{
+                  left: align === 'start' ? '12px' : '50%',
+                  transform: align === 'start' ? 'rotate(45deg)' : 'translateX(-50%) rotate(45deg)',
+                }}
+              />
+            </div>,
+            document.body,
+          )
         : null}
     </div>
   );
 }
-

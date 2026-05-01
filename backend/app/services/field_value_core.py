@@ -940,9 +940,9 @@ def _coerce_brand_text(value: object) -> str | None:
     if not text:
         return None
     parsed = urlparse(text)
-    if parsed.scheme or parsed.netloc:
+    if parsed.scheme in {"http", "https", "ftp", "mailto"} or parsed.netloc:
         return None
-    if _BARE_HOST_URL_RE.search(text):
+    if _BARE_HOST_URL_RE.fullmatch(text):
         return None
     return text
 

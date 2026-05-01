@@ -90,11 +90,11 @@ def _breadcrumb_names(payload: dict[str, object]) -> list[str]:
     raw_items = payload.get("itemListElement")
     if not isinstance(raw_items, list):
         return []
-    names = [
-        name
-        for item in raw_items
-        if (name := _breadcrumb_item_name(item)) not in (None, "")
-    ]
+    names: list[str] = []
+    for item in raw_items:
+        name = _breadcrumb_item_name(item)
+        if name:
+            names.append(name)
     if names and names[0].strip().lower() in DETAIL_BREADCRUMB_ROOT_LABELS:
         names = names[1:]
     if len(names) >= 2:

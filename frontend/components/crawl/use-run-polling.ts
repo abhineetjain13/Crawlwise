@@ -1,9 +1,9 @@
-"use client";
+'use client';
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef } from 'react';
 
-import type { CrawlRun } from "../../lib/api/types";
-import { ACTIVE_STATUSES, TERMINAL_STATUSES } from "../../lib/constants/crawl-statuses";
+import type { CrawlRun } from '../../lib/api/types';
+import { ACTIVE_STATUSES, TERMINAL_STATUSES } from '../../lib/constants/crawl-statuses';
 
 type RefetchableQuery = {
   refetch: () => Promise<unknown>;
@@ -16,13 +16,12 @@ export function useRunStatusFlags(run: CrawlRun | undefined) {
 }
 
 export function useTerminalSync(
- run: CrawlRun | undefined,
- terminal: boolean,
- queries: ReadonlyArray<RefetchableQuery>,
+  run: CrawlRun | undefined,
+  terminal: boolean,
+  queries: ReadonlyArray<RefetchableQuery>,
 ) {
   const terminalSyncRef = useRef<string | null>(null);
   const queriesRef = useRef(queries);
-
 
   useEffect(() => {
     queriesRef.current = queries;
@@ -31,7 +30,7 @@ export function useTerminalSync(
       return;
     }
 
-    const syncKey = `${run.id}:${run.status}:${run.completed_at ?? ""}:${run.updated_at}`;
+    const syncKey = `${run.id}:${run.status}:${run.completed_at ?? ''}:${run.updated_at}`;
     if (terminalSyncRef.current === syncKey) {
       return;
     }

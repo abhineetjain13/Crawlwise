@@ -750,8 +750,6 @@ export default function ProductIntelligencePage() {
         </div>
       </div>
 
-
-
       <SettingsDrawer
         open={configOpen}
         onClose={() => setConfigOpen(false)}

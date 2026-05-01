@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @theme inline {
   --color-background: var(--bg-base);
@@ -47,9 +47,12 @@
 :root {
   color-scheme: light;
 
-  --font-primary-family: var(--font-primary-source, "Outfit"), "SF Pro Display", "Geist Sans", "Helvetica Neue", system-ui, sans-serif;
-  --font-mono-family: var(--font-jetbrains-mono, "JetBrains Mono"), ui-monospace, Menlo, Consolas, monospace;
-  --font-serif: "Instrument Serif", "Newsreader", "Playfair Display", Georgia, serif;
+  --font-primary-family:
+    var(--font-primary-source, 'Outfit'), 'SF Pro Display', 'Geist Sans', 'Helvetica Neue',
+    system-ui, sans-serif;
+  --font-mono-family:
+    var(--font-jetbrains-mono, 'JetBrains Mono'), ui-monospace, Menlo, Consolas, monospace;
+  --font-serif: 'Instrument Serif', 'Newsreader', 'Playfair Display', Georgia, serif;
   --font-mono-size: 14px;
   --font-mono-line-height: 1.58;
 
@@ -85,7 +88,7 @@
   --warning: #e76500;
   --warning-bg: rgba(231, 101, 0, 0.12);
   --danger: #bb0000;
-  --danger-bg: rgba(187, 0, 0, 0.10);
+  --danger-bg: rgba(187, 0, 0, 0.1);
   --info: #0070f2;
   --info-bg: rgba(0, 112, 242, 0.12);
 
@@ -145,16 +148,16 @@
   --logo-mark-fg: #ffffff;
 
   /* Type scale — sizes (geometric ~1.25 ratio) */
-  --text-2xs: 0.625rem;  /* 10px — micro labels */
-  --text-xs: 0.75rem;    /* 12px — captions, table headers */
-  --text-sm: 0.875rem;   /* 14px — body, controls */
-  --text-base: 1rem;     /* 16px — default body */
-  --text-md: 1.125rem;   /* 18px — section titles */
-  --text-lg: 1.25rem;    /* 20px — page subtitles */
-  --text-xl: 1.5rem;     /* 24px — page titles */
-  --text-2xl: 1.875rem;  /* 30px — metric values */
-  --text-3xl: 2.25rem;   /* 36px — hero numbers */
-  --text-4xl: 3rem;      /* 48px — display headings */
+  --text-2xs: 0.625rem; /* 10px — micro labels */
+  --text-xs: 0.75rem; /* 12px — captions, table headers */
+  --text-sm: 0.875rem; /* 14px — body, controls */
+  --text-base: 1rem; /* 16px — default body */
+  --text-md: 1.125rem; /* 18px — section titles */
+  --text-lg: 1.25rem; /* 20px — page subtitles */
+  --text-xl: 1.5rem; /* 24px — page titles */
+  --text-2xl: 1.875rem; /* 30px — metric values */
+  --text-3xl: 2.25rem; /* 36px — hero numbers */
+  --text-4xl: 3rem; /* 48px — display headings */
   /* Type scale — weights */
   --weight-light: 300;
   --weight-normal: 400;
@@ -162,9 +165,9 @@
   --weight-semibold: 600;
   --weight-bold: 700;
   /* Type scale — line-heights */
-  --leading-tight: 1.15;   /* headings — multi-line titles look cohesive */
+  --leading-tight: 1.15; /* headings — multi-line titles look cohesive */
   --leading-snug: 1.35;
-  --leading-normal: 1.5;   /* body reading rhythm */
+  --leading-normal: 1.5; /* body reading rhythm */
   --leading-relaxed: 1.55;
 
   /* Type scale — tracking */
@@ -222,7 +225,7 @@
 }
 
 /* DARK THEME — SenstoSales */
-html[data-theme="dark"] {
+html[data-theme='dark'] {
   color-scheme: dark;
 
   --bg-base: #0d0d0d;
@@ -342,7 +345,10 @@ body {
   font-family: var(--font-primary-family);
   font-size: var(--text-sm);
 
-  font-feature-settings: "ss01" 1, "ss02" 1, "cv01" 1;
+  font-feature-settings:
+    'ss01' 1,
+    'ss02' 1,
+    'cv01' 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -420,7 +426,7 @@ select {
 }
 
 button,
-[role="button"] {
+[role='button'] {
   transition:
     background-color var(--transition-fast),
     color var(--transition-fast),
@@ -430,7 +436,7 @@ button,
 }
 
 button:active:not(:disabled),
-[role="button"]:active:not([aria-disabled="true"]) {
+[role='button']:active:not([aria-disabled='true']) {
   opacity: 0.88;
 }
 
@@ -464,7 +470,9 @@ select:focus-visible:not(.focus-ring) {
 /* UTILITIES */
 .focus-ring {
   outline: none;
-  transition: box-shadow var(--transition-base), border-color var(--transition-base);
+  transition:
+    box-shadow var(--transition-base),
+    border-color var(--transition-base);
 }
 
 .focus-ring:focus-visible {
@@ -590,11 +598,11 @@ select:focus-visible:not(.focus-ring) {
   line-height: var(--leading-relaxed);
 }
 
-.markdown-document> :first-child {
+.markdown-document > :first-child {
   margin-top: 0;
 }
 
-.markdown-document>*+* {
+.markdown-document > * + * {
   margin-top: 0.7rem;
 }
 
@@ -633,7 +641,7 @@ select:focus-visible:not(.focus-ring) {
   padding-left: 1.1rem;
 }
 
-.markdown-document li+li {
+.markdown-document li + li {
   margin-top: 0.15rem;
 }
 
@@ -727,10 +735,12 @@ select:focus-visible:not(.focus-ring) {
 }
 
 .skeleton {
-  background: linear-gradient(90deg,
-      var(--skeleton-base) 25%,
-      var(--skeleton-highlight) 50%,
-      var(--skeleton-base) 75%);
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base) 25%,
+    var(--skeleton-highlight) 50%,
+    var(--skeleton-base) 75%
+  );
   background-size: 1200px 100%;
   animation: shimmer 1.6s ease-in-out infinite;
   border-radius: var(--radius-md);
@@ -768,7 +778,6 @@ select:focus-visible:not(.focus-ring) {
   }
 }
 
-
 .noise-overlay {
   position: fixed;
   inset: 0;
@@ -780,7 +789,7 @@ select:focus-visible:not(.focus-ring) {
   will-change: auto;
 }
 
-html[data-theme="dark"] .noise-overlay {
+html[data-theme='dark'] .noise-overlay {
   opacity: 0.035;
 }
 
@@ -792,32 +801,31 @@ html[data-theme="dark"] .noise-overlay {
   animation: spin 0.75s linear infinite;
 }
 
-.stagger-children>* {
+.stagger-children > * {
   animation: fade-in 180ms ease-out both;
 }
 
-.stagger-children>*:nth-child(2) {
+.stagger-children > *:nth-child(2) {
   animation-delay: 50ms;
 }
 
-.stagger-children>*:nth-child(3) {
+.stagger-children > *:nth-child(3) {
   animation-delay: 100ms;
 }
 
-.stagger-children>*:nth-child(4) {
+.stagger-children > *:nth-child(4) {
   animation-delay: 150ms;
 }
 
-.stagger-children>*:nth-child(5) {
+.stagger-children > *:nth-child(5) {
   animation-delay: 200ms;
 }
 
-.stagger-children>*:nth-child(6) {
+.stagger-children > *:nth-child(6) {
   animation-delay: 250ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
-
   *,
   *::before,
   *::after {
@@ -961,8 +969,6 @@ html[data-theme="dark"] .noise-overlay {
   box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
-
-
 .filter-toolbar {
   display: flex;
   flex-direction: column;
@@ -1010,21 +1016,21 @@ html[data-theme="dark"] .noise-overlay {
   gap: var(--space-3);
 }
 
-html:not([data-theme="dark"]) .panel,
-html:not([data-theme="dark"]) .alert-surface {
+html:not([data-theme='dark']) .panel,
+html:not([data-theme='dark']) .alert-surface {
   border-width: 1px;
   border-color: var(--border-strong);
   box-shadow: var(--shadow-card-value);
 }
 
-html:not([data-theme="dark"]) .segmented-root,
-html:not([data-theme="dark"]) .code-block {
+html:not([data-theme='dark']) .segmented-root,
+html:not([data-theme='dark']) .code-block {
   border-width: 1px;
   border-color: var(--border-strong);
   box-shadow: var(--shadow-xs);
 }
 
-html:not([data-theme="dark"]) .focus-ring:focus-visible {
+html:not([data-theme='dark']) .focus-ring:focus-visible {
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent),
     var(--shadow-xs);
@@ -1068,14 +1074,17 @@ html:not([data-theme="dark"]) .focus-ring:focus-visible {
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
   color: var(--text-secondary);
-  font-feature-settings: "tnum" 1;
+  font-feature-settings: 'tnum' 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .compact-data-table tbody tr {
-  transition: background-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .compact-data-table tbody tr:last-child td {
@@ -1088,7 +1097,7 @@ html:not([data-theme="dark"]) .focus-ring:focus-visible {
   box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.02);
 }
 
-html[data-theme="dark"] .compact-data-table tbody tr:hover {
+html[data-theme='dark'] .compact-data-table tbody tr:hover {
   box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.2);
 }
 
@@ -1098,7 +1107,7 @@ html[data-theme="dark"] .compact-data-table tbody tr:hover {
   box-shadow: none;
 }
 
-html:not([data-theme="dark"]) .compact-data-table {
+html:not([data-theme='dark']) .compact-data-table {
   border-style: solid;
   border-width: 1px;
   border-color: var(--border-strong);

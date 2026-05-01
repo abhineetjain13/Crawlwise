@@ -1,9 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
-import { Dropdown } from "./primitives";
-describe("Dropdown", () => {
-  it("uses sanitized stable option ids for option elements and aria-activedescendant", () => {
+import { Dropdown } from './primitives';
+describe('Dropdown', () => {
+  it('uses sanitized stable option ids for option elements and aria-activedescendant', () => {
     const handleChange = vi.fn();
 
     render(
@@ -12,29 +12,29 @@ describe("Dropdown", () => {
         value="jobs / detail"
         onChange={handleChange}
         options={[
-          { value: "jobs / detail", label: "Jobs Detail" },
-          { value: "commerce:listing", label: "Commerce Listing" },
+          { value: 'jobs / detail', label: 'Jobs Detail' },
+          { value: 'commerce:listing', label: 'Commerce Listing' },
         ]}
       />,
     );
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Surface" }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Surface' }));
 
-    const combobox = screen.getByRole("combobox", { name: "Surface" });
-    const listbox = screen.getByRole("listbox");
-    const activeDescendant = combobox.getAttribute("aria-activedescendant");
-    const activeOption = screen.getByRole("option", { name: "Jobs Detail" });
+    const combobox = screen.getByRole('combobox', { name: 'Surface' });
+    const listbox = screen.getByRole('listbox');
+    const activeDescendant = combobox.getAttribute('aria-activedescendant');
+    const activeOption = screen.getByRole('option', { name: 'Jobs Detail' });
     expect(activeOption.id).toMatch(/jobs-detail$/);
-    expect(activeOption.id).not.toBe("jobs / detail");
-    expect(activeOption.id).not.toBe("");
-    expect(activeOption.id).not.toContain(" ");
-    expect(combobox).toHaveAttribute("aria-activedescendant", activeOption.id);
-    expect(listbox).not.toHaveAttribute("aria-activedescendant");
-    expect(document.getElementById(activeDescendant ?? "")).toBe(activeOption);
+    expect(activeOption.id).not.toBe('jobs / detail');
+    expect(activeOption.id).not.toBe('');
+    expect(activeOption.id).not.toContain(' ');
+    expect(combobox).toHaveAttribute('aria-activedescendant', activeOption.id);
+    expect(listbox).not.toHaveAttribute('aria-activedescendant');
+    expect(document.getElementById(activeDescendant ?? '')).toBe(activeOption);
 
-    const otherOption = screen.getByRole("option", { name: "Commerce Listing" });
+    const otherOption = screen.getByRole('option', { name: 'Commerce Listing' });
     expect(otherOption.id).toMatch(/commerce-listing$/);
-    expect(otherOption.id).not.toBe("");
-    expect(otherOption.id).not.toContain(" ");
+    expect(otherOption.id).not.toBe('');
+    expect(otherOption.id).not.toContain(' ');
   });
 });

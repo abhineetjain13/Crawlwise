@@ -6,7 +6,7 @@ $taxonomy_hint
 
 Return only this JSON object:
 {
-  "category_path": "Plain ecommerce category path, or the JSON null value (null) when evidence is weak",
+  "category_path": "Plain ecommerce category path as a hierarchical string using \" > \" separators (example: \"Electronics > Computers > Laptops\"), max depth 5, free-form names allowed but prefer taxonomy_hint wording when it matches product evidence; return the JSON null value (null) only when fewer than 2 concrete category signals support any path (for example only generic words like \"item\" or \"product\", or title/description lacks category tokens)",
   "intent_attributes": ["3-8 short product intent phrases"],
   "audience": ["2-5 audience descriptors"],
   "style_tags": ["2-5 style adjectives"],

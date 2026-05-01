@@ -1,69 +1,45 @@
-These are comments left during a code review. Please review all issues and provide fixes.
-
-1. logic error: Stamping based on two columns can leave legacy databases at the wrong Alembic revision.
-   Path: backend/app/core/migrations.py
-   Lines: 67-67
-
-2. logic error: Zero-valued quality success identifiers are collapsed to null during normalization.
-   Path: backend/app/models/crawl_settings.py
-   Lines: 222-222
-
-3. logic error: Two commerce test URLs were accidentally concatenated into one invalid line.
-   Path: TEST_SITES.md
-   Lines: 152-152
-
-4. security: A new admin reset endpoint can delete enrichment data immediately with no additional safety distinction.
-   Path: backend/app/api/dashboard.py
-   Lines: 71-71
-
-5. possible bug: An unconditional router import can prevent the entire app from starting if the new module has import-time failures.
-   Path: backend/app/main.py
-   Lines: 15-15
-
-6. possible bug: Duplicate ORM model definitions can break SQLAlchemy model registration and mapping.
-   Path: backend/app/models/crawl.py
-   Lines: 751-751
-
-7. possible bug: Adding a new non-null column without the corresponding schema update will break database operations.
-   Path: backend/app/models/crawl.py
-   Lines: 529-529
-
-8. logic error: Normalizing the quality snapshot now strips data that callers may expect to survive storage round-trips.
-   Path: backend/app/models/crawl_settings.py
-   Lines: 201-201
-
-9. logic error: Successful captures never release reserved budget, so later captures are throttled by stale accounting.
-   Path: backend/app/services/acquisition/browser_capture.py
-   Lines: 263-263
-
-Validate the correctness of each issue sequentially. For each issue that is correct, implement a fix. Please make the fixes concise and address all issues comprehensively and don't impact anything else.
-
 Fix the following issues. The issues can be from different files or can overlap on same lines in one file.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @backend/app/services/acquisition/browser_page_flow.py around lines 1211 - 1215, The shallow copy call copy(analysis.soup) passed into _prepare_markdown_soup can still share nodes with the original BeautifulSoup tree so subsequent .decompose() calls mutate analysis.soup; replace the shallow copy with a deep copy (e.g., use copy.deepcopy(analysis.soup)) where analysis.soup is passed to _prepare_markdown_soup (and add the copy import if missing) to ensure _prepare_markdown_soup’s mutations don’t affect the original HtmlAnalysis.soup.
+In @backend/app/data/prompts/data_enrichment_semantic.user.txt at line 9, The prompt entry "category_path" is vague about "when evidence is weak"—replace that subjective phrase with an objective rule or concrete examples to ensure consistent outputs; update the value for "category_path" to either revert to the prior objective condition (e.g., "or the JSON null value (null) when no category exists") or specify explicit thresholds/examples for weak evidence (e.g., "or null when product title/description contains fewer than 2 category-indicative keywords, missing brand/category tokens, or only generic words like 'item'/'product'") so models have clear deterministic criteria.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/app/data-enrichment/page.tsx around lines 64 - 65, The import for EnrichmentStatus and EnrichmentTableLoading is located after the loadPrefill function; move the statement "import { EnrichmentStatus, EnrichmentTableLoading } from './enrichment-components';" up into the main import block alongside the other imports (i.e., with the top-of-file imports), and remove the trailing duplicate import that currently appears after the loadPrefill function so all imports are grouped consistently at the top.
+In @backend/app/data/prompts/data_enrichment_semantic.user.txt at line 9, Update the "category_path" instruction to explicitly define the expected format for the Plain ecommerce category path: state it must be a hierarchical string (e.g., "Electronics > Computers > Laptops") using " > " as the separator, allow free-form names but prefer a controlled vocabulary when available, enforce a max depth of 5 levels, and return the JSON null value only when evidence is weak; reference the "category_path" key in data_enrichment_semantic.user.txt and ensure any downstream consumers are checked/updated to accept this new string format instead of Google Product Category IDs.
 
 - Verify each finding against the current code and only fix it if needed.
 
-In @frontend/app/data-enrichment/enrichment-components.tsx around lines 72 - 92, The formatPrice function can throw RangeError when Intl.NumberFormat receives an invalid currency code (from currency param or p.currency); to fix, validate or sanitize the currency before calling Intl.NumberFormat (e.g., ensure curr and currency are non-empty valid ISO 4217 strings and fallback to "USD"), or wrap the NumberFormat/format call in a try-catch and return a safe fallback like "--" or a plain numeric/string fallback; update the branches in formatPrice (the object branch using p.amount/p.price_min and curr, and the number branch using currency) to apply this validation/safe fallback consistently.
+In @backend/app/services/field_value_core.py around lines 938 - 948, The _coerce_brand_text function is rejecting valid brand strings because urlparse treats "foo:bar" as a scheme and _BARE_HOST_URL_RE.search allows partial host matches; update _coerce_brand_text to only treat values as URLs when urlparse(text).scheme is one of known URL schemes (e.g., "http","https","ftp","mailto") rather than any non-empty scheme, and change the bare-host regex check to use _BARE_HOST_URL_RE.fullmatch(text) so only whole-string hostnames are rejected; keep using coerce_text and preserve returning None for actual URLs or bare hosts.
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @frontend/app/data-enrichment/enrichment-components.tsx around lines 88 - 98, The current price-rendering branch treats any object (including arrays) as an object and, when no numeric amount/price_min is found, falls through to String(price) which yields "[object Object]"; update the fallback so that in the object branch (the block using p and amount and calling formatAmount) you detect arrays via Array.isArray(price) and, when an object/array has no numeric amount, return a readable representation (e.g. safely JSON.stringify(price) inside a try/catch) instead of String(price); preserve the existing numeric paths that call formatAmount(price, currency) and only change the final fallback to return JSON.stringify(price) for objects/arrays (or String(price) for other types).
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @frontend/app/data-enrichment/page.tsx at line 176, The displayed label uses a nested ternary that checks activeJob?.status before createMutation.isPending, causing "Enriching..." to show when createMutation.isPending is true but activeJob is still null; update the JSX conditional around createMutation/isRunning/activeJob (the expression using createMutation.isPending, isRunning and activeJob?.status) so createMutation.isPending takes precedence and returns "Starting..." whenever createMutation.isPending is true (or when activeJob is null and creation is pending), otherwise fall back to checking isRunning and activeJob?.status to choose "Starting..." vs "Enriching...".
 
 These are comments left during a code review. Please review all issues and provide fixes.
 
-1. possible bug: Replacing the existing HTML-to-text normalization may change extracted product text formatting and break downstream expectations.
-   Path: backend/app/services/adapters/nike.py
-   Lines: 213-213
+1. logic error: Changing the output category guidance can make enriched categories diverge from the taxonomy expected by downstream matching.
+   Path: backend/app/data/prompts/data_enrichment_semantic.system.txt
+   Lines: 4-4
 
-2. logic error: Removing `thriftbooks` from the registry prevents that adapter from being instantiated.
+2. logic error: Zero-valued source run IDs are no longer normalized to an unset value.
+   Path: backend/app/models/crawl_settings.py
+   Lines: 239-239
+
+3. logic error: Removing the blocked_html_checker fallback changes blocked-page detection.
+   Path: backend/app/services/acquisition/browser_page_flow.py
+   Lines: 132-132
+
+4. resource leak: Passing `analysis.soup` into `_prepare_markdown_soup` mutates the cached HTML analysis tree.
+   Path: backend/app/services/acquisition/browser_page_flow.py
+   Lines: 845-845
+
+5. logic error: Removing `thriftbooks` from the adapter registry breaks registry-driven lookup for that configured platform.
    Path: backend/app/services/adapters/registry.py
    Lines: 32-32
-
-3. logic error: Candidate finalization can now merge the wrong values from a source group.
-   Path: backend/app/services/detail_extractor.py
-   Lines: 390-390
 
 Validate the correctness of each issue sequentially. For each issue that is correct, implement a fix. Please make the fixes concise and address all issues comprehensively and don't impact anything else.

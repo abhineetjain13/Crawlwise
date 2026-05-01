@@ -1,6 +1,6 @@
-:global(html:not([data-theme="dark"]) .app-topbar),
-:global(html:not([data-theme="dark"]) .app-sidebar),
-:global(html:not([data-theme="dark"]) .app-mobile-nav-sheet) {
+:global(html:not([data-theme='dark']) .app-topbar),
+:global(html:not([data-theme='dark']) .app-sidebar),
+:global(html:not([data-theme='dark']) .app-mobile-nav-sheet) {
   border-width: 1px;
   border-color: var(--border-strong);
   box-shadow: var(--shadow-card-value);
@@ -153,7 +153,9 @@
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   text-decoration: none;
-  transition: background-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 :global(.app-nav-item:hover) {

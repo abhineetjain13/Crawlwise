@@ -48,18 +48,24 @@ _PROFILE_CONTROLLED_FIELDS = (
 )
 
 
+def _coerce_float(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(str(value))
+
+
 def _require_positive(name: str, value: object) -> None:
-    if float(value) <= 0:
+    if _coerce_float(value) <= 0:
         raise ValueError(f"{name} must be > 0")
 
 
 def _require_non_negative(name: str, value: object) -> None:
-    if float(value) < 0:
+    if _coerce_float(value) < 0:
         raise ValueError(f"{name} must be >= 0")
 
 
 def _require_unit_interval(name: str, value: object) -> None:
-    if not 0.0 <= float(value) <= 1.0:
+    if not 0.0 <= _coerce_float(value) <= 1.0:
         raise ValueError(f"{name} must be between 0 and 1")
 
 

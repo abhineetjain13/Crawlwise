@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from patchright.async_api import Error as PlaywrightError
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -2124,6 +2125,84 @@ async def test_browser_fetch_waits_for_challenge_recovery_before_settling(
     assert page.wait_timeout_calls
     assert page.goto_calls == ["domcontentloaded"]
     assert page.load_state_calls == ["networkidle"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_browser_fetch_keeps_blocked_html_checker_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_capture_close(_page):
+        return SimpleNamespace(
+            payloads=[],
+            network_payload_count=0,
+            malformed_network_payloads=0,
+            network_payload_read_failures=0,
+            network_payload_read_timeouts=0,
+            closed_network_payloads=0,
+            skipped_oversized_network_payloads=0,
+            dropped_payload_events=0,
+        )
+
+    async def _fake_capture_fragments(*_args, **_kwargs):
+        return []
+
+    async def _fake_capture_visuals(*_args, **_kwargs):
+        return []
+
+    async def _fake_classify_blocked_page_async(_html: str, _status: int):
+        return SimpleNamespace(blocked=False, outcome="ok", evidence=[])
+
+    async def _fake_emit_browser_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        browser_page_flow,
+        "capture_rendered_listing_fragments",
+        _fake_capture_fragments,
+    )
+    monkeypatch.setattr(
+        browser_page_flow,
+        "_capture_listing_visual_elements",
+        _fake_capture_visuals,
+    )
+
+    payload = browser_page_flow.BrowserFinalizeInput(
+        page=SimpleNamespace(url="https://example.com/products/widget"),
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_reason=None,
+        on_event=None,
+        response=SimpleNamespace(status=200, headers=httpx.Headers({"content-type": "text/html"})),
+        navigation_strategy="goto",
+        readiness_probes=[],
+        networkidle_timed_out=False,
+        networkidle_skip_reason=None,
+        readiness_policy={},
+        readiness_diagnostics={},
+        expansion_diagnostics={},
+        listing_recovery_diagnostics={},
+        payload_capture=SimpleNamespace(close=_fake_capture_close),
+        html="<html><body><h1>Widget Prime</h1></body></html>",
+        traversal_result=None,
+        rendered_html="",
+        page_markdown="",
+        phase_timings_ms={},
+        started_at=0.0,
+    )
+
+    result = await browser_page_flow.finalize_browser_fetch(
+        payload,
+        blocked_html_checker=lambda *_args, **_kwargs: True,
+        classify_blocked_page_async=_fake_classify_blocked_page_async,
+        classify_low_content_reason=lambda *_args, **_kwargs: None,
+        classify_browser_outcome=lambda **kwargs: "challenge_page" if kwargs["blocked"] else "usable_content",
+        capture_browser_screenshot=_fake_emit_browser_event,
+        emit_browser_event=_fake_emit_browser_event,
+        elapsed_ms=lambda _started_at: 0,
+    )
+
+    assert result["blocked"] is True
+    assert result["diagnostics"]["challenge_evidence"] == ["blocked_html_checker"]
 
 
 @pytest.mark.asyncio

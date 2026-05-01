@@ -1,6 +1,6 @@
 export const STORAGE_KEYS = {
- BULK_PREFILL:"bulk-crawl-prefill-v1",
- DATA_ENRICHMENT_PREFILL:"data-enrichment-prefill-v1",
- PRODUCT_INTELLIGENCE_PREFILL:"product-intelligence-prefill-v1",
- SIDEBAR_COLLAPSED:"crawlerai-sidebar-collapsed",
+  BULK_PREFILL: 'bulk-crawl-prefill-v1',
+  DATA_ENRICHMENT_PREFILL: 'data-enrichment-prefill-v1',
+  PRODUCT_INTELLIGENCE_PREFILL: 'product-intelligence-prefill-v1',
+  SIDEBAR_COLLAPSED: 'crawlerai-sidebar-collapsed',
 } as const;

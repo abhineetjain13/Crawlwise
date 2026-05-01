@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 from json import loads as parse_json
 from string import Template
@@ -623,7 +622,7 @@ def _prune_html_for_llm(html_text: str) -> str:
 
     soup = prune_html_tree(
         BeautifulSoup(html_text, "html.parser"),
-        drop_tags=stripped_tags,
+        drop_tags=set(stripped_tags),
         attr_filter=_keep_attr,
         preserve_tag=_preserve_tag,
     )

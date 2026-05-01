@@ -35,7 +35,7 @@ def reduce_html_for_selector_synthesis(html: str) -> str:
     soup = prune_html_tree(
         BeautifulSoup(str(html or ""), "html.parser"),
         drop_tags=tuple(SELECTOR_SYNTHESIS_DROP_TAGS) + tuple(SELECTOR_SYNTHESIS_LOW_VALUE_TAGS),
-        allowed_attrs=SELECTOR_SYNTHESIS_ALLOWED_ATTRS,
+        allowed_attrs=set(SELECTOR_SYNTHESIS_ALLOWED_ATTRS),
     )
     reduced = BeautifulSoup("<html><body></body></html>", "html.parser")
     source_root = soup.body or soup

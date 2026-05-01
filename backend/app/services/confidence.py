@@ -156,10 +156,10 @@ def _requested_match_keys(
             continue
         seen.add(normalized)
         ordered.append(normalized)
-        canonical = alias_to_canonical.get(normalized)
-        if canonical and canonical not in seen:
-            seen.add(canonical)
-            ordered.append(canonical)
+        canonical_key = alias_to_canonical.get(normalized)
+        if canonical_key and canonical_key not in seen:
+            seen.add(canonical_key)
+            ordered.append(canonical_key)
         for alias in alias_map.get(normalized) or []:
             normalized_alias = normalize_field_key(alias)
             if normalized_alias and normalized_alias not in seen:
@@ -203,11 +203,12 @@ def _normalized_field_sources(record: dict[str, Any]) -> dict[str, list[str]]:
     for field_name, sources in raw.items():
         if not isinstance(sources, list):
             continue
-        normalized[str(field_name)] = [
-            str(source or "").strip()
-            for source in sources
-            if str(source or "").strip()
-        ]
+        source_rows: list[str] = []
+        for source in sources:
+            normalized_source = str(source or "").strip()
+            if normalized_source:
+                source_rows.append(normalized_source)
+        normalized[str(field_name)] = source_rows
     return normalized
 
 

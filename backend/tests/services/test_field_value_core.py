@@ -55,6 +55,11 @@ def test_coerce_brand_rejects_url_like_values() -> None:
     )
 
 
+def test_coerce_brand_keeps_non_url_scheme_text_but_rejects_full_bare_host() -> None:
+    assert coerce_field_value("brand", "foo:bar", "https://example.com/p/x") == "foo:bar"
+    assert coerce_field_value("brand", "shop.example.com", "https://example.com/p/x") is None
+
+
 def test_frequently_bought_together_is_title_noise() -> None:
     assert is_title_noise("Frequently Bought Together") is True
 

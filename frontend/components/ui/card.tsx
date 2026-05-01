@@ -1,17 +1,17 @@
-"use client";
+'use client';
 
-import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { cva, type VariantProps } from "class-variance-authority";
+import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import { cva, type VariantProps } from 'class-variance-authority';
 
-import { cn } from "../../lib/utils";
+import { cn } from '../../lib/utils';
 
 export const cardVariants = cva(
-  "relative rounded-[var(--radius-xl)] border border-border bg-panel p-5 shadow-card transition-[border-color,box-shadow] hover:border-border-strong",
+  'relative rounded-[var(--radius-xl)] border border-border bg-panel p-5 shadow-card transition-[border-color,box-shadow] hover:border-border-strong',
   {
     variants: {
       animate: {
-        true: "animate-fade-in",
-        false: "",
+        true: 'animate-fade-in',
+        false: '',
       },
     },
     defaultVariants: {
@@ -20,7 +20,7 @@ export const cardVariants = cva(
   },
 );
 
-export type CardProps = ComponentPropsWithoutRef<"section"> &
+export type CardProps = ComponentPropsWithoutRef<'section'> &
   VariantProps<typeof cardVariants> & {
     children: ReactNode;
   };

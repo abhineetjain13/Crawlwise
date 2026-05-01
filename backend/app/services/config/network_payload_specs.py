@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 from app.services.config._export_data import load_export_data
 from app.services.config.runtime_settings import crawler_runtime_settings

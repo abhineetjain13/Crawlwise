@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import {
   Activity,
@@ -24,19 +24,32 @@ import {
   X,
   XCircle,
   Zap,
-} from "lucide-react";
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactElement, ReactNode, RefObject } from "react";
+} from 'lucide-react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactElement, ReactNode, RefObject } from 'react';
 
-import { Badge, Button, Input, Textarea, Tooltip, Toggle as PrimitiveToggle } from "../ui/primitives";
-import type { CrawlDomain, CrawlLog, CrawlRecord, CrawlRun, CrawlSurface } from "../../lib/api/types";
-import { formatTimeHms, parseApiDate } from "../../lib/format/date";
-import { cn } from "../../lib/utils";
+import {
+  Badge,
+  Button,
+  Input,
+  Textarea,
+  Tooltip,
+  Toggle as PrimitiveToggle,
+} from '../ui/primitives';
+import type {
+  CrawlDomain,
+  CrawlLog,
+  CrawlRecord,
+  CrawlRun,
+  CrawlSurface,
+} from '../../lib/api/types';
+import { formatTimeHms, parseApiDate } from '../../lib/format/date';
+import { cn } from '../../lib/utils';
 
-export type CrawlTab = "category" | "pdp";
-export type CategoryMode = "single" | "sitemap" | "bulk";
-export type PdpMode = "single" | "batch" | "csv";
-export type ValidationState = "idle" | "valid" | "invalid";
+export type CrawlTab = 'category' | 'pdp';
+export type CategoryMode = 'single' | 'sitemap' | 'bulk';
+export type PdpMode = 'single' | 'batch' | 'csv';
+export type ValidationState = 'idle' | 'valid' | 'invalid';
 export type FieldRow = {
   id: string;
   fieldName: string;
@@ -47,9 +60,9 @@ export type FieldRow = {
   xpathState: ValidationState;
   regexState: ValidationState;
 };
-export type FieldRowMessageTone = "success" | "warning" | "danger";
+export type FieldRowMessageTone = 'success' | 'warning' | 'danger';
 export type PendingDispatch = {
-  runType: "crawl" | "batch" | "csv";
+  runType: 'crawl' | 'batch' | 'csv';
   surface: CrawlSurface;
   url?: string;
   urls?: string[];
@@ -57,21 +70,21 @@ export type PendingDispatch = {
   additionalFields: string[];
   csvFile: File | null;
 };
-export type OutputTabKey = "table" | "json" | "markdown" | "logs" | "learning" | "run_config";
+export type OutputTabKey = 'table' | 'json' | 'markdown' | 'logs' | 'learning' | 'run_config';
 type IconElementProps = {
   className?: string;
 };
 
 export function parseRequestedCrawlTab(value: string | null): CrawlTab | null {
-  return value === "category" || value === "pdp" ? value : null;
+  return value === 'category' || value === 'pdp' ? value : null;
 }
 
 export function parseRequestedCategoryMode(value: string | null): CategoryMode | null {
-  return value === "single" || value === "sitemap" || value === "bulk" ? value : null;
+  return value === 'single' || value === 'sitemap' || value === 'bulk' ? value : null;
 }
 
 export function parseRequestedPdpMode(value: string | null): PdpMode | null {
-  return value === "single" || value === "batch" || value === "csv" ? value : null;
+  return value === 'single' || value === 'batch' || value === 'csv' ? value : null;
 }
 
 export function uniqueFields(values: string[]) {
@@ -79,7 +92,9 @@ export function uniqueFields(values: string[]) {
 }
 
 export function cleanRequestedField(value: string) {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export function uniqueRequestedFields(values: string[]) {
@@ -111,83 +126,83 @@ export function uniqueStrings(values: string[]) {
 export function normalizeField(value: string) {
   return value
     .trim()
-    .replace(/&/g, "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/&/g, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 export function deriveSurface(domain: CrawlDomain, module: CrawlTab): CrawlSurface {
-  if (domain === "jobs") {
-    return module === "category" ? "job_listing" : "job_detail";
+  if (domain === 'jobs') {
+    return module === 'category' ? 'job_listing' : 'job_detail';
   }
-  return module === "category" ? "ecommerce_listing" : "ecommerce_detail";
+  return module === 'category' ? 'ecommerce_listing' : 'ecommerce_detail';
 }
 
 export function inferDomainFromSurface(surface: string | null | undefined): CrawlDomain | null {
-  const normalizedSurface = String(surface || "").toLowerCase();
-  if (normalizedSurface.startsWith("job_")) {
-    return "jobs";
+  const normalizedSurface = String(surface || '').toLowerCase();
+  if (normalizedSurface.startsWith('job_')) {
+    return 'jobs';
   }
-  if (normalizedSurface.startsWith("ecommerce_")) {
-    return "commerce";
+  if (normalizedSurface.startsWith('ecommerce_')) {
+    return 'commerce';
   }
   return null;
 }
 
 const SCHEMA_TYPE_FIELD_NAMES = new Set(
   [
-    "AggregateRating",
-    "BreadcrumbList",
-    "IndividualProduct",
-    "Organization",
-    "PeopleAudience",
-    "PostalAddress",
-    "QuantitativeValue",
-    "WebPage",
-    "WebSite",
+    'AggregateRating',
+    'BreadcrumbList',
+    'IndividualProduct',
+    'Organization',
+    'PeopleAudience',
+    'PostalAddress',
+    'QuantitativeValue',
+    'WebPage',
+    'WebSite',
   ].flatMap((value) => {
     const normalized = normalizeField(value);
-    return [normalized, normalized.replace(/_/g, "")];
+    return [normalized, normalized.replace(/_/g, '')];
   }),
 );
 
 const DAY_OF_WEEK_FIELD_NAMES = new Set([
-  "monday",
-  "tuesday",
-  "wednesday",
-  "thursday",
-  "friday",
-  "saturday",
-  "sunday",
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
 ]);
 
 export function validateAdditionalFieldName(value: string) {
   const cleaned = cleanRequestedField(value);
   const normalized = normalizeField(cleaned);
-  const collapsed = normalized.replace(/_/g, "");
+  const collapsed = normalized.replace(/_/g, '');
   if (!cleaned) {
-    return "Field name cannot be empty.";
+    return 'Field name cannot be empty.';
   }
   if (cleaned.length < 2) {
-    return "Field name must be at least 2 characters.";
+    return 'Field name must be at least 2 characters.';
   }
   if (cleaned.length > 60) {
-    return "Field name must be 60 characters or fewer.";
+    return 'Field name must be 60 characters or fewer.';
   }
   if (!normalized) {
-    return "Field name must include letters or numbers.";
+    return 'Field name must include letters or numbers.';
   }
   if ((cleaned.match(/\s+/g) ?? []).length >= 7 || (normalized.match(/_/g) ?? []).length >= 7) {
-    return "Field name is too sentence-like. Keep it concise.";
+    return 'Field name is too sentence-like. Keep it concise.';
   }
   if (SCHEMA_TYPE_FIELD_NAMES.has(normalized) || SCHEMA_TYPE_FIELD_NAMES.has(collapsed)) {
-    return "Field name looks like a schema type. Use a business field.";
+    return 'Field name looks like a schema type. Use a business field.';
   }
   if (DAY_OF_WEEK_FIELD_NAMES.has(normalized)) {
-    return "Field name looks like a day label. Use a business field.";
+    return 'Field name looks like a day label. Use a business field.';
   }
   return null;
 }
@@ -211,17 +226,17 @@ export function extractRecordUrl(record: CrawlRecord) {
 }
 
 export function isListingRun(run?: CrawlRun) {
-  return inferRunModule(run) === "category";
+  return inferRunModule(run) === 'category';
 }
 
 export function stringifyCell(value: unknown) {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
   return JSON.stringify(value);
 }
 
 export function decodeUrlForDisplay(value: string) {
-  const text = String(value || "").trim();
+  const text = String(value || '').trim();
   if (!/^https?:\/\//i.test(text)) return text;
   try {
     return decodeURI(text);
@@ -235,13 +250,13 @@ export function formatCellDisplay(value: unknown) {
 }
 
 export function decodeUrlsForDisplay<T>(value: T): T {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     return decodeUrlForDisplay(value) as T;
   }
   if (Array.isArray(value)) {
     return value.map((entry) => decodeUrlsForDisplay(entry)) as T;
   }
-  if (value && typeof value === "object") {
+  if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => [key, decodeUrlsForDisplay(entry)]),
     ) as T;
@@ -250,46 +265,46 @@ export function decodeUrlsForDisplay<T>(value: T): T {
 }
 
 export function humanizeFieldName(value: string) {
-  const normalized = String(value || "")
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
+  const normalized = String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
-  if (!normalized) return "";
+  if (!normalized) return '';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 export function presentCandidateValue(value: unknown) {
   const trimmed = stringifyCell(value).trim();
-  if (!trimmed) return "";
+  if (!trimmed) return '';
   const schemaMatch = trimmed.match(/^https?:\/\/schema\.org\/([A-Za-z]+)$/i);
   if (!schemaMatch) return trimmed;
-  const token = schemaMatch[1].replace(/([a-z])([A-Z])/g, "$1 $2");
+  const token = schemaMatch[1].replace(/([a-z])([A-Z])/g, '$1 $2');
   return token.charAt(0).toUpperCase() + token.slice(1);
 }
 
 export function isEmptyCandidateValue(value: unknown) {
   if (value === null || value === undefined) return true;
-  if (typeof value === "string") return value.trim().length === 0;
+  if (typeof value === 'string') return value.trim().length === 0;
   if (Array.isArray(value)) return value.length === 0;
-  if (typeof value === "object") return Object.keys(value).length === 0;
+  if (typeof value === 'object') return Object.keys(value).length === 0;
   return false;
 }
 
 export function readRecordValue(record: CrawlRecord, field: string) {
-  const data = record.data && typeof record.data === "object" ? record.data : {};
-  const raw = record.raw_data && typeof record.raw_data === "object" ? record.raw_data : {};
+  const data = record.data && typeof record.data === 'object' ? record.data : {};
+  const raw = record.raw_data && typeof record.raw_data === 'object' ? record.raw_data : {};
   if (field in data) return data[field];
   if (field in raw) return raw[field];
-  if (field === "source_url") return record.source_url;
-  return "";
+  if (field === 'source_url') return record.source_url;
+  return '';
 }
 
 export function formatDuration(start?: string | null, end?: string | null) {
-  if (!start) return "--";
+  if (!start) return '--';
   const started = parseApiDate(start).getTime();
   const finished = end ? parseApiDate(end).getTime() : Date.now();
 
-  if (!Number.isFinite(started) || !Number.isFinite(finished)) return "--";
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return '--';
   const ms = Math.max(0, finished - started);
   const totalSeconds = Math.floor(ms / 1000);
   const m = Math.floor(totalSeconds / 60);
@@ -298,7 +313,7 @@ export function formatDuration(start?: string | null, end?: string | null) {
 }
 
 export function formatDurationMs(durationMs?: number | null) {
-  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0) {
     return null;
   }
   const totalSeconds = Math.floor(durationMs / 1000);
@@ -308,27 +323,31 @@ export function formatDurationMs(durationMs?: number | null) {
 }
 
 export function progressPercent(run: CrawlRun | undefined) {
-  const value = typeof run?.result_summary?.progress === "number" ? run.result_summary.progress : 0;
+  const value = typeof run?.result_summary?.progress === 'number' ? run.result_summary.progress : 0;
   return Math.min(100, Math.max(0, value));
 }
 
 export function extractionVerdict(run: CrawlRun | undefined) {
-  const verdict = String(run?.result_summary?.extraction_verdict ?? "").trim().toLowerCase();
-  return verdict || "unknown";
+  const verdict = String(run?.result_summary?.extraction_verdict ?? '')
+    .trim()
+    .toLowerCase();
+  return verdict || 'unknown';
 }
 
 export function extractionVerdictTone(verdict: string) {
-  if (verdict === "success") return "success";
-  if (verdict === "partial") return "warning";
-  if (verdict === "schema_miss" || verdict === "listing_detection_failed" || verdict === "empty") return "warning";
-  if (verdict === "blocked" || verdict === "proxy_exhausted" || verdict === "error") return "danger";
-  return "neutral";
+  if (verdict === 'success') return 'success';
+  if (verdict === 'partial') return 'warning';
+  if (verdict === 'schema_miss' || verdict === 'listing_detection_failed' || verdict === 'empty')
+    return 'warning';
+  if (verdict === 'blocked' || verdict === 'proxy_exhausted' || verdict === 'error')
+    return 'danger';
+  return 'neutral';
 }
 
 export function humanizeVerdict(verdict: string) {
-  return verdict.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  return verdict.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
-export type QualityLevel = "high" | "medium" | "low" | "unknown";
+export type QualityLevel = 'high' | 'medium' | 'low' | 'unknown';
 
 export type QualitySnapshot = {
   level: QualityLevel;
@@ -354,15 +373,15 @@ const QUALITY_IDENTITY_FIELD_PATTERNS = [
 ];
 
 const LOW_SIGNAL_VALUE_TOKENS = new Set([
-  "n/a",
-  "na",
-  "none",
-  "null",
-  "undefined",
-  "unknown",
-  "tbd",
-  "--",
-  "-",
+  'n/a',
+  'na',
+  'none',
+  'null',
+  'undefined',
+  'unknown',
+  'tbd',
+  '--',
+  '-',
 ]);
 
 function isIdentityField(field: string) {
@@ -388,8 +407,10 @@ function isInformativeValue(value: unknown): boolean {
     return value.some((entry) => isInformativeValue(entry));
   }
 
-  if (typeof value === "object") {
-    return Object.values(value as Record<string, unknown>).some((entry) => isInformativeValue(entry));
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some((entry) =>
+      isInformativeValue(entry),
+    );
   }
 
   return rendered.length >= 2;
@@ -446,16 +467,20 @@ export function scoreFieldQuality(records: CrawlRecord[], field: string) {
     return 0;
   }
   const coverage = informativeValues.length / records.length;
-  const uniqueValues = new Set(informativeValues.map((value) => stringifyCell(value).trim().toLowerCase()).filter(Boolean)).size;
+  const uniqueValues = new Set(
+    informativeValues.map((value) => stringifyCell(value).trim().toLowerCase()).filter(Boolean),
+  ).size;
   const diversity = Math.min(1, uniqueValues / Math.min(3, informativeValues.length));
   return coverage * 0.75 + diversity * 0.25;
 }
 
-
-export function estimateDataQuality(records: CrawlRecord[], visibleColumns: string[]): QualitySnapshot {
+export function estimateDataQuality(
+  records: CrawlRecord[],
+  visibleColumns: string[],
+): QualitySnapshot {
   if (!records.length || !visibleColumns.length) {
     return {
-      level: "unknown",
+      level: 'unknown',
       score: 0,
       populatedCells: 0,
       totalCells: records.length * visibleColumns.length,
@@ -489,31 +514,31 @@ export function estimateDataQuality(records: CrawlRecord[], visibleColumns: stri
   const score = completenessRatio * 0.2 + averageRecordScore * 0.6 + usefulRowRatio * 0.2;
 
   if (score >= 0.8) {
-    return { level: "high", score, populatedCells, totalCells };
+    return { level: 'high', score, populatedCells, totalCells };
   }
   if (score >= 0.5) {
-    return { level: "medium", score, populatedCells, totalCells };
+    return { level: 'medium', score, populatedCells, totalCells };
   }
-  return { level: "low", score, populatedCells, totalCells };
+  return { level: 'low', score, populatedCells, totalCells };
 }
 
 export function qualityTone(level: QualityLevel) {
-  if (level === "high") return "success";
-  if (level === "medium") return "warning";
-  if (level === "low") return "danger";
-  return "neutral";
+  if (level === 'high') return 'success';
+  if (level === 'medium') return 'warning';
+  if (level === 'low') return 'danger';
+  return 'neutral';
 }
 
 export function humanizeQuality(level: QualityLevel) {
-  if (level === "unknown") return "Unknown";
+  if (level === 'unknown') return 'Unknown';
   return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
 export function qualityLevelFromScore(score: number): QualityLevel {
-  if (!Number.isFinite(score)) return "unknown";
-  if (score >= 0.8) return "high";
-  if (score >= 0.5) return "medium";
-  return "low";
+  if (!Number.isFinite(score)) return 'unknown';
+  if (score >= 0.8) return 'high';
+  if (score >= 0.5) return 'medium';
+  return 'low';
 }
 
 export function copyJson(records: CrawlRecord[]) {
@@ -523,7 +548,11 @@ export function copyJson(records: CrawlRecord[]) {
 export function cleanRecord(record: CrawlRecord) {
   return Object.fromEntries(
     Object.entries(record.data ?? {}).filter(
-      ([key, value]) => !key.startsWith("_") && value !== null && value !== "" && !(Array.isArray(value) && value.length === 0),
+      ([key, value]) =>
+        !key.startsWith('_') &&
+        value !== null &&
+        value !== '' &&
+        !(Array.isArray(value) && value.length === 0),
     ),
   );
 }
@@ -544,51 +573,45 @@ export function scrollViewportToBottom(ref: RefObject<HTMLDivElement | null>) {
 
 function getLogIcon(level: string, message: string) {
   const msg = message.toLowerCase();
-  const isWarn = level === "warning" || level === "warn";
+  const isWarn = level === 'warning' || level === 'warn';
   const isError = logMessageIsError(level, message);
   const hasUrl = /https?:\/\//i.test(message);
 
   if (isError) return XCircle;
   if (isWarn) return AlertTriangle;
 
-  if (msg.includes("starting crawl")) return Activity;
-  if (msg.includes("ignoring robots.txt")) return ShieldAlert;
-  if (msg.includes("extracted")) return Database;
-  if (msg.includes("normalized") || msg.includes("normalised")) return Layers;
-  if (msg.includes("persisted")) return HardDrive;
+  if (msg.includes('starting crawl')) return Activity;
+  if (msg.includes('ignoring robots.txt')) return ShieldAlert;
+  if (msg.includes('extracted')) return Database;
+  if (msg.includes('normalized') || msg.includes('normalised')) return Layers;
+  if (msg.includes('persisted')) return HardDrive;
+  if (msg.includes('acquiring') || msg.includes('fetching')) return Globe;
   if (
-    msg.includes("acquiring") ||
-    msg.includes("fetching")
-  ) return Globe;
+    msg.includes('browser') ||
+    msg.includes('playwright') ||
+    msg.includes('patchright') ||
+    msg.includes('headless')
+  )
+    return Monitor;
+  if (msg.includes('record')) return Database;
+  if (msg.includes('page loaded') || msg.includes('page load')) return Zap;
   if (
-    msg.includes("browser") ||
-    msg.includes("playwright") ||
-    msg.includes("patchright") ||
-    msg.includes("headless")
-  ) return Monitor;
-  if (msg.includes("record")) return Database;
-  if (
-    msg.includes("page loaded") ||
-    msg.includes("page load")
-  ) return Zap;
-  if (
-    msg.includes("challenge") ||
-    msg.includes("blocked") ||
-    msg.includes("captcha") ||
-    msg.includes("bot check")
-  ) return ShieldAlert;
+    msg.includes('challenge') ||
+    msg.includes('blocked') ||
+    msg.includes('captcha') ||
+    msg.includes('bot check')
+  )
+    return ShieldAlert;
   if (hasUrl) return Globe;
+  if (msg.includes('retry') || msg.includes('retrying') || msg.includes('refresh'))
+    return RefreshCw;
   if (
-    msg.includes("retry") ||
-    msg.includes("retrying") ||
-    msg.includes("refresh")
-  ) return RefreshCw;
-  if (
-    msg.includes("complete") ||
-    msg.includes("success") ||
-    msg.includes("done") ||
-    msg.includes("finished")
-  ) return CheckCircle2;
+    msg.includes('complete') ||
+    msg.includes('success') ||
+    msg.includes('done') ||
+    msg.includes('finished')
+  )
+    return CheckCircle2;
   return Dot;
 }
 
@@ -597,51 +620,76 @@ function getLogIconStyle(level: string, message: string): { iconCls: string; bgC
   const isError = logMessageIsError(level, message);
   const hasUrl = /https?:\/\//i.test(message);
 
-  if (isError) return { iconCls: "text-rose-600 dark:text-rose-400", bgCls: "bg-rose-500/10" };
-  if (level === "warning" || level === "warn") return { iconCls: "text-orange-600 dark:text-orange-400", bgCls: "bg-orange-500/10" };
+  if (isError) return { iconCls: 'text-rose-600 dark:text-rose-400', bgCls: 'bg-rose-500/10' };
+  if (level === 'warning' || level === 'warn')
+    return { iconCls: 'text-orange-600 dark:text-orange-400', bgCls: 'bg-orange-500/10' };
 
-  if (msg.includes("starting crawl")) return { iconCls: "text-sky-600 dark:text-sky-400", bgCls: "bg-sky-500/10" };
-  if (msg.includes("ignoring robots.txt")) return { iconCls: "text-orange-600 dark:text-orange-400", bgCls: "bg-orange-500/10" };
-  if (msg.includes("resolved")) return { iconCls: "text-slate-600 dark:text-slate-400", bgCls: "bg-slate-500/10" };
-  if (msg.includes("acquired")) return { iconCls: "text-indigo-600 dark:text-indigo-400", bgCls: "bg-indigo-500/10" };
-  if (msg.includes("extracted")) return { iconCls: "text-emerald-600 dark:text-emerald-400", bgCls: "bg-emerald-500/12" };
-  if (msg.includes("normalized") || msg.includes("normalised")) return { iconCls: "text-amber-600 dark:text-amber-400", bgCls: "bg-amber-500/12" };
-  if (msg.includes("persisted")) return { iconCls: "text-fuchsia-600 dark:text-fuchsia-400", bgCls: "bg-fuchsia-500/12" };
-  if (msg.includes("page loaded") || msg.includes("page load"))
-    return { iconCls: "text-amber-600 dark:text-amber-400", bgCls: "bg-amber-500/12" };
-  if (msg.includes("challenge") || msg.includes("blocked") || msg.includes("captcha") || msg.includes("bot check"))
-    return { iconCls: "text-orange-600 dark:text-orange-400", bgCls: "bg-orange-500/12" };
-  if (msg.includes("acquiring") || msg.includes("fetching"))
-    return { iconCls: "text-indigo-600 dark:text-indigo-400", bgCls: "bg-indigo-500/12" };
-  if (msg.includes("browser") || msg.includes("patchright") || msg.includes("playwright") || msg.includes("headless"))
-    return { iconCls: "text-violet-600 dark:text-violet-400", bgCls: "bg-violet-500/12" };
-  if (msg.includes("record")) return { iconCls: "text-emerald-600 dark:text-emerald-400", bgCls: "bg-emerald-500/12" };
-  if (hasUrl) return { iconCls: "text-indigo-600 dark:text-indigo-400", bgCls: "bg-indigo-500/12" };
-  if (msg.includes("complete") || msg.includes("success") || msg.includes("done") || msg.includes("finished"))
-    return { iconCls: "text-emerald-600 dark:text-emerald-400", bgCls: "bg-emerald-500/10" };
-  if (msg.includes("retry") || msg.includes("retrying"))
-    return { iconCls: "text-sky-600 dark:text-sky-400", bgCls: "bg-sky-500/12" };
-  if (level === "debug") return { iconCls: "text-muted/40 dark:text-white/20", bgCls: "bg-transparent" };
-  return { iconCls: "text-muted/60 dark:text-white/40", bgCls: "bg-black/[0.03] dark:bg-white/5" };
+  if (msg.includes('starting crawl'))
+    return { iconCls: 'text-sky-600 dark:text-sky-400', bgCls: 'bg-sky-500/10' };
+  if (msg.includes('ignoring robots.txt'))
+    return { iconCls: 'text-orange-600 dark:text-orange-400', bgCls: 'bg-orange-500/10' };
+  if (msg.includes('resolved'))
+    return { iconCls: 'text-slate-600 dark:text-slate-400', bgCls: 'bg-slate-500/10' };
+  if (msg.includes('acquired'))
+    return { iconCls: 'text-indigo-600 dark:text-indigo-400', bgCls: 'bg-indigo-500/10' };
+  if (msg.includes('extracted'))
+    return { iconCls: 'text-emerald-600 dark:text-emerald-400', bgCls: 'bg-emerald-500/12' };
+  if (msg.includes('normalized') || msg.includes('normalised'))
+    return { iconCls: 'text-amber-600 dark:text-amber-400', bgCls: 'bg-amber-500/12' };
+  if (msg.includes('persisted'))
+    return { iconCls: 'text-fuchsia-600 dark:text-fuchsia-400', bgCls: 'bg-fuchsia-500/12' };
+  if (msg.includes('page loaded') || msg.includes('page load'))
+    return { iconCls: 'text-amber-600 dark:text-amber-400', bgCls: 'bg-amber-500/12' };
+  if (
+    msg.includes('challenge') ||
+    msg.includes('blocked') ||
+    msg.includes('captcha') ||
+    msg.includes('bot check')
+  )
+    return { iconCls: 'text-orange-600 dark:text-orange-400', bgCls: 'bg-orange-500/12' };
+  if (msg.includes('acquiring') || msg.includes('fetching'))
+    return { iconCls: 'text-indigo-600 dark:text-indigo-400', bgCls: 'bg-indigo-500/12' };
+  if (
+    msg.includes('browser') ||
+    msg.includes('patchright') ||
+    msg.includes('playwright') ||
+    msg.includes('headless')
+  )
+    return { iconCls: 'text-violet-600 dark:text-violet-400', bgCls: 'bg-violet-500/12' };
+  if (msg.includes('record'))
+    return { iconCls: 'text-emerald-600 dark:text-emerald-400', bgCls: 'bg-emerald-500/12' };
+  if (hasUrl) return { iconCls: 'text-indigo-600 dark:text-indigo-400', bgCls: 'bg-indigo-500/12' };
+  if (
+    msg.includes('complete') ||
+    msg.includes('success') ||
+    msg.includes('done') ||
+    msg.includes('finished')
+  )
+    return { iconCls: 'text-emerald-600 dark:text-emerald-400', bgCls: 'bg-emerald-500/10' };
+  if (msg.includes('retry') || msg.includes('retrying'))
+    return { iconCls: 'text-sky-600 dark:text-sky-400', bgCls: 'bg-sky-500/12' };
+  if (level === 'debug')
+    return { iconCls: 'text-muted/40 dark:text-white/20', bgCls: 'bg-transparent' };
+  return { iconCls: 'text-muted/60 dark:text-white/40', bgCls: 'bg-black/[0.03] dark:bg-white/5' };
 }
 
 function logMessageIsError(level: string, message: string): boolean {
-  const normalizedLevel = String(level || "").toLowerCase();
-  if (normalizedLevel === "error") return true;
+  const normalizedLevel = String(level || '').toLowerCase();
+  if (normalizedLevel === 'error') return true;
   if (normalizedLevel) return false;
-  const text = String(message || "");
+  const text = String(message || '');
   const lowered = text.toLowerCase();
   if (
     /\b(no|not|none|no longer)\s+(error|errors|failed)\b/i.test(text) ||
-    lowered.includes("no errors found") ||
-    lowered.includes("validation failed check passed")
+    lowered.includes('no errors found') ||
+    lowered.includes('validation failed check passed')
   ) {
     return false;
   }
   return /^\s*(error|failed)\b/i.test(text);
 }
 
-export type LogStage = "acquisition" | "extraction" | "normalize" | "persistence" | "system";
+export type LogStage = 'acquisition' | 'extraction' | 'normalize' | 'persistence' | 'system';
 
 export interface LogStageConfig {
   label: string;
@@ -649,57 +697,60 @@ export interface LogStageConfig {
   chipClass: string;
   textOnlyClass: string;
   panelClass: string;
-};
+}
 
-const DISPLAY_LOG_STAGES: LogStage[] = ["acquisition", "extraction", "normalize", "persistence"];
+const DISPLAY_LOG_STAGES: LogStage[] = ['acquisition', 'extraction', 'normalize', 'persistence'];
 
 export const STAGE_CONFIG: Record<LogStage, LogStageConfig> = {
   acquisition: {
-    label: "Acquire",
-    borderClass: "border-indigo-200 dark:border-indigo-500/30",
-    chipClass: "bg-indigo-600 text-white font-medium",
-    textOnlyClass: "text-info font-medium",
-    panelClass: "border-indigo-200 dark:border-indigo-500/20 bg-indigo-50/50 dark:bg-indigo-500/[0.05]",
+    label: 'Acquire',
+    borderClass: 'border-indigo-200 dark:border-indigo-500/30',
+    chipClass: 'bg-indigo-600 text-white font-medium',
+    textOnlyClass: 'text-info font-medium',
+    panelClass:
+      'border-indigo-200 dark:border-indigo-500/20 bg-indigo-50/50 dark:bg-indigo-500/[0.05]',
   },
   extraction: {
-    label: "Extract",
-    borderClass: "border-violet-200 dark:border-violet-500/30",
-    chipClass: "bg-violet-600 text-white font-medium",
-    textOnlyClass: "text-accent font-medium",
-    panelClass: "border-violet-200 dark:border-violet-500/20 bg-violet-50/50 dark:bg-violet-500/[0.05]",
+    label: 'Extract',
+    borderClass: 'border-violet-200 dark:border-violet-500/30',
+    chipClass: 'bg-violet-600 text-white font-medium',
+    textOnlyClass: 'text-accent font-medium',
+    panelClass:
+      'border-violet-200 dark:border-violet-500/20 bg-violet-50/50 dark:bg-violet-500/[0.05]',
   },
   normalize: {
-    label: "Normalize",
-    borderClass: "border-amber-200 dark:border-amber-500/30",
-    chipClass: "bg-amber-600 text-white font-medium",
-    textOnlyClass: "text-warning font-medium",
-    panelClass: "border-amber-200 dark:border-amber-500/20 bg-amber-50/50 dark:bg-amber-500/[0.05]",
+    label: 'Normalize',
+    borderClass: 'border-amber-200 dark:border-amber-500/30',
+    chipClass: 'bg-amber-600 text-white font-medium',
+    textOnlyClass: 'text-warning font-medium',
+    panelClass: 'border-amber-200 dark:border-amber-500/20 bg-amber-50/50 dark:bg-amber-500/[0.05]',
   },
   persistence: {
-    label: "Persist",
-    borderClass: "border-emerald-200 dark:border-emerald-500/30",
-    chipClass: "bg-emerald-600 text-white font-medium",
-    textOnlyClass: "text-success font-medium",
-    panelClass: "border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/[0.05]",
+    label: 'Persist',
+    borderClass: 'border-emerald-200 dark:border-emerald-500/30',
+    chipClass: 'bg-emerald-600 text-white font-medium',
+    textOnlyClass: 'text-success font-medium',
+    panelClass:
+      'border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/[0.05]',
   },
   system: {
-    label: "Run",
-    borderClass: "border-slate-300 dark:border-white/10",
-    chipClass: "bg-slate-600 text-white font-medium",
-    textOnlyClass: "text-muted font-medium",
-    panelClass: "border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-white/[0.03]",
+    label: 'Run',
+    borderClass: 'border-slate-300 dark:border-white/10',
+    chipClass: 'bg-slate-600 text-white font-medium',
+    textOnlyClass: 'text-muted font-medium',
+    panelClass: 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-white/[0.03]',
   },
 };
 
 export const TERMINAL_STRINGS = {
-  FIELDS: "Fields",
-  CONFIDENCE: "Confidence",
-  RUN_EVENTS: "Run Events",
-  PENDING: "Pending...",
-  SITE_PAYLOAD: "Site payload",
-  PAYLOAD_PEEK: "Payload Peek",
-  NO_LOGS: "No logs.",
-  NO_PAYLOAD: "No persisted payload for this site yet.",
+  FIELDS: 'Fields',
+  CONFIDENCE: 'Confidence',
+  RUN_EVENTS: 'Run Events',
+  PENDING: 'Pending...',
+  SITE_PAYLOAD: 'Site payload',
+  PAYLOAD_PEEK: 'Payload Peek',
+  NO_LOGS: 'No logs.',
+  NO_PAYLOAD: 'No persisted payload for this site yet.',
 } as const;
 
 export const LOG_PATTERNS = {
@@ -714,51 +765,47 @@ export const LOG_PATTERNS = {
 
 export function getLogStage(message: string): LogStage {
   const text = message.toLowerCase();
-  if (
-    text.includes("persisted") ||
-    text.includes("persisting") ||
-    text.includes("committed")
-  ) {
-    return "persistence";
+  if (text.includes('persisted') || text.includes('persisting') || text.includes('committed')) {
+    return 'persistence';
   }
   if (
-    text.includes("normalized") ||
-    text.includes("normalised") ||
-    text.includes("schema validation cleaned")
+    text.includes('normalized') ||
+    text.includes('normalised') ||
+    text.includes('schema validation cleaned')
   ) {
-    return "normalize";
+    return 'normalize';
   }
   if (
-    text.includes("extracted") ||
-    text.includes("extraction yielded") ||
-    text.includes("rejected detail extraction") ||
-    text.includes("traversal yielded") ||
-    text.includes("selector self-heal")
+    text.includes('extracted') ||
+    text.includes('extraction yielded') ||
+    text.includes('rejected detail extraction') ||
+    text.includes('traversal yielded') ||
+    text.includes('selector self-heal')
   ) {
-    return "extraction";
+    return 'extraction';
   }
   if (
-    text.includes("acquiring") ||
-    text.includes("robots") ||
-    text.includes("proxy") ||
-    text.includes("browser") ||
-    text.includes("navigation") ||
-    text.includes("page loaded") ||
-    text.includes("acquired payload")
+    text.includes('acquiring') ||
+    text.includes('robots') ||
+    text.includes('proxy') ||
+    text.includes('browser') ||
+    text.includes('navigation') ||
+    text.includes('page loaded') ||
+    text.includes('acquired payload')
   ) {
-    return "acquisition";
+    return 'acquisition';
   }
   if (
-    text.includes("starting crawl") ||
-    text.includes("resolved") ||
-    text.includes("pipeline finished") ||
-    text.includes("stopped after reaching") ||
-    text.includes("run paused") ||
-    text.includes("run killed")
+    text.includes('starting crawl') ||
+    text.includes('resolved') ||
+    text.includes('pipeline finished') ||
+    text.includes('stopped after reaching') ||
+    text.includes('run paused') ||
+    text.includes('run killed')
   ) {
-    return "system";
+    return 'system';
   }
-  return "system";
+  return 'system';
 }
 
 type LogSiteGroup = {
@@ -776,7 +823,6 @@ type LogSiteGroup = {
   recordCount: number;
 };
 
-
 function parseStartingLog(message: string) {
   const match = sanitizeLogMessage(message).match(LOG_PATTERNS.STARTING_CRAWL);
   if (!match) {
@@ -791,25 +837,25 @@ function parseStartingLog(message: string) {
 }
 
 function isWarningLog(log: CrawlLog) {
-  const level = String(log.level || "").toLowerCase();
-  if (level === "warn" || level === "warning") {
+  const level = String(log.level || '').toLowerCase();
+  if (level === 'warn' || level === 'warning') {
     return true;
   }
   const text = log.message.toLowerCase();
   return (
-    text.includes("partial") ||
-    text.includes("yielded 0 records") ||
-    text.includes("retrying") ||
-    text.includes("rejected detail extraction")
+    text.includes('partial') ||
+    text.includes('yielded 0 records') ||
+    text.includes('retrying') ||
+    text.includes('rejected detail extraction')
   );
 }
 
 function isHiddenLogMessage(message: string) {
-  return LOG_PATTERNS.ROBOTS_IGNORE.test(String(message || ""));
+  return LOG_PATTERNS.ROBOTS_IGNORE.test(String(message || ''));
 }
 
 function isPersistenceSummaryLog(message: string) {
-  return LOG_PATTERNS.PERSISTENCE_SUMMARY.test(String(message || ""));
+  return LOG_PATTERNS.PERSISTENCE_SUMMARY.test(String(message || ''));
 }
 
 function matchesSiteUrl(record: CrawlRecord, siteUrl: string) {
@@ -818,11 +864,11 @@ function matchesSiteUrl(record: CrawlRecord, siteUrl: string) {
     record.source_url,
     record.data?.url,
     record.raw_data?.url,
-    record.source_trace?.acquisition && typeof record.source_trace.acquisition === "object"
+    record.source_trace?.acquisition && typeof record.source_trace.acquisition === 'object'
       ? (record.source_trace.acquisition as Record<string, unknown>).final_url
       : null,
   ]) {
-    const text = typeof value === "string" ? value.trim() : "";
+    const text = typeof value === 'string' ? value.trim() : '';
     if (text) {
       candidates.add(text);
     }
@@ -836,11 +882,13 @@ function siteLabel(url: string, index: number | null, total: number | null) {
 }
 
 function siteDomId(groupKey: string) {
-  return `site-log-${groupKey.replace(/[^a-z0-9_-]+/gi, "-")}`;
+  return `site-log-${groupKey.replace(/[^a-z0-9_-]+/gi, '-')}`;
 }
 
 export function buildLogSiteGroups(logs: CrawlLog[], records: CrawlRecord[] = []): LogSiteGroup[] {
-  const groups: Array<Omit<LogSiteGroup, "records" | "hasError" | "hasWarning" | "lastStage" | "recordCount">> = [];
+  const groups: Array<
+    Omit<LogSiteGroup, 'records' | 'hasError' | 'hasWarning' | 'lastStage' | 'recordCount'>
+  > = [];
   let currentGroup: (typeof groups)[number] | null = null;
   let untitledCounter = 0;
 
@@ -873,7 +921,7 @@ export function buildLogSiteGroups(logs: CrawlLog[], records: CrawlRecord[] = []
       currentGroup = {
         key: `run:${untitledCounter}`,
         label: TERMINAL_STRINGS.RUN_EVENTS,
-        url: "",
+        url: '',
         index: null,
         total: null,
         logs: [],
@@ -888,7 +936,7 @@ export function buildLogSiteGroups(logs: CrawlLog[], records: CrawlRecord[] = []
       groups.push(currentGroup);
     }
 
-    const stage = start ? "system" : getLogStage(log.message);
+    const stage = start ? 'system' : getLogStage(log.message);
     currentGroup.logs.push(log);
     currentGroup.stageLogs[stage].push(log);
   }
@@ -897,8 +945,8 @@ export function buildLogSiteGroups(logs: CrawlLog[], records: CrawlRecord[] = []
     const matchedRecords = group.url
       ? records.filter((record) => matchesSiteUrl(record, group.url))
       : [];
-    let lastStage: LogStage = "system";
-    for (const stage of [...DISPLAY_LOG_STAGES, "system"] as LogStage[]) {
+    let lastStage: LogStage = 'system';
+    for (const stage of [...DISPLAY_LOG_STAGES, 'system'] as LogStage[]) {
       if (group.stageLogs[stage].length > 0) {
         lastStage = stage;
       }
@@ -918,52 +966,56 @@ export function buildLogSiteGroups(logs: CrawlLog[], records: CrawlRecord[] = []
 
 function severityTone(group: LogSiteGroup, index: number) {
   if (group.hasError) {
-    return "bg-rose-50/60 dark:bg-rose-500/10";
+    return 'bg-rose-50/60 dark:bg-rose-500/10';
   }
   if (group.hasWarning) {
-    return "bg-amber-50/60 dark:bg-amber-500/10";
+    return 'bg-amber-50/60 dark:bg-amber-500/10';
   }
   if (group.recordCount > 0 || group.stageLogs.persistence.length > 0) {
-    return "bg-emerald-50/50 dark:bg-emerald-500/10";
+    return 'bg-emerald-50/50 dark:bg-emerald-500/10';
   }
-  return index % 2 === 0 ? "bg-black/[0.02] dark:bg-white/[0.02]" : "bg-transparent";
+  return index % 2 === 0 ? 'bg-black/[0.02] dark:bg-white/[0.02]' : 'bg-transparent';
 }
 
 function severityLabel(group: LogSiteGroup) {
   if (group.hasError) {
-    return "Error";
+    return 'Error';
   }
   if (group.hasWarning) {
-    return "Warning";
+    return 'Warning';
   }
   if (group.recordCount > 0 || group.stageLogs.persistence.length > 0) {
-    return "Persisted";
+    return 'Persisted';
   }
-  return "Running";
+  return 'Running';
 }
 
 function payloadSnapshot(group: LogSiteGroup) {
   if (!group.records.length) {
-    return "";
+    return '';
   }
-  const payload = group.records.length === 1
-    ? cleanRecordForDisplay(group.records[0])
-    : group.records.map(cleanRecordForDisplay);
+  const payload =
+    group.records.length === 1
+      ? cleanRecordForDisplay(group.records[0])
+      : group.records.map(cleanRecordForDisplay);
   return JSON.stringify(payload, null, 2);
 }
 
 function publicFieldNames(record: CrawlRecord) {
   return Object.entries(record.data ?? {})
-    .filter(([key, value]) => !key.startsWith("_") && isInformativeValue(value))
+    .filter(([key, value]) => !key.startsWith('_') && isInformativeValue(value))
     .map(([key]) => key);
 }
 
 function recordConfidence(record: CrawlRecord): { score: number; level: string } | null {
-  const rawConfidence = (
-    (record.raw_data && typeof record.raw_data === "object" ? (record.raw_data as Record<string, unknown>)._confidence : null)
-    || (record.discovered_data && typeof record.discovered_data === "object" ? (record.discovered_data as Record<string, unknown>).confidence : null)
-  );
-  if (!rawConfidence || typeof rawConfidence !== "object") {
+  const rawConfidence =
+    (record.raw_data && typeof record.raw_data === 'object'
+      ? (record.raw_data as Record<string, unknown>)._confidence
+      : null) ||
+    (record.discovered_data && typeof record.discovered_data === 'object'
+      ? (record.discovered_data as Record<string, unknown>).confidence
+      : null);
+  if (!rawConfidence || typeof rawConfidence !== 'object') {
     return null;
   }
   const payload = rawConfidence as Record<string, unknown>;
@@ -973,7 +1025,10 @@ function recordConfidence(record: CrawlRecord): { score: number; level: string }
   }
   return {
     score,
-    level: String(payload.level || qualityLevelFromScore(score)).trim().toLowerCase() || "unknown",
+    level:
+      String(payload.level || qualityLevelFromScore(score))
+        .trim()
+        .toLowerCase() || 'unknown',
   };
 }
 
@@ -1008,7 +1063,10 @@ function groupFieldCoverage(group: LogSiteGroup, requestedFields: string[]) {
   }
 
   if (requested.length) {
-    const covered = requested.filter((field, index) => foundNormalized.has(normalizedRequested[index]) || foundNormalized.has(field));
+    const covered = requested.filter(
+      (field, index) =>
+        foundNormalized.has(normalizedRequested[index]) || foundNormalized.has(field),
+    );
     return {
       foundCount: covered.length,
       totalCount: requested.length,
@@ -1025,10 +1083,10 @@ function groupFieldCoverage(group: LogSiteGroup, requestedFields: string[]) {
 }
 
 function toneForConfidence(level: string) {
-  if (level === "high") return "text-emerald-600 dark:text-emerald-400";
-  if (level === "medium") return "text-amber-600 dark:text-amber-400";
-  if (level === "low") return "text-rose-600 dark:text-rose-400";
-  return "text-slate-500 dark:text-white/50";
+  if (level === 'high') return 'text-emerald-600 dark:text-emerald-400';
+  if (level === 'medium') return 'text-amber-600 dark:text-amber-400';
+  if (level === 'low') return 'text-rose-600 dark:text-rose-400';
+  return 'text-slate-500 dark:text-white/50';
 }
 
 type ExpandedLogRow = {
@@ -1047,7 +1105,7 @@ function buildExpandedRows(
 ): ExpandedLogRow[] {
   const rows: ExpandedLogRow[] = group.logs.map((log) => ({
     key: `log-${log.id}`,
-    stage: parseStartingLog(log.message) ? "system" : getLogStage(log.message),
+    stage: parseStartingLog(log.message) ? 'system' : getLogStage(log.message),
     level: log.level,
     message: log.message,
     createdAt: log.created_at,
@@ -1056,17 +1114,21 @@ function buildExpandedRows(
   if (coverage.totalCount > 0 || coverage.labels.length > 0 || confidence) {
     const parts: string[] = [];
     if (coverage.totalCount > 0) {
-      const labels = coverage.labels.length ? coverage.labels.map(humanizeFieldName).join(", ") : "none";
-      parts.push(`${TERMINAL_STRINGS.FIELDS} ${coverage.foundCount}/${coverage.totalCount}: ${labels}`);
+      const labels = coverage.labels.length
+        ? coverage.labels.map(humanizeFieldName).join(', ')
+        : 'none';
+      parts.push(
+        `${TERMINAL_STRINGS.FIELDS} ${coverage.foundCount}/${coverage.totalCount}: ${labels}`,
+      );
     }
     if (confidence) {
       parts.push(`${TERMINAL_STRINGS.CONFIDENCE} ${Math.round(confidence.score * 100)}%`);
     }
     rows.push({
       key: `${group.key}-fields`,
-      stage: "persistence",
-      level: "info",
-      message: parts.join(" | "),
+      stage: 'persistence',
+      level: 'info',
+      message: parts.join(' | '),
       payloadAction: group.records.length > 0,
     });
   }
@@ -1077,22 +1139,22 @@ function buildExpandedRows(
 function formatShortUrlLabel(url: string) {
   try {
     const parsed = new URL(url);
-    const domain = parsed.hostname.replace(/^www\./, "");
-    const parts = parsed.pathname.split("/").filter(Boolean);
-    const lastPart = parts.at(-1) || "";
+    const domain = parsed.hostname.replace(/^www\./, '');
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    const lastPart = parts.at(-1) || '';
     if (parts.length > 1) {
       return `${domain}/.../${lastPart}`;
     }
-    return domain + (lastPart ? `/${lastPart}` : "");
+    return domain + (lastPart ? `/${lastPart}` : '');
   } catch {
-    return url.length > 40 ? url.slice(0, 40) + "…" : url;
+    return url.length > 40 ? url.slice(0, 40) + '…' : url;
   }
 }
 
 function sanitizeLogMessage(message: string) {
-  return String(message || "")
-    .replace(/\s*\[corr=[^\]]+\]/gi, "")
-    .replace(/\s{2,}/g, " ")
+  return String(message || '')
+    .replace(/\s*\[corr=[^\]]+\]/gi, '')
+    .replace(/\s{2,}/g, ' ')
     .trim();
 }
 
@@ -1102,7 +1164,7 @@ function ShortenedUrl({ url }: { url: string }) {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 underline underline-offset-2 decoration-blue-500/20 transition-colors"
+      className="text-blue-600 underline decoration-blue-500/20 underline-offset-2 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
       title={url}
       onClick={(e) => e.stopPropagation()}
     >
@@ -1112,7 +1174,7 @@ function ShortenedUrl({ url }: { url: string }) {
 }
 
 function renderLogContent(message: string, isStartingCrawl: boolean): React.ReactNode {
-  let text = sanitizeLogMessage(message).replace(LOG_PATTERNS.ROBOTS_PREFIX, "");
+  let text = sanitizeLogMessage(message).replace(LOG_PATTERNS.ROBOTS_PREFIX, '');
   text = text.replace(
     LOG_PATTERNS.HEADLESS_BROWSER,
     (_, engine) => `Launched ${engine.trim()} browser`,
@@ -1138,7 +1200,7 @@ function renderLogContent(message: string, isStartingCrawl: boolean): React.Reac
 
   if (isStartingCrawl) {
     return baseContent.map((part, i) => {
-      if (typeof part === "string") {
+      if (typeof part === 'string') {
         const counterMatch = part.match(LOG_PATTERNS.COUNTER);
         if (counterMatch && counterMatch.index !== undefined) {
           const before = part.slice(0, counterMatch.index);
@@ -1176,7 +1238,9 @@ export const LogTerminal = memo(function LogTerminal({
   const peekPanelRef = useRef<HTMLDivElement | null>(null);
   const [peekedGroupKey, setPeekedGroupKey] = useState<string | null>(null);
   const [peekedRecordIndex, setPeekedRecordIndex] = useState(0);
-  const [expandedGroupPreference, setExpandedGroupPreference] = useState<string | null | "__auto__">("__auto__");
+  const [expandedGroupPreference, setExpandedGroupPreference] = useState<
+    string | null | '__auto__'
+  >('__auto__');
   const [triageCursor, setTriageCursor] = useState(0);
   const groups = useMemo(() => buildLogSiteGroups(logs, records), [logs, records]);
   const issueGroups = useMemo(
@@ -1184,7 +1248,10 @@ export const LogTerminal = memo(function LogTerminal({
     [groups],
   );
   const activePeekedGroupKey = useMemo(
-    () => (peekedGroupKey && groups.some((group) => group.key === peekedGroupKey) ? peekedGroupKey : null),
+    () =>
+      peekedGroupKey && groups.some((group) => group.key === peekedGroupKey)
+        ? peekedGroupKey
+        : null,
     [groups, peekedGroupKey],
   );
   const peekedGroup = useMemo(
@@ -1192,7 +1259,11 @@ export const LogTerminal = memo(function LogTerminal({
     [activePeekedGroupKey, groups],
   );
   const expandedGroupKey = useMemo(() => {
-    if (expandedGroupPreference && expandedGroupPreference !== "__auto__" && groups.some((group) => group.key === expandedGroupPreference)) {
+    if (
+      expandedGroupPreference &&
+      expandedGroupPreference !== '__auto__' &&
+      groups.some((group) => group.key === expandedGroupPreference)
+    ) {
       return expandedGroupPreference;
     }
     if (expandedGroupPreference === null) {
@@ -1221,8 +1292,8 @@ export const LogTerminal = memo(function LogTerminal({
         setPeekedGroupKey(null);
       }
     };
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [activePeekedGroupKey]);
 
   const timelineTicks = useMemo(() => {
@@ -1230,7 +1301,11 @@ export const LogTerminal = memo(function LogTerminal({
       return [];
     }
     const start = parseApiDate(groups[0].logs[0]?.created_at ?? new Date().toISOString()).getTime();
-    const end = parseApiDate(groups[groups.length - 1].logs.at(-1)?.created_at ?? groups[0].logs[0]?.created_at ?? new Date().toISOString()).getTime();
+    const end = parseApiDate(
+      groups[groups.length - 1].logs.at(-1)?.created_at ??
+        groups[0].logs[0]?.created_at ??
+        new Date().toISOString(),
+    ).getTime();
     const range = Math.max(1, end - start);
     return groups.map((group) => {
       const createdAt = group.logs[0]?.created_at ?? new Date().toISOString();
@@ -1238,7 +1313,13 @@ export const LogTerminal = memo(function LogTerminal({
       return {
         key: group.key,
         percent,
-        tone: group.hasError ? "bg-danger" : group.hasWarning ? "bg-warning" : group.recordCount > 0 ? "bg-emerald-400" : "bg-white/15",
+        tone: group.hasError
+          ? 'bg-danger'
+          : group.hasWarning
+            ? 'bg-warning'
+            : group.recordCount > 0
+              ? 'bg-emerald-400'
+              : 'bg-white/15',
       };
     });
   }, [groups]);
@@ -1246,9 +1327,9 @@ export const LogTerminal = memo(function LogTerminal({
   const jumpToGroup = (groupKey: string) => {
     const el = document.getElementById(siteDomId(groupKey));
     if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("log-entry-highlight");
-      setTimeout(() => el.classList.remove("log-entry-highlight"), 2000);
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('log-entry-highlight');
+      setTimeout(() => el.classList.remove('log-entry-highlight'), 2000);
     }
     setExpandedGroupPreference(groupKey);
   };
@@ -1260,11 +1341,11 @@ export const LogTerminal = memo(function LogTerminal({
     setExpandedGroupPreference((current) => (current === groupKey ? null : groupKey));
   };
 
-  const navigateTriage = (dir: "next" | "prev") => {
+  const navigateTriage = (dir: 'next' | 'prev') => {
     if (!issueGroups.length) {
       return;
     }
-    const delta = dir === "next" ? 1 : -1;
+    const delta = dir === 'next' ? 1 : -1;
     const nextIndex = (safeTriageCursor + delta + issueGroups.length) % issueGroups.length;
     setTriageCursor(nextIndex);
     jumpToGroup(issueGroups[nextIndex].key);
@@ -1274,16 +1355,21 @@ export const LogTerminal = memo(function LogTerminal({
     <div
       className="group/terminal relative flex flex-col overflow-hidden rounded-xl border"
       style={{
-        borderColor: "var(--terminal-border)",
-        backgroundColor: "var(--terminal-bg)",
-        color: "var(--terminal-fg)",
-        boxShadow: "var(--terminal-shadow)",
+        borderColor: 'var(--terminal-border)',
+        backgroundColor: 'var(--terminal-bg)',
+        color: 'var(--terminal-fg)',
+        boxShadow: 'var(--terminal-shadow)',
       }}
     >
-      <div className="flex h-9 items-center justify-between border-b bg-black/[0.05] px-4 dark:bg-white/[0.05]" style={{ borderColor: "var(--terminal-border)" }}>
-        <span className="text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-muted">activity_stream.log</span>
+      <div
+        className="flex h-9 items-center justify-between border-b bg-black/[0.05] px-4 dark:bg-white/[0.05]"
+        style={{ borderColor: 'var(--terminal-border)' }}
+      >
+        <span className="text-muted font-mono text-[10px] font-bold tracking-[0.2em] uppercase">
+          activity_stream.log
+        </span>
         <div className="flex items-center gap-2">
-          <div className="flex h-3 w-32 items-center px-1 bg-black/10 dark:bg-white/10 rounded-full relative group/scrubber cursor-crosshair">
+          <div className="group/scrubber relative flex h-3 w-32 cursor-crosshair items-center rounded-full bg-black/10 px-1 dark:bg-white/10">
             {timelineTicks.map((tick) => (
               <div
                 key={tick.key}
@@ -1292,69 +1378,77 @@ export const LogTerminal = memo(function LogTerminal({
                 aria-label={`Jump to ${tick.key}`}
                 onClick={() => jumpToGroup(tick.key)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
+                  if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     jumpToGroup(tick.key);
                   }
                 }}
                 className={cn(
-                  "absolute h-2 w-0.5 rounded-full transition-transform hover:scale-y-150 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:scale-y-150",
+                  'absolute h-2 w-0.5 cursor-pointer rounded-full transition-transform hover:scale-y-150 focus-visible:scale-y-150 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none',
                   tick.tone,
                 )}
                 style={{ left: `${tick.percent}%` }}
               />
             ))}
           </div>
-          <div className="flex items-center gap-2 opacity-60 group-hover/terminal:opacity-100 transition-opacity">
-            <button onClick={() => navigateTriage("prev")} className="text-[10px] uppercase font-bold hover:text-blue-500 focus-visible:outline-none focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 rounded">Prev</button>
+          <div className="flex items-center gap-2 opacity-60 transition-opacity group-hover/terminal:opacity-100">
+            <button
+              onClick={() => navigateTriage('prev')}
+              className="rounded text-[10px] font-bold uppercase hover:text-blue-500 focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none"
+            >
+              Prev
+            </button>
             <span className="opacity-20">/</span>
-            <button onClick={() => navigateTriage("next")} className="text-[10px] uppercase font-bold hover:text-blue-500 focus-visible:outline-none focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 rounded">Next</button>
+            <button
+              onClick={() => navigateTriage('next')}
+              className="rounded text-[10px] font-bold uppercase hover:text-blue-500 focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none"
+            >
+              Next
+            </button>
           </div>
         </div>
       </div>
 
       <div
         ref={ref}
-        className="crawl-activity-log min-h-[50vh] max-h-[72vh] overflow-y-auto"
+        className="crawl-activity-log max-h-[72vh] min-h-[50vh] overflow-y-auto"
         role="log"
-        aria-live={live ? "polite" : "off"}
+        aria-live={live ? 'polite' : 'off'}
         aria-atomic="false"
       >
-        {groups.length
-          ? groups.map((group, index) => {
+        {groups.length ? (
+          groups.map((group, index) => {
             const activeKey = live && groups.length > 0 ? groups[groups.length - 1].key : null;
             const expanded = expandedGroupKey === group.key || group.key === activeKey;
             const payload = payloadSnapshot(group);
             const confidence = groupConfidence(group);
             const coverage = groupFieldCoverage(group, requestedFields);
             const lastLog = group.logs.at(-1);
-            const summaryLog = [...group.logs].reverse().find((log) => !isPersistenceSummaryLog(log.message)) ?? lastLog;
+            const summaryLog =
+              [...group.logs].reverse().find((log) => !isPersistenceSummaryLog(log.message)) ??
+              lastLog;
             const expandedRows = buildExpandedRows(group, coverage, confidence);
             return (
-              <section
-                key={group.key}
-                id={siteDomId(group.key)}
-                className="overflow-hidden"
-              >
+              <section key={group.key} id={siteDomId(group.key)} className="overflow-hidden">
                 <div
                   role="button"
                   tabIndex={0}
                   aria-expanded={expanded}
-                  aria-label={`${expanded ? "Collapse" : "Expand"} logs for ${group.url || group.label}`}
+                  aria-label={`${expanded ? 'Collapse' : 'Expand'} logs for ${group.url || group.label}`}
                   onClick={() => toggleGroup(group.key)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
+                    if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       toggleGroup(group.key);
                     }
                   }}
                   className={cn(
-                    "grid w-full grid-cols-[32px_minmax(280px,2fr)_80px_100px_auto_minmax(200px,1.2fr)_80px_60px] items-center gap-3 px-4 py-2.5 text-left transition-colors cursor-pointer outline-none group/row focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset",
-                    severityTone(group, index)
+                    'group/row grid w-full cursor-pointer grid-cols-[32px_minmax(280px,2fr)_80px_100px_auto_minmax(200px,1.2fr)_80px_60px] items-center gap-3 px-4 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset',
+                    severityTone(group, index),
                   )}
                 >
-                  <div className="text-[12px] font-mono font-medium tabular-nums text-muted">
-                    {(index + 1).toString().padStart(2, "0")}
+                  <div className="text-muted font-mono text-[12px] font-medium tabular-nums">
+                    {(index + 1).toString().padStart(2, '0')}
                   </div>
                   <div className="min-w-0">
                     {group.url ? (
@@ -1363,14 +1457,14 @@ export const LogTerminal = memo(function LogTerminal({
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="truncate block text-[12px] font-mono font-medium text-blue-600 dark:text-blue-400 hover:underline underline-offset-2"
+                        className="block truncate font-mono text-[12px] font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
                         title={group.url}
                       >
                         {formatShortUrlLabel(group.url)}
                       </a>
                     ) : (
                       <span
-                        className="truncate block text-[12px] font-mono font-medium text-secondary"
+                        className="text-secondary block truncate font-mono text-[12px] font-medium"
                         title={group.label}
                         onClick={(e) => e.stopPropagation()}
                       >
@@ -1378,24 +1472,43 @@ export const LogTerminal = memo(function LogTerminal({
                       </span>
                     )}
                   </div>
-                  <div className="text-[12px] font-mono font-medium tabular-nums whitespace-nowrap text-secondary">
-                    <span className="text-muted mr-1.5 text-[10px] uppercase font-sans font-bold tracking-wider">F:</span>
+                  <div className="text-secondary font-mono text-[12px] font-medium whitespace-nowrap tabular-nums">
+                    <span className="text-muted mr-1.5 font-sans text-[10px] font-bold tracking-wider uppercase">
+                      F:
+                    </span>
                     {coverage.foundCount}/{coverage.totalCount || 0}
                   </div>
-                  <div className={cn("text-[12px] font-mono font-medium tabular-nums whitespace-nowrap", confidence ? toneForConfidence(confidence.level) : "text-muted")}>
-                    <span className="text-muted mr-1.5 text-[10px] uppercase font-sans font-bold tracking-wider">C:</span>
-                    {confidence ? `${Math.round(confidence.score * 100)}%` : "--"}
+                  <div
+                    className={cn(
+                      'font-mono text-[12px] font-medium whitespace-nowrap tabular-nums',
+                      confidence ? toneForConfidence(confidence.level) : 'text-muted',
+                    )}
+                  >
+                    <span className="text-muted mr-1.5 font-sans text-[10px] font-bold tracking-wider uppercase">
+                      C:
+                    </span>
+                    {confidence ? `${Math.round(confidence.score * 100)}%` : '--'}
                   </div>
                   <div className="flex items-center justify-center">
-                    {group.lastStage !== "system" && (
-                      <div className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider", STAGE_CONFIG[group.lastStage].chipClass)}>
+                    {group.lastStage !== 'system' && (
+                      <div
+                        className={cn(
+                          'rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase',
+                          STAGE_CONFIG[group.lastStage].chipClass,
+                        )}
+                      >
                         {STAGE_CONFIG[group.lastStage].label}
                       </div>
                     )}
                   </div>
                   <div className="min-w-0">
-                    <div className="truncate text-[12px] font-mono font-medium text-secondary" title={summaryLog?.message || ""}>
-                      {summaryLog ? sanitizeLogMessage(summaryLog.message) : TERMINAL_STRINGS.PENDING}
+                    <div
+                      className="text-secondary truncate font-mono text-[12px] font-medium"
+                      title={summaryLog?.message || ''}
+                    >
+                      {summaryLog
+                        ? sanitizeLogMessage(summaryLog.message)
+                        : TERMINAL_STRINGS.PENDING}
                     </div>
                   </div>
                   <div className="flex items-center justify-end">
@@ -1404,7 +1517,7 @@ export const LogTerminal = memo(function LogTerminal({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 text-[12px] font-medium px-2"
+                        className="h-7 px-2 text-[12px] font-medium"
                         onClick={(event) => {
                           event.stopPropagation();
                           setPeekedGroupKey(group.key);
@@ -1413,56 +1526,75 @@ export const LogTerminal = memo(function LogTerminal({
                       >
                         Peek
                       </Button>
-                    ) : <span className="text-[11px] opacity-25">--</span>}
+                    ) : (
+                      <span className="text-[11px] opacity-25">--</span>
+                    )}
                   </div>
-                  <div className="text-right pr-2">
-                    <div className="text-[11px] font-medium uppercase tracking-tight text-muted group-hover/row:text-secondary transition-colors">
-                      {live && groups.length > 0 && group.key === groups[groups.length - 1].key ? "Active" : expanded ? "Less" : "More"}
+                  <div className="pr-2 text-right">
+                    <div className="text-muted group-hover/row:text-secondary text-[11px] font-medium tracking-tight uppercase transition-colors">
+                      {live && groups.length > 0 && group.key === groups[groups.length - 1].key
+                        ? 'Active'
+                        : expanded
+                          ? 'Less'
+                          : 'More'}
                     </div>
                   </div>
                 </div>
 
                 {expanded ? (
-                  <div className="bg-black/[0.03] dark:bg-white/[0.03] shadow-[inset_0_4px_12px_rgba(0,0,0,0.03)] dark:shadow-[inset_0_4px_12px_rgba(0,0,0,0.15)]">
+                  <div className="bg-black/[0.03] shadow-[inset_0_4px_12px_rgba(0,0,0,0.03)] dark:bg-white/[0.03] dark:shadow-[inset_0_4px_12px_rgba(0,0,0,0.15)]">
                     <div className="overflow-hidden">
-                      {expandedRows.length ? expandedRows.map((row, expandedIndex) => {
-                        return (
-                          <div
-                            key={row.key}
-                            className={cn(
-                              "grid grid-cols-[64px_84px_minmax(0,1fr)_auto] items-center gap-4 px-4 py-2 text-[13px]",
-                              expandedIndex % 2 === 0 ? "bg-black/[0.015] dark:bg-white/[0.015]" : "bg-transparent",
-                            )}
-                          >
-                            <span className="text-[11px] font-medium tabular-nums font-mono text-muted">
-                              {row.createdAt ? formatTimeHms(row.createdAt) : "--"}
-                            </span>
-                            <span className={cn("inline-flex text-[11px] uppercase tracking-wider font-semibold", STAGE_CONFIG[row.stage].textOnlyClass)}>
-                              {STAGE_CONFIG[row.stage].label}
-                            </span>
-                            <span className="min-w-0 break-words text-[13px] font-mono font-medium leading-relaxed text-secondary">
-                              {!row.createdAt ? row.message : renderLogContent(row.message, row.stage === "system")}
-                            </span>
-                            <span className="flex items-center gap-2">
-                              {row.payloadAction ? (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-auto px-0 py-0 text-[14px] font-normal"
-                                  onClick={() => {
-                                    setPeekedGroupKey(group.key);
-                                    setPeekedRecordIndex(0);
-                                  }}
-                                >
-                                  Peek payload
-                                </Button>
-                              ) : null}
-                            </span>
-                          </div>
-                        );
-                      }) : (
-                        <div className="px-3 py-2 text-[13px] opacity-40">{TERMINAL_STRINGS.NO_LOGS}</div>
+                      {expandedRows.length ? (
+                        expandedRows.map((row, expandedIndex) => {
+                          return (
+                            <div
+                              key={row.key}
+                              className={cn(
+                                'grid grid-cols-[64px_84px_minmax(0,1fr)_auto] items-center gap-4 px-4 py-2 text-[13px]',
+                                expandedIndex % 2 === 0
+                                  ? 'bg-black/[0.015] dark:bg-white/[0.015]'
+                                  : 'bg-transparent',
+                              )}
+                            >
+                              <span className="text-muted font-mono text-[11px] font-medium tabular-nums">
+                                {row.createdAt ? formatTimeHms(row.createdAt) : '--'}
+                              </span>
+                              <span
+                                className={cn(
+                                  'inline-flex text-[11px] font-semibold tracking-wider uppercase',
+                                  STAGE_CONFIG[row.stage].textOnlyClass,
+                                )}
+                              >
+                                {STAGE_CONFIG[row.stage].label}
+                              </span>
+                              <span className="text-secondary min-w-0 font-mono text-[13px] leading-relaxed font-medium break-words">
+                                {!row.createdAt
+                                  ? row.message
+                                  : renderLogContent(row.message, row.stage === 'system')}
+                              </span>
+                              <span className="flex items-center gap-2">
+                                {row.payloadAction ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-auto px-0 py-0 text-[14px] font-normal"
+                                    onClick={() => {
+                                      setPeekedGroupKey(group.key);
+                                      setPeekedRecordIndex(0);
+                                    }}
+                                  >
+                                    Peek payload
+                                  </Button>
+                                ) : null}
+                              </span>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="px-3 py-2 text-[13px] opacity-40">
+                          {TERMINAL_STRINGS.NO_LOGS}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1470,37 +1602,48 @@ export const LogTerminal = memo(function LogTerminal({
               </section>
             );
           })
-          : (
-            <div className="px-4 py-8 text-center text-[14px] italic opacity-55">
-              {live ? "Waiting for log stream..." : "No log activity recorded"}
-            </div>
-          )}
+        ) : (
+          <div className="px-4 py-8 text-center text-[14px] italic opacity-55">
+            {live ? 'Waiting for log stream...' : 'No log activity recorded'}
+          </div>
+        )}
       </div>
 
       {activePeekedGroupKey ? (
         <div className="absolute inset-0 z-40 bg-black/10 dark:bg-black/20">
           <div
             ref={peekPanelRef}
-            className="absolute inset-y-0 right-0 z-50 w-[32rem] max-w-full animate-in slide-in-from-right duration-300 border-l"
+            className="animate-in slide-in-from-right absolute inset-y-0 right-0 z-50 w-[32rem] max-w-full border-l duration-300"
             style={{
-              borderColor: "var(--terminal-border)",
-              backgroundColor: "var(--terminal-code-bg)",
-              color: "var(--terminal-fg)",
-              boxShadow: "var(--terminal-shadow)",
+              borderColor: 'var(--terminal-border)',
+              backgroundColor: 'var(--terminal-code-bg)',
+              color: 'var(--terminal-fg)',
+              boxShadow: 'var(--terminal-shadow)',
             }}
           >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: "var(--terminal-border)", backgroundColor: "var(--terminal-bg)" }}>
+            <div
+              className="flex items-center justify-between border-b px-4 py-3"
+              style={{
+                borderColor: 'var(--terminal-border)',
+                backgroundColor: 'var(--terminal-bg)',
+              }}
+            >
               <div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-accent">{TERMINAL_STRINGS.PAYLOAD_PEEK}</div>
+                <div className="text-accent text-[11px] tracking-[0.16em] uppercase">
+                  {TERMINAL_STRINGS.PAYLOAD_PEEK}
+                </div>
                 <div className="mt-1 text-[13px] opacity-55">
                   {peekedGroup?.label ?? TERMINAL_STRINGS.SITE_PAYLOAD}
                 </div>
               </div>
-              <button onClick={() => setPeekedGroupKey(null)} className="text-[13px] opacity-60 transition-colors hover:opacity-100">
+              <button
+                onClick={() => setPeekedGroupKey(null)}
+                className="text-[13px] opacity-60 transition-colors hover:opacity-100"
+              >
                 Close
               </button>
             </div>
-            <div className="p-4 overflow-y-auto max-h-[calc(100%-48px)]">
+            <div className="max-h-[calc(100%-48px)] overflow-y-auto p-4">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Button
@@ -1513,14 +1656,18 @@ export const LogTerminal = memo(function LogTerminal({
                         if (!peekedGroup || peekedGroup.records.length <= 1) {
                           return 0;
                         }
-                        return (current - 1 + peekedGroup.records.length) % peekedGroup.records.length;
+                        return (
+                          (current - 1 + peekedGroup.records.length) % peekedGroup.records.length
+                        );
                       })
                     }
                   >
                     Prev
                   </Button>
                   <span className="text-[13px] opacity-55">
-                  {peekedGroup ? `${Math.min(safePeekedRecordIndex + 1, peekedGroup.records.length)}/${peekedGroup.records.length}` : "0/0"}
+                    {peekedGroup
+                      ? `${Math.min(safePeekedRecordIndex + 1, peekedGroup.records.length)}/${peekedGroup.records.length}`
+                      : '0/0'}
                   </span>
                   <Button
                     type="button"
@@ -1547,16 +1694,13 @@ export const LogTerminal = memo(function LogTerminal({
                     if (!peekedGroup) {
                       return;
                     }
-                    const currentRecord = peekedGroup.records[safePeekedRecordIndex] ?? peekedGroup.records[0];
+                    const currentRecord =
+                      peekedGroup.records[safePeekedRecordIndex] ?? peekedGroup.records[0];
                     if (!currentRecord) {
                       return;
                     }
                     void navigator.clipboard.writeText(
-                      JSON.stringify(
-                        cleanRecordForDisplay(currentRecord),
-                        null,
-                        2,
-                      ),
+                      JSON.stringify(cleanRecordForDisplay(currentRecord), null, 2),
                     );
                   }}
                 >
@@ -1566,10 +1710,10 @@ export const LogTerminal = memo(function LogTerminal({
               <pre className="text-[14px] leading-7 whitespace-pre-wrap">
                 {peekedGroup && peekedGroup.records[safePeekedRecordIndex]
                   ? JSON.stringify(
-                    cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
-                    null,
-                    2,
-                  )
+                      cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
+                      null,
+                      2,
+                    )
                   : TERMINAL_STRINGS.NO_PAYLOAD}
               </pre>
             </div>
@@ -1597,21 +1741,21 @@ export function SettingSection({
 }>) {
   const renderedIcon = React.isValidElement<IconElementProps>(icon)
     ? React.cloneElement(icon, {
-      className: cn(icon.props.className, "size-4"),
-    })
+        className: cn(icon.props.className, 'size-4'),
+      })
     : null;
 
   return (
-    <div className="transition-all h-9 flex items-center w-full">
+    <div className="flex h-9 w-full items-center transition-all">
       <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5">
           {renderedIcon ? (
             <div
               className={cn(
-                "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors",
+                'flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors',
                 checked
-                  ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-setting-icon-active-bg text-accent shadow-setting-icon-active"
-                  : "border-border bg-setting-icon-bg text-secondary",
+                  ? 'bg-setting-icon-active-bg text-accent shadow-setting-icon-active border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)]'
+                  : 'border-border bg-setting-icon-bg text-secondary',
               )}
             >
               {renderedIcon}
@@ -1619,7 +1763,7 @@ export function SettingSection({
           ) : null}
           <div className="field-label mb-0 min-w-0">{label}</div>
           <Tooltip content={description}>
-            <Info className="size-3.5 text-muted hover:text-secondary cursor-help transition-colors" />
+            <Info className="text-muted hover:text-secondary size-3.5 cursor-help transition-colors" />
           </Tooltip>
         </div>
         <div className="flex justify-start">
@@ -1629,11 +1773,13 @@ export function SettingSection({
       {children ? (
         <div
           className={cn(
-            "transition-[max-height] duration-200 ease-out",
-            checked ? "max-h-[500px] overflow-visible" : "max-h-0 overflow-hidden",
+            'transition-[max-height] duration-200 ease-out',
+            checked ? 'max-h-[500px] overflow-visible' : 'max-h-0 overflow-hidden',
           )}
         >
-          <div className="border-t border-divider bg-setting-body-bg px-5 py-4 space-y-3">{children}</div>
+          <div className="border-divider bg-setting-body-bg space-y-3 border-t px-5 py-4">
+            {children}
+          </div>
         </div>
       ) : null}
     </div>
@@ -1663,22 +1809,20 @@ export function SliderRow({
 }>) {
   return (
     <div
-      className={cn(
-        "grid gap-2.5 md:grid-cols-[140px_minmax(0,1fr)_112px] md:items-center w-full",
-      )}
+      className={cn('grid w-full gap-2.5 md:grid-cols-[140px_minmax(0,1fr)_112px] md:items-center')}
     >
-      <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex min-w-0 items-center gap-1.5">
         <span className="field-label mb-0">{label}</span>
         {description ? (
           <Tooltip content={description}>
-            <Info className="size-3.5 cursor-help text-muted transition-colors hover:text-secondary" />
+            <Info className="text-muted hover:text-secondary size-3.5 cursor-help transition-colors" />
           </Tooltip>
         ) : null}
         <button
           type="button"
           onClick={onReset}
           aria-label={`Reset ${label}`}
-          className="text-muted transition-colors hover:text-primary"
+          className="text-muted hover:text-primary transition-colors"
         >
           <RotateCcw className="size-3" aria-hidden="true" />
         </button>
@@ -1697,12 +1841,12 @@ export function SliderRow({
           type="text"
           inputMode="numeric"
           value={value}
-          onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
+          onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ''))}
           onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
           className="pr-8 text-right font-mono tabular-nums"
         />
         {suffix ? (
-          <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-sm leading-normal lowercase text-muted">
+          <span className="text-muted pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 text-sm leading-normal lowercase">
             {suffix}
           </span>
         ) : null}
@@ -1724,7 +1868,7 @@ export function AdditionalFieldInput({
   onCommit: (value: string) => void;
   onRemove: (value: string) => void;
 }>) {
-  const chips = uniqueRequestedFields([...fields, ...parseLines(value.replace(/,/g, "\n"))]);
+  const chips = uniqueRequestedFields([...fields, ...parseLines(value.replace(/,/g, '\n'))]);
   const [validationHint, setValidationHint] = useState<string | null>(null);
 
   function commitField(candidate: string) {
@@ -1734,23 +1878,22 @@ export function AdditionalFieldInput({
     }
     const validationError = validateAdditionalFieldName(cleaned);
     if (validationError) {
-      setValidationHint(`Skipped "${cleaned}": ${validationError}`); return;
+      setValidationHint(`Skipped "${cleaned}": ${validationError}`);
+      return;
     }
     onCommit(cleaned);
   }
 
   function handleChange(next: string) {
-    const parts = next.split(",");
-    parts
-      .slice(0, -1)
-      .forEach(commitField);
+    const parts = next.split(',');
+    parts.slice(0, -1).forEach(commitField);
     setValidationHint(null);
-    onChange(parts.at(-1) ?? "");
+    onChange(parts.at(-1) ?? '');
   }
 
   function handleBlur() {
     parseLines(value).forEach(commitField);
-    onChange("");
+    onChange('');
   }
 
   return (
@@ -1763,7 +1906,9 @@ export function AdditionalFieldInput({
         placeholder="price, sku, Features & Benefits, Product Story"
         className="font-mono"
       />
-      {validationHint ? <p className="text-sm leading-[var(--leading-normal)] text-danger">{validationHint}</p> : null}
+      {validationHint ? (
+        <p className="text-danger text-sm leading-[var(--leading-normal)]">{validationHint}</p>
+      ) : null}
       {chips.length ? (
         <div className="flex flex-wrap gap-1.5">
           {chips.map((field) => (
@@ -1772,7 +1917,7 @@ export function AdditionalFieldInput({
               type="button"
               onClick={() => onRemove(field)}
               aria-label={`Remove ${field}`}
-              className="inline-flex items-center gap-1 rounded-md border border-subtle-panel-border bg-subtle-panel px-2 py-1 text-sm leading-[var(--leading-normal)] text-secondary"
+              className="border-subtle-panel-border bg-subtle-panel text-secondary inline-flex items-center gap-1 rounded-md border px-2 py-1 text-sm leading-[var(--leading-normal)]"
             >
               <X className="size-3.5 shrink-0" aria-hidden="true" />
               <span className="truncate">{field}</span>
@@ -1792,7 +1937,7 @@ export function ManualFieldEditor({
   testing = false,
   testDisabled = false,
   message,
-  messageTone = "warning",
+  messageTone = 'warning',
   showLabels = true,
 }: Readonly<{
   row: FieldRow;
@@ -1806,19 +1951,19 @@ export function ManualFieldEditor({
   showLabels?: boolean;
 }>) {
   return (
-    <div className="space-y-1.5 rounded-md border border-border/60 bg-background/50 p-2.5">
+    <div className="border-border/60 bg-background/50 space-y-1.5 rounded-md border p-2.5">
       <div className="grid gap-2 xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
-        <div className="hidden items-center justify-center text-muted/50 xl:flex">
+        <div className="text-muted/50 hidden items-center justify-center xl:flex">
           <GripVertical className="size-3.5" />
         </div>
         <label className="grid gap-1">
-          <span className={cn("field-label", !showLabels && "sr-only")}>Field</span>
+          <span className={cn('field-label', !showLabels && 'sr-only')}>Field</span>
           <Input
             aria-label="Field"
             value={row.fieldName}
             onChange={(event) => onChange({ fieldName: event.target.value })}
             placeholder="price"
-            className="font-mono h-8 text-xs"
+            className="h-8 font-mono text-xs"
           />
         </label>
         <ValidatedField
@@ -1859,14 +2004,14 @@ export function ManualFieldEditor({
                 disabled={testing || testDisabled}
                 className="h-8 min-w-[64px] text-xs"
               >
-                {testing ? "..." : "Test"}
+                {testing ? '...' : 'Test'}
               </Button>
             ) : null}
             <button
               type="button"
               onClick={onDelete}
-              aria-label={`Delete ${row.fieldName || "manual field"}`}
-              className="surface-muted inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger/70 hover:bg-danger/10 hover:text-danger"
+              aria-label={`Delete ${row.fieldName || 'manual field'}`}
+              className="surface-muted text-danger/70 hover:bg-danger/10 hover:text-danger inline-flex size-8 items-center justify-center rounded-[var(--radius-md)]"
             >
               <Trash2 className="size-3.5" />
             </button>
@@ -1876,10 +2021,10 @@ export function ManualFieldEditor({
       {message ? (
         <div
           className={cn(
-            "alert-surface px-2.5 py-1.5 text-xs leading-[var(--leading-normal)]",
-            messageTone === "success" && "alert-success",
-            messageTone === "warning" && "alert-warning",
-            messageTone === "danger" && "alert-danger",
+            'alert-surface px-2.5 py-1.5 text-xs leading-[var(--leading-normal)]',
+            messageTone === 'success' && 'alert-success',
+            messageTone === 'warning' && 'alert-warning',
+            messageTone === 'danger' && 'alert-danger',
           )}
         >
           {message}
@@ -1894,22 +2039,24 @@ export function FieldEditorHeader() {
     <div className="hidden items-center gap-2 px-3 py-1.5 xl:grid xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
       <div />
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e]">Field</span>
+        <span className="text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">Field</span>
         <Info className="size-3 text-[#005a9e]/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e]">CSS</span>
+        <span className="text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">CSS</span>
         <Info className="size-3 text-[#005a9e]/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e]">XPath</span>
+        <span className="text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">XPath</span>
         <Info className="size-3 text-[#005a9e]/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e]">Regex</span>
+        <span className="text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">Regex</span>
         <Info className="size-3 text-[#005a9e]/60" />
       </div>
-      <span className="text-[11px] font-bold uppercase tracking-wider text-[#005a9e] text-right">Actions</span>
+      <span className="text-right text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">
+        Actions
+      </span>
     </div>
   );
 }
@@ -1933,7 +2080,7 @@ function ValidatedField({
 }>) {
   return (
     <label className="grid gap-1">
-      <span className={cn("field-label", !showLabel && "sr-only")}>{label}</span>
+      <span className={cn('field-label', !showLabel && 'sr-only')}>{label}</span>
       <div className="relative">
         <Input
           aria-label={label}
@@ -1941,24 +2088,24 @@ function ValidatedField({
           onChange={(event) => onChange(event.target.value)}
           onBlur={(event) => onBlur(event.target.value)}
           placeholder={placeholder}
-          className="pr-9 font-mono h-8 text-xs"
+          className="h-8 pr-9 font-mono text-xs"
         />
         <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
-          {state === "valid" ? <CheckCircle2 className="size-3.5 text-success/80" /> : null}
-          {state === "invalid" ? <CircleAlert className="size-3.5 text-danger/80" /> : null}
+          {state === 'valid' ? <CheckCircle2 className="text-success/80 size-3.5" /> : null}
+          {state === 'invalid' ? <CircleAlert className="text-danger/80 size-3.5" /> : null}
         </div>
       </div>
     </label>
   );
 }
 
-const BROKEN_THUMBNAIL_STORAGE_KEY = "crawlerai-broken-thumb-urls-v1";
-const BROKEN_THUMBNAIL_HOSTS_KEY = "crawlerai-broken-thumb-hosts-v1";
+const BROKEN_THUMBNAIL_STORAGE_KEY = 'crawlerai-broken-thumb-urls-v1';
+const BROKEN_THUMBNAIL_HOSTS_KEY = 'crawlerai-broken-thumb-hosts-v1';
 const BROKEN_THUMBNAIL_URLS = new Set<string>();
 const BROKEN_THUMBNAIL_HOSTS = new Set<string>();
 
 function loadBrokenThumbnailCache() {
-  if (typeof window === "undefined") return;
+  if (typeof window === 'undefined') return;
   try {
     const urls = window.sessionStorage.getItem(BROKEN_THUMBNAIL_STORAGE_KEY);
     if (urls) (JSON.parse(urls) as string[]).forEach((u) => BROKEN_THUMBNAIL_URLS.add(u));
@@ -1971,7 +2118,7 @@ function loadBrokenThumbnailCache() {
 loadBrokenThumbnailCache();
 
 function persistBrokenThumbnailCache() {
-  if (typeof window === "undefined") return;
+  if (typeof window === 'undefined') return;
   try {
     window.sessionStorage.setItem(
       BROKEN_THUMBNAIL_STORAGE_KEY,
@@ -1990,13 +2137,14 @@ function thumbnailHost(src: string): string {
   try {
     return new URL(src).host;
   } catch {
-    return "";
+    return '';
   }
 }
 
 function RecordThumbnail({ src }: Readonly<{ src: string }>) {
   const host = thumbnailHost(src);
-  const initiallyBroken = BROKEN_THUMBNAIL_URLS.has(src) || (host !== "" && BROKEN_THUMBNAIL_HOSTS.has(host));
+  const initiallyBroken =
+    BROKEN_THUMBNAIL_URLS.has(src) || (host !== '' && BROKEN_THUMBNAIL_HOSTS.has(host));
   const [broken, setBroken] = useState(initiallyBroken);
   if (broken) {
     return <span className="ct-muted">--</span>;
@@ -2034,10 +2182,18 @@ export const RecordsTable = memo(function RecordsTable({
   onSelectAll: (checked: boolean) => void;
   onToggleRow: (id: number, checked: boolean) => void;
 }>) {
-  const IMAGE_KEYS = new Set(["image_url", "image", "thumbnail", "img"]);
-  const TITLE_KEYS = new Set(["title", "name", "product_name", "product title"]);
-  const PRICE_KEYS = new Set(["price", "sale_price", "offer_price", "current_price", "final_price", "our_price", "deal_price"]);
-  const URL_KEYS = new Set(["url", "source_url", "product_url", "canonical_url"]);
+  const IMAGE_KEYS = new Set(['image_url', 'image', 'thumbnail', 'img']);
+  const TITLE_KEYS = new Set(['title', 'name', 'product_name', 'product title']);
+  const PRICE_KEYS = new Set([
+    'price',
+    'sale_price',
+    'offer_price',
+    'current_price',
+    'final_price',
+    'our_price',
+    'deal_price',
+  ]);
+  const URL_KEYS = new Set(['url', 'source_url', 'product_url', 'canonical_url']);
 
   const imageCol = visibleColumns.find((col) => IMAGE_KEYS.has(col));
   const dataColumns = visibleColumns.filter((col) => !IMAGE_KEYS.has(col));
@@ -2063,7 +2219,7 @@ export const RecordsTable = memo(function RecordsTable({
   const bottomSpacerPx = Math.max(0, (totalCount - endIndex) * rowHeightPx);
 
   useEffect(() => {
-    if (!containerNode || typeof ResizeObserver === "undefined") {
+    if (!containerNode || typeof ResizeObserver === 'undefined') {
       return;
     }
     const observer = new ResizeObserver((entries) => {
@@ -2079,7 +2235,7 @@ export const RecordsTable = memo(function RecordsTable({
 
   function renderCell(col: string, record: CrawlRecord) {
     const raw = formatCellDisplay(readRecordValue(record, col));
-    if (!raw || raw === "--") return <span className="ct-muted">--</span>;
+    if (!raw || raw === '--') return <span className="ct-muted">--</span>;
 
     if (TITLE_KEYS.has(col)) {
       return <span className="ct-title block max-w-[320px] truncate">{raw}</span>;
@@ -2088,33 +2244,46 @@ export const RecordsTable = memo(function RecordsTable({
       return <span className="ct-price">{raw}</span>;
     }
     if (URL_KEYS.has(col)) {
-      const isSafe = raw.startsWith("http://") || raw.startsWith("https://");
+      const isSafe = raw.startsWith('http://') || raw.startsWith('https://');
       if (isSafe) {
         return (
-          <a href={raw} target="_blank" rel="noreferrer" className="ct-url block max-w-[200px] truncate" title={raw}>
+          <a
+            href={raw}
+            target="_blank"
+            rel="noreferrer"
+            className="ct-url block max-w-[200px] truncate"
+            title={raw}
+          >
             {raw}
           </a>
         );
       }
     }
-    return <span className="block max-w-[260px] truncate leading-[var(--leading-snug)] text-secondary font-normal" style={{ fontSize: "var(--table-font-size)" }}>{raw}</span>;
+    return (
+      <span
+        className="text-secondary block max-w-[260px] truncate leading-[var(--leading-snug)] font-normal"
+        style={{ fontSize: 'var(--table-font-size)' }}
+      >
+        {raw}
+      </span>
+    );
   }
 
   return (
     <div
       ref={setContainerRef}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-      className="commerce-table surface-muted max-h-[70vh] rounded-lg overflow-auto"
+      className="commerce-table surface-muted max-h-[70vh] overflow-auto rounded-lg"
     >
       <table className="compact-data-table min-w-[960px]">
         <colgroup>
           <col style={{ width: 32 }} />
           {hasImageCol ? <col style={{ width: 64 }} /> : null}
           {dataColumns.map((col) => {
-            let width: string | number = "auto";
-            if (URL_KEYS.has(col)) width = "22%";
-            else if (TITLE_KEYS.has(col)) width = "18%";
-            else if (PRICE_KEYS.has(col)) width = "10%";
+            let width: string | number = 'auto';
+            if (URL_KEYS.has(col)) width = '22%';
+            else if (TITLE_KEYS.has(col)) width = '18%';
+            else if (PRICE_KEYS.has(col)) width = '10%';
             return <col key={col} style={{ width }} />;
           })}
         </colgroup>
@@ -2130,7 +2299,7 @@ export const RecordsTable = memo(function RecordsTable({
             {hasImageCol ? <th>IMG</th> : null}
             {dataColumns.map((col) => (
               <th key={col}>
-                <div className="flex items-center gap-1 min-w-0">
+                <div className="flex min-w-0 items-center gap-1">
                   <span className="flex-1 truncate">{humanizeFieldName(col)}</span>
                 </div>
               </th>
@@ -2156,7 +2325,7 @@ export const RecordsTable = memo(function RecordsTable({
                 <td className="ct-image-cell">
                   {(() => {
                     const src = formatCellDisplay(readRecordValue(record, imageCol!));
-                    if (!src || src === "--") return <span className="ct-muted">--</span>;
+                    if (!src || src === '--') return <span className="ct-muted">--</span>;
                     return <RecordThumbnail src={src} />;
                   })()}
                 </td>
@@ -2188,23 +2357,32 @@ export function ActionButton({
   return (
     <Button
       type="button"
-      variant={danger ? "danger" : "secondary"}
+      variant={danger ? 'danger' : 'secondary'}
       size="sm"
       disabled={disabled}
       onClick={onClick}
-      className={cn("h-8 min-w-0 px-3", !danger && "text-sm leading-[var(--leading-normal)]")}
+      className={cn('h-8 min-w-0 px-3', !danger && 'text-sm leading-[var(--leading-normal)]')}
     >
       {label}
     </Button>
   );
 }
 
-export function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: ReactNode; mono?: boolean }>) {
+export function PreviewRow({
+  label,
+  value,
+  mono,
+}: Readonly<{ label: string; value: ReactNode; mono?: boolean }>) {
   return (
     <div className="surface-muted flex items-start justify-between gap-4 rounded-[var(--radius-md)] px-3 py-2">
       <div className="field-label shrink-0">{label}</div>
-      <div className={cn("min-w-0 flex-1 text-right text-sm leading-[var(--leading-normal)] text-foreground", mono && "type-mono-standard")}>
-        {value || "--"}
+      <div
+        className={cn(
+          'text-foreground min-w-0 flex-1 text-right text-sm leading-[var(--leading-normal)]',
+          mono && 'type-mono-standard',
+        )}
+      >
+        {value || '--'}
       </div>
     </div>
   );
@@ -2214,77 +2392,80 @@ function inferRunModule(run?: CrawlRun): CrawlTab | null {
   if (!run) {
     return null;
   }
-  const settings = run.settings && typeof run.settings === "object" ? run.settings : {};
-  const configuredModule = typeof settings.crawl_module === "string" ? settings.crawl_module : "";
-  if (configuredModule === "category" || configuredModule === "pdp") {
+  const settings = run.settings && typeof run.settings === 'object' ? run.settings : {};
+  const configuredModule = typeof settings.crawl_module === 'string' ? settings.crawl_module : '';
+  if (configuredModule === 'category' || configuredModule === 'pdp') {
     return configuredModule;
   }
 
-  const configuredMode = typeof settings.crawl_mode === "string" ? settings.crawl_mode : "";
-  if (configuredMode === "bulk" || configuredMode === "sitemap") {
-    return "category";
+  const configuredMode = typeof settings.crawl_mode === 'string' ? settings.crawl_mode : '';
+  if (configuredMode === 'bulk' || configuredMode === 'sitemap') {
+    return 'category';
   }
-  if (configuredMode === "batch" || configuredMode === "csv") {
-    return "pdp";
+  if (configuredMode === 'batch' || configuredMode === 'csv') {
+    return 'pdp';
   }
 
-  const surface = String(run.surface || "").toLowerCase();
-  if (surface.includes("listing")) {
-    return "category";
+  const surface = String(run.surface || '').toLowerCase();
+  if (surface.includes('listing')) {
+    return 'category';
   }
-  if (surface.includes("detail")) {
-    return "pdp";
+  if (surface.includes('detail')) {
+    return 'pdp';
   }
 
   return null;
 }
 
 function validateXPath(value: string): ValidationState {
-  if (!value.trim()) return "idle";
+  if (!value.trim()) return 'idle';
   try {
     globalThis.document?.evaluate(value, globalThis.document, null, XPathResult.ANY_TYPE, null);
-    return "valid";
+    return 'valid';
   } catch {
-    return "invalid";
+    return 'invalid';
   }
 }
 
 function validateCssSelector(value: string): ValidationState {
-  if (!value.trim()) return "idle";
+  if (!value.trim()) return 'idle';
   try {
     globalThis.document?.querySelector(value);
-    return "valid";
+    return 'valid';
   } catch {
-    return "invalid";
+    return 'invalid';
   }
 }
 
 function validateRegex(value: string): ValidationState {
-  if (!value.trim()) return "idle";
+  if (!value.trim()) return 'idle';
   try {
     new RegExp(value);
-    return "valid";
+    return 'valid';
   } catch {
-    return "invalid";
+    return 'invalid';
   }
 }
 
 function logTone(level: string) {
   const normalized = normalizeLogLevel(level);
-  if (normalized === "WARN" || normalized === "WARNING") return "border-transparent bg-transparent text-warning";
-  if (normalized === "ERROR") return "border-transparent bg-transparent text-danger";
-  return "border-transparent bg-transparent text-terminal-fg";
+  if (normalized === 'WARN' || normalized === 'WARNING')
+    return 'border-transparent bg-transparent text-warning';
+  if (normalized === 'ERROR') return 'border-transparent bg-transparent text-danger';
+  return 'border-transparent bg-transparent text-terminal-fg';
 }
 
 function logLineTone(level: string) {
   const normalized = normalizeLogLevel(level);
-  if (normalized === "WARN" || normalized === "WARNING") return "text-warning";
-  if (normalized === "ERROR") return "text-danger";
-  return "text-terminal-fg";
+  if (normalized === 'WARN' || normalized === 'WARNING') return 'text-warning';
+  if (normalized === 'ERROR') return 'text-danger';
+  return 'text-terminal-fg';
 }
 
 function normalizeLogLevel(level: string) {
-  return String(level || "").trim().toUpperCase();
+  return String(level || '')
+    .trim()
+    .toUpperCase();
 }
 
 function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null>) {
@@ -2299,4 +2480,3 @@ function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null
 
   return targetRef;
 }
-
