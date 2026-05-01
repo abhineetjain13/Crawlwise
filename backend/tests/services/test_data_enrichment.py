@@ -13,6 +13,7 @@ from app.services.config.data_enrichment import (
     DATA_ENRICHMENT_STATUS_ENRICHED,
     DATA_ENRICHMENT_STATUS_FAILED,
     DATA_ENRICHMENT_STATUS_PENDING,
+    DATA_ENRICHMENT_TAXONOMY_VERSION,
 )
 from app.services.data_enrichment.service import (
     _build_deterministic_enrichment,
@@ -216,13 +217,21 @@ async def test_data_enrichment_deterministic_job_populates_enriched_fields(
     assert product.materials_normalized == ["linen"]
     assert product.availability_normalized == "in_stock"
     assert product.category_path
-    assert product.category_path == "Dresses"
-    assert product.diagnostics["product_category"]["category_path"] == "Dresses"
+    assert product.category_path == "Apparel & Accessories > Clothing > Dresses"
+    assert product.taxonomy_version == DATA_ENRICHMENT_TAXONOMY_VERSION
     assert (
-        product.diagnostics["product_category"]["gpc_reference"]["category_path"]
+        product.diagnostics["product_category"]["category_path"]
         == "Apparel & Accessories > Clothing > Dresses"
     )
-    assert "material" in product.diagnostics["product_attributes"]["present_attributes"]
+    assert (
+        product.diagnostics["product_category"]["taxonomy_reference"]["category_path"]
+        == "Apparel & Accessories > Clothing > Dresses"
+    )
+    assert (
+        product.diagnostics["product_category"]["taxonomy_version"]
+        == DATA_ENRICHMENT_TAXONOMY_VERSION
+    )
+    assert "fabric" in product.diagnostics["product_attributes"]["present_attributes"]
     assert "image_link" in product.diagnostics["product_attributes"]["null_attributes"]
     assert "linen" in product.seo_keywords
     assert product.intent_attributes is None
@@ -260,6 +269,54 @@ async def test_data_enrichment_category_low_confidence_stays_null(
     ).one()
 
     assert product.category_path is None
+
+
+@pytest.mark.asyncio
+async def test_data_enrichment_reenrichment_clears_taxonomy_version_before_rerun(
+    db_session: AsyncSession,
+    create_test_run,
+    test_user,
+) -> None:
+    run = await create_test_run(
+        url="https://example.com/products/dress",
+        surface="ecommerce_detail",
+    )
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/products/dress",
+        data={"title": "Linen Dress", "category": "Dresses"},
+    )
+    db_session.add(record)
+    await db_session.commit()
+    await db_session.refresh(record)
+
+    first_job = await create_data_enrichment_job(
+        db_session,
+        user=test_user,
+        payload={"source_record_ids": [record.id]},
+    )
+    await _run_job(db_session, first_job)
+    product = (
+        await db_session.scalars(
+            select(EnrichedProduct).where(EnrichedProduct.source_record_id == record.id)
+        )
+    ).one()
+    assert product.taxonomy_version == DATA_ENRICHMENT_TAXONOMY_VERSION
+
+    record.enrichment_status = "unenriched"
+    await db_session.commit()
+    second_job = await create_data_enrichment_job(
+        db_session,
+        user=test_user,
+        payload={"source_record_ids": [record.id]},
+    )
+    refreshed = (
+        await db_session.scalars(
+            select(EnrichedProduct).where(EnrichedProduct.job_id == second_job.id)
+        )
+    ).one()
+
+    assert refreshed.taxonomy_version is None
 
 
 @pytest.mark.asyncio
@@ -313,6 +370,7 @@ def test_data_enrichment_llm_prompt_context_excludes_raw_artifacts() -> None:
         availability_normalized="in_stock",
         seo_keywords=["linen", "dress"],
         category_path="Apparel & Accessories > Clothing > Dresses",
+        taxonomy_version=DATA_ENRICHMENT_TAXONOMY_VERSION,
     )
 
     context = _llm_prompt_context(
@@ -323,11 +381,13 @@ def test_data_enrichment_llm_prompt_context_excludes_raw_artifacts() -> None:
             "_source": "artifact",
         },
         product=product,
+        category_candidates=[],
     )
 
     assert "raw_html" not in context
     assert "_source" not in context
     assert context["description_excerpt"] == "Clean description"
+    assert context["taxonomy_version"] == DATA_ENRICHMENT_TAXONOMY_VERSION
 
 
 def test_data_enrichment_variant_dict_values_do_not_pollute_sizes_or_availability() -> None:
@@ -377,8 +437,37 @@ def test_data_enrichment_category_uses_primary_category_before_title_noise() -> 
         source_url="https://example.com/products/food-processor",
     )
 
-    assert enrichment["category_path"] == "Kitchen Appliances"
+    assert (
+        enrichment["category_path"]
+        == "Home & Garden > Kitchen & Dining > Kitchen Appliances"
+    )
     assert "Cup Sleeves" not in str(enrichment["category_path"])
+
+
+def test_data_enrichment_exact_shopify_path_match_wins() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Navy Linen Midi Dress",
+            "category": "Apparel & Accessories > Clothing > Dresses",
+        },
+        source_url="https://example.com/products/dress",
+    )
+
+    assert enrichment["category_path"] == "Apparel & Accessories > Clothing > Dresses"
+    assert enrichment["_taxonomy_match"]["source"] == "exact_path"
+
+
+def test_data_enrichment_scored_match_maps_category_phrase_to_shopify_path() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Navy Linen Midi Dress",
+            "category": "Cocktail Dresses",
+        },
+        source_url="https://example.com/products/dress",
+    )
+
+    assert enrichment["category_path"] == "Apparel & Accessories > Clothing > Dresses"
+    assert enrichment["_taxonomy_match"]["source"] == "scored_match"
 
 
 def test_data_enrichment_seo_keywords_filter_stopwords_from_all_sources() -> None:
@@ -472,7 +561,7 @@ async def test_data_enrichment_rolls_back_after_sqlalchemy_product_failure(
 
 
 @pytest.mark.asyncio
-async def test_data_enrichment_llm_enabled_applies_valid_payload(
+async def test_data_enrichment_llm_enabled_backfills_missing_fields_in_one_call(
     db_session: AsyncSession,
     create_test_run,
     test_user,
@@ -485,7 +574,13 @@ async def test_data_enrichment_llm_enabled_applies_valid_payload(
         captured["variables"] = variables
         return LLMTaskResult(
             payload={
-                "category_path": "Clothing > Dresses",
+                "category_path": "Apparel & Accessories > Clothing > Dresses",
+                "color_family": "blue",
+                "size_normalized": ["Medium (M)"],
+                "size_system": "alpha",
+                "gender_normalized": "female",
+                "materials_normalized": ["linen"],
+                "availability_normalized": "in_stock",
                 "intent_attributes": ["cocktail"],
                 "audience": ["women"],
                 "style_tags": ["classic"],
@@ -507,7 +602,7 @@ async def test_data_enrichment_llm_enabled_applies_valid_payload(
     record = CrawlRecord(
         run_id=run.id,
         source_url="https://example.com/products/dress",
-        data={"title": "Linen Dress", "category": "Dresses"},
+        data={"title": "Linen Dress", "category": "ZXQ Plinth"},
     )
     db_session.add(record)
     await db_session.commit()
@@ -527,13 +622,91 @@ async def test_data_enrichment_llm_enabled_applies_valid_payload(
 
     assert captured["task_type"] == "data_enrichment_semantic"
     assert "product_json" in captured["variables"]
-    assert product.category_path == "Clothing > Dresses"
+    assert product.category_path == "Apparel & Accessories > Clothing > Dresses"
+    assert product.color_family == "blue"
+    assert product.size_normalized == ["M"]
+    assert product.size_system == "alpha"
+    assert product.gender_normalized == "female"
+    assert product.materials_normalized == ["linen"]
+    assert product.availability_normalized == "in_stock"
     assert product.intent_attributes == ["cocktail"]
     assert product.ai_discovery_tags == ["linen-dress"]
+    assert product.diagnostics["llm"]["applied_fields"]
 
 
 @pytest.mark.asyncio
-async def test_data_enrichment_llm_applies_plain_category_when_source_missing(
+async def test_data_enrichment_llm_does_not_overwrite_deterministic_fields(
+    db_session: AsyncSession,
+    create_test_run,
+    test_user,
+    monkeypatch,
+) -> None:
+    async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
+        return LLMTaskResult(
+            payload={
+                "category_path": "Apparel & Accessories > Clothing > Shirts",
+                "color_family": "red",
+                "size_normalized": ["XL"],
+                "gender_normalized": "male",
+                "materials_normalized": ["wool"],
+                "availability_normalized": "out_of_stock",
+                "intent_attributes": ["useful"],
+                "audience": ["men"],
+                "style_tags": ["sharp"],
+                "ai_discovery_tags": ["linen-dress"],
+                "suggested_bundles": ["boots"],
+            }
+        )
+
+    monkeypatch.setattr(
+        "app.services.data_enrichment.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+    run = await create_test_run(
+        url="https://example.com/products/mystery",
+        surface="ecommerce_detail",
+    )
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/products/dress",
+        data={
+            "title": "Linen Dress",
+            "category": "Dresses",
+            "color": "navy",
+            "size": "medium",
+            "gender": "women",
+            "materials": "linen",
+            "availability": "In stock",
+        },
+    )
+    db_session.add(record)
+    await db_session.commit()
+    await db_session.refresh(record)
+    job = await create_data_enrichment_job(
+        db_session,
+        user=test_user,
+        payload={"source_record_ids": [record.id], "options": {"llm_enabled": True}},
+    )
+
+    await _run_job(db_session, job)
+    product = (
+        await db_session.scalars(
+            select(EnrichedProduct).where(EnrichedProduct.job_id == job.id)
+        )
+    ).one()
+
+    assert product.category_path == "Apparel & Accessories > Clothing > Dresses"
+    assert product.color_family == "blue"
+    assert product.size_normalized == ["M"]
+    assert product.gender_normalized == "female"
+    assert product.materials_normalized == ["linen"]
+    assert product.availability_normalized == "in_stock"
+    assert product.intent_attributes == ["useful"]
+    assert product.suggested_bundles == ["boots"]
+
+
+@pytest.mark.asyncio
+async def test_data_enrichment_llm_rejects_non_shopify_category_path(
     db_session: AsyncSession,
     create_test_run,
     test_user,
@@ -544,10 +717,6 @@ async def test_data_enrichment_llm_applies_plain_category_when_source_missing(
             payload={
                 "category_path": "Hardware > Plinths",
                 "intent_attributes": ["useful"],
-                "audience": [],
-                "style_tags": [],
-                "ai_discovery_tags": [],
-                "suggested_bundles": [],
             }
         )
 
@@ -580,5 +749,49 @@ async def test_data_enrichment_llm_applies_plain_category_when_source_missing(
         )
     ).one()
 
-    assert product.category_path == "Hardware > Plinths"
+    assert product.category_path is None
     assert product.intent_attributes == ["useful"]
+    assert "category_path" not in product.diagnostics["llm"]["applied_fields"]
+
+
+@pytest.mark.asyncio
+async def test_data_enrichment_llm_ignores_non_dict_payload(
+    db_session: AsyncSession,
+    create_test_run,
+    test_user,
+    monkeypatch,
+) -> None:
+    async def fake_run_prompt_task(session, *, task_type, run_id, domain, variables):
+        return LLMTaskResult(payload="bad-payload")
+
+    monkeypatch.setattr(
+        "app.services.data_enrichment.service.run_prompt_task",
+        fake_run_prompt_task,
+    )
+    run = await create_test_run(
+        url="https://example.com/products/dress",
+        surface="ecommerce_detail",
+    )
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/products/dress",
+        data={"title": "Linen Dress", "category": "Dresses"},
+    )
+    db_session.add(record)
+    await db_session.commit()
+    await db_session.refresh(record)
+    job = await create_data_enrichment_job(
+        db_session,
+        user=test_user,
+        payload={"source_record_ids": [record.id], "options": {"llm_enabled": True}},
+    )
+
+    await _run_job(db_session, job)
+    product = (
+        await db_session.scalars(
+            select(EnrichedProduct).where(EnrichedProduct.job_id == job.id)
+        )
+    ).one()
+
+    assert product.category_path == "Apparel & Accessories > Clothing > Dresses"
+    assert product.diagnostics["llm"]["applied"] is False

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-
-
 from bs4 import BeautifulSoup
 
 from app.services.acquisition.acquirer import AcquisitionResult, PageEvidence
@@ -52,6 +50,9 @@ def empty_extraction_browser_retry_decision(
         requested_fields=requested_fields,
         selector_rules=selector_rules,
     ):
+        # Even if we see static evidence, if we got 0 records, we might still want to try browser
+        # but only if the static evidence is "weak" (e.g. just a title or just generic price markers)
+        # For now, we keep this as is but ensure _empty_detail_extraction_has_static_evidence is strict.
         return {"should_retry": False, "reason": "static_detail_extractable"}
     return {"should_retry": True, "reason": "empty_non_browser_html"}
 
@@ -186,7 +187,7 @@ def _empty_detail_extraction_has_static_evidence(
     )
     raw_extractable_fields = extractability.get("extractable_fields")
     extractable_field_values = (
-        raw_extractable_fields if isinstance(raw_extractable_fields, list) else []
+        list(raw_extractable_fields) if isinstance(raw_extractable_fields, list) else []
     )
     extractable_fields = {
         str(field_name).strip()
@@ -195,7 +196,7 @@ def _empty_detail_extraction_has_static_evidence(
     }
     raw_matched_requested_fields = extractability.get("matched_requested_fields")
     matched_requested_values = (
-        raw_matched_requested_fields
+        list(raw_matched_requested_fields)
         if isinstance(raw_matched_requested_fields, list)
         else []
     )
@@ -204,11 +205,15 @@ def _empty_detail_extraction_has_static_evidence(
         for field_name in matched_requested_values
         if str(field_name).strip()
     }
-    return bool(
-        matched_requested_fields
-        or extractable_fields & set(PRICE_FIELDS)
-        or _html_has_configured_detail_price(soup)
-    )
+    # If we have matched requested fields, that's strong evidence
+    if matched_requested_fields:
+        return True
+
+    # If we see price fields AND BOTH title and image, that's decent evidence
+    has_price = bool(extractable_fields & set(PRICE_FIELDS)) or _html_has_configured_detail_price(soup)
+    has_identity = {"title", "image_url"} <= extractable_fields
+
+    return bool(has_price and has_identity)
 
 
 def _html_has_configured_detail_price(soup: BeautifulSoup) -> bool:

@@ -170,7 +170,7 @@ def test_crawl_run_settings_preserves_modeled_acquisition_contract_success() -> 
     }
 
 
-def test_crawl_run_settings_preserves_zero_source_run_id() -> None:
+def test_crawl_run_settings_normalizes_zero_source_run_id_to_unset() -> None:
     settings = CrawlRunSettings.from_value(
         {
             "acquisition_contract": {
@@ -184,7 +184,7 @@ def test_crawl_run_settings_preserves_zero_source_run_id() -> None:
         }
     )
 
-    assert settings.acquisition_contract()["last_quality_success"]["source_run_id"] == 0
+    assert settings.acquisition_contract()["last_quality_success"]["source_run_id"] is None
 
 
 def test_legacy_migration_start_detects_missing_data_enrichment_tables(monkeypatch: pytest.MonkeyPatch) -> None:

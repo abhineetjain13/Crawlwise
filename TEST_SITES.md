@@ -75,7 +75,6 @@ https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-s
 https://savannahs.com/collections/all-boots/products/pavlova-100-lace-up-blush-satin-boots-cl28517s
 https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants?g_aidx=Listing_by_listing_quality_production&g_aqid=dcff41da6c7483961c0b500769d4c7bc
 https://www.desertcart.in/products/808107894-hormone-healthy-eats-100-recipes-to-balance-your-hormones-support?source=search
-https://www2.hm.com/en_in/productpage.1317259001.html
 
 ## Section DJ — Detail Jobs
 

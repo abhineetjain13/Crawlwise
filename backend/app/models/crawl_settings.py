@@ -33,7 +33,9 @@ def _coerce_optional_int(
     if not text:
         return None
     try:
-        result = max(minimum, int(text))
+        result = int(text)
+        if result < minimum:
+            return None
         if maximum is not None:
             result = min(result, maximum)
         return result
@@ -238,7 +240,7 @@ class CrawlRunSettings:
                     else {},
                     "source_run_id": _coerce_optional_int(
                         last_quality_success.get("source_run_id"),
-                        0,
+                        1,
                     ),
                     "timestamp": _clean_str(last_quality_success.get("timestamp")),
                 }

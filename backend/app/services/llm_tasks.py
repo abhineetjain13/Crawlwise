@@ -147,6 +147,23 @@ class _ProductIntelligenceBrandInferencePayload(BaseModel):
     rationale: str = ""
 
 
+class _DataEnrichmentSemanticPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category_path: str | None = None
+    color_family: str | None = None
+    size_normalized: list[str] | None = None
+    size_system: str | None = None
+    gender_normalized: str | None = None
+    materials_normalized: list[str] | None = None
+    availability_normalized: str | None = None
+    intent_attributes: list[str] | None = None
+    audience: list[str] | None = None
+    style_tags: list[str] | None = None
+    ai_discovery_tags: list[str] | None = None
+    suggested_bundles: list[str] | None = None
+
+
 _PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "direct_record_extraction": TypeAdapter(list[dict[_FieldKey, Any]]),
     "xpath_discovery": TypeAdapter(list[_XPathSelector]),
@@ -156,7 +173,7 @@ _PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "schema_inference": TypeAdapter(_SchemaInferencePayload),
     "product_intelligence_enrichment": TypeAdapter(_ProductIntelligenceEnrichmentPayload),
     "product_intelligence_brand_inference": TypeAdapter(_ProductIntelligenceBrandInferencePayload),
-    "data_enrichment_semantic": TypeAdapter(dict[str, Any]),
+    "data_enrichment_semantic": TypeAdapter(_DataEnrichmentSemanticPayload),
 }
 
 

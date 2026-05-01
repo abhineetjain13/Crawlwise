@@ -576,7 +576,7 @@ def _has_extractable_detail_signals(
     analysis: HtmlAnalysis | None = None,
 ) -> bool:
     parsed = analysis or analyze_html(html)
-    if not parsed.html:
+    if not parsed.html or _looks_like_js_required_placeholder(parsed):
         return False
     for payload in parse_json_ld(parsed.soup):
         if not isinstance(payload, dict):
@@ -648,7 +648,7 @@ def _has_extractable_listing_signals(
     analysis: HtmlAnalysis | None = None,
 ) -> bool:
     parsed = analysis or analyze_html(html)
-    if not parsed.html:
+    if not parsed.html or _looks_like_js_required_placeholder(parsed):
         return False
     typed_listing_count = 0
     for payload in parse_json_ld(parsed.soup):

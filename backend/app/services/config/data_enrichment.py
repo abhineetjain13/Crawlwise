@@ -11,6 +11,7 @@ DATA_ENRICHMENT_STATUS_ENRICHED = "enriched"
 DATA_ENRICHMENT_STATUS_DEGRADED = "degraded"
 DATA_ENRICHMENT_STATUS_FAILED = "failed"
 DATA_ENRICHMENT_LLM_TASK = "data_enrichment_semantic"
+DATA_ENRICHMENT_TAXONOMY_VERSION = "shopify-2026-02"
 
 DATA_ENRICHMENT_SKIP_RECORD_STATUSES = (
     DATA_ENRICHMENT_STATUS_ENRICHED,
@@ -23,11 +24,117 @@ DATA_ENRICHMENT_JOB_TERMINAL_STATUSES = (
 )
 
 ECOMMERCE_DETAIL_SURFACE = "ecommerce_detail"
-DATA_ENRICHMENT_TAXONOMY_FILENAME = "google_product_category.txt"
-DATA_ENRICHMENT_ATTRIBUTES_FILENAME = "google_product_data_attributes.json"
+DATA_ENRICHMENT_TAXONOMY_FILENAME = "shopify_categories.json"
+DATA_ENRICHMENT_ATTRIBUTES_FILENAME = "shopify_attributes.json"
 DATA_ENRICHMENT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "enrichment"
 DATA_ENRICHMENT_TAXONOMY_PATH = DATA_ENRICHMENT_DATA_DIR / DATA_ENRICHMENT_TAXONOMY_FILENAME
 DATA_ENRICHMENT_ATTRIBUTES_PATH = DATA_ENRICHMENT_DATA_DIR / DATA_ENRICHMENT_ATTRIBUTES_FILENAME
+DATA_ENRICHMENT_BASE_REQUIRED_ATTRIBUTES = (
+    "title",
+    "description",
+    "link",
+    "image_link",
+    "availability",
+    "price",
+)
+DATA_ENRICHMENT_LLM_BACKFILL_FIELDS = (
+    "category_path",
+    "color_family",
+    "size_normalized",
+    "size_system",
+    "gender_normalized",
+    "materials_normalized",
+    "availability_normalized",
+)
+DATA_ENRICHMENT_SHOPIFY_NORMALIZATION_ATTRIBUTE_NAMES = {
+    "color": "Color",
+    "size": "Size",
+    "gender": "Target gender",
+    "fabric": "Fabric",
+    "material": "Material",
+}
+DATA_ENRICHMENT_COLOR_FAMILY_ALIASES = {
+    "black": ("black",),
+    "blue": ("blue", "navy"),
+    "brown": ("beige", "brown", "tan"),
+    "gold": ("gold", "bronze", "rose gold"),
+    "gray": ("gray", "grey", "silver"),
+    "green": ("green",),
+    "multi": ("multicolor",),
+    "orange": ("orange",),
+    "pink": ("pink",),
+    "purple": ("purple",),
+    "red": ("red",),
+    "white": ("white", "clear"),
+    "yellow": ("yellow",),
+}
+DATA_ENRICHMENT_GENDER_ALIASES = {
+    "female": ("female", "women", "woman", "womens", "women's", "ladies", "girl", "girls"),
+    "male": ("male", "men", "man", "mens", "men's", "boy", "boys"),
+    "unisex": ("unisex", "all gender", "all-gender", "gender neutral", "gender-neutral"),
+}
+DATA_ENRICHMENT_AVAILABILITY_TERMS = {
+    "in_stock": (
+        "in stock",
+        "available",
+        "ready to ship",
+        "ships now",
+        "add to cart",
+        "preorder available",
+    ),
+    "out_of_stock": (
+        "out of stock",
+        "sold out",
+        "unavailable",
+        "notify me",
+        "currently unavailable",
+    ),
+    "preorder": ("preorder", "pre-order", "pre order"),
+    "backorder": ("backorder", "back order"),
+}
+DATA_ENRICHMENT_SEO_STOPWORDS = (
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "new",
+    "of",
+    "on",
+    "or",
+    "sale",
+    "the",
+    "to",
+    "with",
+    "your",
+)
+DATA_ENRICHMENT_SHOPIFY_ATTRIBUTE_CRAWL_FIELDS = {
+    "age_group": ("age_group", "gender", "category", "product_type", "title"),
+    "availability": ("availability", "stock_status", "variants", "selected_variant"),
+    "brand": ("brand", "vendor", "manufacturer"),
+    "care_instructions": ("care_instructions", "product_attributes", "details"),
+    "color": ("color", "variant_axes", "selected_variant", "title"),
+    "description": ("description", "short_description", "summary"),
+    "fabric": ("materials", "material", "product_attributes", "description"),
+    "gender": ("gender", "department", "category", "product_type", "title"),
+    "image_link": ("image_url", "image", "thumbnail"),
+    "link": ("canonical_url", "source_url", "url"),
+    "material": ("materials", "material", "product_attributes", "description"),
+    "pattern": ("pattern", "product_attributes", "description", "title"),
+    "price": ("price", "original_price"),
+    "size": ("size", "available_sizes", "variant_axes", "selected_variant"),
+    "size_system": ("size_system", "size", "available_sizes"),
+    "target_gender": ("gender", "department", "category", "product_type", "title"),
+    "title": ("title", "name"),
+}
 
 DATA_ENRICHMENT_PROMPT_REGISTRY = {
     DATA_ENRICHMENT_LLM_TASK: {
@@ -47,6 +154,7 @@ class DataEnrichmentSettings:
     category_match_threshold: float = 0.42
     max_seo_keywords: int = 20
     llm_description_excerpt_chars: int = 300
+    llm_taxonomy_hint_count: int = 5
 
 
 data_enrichment_settings = DataEnrichmentSettings()

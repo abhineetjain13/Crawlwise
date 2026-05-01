@@ -85,7 +85,8 @@ export function Dropdown<T extends string>({
     top: number;
     left: number;
     width: number;
-  }>({ top: 0, left: 0, width: 0 });
+    side: 'top' | 'bottom';
+  }>({ top: 0, left: 0, width: 0, side: 'bottom' });
   const closeTimerRef = React.useRef<number | undefined>(undefined);
   const dropdownId = useId().replace(/[^a-zA-Z0-9_-]+/g, '') || 'dropdown';
   const activeIndex = options.findIndex((o) => o.value === value);
@@ -113,12 +114,17 @@ export function Dropdown<T extends string>({
   const updatePosition = React.useCallback(() => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
+    const menuHeight = listboxRef.current?.offsetHeight ?? options.length * 36 + 8; // Estimate if not measured
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const shouldFlip = spaceBelow < menuHeight && rect.top > menuHeight;
+
     setListboxPosition({
-      top: rect.bottom + 4,
+      top: shouldFlip ? rect.top - menuHeight - 4 : rect.bottom + 4,
       left: rect.left,
       width: rect.width,
+      side: shouldFlip ? 'top' : 'bottom',
     });
-  }, []);
+  }, [options.length]);
 
   React.useLayoutEffect(() => {
     if (open) {
@@ -241,7 +247,12 @@ export function Dropdown<T extends string>({
               role="listbox"
               onMouseEnter={cancelClose}
               onMouseLeave={scheduleClose}
-              className="border-border bg-background-elevated fixed z-[300] w-max animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)] rounded-[var(--radius-lg)] border py-1 shadow-lg"
+              className={cn(
+                'border-border bg-background-elevated fixed z-[300] w-max rounded-[var(--radius-lg)] border py-1 shadow-lg overflow-y-auto max-h-[320px]',
+                listboxPosition.side === 'bottom'
+                  ? 'animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)]'
+                  : 'animate-[dropdown-in-up_150ms_cubic-bezier(0.16,1,0.3,1)]',
+              )}
               style={{
                 top: `${listboxPosition.top}px`,
                 left: `${listboxPosition.left}px`,

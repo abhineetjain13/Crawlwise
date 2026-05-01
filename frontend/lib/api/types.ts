@@ -366,6 +366,7 @@ export type EnrichedProduct = {
   availability_normalized: string | null;
   seo_keywords: string[] | null;
   category_path: string | null;
+  taxonomy_version: string | null;
   intent_attributes: string[] | null;
   audience: string[] | null;
   style_tags: string[] | null;

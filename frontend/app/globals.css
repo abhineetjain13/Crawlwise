@@ -72,7 +72,7 @@
   /* Typography — SenstoSales */
   --text-primary: #32363a;
   --text-secondary: #52596a;
-  --text-muted: #8b9099;
+  --text-muted: #6b7280;
 
   /* Accent — SenstoSales primary blue */
   --accent: #0854a0;
@@ -83,14 +83,14 @@
   --accent-dim: rgba(8, 84, 160, 0.18);
 
   /* Semantic — SenstoSales */
-  --success: #5a8a60;
-  --success-bg: rgba(90, 138, 96, 0.12);
-  --warning: #e76500;
-  --warning-bg: rgba(231, 101, 0, 0.12);
+  --success: #36613c;
+  --success-bg: rgba(54, 97, 60, 0.12);
+  --warning: #a34800;
+  --warning-bg: rgba(163, 72, 0, 0.12);
   --danger: #bb0000;
   --danger-bg: rgba(187, 0, 0, 0.1);
-  --info: #0070f2;
-  --info-bg: rgba(0, 112, 242, 0.12);
+  --info: #0056b8;
+  --info-bg: rgba(0, 86, 184, 0.12);
 
   --status-active-bg: var(--success-bg);
   --status-running-bg: var(--accent-subtle);
@@ -241,17 +241,18 @@ html[data-theme='dark'] {
 
   --text-primary: #b4b9c4;
   --text-secondary: #8f97a4;
-  --text-muted: #606874;
+  --text-muted: #9ca3af;
 
-  /* Dark accent — SenstoSales lighter blue */
-  --accent: #5c9ce6;
+  /* Dark accent — brand primary blue */
+  --accent: #0854a0;
+  --accent-text: #60a5fa; /* Lighter blue for text/links in dark mode to pass AA */
   --logo-mark-bg: var(--accent);
-  --logo-mark-fg: #0d0d0d;
-  --accent-hover: #7ab8ff;
+  --logo-mark-fg: #ffffff;
+  --accent-hover: #0a6ed1;
   --accent-foreground: #ffffff;
   --accent-fg: #ffffff;
-  --accent-subtle: rgba(92, 156, 230, 0.15);
-  --accent-dim: rgba(92, 156, 230, 0.25);
+  --accent-subtle: rgba(8, 84, 160, 0.15);
+  --accent-dim: rgba(8, 84, 160, 0.25);
 
   /* Semantic — SenstoSales dark */
   --success: #6b9e72;
@@ -384,7 +385,7 @@ a.no-underline:focus-visible {
 }
 
 .link-accent {
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
   text-decoration: none;
 }
 
@@ -764,6 +765,18 @@ select:focus-visible:not(.focus-ring) {
   from {
     opacity: 0;
     transform: translateY(-4px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dropdown-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
   }
 
   to {

@@ -824,6 +824,7 @@ class EnrichedProduct(Base):
     )
     seo_keywords: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     category_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    taxonomy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     intent_attributes: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     audience: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     style_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)

@@ -56,6 +56,7 @@ class EnrichedProductResponse(BaseModel):
     availability_normalized: str | None = None
     seo_keywords: list | None = None
     category_path: str | None = None
+    taxonomy_version: str | None = None
     intent_attributes: list | None = None
     audience: list | None = None
     style_tags: list | None = None

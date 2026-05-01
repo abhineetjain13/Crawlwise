@@ -625,7 +625,7 @@ function getLogIconStyle(level: string, message: string): { iconCls: string; bgC
     return { iconCls: 'text-orange-600 dark:text-orange-400', bgCls: 'bg-orange-500/10' };
 
   if (msg.includes('starting crawl'))
-    return { iconCls: 'text-sky-600 dark:text-sky-400', bgCls: 'bg-sky-500/10' };
+    return { iconCls: 'text-sky-700 dark:text-sky-400', bgCls: 'bg-sky-500/10' };
   if (msg.includes('ignoring robots.txt'))
     return { iconCls: 'text-orange-600 dark:text-orange-400', bgCls: 'bg-orange-500/10' };
   if (msg.includes('resolved'))
@@ -633,13 +633,13 @@ function getLogIconStyle(level: string, message: string): { iconCls: string; bgC
   if (msg.includes('acquired'))
     return { iconCls: 'text-indigo-600 dark:text-indigo-400', bgCls: 'bg-indigo-500/10' };
   if (msg.includes('extracted'))
-    return { iconCls: 'text-emerald-600 dark:text-emerald-400', bgCls: 'bg-emerald-500/12' };
+    return { iconCls: 'text-emerald-700 dark:text-emerald-400', bgCls: 'bg-emerald-500/12' };
   if (msg.includes('normalized') || msg.includes('normalised'))
-    return { iconCls: 'text-amber-600 dark:text-amber-400', bgCls: 'bg-amber-500/12' };
+    return { iconCls: 'text-amber-700 dark:text-amber-400', bgCls: 'bg-amber-500/12' };
   if (msg.includes('persisted'))
-    return { iconCls: 'text-fuchsia-600 dark:text-fuchsia-400', bgCls: 'bg-fuchsia-500/12' };
+    return { iconCls: 'text-fuchsia-700 dark:text-fuchsia-400', bgCls: 'bg-fuchsia-500/12' };
   if (msg.includes('page loaded') || msg.includes('page load'))
-    return { iconCls: 'text-amber-600 dark:text-amber-400', bgCls: 'bg-amber-500/12' };
+    return { iconCls: 'text-amber-700 dark:text-amber-400', bgCls: 'bg-amber-500/12' };
   if (
     msg.includes('challenge') ||
     msg.includes('blocked') ||

@@ -119,21 +119,33 @@ async def probe_browser_readiness_impl(
     html_text = html if html is not None else await get_page_html(page)
     analysis = analyze_html(html_text or "")
     visible_text_length = len(analysis.normalized_text)
-    structured_data_present = any(
-        token in analysis.lowered_html
-        for token in (
-            '"@type":"product"',
-            '"@type":"jobposting"',
-            "application/ld+json",
-            "__next_data__",
-            "__nuxt__",
-            "shopifyanalytics.meta",
-        )
-    )
-    detail_hints = detail_readiness_hint_count(surface, analysis.visible_text.lower())
-    detail_like = analysis.h1_present or structured_data_present or detail_hints > 0
     is_detail = "detail" in surface
     is_listing = "listing" in surface
+
+    # Generic shell tokens that don't guarantee content readiness
+    shell_tokens = (
+        "application/ld+json",
+        "__next_data__",
+        "__nuxt__",
+        "shopifyanalytics.meta",
+    )
+    # Specific detail tokens that strongly indicate PDP/Job content is present
+    detail_tokens = (
+        '"@type":"product"',
+        '"@type":"jobposting"',
+    )
+
+    has_shell_token = any(token in analysis.lowered_html for token in shell_tokens)
+    has_detail_token = any(token in analysis.lowered_html for token in detail_tokens)
+
+    if is_detail:
+        # For detail pages, a generic shell token is NOT enough to claim readiness
+        structured_data_present = has_detail_token
+    else:
+        # For listings or others, we can be more lenient
+        structured_data_present = has_detail_token or has_shell_token
+    detail_hints = detail_readiness_hint_count(surface, analysis.visible_text.lower())
+    detail_like = analysis.h1_present or structured_data_present or detail_hints > 0
     listing_card_count = 0
     matched_listing_selectors = 0
     if is_listing:

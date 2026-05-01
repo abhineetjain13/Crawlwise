@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
-from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -15,6 +13,8 @@ from app.core.database import SessionLocal
 from app.models.crawl import CrawlRecord, CrawlRun, DataEnrichmentJob, EnrichedProduct
 from app.models.user import User
 from app.services.config.data_enrichment import (
+    DATA_ENRICHMENT_BASE_REQUIRED_ATTRIBUTES,
+    DATA_ENRICHMENT_LLM_BACKFILL_FIELDS,
     DATA_ENRICHMENT_LLM_TASK,
     DATA_ENRICHMENT_SKIP_RECORD_STATUSES,
     DATA_ENRICHMENT_STATUS_DEGRADED,
@@ -22,12 +22,23 @@ from app.services.config.data_enrichment import (
     DATA_ENRICHMENT_STATUS_FAILED,
     DATA_ENRICHMENT_STATUS_PENDING,
     DATA_ENRICHMENT_STATUS_RUNNING,
+    DATA_ENRICHMENT_TAXONOMY_VERSION,
     ECOMMERCE_DETAIL_SURFACE,
     data_enrichment_settings,
 )
 from app.services.crawl_access_service import (
     require_accessible_record,
     require_accessible_run,
+)
+from app.services.data_enrichment.shopify_catalog import (
+    attribute_lookup_keys,
+    category_attribute_handles,
+    load_attribute_repository_data,
+    load_taxonomy_index,
+    repository_terms,
+    taxonomy_reference_for_category_path,
+    term_dict,
+    top_taxonomy_candidates,
 )
 from app.services.field_value_core import (
     clean_text,
@@ -261,10 +272,12 @@ async def _enrich_product(
 ) -> None:
     data = dict(record.data or {})
     deterministic = _build_deterministic_enrichment(data, source_url=record.source_url)
-    category_match = deterministic.pop("_category_match", None)
+    category_match = deterministic.pop("_taxonomy_match", None)
+    category_candidates = deterministic.pop("_taxonomy_candidates", None)
     product_attributes = deterministic.pop("_product_attributes", None)
     for key, value in deterministic.items():
         setattr(product, key, value)
+    product.taxonomy_version = DATA_ENRICHMENT_TAXONOMY_VERSION
     diagnostics: dict[str, object] = {
         "deterministic": True,
         "llm_requested": llm_enabled,
@@ -272,6 +285,8 @@ async def _enrich_product(
         "product_category": category_match or {},
         "product_attributes": product_attributes or {},
     }
+    if category_candidates:
+        diagnostics["category_candidates"] = category_candidates
     if llm_enabled:
         llm_result = await _run_llm_enrichment(
             session,
@@ -279,6 +294,7 @@ async def _enrich_product(
             record=record,
             product=product,
             source_data=data,
+            category_candidates=category_candidates or [],
         )
         diagnostics["llm"] = llm_result
         if llm_result.get("category_applied"):
@@ -298,7 +314,7 @@ def _build_deterministic_enrichment(
     attribute_data = {**data, "source_url": source_url}
     price_normalized = _normalize_price(data, source_url=source_url)
     repository = _load_attribute_repository()
-    terms = _repository_terms(repository)
+    terms = repository_terms(repository)
     color_family = _normalize_from_terms(
         [
             *_candidate_values(
@@ -315,12 +331,12 @@ def _build_deterministic_enrichment(
                 "selected_variant",
             ),
         ],
-        _term_dict(terms, "color_families"),
+        term_dict(terms, "color_families"),
     )
     size_normalized, size_system = _normalize_sizes(data, terms=terms)
     gender_normalized = _normalize_from_terms(
         _candidate_values(data, "gender", "category", "product_type", "title"),
-        _term_dict(terms, "gender_terms"),
+        term_dict(terms, "gender_terms"),
     )
     materials_normalized = _normalize_materials(data, terms=terms)
     availability_normalized = _normalize_from_terms(
@@ -333,9 +349,10 @@ def _build_deterministic_enrichment(
                 "selected_variant",
             ),
         ],
-        _term_dict(terms, "availability_terms"),
+        term_dict(terms, "availability_terms"),
     )
-    category_match = _match_category_path(data)
+    category_candidates = _top_taxonomy_candidates(data)
+    category_match = category_candidates[0] if category_candidates else None
     category_path = (
         text_or_none(category_match.get("category_path"))
         if category_match
@@ -359,7 +376,8 @@ def _build_deterministic_enrichment(
         "availability_normalized": availability_normalized,
         "seo_keywords": seo_keywords,
         "category_path": category_path,
-        "_category_match": category_match,
+        "_taxonomy_match": category_match,
+        "_taxonomy_candidates": category_candidates,
         "_product_attributes": _product_attribute_diagnostics(
             attribute_data, category_match
         ),
@@ -373,8 +391,13 @@ async def _run_llm_enrichment(
     record: CrawlRecord,
     product: EnrichedProduct,
     source_data: dict[str, object],
+    category_candidates: list[dict[str, object]],
 ) -> dict[str, object]:
-    prompt_context = _llm_prompt_context(source_data, product=product)
+    prompt_context = _llm_prompt_context(
+        source_data,
+        product=product,
+        category_candidates=category_candidates,
+    )
     result = await run_prompt_task(
         session,
         task_type=DATA_ENRICHMENT_LLM_TASK,
@@ -382,7 +405,11 @@ async def _run_llm_enrichment(
         domain=source_domain(record.source_url),
         variables={
             "product_json": prompt_context,
-            "taxonomy_hint": _taxonomy_hint(product.category_path),
+            "taxonomy_hint": _taxonomy_hint(
+                product.category_path,
+                category_candidates=category_candidates,
+                missing_fields=_missing_llm_backfill_fields(product),
+            ),
         },
     )
     if result.error_message:
@@ -391,22 +418,89 @@ async def _run_llm_enrichment(
             "error": result.error_message,
             "error_category": str(result.error_category or ""),
         }
-    payload = result.payload if isinstance(result.payload, dict) else {}
-    category_applied = _apply_llm_payload(product, payload)
+    if isinstance(result.payload, dict):
+        payload = result.payload
+    elif hasattr(result.payload, "model_dump"):
+        payload = dict(result.payload.model_dump(exclude_none=True))
+    else:
+        payload = {}
+    applied_fields = _apply_llm_payload(product, payload)
     return {
-        "applied": bool(payload),
-        "category_applied": category_applied,
+        "applied": bool(applied_fields),
+        "category_applied": "category_path" in applied_fields,
+        "applied_fields": applied_fields,
         "provider": result.provider or "",
         "model": result.model or "",
     }
 
 
-def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> bool:
+def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> list[str]:
+    applied: list[str] = []
+    repository = _load_attribute_repository()
+    terms = repository_terms(repository)
     category_path = text_or_none(payload.get("category_path"))
-    category_applied = False
-    if category_path:
-        product.category_path = category_path
-        category_applied = True
+    if product.category_path is None and category_path:
+        if taxonomy_reference := taxonomy_reference_for_category_path(
+            category_path,
+            _load_taxonomy_index(),
+        ):
+            product.category_path = str(taxonomy_reference.get("category_path") or "")
+            applied.append("category_path")
+    if product.color_family is None:
+        color_family = _normalize_from_terms(
+            _string_list(payload.get("color_family"), max_items=1, max_chars=60)
+            or [payload.get("color_family")],
+            term_dict(terms, "color_families"),
+        )
+        if color_family:
+            product.color_family = color_family
+            applied.append("color_family")
+    if product.size_normalized is None:
+        size_normalized, size_system = _normalize_sizes(
+            {"size": payload.get("size_normalized"), "size_system": payload.get("size_system")},
+            terms=terms,
+        )
+        if size_normalized:
+            product.size_normalized = size_normalized
+            applied.append("size_normalized")
+        if product.size_system is None and size_system:
+            product.size_system = size_system
+            applied.append("size_system")
+    if product.size_system is None:
+        size_system = text_or_none(payload.get("size_system"))
+        known_systems = {
+            str(key)
+            for key in _object_dict(term_dict(terms, "size_systems").get("systems")).keys()
+        }
+        if size_system and size_system in known_systems:
+            product.size_system = size_system
+            applied.append("size_system")
+    if product.gender_normalized is None:
+        gender_normalized = _normalize_from_terms(
+            _string_list(payload.get("gender_normalized"), max_items=1, max_chars=60)
+            or [payload.get("gender_normalized")],
+            term_dict(terms, "gender_terms"),
+        )
+        if gender_normalized:
+            product.gender_normalized = gender_normalized
+            applied.append("gender_normalized")
+    if product.materials_normalized is None:
+        materials_normalized = _normalize_materials(
+            {"materials": payload.get("materials_normalized")},
+            terms=terms,
+        )
+        if materials_normalized:
+            product.materials_normalized = materials_normalized
+            applied.append("materials_normalized")
+    if product.availability_normalized is None:
+        availability_normalized = _normalize_from_terms(
+            _string_list(payload.get("availability_normalized"), max_items=1, max_chars=60)
+            or [payload.get("availability_normalized")],
+            term_dict(terms, "availability_terms"),
+        )
+        if availability_normalized:
+            product.availability_normalized = availability_normalized
+            applied.append("availability_normalized")
     for field_name in (
         "intent_attributes",
         "audience",
@@ -416,7 +510,10 @@ def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> 
     ):
         values = _string_list(payload.get(field_name), max_items=10, max_chars=60)
         setattr(product, field_name, values or None)
-    return category_applied
+        if values:
+            applied.append(field_name)
+    product.taxonomy_version = DATA_ENRICHMENT_TAXONOMY_VERSION
+    return applied
 
 
 async def _upsert_enriched_product(
@@ -515,7 +612,7 @@ def _normalize_price(
 def _normalize_sizes(
     data: dict[str, object], *, terms: dict[str, object]
 ) -> tuple[list[str] | None, str | None]:
-    size_config = _term_dict(terms, "size_systems")
+    size_config = term_dict(terms, "size_systems")
     aliases_value = size_config.get("aliases")
     aliases_dict = aliases_value if isinstance(aliases_value, dict) else {}
     aliases = {str(k).casefold(): str(v) for k, v in aliases_dict.items()}
@@ -582,7 +679,7 @@ def _detect_size_system(value: str, systems: dict[str, set[str]]) -> str | None:
 def _normalize_materials(
     data: dict[str, object], *, terms: dict[str, object]
 ) -> list[str] | None:
-    material_terms = _term_dict(terms, "material_terms")
+    material_terms = term_dict(terms, "material_terms")
     found: list[str] = []
     seen: set[str] = set()
     for value in _candidate_values(
@@ -611,88 +708,52 @@ def _normalize_from_terms(values: list[object], terms: dict[str, object]) -> str
             if isinstance(tokens, str):
                 if _term_present(lowered, canonical) or _term_present(lowered, tokens):
                     return tokens
-            elif isinstance(tokens, list) and any(
-                _term_present(lowered, token) for token in tokens
-            ):
-                return str(canonical)
+            elif isinstance(tokens, list):
+                canonical_text = clean_text(canonical).casefold().replace(" ", "_")
+                lowered_key = lowered.replace(" ", "_")
+                if canonical_text == lowered_key or any(
+                    _term_present(lowered, token) for token in tokens
+                ):
+                    return str(canonical)
     return None
+
+
+def _top_taxonomy_candidates(
+    data: dict[str, object], *, limit: int | None = None
+) -> list[dict[str, object]]:
+    if limit is None:
+        limit = data_enrichment_settings.llm_taxonomy_hint_count
+    return top_taxonomy_candidates(
+        data,
+        load_taxonomy_index(data_enrichment_settings.taxonomy_path),
+        category_match_threshold=data_enrichment_settings.category_match_threshold,
+        limit=limit,
+        candidate_values=_category_match_values(data),
+        candidate_value_loader=_candidate_values,
+    )
 
 
 def _match_category_path(data: dict[str, object]) -> dict[str, object] | None:
-    raw_category = _first_present(data, "category", "product_type")
-    category_path = _source_category_path(raw_category, title=data.get("title"))
-    if not category_path:
-        return None
-    match = {
-        "category_id": "",
-        "category_path": category_path,
-        "score": 1.0,
-        "source": "source_category",
-    }
-    gpc_reference = _gpc_reference_for_category(category_path)
-    if gpc_reference:
-        match["gpc_reference"] = gpc_reference
-    return match
+    candidates = _top_taxonomy_candidates(data, limit=1)
+    return candidates[0] if candidates else None
 
 
-def _exact_category_match(
-    values: list[object],
-    categories: list[dict[str, object]],
-    normalized_lookup: dict[str, dict[str, object]],
-    scores: tuple[float, float, float],
-) -> dict[str, object] | None:
-    for value in values:
-        normalized = _normalize_category_path(clean_text(value))
-        if normalized in normalized_lookup:
-            return _category_match_payload(
-                normalized_lookup[normalized], score=scores[0], source="exact_path"
-            )
-        if not normalized:
+def _category_match_values(data: dict[str, object]) -> list[object]:
+    values: list[object] = []
+    for key in ("category", "product_type", "title"):
+        value = _first_present(data, key)
+        if value in (None, "", [], {}):
             continue
-        for item in categories:
-            path = str(item.get("category_path") or "")
-            leaf = _normalize_category_path(path.rsplit(">", 1)[-1])
-            if normalized == leaf:
-                return _category_match_payload(item, score=scores[1], source="leaf")
-            aliases_value = item.get("aliases")
-            aliases = (
-                [_normalize_category_path(alias) for alias in aliases_value]
-                if isinstance(aliases_value, list)
-                else []
-            )
-            if normalized in aliases:
-                return _category_match_payload(item, score=scores[2], source="alias")
-    return None
+        values.append(value)
+    return values
 
 
-def _source_category_path(value: object, *, title: object) -> str | None:
-    text = clean_text(value)
-    if not text:
-        return None
-    if _normalize_category_path(text) == _normalize_category_path(title):
-        return None
-    parts = [
-        clean_text(part)
-        for part in re.split(r"\s*>\s*", text)
-        if clean_text(part)
-    ]
-    return " > ".join(parts) if parts else None
-
-
-def _gpc_reference_for_category(category_path: str) -> dict[str, object] | None:
-    categories = _load_taxonomy()
-    if not categories:
-        return None
-    normalized_lookup = {
-        _normalize_category_path(path): item
-        for item in categories
-        if isinstance(item, dict)
-        for path in [item.get("category_path")]
-        if path
-    }
-    return _exact_category_match(
-        [category_path], list(categories), normalized_lookup, (1.0, 0.9, 0.86)
-    )
+def _missing_llm_backfill_fields(product: EnrichedProduct) -> list[str]:
+    rows: list[str] = []
+    for field_name in DATA_ENRICHMENT_LLM_BACKFILL_FIELDS:
+        if getattr(product, field_name) in (None, "", [], {}):
+            rows.append(str(field_name))
+    return rows
 
 
 def _build_seo_keywords(
@@ -707,7 +768,7 @@ def _build_seo_keywords(
     stopwords = {
         str(item).casefold()
         for item in _object_list(
-            _repository_terms(_load_attribute_repository()).get("seo_stopwords")
+            repository_terms(_load_attribute_repository()).get("seo_stopwords")
         )
     }
     raw_parts = [
@@ -739,9 +800,15 @@ def _build_seo_keywords(
 
 
 def _llm_prompt_context(
-    source_data: dict[str, object], *, product: EnrichedProduct
+    source_data: dict[str, object],
+    *,
+    product: EnrichedProduct,
+    category_candidates: list[dict[str, object]],
 ) -> dict[str, object]:
     description = clean_text(strip_html_tags(source_data.get("description")))
+    category_anchor = product.category_path or text_or_none(
+        category_candidates[0].get("category_path") if category_candidates else None
+    )
     context = _without_empty(
         {
             "title": clean_text(source_data.get("title")),
@@ -757,6 +824,19 @@ def _llm_prompt_context(
             "availability_normalized": product.availability_normalized,
             "seo_keywords": product.seo_keywords,
             "category_path": product.category_path,
+            "taxonomy_version": DATA_ENRICHMENT_TAXONOMY_VERSION,
+            "missing_backfill_fields": _missing_llm_backfill_fields(product),
+            "taxonomy_candidates": [
+                _without_empty(
+                    {
+                        "category_id": candidate.get("category_id"),
+                        "category_path": candidate.get("category_path"),
+                        "score": candidate.get("score"),
+                    }
+                )
+                for candidate in category_candidates[: data_enrichment_settings.llm_taxonomy_hint_count]
+            ],
+            "category_attributes": _category_attribute_handles(category_anchor),
         }
     )
     if description:
@@ -766,10 +846,34 @@ def _llm_prompt_context(
     return context
 
 
-def _taxonomy_hint(category_path: str | None) -> str:
+def _taxonomy_hint(
+    category_path: str | None,
+    *,
+    category_candidates: list[dict[str, object]],
+    missing_fields: list[str],
+) -> str:
     if category_path:
-        return f"Existing source category: {category_path}"
-    return "Infer a plain ecommerce category path only if product evidence is strong."
+        return (
+            f"Use Shopify taxonomy version {DATA_ENRICHMENT_TAXONOMY_VERSION}. "
+            f"Current deterministic category is {category_path}. "
+            f"Only fill missing fields: {', '.join(missing_fields) or 'none'}."
+        )
+    candidate_paths = ", ".join(
+        str(item.get("category_path") or "")
+        for item in category_candidates[: data_enrichment_settings.llm_taxonomy_hint_count]
+        if str(item.get("category_path") or "").strip()
+    )
+    if candidate_paths:
+        return (
+            f"Use Shopify taxonomy version {DATA_ENRICHMENT_TAXONOMY_VERSION}. "
+            f"Prefer one of these candidates when supported by evidence: {candidate_paths}. "
+            f"Only fill missing fields: {', '.join(missing_fields) or 'none'}."
+        )
+    return (
+        f"Use Shopify taxonomy version {DATA_ENRICHMENT_TAXONOMY_VERSION}. "
+        f"Return only real Shopify category paths. "
+        f"Only fill missing fields: {', '.join(missing_fields) or 'none'}."
+    )
 
 
 def _source_record_ids(payload: dict[str, object]) -> list[int]:
@@ -795,6 +899,7 @@ def _normalized_options(value: object) -> dict[str, object]:
         "llm_enabled": bool(raw.get("llm_enabled", False)),
         "taxonomy_path": str(data_enrichment_settings.taxonomy_path),
         "attributes_path": str(data_enrichment_settings.attributes_path),
+        "taxonomy_version": DATA_ENRICHMENT_TAXONOMY_VERSION,
         "max_concurrency": data_enrichment_settings.max_concurrency,
     }
 
@@ -818,6 +923,7 @@ def _clear_enriched_fields(product: EnrichedProduct) -> None:
         "availability_normalized",
         "seo_keywords",
         "category_path",
+        "taxonomy_version",
         "intent_attributes",
         "audience",
         "style_tags",
@@ -832,29 +938,15 @@ def _product_attribute_diagnostics(
     category_match: dict[str, object] | None,
 ) -> dict[str, object]:
     repository = _load_attribute_repository()
-    rules = _object_dict(repository.get("attribute_rules"))
-    required = [str(item) for item in _object_list(rules.get("base_required"))]
-    recommended = [str(item) for item in _object_list(rules.get("base_recommended"))]
+    required = [str(item) for item in DATA_ENRICHMENT_BASE_REQUIRED_ATTRIBUTES]
+    recommended: list[str] = []
     if category_match:
-        category_rules = _object_dict(rules.get("category_rules"))
-        gpc_reference = category_match.get("gpc_reference")
-        path = str(
-            _object_dict(gpc_reference).get("category_path")
-            if isinstance(gpc_reference, dict)
-            else category_match.get("category_path") or ""
+        taxonomy_reference = _object_dict(category_match.get("taxonomy_reference"))
+        recommended.extend(
+            str(item)
+            for item in _object_list(taxonomy_reference.get("attribute_handles"))
+            if str(item or "").strip()
         )
-        matched_keys = [
-            key
-            for key in category_rules
-            if _normalize_category_path(key)
-            and _normalize_category_path(key) in _normalize_category_path(path)
-        ]
-        for key in matched_keys:
-            rule = _object_dict(category_rules.get(key))
-            required.extend(str(item) for item in _object_list(rule.get("required")))
-            recommended.extend(
-                str(item) for item in _object_list(rule.get("recommended"))
-            )
     attributes = [
         str(item) for item in [*required, *recommended] if str(item or "").strip()
     ]
@@ -875,23 +967,19 @@ def _product_attribute_diagnostics(
 
 
 def _product_attribute_value(data: dict[str, object], attribute: str) -> object | None:
-    attributes = _object_dict(_load_attribute_repository().get("attributes"))
-    config = _object_dict(attributes.get(attribute))
-    keys = tuple(str(item) for item in _object_list(config.get("crawl_fields"))) or (
-        attribute,
-    )
+    keys = _attribute_lookup_keys(attribute)
     return _first_present(data, *keys)
 
 
-def _category_match_payload(
-    item: dict[str, object], *, score: float, source: str
-) -> dict[str, object]:
-    return {
-        "category_id": item.get("category_id") or "",
-        "category_path": item.get("category_path") or "",
-        "score": round(float(score), 3),
-        "source": source,
-    }
+def _attribute_lookup_keys(attribute: str) -> tuple[str, ...]:
+    return attribute_lookup_keys(attribute)
+
+
+def _category_attribute_handles(category_path: str | None) -> list[str]:
+    return category_attribute_handles(
+        category_path,
+        load_taxonomy_index(data_enrichment_settings.taxonomy_path),
+    )
 
 
 def _candidate_values(data: dict[str, object], *keys: str) -> list[object]:
@@ -1026,14 +1114,6 @@ def _term_present(text: str, term: object) -> bool:
     )
 
 
-def _normalize_category_path(value: object) -> str:
-    return " > ".join(
-        " ".join(_tokens(part))
-        for part in clean_text(value).split(">")
-        if _tokens(part)
-    )
-
-
 def _decimal_text(value: object) -> Decimal | None:
     normalized = normalize_decimal_price(value)
     if normalized is None:
@@ -1105,45 +1185,11 @@ def _as_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
-@lru_cache(maxsize=16)
-def _load_json_dict(path: Path) -> dict[str, object]:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, dict):
-        raise ValueError(f"Data enrichment JSON must be an object: {path}")
-    return payload
-
-
 @lru_cache(maxsize=1)
 def _load_attribute_repository() -> dict[str, object]:
-    return _load_json_dict(data_enrichment_settings.attributes_path)
-
-
-def _repository_terms(repository: dict[str, object]) -> dict[str, object]:
-    terms = repository.get("normalization_terms")
-    return dict(terms) if isinstance(terms, dict) else {}
-
-
-def _term_dict(terms: dict[str, object], key: str) -> dict[str, object]:
-    value = terms.get(key)
-    return dict(value) if isinstance(value, dict) else {}
+    return load_attribute_repository_data(data_enrichment_settings.attributes_path)
 
 
 @lru_cache(maxsize=1)
-def _load_taxonomy() -> tuple[dict[str, object], ...]:
-    rows: list[dict[str, object]] = []
-    with Path(data_enrichment_settings.taxonomy_path).open(
-        "r", encoding="utf-8"
-    ) as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            category_id = ""
-            category_path = line
-            match = re.match(r"^(\d+)\s+-\s+(.+)$", line)
-            if match:
-                category_id = match.group(1)
-                category_path = match.group(2)
-            rows.append({"category_id": category_id, "category_path": category_path})
-    return tuple(rows)
+def _load_taxonomy_index():
+    return load_taxonomy_index(data_enrichment_settings.taxonomy_path)

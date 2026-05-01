@@ -6,7 +6,13 @@ $taxonomy_hint
 
 Return only this JSON object:
 {
-  "category_path": "Plain ecommerce category path as a hierarchical string using \" > \" separators (example: \"Electronics > Computers > Laptops\"), max depth 5, free-form names allowed but prefer taxonomy_hint wording when it matches product evidence; return the JSON null value (null) only when fewer than 2 concrete category signals support any path (for example only generic words like \"item\" or \"product\", or title/description lacks category tokens)",
+  "category_path": "Real Shopify taxonomy path using \" > \" separators, or null when evidence is weak",
+  "color_family": "One canonical family string such as black, blue, brown, gold, gray, green, multi, orange, pink, purple, red, white, yellow, or null",
+  "size_normalized": ["Canonical normalized size strings such as M, XL, 10, OS, or null"],
+  "size_system": "One canonical size system such as alpha or numeric, or null",
+  "gender_normalized": "One canonical value: female, male, unisex, or null",
+  "materials_normalized": ["1-5 canonical material strings, or null"],
+  "availability_normalized": "One canonical value: in_stock, out_of_stock, preorder, backorder, or null",
   "intent_attributes": ["3-8 short product intent phrases"],
   "audience": ["2-5 audience descriptors"],
   "style_tags": ["2-5 style adjectives"],
