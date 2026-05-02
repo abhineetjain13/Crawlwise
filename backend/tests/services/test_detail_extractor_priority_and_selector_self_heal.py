@@ -9,7 +9,9 @@ from app.services.selector_self_heal import (
 )
 
 
-def test_extract_records_prefers_higher_priority_adapter_value_even_when_dom_value_exists() -> None:
+def test_extract_records_prefers_higher_priority_adapter_value_even_when_dom_value_exists() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -36,7 +38,9 @@ def test_extract_records_prefers_higher_priority_adapter_value_even_when_dom_val
     assert record["_source"] == "adapter"
 
 
-def test_extract_records_does_not_fabricate_discount_percentage_from_unrelated_body_text() -> None:
+def test_extract_records_does_not_fabricate_discount_percentage_from_unrelated_body_text() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -149,7 +153,9 @@ def test_extract_records_uses_accordion_dom_sections_for_long_text_fields() -> N
     assert record["_field_sources"]["description"] == ["dom_sections"]
 
 
-def test_extract_records_uses_nested_wrapped_dom_sections_for_long_text_fields() -> None:
+def test_extract_records_uses_nested_wrapped_dom_sections_for_long_text_fields() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -234,7 +240,9 @@ def test_selector_self_heal_config_falls_back_to_runtime_enabled_when_missing(
     }
 
 
-def test_selector_self_heal_targets_default_ecommerce_fields_when_requested_empty() -> None:
+def test_selector_self_heal_targets_default_ecommerce_fields_when_requested_empty() -> (
+    None
+):
     class _Run:
         surface = "ecommerce_detail"
         requested_fields: list[str] = []
@@ -303,11 +311,13 @@ def test_reduce_html_for_selector_synthesis_preserves_shadow_root_boundaries() -
     )
 
     assert "template" in reduced
-    assert "shadowrootmode=\"open\"" in reduced
+    assert 'shadowrootmode="open"' in reduced
     assert "Waterproof membrane" in reduced
 
 
-def test_reduce_html_for_selector_synthesis_preserves_price_and_buy_box_controls() -> None:
+def test_reduce_html_for_selector_synthesis_preserves_price_and_buy_box_controls() -> (
+    None
+):
     reduced = reduce_html_for_selector_synthesis(
         """
         <html><body>
@@ -322,11 +332,12 @@ def test_reduce_html_for_selector_synthesis_preserves_price_and_buy_box_controls
         """
     )
 
-    assert "data-price=\"229.99\"" in reduced
-    assert "itemprop=\"price\"" in reduced
-    assert "aria-label=\"Size 9\"" in reduced
-    assert "data-variant-id=\"v9\"" in reduced
-    assert "data-sku=\"sku-1\"" in reduced
+    assert 'data-price="229.99"' in reduced
+    assert 'itemprop="price"' in reduced
+    assert 'aria-label="Size 9"' in reduced
+    assert 'data-variant-id="v9"' in reduced
+    assert 'data-sku="sku-1"' in reduced
+    assert 'value="sku-1"' in reduced
 
 
 def test_extract_records_deep_merges_structured_variant_fields_across_tiers() -> None:
@@ -363,28 +374,26 @@ def test_extract_records_deep_merges_structured_variant_fields_across_tiers() ->
         ],
     )[0]
 
-    assert record["variant_axes"] == {
-        "size": ["S", "M"],
-        "color": ["Black", "Olive"],
-    }
-    assert record["selected_variant"] == {
-        "sku": "TRAIL-S",
-        "size": "S",
-        "option_values": {"size": "S"},
-    }
 
-
-def test_selector_self_heal_requires_field_level_improvement_before_persisting() -> None:
-    assert _selector_heal_improved_record(
-        before_record={"title": "Widget Prime", "price": ""},
-        after_record={"title": "Widget Prime", "price": "19.99"},
-        target_fields=["price"],
-    ) is True
-    assert _selector_heal_improved_record(
-        before_record={"title": "Widget Prime", "price": ""},
-        after_record={"title": "Widget Prime", "price": ""},
-        target_fields=["price"],
-    ) is False
+def test_selector_self_heal_requires_field_level_improvement_before_persisting() -> (
+    None
+):
+    assert (
+        _selector_heal_improved_record(
+            before_record={"title": "Widget Prime", "price": ""},
+            after_record={"title": "Widget Prime", "price": "19.99"},
+            target_fields=["price"],
+        )
+        is True
+    )
+    assert (
+        _selector_heal_improved_record(
+            before_record={"title": "Widget Prime", "price": ""},
+            after_record={"title": "Widget Prime", "price": ""},
+            target_fields=["price"],
+        )
+        is False
+    )
 
 
 def test_selector_self_heal_converts_css_candidates_before_persisting_xpath() -> None:

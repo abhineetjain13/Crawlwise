@@ -4,10 +4,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.services.config.field_mappings import (
+    BARCODE_FIELD,
     CANONICAL_SCHEMAS,
     PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS,
     PUBLIC_RECORD_URL_BLOCKED_PATH_MARKERS,
     PUBLIC_RECORD_URL_MAX_LENGTH,
+    ROUTE_BARCODE_TO_SKU,
+    SKU_FIELD,
+    VARIANTS_FIELD,
 )
 from app.services.field_policy import canonical_requested_fields, normalize_field_key
 from app.services.field_value_core import (
@@ -19,6 +23,7 @@ from app.services.field_value_core import (
     URL_FIELDS,
     coerce_field_value,
     finalize_record,
+    flatten_variants_for_public_output,
     text_or_none,
 )
 from app.services.field_url_normalization import canonical_public_record_url
@@ -67,13 +72,29 @@ def public_record_data_for_surface(
             rejected[str(raw_field_name)] = "field_not_allowed_for_surface"
             continue
         coerced = coerce_field_value(field_name, raw_value, page_url)
+        if field_name == VARIANTS_FIELD:
+            coerced = flatten_variants_for_public_output(coerced, page_url=page_url)
         if coerced in (None, "", [], {}):
+            if field_name == BARCODE_FIELD and ROUTE_BARCODE_TO_SKU:
+                routed_sku = coerce_field_value(SKU_FIELD, raw_value, page_url)
+                if (
+                    routed_sku not in (None, "", [], {})
+                    and SKU_FIELD in allowed_fields
+                    and record.get(SKU_FIELD) in (None, "", [], {})
+                ):
+                    data[SKU_FIELD] = routed_sku
+                    rejected[str(raw_field_name)] = "routed_to_sku"
+                    continue
             rejected[str(raw_field_name)] = "empty_after_coercion"
             continue
         if not _public_record_field_shape_valid(field_name, coerced):
             rejected[str(raw_field_name)] = "invalid_field_shape"
             continue
-        if field_name in {"url", "apply_url", "canonical_url"} and not public_navigation_url_safe(coerced):
+        if field_name in {
+            "url",
+            "apply_url",
+            "canonical_url",
+        } and not public_navigation_url_safe(coerced):
             rejected[str(raw_field_name)] = "unsafe_navigation_url"
             continue
         if field_name in {"url", "apply_url", "canonical_url"}:
@@ -96,8 +117,7 @@ def _public_record_field_shape_valid(field_name: str, value: object) -> bool:
         return isinstance(value, list) and all(isinstance(item, dict) for item in value)
     if field_name in STRUCTURED_MULTI_FIELDS or field_name == "additional_images":
         return isinstance(value, list) and all(
-            not isinstance(item, (dict, list, tuple, set))
-            for item in value
+            not isinstance(item, (dict, list, tuple, set)) for item in value
         )
     if field_name in URL_FIELDS | IMAGE_FIELDS | LONG_TEXT_FIELDS:
         return isinstance(value, str)

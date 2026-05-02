@@ -300,5 +300,3 @@ def test_listing_adapter_records_use_shared_surface_normalization() -> None:
     assert record["_source"] == "shopify_adapter"
     assert "additional_images" not in record
     assert "variants" not in record
-    assert "variant_axes" not in record
-    assert "selected_variant" not in record

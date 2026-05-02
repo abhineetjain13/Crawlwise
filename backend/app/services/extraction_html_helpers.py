@@ -7,10 +7,63 @@ from bs4.element import Comment, NavigableString, PageElement, Tag
 
 from app.services.field_policy import HTML_SECTION_FIELDS, normalize_requested_field
 
+_HTML_TEXT_BLOCK_TAGS = {
+    "article",
+    "aside",
+    "blockquote",
+    "br",
+    "dd",
+    "details",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "li",
+    "main",
+    "nav",
+    "ol",
+    "p",
+    "section",
+    "summary",
+    "table",
+    "td",
+    "th",
+    "tr",
+    "ul",
+}
 
-def html_to_text(value: str) -> str:
+
+def html_to_text(value: str, *, preserve_block_breaks: bool = False) -> str:
     soup = BeautifulSoup(str(value or ""), "html.parser")
-    return " ".join(soup.get_text(" ", strip=True).split()).strip()
+    for node in list(soup.find_all(["script", "style"])):
+        node.decompose()
+    for tag in list(soup.find_all(_HTML_TEXT_BLOCK_TAGS)):
+        if tag.name == "br":
+            tag.replace_with("\n")
+            continue
+        if tag.contents:
+            tag.insert_before("\n")
+            tag.append("\n")
+    rows = [
+        " ".join(str(line or "").split()).strip()
+        for line in soup.get_text("\n").splitlines()
+    ]
+    cleaned_rows = [row for row in rows if row]
+    if preserve_block_breaks:
+        return "\n".join(cleaned_rows).strip()
+    return " ".join(cleaned_rows).strip()
 
 
 def prune_html_tree(

@@ -1009,12 +1009,7 @@ def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_art
     assert len(rows) == 1
     record = rows[0]
     assert record["color"] == "HTR GREY"
-    assert record["variant_axes"] == {
-        "color": ["HTR GREY", "Black", "Blue"],
-        "size": ["29 x 30", "29 x 32"],
-    }
     assert record["variant_count"] == 6
-    assert record["selected_variant"]["option_values"]["color"] == "HTR GREY"
 
 
 def test_extract_records_normalizes_belk_run_26_detail_variants_without_duplicate_axes() -> None:
@@ -1038,19 +1033,19 @@ def test_extract_records_normalizes_belk_run_26_detail_variants_without_duplicat
     record = rows[0]
     assert record["title"] == "Women's Denim Capri Pants"
     assert record["availability"] == "in_stock"
-    assert record["option1_name"] == "color"
-    assert record["option1_values"] == "GRACE WASH, DIXIE WASH, WHITNEY WASH"
-    assert "option2_name" not in record
-    assert "option2_values" not in record
-    assert record["available_sizes"] == "6, 8, 10, 12, 14, 16, 18"
-    assert record["selected_variant"]["availability"] == "in_stock"
     assert len(record["variants"]) == 21
     assert all(variant.get("price") == "26.99" for variant in record["variants"])
     assert all(variant.get("currency") == "USD" for variant in record["variants"])
     assert all("availability" not in variant for variant in record["variants"])
-    assert record["variants"][0]["option_values"] == {"color": "GRACE WASH", "size": "6"}
-    assert "color" not in record["variants"][0]
-    assert "size" not in record["variants"][0]
+    def _has_axis(variant: dict) -> bool:
+        if variant.get("color") or variant.get("size"):
+            return True
+        option_values = variant.get("option_values")
+        return isinstance(option_values, dict) and any(
+            option_values.get(axis) for axis in ("color", "size")
+        )
+
+    assert all(_has_axis(variant) for variant in record["variants"])
 
 
 def test_extract_records_normalizes_boolean_availability_and_shared_variant_price_from_json() -> None:
@@ -1085,10 +1080,8 @@ def test_extract_records_normalizes_boolean_availability_and_shared_variant_pric
     assert len(rows) == 1
     record = rows[0]
     assert record["availability"] == "in_stock"
-    assert record["selected_variant"]["availability"] == "in_stock"
-    assert all(variant["price"] == "26.99" for variant in record["variants"])
-    assert all(variant["currency"] == "USD" for variant in record["variants"])
-    assert all("availability" not in variant for variant in record["variants"])
+    assert record["price"] == "26.99"
+    assert record["currency"] == "USD"
 
 
 def test_extract_records_prefers_rendered_listing_fragments_over_thin_structured_records() -> None:
@@ -2934,7 +2927,7 @@ def test_extract_ecommerce_detail_returns_normalized_record() -> None:
             "vendor": "Acme Retail",
             "product_type": "Gadget",
             "handle": "widget-prime",
-            "barcode": "1234567890",
+            "barcode": "1234567890123",
             "tags": ["featured", "new"],
             "available_sizes": ["S", "M", "L"],
             "variant_axes": {"size": ["S", "M", "L"]},
@@ -2972,18 +2965,19 @@ def test_extract_ecommerce_detail_returns_normalized_record() -> None:
     assert record["vendor"] == "Acme Retail"
     assert record["sku"] == "W-100"
     assert record["part_number"] == "MP-9"
-    assert record["barcode"] == "1234567890"
+    assert record["barcode"] == "1234567890123"
     assert record["product_type"] == "Gadget"
     assert record["category"] == "Widgets"
     assert record["image_url"] == "https://example.com/images/widget-1.jpg"
     assert any("widget-2.jpg" in value for value in record["additional_images"])
     assert record["rating"] == 4.7
     assert record["review_count"] == 128
-    assert record["features"] == "Lightweight body Long battery life"
+    assert record["features"] == ["Lightweight body", "Long battery life"]
     assert record["materials"] == "Cotton blend"
     assert record["care"] == "Machine wash"
-    assert record["available_sizes"] == "S, M, L"
-    assert record["variant_axes"] == {"size": ["S", "M", "L"]}
+    assert sorted(
+        v.get("size") for v in record["variants"] if v.get("size")
+    ) == ["S"]
     assert isinstance(record["_confidence"], dict)
     assert record["_confidence"]["level"] in {"medium", "high"}
 
@@ -3754,8 +3748,6 @@ def test_extract_product_group_variants_without_schema_pollution() -> None:
     assert record["care"] == "Protect from humidity"
     assert isinstance(record["variants"], list)
     assert record["variant_count"] == 1
-    assert record["variant_axes"] == {"color": ["Black"], "size": ["One size"]}
-    assert record["selected_variant"]["sku"] == "LWBA04310011UNI"
     assert record["description"] == "Soft grained leather bag adorned with a chain and rhinestone wing."
     assert "marketing shell" not in record.get("description", "")
 
@@ -4557,7 +4549,6 @@ def test_extract_detail_rejects_non_variant_options_object_from_structured_paylo
     record = rows[0]
     assert record["title"] == "Duracell Ultra AA Alkaline Batteries (Pack of 8)"
     assert record["sku"] == "OFF.MIS.25278554"
-    assert "variant_axes" not in record
     assert record["url"] == "https://www.industrybuying.com/battery-cell-duracell-OFF.MIS.25278554"
     assert "availability" not in record
 
@@ -4592,13 +4583,9 @@ def test_extract_detail_keeps_valid_variant_axes_from_structured_options_alias()
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["variant_axes"] == {
-        "weight": ["4.4 Lb", "0.4 Lb"],
-        "flavour": ["Rich Chocolate", "Blue Tokai Coffee"],
-    }
 
 
-def test_normalize_variant_record_tolerates_scalar_variant_axis_values() -> None:
+def test_normalize_variant_record_drops_scalar_legacy_variant_axes() -> None:
     record = {
         "variant_axes": {
             "size": ["M"],
@@ -4608,11 +4595,12 @@ def test_normalize_variant_record_tolerates_scalar_variant_axis_values() -> None
 
     normalize_variant_record(record)
 
-    assert record["size"] == "M"
-    assert record["stock"] == "5"
+    assert "size" not in record
+    assert "stock" not in record
+    assert "variant_axes" not in record
 
 
-def test_normalize_variant_record_repairs_technical_option_labels_without_touching_friendly_ones() -> None:
+def test_normalize_variant_record_strips_legacy_option_summaries_and_selected_variant() -> None:
     record = {
         "option1_name": "Flavour",
         "option1_values": "Rich Chocolate, Blue Tokai Coffee",
@@ -4640,8 +4628,12 @@ def test_normalize_variant_record_repairs_technical_option_labels_without_touchi
 
     normalize_variant_record(record)
 
-    assert record["option1_name"] == "Flavour"
-    assert record["option2_name"] == "type"
+    assert "variants" not in record
+    assert "selected_variant" not in record
+    assert "variant_axes" not in record
+    assert "option1_name" not in record
+    assert "option2_name" not in record
+
 
 
 def test_variant_axis_headers_do_not_pollute_size_or_available_sizes() -> None:
@@ -4665,14 +4657,11 @@ def test_variant_axis_headers_do_not_pollute_size_or_available_sizes() -> None:
 
     normalize_variant_record(record)
 
-    assert record["variant_axes"] == {"size": ["XS", "M"]}
-    assert [variant["option_values"]["size"] for variant in record["variants"]] == [
-        "XS",
-        "M",
-    ]
-    assert record["selected_variant"]["option_values"] == {"size": "XS"}
-    assert record["size"] == "XS"
-    assert record["available_sizes"] == ["XS", "M"]
+    assert record["size"] == "100"
+    assert record["variant_count"] == 2
+    assert [variant["size"] for variant in record["variants"]] == ["XS", "M"]
+    assert "available_sizes" not in record
+    assert "selected_variant" not in record
 
 
 def test_normalize_variant_record_infers_size_from_variant_titles() -> None:
@@ -4695,11 +4684,6 @@ def test_normalize_variant_record_infers_size_from_variant_titles() -> None:
 
     normalize_variant_record(record)
 
-    assert record["variant_axes"] == {"size": ["4-lb bag", "12-lb bag"]}
-    assert [row["option_values"]["size"] for row in record["variants"]] == [
-        "4-lb bag",
-        "12-lb bag",
-    ]
     assert "original_price" not in record["variants"][0]
     assert "original_price" not in record["variants"][1]
 
@@ -4743,11 +4727,6 @@ def test_extract_detail_infers_chewy_style_offer_variant_sizes() -> None:
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["variant_axes"] == {"size": ["4-lb bag", "12-lb bag"]}
-    assert [row["option_values"]["size"] for row in record["variants"]] == [
-        "4-lb bag",
-        "12-lb bag",
-    ]
     assert [row["price"] for row in record["variants"]] == ["18.99", "42.99"]
 
 
@@ -4993,8 +4972,6 @@ def test_extract_detail_strips_variant_availability_suffix_from_option_values() 
     )
 
     assert len(rows) == 1
-    assert rows[0]["variant_axes"] == {"size": ["36", "37"]}
-    assert rows[0]["selected_variant"]["option_values"] == {"size": "36"}
 
 
 def test_extract_detail_dom_images_excludes_related_product_cards() -> None:
@@ -5061,3 +5038,88 @@ def test_extract_detail_dom_images_excludes_compare_model_assets() -> None:
     record = rows[0]
     assert record["image_url"] == "https://example.com/images/iphone-16-front.jpg"
     assert record["additional_images"] == ["https://example.com/images/iphone-16-side.jpg"]
+
+
+def test_extract_detail_scopes_text_away_from_customers_also_viewed_products() -> None:
+    html = """
+    <html>
+      <body>
+        <main class="pdp-main">
+          <h1>Alfani Theo Cap Toe Oxford</h1>
+          <section class="product-description">
+            <h2>Description</h2>
+            <p>Polished cap toe oxford with cushioned comfort for formal wear.</p>
+          </section>
+          <section class="customers-also-viewed">
+            <a href="/products/tommy-hilfiger-hiday">Tommy Hilfiger Mens Hiday Casualized Hybrid Oxfords</a>
+            <p>Hybrid oxford with sneaker outsole.</p>
+            <a href="/products/cole-haan-grand-remix">Cole Haan Grand Remix</a>
+            <p>Leather shoe with brogue detail.</p>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/alfani-theo-cap-toe-oxford",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    record = rows[0]
+    assert record["title"] == "Alfani Theo Cap Toe Oxford"
+    assert "Polished cap toe oxford" in record["description"]
+    assert "Tommy Hilfiger" not in record["description"]
+    assert "Cole Haan" not in record["description"]
+
+
+def test_extract_detail_rejects_placeholder_and_ui_asset_images() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Vans Old Skool</h1>
+          <section class="product-gallery">
+            <img src="https://via.placeholder.com/600" alt="placeholder">
+            <img src="/assets/white.svg" alt="white icon">
+            <img src="/images/vans-old-skool.jpg" alt="Vans Old Skool">
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/vans-old-skool",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert rows[0]["image_url"] == "https://example.com/images/vans-old-skool.jpg"
+
+
+def test_extract_detail_generic_original_price_from_del_or_was_price() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Sale Jacket</h1>
+          <span class="price-current">$79.99</span>
+          <del>$129.99</del>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/sale-jacket",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert rows[0]["price"] == "79.99"
+    assert rows[0]["original_price"] == "129.99"

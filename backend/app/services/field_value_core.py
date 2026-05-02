@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import re
-from html.parser import HTMLParser
 from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -41,7 +40,19 @@ from app.services.config.extraction_rules import (
     URL_FIELDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
 )
-from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
+from app.services.config.field_mappings import (
+    CANONICAL_SCHEMAS,
+    FIELD_ALIASES,
+    FLAT_VARIANT_KEYS,
+    PUBLIC_RECORD_BARCODE_LENGTHS,
+    PUBLIC_RECORD_BRAND_REGION_SUFFIX_TOKENS,
+    PUBLIC_RECORD_GENDER_REJECT_TOKENS,
+    PUBLIC_RECORD_GENDER_TAXONOMY,
+    PUBLIC_RECORD_IDENTITY_INTERNAL_TOKENS,
+    PUBLIC_RECORD_LEGACY_VARIANT_FIELDS,
+    PUBLIC_RECORD_PRODUCT_TYPE_NOISE_TOKENS,
+    PUBLIC_RECORD_SKU_DRAFT_PREFIX_PATTERN,
+)
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_url_normalization import (
     strip_record_tracking_params,
@@ -128,11 +139,14 @@ _NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
     if str(key or "").strip()
 ) | {"availability", "available", "in_stock", "stock_status"}
 
+
 def _object_list(value: object) -> list:
     return list(value) if isinstance(value, list) else []
 
+
 def _object_dict(value: object) -> dict:
     return dict(value) if isinstance(value, dict) else {}
+
 
 def _safe_int(value: object, *, default: int | None = None) -> int | None:
     if value is None or value == "":
@@ -141,6 +155,7 @@ def _safe_int(value: object, *, default: int | None = None) -> int | None:
         return int(str(value))
     except (ValueError, TypeError):
         return default
+
 
 def _coerce_int(value: object, *, default: int = 0) -> int:
     if isinstance(value, bool):
@@ -151,6 +166,7 @@ def _coerce_int(value: object, *, default: int = 0) -> int:
         return int(str(value).strip())
     except (ValueError, TypeError):
         return default
+
 
 object_list = _object_list
 object_dict = _object_dict
@@ -206,26 +222,11 @@ def is_title_noise(title: object) -> bool:
     return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
 
 
-class _HTMLTextStripper(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self._parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self._parts.append(data)
-
-    def get_text(self) -> str:
-        return " ".join(self._parts)
-
-
 def strip_html_tags(value: object) -> str:
     text = str(value or "")
     if "<" not in text or ">" not in text:
         return text
-    stripper = _HTMLTextStripper()
-    stripper.feed(text)
-    stripper.close()
-    return stripper.get_text()
+    return html_to_text(text)
 
 
 def text_or_none(value: object) -> str | None:
@@ -474,11 +475,21 @@ def coerce_text(value: object) -> str | None:
     if isinstance(value, str):
         literal_rows = _coerce_literal_text_list(value)
         if literal_rows:
-            return text_or_none(" ".join(literal_rows))
+            return text_or_none("; ".join(literal_rows))
         if "<" in value or _HTML_ENTITY_RE.search(value):
             return text_or_none(html_to_text(value))
         return text_or_none(value)
     return text_or_none(value)
+
+
+def coerce_long_text(value: object) -> str | None:
+    if isinstance(value, str):
+        literal_rows = _coerce_literal_text_list(value)
+        if literal_rows:
+            return text_or_none("; ".join(literal_rows))
+        if "<" in value or _HTML_ENTITY_RE.search(value):
+            return text_or_none(html_to_text(value, preserve_block_breaks=True))
+    return coerce_text(value)
 
 
 def _coerce_literal_text_list(value: str) -> list[str]:
@@ -487,7 +498,7 @@ def _coerce_literal_text_list(value: str) -> list[str]:
         return []
     try:
         parsed = ast.literal_eval(text)
-    except (SyntaxError, ValueError):
+    except (RecursionError, SyntaxError, ValueError):
         return []
     if not isinstance(parsed, (list, tuple)):
         return []
@@ -496,6 +507,44 @@ def _coerce_literal_text_list(value: str) -> list[str]:
         for item in parsed
         if not isinstance(item, (dict, list, tuple, set)) and clean_text(item)
     ]
+
+
+def _split_multivalue_text_rows(value: str) -> list[str]:
+    rows = [
+        clean_text(part)
+        for part in re.split(r"(?:\r?\n|[•\u2022]+)", str(value or ""))
+        if clean_text(part)
+    ]
+    return rows
+
+
+def _coerce_structured_multi_rows(field_name: str, value: object) -> list[str]:
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, dict):
+        rows: list[str] = []
+        for item in value.values():
+            rows.extend(_coerce_structured_multi_rows(field_name, item))
+        return rows
+    if isinstance(value, (list, tuple, set)):
+        rows: list[str] = []
+        for item in value:
+            rows.extend(_coerce_structured_multi_rows(field_name, item))
+        return rows
+    if isinstance(value, str):
+        literal_rows = _coerce_literal_text_list(value)
+        if literal_rows:
+            return literal_rows
+        text = (
+            html_to_text(value, preserve_block_breaks=True)
+            if ("<" in value or _HTML_ENTITY_RE.search(value))
+            else str(value)
+        )
+        rows = _split_multivalue_text_rows(text)
+        if rows:
+            return rows
+    text = coerce_text(value)
+    return [text] if text else []
 
 
 def extract_price_text(
@@ -571,6 +620,8 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
     text = coerce_text(value)
     if not text:
         return None
+    if text.lstrip().startswith(("{", "[")):
+        return None
     cleaned = text
     if field_name in {"color", "condition", "material", "size", "storage", "style"}:
         for pattern in _OPTION_VALUE_SUFFIX_NOISE_RE:
@@ -596,6 +647,15 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         match = re.fullmatch(r"select\s+(.+?)\s+color", cleaned, flags=re.I)
         if match is not None:
             cleaned = clean_text(match.group(1))
+        cleaned = re.split(r"\bstyle\s*:", cleaned, maxsplit=1, flags=re.I)[0]
+        if ":" in cleaned:
+            prefix, suffix = cleaned.rsplit(":", 1)
+            if len(clean_text(suffix).split()) <= 4 and re.search(
+                r"\b(?:color|colour|black|blue|brown|green|grey|gray|orange|pink|purple|red|white|yellow)\b",
+                suffix,
+                flags=re.I,
+            ):
+                cleaned = suffix
         cleaned = re.sub(r"^color\s*:\s*", "", cleaned, flags=re.I)
         cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
         cleaned = re.split(
@@ -608,6 +668,10 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = re.sub(r"^size\s*:\s*", "", cleaned, flags=re.I)
         cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
         cleaned = clean_text(cleaned)
+        if re.search(r"\bplease\s+select\b", cleaned, flags=re.I):
+            return None
+    if cleaned.strip().casefold() in {"none", "null", "- / null", "n/a", "na"}:
+        return None
     return cleaned or None
 
 
@@ -735,33 +799,74 @@ def _looks_like_malformed_relative_url_candidate(value: str) -> bool:
     return any(token in head for token in ("g_auto", "f_auto", "q_auto", "c_fill"))
 
 
-def coerce_variant_axes(value: object) -> dict[str, list[str]] | None:
-    if not isinstance(value, dict) or not value:
+def flatten_variants_for_public_output(
+    value: object,
+    *,
+    page_url: str = "",
+) -> list[dict[str, object]] | None:
+    """Flatten variants to the Zyte-shaped public schema.
+
+    Each emitted variant carries only ``FLAT_VARIANT_KEYS``. Nested
+    ``option_values`` are merged into top-level ``color`` / ``size`` when those
+    axes are missing, then dropped. Unknown keys (``variant_id``, ``name``,
+    ``title``, ``option_values``, etc.) are removed entirely.
+
+    Producers may keep rich rows briefly for source-local matching, but emitted
+    records must use this flat shape before persistence/export.
+    """
+
+    if not isinstance(value, list):
         return None
-    normalized_axes: dict[str, list[str]] = {}
-    for raw_axis_name, raw_axis_values in value.items():
-        axis_name = text_or_none(raw_axis_name)
-        if not axis_name:
+    flattened: list[dict[str, object]] = []
+    for raw_variant in value:
+        if not isinstance(raw_variant, dict):
             continue
-        if not isinstance(raw_axis_values, list):
-            continue
-        cleaned_values: list[str] = []
-        seen: set[str] = set()
-        for item in raw_axis_values:
-            if isinstance(item, (dict, list, tuple, set)):
+        merged: dict[str, object] = {}
+        option_values = raw_variant.get("option_values")
+        if isinstance(option_values, dict):
+            for axis_name, axis_value in option_values.items():
+                axis_text = text_or_none(axis_name)
+                value_text = text_or_none(axis_value)
+                if not axis_text or not value_text:
+                    continue
+                axis_key = axis_text.strip().lower()
+                if axis_key in {"color", "colour"} and "color" not in merged:
+                    merged["color"] = value_text
+                elif axis_key == "size" and "size" not in merged:
+                    merged["size"] = value_text
+        for key in FLAT_VARIANT_KEYS:
+            if key in merged and merged[key] not in (None, "", [], {}):
                 continue
-            cleaned = text_or_none(item)
-            if not cleaned:
+            candidate = raw_variant.get(key)
+            if candidate in (None, "", [], {}):
                 continue
-            lowered = cleaned.lower()
-            if lowered in seen:
+            coerced = coerce_field_value(key, candidate, page_url)
+            if coerced in (None, "", [], {}):
                 continue
-            seen.add(lowered)
-            cleaned_values.append(cleaned)
-        if not cleaned_values:
-            continue
-        normalized_axes[axis_name] = cleaned_values
-    return normalized_axes or None
+            merged[key] = coerced
+        if merged and (
+            text_or_none(merged.get("color")) or text_or_none(merged.get("size"))
+        ):
+            flattened.append(merged)
+    return flattened or None
+
+
+def enforce_flat_variant_public_contract(
+    record: dict[str, Any],
+    *,
+    page_url: str = "",
+) -> None:
+    variants = flatten_variants_for_public_output(
+        record.get("variants"), page_url=page_url
+    )
+    if variants:
+        record["variants"] = variants
+        record["variant_count"] = len(variants)
+    else:
+        record.pop("variants", None)
+        record.pop("variant_count", None)
+    for field_name in tuple(PUBLIC_RECORD_LEGACY_VARIANT_FIELDS or ()):
+        record.pop(str(field_name), None)
 
 
 def coerce_product_attributes(value: object) -> dict[str, object] | None:
@@ -856,8 +961,6 @@ def coerce_rating_value(value: object) -> float | None:
 def coerce_field_value(field_name: str, value: object, page_url: str) -> object | None:
     if value in (None, "", [], {}):
         return None
-    if field_name == "variant_axes":
-        return coerce_variant_axes(value)
     if field_name == "product_attributes":
         return coerce_product_attributes(value)
     if field_name in STRUCTURED_OBJECT_FIELDS and isinstance(value, dict):
@@ -897,22 +1000,17 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             or value.get("value")
         )
     if field_name == "product_type":
-        if isinstance(value, dict):
-            return coerce_structured_scalar(
-                value,
-                keys=("name", "title", "label", "value", "text", "type"),
-            )
-        text = coerce_text(value)
-        if text and text.lstrip().startswith(("{", "[")):
-            return None
-        return text or None
-    if field_name == "gender" and isinstance(value, dict):
-        return coerce_text(
-            value.get("name")
-            or value.get("title")
-            or value.get("label")
-            or value.get("value")
-        )
+        return _coerce_product_type_clean(value)
+    if field_name == "product_id":
+        return _coerce_identity_token_or_none(value)
+    if field_name == "title":
+        return _coerce_identity_token_or_none(value)
+    if field_name == "barcode":
+        return _coerce_barcode(value)
+    if field_name == "sku":
+        return _coerce_sku(value)
+    if field_name == "gender":
+        return _coerce_gender(value)
     if field_name in {"color", "condition", "material", "size", "storage", "style"}:
         return _sanitize_option_scalar(
             field_name,
@@ -928,6 +1026,12 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             return None
         return text or None
     # Reject non-numeric sentinel strings for integer fields (e.g. "out_of_stock")
+    if (
+        field_name in _INTEGER_FIELD_NAMES
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        return int(value)
     if field_name in _INTEGER_FIELD_NAMES and isinstance(value, str):
         text = coerce_text(value)
         if text and not re.search(r"\d", text):
@@ -992,12 +1096,16 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             return urls or None
         return urls[0] if urls else None
     if field_name in STRUCTURED_MULTI_FIELDS:
-        if isinstance(value, list):
-            rows = [coerce_text(item) for item in value]
-            return [row for row in rows if row] or None
-        if isinstance(value, dict):
-            rows = [coerce_text(item) for item in value.values()]
-            return [row for row in rows if row] or None
+        rows = _coerce_structured_multi_rows(field_name, value)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            lowered = row.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            deduped.append(row)
+        return deduped or None
     if isinstance(value, list):
         normalized_rows: list[object] = []
         for item in value:
@@ -1010,10 +1118,30 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
                 normalized_rows.append(normalized)
         return normalized_rows or None
     if field_name in LONG_TEXT_FIELDS:
-        return coerce_text(value)
+        return coerce_long_text(value)
     if field_name == "rating":
         return coerce_rating_value(value)
     return coerce_text(value)
+
+
+_brand_region_suffix_tokens = tuple(PUBLIC_RECORD_BRAND_REGION_SUFFIX_TOKENS or ())
+_BRAND_REGION_SUFFIX_RE = (
+    re.compile(
+        r"\s*[|\-\u2013\u2014]\s*(?:"
+        + "|".join(
+            re.escape(str(token))
+            for token in sorted(
+                _brand_region_suffix_tokens,
+                key=len,
+                reverse=True,
+            )
+        )
+        + r")\.?\s*$",
+        re.IGNORECASE,
+    )
+    if _brand_region_suffix_tokens
+    else re.compile(r"$^")
+)
 
 
 def _coerce_brand_text(value: object) -> str | None:
@@ -1027,6 +1155,108 @@ def _coerce_brand_text(value: object) -> str | None:
     if parsed.scheme in {"http", "https", "ftp", "mailto"} or parsed.netloc:
         return None
     if _BARE_HOST_URL_RE.fullmatch(text):
+        return None
+    cleaned = _BRAND_REGION_SUFFIX_RE.sub("", text).strip()
+    return cleaned or text
+
+
+_GENDER_TAXONOMY = {
+    str(key).casefold(): str(value)
+    for key, value in dict(PUBLIC_RECORD_GENDER_TAXONOMY or {}).items()
+}
+_gender_reject_tokens = frozenset(
+    str(token).casefold() for token in tuple(PUBLIC_RECORD_GENDER_REJECT_TOKENS or ())
+)
+_identity_internal_tokens = frozenset(
+    str(token).casefold()
+    for token in tuple(PUBLIC_RECORD_IDENTITY_INTERNAL_TOKENS or ())
+)
+_product_type_noise_tokens = frozenset(
+    str(token).casefold()
+    for token in tuple(PUBLIC_RECORD_PRODUCT_TYPE_NOISE_TOKENS or ())
+)
+_SKU_DRAFT_PREFIX_RE = re.compile(
+    str(PUBLIC_RECORD_SKU_DRAFT_PREFIX_PATTERN), re.IGNORECASE
+)
+_BARCODE_SEPARATOR_RE = re.compile(r"[\s-]+")
+
+
+def _coerce_gender(value: object) -> str | None:
+    if isinstance(value, dict):
+        value = (
+            value.get("name")
+            or value.get("title")
+            or value.get("label")
+            or value.get("value")
+        )
+    text = coerce_text(value)
+    if not text:
+        return None
+    folded = text.strip().lower()
+    if folded in _gender_reject_tokens:
+        return None
+    return _GENDER_TAXONOMY.get(folded, text)
+
+
+def _coerce_barcode(value: object) -> str | None:
+    text = coerce_text(value)
+    if not text:
+        return None
+    if not re.fullmatch(r"[\d\s-]+", text):
+        return None
+    digits = _BARCODE_SEPARATOR_RE.sub("", text)
+    if not digits or len(digits) not in set(PUBLIC_RECORD_BARCODE_LENGTHS or ()):
+        return None
+    return digits
+
+
+def _coerce_sku(value: object) -> str | None:
+    text = coerce_text(value)
+    if not text:
+        return None
+    had_draft_prefix = bool(_SKU_DRAFT_PREFIX_RE.match(text))
+    cleaned = _SKU_DRAFT_PREFIX_RE.sub("", text).strip()
+    if had_draft_prefix and re.fullmatch(r"\d{10,}", cleaned):
+        return None
+    if _looks_like_tracking_hash_sku(cleaned):
+        return None
+    return cleaned or None
+
+
+def _looks_like_tracking_hash_sku(value: str) -> bool:
+    if len(value) <= 20 or re.search(r"[-_\s]", value):
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9]+", value):
+        return False
+    has_alpha = bool(re.search(r"[A-Za-z]", value))
+    has_digit = bool(re.search(r"\d", value))
+    return has_alpha and has_digit
+
+
+def _coerce_identity_token_or_none(value: object) -> str | None:
+    text = coerce_text(value)
+    if not text:
+        return None
+    folded = text.strip().lower()
+    if folded in _identity_internal_tokens:
+        return None
+    return text
+
+
+def _coerce_product_type_clean(value: object) -> str | None:
+    if isinstance(value, dict):
+        value = coerce_structured_scalar(
+            value, keys=("name", "title", "label", "value", "text", "type")
+        )
+    text = coerce_text(value)
+    if not text:
+        return None
+    if text.lstrip().startswith(("{", "[")):
+        return None
+    folded = text.strip().lower()
+    if folded in _identity_internal_tokens:
+        return None
+    if any(token in folded for token in _product_type_noise_tokens):
         return None
     return text
 
@@ -1088,8 +1318,9 @@ def validate_and_clean(
 ) -> tuple[dict[str, Any], list[str]]:
     """Validate a post-extraction record against the surface output schema.
 
-    Fields whose type does not match the expected schema are nullified so they
-    are dropped by the downstream ``clean_record`` pass.  Returns a
+    Fields outside the schema are omitted. Fields whose type does not match the
+    expected schema are nullified so they are dropped by the downstream
+    ``clean_record`` pass. Returns a
     ``(cleaned_record, errors)`` tuple where *errors* is a list of human-readable
     messages describing each violation found.
 

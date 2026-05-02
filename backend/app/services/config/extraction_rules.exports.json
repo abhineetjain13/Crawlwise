@@ -6008,18 +6008,13 @@
     "__type__": "frozenset",
     "items": [
       "additional_images",
-      "available_sizes",
-      "option1_values",
-      "option2_values",
       "tags"
     ]
   },
   "STRUCTURED_OBJECT_FIELDS": {
     "__type__": "frozenset",
     "items": [
-      "product_attributes",
-      "selected_variant",
-      "variant_axes"
+      "product_attributes"
     ]
   },
   "STRUCTURED_OBJECT_LIST_FIELDS": {
@@ -6036,8 +6031,7 @@
       "image_url": 0.1,
       "description": 0.1,
       "availability": 0.1,
-      "variants": 0.15,
-      "selected_variant": 0.1
+      "variants": 0.25
     },
     "job_detail": {
       "title": 0.2,

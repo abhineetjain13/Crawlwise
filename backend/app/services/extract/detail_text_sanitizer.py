@@ -5,6 +5,7 @@ from typing import Any
 
 from app.services.config.extraction_rules import (
     DETAIL_ARTIFACT_IDENTIFIER_VALUES,
+    DETAIL_ARTIFACT_PRICE_VALUES,
     DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES,
     DETAIL_ARTIFACT_SKU_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
@@ -13,14 +14,17 @@ from app.services.config.extraction_rules import (
     DETAIL_DOCUMENT_LINK_LABEL_PATTERNS,
     DETAIL_FULFILLMENT_ONLY_LONG_TEXT_PHRASES,
     DETAIL_FULFILLMENT_LONG_TEXT_PATTERNS,
+    DETAIL_GUIDE_GLOSSARY_HEADING_TOKENS,
     DETAIL_GUIDE_GLOSSARY_TEXT_PATTERNS,
     DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES,
     DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX,
     DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES,
     DETAIL_LOW_SIGNAL_TITLE_VALUES,
+    DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS,
     DETAIL_LONG_TEXT_UI_TAIL_PHRASES,
     DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS,
     DETAIL_MATERIALS_POLLUTION_TOKENS,
+    DETAIL_NOISE_PREFIXES,
     DETAIL_TITLE_DIMENSION_SIZE_PATTERN,
     DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
 )
@@ -46,6 +50,16 @@ guide_glossary_text_patterns = tuple(
     for pattern in tuple(DETAIL_GUIDE_GLOSSARY_TEXT_PATTERNS or ())
     if str(pattern).strip()
 )
+guide_glossary_heading_tokens = frozenset(
+    clean_text(value).lower()
+    for value in tuple(DETAIL_GUIDE_GLOSSARY_HEADING_TOKENS or ())
+    if clean_text(value)
+)
+long_text_disclaimer_patterns = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS or ())
+    if str(pattern).strip()
+)
 low_signal_title_values = frozenset(
     clean_text(value).lower()
     for value in tuple(DETAIL_LOW_SIGNAL_TITLE_VALUES or ())
@@ -55,6 +69,11 @@ low_signal_long_text_values = frozenset(
     clean_text(value).lower()
     for value in tuple(DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES or ())
     if clean_text(value)
+)
+materials_pollution_tokens = frozenset(
+    clean_text(token).casefold()
+    for token in tuple(DETAIL_MATERIALS_POLLUTION_TOKENS or ())
+    if clean_text(token)
 )
 low_signal_product_type_values = frozenset(
     clean_text(value).lower()
@@ -120,18 +139,27 @@ def _category_candidate_is_noise(field_name: str, value: object) -> bool:
     cleaned = clean_text(value)
     if not cleaned:
         return True
-    parts = [clean_text(part).lower() for part in re.split(r">\s*|/+", cleaned) if clean_text(part)]
+    parts = [
+        clean_text(part).lower()
+        for part in re.split(r">\s*|/+", cleaned)
+        if clean_text(part)
+    ]
     if not parts or any(part in DETAIL_CATEGORY_UI_TOKENS for part in parts):
         return True
     lowered = f" {cleaned.lower()} "
-    return any(f" {token} " in lowered for token in DETAIL_CATEGORY_UI_TOKENS if token != "...")
+    return any(
+        f" {token} " in lowered for token in DETAIL_CATEGORY_UI_TOKENS if token != "..."
+    )
 
 
 def _sku_candidate_is_artifact(field_name: str, value: object) -> bool:
     if field_name not in {"sku", "part_number", "product_id"}:
         return False
     cleaned = clean_text(value).lower()
-    return bool(cleaned and any(cleaned.startswith(prefix) for prefix in DETAIL_ARTIFACT_SKU_PREFIXES))
+    return bool(
+        cleaned
+        and any(cleaned.startswith(prefix) for prefix in DETAIL_ARTIFACT_SKU_PREFIXES)
+    )
 
 
 def _identifier_candidate_is_artifact(field_name: str, value: object) -> bool:
@@ -142,14 +170,17 @@ def _identifier_candidate_is_artifact(field_name: str, value: object) -> bool:
 
 
 def _product_type_candidate_is_artifact(field_name: str, value: object) -> bool:
-    return field_name == "product_type" and clean_text(value).lower() in DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES
+    return (
+        field_name == "product_type"
+        and clean_text(value).lower() in DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES
+    )
 
 
 def _price_candidate_is_artifact(field_name: str, value: object) -> bool:
     if field_name not in {"price", "sale_price", "original_price"}:
         return False
     cleaned = clean_text(value).lower()
-    if cleaned in {"free", "n/a", "na", "unavailable", "contact us"}:
+    if cleaned in frozenset(DETAIL_ARTIFACT_PRICE_VALUES or ()):
         return True
     if re.search(r"(^|[^\d])-\s*\d", cleaned):
         return True
@@ -165,7 +196,9 @@ def _price_candidate_is_artifact(field_name: str, value: object) -> bool:
 def _variant_candidate_is_artifact(field_name: str, value: object) -> bool:
     if field_name not in {"variants", "selected_variant", "variant_axes"}:
         return False
-    return any(_variant_artifact_token_seen(item) for item in _walk_variant_values(value))
+    return any(
+        _variant_artifact_token_seen(item) for item in _walk_variant_values(value)
+    )
 
 
 def _walk_variant_values(value: object) -> list[object]:
@@ -181,7 +214,13 @@ def _walk_variant_values(value: object) -> list[object]:
 
 def _variant_artifact_token_seen(value: object) -> bool:
     text = clean_text(value).lower()
-    return bool(text and (text in DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or re.fullmatch(r"\d+\s*%", text)))
+    return bool(
+        text
+        and (
+            text in DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS
+            or re.fullmatch(r"\d+\s*%", text)
+        )
+    )
 
 
 def _long_text_candidate_is_noise(
@@ -196,11 +235,15 @@ def _long_text_candidate_is_noise(
     lowered = cleaned.lower()
     if not lowered or lowered in low_signal_long_text_values:
         return True
-    if field_name in {"description", "specifications"} and lowered.startswith(("check the details", "product summary")):
+    if field_name in {"description", "specifications"} and lowered.startswith(
+        tuple(DETAIL_NOISE_PREFIXES or ())
+    ):
         return True
     tail_stripped = _strip_long_text_ui_tail(cleaned)
     if tail_stripped != cleaned:
-        return len(tail_stripped.split()) < int(DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS)
+        return len(tail_stripped.split()) < int(
+            DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS
+        )
     if (
         source == "dom_sections"
         and field_name in {"description", "specifications", "product_details"}
@@ -237,6 +280,11 @@ def sanitize_detail_long_text_fields(
         record["materials"] = materials
     else:
         record.pop("materials", None)
+    features = sanitize_detail_features(record.get("features"), title=record_title)
+    if features:
+        record["features"] = features
+    else:
+        record.pop("features", None)
 
 
 def sanitize_detail_long_text(text: str, *, title: str) -> str:
@@ -264,6 +312,8 @@ def sanitize_detail_long_text(text: str, *, title: str) -> str:
             continue
         if detail_long_text_chunk_is_legal_tail(chunk):
             continue
+        if any(pattern.search(chunk) for pattern in long_text_disclaimer_patterns):
+            continue
         if detail_long_text_chunk_is_variant_title(chunk, title=title):
             continue
         if detail_long_text_chunk_is_other_product(chunk, title=title):
@@ -273,6 +323,30 @@ def sanitize_detail_long_text(text: str, *, title: str) -> str:
     if kept and all(detail_long_text_chunk_is_document_label(chunk) for chunk in kept):
         return ""
     return " ".join(kept).strip()
+
+
+def sanitize_detail_features(value: object, *, title: str) -> list[str]:
+    rows = value if isinstance(value, list) else [value]
+    seen: set[str] = set()
+    cleaned_rows: list[str] = []
+    for row in rows:
+        text = text_or_none(row)
+        if not text:
+            continue
+        cleaned = sanitize_detail_long_text(text, title=title)
+        lowered = cleaned.lower()
+        if (
+            not cleaned
+            or detail_long_text_is_numeric_sequence(cleaned)
+            or detail_long_text_is_guide_or_glossary_dump(cleaned)
+            or any(pattern.search(cleaned) for pattern in long_text_disclaimer_patterns)
+        ):
+            continue
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        cleaned_rows.append(cleaned)
+    return cleaned_rows
 
 
 def _strip_long_text_ui_tail(text: str) -> str:
@@ -294,11 +368,12 @@ def _clean_materials_pollution(value: object) -> str:
     text = clean_text(value)
     if not text:
         return ""
-    pollution_tokens = {
-        clean_text(token).casefold()
-        for token in tuple(DETAIL_MATERIALS_POLLUTION_TOKENS or ())
-        if clean_text(token)
-    }
+    if text.lstrip().startswith(("{", "[")):
+        return ""
+    if detail_long_text_is_fulfillment_only(text) or any(
+        pattern.search(text) for pattern in long_text_disclaimer_patterns
+    ):
+        return ""
     chunks = [
         clean_text(chunk)
         for chunk in re.split(r"(?<=[.!?])\s+|\s+:\s+|\n+", text)
@@ -307,12 +382,15 @@ def _clean_materials_pollution(value: object) -> str:
     kept = [
         chunk
         for chunk in chunks
-        if clean_text(chunk).casefold() not in pollution_tokens
+        if clean_text(chunk).casefold() not in materials_pollution_tokens
     ]
     cleaned = " ".join(kept).strip()
     while True:
         parts = cleaned.split(maxsplit=1)
-        if not parts or parts[0].casefold().strip(":") not in pollution_tokens:
+        if (
+            not parts
+            or parts[0].casefold().strip(":") not in materials_pollution_tokens
+        ):
             return cleaned
         cleaned = parts[1] if len(parts) > 1 else ""
 
@@ -334,14 +412,23 @@ def detail_long_text_is_fulfillment_only(text: str) -> bool:
 
 def detail_long_text_is_guide_or_glossary_dump(text: str) -> bool:
     cleaned = clean_text(text)
-    return bool(cleaned and any(pattern.search(cleaned) for pattern in guide_glossary_text_patterns))
+    if not cleaned:
+        return False
+    if any(pattern.search(cleaned) for pattern in guide_glossary_text_patterns):
+        return True
+    lowered = cleaned.lower()
+    heading_hits = sum(
+        1 for token in guide_glossary_heading_tokens if token and token in lowered
+    )
+    return heading_hits >= 3
 
 
 def detail_long_text_chunk_is_legal_tail(chunk: str) -> bool:
     lowered = chunk.lower()
     return (
         "product safety" in lowered
-        or "powered by product details have been supplied by the manufacturer" in lowered
+        or "powered by product details have been supplied by the manufacturer"
+        in lowered
         or ("customer service" in lowered and any(char.isdigit() for char in chunk))
         or ("contact " in lowered and any(char.isdigit() for char in chunk))
         or ("privacy" in lowered and "policy" in lowered)
@@ -353,7 +440,9 @@ def detail_long_text_chunk_is_document_label(chunk: str) -> bool:
     normalized = clean_text(chunk)
     if not normalized:
         return False
-    return any(pattern.fullmatch(normalized) for pattern in document_link_label_patterns)
+    return any(
+        pattern.fullmatch(normalized) for pattern in document_link_label_patterns
+    )
 
 
 def detail_long_text_is_document_label_cluster(text: str) -> bool:
@@ -361,12 +450,10 @@ def detail_long_text_is_document_label_cluster(text: str) -> bool:
     if not normalized:
         return False
     normalized = re.sub(r"\b(guide|label|manual)\b\s+", r"\1\n", normalized, flags=re.I)
-    parts = [
-        clean_text(part)
-        for part in normalized.splitlines()
-        if clean_text(part)
-    ]
-    return len(parts) >= 2 and all(detail_long_text_chunk_is_document_label(part) for part in parts)
+    parts = [clean_text(part) for part in normalized.splitlines() if clean_text(part)]
+    return len(parts) >= 2 and all(
+        detail_long_text_chunk_is_document_label(part) for part in parts
+    )
 
 
 def detail_long_text_chunk_is_variant_title(chunk: str, *, title: str) -> bool:
@@ -404,7 +491,9 @@ def detail_long_text_chunk_is_other_product(chunk: str, *, title: str) -> bool:
         if len(token) >= 5 and token not in cross_product_text_generic_tokens
     }
     lowered_chunk = normalized_chunk.lower()
-    if chunk_tokens & distinctive_title_tokens and lowered_chunk.startswith(("official ", "shop for ")):
+    if chunk_tokens & distinctive_title_tokens and lowered_chunk.startswith(
+        ("official ", "shop for ")
+    ):
         return False
     if not distinctive_title_tokens or chunk_tokens & distinctive_title_tokens:
         distinctive_chunk_tokens = {
@@ -431,9 +520,7 @@ def detail_product_text_tokens(value: str) -> set[str]:
         if token and not token.isdigit()
     }
     tokens.update(
-        token[:-1]
-        for token in list(tokens)
-        if len(token) > 4 and token.endswith("s")
+        token[:-1] for token in list(tokens) if len(token) > 4 and token.endswith("s")
     )
     return tokens
 
@@ -446,4 +533,9 @@ def detail_long_text_chunk_has_product_name_shape(chunk: str) -> bool:
     non_initial_capitalized = [word for word in words[1:] if word[:1].isupper()]
     if len(capitalized) >= 2 or non_initial_capitalized:
         return True
-    return bool(words and words[0].lower() == "the" and len(words) > 1 and words[1][:1].isupper())
+    return bool(
+        words
+        and words[0].lower() == "the"
+        and len(words) > 1
+        and words[1][:1].isupper()
+    )

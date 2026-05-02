@@ -10,6 +10,7 @@ from app.services.field_value_core import (
     infer_brand_from_title_marker,
     is_title_noise,
     strip_tracking_query_params,
+    surface_alias_lookup,
     validate_and_clean,
     validate_record_for_surface,
 )
@@ -141,6 +142,19 @@ def test_validate_record_for_surface_drops_unknown_fields_but_keeps_canonical_fi
     assert len(errors) == 1
 
 
+def test_ecommerce_aliases_keep_product_id_distinct_from_sku() -> None:
+    aliases = surface_alias_lookup("ecommerce_detail", None)
+
+    assert aliases["product_id"] == "product_id"
+    assert aliases["sku"] == "sku"
+
+
+def test_ecommerce_price_original_aliases_to_original_price() -> None:
+    aliases = surface_alias_lookup("ecommerce_detail", None)
+
+    assert aliases["price_original"] == "original_price"
+
+
 def test_persistence_schema_firewall_drops_unknown_and_internal_fields() -> None:
     data, rejected = public_record_data_for_surface(
         {
@@ -167,8 +181,92 @@ def test_persistence_schema_firewall_keeps_ecommerce_gender() -> None:
         page_url="https://example.com/products/linen-dress",
     )
 
-    assert data == {"title": "Linen Dress", "gender": "women"}
+    assert data == {"title": "Linen Dress", "gender": "Women"}
     assert rejected == {}
+
+
+def test_public_record_firewall_validates_identity_shapes() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "barcode": "COPY-ABC123",
+            "gender": "default",
+            "brand": "Acme | US",
+            "product_id": "specifications",
+            "product_type": "BRIGHTCOVE VIDEO PLAYER",
+            "sku": "tmp-ABC-123",
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget",
+    )
+
+    assert data == {"sku": "ABC-123", "brand": "Acme"}
+    assert rejected == {
+        "barcode": "empty_after_coercion",
+        "gender": "empty_after_coercion",
+        "product_id": "empty_after_coercion",
+        "product_type": "empty_after_coercion",
+    }
+
+
+def test_coerce_sku_drops_draft_prefixed_numeric_artifacts() -> None:
+    assert (
+        coerce_field_value(
+            "sku",
+            "COPY-1720644688978",
+            "https://example.com/products/widget",
+        )
+        is None
+    )
+
+
+def test_public_record_firewall_flattens_variants_to_public_shape() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Widget",
+            "variants": [
+                {
+                    "variant_id": "1",
+                    "title": "Widget Red Small",
+                    "option_values": {"Colour": "Red", "Size": "S"},
+                    "sku": "W-S",
+                    "barcode": "ABC123",
+                    "price": "$19.99",
+                    "currency": "USD",
+                    "url": "/products/widget?variant=1",
+                }
+            ],
+            "variant_count": 1,
+            "selected_variant": {"sku": "legacy"},
+            "variant_axes": {"size": ["S"]},
+            "available_sizes": ["S"],
+            "option1_name": "size",
+            "option1_values": ["S"],
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget",
+    )
+
+    assert data == {
+        "title": "Widget",
+        "variants": [
+            {
+                "color": "Red",
+                "size": "S",
+                "sku": "W-S",
+                "price": "19.99",
+                "currency": "USD",
+                "url": "https://example.com/products/widget?variant=1",
+            }
+        ],
+        "variant_count": 1,
+    }
+    assert rejected == {
+        "selected_variant": "field_not_allowed_for_surface",
+        "variant_axes": "field_not_allowed_for_surface",
+        "available_sizes": "field_not_allowed_for_surface",
+        "option1_name": "field_not_allowed_for_surface",
+        "option1_values": "field_not_allowed_for_surface",
+    }
 
 
 def test_persistence_schema_firewall_drops_default_ecommerce_schema_pollution() -> None:
@@ -195,12 +293,12 @@ def test_persistence_schema_firewall_drops_default_ecommerce_schema_pollution() 
         "brand": "Acme",
         "vendor": "Acme",
         "product_type": "CriteoProductRail",
+        "variant_count": 4,
     }
     assert rejected == {
         "image_count": "default_public_field_excluded",
-        "variant_count": "default_public_field_excluded",
-        "option1_name": "default_public_field_excluded",
-        "option1_values": "default_public_field_excluded",
+        "option1_name": "field_not_allowed_for_surface",
+        "option1_values": "field_not_allowed_for_surface",
         "canonical_url": "default_public_field_excluded",
         "created_at": "default_public_field_excluded",
         "published_at": "default_public_field_excluded",
@@ -363,6 +461,42 @@ def test_extract_currency_code_supports_rs_price_prefixes() -> None:
 
 def test_extract_currency_code_ignores_non_currency_uppercase_acronyms() -> None:
     assert extract_currency_code("SKU 499") is None
+
+
+def test_literal_list_text_uses_readable_delimiters() -> None:
+    assert coerce_field_value(
+        "description",
+        "['Digital max resolution', 'Real boost clock: 1800 MHz']",
+        "https://example.com/p/card",
+    ) == "Digital max resolution; Real boost clock: 1800 MHz"
+
+
+def test_option_scalars_reject_raw_objects_and_null_tokens() -> None:
+    assert coerce_field_value(
+        "color",
+        "{'id': 'black-onyx', 'title': 'black onyx'}",
+        "https://example.com/p/socks",
+    ) is None
+    assert coerce_field_value("color", "None", "https://example.com/p/wash") is None
+    assert coerce_field_value("size", "- / null", "https://example.com/p/bag") is None
+    assert coerce_field_value(
+        "size",
+        "Please select US EU",
+        "https://example.com/p/sandal",
+    ) is None
+
+
+def test_color_scalar_extracts_value_from_prefixed_product_copy() -> None:
+    assert coerce_field_value(
+        "color",
+        "for Sony WH-1000XM5 Wireless Noise-canceling Headphones - Black: Black",
+        "https://example.com/p/headphones",
+    ) == "Black"
+    assert coerce_field_value(
+        "color",
+        "Black/Red Style: HJ0139-045",
+        "https://example.com/p/shirt",
+    ) == "Black/Red"
 
 
 def test_clean_text_strips_leading_css_in_js_noise() -> None:

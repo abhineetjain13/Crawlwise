@@ -26,6 +26,33 @@ DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD = {
 }
 
 
+def _parse_provider_model_and_rates(
+    key: object,
+    value: object,
+    *,
+    require_supported_provider: bool,
+) -> tuple[tuple[str, str], tuple[Decimal, Decimal]] | None:
+    provider, separator, model = str(key or "").partition("/")
+    normalized_provider = provider.strip().lower()
+    if not separator:
+        return None
+    if (
+        require_supported_provider
+        and normalized_provider not in SUPPORTED_LLM_PROVIDERS
+    ):
+        return None
+    rates: Any = value
+    if not isinstance(rates, (list, tuple)) or len(rates) != 2:
+        return None
+    try:
+        return (normalized_provider, model.strip().lower()), (
+            Decimal(str(rates[0])),
+            Decimal(str(rates[1])),
+        )
+    except (InvalidOperation, ValueError):
+        return None
+
+
 class LLMRuntimeSettings(BaseSettings):
     """Runtime LLM settings loaded from ``CRAWLER_LLM_`` environment variables."""
 
@@ -86,28 +113,22 @@ class LLMRuntimeSettings(BaseSettings):
 
         pricing: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
         for key, value in raw.items():
-            provider, separator, model = str(key or "").partition("/")
-            if not separator or provider.strip().lower() not in SUPPORTED_LLM_PROVIDERS:
-                continue
-            rates: Any = value
-            if not isinstance(rates, (list, tuple)) or len(rates) != 2:
-                continue
-            try:
-                pricing[(provider.strip().lower(), model.strip().lower())] = (
-                    Decimal(str(rates[0])),
-                    Decimal(str(rates[1])),
-                )
-            except (InvalidOperation, ValueError):
-                continue
+            parsed = _parse_provider_model_and_rates(
+                key,
+                value,
+                require_supported_provider=True,
+            )
+            if parsed:
+                pricing[parsed[0]] = parsed[1]
         if not pricing and raw is not DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD:
             for key, value in DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD.items():
-                provider, separator, model = str(key or "").partition("/")
-                if not separator:
-                    continue
-                pricing[(provider.strip().lower(), model.strip().lower())] = (
-                    Decimal(str(value[0])),
-                    Decimal(str(value[1])),
+                parsed = _parse_provider_model_and_rates(
+                    key,
+                    value,
+                    require_supported_provider=False,
                 )
+                if parsed:
+                    pricing[parsed[0]] = parsed[1]
         return pricing
 
 

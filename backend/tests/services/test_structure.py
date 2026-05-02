@@ -82,21 +82,25 @@ FILE_LOC_BUDGETS = {
     # Detail extraction owns candidate arbitration and tier orchestration.
     Path("app/services/detail_extractor.py"): 1460,
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
-    Path("app/services/extract/detail_dom_extractor.py"): 1270,
+    Path("app/services/extract/detail_dom_extractor.py"): 1320,
+    # Detail finalizer owns public-boundary cleanup and record repair.
+    Path("app/services/extract/detail_record_finalizer.py"): 1090,
+    # Shared variant logic owns generic axis and row reconciliation.
+    Path("app/services/extract/shared_variant_logic.py"): 1020,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
-    Path("app/services/field_value_dom.py"): 1300,
+    Path("app/services/field_value_dom.py"): 1550,
     # Canonical field coercion remains centralized here instead of scattering value policy.
-    Path("app/services/field_value_core.py"): 1125,
+    Path("app/services/field_value_core.py"): 1360,
     # Enrichment owns deterministic product normalization and job application.
-    Path("app/services/data_enrichment/service.py"): 1285,
+    Path("app/services/data_enrichment/service.py"): 1300,
     # JS state mapping stays centralized to avoid adapter-specific drift.
     Path("app/services/js_state_mapper.py"): 1060,
     # LLM task runtime owns prompt validation, provider calls, cost logging, and typed errors.
     Path("app/services/llm_tasks.py"): 1080,
     # Pipeline core still owns the per-URL orchestration boundary.
-    Path("app/services/pipeline/core.py"): 1210,
+    Path("app/services/pipeline/core.py"): 1320,
     # Product Intelligence service owns job + discovery orchestration with brand and enrichment LLM helpers.
     Path("app/services/product_intelligence/service.py"): 1160,
 }

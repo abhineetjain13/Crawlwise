@@ -22,6 +22,10 @@ _STATIC_EXPORTS = {
 for _name, _value in _STATIC_EXPORTS.items():
     globals()[_name] = _value
 
+NORMALIZER_LIST_TEXT_FIELDS = frozenset(
+    {*tuple(_STATIC_EXPORTS.get("NORMALIZER_LIST_TEXT_FIELDS", ()) or ()), "features"}
+)
+
 JS_STATE_GLOM_SKIP: tuple[object, ...] = ("", [], {})
 JS_STATE_PRODUCT_FIELD_SPEC = {
     "title": Coalesce("title", "name", "pn", default=None, skip=JS_STATE_GLOM_SKIP),
@@ -59,9 +63,7 @@ JS_STATE_PRODUCT_FIELD_SPEC = {
     "gender": Coalesce(
         "gender", "target_gender", "targetGender", default=None, skip=JS_STATE_GLOM_SKIP
     ),
-    "sku": Coalesce(
-        "sku", "productId", "product_id", default=None, skip=JS_STATE_GLOM_SKIP
-    ),
+    "sku": Coalesce("sku", default=None, skip=JS_STATE_GLOM_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=JS_STATE_GLOM_SKIP),
     "currency": Coalesce(
         "currency",
@@ -190,24 +192,146 @@ JS_STATE_VARIANT_FIELD_SPEC = {
         default=None,
         skip=JS_STATE_GLOM_SKIP,
     ),
-    "sku": Coalesce(
-        "sku", "productId", "product_id", default=None, skip=JS_STATE_GLOM_SKIP
-    ),
+    "sku": Coalesce("sku", default=None, skip=JS_STATE_GLOM_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=JS_STATE_GLOM_SKIP),
 }
+COLOR_FIELD = "color"
+SIZE_FIELD = "size"
+WIDTH_FIELD = "width"
+VARIANTS_FIELD = "variants"
+AVAILABLE_SIZES_FIELD = "available_sizes"
+VARIANT_AXES_FIELD = "variant_axes"
+SELECTED_VARIANT_FIELD = "selected_variant"
+BARCODE_FIELD = "barcode"
+SKU_FIELD = "sku"
+ROUTE_BARCODE_TO_SKU = True
+FLAT_VARIANT_KEYS: tuple[str, ...] = (
+    COLOR_FIELD,
+    SIZE_FIELD,
+    SKU_FIELD,
+    "price",
+    "currency",
+    "url",
+    "image_url",
+    "availability",
+    "stock_quantity",
+)
 PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS = frozenset(
     {"page_markdown", "table_markdown", "record_type"}
 )
-PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS = frozenset(
-    {"product_attributes", "selected_variant", "variant_axes", "variants"}
+PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS = frozenset({"product_attributes", "variants"})
+PUBLIC_RECORD_LEGACY_VARIANT_FIELDS = frozenset(
+    {
+        "selected_variant",
+        "variant_axes",
+        "available_sizes",
+        "option1_name",
+        "option1_values",
+        "option2_name",
+        "option2_values",
+        "option_1_name",
+        "option_1_value",
+        "option_1_values",
+        "option_2_name",
+        "option_2_value",
+        "option_2_values",
+    }
 )
+PUBLIC_RECORD_BARCODE_LENGTHS = frozenset({8, 12, 13, 14})
+PUBLIC_RECORD_BRAND_REGION_SUFFIX_TOKENS = frozenset(
+    {
+        "USA",
+        "US",
+        "UK",
+        "EU",
+        "EN",
+        "CA",
+        "AU",
+        "IN",
+        "UAE",
+        "GCC",
+        "GLOBAL",
+        "INTL",
+        "INTERNATIONAL",
+        "OFFICIAL",
+        "ONLINE",
+        "STORE",
+        "SHOP",
+        "HOME",
+        "WEBSITE",
+    }
+)
+PUBLIC_RECORD_GENDER_TAXONOMY = {
+    "men": "Men",
+    "man": "Men",
+    "male": "Men",
+    "mens": "Men",
+    "men's": "Men",
+    "women": "Women",
+    "woman": "Women",
+    "female": "Women",
+    "womens": "Women",
+    "women's": "Women",
+    "unisex": "Unisex",
+    "uni": "Unisex",
+    "kids": "Kids",
+    "kid": "Kids",
+    "children": "Kids",
+    "child": "Kids",
+    "boys": "Boys",
+    "boy": "Boys",
+    "girls": "Girls",
+    "girl": "Girls",
+}
+PUBLIC_RECORD_GENDER_REJECT_TOKENS = frozenset(
+    {"default", "null", "na", "n/a", "none", "all", "other", ""}
+)
+PUBLIC_RECORD_IDENTITY_INTERNAL_TOKENS = frozenset(
+    {
+        "plp",
+        "pdp",
+        "specifications",
+        "specification",
+        "description",
+        "details",
+        "detail",
+        "overview",
+        "reviews",
+        "review",
+        "summary",
+        "untitled",
+    }
+)
+PUBLIC_RECORD_PRODUCT_TYPE_NOISE_TOKENS = frozenset(
+    {"brightcove", "video", "player", "iframe", "embed", "widget"}
+)
+PUBLIC_RECORD_SKU_DRAFT_PREFIX_PATTERN = r"^(?:copy|draft|tmp|temp|test)[-_]+"
 
 _EXTRA_EXPORTS = [
     "JS_STATE_GLOM_SKIP",
     "JS_STATE_PRODUCT_FIELD_SPEC",
     "JS_STATE_VARIANT_FIELD_SPEC",
+    "AVAILABLE_SIZES_FIELD",
+    "BARCODE_FIELD",
+    "COLOR_FIELD",
+    "FLAT_VARIANT_KEYS",
     "PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS",
     "PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS",
+    "PUBLIC_RECORD_LEGACY_VARIANT_FIELDS",
+    "PUBLIC_RECORD_BARCODE_LENGTHS",
+    "PUBLIC_RECORD_BRAND_REGION_SUFFIX_TOKENS",
+    "PUBLIC_RECORD_GENDER_TAXONOMY",
+    "PUBLIC_RECORD_GENDER_REJECT_TOKENS",
+    "PUBLIC_RECORD_IDENTITY_INTERNAL_TOKENS",
+    "PUBLIC_RECORD_PRODUCT_TYPE_NOISE_TOKENS",
+    "PUBLIC_RECORD_SKU_DRAFT_PREFIX_PATTERN",
+    "ROUTE_BARCODE_TO_SKU",
+    "SELECTED_VARIANT_FIELD",
+    "SIZE_FIELD",
+    "SKU_FIELD",
+    "VARIANTS_FIELD",
+    "VARIANT_AXES_FIELD",
+    "WIDTH_FIELD",
 ]
 
 

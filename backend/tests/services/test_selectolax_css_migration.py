@@ -992,15 +992,7 @@ async def test_amazon_adapter_extracts_inline_twister_variants() -> None:
     assert record["brand"] == "Under Armour"
     assert record["color"] == "Pitch Gray-black"
     assert record["size"] == "Large"
-    assert record["variant_axes"] == {
-        "color": ["Pitch Gray-black", "Pitch Gray/Black"],
-        "size": ["X-Small", "Large", "X-Large", "4X-Large Big"],
-    }
     assert record["variant_count"] == 4
-    assert record["selected_variant"]["option_values"] == {
-        "color": "Pitch Gray-black",
-        "size": "Large",
-    }
 
 
 @pytest.mark.asyncio
@@ -1039,7 +1031,7 @@ async def test_amazon_adapter_extracts_detail_completeness_fields() -> None:
     )
 
     record = result.records[0]
-    assert record["sku"] == "B08J5F3G18"
+    assert "sku" not in record
     assert record["product_id"] == "B08J5F3G18"
     assert record["part_number"] == "24G-P5-3987-KR"
     assert record["barcode"] == "843368067763"
@@ -1206,10 +1198,6 @@ async def test_amazon_adapter_does_not_fabricate_multi_axis_twister_product() ->
 
     record = result.records[0]
     assert "variants" not in record
-    assert record["variant_axes"] == {
-        "color": ["Black", "Blue"],
-        "size": ["Large", "X-Large"],
-    }
 
 
 @pytest.mark.asyncio
@@ -1264,13 +1252,6 @@ async def test_nike_adapter_maps_preloaded_state_product() -> None:
     assert record["original_price"] == "2495"
     assert record["color"] == "Green"
     assert record["size"] == "S"
-    assert record["variant_axes"] == {"size": ["XXS", "S"]}
-    assert record["available_sizes"] == ["XXS", "S"]
-    assert record["selected_variant"]["option_values"] == {
-        "size": "S",
-        "color": "Green",
-    }
-    assert record["selected_variant"]["availability"] == "in_stock"
 
 
 @pytest.mark.asyncio
@@ -1334,12 +1315,9 @@ async def test_nike_detail_extraction_uses_adapter_and_rejects_shell_json_ld() -
     record = records[0]
     assert record["title"] == "Nike Pro Men's Dri-FIT Tight Sleeveless Fitness Top"
     assert record["brand"] == "Nike"
-    assert record["variant_axes"] == {"size": ["XS", "S"]}
     assert record["variant_count"] == 2
     assert record["size"] == "S"
     assert "Bill Bowerman" not in record.values()
-    assert "background" not in record["variant_axes"]
-    assert "text" not in record["variant_axes"]
 
 
 @pytest.mark.asyncio
@@ -1410,8 +1388,7 @@ async def test_nike_adapter_maps_next_data_selected_product_payload() -> None:
     assert record["currency"] == "USD"
     assert record["image_url"] == "https://static.nike.com/af1-main.jpg"
     assert record["additional_images"] == ["https://static.nike.com/af1-alt.jpg"]
-    assert record["variant_axes"] == {"size": ["6", "7"]}
-    assert record["variants"][0]["barcode"] == "00194500874886"
+    assert "barcode" not in record["variants"][0]
     assert record["variants"][0]["price"] == "115"
     assert record["variants"][1]["availability"] == "out_of_stock"
 
@@ -1462,7 +1439,7 @@ async def test_nike_adapter_maps_nested_next_data_price_objects() -> None:
     assert record["price"] == "115"
     assert record["original_price"] == "130"
     assert record["variants"][0]["price"] == "115"
-    assert record["variants"][0]["original_price"] == "130"
+    assert "original_price" not in record["variants"][0]
 
 
 @pytest.mark.asyncio

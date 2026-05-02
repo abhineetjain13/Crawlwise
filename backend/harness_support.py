@@ -12,13 +12,17 @@ from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models.crawl import CrawlRun
 from app.models.user import User
-from app.services.extract.shared_variant_logic import variant_axis_name_is_semantic
 from app.services._batch_runtime import process_run
 from app.services.adapters.registry import registered_adapters
 from app.services.crawl_crud import create_crawl_run, get_run_records
 from app.services.pipeline.core import process_single_url
 from app.services.pipeline.types import URLProcessingConfig
-from app.services.platform_policy import configured_adapter_names, detect_platform_family, job_platform_families, platform_config_for_family
+from app.services.platform_policy import (
+    configured_adapter_names,
+    detect_platform_family,
+    job_platform_families,
+    platform_config_for_family,
+)
 from app.services.publish import VERDICT_PARTIAL, VERDICT_SUCCESS
 from app.services.publish.metrics import diagnostics_indicate_block
 from app.services.config.extraction_rules import (
@@ -26,6 +30,7 @@ from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
 )
+from app.services.config.field_mappings import PUBLIC_RECORD_LEGACY_VARIANT_FIELDS
 from sqlalchemy import select
 
 HARNESS_MODE_ACQUISITION_ONLY = "acquisition_only"
@@ -33,9 +38,31 @@ HARNESS_MODE_FULL_PIPELINE = "full_pipeline"
 DEFAULT_SITE_SET_PATH = (
     Path(__file__).resolve().parent / "test_site_sets" / "commerce_browser_heavy.json"
 )
+_VARIANT_AXIS_FIELDS = ("color", "size")
+_HIGH_DENOMINATION_PRICE_CURRENCIES = {"INR", "JPY", "KRW"}
 
-_DETAIL_HINTS = ("/products/", "/product/", "/p/", "/dp/", "/job/", "/viewjob", "showjob=", "/release/")
-_LISTING_HINTS = ("/collections", "/shop/", "/category/", "/careers", "/jobs", "job-search", "career-page", "jobboard", "recruitment", "currentopenings")
+_DETAIL_HINTS = (
+    "/products/",
+    "/product/",
+    "/p/",
+    "/dp/",
+    "/job/",
+    "/viewjob",
+    "showjob=",
+    "/release/",
+)
+_LISTING_HINTS = (
+    "/collections",
+    "/shop/",
+    "/category/",
+    "/careers",
+    "/jobs",
+    "job-search",
+    "career-page",
+    "jobboard",
+    "recruitment",
+    "currentopenings",
+)
 _JOB_LISTING_HINTS = (
     "/jobs",
     "/careers",
@@ -96,6 +123,18 @@ _GENERIC_DETAIL_SECTION_TITLES = {
     "related products",
     "you may also like",
 }
+_ALLOWED_GENDERS = {"Men", "Women", "Unisex", "Kids", "Boys", "Girls"}
+_BARCODE_LENGTHS = {8, 12, 13, 14}
+_INTERNAL_IDENTITY_TOKENS = {
+    "plp",
+    "pdp",
+    "specification",
+    "specifications",
+    "description",
+    "details",
+    "overview",
+    "reviews",
+}
 
 
 def infer_surface(url: str, explicit_surface: object | None = None) -> str:
@@ -116,14 +155,23 @@ def infer_surface(url: str, explicit_surface: object | None = None) -> str:
     ):
         if any(token in normalized_url for token in _JOB_LISTING_HINTS):
             return "job_listing"
-        return "job_detail" if any(token in normalized_url for token in ("/job/", "/viewjob", "showjob=")) else "job_listing"
+        return (
+            "job_detail"
+            if any(
+                token in normalized_url for token in ("/job/", "/viewjob", "showjob=")
+            )
+            else "job_listing"
+        )
     if any(token in host_label for token in ("job", "career")) and not any(
         token in normalized_url for token in _DETAIL_HINTS
     ):
         return "job_listing"
     if any(token in normalized_url for token in _JOB_LISTING_HINTS):
         return "job_listing"
-    if host.endswith("autozone.com") and normalized_url.rstrip("/").rsplit("/", 1)[-1].count("_") >= 2:
+    if (
+        host.endswith("autozone.com")
+        and normalized_url.rstrip("/").rsplit("/", 1)[-1].count("_") >= 2
+    ):
         return "ecommerce_detail"
     if (
         len(path_segments) >= 2
@@ -138,11 +186,17 @@ def infer_surface(url: str, explicit_surface: object | None = None) -> str:
         _DETAIL_FILE_RE.fullmatch(terminal)
         and not _NON_DETAIL_FILE_RE.fullmatch(terminal)
         and any(separator in terminal for separator in ("-", "_"))
-        and not any(token in terminal for token in ("jobs", "careers", "category", "collection"))
+        and not any(
+            token in terminal for token in ("jobs", "careers", "category", "collection")
+        )
     ):
         return "ecommerce_detail"
     if any(token in normalized_url for token in _LISTING_HINTS):
-        return "job_listing" if "job" in normalized_url or "career" in normalized_url else "ecommerce_listing"
+        return (
+            "job_listing"
+            if "job" in normalized_url or "career" in normalized_url
+            else "ecommerce_listing"
+        )
     return "ecommerce_listing"
 
 
@@ -151,7 +205,11 @@ def build_explicit_sites(
     *,
     explicit_surfaces: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    normalized_urls = [str(value or "").strip() for value in list(urls or []) if str(value or "").strip()]
+    normalized_urls = [
+        str(value or "").strip()
+        for value in list(urls or [])
+        if str(value or "").strip()
+    ]
     normalized_surfaces = [
         str(value or "").strip()
         for value in list(explicit_surfaces or [])
@@ -161,7 +219,9 @@ def build_explicit_sites(
         raise ValueError("Explicit URL and surface counts must match")
     rows: list[dict[str, str]] = []
     for index, url in enumerate(normalized_urls):
-        explicit_surface = normalized_surfaces[index] if index < len(normalized_surfaces) else ""
+        explicit_surface = (
+            normalized_surfaces[index] if index < len(normalized_surfaces) else ""
+        )
         rows.append(
             {
                 "name": url,
@@ -209,7 +269,10 @@ def load_site_set(path: Path, *, site_set_name: str) -> list[dict[str, object]]:
                 if str(value).strip()
             ],
             "artifact_run_id": _safe_int(item.get("artifact_run_id")) or None,
-            "seed_failure_mode": str(item.get("seed_failure_mode") or "").strip().lower() or None,
+            "seed_failure_mode": str(item.get("seed_failure_mode") or "")
+            .strip()
+            .lower()
+            or None,
             "quality_expectations": _object_dict(item.get("quality_expectations")),
         }
         gate = str(item.get("gate") or "").strip().lower() or None
@@ -248,7 +311,9 @@ def parse_test_sites_markdown(path: Path, *, start_line: int) -> list[dict[str, 
                 url = match.group(0).strip().rstrip("`")
                 name = url
             if not explicit_surface and index > 0:
-                normalized = re.sub(r"[^a-z0-9]+", "_", str(cell or "").strip().lower()).strip("_")
+                normalized = re.sub(
+                    r"[^a-z0-9]+", "_", str(cell or "").strip().lower()
+                ).strip("_")
                 if normalized in {
                     "listing",
                     "ajax_listing",
@@ -278,11 +343,15 @@ def parse_test_sites_markdown(path: Path, *, start_line: int) -> list[dict[str, 
 
 
 def unavailable_configured_adapters() -> set[str]:
-    return set(configured_adapter_names()) - {adapter.name for adapter in registered_adapters()}
+    return set(configured_adapter_names()) - {
+        adapter.name for adapter in registered_adapters()
+    }
 
 
 def timeout_owner_for_mode(mode: str) -> str:
-    return "batch_runtime" if mode == HARNESS_MODE_FULL_PIPELINE else "acquisition_runtime"
+    return (
+        "batch_runtime" if mode == HARNESS_MODE_FULL_PIPELINE else "acquisition_runtime"
+    )
 
 
 def status_for_result(result: dict[str, object]) -> str:
@@ -296,7 +365,12 @@ async def run_site_harness(*, url: str, surface: str, mode: str) -> dict[str, ob
         run = await create_crawl_run(
             session,
             await _ensure_harness_user_id(session),
-            {"run_type": "crawl", "url": url, "surface": surface, "settings": {"max_pages": 5, "max_scrolls": 5}},
+            {
+                "run_type": "crawl",
+                "url": url,
+                "surface": surface,
+                "settings": {"max_pages": 5, "max_scrolls": 5},
+            },
         )
         if mode == HARNESS_MODE_FULL_PIPELINE:
             await process_run(session, run.id)
@@ -330,7 +404,8 @@ async def run_site_harness(*, url: str, surface: str, mode: str) -> dict[str, ob
             "requested_url": url,
             "verdict": str(url_result.verdict or ""),
             "method": str(metrics.get("method") or "").strip() or None,
-            "platform_family": str(metrics.get("platform_family") or "").strip() or None,
+            "platform_family": str(metrics.get("platform_family") or "").strip()
+            or None,
             "status_code": metrics.get("status_code"),
             "blocked": bool(metrics.get("blocked")),
             "browser_diagnostics": dict(metrics.get("browser_diagnostics") or {}),
@@ -350,7 +425,9 @@ async def review_saved_run(
 ) -> dict[str, object]:
     async with SessionLocal() as session:
         run = (
-            await session.execute(select(CrawlRun).where(CrawlRun.id == int(run_id)).limit(1))
+            await session.execute(
+                select(CrawlRun).where(CrawlRun.id == int(run_id)).limit(1)
+            )
         ).scalar_one_or_none()
         if run is None:
             raise RuntimeError(f"Saved harness run {run_id} was not found")
@@ -373,7 +450,9 @@ def classify_failure_mode(result: dict[str, object]) -> str:
     status_code = _safe_int(result.get("status_code"))
     if verdict in _SUCCESS_VERDICTS and _looks_like_detail_identity_mismatch(result):
         return "detail_identity_mismatch"
-    if verdict in _SUCCESS_VERDICTS and not _looks_like_placeholder_or_wrong_content(result, diagnostics):
+    if verdict in _SUCCESS_VERDICTS and not _looks_like_placeholder_or_wrong_content(
+        result, diagnostics
+    ):
         return "success"
     if diagnostics.get("networkidle_timed_out"):
         return "spa_readiness_timeout"
@@ -411,7 +490,9 @@ def classify_failure_mode(result: dict[str, object]) -> str:
     platform_config = platform_config_for_family(family) if family else None
     expected_adapters = {
         str(name).strip().lower()
-        for name in (platform_config.adapter_names if platform_config is not None else [])
+        for name in (
+            platform_config.adapter_names if platform_config is not None else []
+        )
         if str(name or "").strip()
     }
     missing_registrations = unavailable_configured_adapters()
@@ -419,10 +500,18 @@ def classify_failure_mode(result: dict[str, object]) -> str:
         return "adapter_not_registered"
     if expected_adapters and not result.get("adapter_name"):
         return "adapter_not_matched"
-    if family and not expected_adapters and str(result.get("surface") or "").startswith("job_"):
+    if (
+        family
+        and not expected_adapters
+        and str(result.get("surface") or "").startswith("job_")
+    ):
         return "platform_family_without_adapter"
     if _safe_int(result.get("records")) == 0:
-        return "listing_extraction_empty" if str(result.get("surface") or "").endswith("_listing") else "detail_extraction_empty"
+        return (
+            "listing_extraction_empty"
+            if str(result.get("surface") or "").endswith("_listing")
+            else "detail_extraction_empty"
+        )
     return "unknown_failure"
 
 
@@ -448,7 +537,9 @@ def _diagnostics_contain_strong_challenge_evidence(
     )
 
 
-def _challenge_summary_from_diagnostics(diagnostics: dict[str, object]) -> dict[str, object] | None:
+def _challenge_summary_from_diagnostics(
+    diagnostics: dict[str, object],
+) -> dict[str, object] | None:
     if not _diagnostics_indicate_challenge(diagnostics):
         return None
     provider_hits = [
@@ -467,7 +558,8 @@ def _challenge_summary_from_diagnostics(diagnostics: dict[str, object]) -> dict[
         if str(item or "").strip()
     ]
     summary: dict[str, object] = {
-        "browser_outcome": str(diagnostics.get("browser_outcome") or "").strip().lower() or None,
+        "browser_outcome": str(diagnostics.get("browser_outcome") or "").strip().lower()
+        or None,
         "provider": provider_hits[0].lower() if provider_hits else None,
         "providers": [item.lower() for item in provider_hits],
         "elements": element_hits,
@@ -476,16 +568,21 @@ def _challenge_summary_from_diagnostics(diagnostics: dict[str, object]) -> dict[
     return summary
 
 
-def _looks_like_placeholder_or_wrong_content(result: dict[str, object], diagnostics: dict[str, object]) -> bool:
+def _looks_like_placeholder_or_wrong_content(
+    result: dict[str, object], diagnostics: dict[str, object]
+) -> bool:
     sample_title = str(result.get("sample_title") or "").strip()
     return (
-        str(diagnostics.get("browser_outcome") or "").strip().lower() == "low_content_shell"
+        str(diagnostics.get("browser_outcome") or "").strip().lower()
+        == "low_content_shell"
         or (
             _safe_int(result.get("records")) > 0
             and not sample_title
             and _safe_int(result.get("populated_fields")) <= 1
         )
-        or _looks_like_placeholder_title(sample_title, populated_fields=_safe_int(result.get("populated_fields")))
+        or _looks_like_placeholder_title(
+            sample_title, populated_fields=_safe_int(result.get("populated_fields"))
+        )
     )
 
 
@@ -520,13 +617,19 @@ def _looks_like_detail_identity_mismatch(result: dict[str, object]) -> bool:
         return False
     sample_path = _identity_path(sample_url)
     requested_path = _identity_path(requested_url)
-    if sample_path in {"", "/"} and requested_path not in {"", "/"} and sample_path != requested_path:
+    if (
+        sample_path in {"", "/"}
+        and requested_path not in {"", "/"}
+        and sample_path != requested_path
+    ):
         return True
     requested_tokens = _primary_identity_tokens(requested_url)
     if len(requested_tokens) < 2:
         return False
     sample_url_tokens = _primary_identity_tokens(sample_url)
-    sample_title = " ".join(str(result.get("sample_title") or "").strip().lower().split())
+    sample_title = " ".join(
+        str(result.get("sample_title") or "").strip().lower().split()
+    )
     sample_title_tokens = _identity_tokens(sample_title)
     overlap = max(
         _identity_overlap_count(requested_tokens, sample_url_tokens),
@@ -535,7 +638,9 @@ def _looks_like_detail_identity_mismatch(result: dict[str, object]) -> bool:
     required_overlap = _required_identity_overlap(len(requested_tokens))
     if sample_title in _GENERIC_DETAIL_SECTION_TITLES and overlap < required_overlap:
         return True
-    return bool((sample_url_tokens or sample_title_tokens) and overlap < required_overlap)
+    return bool(
+        (sample_url_tokens or sample_title_tokens) and overlap < required_overlap
+    )
 
 
 def _looks_like_placeholder_title(title: str, *, populated_fields: int) -> bool:
@@ -548,7 +653,11 @@ def _looks_like_placeholder_title(title: str, *, populated_fields: int) -> bool:
 
 
 def _populated_field_count(record: dict[str, object]) -> int:
-    return sum(1 for key, value in record.items() if value not in (None, "", [], {}) and not str(key).startswith("_"))
+    return sum(
+        1
+        for key, value in record.items()
+        if value not in (None, "", [], {}) and not str(key).startswith("_")
+    )
 
 
 def _sample_records(rows: Sequence[object]) -> list[dict[str, object]]:
@@ -583,7 +692,9 @@ def _sample_record_audit(sample_records: list[dict[str, object]]) -> dict[str, o
     ]
     return {
         "field_coverage": {
-            "avg_populated_fields": round(sum(coverage_values) / max(1, len(coverage_values)), 2),
+            "avg_populated_fields": round(
+                sum(coverage_values) / max(1, len(coverage_values)), 2
+            ),
             "max_populated_fields": max(coverage_values, default=0),
             "min_populated_fields": min(coverage_values, default=0),
         },
@@ -663,23 +774,24 @@ def _persisted_run_result(
 
 
 def _sample_semantics(record: dict[str, object]) -> dict[str, object]:
-    variant_axes = _object_dict(record.get("variant_axes"))
-    axis_keys = [str(key).strip() for key in variant_axes.keys() if str(key).strip()]
-    selected_variant = _object_dict(record.get("selected_variant"))
-    variants = _object_list(record.get("variants"))
+    variants = [
+        row for row in _object_list(record.get("variants")) if isinstance(row, dict)
+    ]
+    variant_rows_with_axes = sum(1 for row in variants if _variant_row_has_axis(row))
+    variant_rows_with_price = sum(
+        1 for row in variants if row.get("price") not in (None, "", [], {})
+    )
     return {
         "price_present": record.get("price") not in (None, "", [], {}),
         "currency_present": record.get("currency") not in (None, "", [], {}),
         "variant_count": max(_safe_int(record.get("variant_count")), len(variants)),
-        "variant_axes_keys": axis_keys,
-        "variant_axes_semantic": bool(axis_keys) and all(
-            variant_axis_name_is_semantic(key) for key in axis_keys
-        ),
-        "selected_variant_present": bool(selected_variant),
-        "selected_variant_has_price": selected_variant.get("price") not in (None, "", [], {}),
-        "selected_variant_has_option_values": bool(
-            isinstance(selected_variant.get("option_values"), dict)
-            and selected_variant.get("option_values")
+        "variants_with_axes_count": variant_rows_with_axes,
+        "variants_all_have_axes": bool(variants)
+        and variant_rows_with_axes == len(variants),
+        "variants_with_price_count": variant_rows_with_price,
+        "legacy_variant_keys_present": any(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in PUBLIC_RECORD_LEGACY_VARIANT_FIELDS
         ),
     }
 
@@ -693,7 +805,9 @@ def _listing_contract(rows: Sequence[object]) -> dict[str, object]:
         data = dict(getattr(row, "data", {}) or {})
         sampled += 1
         row_url = str(data.get("url") or "").strip()
-        if row_url and not _looks_like_utility_record(title=data.get("title"), url=row_url):
+        if row_url and not _looks_like_utility_record(
+            title=data.get("title"), url=row_url
+        ):
             detail_url_count += 1
         if data.get("price") not in (None, "", [], {}):
             price_present_count += 1
@@ -715,16 +829,41 @@ def evaluate_quality(
     expectations = _quality_expectations(site, result=result)
     checks = {
         "identity_ok": _quality_identity_ok(result),
-        "listing_noise_ok": _quality_listing_noise_ok(result, expectations=expectations),
-        "variant_presence_ok": _quality_variant_presence_ok(result, expectations=expectations),
-        "variant_labels_ok": _quality_variant_labels_ok(result, expectations=expectations),
-        "selected_variant_price_ok": _quality_selected_variant_price_ok(result, expectations=expectations),
+        "listing_noise_ok": _quality_listing_noise_ok(
+            result, expectations=expectations
+        ),
+        "variant_presence_ok": _quality_variant_presence_ok(
+            result, expectations=expectations
+        ),
+        "variant_labels_ok": _quality_variant_labels_ok(
+            result, expectations=expectations
+        ),
+        "variant_price_ok": _quality_variant_price_ok(
+            result, expectations=expectations
+        ),
         "price_sane_ok": _quality_price_sane_ok(result, expectations=expectations),
-        "category_clean_ok": _quality_category_clean_ok(result, expectations=expectations),
-        "long_text_clean_ok": _quality_long_text_clean_ok(result, expectations=expectations),
-        "variant_artifacts_ok": _quality_variant_artifacts_ok(result, expectations=expectations),
-        "system_artifacts_ok": _quality_system_artifacts_ok(result, expectations=expectations),
-        "repair_diagnostics_ok": _quality_repair_diagnostics_ok(result, expectations=expectations),
+        "category_clean_ok": _quality_category_clean_ok(
+            result, expectations=expectations
+        ),
+        "long_text_clean_ok": _quality_long_text_clean_ok(
+            result, expectations=expectations
+        ),
+        "variant_artifacts_ok": _quality_variant_artifacts_ok(
+            result, expectations=expectations
+        ),
+        "variant_currency_parity_ok": _quality_variant_currency_parity_ok(
+            result, expectations=expectations
+        ),
+        "identifier_shapes_ok": _quality_identifier_shapes_ok(
+            result, expectations=expectations
+        ),
+        "title_token_ok": _quality_title_token_ok(result, expectations=expectations),
+        "system_artifacts_ok": _quality_system_artifacts_ok(
+            result, expectations=expectations
+        ),
+        "repair_diagnostics_ok": _quality_repair_diagnostics_ok(
+            result, expectations=expectations
+        ),
     }
     observed_failure_mode = _observed_quality_failure_mode(
         site,
@@ -757,14 +896,17 @@ def _quality_expectations(
         "require_listing_noise_free": surface.endswith("_listing"),
         "require_price": False,
         "require_price_sane": False,
-        "require_clean_category": False,
-        "require_clean_long_text": False,
-        "require_clean_variants": False,
-        "require_clean_system_fields": False,
+        "require_clean_category": surface.startswith("ecommerce_"),
+        "require_clean_long_text": surface == "ecommerce_detail",
+        "require_clean_variants": surface == "ecommerce_detail",
+        "require_clean_system_fields": surface == "ecommerce_detail",
+        "require_identifier_shapes": surface == "ecommerce_detail",
+        "require_title_not_internal_token": surface == "ecommerce_detail",
+        "require_variant_currency_parity": surface == "ecommerce_detail",
         "require_repair_diagnostics": False,
         "expect_variants": False,
         "require_semantic_variant_labels": False,
-        "require_selected_variant_price": False,
+        "require_variant_price": False,
     }
     for key in list(expectations):
         if key in configured:
@@ -787,10 +929,15 @@ def _quality_identity_ok(result: dict[str, object]) -> bool:
             isinstance(row, dict)
             and str(row.get("title") or "").strip()
             and str(row.get("url") or "").strip()
-            and not _looks_like_utility_record(title=row.get("title"), url=row.get("url"))
+            and not _looks_like_utility_record(
+                title=row.get("title"), url=row.get("url")
+            )
             for row in sample_records
         )
-    return not (_looks_like_site_shell_success(result) or _looks_like_promo_or_wrong_page(result))
+    return not (
+        _looks_like_site_shell_success(result)
+        or _looks_like_promo_or_wrong_page(result)
+    )
 
 
 def _quality_listing_noise_ok(
@@ -803,7 +950,9 @@ def _quality_listing_noise_ok(
     if _looks_like_utility_chrome_success(result):
         return False
     sample_records = _object_list(result.get("sample_records"))
-    if sample_records and not any(_looks_like_real_listing_row(row) for row in sample_records[:3]):
+    if sample_records and not any(
+        _looks_like_real_listing_row(row) for row in sample_records[:3]
+    ):
         return False
     return True
 
@@ -816,7 +965,7 @@ def _quality_variant_presence_ok(
     if not expectations.get("expect_variants"):
         return True
     semantics = _object_dict(result.get("sample_semantics"))
-    return _safe_int(semantics.get("variant_count")) >= 2 and bool(semantics.get("selected_variant_present"))
+    return _safe_int(semantics.get("variant_count")) >= 2
 
 
 def _quality_variant_labels_ok(
@@ -827,23 +976,20 @@ def _quality_variant_labels_ok(
     if not expectations.get("require_semantic_variant_labels"):
         return True
     semantics = _object_dict(result.get("sample_semantics"))
-    axis_keys = [
-        str(value).strip()
-        for value in _object_list(semantics.get("variant_axes_keys"))
-        if str(value).strip()
-    ]
-    return bool(axis_keys) and bool(semantics.get("variant_axes_semantic"))
+    return bool(semantics.get("variants_all_have_axes"))
 
 
-def _quality_selected_variant_price_ok(
+def _quality_variant_price_ok(
     result: dict[str, object],
     *,
     expectations: dict[str, bool],
 ) -> bool:
-    if not expectations.get("require_selected_variant_price"):
+    if not expectations.get("require_variant_price"):
         return True
     semantics = _object_dict(result.get("sample_semantics"))
-    return bool(semantics.get("selected_variant_has_price"))
+    if bool(semantics.get("price_present")):
+        return True
+    return _safe_int(semantics.get("variants_with_price_count")) > 0
 
 
 def _quality_price_sane_ok(
@@ -855,13 +1001,10 @@ def _quality_price_sane_ok(
         return True
     record = _object_dict(result.get("sample_record_data"))
     price = _price_number(record.get("price"))
-    if price is None:
-        selected_variant = _object_dict(record.get("selected_variant"))
-        price = _price_number(selected_variant.get("price"))
     if price is None or price <= 0:
         return False
     currency = str(record.get("currency") or "").strip().upper()
-    max_price = 100000.0 if currency == "INR" else 10000.0
+    max_price = 100000.0 if currency in _HIGH_DENOMINATION_PRICE_CURRENCIES else 10000.0
     return price <= max_price
 
 
@@ -876,13 +1019,41 @@ def _quality_category_clean_ok(
     if not category.strip():
         return True
     lowered = f" {category.lower()} "
-    if any(token in lowered for token in (" previous ", " next ", " view all ", " back ")):
+    if any(
+        token in lowered
+        for token in (
+            " previous ",
+            " next ",
+            " view all ",
+            " back ",
+            " best sellers ",
+            " shop by ",
+            "···",
+            " … ",
+        )
+    ):
         return False
-    parts = [part.strip().lower() for part in re.split(r">\s*|/+", category) if part.strip()]
-    if any(part in {"home", "..."} or part.startswith("...") or part.endswith("...") for part in parts):
+    parts = [
+        part.strip().lower() for part in re.split(r">\s*|/+", category) if part.strip()
+    ]
+    if any(
+        part in {"home", "...", "all categories", "best sellers"}
+        or part.startswith(("...", "shop by "))
+        or part.endswith("...")
+        for part in parts
+    ):
         return False
     title = " ".join(str(result.get("sample_title") or "").strip().lower().split())
-    return not bool(title and parts and parts[-1] == title)
+    sku = " ".join(
+        str(_object_dict(result.get("sample_record_data")).get("sku") or "")
+        .strip()
+        .lower()
+        .split()
+    )
+    return not bool(
+        (title and any(part == title for part in parts))
+        or (sku and any(part == sku or part.endswith(f"sku: {sku}") for part in parts))
+    )
 
 
 def _quality_long_text_clean_ok(
@@ -897,14 +1068,39 @@ def _quality_long_text_clean_ok(
     specifications = _normalized_space(record.get("specifications"))
     if description and specifications and description == specifications:
         return False
-    for field_name in ("description", "product_details", "specifications", "materials", "care"):
+    for field_name in (
+        "description",
+        "product_details",
+        "specifications",
+        "materials",
+        "care",
+    ):
         text = _normalized_space(record.get(field_name))
         lowered = text.lower()
         if not lowered:
             continue
-        if lowered.endswith((" show more", " more details")) or " learn more about our materials" in lowered:
+        if (
+            lowered.endswith((" show more", " more details"))
+            or " learn more about our materials" in lowered
+        ):
             return False
-        if "choose from same day delivery" in lowered or "free standard delivery" in lowered:
+        if any(
+            token in lowered
+            for token in (
+                "choose from same day delivery",
+                "free standard delivery",
+                "shipping and returns",
+                "cookie policy",
+                "privacy policy",
+                "add to cart",
+                "size guide",
+                "view size guide",
+                "ask a question",
+                "we aim to show you accurate product information",
+            )
+        ):
+            return False
+        if re.search(r"\{['\"][a-z0-9_ -]+['\"]\s*:", text, flags=re.I):
             return False
         if field_name == "materials" and re.search(r"\breviews?\s*\(", lowered):
             return False
@@ -919,15 +1115,28 @@ def _quality_variant_artifacts_ok(
     if not expectations.get("require_clean_variants"):
         return True
     record = _object_dict(result.get("sample_record_data"))
+    if any(
+        record.get(field_name) not in (None, "", [], {})
+        for field_name in PUBLIC_RECORD_LEGACY_VARIANT_FIELDS
+    ):
+        return False
     values: list[object] = []
-    values.extend(_object_dict(record.get("variant_axes")).keys())
-    for axis_values in _object_dict(record.get("variant_axes")).values():
-        values.extend(_object_list(axis_values))
-    for row in [_object_dict(record.get("selected_variant")), *_object_list(record.get("variants"))]:
+    allowed_variant_keys = {
+        *_VARIANT_AXIS_FIELDS,
+        "sku",
+        "price",
+        "currency",
+        "url",
+        "image_url",
+        "availability",
+        "stock_quantity",
+    }
+    for row in _object_list(record.get("variants")):
         if isinstance(row, dict):
+            if any(str(key).strip() not in allowed_variant_keys for key in row.keys()):
+                return False
             values.extend(row.keys())
             values.extend(row.values())
-            values.extend(_object_dict(row.get("option_values")).values())
     for value in values:
         if isinstance(value, bool):
             return False
@@ -939,6 +1148,63 @@ def _quality_variant_artifacts_ok(
         if re.fullmatch(r"\d+\s*%", text) or re.fullmatch(r"#[0-9a-f]{6}", text):
             return False
     return True
+
+
+def _quality_variant_currency_parity_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_variant_currency_parity"):
+        return True
+    record = _object_dict(result.get("sample_record_data"))
+    parent_currency = str(record.get("currency") or "").strip().upper()
+    variants = [
+        row for row in _object_list(record.get("variants")) if isinstance(row, dict)
+    ]
+    if not variants or not parent_currency:
+        return True
+    for row in variants:
+        row_currency = str(row.get("currency") or "").strip().upper()
+        if row_currency and row_currency != parent_currency:
+            return False
+        if row.get("price") not in (None, "", [], {}) and not row_currency:
+            return False
+    return True
+
+
+def _quality_identifier_shapes_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_identifier_shapes"):
+        return True
+    record = _object_dict(result.get("sample_record_data"))
+    barcode = str(record.get("barcode") or "").strip()
+    if barcode and (not barcode.isdigit() or len(barcode) not in _BARCODE_LENGTHS):
+        return False
+    gender = str(record.get("gender") or "").strip()
+    if gender and gender not in _ALLOWED_GENDERS:
+        return False
+    for field_name in ("product_id", "product_type"):
+        text = str(record.get(field_name) or "").strip().lower()
+        if text and any(token in text for token in _INTERNAL_IDENTITY_TOKENS):
+            return False
+    return True
+
+
+def _quality_title_token_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_title_not_internal_token"):
+        return True
+    title = str(result.get("sample_title") or "").strip().lower()
+    if not title:
+        return True
+    return title not in _INTERNAL_IDENTITY_TOKENS and "brightcove video" not in title
 
 
 def _quality_system_artifacts_ok(
@@ -971,7 +1237,9 @@ def _quality_repair_diagnostics_ok(
         return True
     trace = _object_dict(result.get("sample_source_trace"))
     extraction = _object_dict(trace.get("extraction"))
-    field_repair = _object_dict(extraction.get("field_repair") or trace.get("field_repair"))
+    field_repair = _object_dict(
+        extraction.get("field_repair") or trace.get("field_repair")
+    )
     self_heal = _object_dict(extraction.get("self_heal") or trace.get("self_heal"))
     return bool(
         field_repair.get("reason")
@@ -1019,26 +1287,56 @@ def _observed_quality_failure_mode(
         return "listing_chrome_noise"
     if expectations.get("expect_variants") and not checks["variant_presence_ok"]:
         return "thin_detail"
-    if expectations.get("require_semantic_variant_labels") and not checks["variant_labels_ok"]:
+    if (
+        expectations.get("require_semantic_variant_labels")
+        and not checks["variant_labels_ok"]
+    ):
         return "axis_pollution"
-    if expectations.get("require_selected_variant_price") and not checks["selected_variant_price_ok"]:
-        return "selected_variant_price_missing"
+    if expectations.get("require_variant_price") and not checks["variant_price_ok"]:
+        return "variant_price_missing"
     if expectations.get("require_price_sane") and not checks["price_sane_ok"]:
         return "price_magnitude_anomaly"
     if expectations.get("require_clean_category") and not checks["category_clean_ok"]:
         return "category_pollution"
     if expectations.get("require_clean_long_text") and not checks["long_text_clean_ok"]:
         return "long_text_pollution"
-    if expectations.get("require_clean_variants") and not checks["variant_artifacts_ok"]:
+    if (
+        expectations.get("require_clean_variants")
+        and not checks["variant_artifacts_ok"]
+    ):
         return "variant_artifact_pollution"
-    if expectations.get("require_clean_system_fields") and not checks["system_artifacts_ok"]:
+    if (
+        expectations.get("require_variant_currency_parity")
+        and not checks["variant_currency_parity_ok"]
+    ):
+        return "variant_currency_mismatch"
+    if (
+        expectations.get("require_identifier_shapes")
+        and not checks["identifier_shapes_ok"]
+    ):
+        return "identifier_shape_pollution"
+    if (
+        expectations.get("require_title_not_internal_token")
+        and not checks["title_token_ok"]
+    ):
+        return "title_internal_token"
+    if (
+        expectations.get("require_clean_system_fields")
+        and not checks["system_artifacts_ok"]
+    ):
         return "system_artifact_pollution"
-    if expectations.get("require_repair_diagnostics") and not checks["repair_diagnostics_ok"]:
+    if (
+        expectations.get("require_repair_diagnostics")
+        and not checks["repair_diagnostics_ok"]
+    ):
         return "repair_diagnostic_missing"
     if _price_requirement_failed(result, expectations=expectations):
         return "thin_detail"
     seeded_failure_mode = str(site.get("seed_failure_mode") or "").strip().lower()
-    if str(result.get("run_source") or "").strip().lower() == "artifact_review" and seeded_failure_mode:
+    if (
+        str(result.get("run_source") or "").strip().lower() == "artifact_review"
+        and seeded_failure_mode
+    ):
         return seeded_failure_mode
     return "control_good"
 
@@ -1062,6 +1360,9 @@ def _quality_verdict(
         "category_pollution",
         "long_text_pollution",
         "variant_artifact_pollution",
+        "variant_currency_mismatch",
+        "identifier_shape_pollution",
+        "title_internal_token",
         "system_artifact_pollution",
         "repair_diagnostic_missing",
     }:
@@ -1077,32 +1378,58 @@ def _looks_like_site_shell_success(result: dict[str, object]) -> bool:
     surface = str(result.get("surface") or "").strip().lower()
     if not surface.endswith("_detail"):
         return False
-    sample_title = " ".join(str(result.get("sample_title") or "").strip().lower().split())
+    sample_title = " ".join(
+        str(result.get("sample_title") or "").strip().lower().split()
+    )
     if not sample_title:
         return True
     semantics = _object_dict(result.get("sample_semantics"))
-    if bool(semantics.get("price_present")) or _safe_int(semantics.get("variant_count")) >= 2:
+    if (
+        bool(semantics.get("price_present"))
+        or _safe_int(semantics.get("variant_count")) >= 2
+    ):
         return False
     title_tokens = {
-        token
-        for token in re.split(r"[^a-z0-9]+", sample_title)
-        if len(token) >= 3
+        token for token in re.split(r"[^a-z0-9]+", sample_title) if len(token) >= 3
     }
-    host = str(urlsplit(str(result.get("requested_url") or result.get("url") or "")).hostname or "").strip().lower()
+    host = (
+        str(
+            urlsplit(
+                str(result.get("requested_url") or result.get("url") or "")
+            ).hostname
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     host_tokens = {
         token
         for token in re.split(r"[^a-z0-9]+", host.removeprefix("www."))
         if len(token) >= 3
     }
-    return bool(host_tokens and host_tokens & title_tokens and _safe_int(result.get("populated_fields")) <= 6)
+    return bool(
+        host_tokens
+        and host_tokens & title_tokens
+        and _safe_int(result.get("populated_fields")) <= 6
+    )
 
 
 def _looks_like_promo_or_wrong_page(result: dict[str, object]) -> bool:
-    sample_title = " ".join(str(result.get("sample_title") or "").strip().lower().split())
+    sample_title = " ".join(
+        str(result.get("sample_title") or "").strip().lower().split()
+    )
     sample_url = str(result.get("sample_url") or "").strip().lower()
-    promo_tokens = ("promo", "new arrivals", "sale", "shop all", "category", "categories")
+    promo_tokens = (
+        "promo",
+        "new arrivals",
+        "sale",
+        "shop all",
+        "category",
+        "categories",
+    )
     return any(token in sample_title for token in promo_tokens) or any(
-        token in sample_url for token in ("/promo", "promo-", "products=newarrival", "/sale", "/category")
+        token in sample_url
+        for token in ("/promo", "promo-", "products=newarrival", "/sale", "/category")
     )
 
 
@@ -1166,10 +1493,14 @@ def _looks_like_real_listing_row(row: object) -> bool:
 
 async def _ensure_harness_user_id(session) -> int:
     if _is_production_environment():
-        raise RuntimeError("Harness user access is disabled outside local/test environments")
+        raise RuntimeError(
+            "Harness user access is disabled outside local/test environments"
+        )
     harness_email = str(os.getenv("HARNESS_EMAIL") or "").strip().lower()
     harness_password = str(os.getenv("HARNESS_PASSWORD") or "").strip()
-    harness_role = str(os.getenv("HARNESS_ROLE") or "harness").strip().lower() or "harness"
+    harness_role = (
+        str(os.getenv("HARNESS_ROLE") or "harness").strip().lower() or "harness"
+    )
     if not harness_email:
         raise RuntimeError("HARNESS_EMAIL is required for harness user bootstrap.")
     if not harness_password:
@@ -1197,7 +1528,14 @@ def _is_production_environment() -> bool:
         or os.getenv("ENV")
         or "development"
     )
-    return str(env_name).strip().lower() not in {"", "development", "dev", "local", "test", "testing"}
+    return str(env_name).strip().lower() not in {
+        "",
+        "development",
+        "dev",
+        "local",
+        "test",
+        "testing",
+    }
 
 
 def _safe_int(value: object) -> int:
@@ -1238,7 +1576,12 @@ def _price_number(value: object) -> float | None:
         return None
     normalized = re.sub(r"[^0-9.,]+", "", text)
     if "." in normalized and "," in normalized:
-        normalized = normalized.replace(",", "")
+        decimal_separator = (
+            "." if normalized.rfind(".") > normalized.rfind(",") else ","
+        )
+        thousands_separator = "," if decimal_separator == "." else "."
+        normalized = normalized.replace(thousands_separator, "")
+        normalized = normalized.replace(decimal_separator, ".")
     elif "," in normalized and re.fullmatch(r"\d+,\d{1,2}", normalized):
         normalized = normalized.replace(",", ".")
     else:
@@ -1247,6 +1590,13 @@ def _price_number(value: object) -> float | None:
         return float(normalized)
     except ValueError:
         return None
+
+
+def _variant_row_has_axis(row: dict[str, object]) -> bool:
+    axis_values = [
+        str(row.get(field_name) or "").strip() for field_name in _VARIANT_AXIS_FIELDS
+    ]
+    return any(axis_values)
 
 
 def _normalized_space(value: object) -> str:

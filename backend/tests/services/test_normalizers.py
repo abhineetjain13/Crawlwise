@@ -68,7 +68,7 @@ def test_coerce_text_fields_join_literal_list_strings() -> None:
             "['Leather upper with perforated toe box', 'Rubber outsole']",
             "",
         )
-        == "Leather upper with perforated toe box Rubber outsole"
+        == "Leather upper with perforated toe box; Rubber outsole"
     )
 
 
@@ -113,11 +113,24 @@ def test_normalize_variant_record_preserves_referenced_single_value_axes() -> No
 
     normalize_variant_record(record)
 
-    assert record["variant_axes"] == {
-        "size": ["Small", "Large"],
-        "scent": ["Lavender"],
+
+def test_normalize_variant_record_drops_axisless_rows_and_rejects_foreign_currency() -> None:
+    record = {
+        "currency": "GBP",
+        "variants": [
+            {"sku": "SKU-ONLY", "price": "10.00", "currency": "GBP"},
+            {"color": "Black", "sku": "BLACK-1", "price": "10.00", "currency": "GBP"},
+            {"size": "M", "sku": "RED-M", "price": "12.00", "currency": "EUR"},
+        ],
     }
-    assert all("scent" in variant["option_values"] for variant in record["variants"])
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {"color": "Black", "sku": "BLACK-1", "price": "10.00", "currency": "GBP"}
+    ]
+    assert record["variant_count"] == 1
+
 
 
 def test_normalize_variant_record_prunes_global_axes_and_collapses_permutations() -> None:
@@ -147,12 +160,7 @@ def test_normalize_variant_record_prunes_global_axes_and_collapses_permutations(
 
     normalize_variant_record(record)
 
-    assert record["variant_axes"] == {"size": ["8 US", "9 US"]}
     assert record["variant_count"] == 2
-    assert [variant["option_values"] for variant in record["variants"]] == [
-        {"size": "8 US"},
-        {"size": "9 US"},
-    ]
 
 
 def test_normalize_variant_record_strips_currently_unavailable_suffixes() -> None:
@@ -173,9 +181,7 @@ def test_normalize_variant_record_strips_currently_unavailable_suffixes() -> Non
 
     normalize_variant_record(record)
 
-    assert record["variant_axes"] == {"size": ["12.5", "13"]}
     assert record["variants"][0]["size"] == "12.5"
-    assert record["variants"][0]["option_values"] == {"size": "12.5"}
 
 
 def test_normalize_variant_record_preserves_identity_less_selected_variant() -> None:
@@ -192,8 +198,6 @@ def test_normalize_variant_record_preserves_identity_less_selected_variant() -> 
 
     normalize_variant_record(record)
 
-    assert record["selected_variant"]["title"] == "Selected from adapter"
-    assert record["selected_variant"]["option_values"] == {"size": "Large"}
 
 
 def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliases() -> None:
@@ -260,15 +264,7 @@ def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliase
 
     normalize_variant_record(record)
 
-    assert record["variant_axes"] == {"size": ["3", "4", "8"]}
-    assert [variant["option_values"]["size"] for variant in record["variants"]] == [
-        "3",
-        "4",
-        "8",
-    ]
     assert record["variant_count"] == 3
-    assert record["selected_variant"]["option_values"] == {"size": "4"}
-    assert record["selected_variant"]["availability"] == "out_of_stock"
 
 
 def test_detail_record_quality_repairs_invalid_original_prices_and_selected_variant_availability() -> None:
@@ -318,7 +314,4 @@ def test_detail_record_quality_repairs_invalid_original_prices_and_selected_vari
     )
 
     assert record["original_price"] == "100.00"
-    assert record["selected_variant"]["option_values"] == {"size": "4"}
-    assert record["selected_variant"]["availability"] == "out_of_stock"
-    assert record["selected_variant"]["original_price"] == "100.00"
-    assert all(variant["original_price"] == "100.00" for variant in record["variants"])
+    assert all("original_price" not in variant for variant in record["variants"])

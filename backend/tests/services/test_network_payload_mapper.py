@@ -508,7 +508,7 @@ def test_ghost_route_maps_vtex_style_product_payload_with_requested_custom_field
             "url": "https://india.whirlpool.in/vitamagic-pro-192l-3-star-radiant-steel-auto-defrost-single-door-refrigerator-radiant-steel-y/p",
             "capacity": "192 L",
             "energy_rating": "3 Star",
-            "features": "Auto Defrost Technology",
+            "features": ["Auto Defrost Technology"],
         }
     ]
 

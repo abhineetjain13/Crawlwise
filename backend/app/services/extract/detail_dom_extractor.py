@@ -25,6 +25,7 @@ from app.services.field_value_core import (
     clean_text,
     coerce_field_value,
     extract_currency_code,
+    flatten_variants_for_public_output,
     is_title_noise,
     object_dict as _object_dict,
     object_list as _object_list,
@@ -34,6 +35,7 @@ from app.services.field_value_core import (
 )
 from app.services.field_value_dom import (
     apply_selector_fallbacks,
+    extract_feature_rows,
     extract_heading_sections,
     extract_page_images,
 )
@@ -46,6 +48,7 @@ from app.services.extract.shared_variant_logic import (
     infer_variant_group_name_from_values,
     iter_variant_choice_groups,
     iter_variant_select_groups,
+    merge_variant_pair,
     normalized_variant_axis_display_name,
     normalized_variant_axis_key,
     resolve_variants,
@@ -211,6 +214,18 @@ def apply_dom_fallbacks(
                 coerce_field_value(normalized, value, page_url),
                 source="dom_sections",
             )
+    if "features" in fields:
+        feature_rows = extract_feature_rows(soup)
+        if feature_rows:
+            add_sourced_candidate(
+                candidates,
+                candidate_sources,
+                field_sources,
+                selector_trace_candidates,
+                "features",
+                feature_rows,
+                source="dom_sections",
+            )
     breadcrumb_category = breadcrumb_category_from_dom(
         breadcrumb_soup or soup,
         current_title=title,
@@ -324,8 +339,11 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
         compact in _variant_option_value_noise_tokens
         or compact in _variant_artifact_value_tokens
         or re.fullmatch(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?", compact) is not None
-        or re.fullmatch(r"\d+\s*%\s*(?:off)?", lowered) is not None
-        or ("%" in lowered and any(token in lowered for token in ("off", "discount", "promo")))
+        or re.fullmatch(r"\d+\s*%\s*off", lowered) is not None
+        or (
+            "%" in lowered
+            and any(token in lowered for token in ("off", "discount", "promo"))
+        )
         or lowered in {"select", "choose", "option", "size guide"}
         or any(phrase in lowered for phrase in _variant_option_value_ui_noise_phrases)
         or (
@@ -1071,7 +1089,7 @@ def _extract_variants_from_dom(
         page_url=page_url,
     )
     record: dict[str, object] = {}
-    variant_axes: dict[str, list[str]] = {}
+    axis_values_by_name: dict[str, list[str]] = {}
     axis_option_metadata: dict[str, dict[str, dict[str, object]]] = {}
     axis_order: list[tuple[str, str, list[str]]] = []
     for group in deduped_groups:
@@ -1080,10 +1098,7 @@ def _extract_variants_from_dom(
         axis_key = normalized_variant_axis_key(name)
         if not axis_key:
             continue
-        axis_index = len(axis_order) + 1
-        record[f"option{axis_index}_name"] = name
-        record[f"option{axis_index}_values"] = values
-        variant_axes[axis_key] = values
+        axis_values_by_name[axis_key] = values
         axis_option_metadata[axis_key] = {
             clean_text(entry.get("value")): {
                 key: entry.get(key)
@@ -1115,9 +1130,7 @@ def _extract_variants_from_dom(
                 ) and merged_metadata.get(key) in (None, "", [], {}):
                     merged_metadata[key] = state_metadata[key]
         axis_order.append((axis_key, name, values))
-        if axis_key == "size" and not record.get("available_sizes"):
-            record["available_sizes"] = values
-    if not variant_axes:
+    if not axis_values_by_name:
         return {}
 
     variants: list[dict[str, object]] = []
@@ -1158,13 +1171,15 @@ def _extract_variants_from_dom(
         variants.append(variant)
 
     selectable_axes, single_value_attributes = split_variant_axes(
-        variant_axes,
+        axis_values_by_name,
         always_selectable_axes=frozenset({"size"}),
     )
     resolved_variants = (
-        resolve_variants(selectable_axes or variant_axes, variants) if variants else []
+        resolve_variants(selectable_axes or axis_values_by_name, variants)
+        if variants
+        else []
     )
-    selected_variant = select_variant(resolved_variants, page_url=page_url)
+    active_variant = select_variant(resolved_variants, page_url=page_url)
     selected_option_values = {
         axis_name: option_value
         for axis_name, option_value in (
@@ -1186,29 +1201,27 @@ def _extract_variants_from_dom(
         if option_value
     }
     if selected_option_values:
-        selected_variant = next(
+        active_variant = next(
             (
                 variant
                 for variant in resolved_variants
                 if variant.get("option_values") == selected_option_values
             ),
-            selected_variant,
+            active_variant,
         )
     for axis_name, value in single_value_attributes.items():
         record.setdefault(axis_name, value)
-    if selectable_axes:
-        record["variant_axes"] = selectable_axes
-    elif variant_axes:
-        record["variant_axes"] = variant_axes
     if resolved_variants:
-        record["variants"] = resolved_variants
-        record["variant_count"] = len(resolved_variants)
-        if selected_variant:
-            record["selected_variant"] = selected_variant
+        flat_variants = flatten_variants_for_public_output(
+            resolved_variants,
+            page_url=page_url,
+        )
+        if flat_variants:
+            record["variants"] = flat_variants
+            record["variant_count"] = len(flat_variants)
+        if active_variant:
             if record.get("availability") in (None, "", [], {}):
-                selected_availability = text_or_none(
-                    selected_variant.get("availability")
-                )
+                selected_availability = text_or_none(active_variant.get("availability"))
                 if selected_availability:
                     record["availability"] = selected_availability
     return record
@@ -1221,7 +1234,15 @@ def _backfill_variants_from_dom_if_missing(
     page_url: str,
     js_state_objects: dict[str, Any] | None = None,
 ) -> None:
-    if record.get("variant_axes") not in (None, "", [], {}):
+    existing_variants = [
+        row for row in list(record.get("variants") or []) if isinstance(row, dict)
+    ]
+    existing_has_axis = any(
+        row.get("color") not in (None, "", [], {})
+        or row.get("size") not in (None, "", [], {})
+        for row in existing_variants
+    )
+    if existing_variants and existing_has_axis:
         return
     if not variant_dom_cues_present(soup):
         return
@@ -1230,23 +1251,40 @@ def _backfill_variants_from_dom_if_missing(
         page_url=page_url,
         js_state_objects=js_state_objects,
     )
-    for field_name in ("variant_axes", "variants", "variant_count", "selected_variant"):
-        if record.get(field_name) in (None, "", [], {}) and dom_variants.get(
-            field_name
-        ) not in (
-            None,
-            "",
-            [],
-            {},
-        ):
-            record[field_name] = dom_variants[field_name]
+    dom_variant_rows = [
+        row for row in list(dom_variants.get("variants") or []) if isinstance(row, dict)
+    ]
+    if dom_variant_rows and (
+        not existing_variants or len(dom_variant_rows) > len(existing_variants)
+    ):
+        existing_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        existing_by_index: dict[int, dict[str, Any]] = {}
+        for index, row in enumerate(existing_variants):
+            row_key = text_or_none(row.get("variant_id")) or text_or_none(
+                row.get("url")
+            )
+            if row_key:
+                existing_by_key[("", row_key)] = row
+            existing_by_index[index] = row
+        merged_rows: list[dict[str, Any]] = []
+        for index, dom_row in enumerate(dom_variant_rows):
+            dom_key = text_or_none(dom_row.get("variant_id")) or text_or_none(
+                dom_row.get("url")
+            )
+            existing_row = (
+                existing_by_key.get(("", dom_key or ""))
+                if dom_key
+                else existing_by_index.get(index)
+            )
+            merged_rows.append(
+                merge_variant_pair(dom_row, existing_row)
+                if isinstance(existing_row, dict)
+                else dom_row
+            )
+        record["variants"] = merged_rows
+        record["variant_count"] = len(merged_rows)
     currency = text_or_none(record.get("currency"))
-    selected_variant = record.get("selected_variant")
-    if not currency and isinstance(selected_variant, dict):
-        currency = text_or_none(selected_variant.get("currency"))
     price = text_or_none(record.get("price"))
-    if not price and isinstance(selected_variant, dict):
-        price = text_or_none(selected_variant.get("price"))
     variants = record.get("variants")
     if not isinstance(variants, list) or not variants:
         return

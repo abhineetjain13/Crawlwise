@@ -3,6 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.services.config.field_mappings import (
+    AVAILABLE_SIZES_FIELD,
+    COLOR_FIELD,
+    SELECTED_VARIANT_FIELD,
+    SIZE_FIELD,
+    VARIANTS_FIELD,
+    VARIANT_AXES_FIELD,
+    WIDTH_FIELD,
+)
+
 
 DATA_ENRICHMENT_STATUS_UNENRICHED = "unenriched"
 DATA_ENRICHMENT_STATUS_PENDING = "pending"
@@ -129,6 +139,34 @@ DATA_ENRICHMENT_MATERIAL_PRIMARY_FIELDS = (
     "product_attributes",
 )
 DATA_ENRICHMENT_MATERIAL_FALLBACK_FIELDS = ("description",)
+DATA_ENRICHMENT_COLOR_CANDIDATE_FIELDS = (
+    COLOR_FIELD,
+    "title",
+    "category",
+    "product_type",
+)
+DATA_ENRICHMENT_COLOR_CANDIDATE_SOURCES = (
+    VARIANTS_FIELD,
+    VARIANT_AXES_FIELD,
+    SELECTED_VARIANT_FIELD,
+)
+DATA_ENRICHMENT_COLOR_CANDIDATE_TARGETS = frozenset(
+    {COLOR_FIELD, "colour", "shade", "finish", "tone"}
+)
+DATA_ENRICHMENT_SIZE_CANDIDATE_FIELDS = (SIZE_FIELD, AVAILABLE_SIZES_FIELD)
+DATA_ENRICHMENT_SIZE_CANDIDATE_SOURCES = (
+    VARIANTS_FIELD,
+    VARIANT_AXES_FIELD,
+    SELECTED_VARIANT_FIELD,
+)
+DATA_ENRICHMENT_SIZE_CANDIDATE_TARGETS = frozenset({SIZE_FIELD, WIDTH_FIELD})
+DATA_ENRICHMENT_AVAILABILITY_CANDIDATE_SOURCES = (
+    VARIANTS_FIELD,
+    SELECTED_VARIANT_FIELD,
+)
+DATA_ENRICHMENT_AVAILABILITY_CANDIDATE_TARGETS = frozenset(
+    {"availability", "stock", "status", "inventory"}
+)
 DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS = (
     r"\bcare\b.*$",
     r"\bcare instructions?\b.*$",
@@ -189,10 +227,10 @@ DATA_ENRICHMENT_SEO_STOPWORDS = (
 )
 DATA_ENRICHMENT_SHOPIFY_ATTRIBUTE_CRAWL_FIELDS = {
     "age_group": ("age_group", "gender", "category", "product_type", "title"),
-    "availability": ("availability", "stock_status", "variants", "selected_variant"),
+    "availability": ("availability", "stock_status", "variants"),
     "brand": ("brand", "vendor", "manufacturer"),
     "care_instructions": ("care_instructions", "product_attributes", "details"),
-    "color": ("color", "variant_axes", "selected_variant", "title"),
+    "color": ("color", "variants", "title"),
     "description": ("description", "short_description", "summary"),
     "fabric": ("materials", "material", "product_attributes", "description"),
     "gender": ("gender", "department", "category", "product_type", "title"),
@@ -201,8 +239,8 @@ DATA_ENRICHMENT_SHOPIFY_ATTRIBUTE_CRAWL_FIELDS = {
     "material": ("materials", "material", "product_attributes", "description"),
     "pattern": ("pattern", "product_attributes", "description", "title"),
     "price": ("price", "original_price"),
-    "size": ("size", "available_sizes", "variant_axes", "selected_variant"),
-    "size_system": ("size_system", "size", "available_sizes"),
+    "size": ("size", "variants"),
+    "size_system": ("size_system", "size", "variants"),
     "target_gender": ("gender", "department", "category", "product_type", "title"),
     "title": ("title", "name"),
 }

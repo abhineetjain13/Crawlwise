@@ -31,12 +31,14 @@ from app.services.extraction_html_helpers import prune_html_tree
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import extract_selector_value, validate_or_convert_xpath
 
+
 def reduce_html_for_selector_synthesis(html: str) -> str:
     soup = prune_html_tree(
         BeautifulSoup(str(html or ""), "html.parser"),
-        drop_tags=tuple(SELECTOR_SYNTHESIS_DROP_TAGS) + tuple(SELECTOR_SYNTHESIS_LOW_VALUE_TAGS),
+        drop_tags=tuple(SELECTOR_SYNTHESIS_DROP_TAGS),
         allowed_attrs=set(SELECTOR_SYNTHESIS_ALLOWED_ATTRS),
     )
+    _remove_low_value_nodes(soup)
     reduced = BeautifulSoup("<html><body></body></html>", "html.parser")
     source_root = soup.body or soup
     target_root = reduced.body or reduced
@@ -81,7 +83,9 @@ def _append_reduced_node(
         return len(chunk)
     if not isinstance(node, Tag):
         return 0
-    if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS:
+    if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS and not _keep_low_value_node(
+        node
+    ):
         return 0
     if node.name == "template" and not node.has_attr("shadowrootmode"):
         return 0
@@ -109,6 +113,51 @@ def _append_reduced_node(
         return 0
     target_parent.append(clone)
     return len(str(clone))
+
+
+def _remove_low_value_nodes(soup: BeautifulSoup) -> None:
+    for node in list(soup.find_all(True)):
+        if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS and not _keep_low_value_node(
+            node
+        ):
+            node.decompose()
+
+
+def _keep_low_value_node(node: Tag) -> bool:
+    if node.name not in {"button", "input", "select"}:
+        return False
+    attrs = dict(node.attrs)
+    if (
+        not any(
+            attrs.get(attr_name) not in (None, "", [], {})
+            for attr_name in (
+                "data-variant-id",
+                "data-product-id",
+                "data-price",
+                "value",
+            )
+        )
+        and not str(attrs.get("aria-label") or "").strip()
+    ):
+        return False
+    current: Tag | None = node
+    while isinstance(current, Tag):
+        probe = " ".join(
+            str(part)
+            for part in (
+                current.name,
+                current.get("id"),
+                current.get("class"),
+                current.get("data-testid"),
+            )
+            if part
+        ).lower()
+        if any(
+            token in probe for token in ("buy", "cart", "pdp", "product", "variant")
+        ):
+            return True
+        current = current.parent if isinstance(current.parent, Tag) else None
+    return False
 
 
 def selector_self_heal_enabled(run: CrawlRun) -> tuple[bool, float]:
@@ -175,7 +224,11 @@ async def apply_selector_self_heal(
     selector_rules: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     enabled, threshold = selector_self_heal_enabled(run)
-    if not enabled or not run.settings_view.llm_enabled() or "detail" not in run.surface:
+    if (
+        not enabled
+        or not run.settings_view.llm_enabled()
+        or "detail" not in run.surface
+    ):
         return records, selector_rules
 
     domain = normalize_domain(page_url)
@@ -295,7 +348,9 @@ def _validated_xpath_rules(
     target_fields: list[str],
 ) -> list[dict[str, object]]:
     rules: list[dict[str, object]] = []
-    allowed_fields = {str(field_name or "").strip().lower() for field_name in target_fields}
+    allowed_fields = {
+        str(field_name or "").strip().lower() for field_name in target_fields
+    }
     for row in _list_or_empty(candidates):
         if not isinstance(row, dict):
             continue
@@ -342,16 +397,19 @@ def _merge_selector_rules(
         for row in merged
         if isinstance(row, dict)
     }
-    next_id = max(
-        (
-            parsed_id
-            for row in merged
-            if isinstance(row, dict)
-            for parsed_id in [_safe_int(row.get("id"), default=None)]
-            if parsed_id is not None
-        ),
-        default=0,
-    ) + 1
+    next_id = (
+        max(
+            (
+                parsed_id
+                for row in merged
+                if isinstance(row, dict)
+                for parsed_id in [_safe_int(row.get("id"), default=None)]
+                if parsed_id is not None
+            ),
+            default=0,
+        )
+        + 1
+    )
     for row in new_rules:
         key = (
             str(row.get("field_name") or "").strip().lower(),

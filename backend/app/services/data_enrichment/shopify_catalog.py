@@ -210,7 +210,7 @@ def taxonomy_context_conflicts(source_tokens: set[str], category_path: object) -
         if not context_terms or not path_terms:
             continue
         if not any(
-            tokens and tokens <= source_tokens
+            tokens <= source_tokens
             for term in context_terms
             if (tokens := set(tokenize_text(term)))
         ):

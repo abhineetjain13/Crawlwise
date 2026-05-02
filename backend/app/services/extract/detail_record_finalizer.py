@@ -7,10 +7,19 @@ from urllib.parse import unquote, urlparse
 
 from app.services.config.extraction_rules import (
     CANDIDATE_PLACEHOLDER_VALUES,
+    DETAIL_CATEGORY_LABEL_PREFIXES,
+    DETAIL_CATEGORY_UI_TOKENS,
+    DETAIL_BREADCRUMB_SEPARATOR_LABELS,
+    DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO,
+    DETAIL_LOW_SIGNAL_PARENT_MIN,
+    DETAIL_LOW_SIGNAL_PRICE_MAX,
+    DETAIL_PRICE_COMPARISON_TOLERANCE,
+    VARIANT_OPTION_LABEL_MAX_WORDS,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
 )
 from app.services.field_value_core import (
     clean_text,
+    flatten_variants_for_public_output,
     same_site,
     text_or_none,
 )
@@ -46,9 +55,7 @@ from app.services.extract.shared_variant_logic import (
     variant_axis_name_is_semantic,
 )
 
-_UUID_LIKE_PATTERN = re.compile(
-    r"(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
-)
+_UUID_LIKE_PATTERN = re.compile(r"(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _MERCH_CODE_PATTERN = re.compile(r"\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", re.I)
 _VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
     str(token).strip().lower()
@@ -61,18 +68,25 @@ _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(r"^error\s+page$", re.I),
     re.compile(r"^your\s+ai-generated\s+outfit$", re.I),
     re.compile(r"^oops,?\s+something\s+went\s+wrong\.?$", re.I),
-    re.compile(r"^oops!? the page you(?:'|’)re looking for can(?:'|’)t be found\.?$", re.I),
+    re.compile(
+        r"^oops!? the page you(?:'|’)re looking for can(?:'|’)t be found\.?$", re.I
+    ),
     re.compile(r"\bpage not found\b", re.I),
     re.compile(r"\bnot found\b", re.I),
     re.compile(r"\baccess denied\b", re.I),
 )
+
 
 def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
     raw_additional_images = record.get("additional_images")
     additional_images = (
         list(raw_additional_images)
         if isinstance(raw_additional_images, (list, tuple, set))
-        else ([raw_additional_images] if raw_additional_images not in (None, "", [], {}) else [])
+        else (
+            [raw_additional_images]
+            if raw_additional_images not in (None, "", [], {})
+            else []
+        )
     )
     values: list[str] = []
     for raw_value in (
@@ -114,15 +128,32 @@ def _sanitize_ecommerce_detail_record(
 
 def _sanitize_detail_placeholder_scalars(record: dict[str, Any]) -> None:
     title = clean_text(record.get("title"))
-    if _detail_title_looks_like_placeholder(title) or detail_title_value_is_low_signal(title):
+    if _detail_title_looks_like_placeholder(title) or detail_title_value_is_low_signal(
+        title
+    ):
         record.pop("title", None)
         record["_placeholder_title_removed"] = True
     category = clean_text(record.get("category"))
     if category.lower() in {"category", "categories", "uncategorized"}:
         record.pop("category", None)
-    features = text_or_none(record.get("features"))
-    if features and features.startswith("{") and features.endswith("}"):
-        record.pop("features", None)
+    elif category:
+        cleaned_category = _clean_detail_category_path(
+            category,
+            title=record.get("title"),
+            sku=record.get("sku"),
+        )
+        if cleaned_category:
+            record["category"] = cleaned_category
+        else:
+            record.pop("category", None)
+    features = record.get("features")
+    if isinstance(features, list):
+        if not any(text_or_none(item) for item in features):
+            record.pop("features", None)
+    else:
+        feature_text = text_or_none(features)
+        if feature_text and feature_text.startswith("{") and feature_text.endswith("}"):
+            record.pop("features", None)
     product_type = text_or_none(record.get("product_type"))
     if detail_product_type_is_low_signal(product_type):
         record.pop("product_type", None)
@@ -178,7 +209,6 @@ def _detail_title_fallback_is_safe(record: dict[str, Any]) -> bool:
             "availability",
             "product_attributes",
             "variants",
-            "selected_variant",
         )
     )
 
@@ -207,7 +237,11 @@ def _preferred_detail_merch_code(
             if candidate.count("-") > 2:
                 continue
             normalized = re.sub(r"[^A-Z0-9]+", "", candidate)
-            if len(normalized) < 8 or not re.search(r"[A-Z]", normalized) or not re.search(r"\d", normalized):
+            if (
+                len(normalized) < 8
+                or not re.search(r"[A-Z]", normalized)
+                or not re.search(r"\d", normalized)
+            ):
                 continue
             if fallback is None:
                 fallback = candidate
@@ -229,6 +263,65 @@ def _detail_scalar_value_is_placeholder(value: object) -> bool:
     return cleaned in {"category", "default title", "uncategorized"}
 
 
+def _clean_detail_category_path(
+    value: object,
+    *,
+    title: object,
+    sku: object,
+) -> str:
+    parts = [
+        clean_text(part)
+        for part in re.split(r"\s*(?:>|/|›|»|→|\|)\s*", clean_text(value))
+        if clean_text(part)
+    ]
+    if not parts:
+        return ""
+    ui_tokens = {
+        clean_text(token).casefold()
+        for token in tuple(DETAIL_CATEGORY_UI_TOKENS or ())
+        if clean_text(token)
+    }
+    prefixes = tuple(
+        str(prefix).casefold() for prefix in tuple(DETAIL_CATEGORY_LABEL_PREFIXES or ())
+    )
+    cleaned_parts: list[str] = []
+    strip_chars = "".join(tuple(DETAIL_BREADCRUMB_SEPARATOR_LABELS or ())) + " \t\n\r"
+    for part in parts:
+        cleaned = clean_text(part.strip(strip_chars))
+        lowered = cleaned.casefold()
+        if (
+            not cleaned
+            or lowered in ui_tokens
+            or any(lowered.startswith(prefix) for prefix in prefixes)
+        ):
+            continue
+        cleaned_parts.append(cleaned)
+    identity_values = [clean_text(title), clean_text(sku)]
+    while cleaned_parts and any(
+        _category_part_matches_identity(cleaned_parts[-1], identity)
+        for identity in identity_values
+        if identity
+    ):
+        cleaned_parts.pop()
+    return " > ".join(cleaned_parts)
+
+
+def _category_part_matches_identity(part: object, identity: str) -> bool:
+    part_key = re.sub(r"[^a-z0-9]+", "", clean_text(part).casefold())
+    identity_key = re.sub(r"[^a-z0-9]+", "", clean_text(identity).casefold())
+    if not part_key or not identity_key:
+        return False
+    if part_key == identity_key:
+        return True
+    if min(len(part_key), len(identity_key)) < 8:
+        return False
+    from difflib import SequenceMatcher
+
+    return SequenceMatcher(None, part_key, identity_key).ratio() >= float(
+        DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO
+    )
+
+
 def _detail_title_looks_like_placeholder(title: str) -> bool:
     normalized = clean_text(title)
     if not normalized:
@@ -236,7 +329,9 @@ def _detail_title_looks_like_placeholder(title: str) -> bool:
     lowered = normalized.lower()
     if lowered in {"404", "not found"}:
         return True
-    return any(pattern.search(normalized) for pattern in _DETAIL_PLACEHOLDER_TITLE_PATTERNS)
+    return any(
+        pattern.search(normalized) for pattern in _DETAIL_PLACEHOLDER_TITLE_PATTERNS
+    )
 
 
 def _materials_value_looks_like_org_name(value: str) -> bool:
@@ -262,53 +357,50 @@ def _materials_value_looks_like_org_name(value: str) -> bool:
     )
 
 
-def _sanitize_detail_variant_payload(record: dict[str, Any], *, identity_url: str) -> None:
+def _sanitize_detail_variant_payload(
+    record: dict[str, Any], *, identity_url: str
+) -> None:
     cleaned_variants: list[dict[str, Any]] = []
+    title_hint = clean_text(record.get("title"))
     for variant in list(record.get("variants") or []):
         if not isinstance(variant, dict):
             continue
-        if not _sanitize_variant_row(variant, identity_url=identity_url):
+        if not _sanitize_variant_row(
+            variant, identity_url=identity_url, title_hint=title_hint
+        ):
             continue
         cleaned_variants.append(variant)
     if _detail_variant_cluster_is_low_signal_numeric_only(cleaned_variants):
         cleaned_variants = []
     if cleaned_variants:
-        record["variants"] = cleaned_variants
-        record["variant_count"] = len(cleaned_variants)
+        flat_variants = flatten_variants_for_public_output(
+            cleaned_variants, page_url=identity_url
+        )
+        if flat_variants:
+            record["variants"] = flat_variants
+            record["variant_count"] = len(flat_variants)
+        else:
+            record.pop("variants", None)
+            record.pop("variant_count", None)
     else:
         record.pop("variants", None)
         record.pop("variant_count", None)
-    selected_variant = record.get("selected_variant")
-    if isinstance(selected_variant, dict) and not _sanitize_variant_row(
-        selected_variant,
-        identity_url=identity_url,
-    ):
-        selected_variant = None
-    if (
-        isinstance(selected_variant, dict)
-        and cleaned_variants
-        and selected_variant.get("option_values") in (None, "", [], {})
-        and not any(
-            selected_variant.get(field_name) not in (None, "", [], {})
-            for field_name in ("sku", "variant_id", "barcode", "availability", "title")
-        )
-    ):
-        selected_variant = dict(cleaned_variants[0])
-    if isinstance(selected_variant, dict) and _selected_variant_is_url_code_expansion(
-        selected_variant,
-        identity_url=identity_url,
-    ):
-        _drop_selected_variant_axis_scalars(record, selected_variant)
-        selected_variant = None
-    if isinstance(selected_variant, dict):
-        record["selected_variant"] = selected_variant
-    else:
-        record.pop("selected_variant", None)
-    _rebuild_variant_axes_from_rows(record)
+    record.pop("selected_variant", None)
+    record.pop("variant_axes", None)
+    record.pop("available_sizes", None)
+    for field_name in list(record):
+        if re.fullmatch(r"option\d+_(?:name|values?)", str(field_name)):
+            record.pop(field_name, None)
     _drop_detail_variant_scalar_noise(record)
+    _drop_variant_derived_parent_axis_scalars(record)
 
 
-def _sanitize_variant_row(variant: dict[str, Any], *, identity_url: str) -> bool:
+def _sanitize_variant_row(
+    variant: dict[str, Any],
+    *,
+    identity_url: str,
+    title_hint: str = "",
+) -> bool:
     option_values = variant.get("option_values")
     if isinstance(option_values, dict):
         cleaned_options: dict[str, str] = {}
@@ -317,12 +409,19 @@ def _sanitize_variant_row(variant: dict[str, Any], *, identity_url: str) -> bool
             cleaned_value = clean_text(axis_value)
             if not axis_key or not cleaned_value:
                 continue
-            if axis_key.startswith("toggle") or _variant_option_value_is_noise(cleaned_value):
+            if axis_key.startswith("toggle") or _variant_option_value_is_noise(
+                cleaned_value
+            ):
                 continue
             if not variant_axis_name_is_semantic(axis_name):
                 continue
             cleaned_options[axis_key] = cleaned_value
-            if axis_key in {"size", "color"} and variant.get(axis_key) not in (None, "", [], {}):
+            if axis_key in {"size", "color"} and variant.get(axis_key) not in (
+                None,
+                "",
+                [],
+                {},
+            ):
                 variant[axis_key] = cleaned_value
         if cleaned_options:
             variant["option_values"] = cleaned_options
@@ -330,7 +429,13 @@ def _sanitize_variant_row(variant: dict[str, Any], *, identity_url: str) -> bool
             variant.pop("option_values", None)
     for field_name in ("size", "color"):
         cleaned_value = clean_text(variant.get(field_name))
-        if cleaned_value and not _variant_option_value_is_noise(cleaned_value):
+        if (
+            cleaned_value
+            and not _variant_option_value_is_noise(cleaned_value)
+            and not _option_value_repeats_product_title(
+                cleaned_value, title_hint=title_hint
+            )
+        ):
             variant[field_name] = cleaned_value
         else:
             variant.pop(field_name, None)
@@ -348,7 +453,9 @@ def _sanitize_variant_row(variant: dict[str, Any], *, identity_url: str) -> bool
     title = clean_text(variant.get("title"))
     if (
         title
-        and not _variant_url_matches_requested_base(variant.get("url"), identity_url=identity_url)
+        and not _variant_url_matches_requested_base(
+            variant.get("url"), identity_url=identity_url
+        )
         and _variant_title_looks_like_other_product(title, identity_url=identity_url)
         and not _variant_title_can_be_option_label(variant, title=title)
     ):
@@ -366,36 +473,6 @@ def _sanitize_variant_row(variant: dict[str, Any], *, identity_url: str) -> bool
             "color",
         )
     )
-
-
-def _selected_variant_is_url_code_expansion(
-    selected_variant: dict[str, Any],
-    *,
-    identity_url: str,
-) -> bool:
-    requested_codes = _detail_identity_codes_from_url(identity_url)
-    variant_codes = _detail_identity_codes_from_record_fields(selected_variant)
-    if not requested_codes or not variant_codes:
-        return False
-    if detail_identity_codes_match(requested_codes, variant_codes):
-        return False
-    return any(
-        variant_code.startswith(requested_code) and len(variant_code) > len(requested_code)
-        for requested_code in requested_codes
-        for variant_code in variant_codes
-    )
-
-
-def _drop_selected_variant_axis_scalars(
-    record: dict[str, Any],
-    selected_variant: dict[str, Any],
-) -> None:
-    option_values = selected_variant.get("option_values")
-    option_values = option_values if isinstance(option_values, dict) else {}
-    for field_name in ("size", "color"):
-        selected_value = clean_text(selected_variant.get(field_name) or option_values.get(field_name))
-        if selected_value and clean_text(record.get(field_name)).casefold() == selected_value.casefold():
-            record.pop(field_name, None)
 
 
 def repair_ecommerce_detail_record_quality(
@@ -421,23 +498,10 @@ def repair_ecommerce_detail_record_quality(
 
 def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
     parent_price = text_or_none(record.get("price"))
-    selected_variant = record.get("selected_variant")
-    if not parent_price and isinstance(selected_variant, dict):
-        parent_price = text_or_none(selected_variant.get("price"))
     parent_availability = text_or_none(record.get("availability"))
     parent_sku = text_or_none(record.get("sku"))
     parent_title = clean_text(record.get("title"))
-    rows = [
-        row
-        for row in [selected_variant, *list(record.get("variants") or [])]
-        if isinstance(row, dict)
-    ]
-    if (
-        parent_availability
-        and isinstance(selected_variant, dict)
-        and selected_variant.get("availability") in (None, "", [], {})
-    ):
-        selected_variant["availability"] = parent_availability
+    rows = [row for row in list(record.get("variants") or []) if isinstance(row, dict)]
     for row in rows:
         if parent_price:
             row_price = text_or_none(row.get("price"))
@@ -469,7 +533,11 @@ def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
         if row_sku and _looks_like_uuid(row_sku):
             row.pop("sku", None)
         barcode = text_or_none(row.get("barcode"))
-        if barcode and row.get("sku") == barcode and len(re.sub(r"\D+", "", barcode)) <= 8:
+        if (
+            barcode
+            and row.get("sku") == barcode
+            and len(re.sub(r"\D+", "", barcode)) <= 8
+        ):
             row.pop("barcode", None)
         title = clean_text(row.get("title"))
         if title and _variant_title_is_low_signal(title):
@@ -482,8 +550,7 @@ def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
         row for row in list(record.get("variants") or []) if isinstance(row, dict)
     ]
     if (
-        parent_availability
-        == "in_stock"
+        parent_availability == "in_stock"
         and variant_rows
         and all(
             text_or_none(row.get("availability")) == parent_availability
@@ -501,7 +568,9 @@ def _price_is_cents_copy(value: str, parent_price: str) -> bool:
     parent_number = detail_price_decimal(parent_price)
     if value_number is None or parent_number is None or parent_number <= 0:
         return False
-    return abs(value_number - (parent_number * 100)) < Decimal("0.01")
+    return abs(value_number - (parent_number * 100)) < Decimal(
+        str(DETAIL_PRICE_COMPARISON_TOLERANCE)
+    )
 
 
 def _price_is_low_signal_copy(value: str, parent_price: str) -> bool:
@@ -509,7 +578,9 @@ def _price_is_low_signal_copy(value: str, parent_price: str) -> bool:
     parent_number = detail_price_decimal(parent_price)
     if value_number is None or parent_number is None:
         return False
-    return Decimal("0") < value_number <= Decimal("1") and parent_number >= Decimal("10")
+    return Decimal("0") < value_number <= Decimal(
+        str(DETAIL_LOW_SIGNAL_PRICE_MAX)
+    ) and parent_number >= Decimal(str(DETAIL_LOW_SIGNAL_PARENT_MIN))
 
 
 def _normalize_detail_money_precision(record: dict[str, Any]) -> None:
@@ -526,9 +597,6 @@ def _normalize_detail_money_precision(record: dict[str, Any]) -> None:
 
 def _detail_money_containers(record: dict[str, Any]) -> list[dict[str, Any]]:
     containers = [record]
-    selected_variant = record.get("selected_variant")
-    if isinstance(selected_variant, dict):
-        containers.append(selected_variant)
     variants = record.get("variants")
     if isinstance(variants, list):
         containers.extend(row for row in variants if isinstance(row, dict))
@@ -589,7 +657,9 @@ def _variant_title_from_parent(parent_title: str, row: dict[str, Any]) -> str | 
     option_values = row.get("option_values")
     values: list[str] = []
     if isinstance(option_values, dict):
-        values.extend(clean_text(value) for value in option_values.values() if clean_text(value))
+        values.extend(
+            clean_text(value) for value in option_values.values() if clean_text(value)
+        )
     for field_name in ("size", "color"):
         value = clean_text(row.get(field_name))
         if value and value not in values:
@@ -611,7 +681,10 @@ def _variant_url_matches_requested_base(value: object, *, identity_url: str) -> 
 def _detail_variant_row_is_low_signal_numeric_only(variant: object) -> bool:
     if not isinstance(variant, dict):
         return False
-    if any(clean_text(variant.get(field_name)) for field_name in ("variant_id", "barcode", "image_url", "title")):
+    if any(
+        clean_text(variant.get(field_name))
+        for field_name in ("variant_id", "barcode", "image_url", "title")
+    ):
         return False
     if clean_text(variant.get("url")):
         return False
@@ -622,7 +695,9 @@ def _detail_variant_row_is_low_signal_numeric_only(variant: object) -> bool:
     return bool(size_value) and size_value.isdigit() and int(size_value) <= 4
 
 
-def _detail_variant_cluster_is_low_signal_numeric_only(variants: list[dict[str, Any]]) -> bool:
+def _detail_variant_cluster_is_low_signal_numeric_only(
+    variants: list[dict[str, Any]],
+) -> bool:
     return bool(variants) and all(
         _detail_variant_row_is_low_signal_numeric_only(variant) for variant in variants
     )
@@ -638,7 +713,7 @@ def _variant_title_looks_like_other_product(title: str, *, identity_url: str) ->
 
 def _variant_title_can_be_option_label(variant: dict[str, Any], *, title: str) -> bool:
     title_words = clean_text(title).split()
-    if len(title_words) > 6:
+    if len(title_words) > int(VARIANT_OPTION_LABEL_MAX_WORDS):
         return False
     has_option_axis = any(
         variant.get(field_name) not in (None, "", [], {})
@@ -656,51 +731,6 @@ def _variant_title_can_be_option_label(variant: dict[str, Any], *, title: str) -
     )
 
 
-def _rebuild_variant_axes_from_rows(record: dict[str, Any]) -> None:
-    variant_axes: dict[str, list[str]] = {}
-    existing_axes = record.get("variant_axes")
-    if isinstance(existing_axes, dict):
-        for axis_name, axis_values in existing_axes.items():
-            cleaned_values = [
-                clean_text(value)
-                for value in list(axis_values or [])
-                if clean_text(value) and not _variant_option_value_is_noise(clean_text(value))
-            ]
-            if cleaned_values:
-                variant_axes[str(axis_name)] = list(dict.fromkeys(cleaned_values))
-    rows = [record.get("selected_variant"), *list(record.get("variants") or [])]
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        option_values = row.get("option_values")
-        if not isinstance(option_values, dict):
-            continue
-        for axis_name, axis_value in option_values.items():
-            cleaned_value = clean_text(axis_value)
-            if not cleaned_value or _variant_option_value_is_noise(cleaned_value):
-                continue
-            variant_axes.setdefault(str(axis_name), [])
-            if cleaned_value not in variant_axes[str(axis_name)]:
-                variant_axes[str(axis_name)].append(cleaned_value)
-    if variant_axes:
-        record["variant_axes"] = variant_axes
-        if isinstance(record.get("selected_variant"), dict):
-            for axis_name, axis_values in variant_axes.items():
-                if axis_name in {"size", "color"} and len(axis_values) == 1:
-                    record[axis_name] = axis_values[0]
-        else:
-            for axis_name, axis_values in variant_axes.items():
-                if (
-                    axis_name in {"size", "color"}
-                    and len(axis_values) == 1
-                    and clean_text(record.get(axis_name)).casefold()
-                    == clean_text(axis_values[0]).casefold()
-                ):
-                    record.pop(axis_name, None)
-    else:
-        record.pop("variant_axes", None)
-
-
 def _drop_detail_variant_scalar_noise(record: dict[str, Any]) -> None:
     for field_name in list(record.keys()):
         if str(field_name).startswith("toggle_"):
@@ -713,19 +743,56 @@ def _drop_detail_variant_scalar_noise(record: dict[str, Any]) -> None:
         ):
             record.pop(field_name, None)
             continue
-        if cleaned_value and not _variant_option_value_is_noise(cleaned_value):
+        if (
+            cleaned_value
+            and not _variant_option_value_is_noise(cleaned_value)
+            and not _option_value_repeats_product_title(
+                cleaned_value,
+                title_hint=clean_text(record.get("title")),
+            )
+        ):
             record[field_name] = cleaned_value
             continue
         record.pop(field_name, None)
 
 
+def _option_value_repeats_product_title(value: str, *, title_hint: str) -> bool:
+    if not value or not title_hint:
+        return False
+    value_key = re.sub(r"[^a-z0-9]+", "", clean_text(value).casefold())
+    title_key = re.sub(r"[^a-z0-9]+", "", clean_text(title_hint).casefold())
+    if not value_key or not title_key or len(title_key) < 8:
+        return False
+    return title_key in value_key
+
+
+def _drop_variant_derived_parent_axis_scalars(record: dict[str, Any]) -> None:
+    variants = [
+        row for row in list(record.get("variants") or []) if isinstance(row, dict)
+    ]
+    if not variants:
+        return
+    field_sources = record.get("_field_sources")
+    sources = field_sources if isinstance(field_sources, dict) else {}
+    for field_name in ("size", "color"):
+        if sources.get(field_name):
+            continue
+        parent_value = clean_text(record.get(field_name))
+        if not parent_value:
+            continue
+        variant_values = {
+            clean_text(row.get(field_name)).casefold()
+            for row in variants
+            if clean_text(row.get(field_name))
+        }
+        if variant_values == {parent_value.casefold()}:
+            record.pop(field_name, None)
+
+
 def _sanitize_detail_images(record: dict[str, Any], *, identity_url: str) -> None:
     raw_images = [
         text_or_none(record.get("image_url")),
-        *[
-            text_or_none(value)
-            for value in list(record.get("additional_images") or [])
-        ],
+        *[text_or_none(value) for value in list(record.get("additional_images") or [])],
     ]
     images = [image for image in raw_images if image]
     if not images:
@@ -738,11 +805,11 @@ def _sanitize_detail_images(record: dict[str, Any], *, identity_url: str) -> Non
     cleaned: list[str] = []
     for image in images:
         normalized_image = (
-            "https://" + image[7:]
-            if image.lower().startswith("http://")
-            else image
+            "https://" + image[7:] if image.lower().startswith("http://") else image
         )
-        if not _detail_image_candidate_is_usable(normalized_image, identity_url=identity_url):
+        if not _detail_image_candidate_is_usable(
+            normalized_image, identity_url=identity_url
+        ):
             continue
         if not _detail_image_matches_primary_family(
             normalized_image,
@@ -772,6 +839,12 @@ def _detail_image_candidate_is_usable(url: str, *, identity_url: str) -> bool:
         return False
     lowered = url.lower()
     if "base64," in lowered or lowered.startswith("data:"):
+        return False
+    if (
+        "placeholder" in lowered
+        or "via.placeholder.com" in lowered
+        or lowered.endswith("/white.svg")
+    ):
         return False
     if _detail_image_url_is_extensionless_transform(path):
         return False
@@ -809,7 +882,14 @@ def _detail_path_looks_like_image_asset(path: str, lowered_url: str) -> bool:
         return True
     return any(
         token in lowered_path
-        for token in ("/image/", "/images/", "/media/", "/picture", "/is/image/", "/cdn/")
+        for token in (
+            "/image/",
+            "/images/",
+            "/media/",
+            "/picture",
+            "/is/image/",
+            "/cdn/",
+        )
     )
 
 
@@ -826,7 +906,11 @@ def _detail_image_matches_primary_family(
     if primary_tokens and candidate_tokens and primary_tokens & candidate_tokens:
         return True
     title_tokens = _semantic_detail_identity_tokens(title)
-    if title_tokens and candidate_tokens and len(title_tokens & candidate_tokens) >= min(2, len(title_tokens)):
+    if (
+        title_tokens
+        and candidate_tokens
+        and len(title_tokens & candidate_tokens) >= min(2, len(title_tokens))
+    ):
         return True
     primary_code = _detail_image_media_code(primary_image)
     candidate_code = _detail_image_media_code(url)
@@ -869,7 +953,9 @@ def _detail_image_stem_looks_encoded(stem: str) -> bool:
         return False
     if not (re.search(r"[A-Z]", compact) and re.search(r"[a-z]", compact)):
         return False
-    return len(re.findall(r"[A-Z]", compact)) >= 3 and len(re.findall(r"\d", compact)) >= 2
+    return (
+        len(re.findall(r"[A-Z]", compact)) >= 3 and len(re.findall(r"\d", compact)) >= 2
+    )
 
 
 def _detail_image_title_has_identity_signal(title: str) -> bool:
@@ -886,7 +972,11 @@ def _detail_image_title_matches_requested_identity(
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     candidate_codes = _detail_identity_codes_from_record_fields({"title": title})
-    if requested_codes and candidate_codes and detail_identity_codes_match(requested_codes, candidate_codes):
+    if (
+        requested_codes
+        and candidate_codes
+        and detail_identity_codes_match(requested_codes, candidate_codes)
+    ):
         return True
     requested_title = _detail_title_from_url(requested_page_url)
     normalized_requested_title = clean_text(requested_title)
@@ -924,9 +1014,7 @@ def _detail_image_title_matches_requested_identity(
     if not requested_tokens or not candidate_tokens:
         return False
     overlap = requested_tokens & candidate_tokens
-    minimum_overlap = (
-        2 if min(len(requested_tokens), len(candidate_tokens)) <= 4 else 4
-    )
+    minimum_overlap = 2 if min(len(requested_tokens), len(candidate_tokens)) <= 4 else 4
     return len(overlap) >= min(minimum_overlap, len(requested_tokens))
 
 

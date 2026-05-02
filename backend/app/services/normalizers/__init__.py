@@ -8,6 +8,7 @@ from typing import Any
 from app.services.config.extraction_rules import (
     AVAILABILITY_URL_MAP,
     CURRENCY_CODES,
+    NORMALIZER_AVAILABILITY_TOKENS,
     REMOTE_BOOLEAN_FALSE_TOKENS,
     REMOTE_BOOLEAN_TRUE_TOKENS,
 )
@@ -35,19 +36,7 @@ _CURRENCY_CONTEXT_RE = re.compile(
     ),
     re.I,
 )
-_AVAILABILITY_TOKENS = {
-    "in_stock": ("in stock", "instock", "available", "ready to ship"),
-    "limited_stock": (
-        "limited stock",
-        "limitedstock",
-        "low stock",
-        "lowstock",
-        "only",
-        "left in stock",
-    ),
-    "out_of_stock": ("out of stock", "outofstock", "oos", "sold out", "unavailable"),
-    "preorder": ("pre-order", "preorder", "backorder", "back-order"),
-}
+_AVAILABILITY_TOKENS = NORMALIZER_AVAILABILITY_TOKENS
 
 
 def _normalize_text(value: object) -> str:

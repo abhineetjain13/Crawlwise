@@ -12,6 +12,8 @@ from app.services.config.extraction_rules import (
     DETAIL_IRRELEVANT_JSON_LD_TYPES,
     INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS,
     INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS,
+    STRUCTURED_CANDIDATE_LIST_SLICE,
+    STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT,
 )
 from app.services.field_policy import normalize_field_key, normalize_requested_field
 
@@ -21,13 +23,15 @@ from app.services.field_value_core import (
     STRUCTURED_OBJECT_LIST_FIELDS,
     LONG_TEXT_FIELDS,
     absolute_url,
-    coerce_variant_axes,
     coerce_field_value,
     coerce_text,
     extract_urls,
     text_or_none,
 )
-from app.services.extract.shared_variant_logic import normalized_variant_axis_key, resolve_variants
+from app.services.extract.shared_variant_logic import (
+    normalized_variant_axis_key,
+    resolve_variants,
+)
 from app.services.normalizers import normalize_decimal_price
 
 logger = logging.getLogger(__name__)
@@ -47,7 +51,11 @@ def add_candidate(
     if value in (None, "", [], {}):
         return 0
     bucket = candidates.setdefault(field_name, [])
-    values = list(value) if field_name in STRUCTURED_MULTI_FIELDS and isinstance(value, list) else [value]
+    values = (
+        list(value)
+        if field_name in STRUCTURED_MULTI_FIELDS and isinstance(value, list)
+        else [value]
+    )
     seen = {candidate_fingerprint(existing) for existing in bucket}
     added = 0
     for item in values:
@@ -95,7 +103,7 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
     raw_items = payload.get("itemListElement")
     if not isinstance(raw_items, list):
         return []
-    
+
     def _get_position(item: Any) -> float:
         if not isinstance(item, dict):
             return 0.0
@@ -105,10 +113,7 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
             return 0.0
 
     try:
-        if all(
-            isinstance(x, dict) and isinstance(x.get("position"), (int, float))
-            for x in raw_items
-        ):
+        if all(isinstance(x, dict) and _get_position(x) > 0 for x in raw_items):
             raw_items = sorted(raw_items, key=_get_position)
     except Exception:
         logger.exception("Failed to sort breadcrumb itemListElement by position")
@@ -123,7 +128,7 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
                 names.append(clean_name)
     if not names:
         return []
-    
+
     def _is_root_label(text: str) -> bool:
         lowered = text.strip().lower()
         if lowered in DETAIL_BREADCRUMB_ROOT_LABELS:
@@ -132,7 +137,9 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
             host = urlparse(page_url).netloc.lower()
             if host.startswith("www."):
                 host = host[4:]
-            if host and (lowered == host or lowered == host.split(".")[0]):
+            host_parts = [part for part in host.split(".") if part]
+            second_level_domain = host_parts[-2] if len(host_parts) >= 2 else host
+            if host and (lowered == host or lowered == second_level_domain):
                 return True
         return False
 
@@ -141,24 +148,28 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
 
     if _is_root_label(names[0]):
         names = names[1:]
-    if len(names) >= 1:
-        names = names[:-1]
     return [name for name in names if name]
 
 
-def _breadcrumb_category_path(payload: dict[str, object], page_url: str = "") -> str | None:
+def _breadcrumb_category_path(
+    payload: dict[str, object], page_url: str = ""
+) -> str | None:
     names = _breadcrumb_names(payload, page_url)
     return " > ".join(names) if names else None
 
 
-def _structured_variant_rows(variants: object, page_url: str) -> list[dict[str, object]]:
+def _structured_variant_rows(
+    variants: object, page_url: str
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for item in variants if isinstance(variants, list) else []:
         if not isinstance(item, dict):
             continue
         offer = item.get("offers")
         offer = offer[0] if isinstance(offer, list) and offer else offer
-        availability_source = offer if isinstance(offer, dict) else item.get("availability")
+        availability_source = (
+            offer if isinstance(offer, dict) else item.get("availability")
+        )
         row: dict[str, object] = {}
         sku = coerce_text(item.get("sku"))
         if sku:
@@ -207,7 +218,9 @@ def _structured_variant_rows(variants: object, page_url: str) -> list[dict[str, 
     return rows
 
 
-def _structured_offer_variant_rows(offers: object, page_url: str) -> list[dict[str, object]]:
+def _structured_offer_variant_rows(
+    offers: object, page_url: str
+) -> list[dict[str, object]]:
     raw_offers = offers if isinstance(offers, list) else []
     if len(raw_offers) < 2:
         return []
@@ -241,6 +254,42 @@ def _structured_offer_variant_rows(offers: object, page_url: str) -> list[dict[s
     return rows
 
 
+def _structured_feature_rows(payload: dict[str, object], page_url: str) -> list[str]:
+    rows: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: object) -> None:
+        coerced = coerce_field_value("features", value, page_url)
+        values = coerced if isinstance(coerced, list) else [coerced]
+        for item in values:
+            text = text_or_none(item)
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            rows.append(text)
+
+    for key in ("feature", "features"):
+        raw_value = payload.get(key)
+        if raw_value not in (None, "", [], {}):
+            _add(raw_value)
+
+    additional_properties = payload.get("additionalProperty")
+    if isinstance(additional_properties, list):
+        for item in additional_properties[: int(STRUCTURED_CANDIDATE_LIST_SLICE)]:
+            if not isinstance(item, dict):
+                continue
+            name = text_or_none(item.get("name") or item.get("label"))
+            value = text_or_none(item.get("value") or item.get("description"))
+            if name and value:
+                _add(f"{name}: {value}")
+            elif value:
+                _add(value)
+    return rows
+
+
 def _variant_axes_from_rows(variants: list[dict[str, object]]) -> dict[str, list[str]]:
     axes: dict[str, list[str]] = {}
     for row in variants:
@@ -265,7 +314,9 @@ def _variant_axes_from_rows(variants: list[dict[str, object]]) -> dict[str, list
     return axes
 
 
-def _variation_attribute_labels(payload: dict[str, object]) -> dict[str, dict[str, str]]:
+def _variation_attribute_labels(
+    payload: dict[str, object],
+) -> dict[str, dict[str, str]]:
     labels: dict[str, dict[str, str]] = {}
     raw_attributes = payload.get("variationAttributes")
     if not isinstance(raw_attributes, list):
@@ -321,10 +372,14 @@ def _structured_variants_from_product_payload(
         if not option_values:
             continue
         row: dict[str, object] = {"option_values": option_values}
-        sku = text_or_none(item.get("sku") or item.get("productId") or item.get("product_id"))
+        sku = text_or_none(
+            item.get("sku") or item.get("productId") or item.get("product_id")
+        )
         if sku:
             row["sku"] = sku
-        variant_id = text_or_none(item.get("id") or item.get("productId") or item.get("product_id"))
+        variant_id = text_or_none(
+            item.get("id") or item.get("productId") or item.get("product_id")
+        )
         if variant_id:
             row["variant_id"] = variant_id
         price = _coerce_structured_candidate_value(
@@ -345,21 +400,15 @@ def _structured_variants_from_product_payload(
 def _uses_integral_price_payload(payload: object) -> bool:
     if not isinstance(payload, dict):
         return False
-    payload_hint_fields = tuple(str(field) for field in INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS)
-    variant_hint_fields = tuple(str(field) for field in INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS)
-    if any(
-        key in payload
-        for key in payload_hint_fields
-    ):
+    payload_hint_fields = INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS
+    variant_hint_fields = INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS
+    if any(key in payload for key in payload_hint_fields):
         return True
     raw_variants = payload.get("variants")
     if isinstance(raw_variants, list):
         return any(
             isinstance(variant, dict)
-            and any(
-                field in variant
-                for field in variant_hint_fields
-            )
+            and any(field in variant for field in variant_hint_fields)
             for variant in raw_variants
         )
     return any(field in payload for field in variant_hint_fields)
@@ -372,7 +421,11 @@ def _coerce_structured_candidate_value(
     page_url: str,
     payload: object,
 ) -> object | None:
-    if canonical in {"price", "sale_price", "original_price"} and _uses_integral_price_payload(payload):
+    if canonical in {
+        "price",
+        "sale_price",
+        "original_price",
+    } and _uses_integral_price_payload(payload):
         normalized = normalize_decimal_price(
             value,
             interpret_integral_as_cents=True,
@@ -393,15 +446,23 @@ def _structured_alias_allowed(
     normalized_key: str,
     payload: dict[str, object],
 ) -> bool:
-    if canonical == "sku" and normalized_key == "id" and _is_product_attribute_row(payload):
+    if (
+        canonical == "sku"
+        and normalized_key == "id"
+        and _is_product_attribute_row(payload)
+    ):
         return False
     payload_types = _structured_payload_types(payload)
     raw_types = payload.get("@type")
     if not payload_types:
         return raw_types in (None, "", [], {})
-    if canonical in {"title", "description", "image_url", "additional_images", "url"} and (
-        payload_types & {"brand", "review", "reviewrating"}
-    ):
+    if canonical in {
+        "title",
+        "description",
+        "image_url",
+        "additional_images",
+        "url",
+    } and (payload_types & {"brand", "review", "reviewrating"}):
         return False
     if canonical == "brand" and "person" in payload_types:
         return False
@@ -416,8 +477,7 @@ def _structured_payload_types(payload: dict[str, object]) -> set[str]:
         if str(item or "").strip()
     }
     irrelevant_types = {
-        str(value).strip().lower()
-        for value in DETAIL_IRRELEVANT_JSON_LD_TYPES
+        str(value).strip().lower() for value in DETAIL_IRRELEVANT_JSON_LD_TYPES
     }
     if normalized_types and normalized_types <= irrelevant_types:
         return set()
@@ -431,13 +491,15 @@ def collect_structured_candidates(
     candidates: dict[str, list[object]],
     *,
     depth: int = 0,
-    limit: int = 8,
+    limit: int = int(STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT),
 ) -> None:
     if depth > limit:
         return
     if isinstance(payload, dict):
         raw_type = payload.get("@type")
-        normalized_type = " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
+        normalized_type = (
+            " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
+        )
         normalized_type = normalized_type.lower()
         breadcrumb_list = "breadcrumblist" in normalized_type
         list_item_wrapper = "listitem" in normalized_type and (
@@ -448,12 +510,12 @@ def collect_structured_candidates(
         )
         additional_properties = payload.get("additionalProperty")
         if isinstance(additional_properties, list):
-            for item in additional_properties[:20]:
+            for item in additional_properties[: int(STRUCTURED_CANDIDATE_LIST_SLICE)]:
                 if not isinstance(item, dict):
                     continue
-                label = normalize_requested_field(item.get("name")) or normalize_field_key(
+                label = normalize_requested_field(
                     item.get("name")
-                )
+                ) or normalize_field_key(item.get("name"))
                 canonical = alias_lookup.get(label)
                 if canonical:
                     add_candidate(
@@ -468,14 +530,19 @@ def collect_structured_candidates(
                 gender = _gender_from_text(category_path)
                 if gender:
                     add_candidate(candidates, "gender", gender)
-        if {
-            normalize_field_key(str(key or ""))
-            for key in payload.keys()
-        } & {"field_name", "field_value", "field_values"}:
+        if {normalize_field_key(str(key or "")) for key in payload.keys()} & {
+            "field_name",
+            "field_value",
+            "field_values",
+        }:
             label = normalize_requested_field(
-                payload.get("FieldName") or payload.get("fieldName") or payload.get("field_name")
+                payload.get("FieldName")
+                or payload.get("fieldName")
+                or payload.get("field_name")
             ) or normalize_field_key(
-                payload.get("FieldName") or payload.get("fieldName") or payload.get("field_name")
+                payload.get("FieldName")
+                or payload.get("fieldName")
+                or payload.get("field_name")
             )
             canonical = alias_lookup.get(label)
             if canonical:
@@ -492,9 +559,7 @@ def collect_structured_candidates(
                         coerced_value: object = raw_value
                     else:
                         coerced_value = " ".join(
-                            text
-                            for item in raw_value
-                            if (text := text_or_none(item))
+                            text for item in raw_value if (text := text_or_none(item))
                         )
                 else:
                     coerced_value = raw_value
@@ -517,22 +582,31 @@ def collect_structured_candidates(
             normalized_key = normalize_field_key(key)
             if (
                 breadcrumb_list
-                and normalized_key in {"item_list_element", "item", "name", "title", "position"}
+                and normalized_key
+                in {"item_list_element", "item", "name", "title", "position"}
             ) or (
                 list_item_wrapper
                 and normalized_key in {"item", "name", "title", "position"}
             ):
                 continue
-            if "productgroup" in normalized_type and normalized_key in {"has_variant", "hasvariant"}:
+            if "productgroup" in normalized_type and normalized_key in {
+                "has_variant",
+                "hasvariant",
+            }:
                 continue
             canonical = alias_lookup.get(normalized_key)
-            if canonical and not (
-                review_like
-                and canonical in {"title", "description", "image_url", "additional_images"}
-            ) and _structured_alias_allowed(
-                canonical=canonical,
-                normalized_key=normalized_key,
-                payload=payload,
+            if (
+                canonical
+                and not (
+                    review_like
+                    and canonical
+                    in {"title", "description", "image_url", "additional_images"}
+                )
+                and _structured_alias_allowed(
+                    canonical=canonical,
+                    normalized_key=normalized_key,
+                    payload=payload,
+                )
             ):
                 add_candidate(
                     candidates,
@@ -558,57 +632,142 @@ def collect_structured_candidates(
             aggregate = payload.get("aggregateRating")
             brand = payload.get("brand")
             images = extract_urls(payload.get("image"), page_url)
-            add_candidate(candidates, "title", coerce_text(payload.get("name") or payload.get("title")))
-            add_candidate(candidates, "url", absolute_url(page_url, payload.get("url") or page_url))
-            add_candidate(candidates, "description", coerce_text(payload.get("description")))
-            add_candidate(candidates, "brand", coerce_field_value("brand", brand, page_url))
+            add_candidate(
+                candidates,
+                "title",
+                coerce_text(payload.get("name") or payload.get("title")),
+            )
+            add_candidate(
+                candidates,
+                "url",
+                absolute_url(page_url, payload.get("url") or page_url),
+            )
+            add_candidate(
+                candidates, "description", coerce_text(payload.get("description"))
+            )
+            add_candidate(
+                candidates, "brand", coerce_field_value("brand", brand, page_url)
+            )
             add_candidate(candidates, "sku", coerce_text(payload.get("sku")))
             add_candidate(candidates, "part_number", coerce_text(payload.get("mpn")))
-            add_candidate(candidates, "barcode", coerce_text(payload.get("gtin13") or payload.get("gtin") or payload.get("gtin14")))
-            add_candidate(candidates, "price", coerce_field_value("price", offer or payload, page_url))
-            add_candidate(candidates, "currency", coerce_field_value("currency", offer or payload, page_url))
-            add_candidate(candidates, "availability", coerce_field_value("availability", offer or payload, page_url))
-            add_candidate(candidates, "rating", coerce_field_value("rating", aggregate, page_url))
-            add_candidate(candidates, "review_count", coerce_field_value("review_count", aggregate, page_url))
+            add_candidate(
+                candidates,
+                "barcode",
+                coerce_text(
+                    payload.get("gtin13")
+                    or payload.get("gtin")
+                    or payload.get("gtin14")
+                ),
+            )
+            add_candidate(
+                candidates,
+                "price",
+                coerce_field_value("price", offer or payload, page_url),
+            )
+            add_candidate(
+                candidates,
+                "currency",
+                coerce_field_value("currency", offer or payload, page_url),
+            )
+            add_candidate(
+                candidates,
+                "availability",
+                coerce_field_value("availability", offer or payload, page_url),
+            )
+            add_candidate(
+                candidates, "rating", coerce_field_value("rating", aggregate, page_url)
+            )
+            add_candidate(
+                candidates,
+                "review_count",
+                coerce_field_value("review_count", aggregate, page_url),
+            )
             add_candidate(candidates, "category", coerce_text(payload.get("category")))
-            add_candidate(candidates, "gender", coerce_field_value("gender", payload.get("gender"), page_url))
-            add_candidate(candidates, "color", coerce_field_value("color", payload.get("color"), page_url))
-            add_candidate(candidates, "size", coerce_field_value("size", payload.get("size"), page_url))
+            add_candidate(
+                candidates,
+                "gender",
+                coerce_field_value("gender", payload.get("gender"), page_url),
+            )
+            add_candidate(
+                candidates,
+                "color",
+                coerce_field_value("color", payload.get("color"), page_url),
+            )
+            add_candidate(
+                candidates,
+                "size",
+                coerce_field_value("size", payload.get("size"), page_url),
+            )
             add_candidate(candidates, "materials", coerce_text(payload.get("material")))
+            feature_rows = _structured_feature_rows(payload, page_url)
+            if feature_rows:
+                add_candidate(candidates, "features", feature_rows)
             if images:
                 add_candidate(candidates, "image_url", images[0])
                 add_candidate(candidates, "additional_images", images[1:])
             variants = _structured_variant_rows(payload.get("hasVariant"), page_url)
-            offer_variants = _structured_offer_variant_rows(payload.get("offers"), page_url)
+            offer_variants = _structured_offer_variant_rows(
+                payload.get("offers"), page_url
+            )
             if offer_variants:
                 variants.extend(offer_variants)
-            product_variants = _structured_variants_from_product_payload(payload, page_url)
+            product_variants = _structured_variants_from_product_payload(
+                payload, page_url
+            )
             if product_variants:
                 variants.extend(product_variants)
             if variants:
                 axes = _variant_axes_from_rows(variants)
                 if axes:
                     variants = resolve_variants(axes, variants)
-                    add_candidate(candidates, "variant_axes", axes)
                 add_candidate(candidates, "variants", variants)
-                add_candidate(candidates, "selected_variant", variants[0])
                 add_candidate(candidates, "variant_count", len(variants))
         if "jobposting" in normalized_type:
             organization = payload.get("hiringOrganization")
             remote_hint = coerce_text(payload.get("jobLocationType"))
-            add_candidate(candidates, "title", coerce_text(payload.get("title") or payload.get("name")))
-            add_candidate(candidates, "url", absolute_url(page_url, payload.get("url") or page_url))
-            add_candidate(candidates, "apply_url", absolute_url(page_url, payload.get("url") or page_url))
-            add_candidate(candidates, "company", coerce_field_value("company", organization, page_url))
-            add_candidate(candidates, "location", coerce_field_value("location", payload.get("jobLocation"), page_url))
-            add_candidate(candidates, "posted_date", coerce_text(payload.get("datePosted")))
-            add_candidate(candidates, "job_type", coerce_text(payload.get("employmentType")))
-            add_candidate(candidates, "salary", coerce_field_value("salary", payload.get("baseSalary"), page_url))
-            add_candidate(candidates, "description", coerce_text(payload.get("description")))
+            add_candidate(
+                candidates,
+                "title",
+                coerce_text(payload.get("title") or payload.get("name")),
+            )
+            add_candidate(
+                candidates,
+                "url",
+                absolute_url(page_url, payload.get("url") or page_url),
+            )
+            add_candidate(
+                candidates,
+                "apply_url",
+                absolute_url(page_url, payload.get("url") or page_url),
+            )
+            add_candidate(
+                candidates,
+                "company",
+                coerce_field_value("company", organization, page_url),
+            )
+            add_candidate(
+                candidates,
+                "location",
+                coerce_field_value("location", payload.get("jobLocation"), page_url),
+            )
+            add_candidate(
+                candidates, "posted_date", coerce_text(payload.get("datePosted"))
+            )
+            add_candidate(
+                candidates, "job_type", coerce_text(payload.get("employmentType"))
+            )
+            add_candidate(
+                candidates,
+                "salary",
+                coerce_field_value("salary", payload.get("baseSalary"), page_url),
+            )
+            add_candidate(
+                candidates, "description", coerce_text(payload.get("description"))
+            )
             if remote_hint:
                 add_candidate(candidates, "remote", remote_hint)
     elif isinstance(payload, list):
-        for item in payload[:20]:
+        for item in payload[: int(STRUCTURED_CANDIDATE_LIST_SLICE)]:
             collect_structured_candidates(
                 item,
                 alias_lookup,
@@ -622,22 +781,6 @@ def collect_structured_candidates(
 def finalize_candidate_value(field_name: str, values: list[object]) -> object | None:
     if not values:
         return None
-    if field_name == "variant_axes":
-        merged_axes: dict[str, list[str]] = {}
-        for value in values:
-            coerced_axes = coerce_variant_axes(value)
-            if not coerced_axes:
-                continue
-            for axis_name, axis_values in coerced_axes.items():
-                merged_bucket = merged_axes.setdefault(axis_name, [])
-                seen = {item.lower() for item in merged_bucket}
-                for axis_value in axis_values:
-                    lowered = axis_value.lower()
-                    if lowered in seen:
-                        continue
-                    seen.add(lowered)
-                    merged_bucket.append(axis_value)
-        return merged_axes or None
     if field_name in STRUCTURED_OBJECT_FIELDS:
         merged: dict[str, object] = {}
         for value in values:
@@ -660,13 +803,15 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                 seen_rows.add(fingerprint)
                 merged_rows.append(row)
         if field_name == "variants" and any(
-            isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))
+            isinstance(row.get("option_values"), dict)
+            and bool(row.get("option_values"))
             for row in merged_rows
         ):
             merged_rows = [
                 row
                 for row in merged_rows
-                if isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))
+                if isinstance(row.get("option_values"), dict)
+                and bool(row.get("option_values"))
             ]
         return merged_rows or None
     if field_name in STRUCTURED_MULTI_FIELDS:
@@ -683,9 +828,9 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                     continue
                 seen_values.add(lowered)
                 rows.append(text)
-        if field_name == "additional_images":
+        if field_name in {"additional_images", "features", "tags"}:
             return rows or None
-        return ", ".join(rows) if rows else None
+        return rows or None
     if field_name in LONG_TEXT_FIELDS:
         text_rows: list[str] = []
         text_seen: set[str] = set()

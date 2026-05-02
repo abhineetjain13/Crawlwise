@@ -16,7 +16,10 @@ from app.services.adapters.base import (
     selectolax_node_attr,
     selectolax_node_text,
 )
-from app.services.field_value_core import extract_currency_code
+from app.services.field_value_core import (
+    extract_currency_code,
+    flatten_variants_for_public_output,
+)
 
 
 def _clean_brand(value: str) -> str:
@@ -166,12 +169,14 @@ class AmazonAdapter(BaseAdapter):
                 )
             ),
             "additional_images": images[1:] if len(images) > 1 else None,
-            "description": description or (desc_el.text(separator=" ", strip=True) if desc_el else None),
+            "description": description
+            or (desc_el.text(separator=" ", strip=True) if desc_el else None),
             "availability": _clean_detail_text(selectolax_node_text(avail_el)),
             "currency": currency,
-            "sku": asin,
             "product_id": asin,
-            "part_number": self._detail_value_from_table(detail_table, "item model number") or asin,
+            "part_number": self._detail_value_from_table(
+                detail_table, "item model number"
+            ),
             "barcode": (
                 self._detail_value_from_table(detail_table, "upc")
                 or self._detail_value_from_table(detail_table, "ean")
@@ -179,7 +184,9 @@ class AmazonAdapter(BaseAdapter):
             "product_type": self._detail_product_type(parser),
             "features": bullets or None,
             "specifications": specifications,
-            "product_details": self._detail_product_details_text(description, bullets, detail_table),
+            "product_details": self._detail_product_details_text(
+                description, bullets, detail_table
+            ),
             "url": url,
         }
         record.update(self._extract_detail_variants(parser, url))
@@ -188,7 +195,9 @@ class AmazonAdapter(BaseAdapter):
     def _detail_images(self, parser: LexborHTMLParser) -> list[str]:
         values: list[str] = []
         seen: set[str] = set()
-        for node in parser.css("#landingImage, #imgBlkFront, #altImages img, #imageBlock img"):
+        for node in parser.css(
+            "#landingImage, #imgBlkFront, #altImages img, #imageBlock img"
+        ):
             for attr_name in ("data-old-hires", "src"):
                 candidate = selectolax_node_attr(node, attr_name)
                 if not candidate:
@@ -224,14 +233,18 @@ class AmazonAdapter(BaseAdapter):
     def _detail_description(self, parser: LexborHTMLParser) -> str | None:
         parts = [
             _clean_detail_text(selectolax_node_text(node))
-            for node in parser.css("#productDescription p, #productDescription, #bookDescription_feature_div")
+            for node in parser.css(
+                "#productDescription p, #productDescription, #bookDescription_feature_div"
+            )
         ]
         cleaned_parts = [part for part in parts if isinstance(part, str) and part]
         return " ".join(dict.fromkeys(cleaned_parts)).strip() or None
 
     def _detail_table(self, parser: LexborHTMLParser) -> dict[str, str]:
         values: dict[str, str] = {}
-        for row in parser.css("#productDetails_techSpec_section_1 tr, #productDetails_detailBullets_sections1 tr"):
+        for row in parser.css(
+            "#productDetails_techSpec_section_1 tr, #productDetails_detailBullets_sections1 tr"
+        ):
             header = _clean_detail_text(selectolax_node_text(row.css_first("th")))
             value = _clean_detail_text(selectolax_node_text(row.css_first("td")))
             if header and value:
@@ -247,7 +260,9 @@ class AmazonAdapter(BaseAdapter):
                 values.setdefault(cleaned_key, cleaned_value)
         return values
 
-    def _detail_value_from_table(self, detail_table: dict[str, str], label: str) -> str | None:
+    def _detail_value_from_table(
+        self, detail_table: dict[str, str], label: str
+    ) -> str | None:
         target = label.strip().lower()
         for key, value in detail_table.items():
             normalized_key = str(key or "").strip().lower().removesuffix(":")
@@ -258,7 +273,9 @@ class AmazonAdapter(BaseAdapter):
     def _detail_product_type(self, parser: LexborHTMLParser) -> str | None:
         crumbs = [
             _clean_detail_text(selectolax_node_text(node))
-            for node in parser.css("#wayfinding-breadcrumbs_feature_div li, #wayfinding-breadcrumbs_container li")
+            for node in parser.css(
+                "#wayfinding-breadcrumbs_feature_div li, #wayfinding-breadcrumbs_container li"
+            )
         ]
         crumbs = [crumb for crumb in crumbs if crumb]
         return crumbs[-1] if crumbs else None
@@ -302,7 +319,7 @@ class AmazonAdapter(BaseAdapter):
         if not dim_order:
             return {}
         axis_entries: dict[str, list[dict[str, object]]] = {}
-        variant_axes: dict[str, list[str]] = {}
+        axis_values_by_name: dict[str, list[str]] = {}
         selected_values: dict[str, str] = {}
         record: dict[str, object] = {}
         for raw_dim in dim_order:
@@ -331,13 +348,8 @@ class AmazonAdapter(BaseAdapter):
             if not values:
                 continue
             axis_entries[axis_name] = entries
-            variant_axes[axis_name] = values
-            index = len(variant_axes)
-            record[f"option{index}_name"] = axis_name
-            record[f"option{index}_values"] = values
-            if axis_name == "size":
-                record["available_sizes"] = values
-        if not variant_axes:
+            axis_values_by_name[axis_name] = values
+        if not axis_values_by_name:
             return {}
         variants = self._twister_variants(
             state.get("sortedVariations"),
@@ -351,20 +363,11 @@ class AmazonAdapter(BaseAdapter):
                 axis_entries=axis_entries,
                 page_url=url,
             )
-        selected_variant = next(
-            (
-                variant
-                for variant in variants
-                if variant.get("option_values") == selected_values
-            ),
-            None,
-        )
-        record["variant_axes"] = variant_axes
         if variants:
-            record["variants"] = variants
-            record["variant_count"] = len(variants)
-        if selected_variant:
-            record["selected_variant"] = selected_variant
+            flat_variants = flatten_variants_for_public_output(variants, page_url=url)
+            if flat_variants:
+                record["variants"] = flat_variants
+                record["variant_count"] = len(flat_variants)
         for axis_name, value in selected_values.items():
             record[axis_name] = value
         return record

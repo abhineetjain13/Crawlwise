@@ -7,11 +7,11 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from app.services.adapters.base import AdapterResult, BaseAdapter, adapter_host_matches
-from app.services.extract.shared_variant_logic import split_variant_axes
 from app.services.field_value_core import (
     absolute_url,
     clean_text,
     finalize_record,
+    flatten_variants_for_public_output,
     text_or_none,
 )
 from app.services.extraction_html_helpers import html_to_text
@@ -19,10 +19,8 @@ from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
     normalize_price,
-    ordered_axes,
     select_variant,
     variant_attribute,
-    variant_axes,
 )
 
 
@@ -232,18 +230,10 @@ def _next_data_size_is_in_stock(option: dict[str, Any]) -> bool:
 
 def _map_product(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
     variants = _variants(product, page_url=page_url)
-    selected_variant = select_variant(variants, page_url=page_url)
-    axes = variant_axes(variants)
-    selectable_axes, _single_value_axes = split_variant_axes(
-        axes,
-        always_selectable_axes=frozenset({"size"}),
-    )
-    size_values = (
-        selectable_axes.get("size") if isinstance(selectable_axes, dict) else None
-    )
-    ordered = ordered_axes(["size", "color"], selectable_axes)
+    active_variant = select_variant(variants, page_url=page_url)
+    flat_variants = flatten_variants_for_public_output(variants, page_url=page_url)
     images = _images(product)
-    color = variant_attribute(selected_variant, "color") or _color_name(product)
+    color = variant_attribute(active_variant, "color") or _color_name(product)
     record = compact_dict(
         {
             "title": _title(product),
@@ -260,20 +250,14 @@ def _map_product(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
             "description": _description(product),
             "product_details": _product_details(product),
             "color": color,
-            "size": variant_attribute(selected_variant, "size"),
+            "size": variant_attribute(active_variant, "size"),
             "image_url": images[0] if images else text_or_none(product.get("imageUrl")),
             "additional_images": images[1:] if len(images) > 1 else None,
-            "variants": variants or None,
-            "selected_variant": selected_variant,
-            "variant_axes": selectable_axes or None,
-            "variant_count": len(variants) or None,
-            "available_sizes": size_values[:20] if size_values else None,
+            "variants": flat_variants,
+            "variant_count": len(flat_variants or []) or None,
             "url": absolute_url(page_url, product.get("action_url")) or page_url,
         }
     )
-    for index, (axis_name, values) in enumerate(ordered[:2], start=1):
-        record[f"option{index}_name"] = axis_name
-        record[f"option{index}_values"] = values
     return record
 
 

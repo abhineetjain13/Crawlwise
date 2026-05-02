@@ -13,6 +13,7 @@ from app.services.extract.shared_variant_logic import (
     normalized_variant_axis_key,
     split_variant_axes,
 )
+from app.services.field_value_core import flatten_variants_for_public_output
 from app.services.normalizers import normalize_decimal_price
 
 _FETCH_ERRORS = (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError)
@@ -163,18 +164,22 @@ class ShopifyAdapter(BaseAdapter):
                         )
                     ]
                     normalized_variants = self._dedupe_variants(normalized_variants)
-                    selected_variant = self._select_shopify_variant(
+                    active_variant = self._select_shopify_variant(
                         normalized_variants,
                         base_url=url,
                     )
                     axes = self._variant_axes(normalized_variants)
-                    selectable_axes, single_value_attributes = (
+                    _selectable_axes, single_value_attributes = (
                         self._split_selectable_axes(axes)
                     )
                     selected_price = (
-                        selected_variant.get("price")
-                        if isinstance(selected_variant, dict)
+                        active_variant.get("price")
+                        if isinstance(active_variant, dict)
                         else product.get("price")
+                    )
+                    flat_variants = flatten_variants_for_public_output(
+                        normalized_variants,
+                        page_url=url,
                     )
                     records.append(
                         {
@@ -190,9 +195,8 @@ class ShopifyAdapter(BaseAdapter):
                             "product_id": str(product.get("id"))
                             if product.get("id") not in (None, "", [], {})
                             else None,
-                            "variants": normalized_variants,
-                            "variant_axes": selectable_axes,
-                            "selected_variant": selected_variant,
+                            "variants": flat_variants,
+                            "variant_count": len(flat_variants or []) or None,
                             "product_attributes": single_value_attributes or None,
                         }
                     )
@@ -332,12 +336,16 @@ class ShopifyAdapter(BaseAdapter):
             )
         ]
         normalized_variants = self._dedupe_variants(normalized_variants)
-        selected_variant = self._select_shopify_variant(
+        active_variant = self._select_shopify_variant(
             normalized_variants,
             base_url=page_url,
         )
         axes = self._variant_axes(normalized_variants)
-        selectable_axes, single_value_attributes = self._split_selectable_axes(axes)
+        _selectable_axes, single_value_attributes = self._split_selectable_axes(axes)
+        flat_variants = flatten_variants_for_public_output(
+            normalized_variants,
+            page_url=page_url,
+        )
         images = [
             image_url
             for img in product.get("images", [])
@@ -358,45 +366,29 @@ class ShopifyAdapter(BaseAdapter):
             "url": product_url,
             "image_url": images[0] if images else None,
             "additional_images": ", ".join(images[1:]) if len(images) > 1 else None,
-            "price": selected_variant.get("price")
-            if isinstance(selected_variant, dict)
+            "price": active_variant.get("price")
+            if isinstance(active_variant, dict)
             else None,
-            "original_price": selected_variant.get("original_price")
-            if isinstance(selected_variant, dict)
+            "original_price": active_variant.get("original_price")
+            if isinstance(active_variant, dict)
             else None,
-            "sku": selected_variant.get("sku")
-            if isinstance(selected_variant, dict)
+            "sku": active_variant.get("sku")
+            if isinstance(active_variant, dict)
             else None,
-            "availability": selected_variant.get("availability")
-            if isinstance(selected_variant, dict)
+            "availability": active_variant.get("availability")
+            if isinstance(active_variant, dict)
             else None,
             "category": product.get("product_type"),
             "tags": tags,
-            "variants": normalized_variants,
-            "variant_axes": selectable_axes,
-            "selected_variant": selected_variant,
+            "variants": flat_variants,
+            "variant_count": len(flat_variants or []) or None,
             "product_attributes": single_value_attributes or None,
         }
-        if isinstance(selected_variant, dict):
+        if isinstance(active_variant, dict):
             for field_name in ("color", "size", "barcode"):
-                if selected_variant.get(field_name):
-                    record[field_name] = selected_variant[field_name]
+                if active_variant.get(field_name):
+                    record[field_name] = active_variant[field_name]
         if surface == "ecommerce_detail":
-            size_values = selectable_axes.get("size") if isinstance(selectable_axes, dict) else None
-            ordered_axes: list[tuple[str, list[str]]] = []
-            seen_axis_names: set[str] = set()
-            for option_name in option_names:
-                axis_key = normalized_variant_axis_key(option_name) or self._normalize_axis(
-                    option_name
-                )
-                axis_values = selectable_axes.get(axis_key)
-                if axis_key and isinstance(axis_values, list) and axis_values:
-                    ordered_axes.append((axis_key, axis_values))
-                    seen_axis_names.add(axis_key)
-            for axis_name, axis_values in selectable_axes.items():
-                if axis_name in seen_axis_names or not axis_values:
-                    continue
-                ordered_axes.append((axis_name, axis_values))
             record.update(
                 {
                     "vendor": product.get("vendor"),
@@ -405,20 +397,12 @@ class ShopifyAdapter(BaseAdapter):
                     if product.get("id") not in (None, "", [], {})
                     else None,
                     "handle": product.get("handle"),
-                    "variant_count": len(normalized_variants) or len(variants) or None,
                     "created_at": product.get("created_at"),
                     "updated_at": product.get("updated_at"),
                     "published_at": product.get("published_at"),
                     "image_count": len(images) or None,
-                    "available_sizes": ", ".join(size_values[:20]) if size_values else None,
                 }
             )
-            if len(ordered_axes) > 0:
-                record["option1_name"] = ordered_axes[0][0]
-                record["option1_values"] = ", ".join(ordered_axes[0][1])
-            if len(ordered_axes) > 1:
-                record["option2_name"] = ordered_axes[1][0]
-                record["option2_values"] = ", ".join(ordered_axes[1][1])
         return record
 
     def _merge_product_records(self, primary: dict, fallback: dict) -> dict:

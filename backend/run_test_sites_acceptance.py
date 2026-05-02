@@ -172,8 +172,6 @@ def _expected_contract_met(
                 return False
         else:
             price_value = _nested_value(sample_record, "price")
-            if price_value in (None, "", [], {}):
-                price_value = _nested_value(sample_record, "selected_variant.price")
             if not _looks_numeric_price(price_value):
                 return False
     if bool(expected.get("detail_urls_must_be_present")):

@@ -12,11 +12,19 @@ from app.models.crawl import CrawlRecord, CrawlRun, DataEnrichmentJob, EnrichedP
 from app.models.user import User
 from app.services.config.data_enrichment import (
     DATA_ENRICHMENT_BASE_REQUIRED_ATTRIBUTES,
+    DATA_ENRICHMENT_AVAILABILITY_CANDIDATE_SOURCES,
+    DATA_ENRICHMENT_AVAILABILITY_CANDIDATE_TARGETS,
+    DATA_ENRICHMENT_COLOR_CANDIDATE_FIELDS,
+    DATA_ENRICHMENT_COLOR_CANDIDATE_SOURCES,
+    DATA_ENRICHMENT_COLOR_CANDIDATE_TARGETS,
     DATA_ENRICHMENT_LLM_BACKFILL_FIELDS,
     DATA_ENRICHMENT_LLM_TASK,
     DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS,
     DATA_ENRICHMENT_MATERIAL_FALLBACK_FIELDS,
     DATA_ENRICHMENT_MATERIAL_PRIMARY_FIELDS,
+    DATA_ENRICHMENT_SIZE_CANDIDATE_FIELDS,
+    DATA_ENRICHMENT_SIZE_CANDIDATE_SOURCES,
+    DATA_ENRICHMENT_SIZE_CANDIDATE_TARGETS,
     DATA_ENRICHMENT_SKIP_RECORD_STATUSES,
     DATA_ENRICHMENT_STATUS_DEGRADED,
     DATA_ENRICHMENT_STATUS_ENRICHED,
@@ -51,9 +59,12 @@ from app.services.field_value_core import (
 from app.services.llm_runtime import run_prompt_task
 from app.services.normalizers import normalize_decimal_price
 from app.services.product_intelligence.matching import source_domain
+
 _token_re = re.compile(r"[a-z0-9]+")
 _PRICE_RANGE_RE = re.compile(r"(.+?)(?:\s+(?:to)\s+|\s*[-–]\s*)(.+)", re.I)
 logger = logging.getLogger(__name__)
+
+
 async def create_data_enrichment_job(
     session: AsyncSession,
     *,
@@ -113,12 +124,15 @@ async def create_data_enrichment_job(
     await session.commit()
     await session.refresh(job)
     return job
+
+
 async def run_data_enrichment_job(job_id: int) -> None:
     async with SessionLocal() as session:
         job = await session.get(DataEnrichmentJob, job_id)
         if job is None or job.status != DATA_ENRICHMENT_STATUS_PENDING:
             return
         await _run_job(session, job)
+
 
 async def list_data_enrichment_jobs(
     session: AsyncSession,
@@ -315,16 +329,12 @@ def _build_deterministic_enrichment(
         [
             *_candidate_values(
                 data,
-                "color",
-                "title",
-                "category",
-                "product_type",
+                *DATA_ENRICHMENT_COLOR_CANDIDATE_FIELDS,
             ),
             *_targeted_candidate_values(
                 data,
-                {"color", "colour", "shade", "finish", "tone"},
-                "variant_axes",
-                "selected_variant",
+                DATA_ENRICHMENT_COLOR_CANDIDATE_TARGETS,
+                *DATA_ENRICHMENT_COLOR_CANDIDATE_SOURCES,
             ),
         ],
         term_dict(terms, "color_families"),
@@ -344,9 +354,8 @@ def _build_deterministic_enrichment(
             *_candidate_values(data, "availability", "product_attributes"),
             *_targeted_candidate_values(
                 data,
-                {"availability", "stock", "status", "inventory"},
-                "variants",
-                "selected_variant",
+                DATA_ENRICHMENT_AVAILABILITY_CANDIDATE_TARGETS,
+                *DATA_ENRICHMENT_AVAILABILITY_CANDIDATE_SOURCES,
             ),
         ],
         term_dict(terms, "availability_terms"),
@@ -631,12 +640,11 @@ def _normalize_sizes(
         if isinstance(values, list)
     }
     values = [
-        *_candidate_values(data, "size", "available_sizes"),
+        *_candidate_values(data, *DATA_ENRICHMENT_SIZE_CANDIDATE_FIELDS),
         *_targeted_candidate_values(
             data,
-            {"size", "width"},
-            "variant_axes",
-            "selected_variant",
+            DATA_ENRICHMENT_SIZE_CANDIDATE_TARGETS,
+            *DATA_ENRICHMENT_SIZE_CANDIDATE_SOURCES,
         ),
     ]
     category_supports_size = (
@@ -747,7 +755,6 @@ def _compiled_material_strip_patterns() -> tuple[re.Pattern[str], ...]:
     return tuple(compiled)
 
 
-@lru_cache(maxsize=1)
 def _material_strip_patterns() -> tuple[re.Pattern[str], ...]:
     return _compiled_material_strip_patterns()
 
@@ -1067,6 +1074,7 @@ def _category_attribute_handles(category_path: str | None) -> list[str]:
 
 
 def _candidate_values(data: dict[str, object], *keys: str) -> list[object]:
+    # Keys come from config data-enrichment candidate field lists.
     values: list[object] = []
     for key in keys:
         value = data.get(key)
@@ -1084,6 +1092,7 @@ def _candidate_values(data: dict[str, object], *keys: str) -> list[object]:
 def _targeted_candidate_values(
     data: dict[str, object], target_keys: set[str], *keys: str
 ) -> list[object]:
+    # Source and target keys come from config data-enrichment candidate maps.
     normalized_targets = {str(key).casefold() for key in target_keys}
     values: list[object] = []
     for key in keys:

@@ -14,7 +14,15 @@ from soupsieve import SelectorSyntaxError
 from app.services.config.extraction_rules import (
     CROSS_LINK_CONTAINER_HINTS,
     CDN_IMAGE_QUERY_PARAMS,
+    DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS,
+    DETAIL_LONG_TEXT_MAX_SECTION_CHARS,
+    DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
+    DETAIL_TEXT_HIDDEN_STYLE_TOKENS,
+    DETAIL_TEXT_SCOPE_EXCLUDE_TOKENS,
+    DETAIL_TEXT_SCOPE_PRIORITY_TOKENS,
+    DETAIL_TEXT_SCOPE_SELECTORS,
     EXTRACTION_RULES,
+    FEATURE_SECTION_ALIASES,
     NON_PRODUCT_IMAGE_HINTS,
     NON_PRODUCT_PROVIDER_HINTS,
     PRODUCT_GALLERY_CONTEXT_HINTS,
@@ -25,6 +33,7 @@ from app.services.config.extraction_rules import (
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.extraction_html_helpers import html_to_text
 from app.services.field_policy import (
     exact_requested_field_key,
     normalize_field_key,
@@ -93,6 +102,31 @@ def _selector_regex_timeout_seconds() -> float | None:
 
 _SECTION_SKIP_PATTERNS = tuple(
     str(token).lower() for token in (SEMANTIC_SECTION_NOISE.get("skip_patterns") or ())
+)
+_detail_text_scope_selectors = tuple(
+    selector
+    for selector in tuple(DETAIL_TEXT_SCOPE_SELECTORS or ())
+    if str(selector).strip()
+)
+_detail_text_scope_priority_tokens = tuple(
+    str(token).lower()
+    for token in tuple(DETAIL_TEXT_SCOPE_PRIORITY_TOKENS or ())
+    if str(token).strip()
+)
+_detail_text_scope_exclude_tokens = tuple(
+    str(token).lower()
+    for token in tuple(DETAIL_TEXT_SCOPE_EXCLUDE_TOKENS or ())
+    if str(token).strip()
+)
+_detail_text_hidden_style_tokens = tuple(
+    str(token).lower()
+    for token in tuple(DETAIL_TEXT_HIDDEN_STYLE_TOKENS or ())
+    if str(token).strip()
+)
+_FEATURE_SECTION_ALIASES = frozenset(
+    normalize_field_key(str(value))
+    for value in tuple(FEATURE_SECTION_ALIASES or ())
+    if str(value).strip()
 )
 
 
@@ -245,9 +279,140 @@ def _node_attr_text(node: Tag, *, max_depth: int = 6) -> str:
     return " ".join(parts).lower()
 
 
+def _field_uses_scoped_text(field_name: str) -> bool:
+    return field_name in LONG_TEXT_FIELDS or field_name == "features"
+
+
+def _node_within_scope(node: Tag, scope: Tag) -> bool:
+    current: Tag | None = node
+    while isinstance(current, Tag):
+        if current is scope:
+            return True
+        parent = current.parent
+        current = parent if isinstance(parent, Tag) else None
+    return False
+
+
+def _node_style_is_hidden(node: Tag) -> bool:
+    style = str(node.get("style") or "").strip().lower()
+    return bool(style) and any(token in style for token in _detail_text_hidden_style_tokens)
+
+
+def _node_is_hidden_or_auxiliary(node: Tag) -> bool:
+    current: Tag | None = node
+    depth = 0
+    while isinstance(current, Tag) and depth < 8:
+        attrs = getattr(current, "attrs", None)
+        if not isinstance(attrs, dict):
+            parent = current.parent
+            current = parent if isinstance(parent, Tag) else None
+            depth += 1
+            continue
+        if isinstance(attrs, dict) and "hidden" in attrs:
+            return True
+        if str(attrs.get("aria-hidden") or "").strip().lower() == "true":
+            return True
+        if str(attrs.get("aria-modal") or "").strip().lower() == "true":
+            return True
+        role = str(attrs.get("role") or "").strip().lower()
+        if role in {"dialog", "alertdialog"}:
+            return True
+        if _node_style_is_hidden(current):
+            return True
+        context = _node_attr_text(current, max_depth=1)
+        if any(token in context for token in _detail_text_scope_exclude_tokens):
+            return True
+        parent = current.parent
+        current = parent if isinstance(parent, Tag) else None
+        depth += 1
+    return False
+
+
+def _node_has_cross_product_cluster(node: Tag) -> bool:
+    if not isinstance(getattr(node, "attrs", None), dict):
+        return False
+    links = [
+        absolute_url("", str(link.get("href") or ""))
+        for link in node.select("a[href]")[:12]
+        if clean_text(link.get_text(" ", strip=True) or link.get("aria-label"))
+    ]
+    product_links = [
+        link
+        for link in links
+        if link and any(marker in urlparse(link).path.lower() for marker in detail_path_hints("ecommerce_detail"))
+    ]
+    if len(set(product_links)) >= 2:
+        return True
+    context = _node_attr_text(node, max_depth=1)
+    return any(
+        token in context
+        for token in ("also-viewed", "also viewed", "customers", "recommend", "related", "similar", "sponsored")
+    )
+
+
+def _candidate_text_scope_nodes(root: BeautifulSoup | Tag) -> list[Tag]:
+    candidates: list[Tag] = []
+    seen: set[int] = set()
+    for selector in _detail_text_scope_selectors:
+        for node in safe_select(root, selector):
+            if id(node) in seen or _node_is_hidden_or_auxiliary(node):
+                continue
+            seen.add(id(node))
+            candidates.append(node)
+    return candidates
+
+
+def _scope_score(node: Tag) -> tuple[int, int]:
+    context = _node_attr_text(node, max_depth=2)
+    text_len = len(clean_text(node.get_text(" ", strip=True)))
+    score = text_len
+    if node.name in {"main", "article"} or str(node.get("role") or "").strip().lower() == "main":
+        score += 4000
+    if any(token in context for token in _detail_text_scope_priority_tokens):
+        score += 2000
+    if DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR and (
+        node.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR) is not None
+        or any(
+            token in context
+            for token in ("product", "detail", "pdp")
+        )
+    ):
+        score += 1000
+    return score, text_len
+
+
+def _scope_is_product_like(node: Tag) -> bool:
+    context = _node_attr_text(node, max_depth=2)
+    if any(token in context for token in ("product", "pdp", "detail")):
+        return True
+    return node.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR) is not None
+
+
+def _best_text_scope(root: BeautifulSoup | Tag) -> Tag | None:
+    candidates = _candidate_text_scope_nodes(root)
+    if not candidates:
+        return None
+    best = max(candidates, key=_scope_score)
+    return best if _scope_is_product_like(best) else None
+
+
+def _pruned_text_scope_root(root: BeautifulSoup | Tag) -> BeautifulSoup | Tag:
+    scope = _best_text_scope(root)
+    if scope is None:
+        return root
+    clone = deepcopy(scope)
+    for node in list(clone.find_all(True)):
+        if _node_is_hidden_or_auxiliary(node) or _node_has_cross_product_cluster(node):
+            node.decompose()
+    return clone
+
+
 def _is_non_primary_image_context(node: Tag) -> bool:
     context = _node_attr_text(node)
-    return any(hint in context for hint in _NON_PRIMARY_IMAGE_SECTION_HINTS)
+    return any(hint in context for hint in _NON_PRIMARY_IMAGE_SECTION_HINTS) or any(
+        token in context
+        for token in _detail_text_scope_exclude_tokens
+    )
 
 
 def _image_node_context(node: Tag) -> str:
@@ -454,7 +619,11 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
     raw_text = (
         _variant_option_node_text(node, field_name)
         if _looks_like_variant_option_node(node, field_name)
-        else node.get_text(" ", strip=True)
+        else (
+            html_to_text(str(node), preserve_block_breaks=True)
+            if _field_uses_scoped_text(field_name)
+            else node.get_text(" ", strip=True)
+        )
     )
     text_value = coerce_field_value(field_name, raw_text, page_url)
     if field_name in LONG_TEXT_FIELDS and not _section_text_is_meaningful(
@@ -516,7 +685,13 @@ def extract_selector_values(
     page_url: str,
 ) -> list[object]:
     values: list[object] = []
+    scoped_text_root = _best_text_scope(root) if _field_uses_scoped_text(field_name) else None
     for node in safe_select(root, selector)[:12]:
+        if _field_uses_scoped_text(field_name):
+            if _node_is_hidden_or_auxiliary(node):
+                continue
+            if scoped_text_root is not None and not _node_within_scope(node, scoped_text_root):
+                continue
         value = extract_node_value(node, field_name, page_url)
         if value in (None, "", [], {}):
             continue
@@ -820,7 +995,8 @@ def _is_section_label(label: str) -> bool:
 
 
 def _section_text(node: Tag, *, label: str = "") -> str:
-    text = clean_text(node.get_text(" ", strip=True))
+    text = html_to_text(str(node), preserve_block_breaks=True)
+    text = clean_text(text)
     if not text:
         return ""
     if label and text.lower().startswith(label.lower()):
@@ -847,7 +1023,10 @@ def _extract_sibling_content(node: Tag, *, label: str = "") -> str:
         ):
             continue
         values.append(text)
-        if len(values) >= 8 or sum(len(item) for item in values) >= 1200:
+        if (
+            len(values) >= int(DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS)
+            or sum(len(item) for item in values) >= int(DETAIL_LONG_TEXT_MAX_SECTION_CHARS)
+        ):
             break
     return " ".join(values)
 
@@ -1099,22 +1278,76 @@ def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
 
 
 def extract_heading_sections(root: BeautifulSoup | Tag) -> dict[str, str]:
+    scoped_root = _pruned_text_scope_root(root)
     sections: dict[str, str] = {}
     seen: set[int] = set()
-    for heading in safe_select(root, _SECTION_LABEL_SELECTOR):
+    for heading in safe_select(scoped_root, _SECTION_LABEL_SELECTOR):
         if id(heading) in seen:
             continue
         seen.add(id(heading))
         heading_text = _section_label_text(heading)
         if not _is_section_label(heading_text):
             continue
-        content = _extract_section_content(heading, root)
+        content = _extract_section_content(heading, scoped_root)
         if len(content) >= 12:
             sections.setdefault(heading_text, content)
-    materials = _extract_product_materials(root)
+    materials = _extract_product_materials(scoped_root) or _extract_product_materials(root)
     if materials:
         sections.setdefault("Composition", materials)
     return sections
+
+
+def _feature_rows_from_node(node: Tag) -> list[str]:
+    rows = [
+        clean_text(item.get_text(" ", strip=True))
+        for item in node.select("li")
+        if clean_text(item.get_text(" ", strip=True))
+    ]
+    if rows:
+        return rows
+    text = html_to_text(str(node), preserve_block_breaks=True)
+    return [row for row in _split_feature_text(text) if row]
+
+
+def _split_feature_text(text: str) -> list[str]:
+    return [
+        clean_text(part)
+        for part in str(text or "").splitlines()
+        if clean_text(part)
+    ]
+
+
+def extract_feature_rows(root: BeautifulSoup | Tag) -> list[str]:
+    scoped_root = _pruned_text_scope_root(root)
+    rows: list[str] = []
+    seen: set[str] = set()
+
+    def _add(values: list[str]) -> None:
+        for value in values:
+            cleaned = clean_text(value)
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            rows.append(cleaned)
+
+    for node in safe_select(
+        scoped_root,
+        "[data-section='features'], .features, .product-features, #features",
+    ):
+        if _node_is_hidden_or_auxiliary(node):
+            continue
+        _add(_feature_rows_from_node(node))
+
+    for heading in safe_select(scoped_root, _SECTION_LABEL_SELECTOR):
+        label = normalize_field_key(_section_label_text(heading))
+        if label not in _FEATURE_SECTION_ALIASES:
+            continue
+        content = _extract_section_content(heading, scoped_root)
+        _add(_split_feature_text(content))
+    return rows
 
 
 def requested_content_extractability(

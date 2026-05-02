@@ -7,6 +7,9 @@ from typing import Any
 
 from app.services.config.extraction_rules import (
     DETAIL_VARIANT_CONTEXT_NOISE_TOKENS,
+    DETAIL_VARIANT_SCOPE_SELECTOR,
+    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH,
+    VARIANT_SCOPE_MAX_ROOTS,
     VARIANT_AXIS_LABEL_NOISE_PATTERNS,
     VARIANT_AXIS_LABEL_NOISE_TOKENS,
     VARIANT_AXIS_ALIASES,
@@ -27,27 +30,23 @@ from app.services.field_value_core import clean_text, text_or_none
 
 _VARIANT_AXIS_LABEL_NOISE_TOKENS = frozenset(
     str(token).strip().lower()
-    for token in VARIANT_AXIS_LABEL_NOISE_TOKENS
+    for token in tuple(VARIANT_AXIS_LABEL_NOISE_TOKENS or ())
     if str(token).strip()
 )
-_VARIANT_AXIS_LABEL_NOISE_PATTERNS = (
-    tuple(
-        re.compile(str(pattern), re.I)
-        for pattern in VARIANT_AXIS_LABEL_NOISE_PATTERNS
-        if str(pattern).strip()
-    )
+_VARIANT_AXIS_LABEL_NOISE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_AXIS_LABEL_NOISE_PATTERNS or ())
+    if str(pattern).strip()
 )
 _VARIANT_GROUP_ATTR_NOISE_TOKENS = frozenset(
     str(token).strip().lower()
-    for token in VARIANT_GROUP_ATTR_NOISE_TOKENS
+    for token in tuple(VARIANT_GROUP_ATTR_NOISE_TOKENS or ())
     if str(token).strip()
 )
-_VARIANT_GROUP_ATTR_NOISE_PATTERNS = (
-    tuple(
-        re.compile(str(pattern), re.I)
-        for pattern in VARIANT_GROUP_ATTR_NOISE_PATTERNS
-        if str(pattern).strip()
-    )
+_VARIANT_GROUP_ATTR_NOISE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_GROUP_ATTR_NOISE_PATTERNS or ())
+    if str(pattern).strip()
 )
 _VARIANT_COLOR_HINT_WORDS = frozenset(
     str(token).strip().lower()
@@ -69,6 +68,7 @@ variant_context_noise_tokens = frozenset(
     for token in tuple(DETAIL_VARIANT_CONTEXT_NOISE_TOKENS or ())
     if str(token).strip()
 )
+variant_scope_selector = str(DETAIL_VARIANT_SCOPE_SELECTOR or "").strip()
 _VARIANT_SIZE_ALIAS_SUFFIXES = tuple(
     str(token).strip().lower()
     for token in tuple(VARIANT_SIZE_ALIAS_SUFFIXES or ())
@@ -84,12 +84,10 @@ variant_axis_generic_tokens = frozenset(
     for token in tuple(VARIANT_AXIS_GENERIC_TOKENS or ())
     if str(token).strip()
 )
-variant_axis_technical_patterns = (
-    tuple(
-        re.compile(str(pattern), re.I)
-        for pattern in tuple(VARIANT_AXIS_TECHNICAL_PATTERNS or ())
-        if str(pattern).strip()
-    )
+variant_axis_technical_patterns = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_AXIS_TECHNICAL_PATTERNS or ())
+    if str(pattern).strip()
 )
 variant_quantity_attr_tokens = frozenset(
     str(token).strip().lower()
@@ -105,7 +103,9 @@ def _variant_axis_label_is_noise(value: object) -> bool:
     tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
     if any(token in _VARIANT_AXIS_LABEL_NOISE_TOKENS for token in tokens):
         return True
-    return any(pattern.search(lowered) for pattern in _VARIANT_AXIS_LABEL_NOISE_PATTERNS)
+    return any(
+        pattern.search(lowered) for pattern in _VARIANT_AXIS_LABEL_NOISE_PATTERNS
+    )
 
 
 def normalized_variant_axis_key(value: object) -> str:
@@ -117,19 +117,14 @@ def normalized_variant_axis_key(value: object) -> str:
     normalized = str(aliases.get(text) or text)
     tokens = [token for token in normalized.split("_") if token]
     semantic_tokens = [
-        token
-        for token in tokens
-        if token in variant_axis_allowed_single_tokens
+        token for token in tokens if token in variant_axis_allowed_single_tokens
     ]
-    if (
-        len(semantic_tokens) == 1
-        and all(
-            token == semantic_tokens[0]
-            or token in variant_axis_generic_tokens
-            or token.isdigit()
-            or len(token) <= 3
-            for token in tokens
-        )
+    if len(semantic_tokens) == 1 and all(
+        token == semantic_tokens[0]
+        or token in variant_axis_generic_tokens
+        or token.isdigit()
+        or len(token) <= 3
+        for token in tokens
     ):
         return semantic_tokens[0]
     return normalized
@@ -152,9 +147,7 @@ def normalized_variant_axis_display_name(value: object) -> str:
         return cleaned
     extra_tokens = [token for token in tokens if token != axis_key]
     if extra_tokens and all(
-        token in variant_axis_generic_tokens
-        or token.isdigit()
-        or len(token) <= 3
+        token in variant_axis_generic_tokens or token.isdigit() or len(token) <= 3
         for token in extra_tokens
     ):
         return axis_key
@@ -163,6 +156,60 @@ def normalized_variant_axis_display_name(value: object) -> str:
 
 def variant_dom_cues_present(soup: Any) -> bool:
     return bool(iter_variant_select_groups(soup) or iter_variant_choice_groups(soup))
+
+
+def _variant_node_in_noise_context(node: Any) -> bool:
+    current = node
+    for _ in range(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH):
+        if current is None or not hasattr(current, "get"):
+            return False
+        parts: list[str] = []
+        for attr_name in ("id", "class", "aria-label", "data-testid", "role"):
+            value = current.get(attr_name)
+            if isinstance(value, list):
+                parts.extend(str(item) for item in value if item)
+            elif value not in (None, "", [], {}):
+                parts.append(str(value))
+        probe = clean_text(" ".join(parts)).lower()
+        if probe and any(token in probe for token in variant_context_noise_tokens):
+            return True
+        current = getattr(current, "parent", None)
+    return False
+
+
+def _variant_scope_roots(soup: Any) -> list[Any]:
+    if not hasattr(soup, "select") or not variant_scope_selector:
+        return [soup]
+    roots: list[Any] = []
+    seen: set[int] = set()
+    for node in soup.select(variant_scope_selector):
+        if id(node) in seen or _variant_node_in_noise_context(node):
+            continue
+        if not (
+            node.select(VARIANT_SELECT_GROUP_SELECTOR)
+            or node.select(VARIANT_CHOICE_GROUP_SELECTOR)
+            or node.select("input[type='radio'], input[type='checkbox']")
+        ):
+            continue
+        roots.append(node)
+        seen.add(id(node))
+        if len(roots) >= VARIANT_SCOPE_MAX_ROOTS:
+            break
+    return roots or [soup]
+
+
+def _select_variant_nodes(soup: Any, selector: str) -> list[Any]:
+    nodes: list[Any] = []
+    seen: set[int] = set()
+    for root in _variant_scope_roots(soup):
+        if not hasattr(root, "select"):
+            continue
+        for node in root.select(selector):
+            if id(node) in seen or _variant_node_in_noise_context(node):
+                continue
+            nodes.append(node)
+            seen.add(id(node))
+    return nodes
 
 
 def infer_variant_group_name(node: Any) -> str:
@@ -211,8 +258,10 @@ def resolve_variant_group_name(node: Any) -> str:
     label = node.find_parent("label") if hasattr(node, "find_parent") else None
     if label is not None and tag_name not in {"input", "button", "option"}:
         visible_candidates.append(label.get_text(" ", strip=True))
-    fieldset = node if tag_name == "fieldset" else (
-        node.find_parent("fieldset") if hasattr(node, "find_parent") else None
+    fieldset = (
+        node
+        if tag_name == "fieldset"
+        else (node.find_parent("fieldset") if hasattr(node, "find_parent") else None)
     )
     if fieldset is not None:
         legend = fieldset.find("legend")
@@ -239,7 +288,11 @@ def resolve_variant_group_name(node: Any) -> str:
         cleaned_name = clean_text(str(raw_name).replace("_", " ").replace("-", " "))
         if variant_axis_name_is_semantic(cleaned_name):
             normalized_name = normalized_variant_axis_key(cleaned_name)
-            tokens = [token for token in re.split(r"[^a-z0-9]+", cleaned_name.lower()) if token]
+            tokens = [
+                token
+                for token in re.split(r"[^a-z0-9]+", cleaned_name.lower())
+                if token
+            ]
             if normalized_name in variant_axis_allowed_single_tokens and any(
                 token.isdigit() or token in variant_axis_generic_tokens
                 for token in tokens
@@ -251,7 +304,9 @@ def resolve_variant_group_name(node: Any) -> str:
         if resolved_name:
             return resolved_name
     if tag_name == "select":
-        inferred_from_values = infer_variant_group_name_from_values(_select_option_texts(node))
+        inferred_from_values = infer_variant_group_name_from_values(
+            _select_option_texts(node)
+        )
         if inferred_from_values:
             return inferred_from_values
     if hasattr(node, "select"):
@@ -268,14 +323,17 @@ def resolve_variant_group_name(node: Any) -> str:
 
 
 def infer_variant_group_name_from_values(values: Sequence[object]) -> str:
-    cleaned_values = [clean_text(value) for value in list(values or []) if clean_text(value)]
+    cleaned_values = [
+        clean_text(value) for value in list(values or []) if clean_text(value)
+    ]
     if len(cleaned_values) < 2:
         return ""
     # Sequential integer runs are quantity selectors, not variant axes.
     if _is_sequential_integer_run(cleaned_values):
         return ""
     size_hits = sum(
-        1 for value in cleaned_values
+        1
+        for value in cleaned_values
         if any(pattern.fullmatch(value) for pattern in _VARIANT_SIZE_VALUE_PATTERNS)
     )
     if size_hits >= 2 and size_hits / len(cleaned_values) >= 0.5:
@@ -357,7 +415,9 @@ def _nearby_variant_group_name(node: Any) -> str:
         sibling = getattr(current, "previous_sibling", None)
         while sibling is not None:
             if hasattr(sibling, "get_text"):
-                extracted = _semantic_group_label_from_text(sibling.get_text(" ", strip=True))
+                extracted = _semantic_group_label_from_text(
+                    sibling.get_text(" ", strip=True)
+                )
                 if extracted:
                     return extracted
             sibling = getattr(sibling, "previous_sibling", None)
@@ -373,7 +433,11 @@ def _select_option_texts(node: Any) -> list[str]:
         return []
     values: list[str] = []
     for option in node.select("option")[:24]:
-        text = clean_text(option.get_text(" ", strip=True)) if hasattr(option, "get_text") else ""
+        text = (
+            clean_text(option.get_text(" ", strip=True))
+            if hasattr(option, "get_text")
+            else ""
+        )
         if text:
             values.append(text)
     return values
@@ -404,9 +468,7 @@ def _select_option_values_are_noise(node: Any) -> bool:
     if _is_sequential_integer_run(values):
         return True
     normalized = {
-        re.sub(r"[^a-z0-9]+", "", value.lower())
-        for value in values
-        if value.strip()
+        re.sub(r"[^a-z0-9]+", "", value.lower()) for value in values if value.strip()
     }
     return bool(normalized) and normalized <= _VARIANT_OPTION_VALUE_NOISE_TOKENS
 
@@ -447,7 +509,10 @@ def variant_axis_name_is_semantic(value: object) -> bool:
         return False
     if any(pattern.fullmatch(lowered) for pattern in variant_axis_technical_patterns):
         return False
-    if re.fullmatch(r"[a-z0-9]+", lowered) and lowered in variant_axis_allowed_single_tokens:
+    if (
+        re.fullmatch(r"[a-z0-9]+", lowered)
+        and lowered in variant_axis_allowed_single_tokens
+    ):
         return True
     tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
     if not tokens or len(tokens) > 4:
@@ -465,12 +530,13 @@ def variant_axis_name_is_semantic(value: object) -> bool:
     if any(token in variant_axis_allowed_single_tokens for token in axis_tokens):
         return True
     non_generic_tokens = [
-        token for token in axis_tokens if token not in variant_axis_generic_tokens and not token.isdigit()
+        token
+        for token in axis_tokens
+        if token not in variant_axis_generic_tokens and not token.isdigit()
     ]
     if not non_generic_tokens:
         return False
     return True
-
 
 
 def _select_is_quantity_node(node: Any) -> bool:
@@ -491,7 +557,7 @@ def _select_is_quantity_node(node: Any) -> bool:
 def iter_variant_select_groups(soup: Any) -> list[Any]:
     groups: list[Any] = []
     seen_ids: set[int] = set()
-    for select in soup.select(VARIANT_SELECT_GROUP_SELECTOR):
+    for select in _select_variant_nodes(soup, VARIANT_SELECT_GROUP_SELECTOR):
         if _select_is_quantity_node(select):
             continue
         if _select_option_values_are_noise(select):
@@ -503,7 +569,7 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
             break
     if len(groups) >= 4:
         return groups
-    for select in soup.select("select"):
+    for select in _select_variant_nodes(soup, "select"):
         if id(select) in seen_ids:
             continue
         if _select_is_quantity_node(select):
@@ -518,11 +584,10 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
     return groups
 
 
-
 def iter_variant_choice_groups(soup: Any) -> list[Any]:
     groups: list[Any] = []
     seen_ids: set[int] = set()
-    for container in soup.select(VARIANT_CHOICE_GROUP_SELECTOR):
+    for container in _select_variant_nodes(soup, VARIANT_CHOICE_GROUP_SELECTOR):
         if resolve_variant_group_name(container):
             groups.append(container)
             seen_ids.add(id(container))
@@ -530,7 +595,9 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
             break
     if len(groups) >= 8:
         return groups
-    for node in soup.select("input[type='radio'], input[type='checkbox']"):
+    for node in _select_variant_nodes(
+        soup, "input[type='radio'], input[type='checkbox']"
+    ):
         axis_name = resolve_variant_group_name(node)
         if not axis_name:
             continue
@@ -569,7 +636,9 @@ def _variant_choice_container_for_input(node: Any, *, axis_name: str) -> Any | N
         if (
             role == "radiogroup"
             or tag_name in {"fieldset", "ul", "ol"}
-            or any(hint in class_probe for hint in ("color", "size", "swatch", "variant"))
+            or any(
+                hint in class_probe for hint in ("color", "size", "swatch", "variant")
+            )
             or resolve_variant_group_name(parent)
         ):
             return parent
@@ -594,9 +663,7 @@ def split_variant_axes(
             else ([values] if values not in (None, "", [], {}) else [])
         )
         cleaned_values = [
-            str(value).strip()
-            for value in raw_values
-            if str(value).strip()
+            str(value).strip() for value in raw_values if str(value).strip()
         ]
         if not cleaned_values:
             continue
@@ -655,7 +722,9 @@ def resolve_variants(
             no_option_values.append(variant)
             continue
         existing = variant_by_combo.get(combo)
-        if existing is None or len(variant) > len(existing):
+        if existing is None or variant_row_richness(variant) > variant_row_richness(
+            existing
+        ):
             variant_by_combo[combo] = variant
 
     # Walk the Cartesian product; only emit combos that have a real variant.
@@ -745,11 +814,15 @@ def variant_semantic_identity(variant: dict[str, Any]) -> str | None:
             )
             for axis_name, axis_value in option_values.items()
             if (axis_key := normalized_variant_axis_key(axis_name))
-            and (canonical_value := _canonical_variant_axis_value(axis_name, axis_value))
+            and (
+                canonical_value := _canonical_variant_axis_value(axis_name, axis_value)
+            )
         )
     else:
         for axis_name in ("size", "color"):
-            canonical_value = _canonical_variant_axis_value(axis_name, variant.get(axis_name))
+            canonical_value = _canonical_variant_axis_value(
+                axis_name, variant.get(axis_name)
+            )
             if canonical_value:
                 normalized_pairs.append((axis_name, canonical_value))
         normalized_pairs.sort()
@@ -826,7 +899,9 @@ def _rewrite_variant_row_size_alias(
 ) -> None:
     if not isinstance(row, dict):
         return
-    canonical_size = _canonicalize_size_alias(row.get("size"), canonical_targets=canonical_targets)
+    canonical_size = _canonicalize_size_alias(
+        row.get("size"), canonical_targets=canonical_targets
+    )
     if canonical_size:
         row["size"] = canonical_size
     option_values = row.get("option_values")
@@ -848,9 +923,7 @@ def variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
         1 for value in variant.values() if value not in (None, "", [], {})
     )
     option_values = variant.get("option_values")
-    option_value_count = (
-        len(option_values) if isinstance(option_values, dict) else 0
-    )
+    option_value_count = len(option_values) if isinstance(option_values, dict) else 0
     has_stock_signal = int(
         variant.get("stock_quantity") not in (None, "", [], {})
         or variant.get("original_price") not in (None, "", [], {})

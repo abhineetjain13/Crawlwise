@@ -164,6 +164,20 @@ Adding local product-universe dictionaries for enrichment categories, materials,
 
 **Fix:** Use canonical taxonomy files at `backend/app/data/enrichment/shopify_categories.json` for category paths and category attribute handles, and `backend/app/data/enrichment/shopify_attributes.json` for Shopify-defined attribute values. If matching fails, improve generic matching mechanics in `backend/app/services/data_enrichment/shopify_catalog.py` using taxonomy paths, category attribute handles, and normalized tokens. Local config may strip UI noise or define source-field lookup, but it must not become a shadow product taxonomy. Owner: `data_enrichment/` subsystem.
 
+### AP-19: Duplicate public-field cleanup helpers
+Adding per-field cleanup in adapters, enrichment, exports, or UI because a bad `barcode`, `gender`, `brand`, `product_type`, or structural title leaked through.
+
+**Violation looks like:** barcode cleanup in export code, brand suffix stripping in enrichment, or another SKU prefix scrubber outside the public-field coercion owner.
+
+**Fix:** Public field validation and final coercion stay in the single boundary owner. Extend that owner and delete the duplicate helper.
+
+### AP-20: Synthesizing parent fields from `selected_variant`
+Backfilling parent `price`, `currency`, `availability`, `color`, `size`, or `image_url` from a synthetic `selected_variant` record instead of extracting parent fields directly and flattening public variants separately.
+
+**Violation looks like:** `_refresh_record_from_selected_variant`, parent price chosen from a synthetic active variant row, or UI/export contracts that require `selected_variant` to understand a product.
+
+**Fix:** Parent detail fields are extracted directly. Public variants are flat rows plus `variant_count`. Remove `selected_variant` dependencies instead of compensating for them.
+
 ---
 
 ## Required Hygiene Gates

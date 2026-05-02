@@ -9,10 +9,12 @@ from bs4 import BeautifulSoup
 from app.services.config.extraction_rules import (
     DETAIL_BREADCRUMB_CONTAINER_SELECTORS,
     DETAIL_BREADCRUMB_LABEL_PREFIXES,
+    DETAIL_BREADCRUMB_MIN_LABEL_LENGTH,
     DETAIL_BREADCRUMB_ROOT_LABELS,
     DETAIL_BREADCRUMB_SEPARATOR_LABELS,
     DETAIL_BREADCRUMB_SELECTORS,
     DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO,
+    DETAIL_CATEGORY_LABEL_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
     DETAIL_GENDER_TERMS,
 )
@@ -42,7 +44,9 @@ def breadcrumb_category_from_dom(
     current_title: str | None = None,
     page_url: str = "",
 ) -> str | None:
-    labels = breadcrumb_labels_from_dom(soup, current_title=current_title, page_url=page_url)
+    labels = breadcrumb_labels_from_dom(
+        soup, current_title=current_title, page_url=page_url
+    )
     return " > ".join(labels) if labels else None
 
 
@@ -69,13 +73,17 @@ def breadcrumb_labels_from_dom(
             labels = _clean_breadcrumb_labels(
                 node.get_text(" ", strip=True) for node in group_nodes
             )
-            labels = _trim_breadcrumb_labels(labels, current_title=current_title, page_url=page_url)
+            labels = _trim_breadcrumb_labels(
+                labels, current_title=current_title, page_url=page_url
+            )
             if labels:
                 return labels
     for selector in DETAIL_BREADCRUMB_CONTAINER_SELECTORS:
         for container in soup.select(str(selector)):
             container_labels = _breadcrumb_labels_from_container(container)
-            container_labels = _trim_breadcrumb_labels(container_labels, current_title=current_title, page_url=page_url)
+            container_labels = _trim_breadcrumb_labels(
+                container_labels, current_title=current_title, page_url=page_url
+            )
             if container_labels:
                 return container_labels
     return []
@@ -112,6 +120,10 @@ def _clean_breadcrumb_label(value: object) -> str:
         if lowered.startswith(str(prefix).casefold()):
             text = clean_text(text[len(str(prefix)) :])
             break
+    lowered = str(text).casefold()
+    for prefix in tuple(DETAIL_CATEGORY_LABEL_PREFIXES or ()):
+        if lowered.startswith(str(prefix).casefold()):
+            return ""
     return text
 
 
@@ -163,7 +175,7 @@ def _trim_breadcrumb_labels(
     if not rows:
         return []
     title = clean_text(current_title).casefold()
-    if len(rows) >= 1 and title and _breadcrumb_label_matches_title(rows[-1], title):
+    if title and _breadcrumb_label_matches_title(rows[-1], title):
         rows = rows[:-1]
     return rows
 
@@ -173,13 +185,12 @@ def _breadcrumb_label_matches_title(label: object, title: str) -> bool:
     title_normalized = _breadcrumb_title_key(title)
     if not label_normalized or not title_normalized:
         return False
-    if len(label_normalized) < 8:
+    if len(label_normalized) < int(DETAIL_BREADCRUMB_MIN_LABEL_LENGTH):
         return False
     if label_normalized == title_normalized:
         return True
-    return (
-        SequenceMatcher(None, label_normalized, title_normalized).ratio()
-        >= float(DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO)
+    return SequenceMatcher(None, label_normalized, title_normalized).ratio() >= float(
+        DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO
     )
 
 

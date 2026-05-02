@@ -3,6 +3,7 @@
 .windsurf/
 .venv/
 node_modules/
+zyte/
 
 .hypothesis/
 .scannerwork/

@@ -36,6 +36,7 @@ from app.services.field_value_core import (
     absolute_url,
     clean_text,
     coerce_field_value,
+    enforce_flat_variant_public_contract,
     finalize_record,
     is_title_noise,
     object_dict as _object_dict,
@@ -144,7 +145,7 @@ def _field_source_rank(surface: str, field_name: str, source: str | None) -> int
                 return configured_rank
         if field_name == "title":
             return DETAIL_TITLE_SOURCE_RANKS.get(str(source or ""), 20)
-        if field_name in LONG_TEXT_FIELDS:
+        if field_name in LONG_TEXT_FIELDS or field_name == "features":
             return DETAIL_LONG_TEXT_SOURCE_RANKS.get(str(source or ""), 20)
         if field_name in ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
             return 2
@@ -236,6 +237,13 @@ def _collect_structured_payload_candidates(
     )
     for field_name, values in structured_candidates.items():
         for value in values:
+            candidate_source = source
+            if (
+                field_name == "category"
+                and source == "json_ld"
+                and _structured_payload_is_breadcrumb_list(payload)
+            ):
+                candidate_source = "json_ld_breadcrumb"
             _add_sourced_candidate(
                 candidates,
                 candidate_sources,
@@ -243,8 +251,19 @@ def _collect_structured_payload_candidates(
                 selector_trace_candidates,
                 field_name,
                 value,
-                source=source,
+                source=candidate_source,
             )
+
+
+def _structured_payload_is_breadcrumb_list(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    raw_type = payload.get("@type")
+    type_values = raw_type if isinstance(raw_type, list) else [raw_type]
+    return any(
+        str(value or "").strip().lower() in {"breadcrumblist", "breadcrumb_list"}
+        for value in type_values
+    )
 
 
 def _primary_source_for_record(
@@ -445,6 +464,7 @@ def _materialize_record(
             page_url=page_url,
             requested_page_url=requested_page_url,
         )
+        enforce_flat_variant_public_contract(record, page_url=page_url)
     drop_low_signal_zero_detail_price(record)
     _dedupe_primary_and_additional_images(record)
     confidence = score_record_confidence(
@@ -597,9 +617,7 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         "part_number",
         "barcode",
         "availability",
-        "variant_axes",
         "variants",
-        "selected_variant",
     )
     has_generic_detail_fields = any(
         record.get(field_name) not in (None, "", [], {})
@@ -650,7 +668,6 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
                 "brand",
                 "availability",
                 "variants",
-                "selected_variant",
             )
         )
     ):
@@ -808,41 +825,18 @@ def _description_looks_like_shell_copy(description: object) -> bool:
     )
 
 
-def _variant_axis_value_count(value: object) -> int:
-    if not isinstance(value, dict):
-        return 0
-    return sum(
-        len([item for item in values if text_or_none(item)])
-        for values in value.values()
-        if isinstance(values, list)
-    )
-
-
-def _variant_rows_with_option_values(value: object) -> int:
-    if not isinstance(value, list):
-        return 0
-    return sum(
-        1
-        for row in value
-        if isinstance(row, dict)
-        and isinstance(row.get("option_values"), dict)
-        and bool(row.get("option_values"))
-    )
-
-
-def _variant_signal_strength(
-    *, variant_axes: object, variants: object, selected_variant: object
-) -> tuple[int, int, int, int, int]:
+def _variant_signal_strength(variants: object) -> tuple[int, int, int]:
+    if not isinstance(variants, list):
+        return (0, 0, 0)
+    rows = [row for row in variants if isinstance(row, dict)]
     return (
-        len(variant_axes) if isinstance(variant_axes, dict) else 0,
-        _variant_axis_value_count(variant_axes),
-        len(variants) if isinstance(variants, list) else 0,
-        _variant_rows_with_option_values(variants),
-        int(
-            isinstance(selected_variant, dict)
-            and isinstance(selected_variant.get("option_values"), dict)
-            and bool(selected_variant.get("option_values"))
+        len(rows),
+        sum(
+            1
+            for row in rows
+            if text_or_none(row.get("color")) or text_or_none(row.get("size"))
         ),
+        sum(1 for row in rows if text_or_none(row.get("price"))),
     )
 
 
@@ -852,27 +846,13 @@ def _should_collect_dom_variants(
 ) -> bool:
     if not any(candidates.get(field_name) for field_name in VARIANT_DOM_FIELD_NAMES):
         return True
-    existing_variant_axes = finalize_candidate_value(
-        "variant_axes", list(candidates.get("variant_axes") or [])
-    )
     existing_variants = finalize_candidate_value(
         "variants", list(candidates.get("variants") or [])
     )
-    existing_selected_variant = finalize_candidate_value(
-        "selected_variant", list(candidates.get("selected_variant") or [])
-    )
-    existing_strength = _variant_signal_strength(
-        variant_axes=existing_variant_axes,
-        variants=existing_variants,
-        selected_variant=existing_selected_variant,
-    )
-    if 0 in existing_strength[:4] or existing_strength[-1] == 0:
+    existing_strength = _variant_signal_strength(existing_variants)
+    if 0 in existing_strength:
         return True
-    dom_strength = _variant_signal_strength(
-        variant_axes=dom_variants.get("variant_axes"),
-        variants=dom_variants.get("variants"),
-        selected_variant=dom_variants.get("selected_variant"),
-    )
+    dom_strength = _variant_signal_strength(dom_variants.get("variants"))
     return dom_strength > existing_strength
 
 

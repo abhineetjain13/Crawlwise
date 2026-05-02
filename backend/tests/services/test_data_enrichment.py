@@ -399,12 +399,14 @@ def test_data_enrichment_variant_dict_values_do_not_pollute_sizes_or_availabilit
         {
             "title": "Cotton Shirt",
             "category": "Shirts",
-            "selected_variant": {
-                "size": "medium",
-                "color": "blue",
-                "sku": "CD",
-                "image": "https://example.com/image.jpg",
-            },
+            "variants": [
+                {
+                    "size": "medium",
+                    "color": "blue",
+                    "sku": "CD",
+                    "image": "https://example.com/image.jpg",
+                }
+            ],
         },
         source_url="https://example.com/products/shirt",
     )
@@ -419,11 +421,13 @@ def test_data_enrichment_variant_fit_does_not_become_size() -> None:
         {
             "title": "Cotton Trouser",
             "category": "Pants",
-            "selected_variant": {
-                "size": "medium",
-                "fit": "regular fit",
-                "width": "wide",
-            },
+            "variants": [
+                {
+                    "size": "medium",
+                    "fit": "regular fit",
+                    "width": "wide",
+                }
+            ],
         },
         source_url="https://example.com/products/trouser",
     )

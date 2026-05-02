@@ -77,6 +77,10 @@ For ecommerce detail, missing high-value fields such as `price`, `title`, and `i
 
 Ecommerce detail candidate admission must reject semantic artifacts before ranking. BreadcrumbList JSON-LD is not a detail category source. DOM breadcrumbs may provide category only after UI/root labels and product-title suffixes are removed. Price repair may correct 100x cent/magnitude drift only when visible DOM, same-product variant evidence, or an explicit host/currency conflict corroborates the smaller value; host name alone must not divide integral prices by 100. Installment/payment-plan prices, promo variant values, hex-only color values, system SKUs, structural IDs, placeholder product types, raw list-string text, related-product variants, and whole-value non-product guide/glossary text must not win as canonical fields.
 
+Public ecommerce detail output has a flat variant contract. Persisted/exported `variants` rows may contain only `color`, `size`, `sku`, `price`, `currency`, `url`, `image_url`, `availability`, and `stock_quantity`, plus top-level `variant_count`. Public output must not expose `selected_variant`, `variant_axes`, `available_sizes`, `option_*`, variant `title`, nested `option_values`, or variant-only identity helpers. If legacy rows are still present internally, the public boundary must flatten and strip them before persistence/export.
+
+Public-field identity validators are single-owner rules at the public boundary. `barcode` is digits-only with allowed lengths `8/12/13/14`, otherwise it is absent and may be rerouted to `sku`. `gender` must be one of `Men`, `Women`, `Unisex`, `Kids`, `Boys`, `Girls` or absent. `brand` must not keep trailing region/site suffixes like `| US` or `- UK`. `product_id`, `title`, and `product_type` must drop structural/internal tokens such as `plp`, `pdp`, `specifications`, and media-player tokens.
+
 **Enrichment is not extraction cleanup.**
 Data enrichment consumes persisted `record.data` as the upstream extraction contract. It must not add blocklists, URL-token cleanup, UI-title suppression, category/source correction, or field-specific compensations for polluted canonical fields. If enrichment output exposes garbage such as URL tokens in `brand`, UI copy in `title`, impossible `size` values, or breadcrumb/category pollution, fix the acquisition/extraction candidate, coercion, ranking, or finalization path before persistence.
 
@@ -94,6 +98,8 @@ When `llm_enabled=True` and active config allows the relevant LLM workflow, LLM 
 - Accepting a partial ecommerce detail record with missing requested/default high-value fields and no repair attempt or diagnostic
 - Treating `requested_fields=[]` as permission to ignore ecommerce detail quality
 - Forcing optional deep ecommerce fields such as `brand`, `sku`, or `variants` when the user did not request them
+- Persisting or exporting legacy variant keys such as `selected_variant`, `variant_axes`, `available_sizes`, `option_*`, nested `option_values`, or variant `title`
+- Letting non-numeric barcodes, region-suffixed brands, or structural identity tokens survive the public record boundary
 - Fixing missing variants by adding hidden browser-side extraction that bypasses normal field provenance
 - Calling `backfill_detail_price_from_html` only at the end of the full tier sequence but not after early exit paths
 - Fixing missing visible PDP prices in persistence/export instead of `detail_extractor.py`

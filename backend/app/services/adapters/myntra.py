@@ -6,22 +6,20 @@ from urllib.parse import urlparse
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.extract.shared_variant_logic import split_variant_axes
 from app.services.field_value_core import (
     absolute_url,
     clean_text,
     finalize_record,
+    flatten_variants_for_public_output,
     text_or_none,
 )
 from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
     normalize_price,
-    ordered_axes,
     select_variant,
     stock_quantity,
     variant_attribute,
-    variant_axes,
 )
 from app.services.structured_sources import harvest_js_state_objects
 
@@ -219,23 +217,8 @@ def map_myx_product_payload(product: dict[str, Any], *, page_url: str) -> dict[s
     images = _myx_images(product)
     base_color = text_or_none(product.get("baseColour"))
     variants = _myx_variants(product, page_url=page_url, color=base_color)
-    selected_variant = select_variant(variants, page_url=page_url)
-    axes = variant_axes(variants)
-    selectable_axes, _ = split_variant_axes(
-        axes,
-        always_selectable_axes=frozenset({"size"}),
-    )
-    size_values = selectable_axes.get("size") if isinstance(selectable_axes, dict) else None
-    ordered = ordered_axes(["size", "color"], selectable_axes)
-    color_options = [
-        color
-        for color in (
-            text_or_none(item.get("label"))
-            for item in list(product.get("colours") or [])
-            if isinstance(item, dict)
-        )
-        if color
-    ]
+    active_variant = select_variant(variants, page_url=page_url)
+    flat_variants = flatten_variants_for_public_output(variants, page_url=page_url)
     record = compact_dict(
         {
             "title": product.get("name"),
@@ -244,34 +227,22 @@ def map_myx_product_payload(product: dict[str, Any], *, page_url: str) -> dict[s
             "price": _myx_price(product, price_key="discountedPrice"),
             "original_price": _myx_price(product, price_key="mrp"),
             "currency": text_or_none(product.get("currency")) or text_or_none(product.get("currencyCode")) or text_or_none(product.get("priceCurrency")),
-            "availability": availability_value(selected_variant) or None,
-            "stock_quantity": stock_quantity(selected_variant),
-            "sku": variant_attribute(selected_variant, "sku"),
-            "color": variant_attribute(selected_variant, "color") or base_color,
-            "size": variant_attribute(selected_variant, "size"),
+            "availability": availability_value(active_variant) or None,
+            "stock_quantity": stock_quantity(active_variant),
+            "sku": variant_attribute(active_variant, "sku"),
+            "color": variant_attribute(active_variant, "color") or base_color,
+            "size": variant_attribute(active_variant, "size"),
             "image_url": (
-                variant_attribute(selected_variant, "image_url")
+                variant_attribute(active_variant, "image_url")
                 or (images[0] if images else None)
             ),
             "additional_images": images[1:] if len(images) > 1 else None,
             "image_count": len(images) or None,
-            "variants": variants or None,
-            "selected_variant": selected_variant,
-            "variant_axes": selectable_axes or None,
-            "variant_count": len(variants) or None,
-            "available_sizes": size_values[:20] if size_values else None,
-            "option2_values": color_options[:20] if color_options else None,
+            "variants": flat_variants,
+            "variant_count": len(flat_variants or []) or None,
             "url": text_or_none(product.get("landingPageUrl")) or page_url,
         }
     )
-    if ordered:
-        record["option1_name"] = ordered[0][0]
-        record["option1_values"] = ordered[0][1]
-    if len(ordered) > 1:
-        record["option2_name"] = ordered[1][0]
-        record["option2_values"] = ordered[1][1]
-    elif color_options:
-        record["option2_name"] = "color"
     return record
 
 

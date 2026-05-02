@@ -338,7 +338,7 @@ def test_evaluate_quality_flags_shell_false_success() -> None:
             "require_price": True,
             "expect_variants": True,
             "require_semantic_variant_labels": True,
-            "require_selected_variant_price": True,
+            "require_variant_price": True,
         },
     }
     result = {
@@ -350,10 +350,10 @@ def test_evaluate_quality_flags_shell_false_success() -> None:
         "sample_semantics": {
             "price_present": False,
             "variant_count": 0,
-            "selected_variant_present": False,
-            "variant_axes_keys": [],
-            "variant_axes_semantic": False,
-            "selected_variant_has_price": False,
+            "variants_with_axes_count": 0,
+            "variants_all_have_axes": False,
+            "variants_with_price_count": 0,
+            "legacy_variant_keys_present": False,
         },
         "failure_mode": "success",
         "sample_records": [],
@@ -375,7 +375,7 @@ def test_evaluate_quality_flags_axis_pollution_as_gap() -> None:
             "require_price": True,
             "expect_variants": True,
             "require_semantic_variant_labels": True,
-            "require_selected_variant_price": True,
+            "require_variant_price": True,
         },
     }
     result = {
@@ -387,10 +387,10 @@ def test_evaluate_quality_flags_axis_pollution_as_gap() -> None:
         "sample_semantics": {
             "price_present": True,
             "variant_count": 7,
-            "selected_variant_present": True,
-            "variant_axes_keys": ["soft_fabric", "high_waisted"],
-            "variant_axes_semantic": False,
-            "selected_variant_has_price": True,
+            "variants_with_axes_count": 0,
+            "variants_all_have_axes": False,
+            "variants_with_price_count": 7,
+            "legacy_variant_keys_present": False,
         },
         "failure_mode": "success",
         "sample_records": [],
@@ -518,9 +518,10 @@ def test_evaluate_quality_flags_audit_variant_and_system_artifacts() -> None:
         "sample_semantics": {
             "price_present": True,
             "variant_count": 1,
-            "selected_variant_present": False,
-            "variant_axes_keys": ["discount"],
-            "variant_axes_semantic": False,
+            "variants_with_axes_count": 0,
+            "variants_all_have_axes": False,
+            "variants_with_price_count": 1,
+            "legacy_variant_keys_present": True,
         },
         "failure_mode": "success",
     }
@@ -531,6 +532,48 @@ def test_evaluate_quality_flags_audit_variant_and_system_artifacts() -> None:
     assert quality["observed_failure_mode"] == "variant_artifact_pollution"
     assert quality["quality_checks"]["variant_artifacts_ok"] is False
     assert quality["quality_checks"]["system_artifacts_ok"] is False
+
+
+def test_evaluate_quality_flags_cross_cutting_detail_invariants() -> None:
+    site = {
+        "surface": "ecommerce_detail",
+        "quality_expectations": {
+            "require_clean_category": True,
+            "require_clean_long_text": True,
+            "require_clean_variants": True,
+            "require_variant_currency_parity": True,
+            "require_identifier_shapes": True,
+            "require_title_not_internal_token": True,
+        },
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://example.com/products/widget",
+        "sample_title": "specifications",
+        "sample_url": "https://example.com/products/widget",
+        "populated_fields": 10,
+        "sample_record_data": {
+            "title": "specifications",
+            "url": "https://example.com/products/widget",
+            "category": "Shop by Shoes > Best Sellers > specifications",
+            "description": "Shipping and Returns Orders may take up to 48 business hours.",
+            "barcode": "ABC123",
+            "gender": "default",
+            "currency": "USD",
+            "variants": [{"size": "M", "price": "19.99", "currency": "EUR"}],
+        },
+        "sample_semantics": {"price_present": True, "variant_count": 1},
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["quality_checks"]["category_clean_ok"] is False
+    assert quality["quality_checks"]["long_text_clean_ok"] is False
+    assert quality["quality_checks"]["variant_currency_parity_ok"] is False
+    assert quality["quality_checks"]["identifier_shapes_ok"] is False
+    assert quality["quality_checks"]["title_token_ok"] is False
 
 
 def test_evaluate_quality_flags_missing_repair_diagnostics() -> None:
@@ -651,10 +694,10 @@ def test_evaluate_quality_flags_listing_sample_window_without_real_product_rows(
         "sample_semantics": {
             "price_present": False,
             "variant_count": 0,
-            "selected_variant_present": False,
-            "variant_axes_keys": [],
-            "variant_axes_semantic": False,
-            "selected_variant_has_price": False,
+            "variants_with_axes_count": 0,
+            "variants_all_have_axes": False,
+            "variants_with_price_count": 0,
+            "legacy_variant_keys_present": False,
         },
         "failure_mode": "success",
     }
@@ -703,10 +746,10 @@ def test_evaluate_quality_accepts_non_utility_listing_rows_without_price_when_fi
         "sample_semantics": {
             "price_present": False,
             "variant_count": 0,
-            "selected_variant_present": False,
-            "variant_axes_keys": [],
-            "variant_axes_semantic": False,
-            "selected_variant_has_price": False,
+            "variants_with_axes_count": 0,
+            "variants_all_have_axes": False,
+            "variants_with_price_count": 0,
+            "legacy_variant_keys_present": False,
         },
         "failure_mode": "success",
     }

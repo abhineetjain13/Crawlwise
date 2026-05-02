@@ -73,7 +73,6 @@
         "gender",
         "color",
         "size",
-        "available_sizes",
         "materials",
         "care",
         "features",
@@ -81,18 +80,12 @@
         "product_details",
         "product_attributes",
         "tags",
-        "variant_count",
         "image_count",
-        "option1_name",
-        "option1_values",
-        "option2_name",
-        "option2_values",
         "created_at",
         "updated_at",
         "published_at",
-        "variant_axes",
         "variants",
-        "selected_variant"
+        "variant_count"
       ]
     },
     "ecommerce_listing": {
@@ -241,6 +234,7 @@
   "SURFACE_BROWSER_RETRY_TARGETS": {
     "ecommerce_detail": [
       "price",
+      "currency",
       "title",
       "image_url"
     ]
@@ -248,23 +242,16 @@
   "ECOMMERCE_DETAIL_JS_STATE_FIELDS": {
     "__type__": "frozenset",
     "items": [
-      "option2_values",
       "variants",
-      "selected_variant",
-      "option1_values",
       "price",
       "currency",
       "original_price",
-      "available_sizes",
-      "variant_axes",
-      "option1_name",
       "image_count",
       "sku",
       "title",
       "availability",
       "brand",
       "image_url",
-      "option2_name",
       "size",
       "color",
       "stock_quantity",
@@ -279,7 +266,6 @@
       "exterior_color",
       "price",
       "interior_color",
-      "price_original",
       "sale_price",
       "currency",
       "original_price",
@@ -393,6 +379,7 @@
         "regular_price",
         "was_price",
         "original_price",
+        "price_original",
         "mrp",
         "listPrice",
         "highPrice"
@@ -474,29 +461,12 @@
         "variant_size"
       ]
     },
-    "variant_axes": {
-      "__type__": "list",
-      "items": [
-        "variant_axes",
-        "options",
-        "product_options",
-        "option_axes"
-      ]
-    },
     "variants": {
       "__type__": "list",
       "items": [
         "variants",
         "variant_rows",
         "variant_matrix"
-      ]
-    },
-    "selected_variant": {
-      "__type__": "list",
-      "items": [
-        "selected_variant",
-        "current_variant",
-        "active_variant"
       ]
     },
     "product_attributes": {
@@ -625,7 +595,6 @@
       "__type__": "list",
       "items": [
         "sku",
-        "product_id",
         "item_id",
         "id"
       ]
@@ -951,12 +920,6 @@
         "dealer"
       ]
     },
-    "price_original": {
-      "__type__": "list",
-      "items": [
-        "price_original"
-      ]
-    },
     "description": {
       "__type__": "list",
       "items": [
@@ -1036,13 +999,8 @@
         "canonical_url",
         "created_at",
         "image_count",
-        "option1_name",
-        "option1_values",
-        "option2_name",
-        "option2_values",
         "published_at",
-        "updated_at",
-        "variant_count"
+        "updated_at"
       ]
     }
   },
@@ -1105,9 +1063,6 @@
     "__type__": "frozenset",
     "items": [
       "additional_images",
-      "available_sizes",
-      "option1_values",
-      "option2_values",
       "tags"
     ]
   },
@@ -1120,12 +1075,6 @@
   "VARIANT_DOM_FIELD_NAMES": {
     "__type__": "tuple",
     "items": [
-      "available_sizes",
-      "option1_name",
-      "option1_values",
-      "option2_name",
-      "option2_values",
-      "variant_axes",
       "variant_count",
       "variants"
     ]

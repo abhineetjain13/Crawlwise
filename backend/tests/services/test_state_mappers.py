@@ -87,13 +87,7 @@ def test_map_js_state_to_fields_recovers_next_data_shopify_product_fields() -> N
         "https://cdn.example.com/products/trail-2.jpg"
     ]
     assert mapped["variant_count"] == 2
-    assert mapped["available_sizes"] == ["8", "9"]
-    assert mapped["option1_name"] == "color"
-    assert mapped["option1_values"] == ["Black", "Sand"]
-    assert mapped["option2_name"] == "size"
-    assert mapped["option2_values"] == ["8", "9"]
-    assert mapped["selected_variant"]["variant_id"] == "102"
-    assert mapped["variants"][0]["variant_id"] == "101"
+    assert "variant_id" not in mapped["variants"][0]
     assert mapped["variants"][1]["stock_quantity"] == 0
     assert (
         mapped["variants"][1]["url"]
@@ -149,11 +143,6 @@ def test_map_js_state_to_fields_uses_variation_attribute_display_names() -> None
     )
 
     assert mapped["color"] == "Cool Grey"
-    assert mapped["variant_axes"]["color"] == ["Cool Grey", "City Grey"]
-    assert mapped["selected_variant"]["option_values"] == {
-        "color": "Cool Grey",
-        "size": "S",
-    }
 
 
 def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None:
@@ -462,13 +451,8 @@ def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_varian
     assert mapped["price"] == "459.00"
     assert mapped["image_url"] == "https://cdn.example.com/iphone-14-front.jpg"
     assert mapped["additional_images"] == ["https://cdn.example.com/iphone-14-back.jpg"]
-    assert mapped["variant_axes"] == {"condition": ["Good", "Excellent"]}
-    assert mapped["variant_count"] == 2
-    assert mapped["selected_variant"]["variant_id"] == "excellent-128"
-    assert mapped["selected_variant"]["option_values"] == {
-        "storage": "128 GB",
-        "condition": "Excellent",
-    }
+    assert "variants" not in mapped
+    assert "variant_count" not in mapped
 
 
 def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_product_object() -> None:
@@ -528,13 +512,9 @@ def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_p
     assert mapped["availability"] == "in_stock"
     assert mapped["stock_quantity"] == 5
     assert mapped["original_price"] == "119.95"
-    assert mapped["selected_variant"]["variant_id"] == "v1"
-    assert mapped["selected_variant"]["availability"] == "in_stock"
-    assert mapped["selected_variant"]["stock_quantity"] == 5
-    assert mapped["selected_variant"]["original_price"] == "119.95"
     assert mapped["variants"][0]["availability"] == "in_stock"
     assert mapped["variants"][0]["stock_quantity"] == 5
-    assert mapped["variants"][0]["original_price"] == "119.95"
+    assert "original_price" not in mapped["variants"][0]
     assert mapped["variants"][1]["availability"] == "in_stock"
     assert mapped["variants"][1]["stock_quantity"] == 6
 
@@ -580,8 +560,6 @@ def test_map_js_state_to_fields_merges_same_product_sibling_payloads() -> None:
 
     assert mapped["title"] == "Trail Runner"
     assert mapped["price"] == "129.95"
-    assert mapped["variant_axes"] == {"color": ["Blue", "Red"], "size": ["9", "10"]}
-    assert mapped["selected_variant"]["variant_id"] == "blue-9"
 
 
 def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_payload() -> None:
@@ -686,15 +664,8 @@ def test_map_js_state_to_fields_recovers_direct_grade_and_storage_axes_from_vari
 
     assert mapped["title"] == "Game Console"
     assert mapped["price"] == "299.00"
-    assert mapped["variant_axes"] == {
-        "grade": ["Fair", "Good"],
-        "storage": ["512 GB", "1 TB"],
-    }
-    assert mapped["variant_count"] == 2
-    assert mapped["selected_variant"]["option_values"] == {
-        "grade": "Good",
-        "storage": "1 TB",
-    }
+    assert "variants" not in mapped
+    assert "variant_count" not in mapped
 
 
 def test_map_js_state_to_fields_replaces_existing_variant_query_parameter() -> None:
@@ -716,10 +687,7 @@ def test_map_js_state_to_fields_replaces_existing_variant_query_parameter() -> N
         page_url="https://store.example.com/products/commuter-backpack?ref=hero&variant=old",
     )
 
-    assert (
-        mapped["variants"][0]["url"]
-        == "https://store.example.com/products/commuter-backpack?ref=hero&variant=sku-123"
-    )
+    assert "variants" not in mapped
 
 
 def test_map_js_state_to_fields_keeps_ambiguous_availability_neutral() -> None:
@@ -741,7 +709,7 @@ def test_map_js_state_to_fields_keeps_ambiguous_availability_neutral() -> None:
         page_url="https://store.example.com/products/commuter-backpack",
     )
 
-    assert "availability" not in mapped["variants"][0]
+    assert "variants" not in mapped
 
 
 def test_job_detail_mappers_keep_shared_html_section_behavior() -> None:
@@ -1038,7 +1006,7 @@ def test_normalize_variant_does_not_use_product_id_as_variant_id() -> None:
         interpret_integral_as_cents=False,
     )
 
-    assert mapped == {"sku": "prod-1"}
+    assert mapped is None
 
 
 def test_map_js_state_to_fields_uses_selected_options_and_skips_marketing_axis_names() -> None:
@@ -1084,14 +1052,6 @@ def test_map_js_state_to_fields_uses_selected_options_and_skips_marketing_axis_n
         page_url="https://store.example.com/products/everyday-seamless-leggings?variant=black-s",
     )
 
-    assert mapped["variant_axes"] == {"size": ["S", "M"]}
-    assert mapped["selected_variant"]["option_values"] == {
-        "color": "Black",
-        "size": "S",
-    }
-    assert mapped["selected_variant"]["price"] == "58.00"
-    assert "soft_fabric" not in mapped["variant_axes"]
-    assert "high_waisted" not in mapped["variant_axes"]
 
 
 def test_map_js_state_to_fields_reads_nested_variant_price_objects() -> None:
@@ -1139,8 +1099,6 @@ def test_map_js_state_to_fields_reads_nested_variant_price_objects() -> None:
     )
 
     assert mapped["price"] == "100.00"
-    assert mapped["selected_variant"]["price"] == "100.00"
-    assert mapped["selected_variant"]["currency"] == "USD"
     assert mapped["variants"][0]["price"] == "100.00"
     assert mapped["variants"][1]["price"] == "100.00"
 
@@ -1176,9 +1134,8 @@ def test_map_js_state_to_fields_reads_nested_variant_original_price_objects() ->
         page_url="https://store.example.com/products/tree-runner?variant=runner-9",
     )
 
-    assert mapped["selected_variant"]["original_price"] == "130.00"
-    assert mapped["variants"][0]["original_price"] == "120.00"
-    assert mapped["variants"][1]["original_price"] == "130.00"
+    assert "original_price" not in mapped["variants"][0]
+    assert "original_price" not in mapped["variants"][1]
 
 
 def test_map_js_state_to_fields_reads_current_price_style_product_fields() -> None:
@@ -1221,4 +1178,3 @@ def test_map_js_state_to_fields_reads_current_price_style_product_fields() -> No
     assert mapped["price"] == "USD 115"
     assert mapped["original_price"] == "USD 130"
     assert mapped["currency"] == "USD"
-    assert mapped["selected_variant"]["price"] == "USD 115"

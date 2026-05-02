@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.services.config.extraction_rules import DETAIL_IRRELEVANT_JSON_LD_TYPES
+from app.services.config.extraction_rules import (
+    DETAIL_BREADCRUMB_JSONLD_TYPES,
+    DETAIL_IRRELEVANT_JSON_LD_TYPES,
+)
 
 
 @dataclass(slots=True)
@@ -125,12 +128,14 @@ def _detail_json_ld_payload_is_irrelevant(payload: object) -> bool:
         for item in (raw_types if isinstance(raw_types, list) else [raw_types])
         if str(item or "").strip()
     }
-    if normalized_types & {"breadcrumblist", "breadcrumb_list"}:
-        return True
+    if normalized_types & frozenset(DETAIL_BREADCRUMB_JSONLD_TYPES or ()):
+        return False
     if not normalized_types:
         return False
-    irrelevant_types = {str(value).strip().lower() for value in DETAIL_IRRELEVANT_JSON_LD_TYPES}
-    return bool(normalized_types) and normalized_types <= irrelevant_types
+    irrelevant_types = {
+        str(value).strip().lower() for value in DETAIL_IRRELEVANT_JSON_LD_TYPES
+    }
+    return normalized_types <= irrelevant_types
 
 
 def collect_js_state_tier(
