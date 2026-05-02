@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -31,7 +31,9 @@ from app.services.extract.detail_identity import (
 )
 from app.services.extract.detail_price_extractor import (
     backfill_detail_price_from_html,
-    normalize_detail_cent_prices_for_context,
+    detail_price_decimal,
+    format_detail_price_decimal,
+    reconcile_detail_price_magnitudes,
 )
 from app.services.extract.detail_text_sanitizer import (
     detail_product_type_is_low_signal,
@@ -410,7 +412,7 @@ def repair_ecommerce_detail_record_quality(
         requested_page_url=identity_url,
     )
     backfill_detail_price_from_html(record, html=html)
-    normalize_detail_cent_prices_for_context(record, page_url=page_url)
+    reconcile_detail_price_magnitudes(record)
     _normalize_detail_money_precision(record)
     _repair_invalid_original_prices(record)
     _drop_invalid_detail_discounts(record)
@@ -495,29 +497,19 @@ def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
 
 
 def _price_is_cents_copy(value: str, parent_price: str) -> bool:
-    value_number = _price_number(value)
-    parent_number = _price_number(parent_price)
+    value_number = detail_price_decimal(value)
+    parent_number = detail_price_decimal(parent_price)
     if value_number is None or parent_number is None or parent_number <= 0:
         return False
-    return abs(value_number - (parent_number * 100)) < 0.01
+    return abs(value_number - (parent_number * 100)) < Decimal("0.01")
 
 
 def _price_is_low_signal_copy(value: str, parent_price: str) -> bool:
-    value_number = _price_number(value)
-    parent_number = _price_number(parent_price)
+    value_number = detail_price_decimal(value)
+    parent_number = detail_price_decimal(parent_price)
     if value_number is None or parent_number is None:
         return False
-    return 0 < value_number <= 1 and parent_number >= 10
-
-
-def _price_number(value: object) -> float | None:
-    text = text_or_none(value)
-    if not text:
-        return None
-    try:
-        return float(re.sub(r"[^0-9.]+", "", text))
-    except ValueError:
-        return None
+    return Decimal("0") < value_number <= Decimal("1") and parent_number >= Decimal("10")
 
 
 def _normalize_detail_money_precision(record: dict[str, Any]) -> None:
@@ -547,17 +539,14 @@ def _money_two_decimals(value: object) -> str | None:
     text = text_or_none(value)
     if not text or not re.fullmatch(r"\d+(?:\.\d+)?", text):
         return None
-    try:
-        return f"{Decimal(text).quantize(Decimal('0.01'))}"
-    except (InvalidOperation, ValueError):
-        return None
+    return format_detail_price_decimal(text)
 
 
 def _drop_invalid_detail_discounts(record: dict[str, Any]) -> None:
-    price = _price_number(record.get("price"))
-    original_price = _price_number(record.get("original_price"))
-    discount_amount = _price_number(record.get("discount_amount"))
-    discount_percentage = _price_number(record.get("discount_percentage"))
+    price = detail_price_decimal(record.get("price"))
+    original_price = detail_price_decimal(record.get("original_price"))
+    discount_amount = detail_price_decimal(record.get("discount_amount"))
+    discount_percentage = detail_price_decimal(record.get("discount_percentage"))
     if discount_percentage is not None and not (0 < discount_percentage <= 100):
         record.pop("discount_percentage", None)
     if discount_amount is None:
@@ -576,8 +565,8 @@ def _repair_invalid_original_prices(record: dict[str, Any]) -> None:
     for container in _detail_money_containers(record):
         if not isinstance(container, dict):
             continue
-        price = _price_number(container.get("price"))
-        original_price = _price_number(container.get("original_price"))
+        price = detail_price_decimal(container.get("price"))
+        original_price = detail_price_decimal(container.get("original_price"))
         if price is None or original_price is None or original_price >= price:
             continue
         normalized_price = _money_two_decimals(container.get("price"))
@@ -648,20 +637,22 @@ def _variant_title_looks_like_other_product(title: str, *, identity_url: str) ->
 
 
 def _variant_title_can_be_option_label(variant: dict[str, Any], *, title: str) -> bool:
-    if len(clean_text(title).split()) > 6:
+    title_words = clean_text(title).split()
+    if len(title_words) > 6:
         return False
-    return any(
+    has_option_axis = any(
         variant.get(field_name) not in (None, "", [], {})
         for field_name in (
-            "sku",
-            "variant_id",
-            "barcode",
-            "price",
-            "availability",
             "option_values",
             "size",
             "color",
         )
+    )
+    if has_option_axis:
+        return True
+    return len(title_words) == 1 and any(
+        variant.get(field_name) not in (None, "", [], {})
+        for field_name in ("sku", "variant_id", "barcode")
     )
 
 

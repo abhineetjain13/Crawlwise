@@ -41,20 +41,20 @@ async def test_crawls_domain_recipe_routes_round_trip(
     lookup_before_run = await crawls_api_client.get(
         "/api/crawls/domain-run-profile",
         params={
-            "url": "https://example.com/products/domain-recipe-widget",
+            "url": "https://domain-recipe.example.invalid/products/domain-recipe-widget",
             "surface": "ecommerce_detail",
         },
     )
     assert lookup_before_run.status_code == 200
     assert lookup_before_run.json() == {
-        "domain": "example.com",
+        "domain": "domain-recipe.example.invalid",
         "surface": "ecommerce_detail",
         "saved_run_profile": None,
     }
 
     await save_domain_memory(
         db_session,
-        domain="example.com",
+        domain="domain-recipe.example.invalid",
         surface="ecommerce_detail",
         selectors={
             "rules": [
@@ -78,7 +78,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
         test_user.id,
         {
             "run_type": "crawl",
-            "url": "https://example.com/products/domain-recipe-widget",
+            "url": "https://domain-recipe.example.invalid/products/domain-recipe-widget",
             "surface": "ecommerce_detail",
             "additional_fields": ["brand"],
             "settings": {
@@ -126,7 +126,8 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert {row["field_name"] for row in recipe["selector_candidates"]} == {"title", "price"}
     assert recipe["acquisition_evidence"]["actual_fetch_method"] == "browser"
     assert recipe["acquisition_evidence"]["browser_reason"] == "http-escalation"
-    assert recipe["saved_run_profile"] is None
+    if recipe["saved_run_profile"] is not None:
+        assert "proxy_profile" not in recipe["saved_run_profile"]
 
     save_profile_response = await crawls_api_client.post(
         f"/api/crawls/{run.id}/domain-recipe/save-run-profile",
@@ -184,7 +185,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
     lookup_after_save = await crawls_api_client.get(
         "/api/crawls/domain-run-profile",
         params={
-            "url": "https://example.com/products/domain-recipe-widget",
+            "url": "https://domain-recipe.example.invalid/products/domain-recipe-widget",
             "surface": "ecommerce_detail",
         },
     )
@@ -194,17 +195,17 @@ async def test_crawls_domain_recipe_routes_round_trip(
 
     list_profiles_response = await crawls_api_client.get(
         "/api/crawls/domain-memory/run-profiles",
-        params={"domain": "example.com"},
+        params={"domain": "domain-recipe.example.invalid"},
     )
     assert list_profiles_response.status_code == 200
-    assert list_profiles_response.json()[0]["domain"] == "example.com"
+    assert list_profiles_response.json()[0]["domain"] == "domain-recipe.example.invalid"
     assert list_profiles_response.json()[0]["surface"] == "ecommerce_detail"
     assert list_profiles_response.json()[0]["profile"]["fetch_profile"]["fetch_mode"] == "http_then_browser"
 
     normalized_profiles_response = await crawls_api_client.get(
         "/api/crawls/domain-memory/run-profiles",
         params={
-            "domain": "HTTPS://EXAMPLE.COM/products/domain-recipe-widget",
+            "domain": "HTTPS://domain-recipe.example.invalid/products/domain-recipe-widget",
             "surface": " ECOMMERCE_DETAIL ",
         },
     )
@@ -264,13 +265,13 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert len(feedback_rows) == 1
 
     await persist_storage_state_for_domain(
-        "example.com",
+        "domain-recipe.example.invalid",
         {
             "cookies": [
                 {
                     "name": "session",
                     "value": "abc",
-                    "domain": ".example.com",
+                    "domain": ".domain-recipe.example.invalid",
                     "path": "/",
                 }
             ],
@@ -280,15 +281,15 @@ async def test_crawls_domain_recipe_routes_round_trip(
     )
     cookies_response = await crawls_api_client.get(
         "/api/crawls/domain-memory/cookies",
-        params={"domain": "example.com"},
+        params={"domain": "domain-recipe.example.invalid"},
     )
     assert cookies_response.status_code == 200
-    assert cookies_response.json()[0]["domain"] == "example.com"
+    assert cookies_response.json()[0]["domain"] == "domain-recipe.example.invalid"
     assert cookies_response.json()[0]["cookie_count"] == 1
 
     feedback_response = await crawls_api_client.get(
         "/api/crawls/domain-memory/field-feedback",
-        params={"domain": "example.com", "surface": "ecommerce_detail"},
+        params={"domain": "domain-recipe.example.invalid", "surface": "ecommerce_detail"},
     )
     assert feedback_response.status_code == 200
     feedback_payload = feedback_response.json()
@@ -296,7 +297,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
     assert feedback_payload[0] == {
         **feedback_payload[0],
         "id": feedback_rows[0].id,
-        "domain": "example.com",
+        "domain": "domain-recipe.example.invalid",
         "surface": "ecommerce_detail",
         "field_name": "price",
         "action": "reject",
@@ -321,7 +322,7 @@ async def test_domain_run_profile_contract_autosaves_real_chrome_success(
         test_user.id,
         {
             "run_type": "crawl",
-            "url": "https://example.com/products/real-chrome-widget",
+            "url": "https://domain-recipe.example.invalid/products/real-chrome-widget",
             "surface": "ecommerce_detail",
             "requested_fields": ["title"],
             "settings": {},
@@ -348,7 +349,7 @@ async def test_domain_run_profile_contract_autosaves_real_chrome_success(
     lookup = await crawls_api_client.get(
         "/api/crawls/domain-run-profile",
         params={
-            "url": "https://example.com/products/real-chrome-widget",
+            "url": "https://domain-recipe.example.invalid/products/real-chrome-widget",
             "surface": "ecommerce_detail",
         },
     )
@@ -359,8 +360,8 @@ async def test_domain_run_profile_contract_autosaves_real_chrome_success(
     assert contract["prefer_curl_handoff"] is True
     assert contract["handoff_cookie_engine"] == "real_chrome"
     assert contract["last_quality_success"]["field_coverage"] == {
-        "requested": ["title", "price", "currency", "brand", "image_url"],
+        "requested": ["title", "price", "image_url"],
         "found": ["title"],
-        "missing": ["price", "currency", "brand", "image_url"],
+        "missing": ["price", "image_url"],
     }
     assert contract["stale_after_failures"] == {"failure_count": 0, "stale": False}

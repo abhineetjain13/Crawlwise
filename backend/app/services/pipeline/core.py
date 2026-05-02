@@ -486,10 +486,15 @@ async def _run_extraction_stage(
         return retry_stage
     await _log_extraction_outcome(context, acquisition_result, records)
     if rejection_reason:
+        guidance = (
+            "; URL looks like a listing/search seed. Use ecommerce_listing."
+            if rejection_reason == "non_detail_seed"
+            else ""
+        )
         await _log_pipeline_event(
             context,
             "warning",
-            f"Rejected detail extraction for {context.url}: {rejection_reason}",
+            f"Rejected detail extraction for {context.url}: {rejection_reason}{guidance}",
         )
     return _ExtractedURLStage(fetched=fetched, records=records)
 

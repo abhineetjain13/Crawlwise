@@ -539,6 +539,51 @@ def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_p
     assert mapped["variants"][1]["stock_quantity"] == 6
 
 
+def test_map_js_state_to_fields_merges_same_product_sibling_payloads() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "id": "prod-1",
+                            "name": "Trail Runner",
+                            "image": "https://example.com/trail.jpg",
+                        },
+                        "pricing": {
+                            "id": "prod-1",
+                            "name": "Trail Runner",
+                            "price": "129.95",
+                            "currency": "USD",
+                            "variants": [
+                                {"id": "blue-9", "color": "Blue", "size": "9"},
+                                {"id": "blue-10", "color": "Blue", "size": "10"},
+                                {"id": "red-9", "color": "Red", "size": "9"},
+                                {"id": "red-10", "color": "Red", "size": "10"},
+                            ],
+                        },
+                        "recommendations": [
+                            {
+                                "id": "prod-2",
+                                "name": "Other Shoe",
+                                "price": "49.00",
+                                "currency": "USD",
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/trail-runner?variant=blue-9",
+    )
+
+    assert mapped["title"] == "Trail Runner"
+    assert mapped["price"] == "129.95"
+    assert mapped["variant_axes"] == {"color": ["Blue", "Red"], "size": ["9", "10"]}
+    assert mapped["selected_variant"]["variant_id"] == "blue-9"
+
+
 def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_payload() -> None:
     mapped = map_js_state_to_fields(
         {

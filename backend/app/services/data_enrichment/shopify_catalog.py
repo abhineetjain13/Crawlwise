@@ -52,7 +52,7 @@ def normalize_taxonomy_token(value: object) -> str:
         return f"{token[:-3]}y"
     if len(token) > 4 and token.endswith("sses"):
         return token[:-2]
-    if len(token) > 4 and token.endswith(("xes", "ches", "shes", "ses")):
+    if len(token) > 4 and token.endswith(("xes", "ches", "shes")):
         return token[:-2]
     if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
         return token[:-1]
@@ -209,7 +209,11 @@ def taxonomy_context_conflicts(source_tokens: set[str], category_path: object) -
         )
         if not context_terms or not path_terms:
             continue
-        if not any(set(tokenize_text(term)) <= source_tokens for term in context_terms):
+        if not any(
+            tokens and tokens <= source_tokens
+            for term in context_terms
+            if (tokens := set(tokenize_text(term)))
+        ):
             continue
         if any(term in path_text for term in path_terms):
             return True

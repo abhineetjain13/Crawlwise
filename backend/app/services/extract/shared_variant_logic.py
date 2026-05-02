@@ -6,17 +6,22 @@ from collections.abc import Sequence
 from typing import Any
 
 from app.services.config.extraction_rules import (
+    DETAIL_VARIANT_CONTEXT_NOISE_TOKENS,
     VARIANT_AXIS_LABEL_NOISE_PATTERNS,
     VARIANT_AXIS_LABEL_NOISE_TOKENS,
     VARIANT_AXIS_ALIASES,
+    VARIANT_AXIS_ALLOWED_SINGLE_TOKENS,
+    VARIANT_AXIS_GENERIC_TOKENS,
     VARIANT_CHOICE_GROUP_SELECTOR,
     VARIANT_COLOR_HINT_WORDS,
     VARIANT_GROUP_ATTR_NOISE_PATTERNS,
     VARIANT_GROUP_ATTR_NOISE_TOKENS,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
+    VARIANT_QUANTITY_ATTR_TOKENS,
     VARIANT_SIZE_ALIAS_SUFFIXES,
     VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SELECT_GROUP_SELECTOR,
+    VARIANT_AXIS_TECHNICAL_PATTERNS,
 )
 from app.services.field_value_core import clean_text, text_or_none
 
@@ -59,56 +64,37 @@ _VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
     for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
     if str(token).strip()
 )
+variant_context_noise_tokens = frozenset(
+    str(token).strip().lower()
+    for token in tuple(DETAIL_VARIANT_CONTEXT_NOISE_TOKENS or ())
+    if str(token).strip()
+)
 _VARIANT_SIZE_ALIAS_SUFFIXES = tuple(
     str(token).strip().lower()
     for token in tuple(VARIANT_SIZE_ALIAS_SUFFIXES or ())
     if str(token).strip()
 )
-_VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
-    {
-        "color",
-        "colour",
-        "condition",
-        "cup",
-        "edition",
-        "finish",
-        "flavor",
-        "flavour",
-        "format",
-        "fit",
-        "material",
-        "memory",
-        "model",
-        "pack",
-        "scent",
-        "shade",
-        "size",
-        "storage",
-        "style",
-        "type",
-        "weight",
-    }
+variant_axis_allowed_single_tokens = frozenset(
+    str(token).strip().lower()
+    for token in tuple(VARIANT_AXIS_ALLOWED_SINGLE_TOKENS or ())
+    if str(token).strip()
 )
-_VARIANT_AXIS_GENERIC_TOKENS = frozenset(
-    {
-        "attribute",
-        "choice",
-        "dropdown",
-        "option",
-        "options",
-        "select",
-        "selected",
-        "selector",
-        "styledselect",
-        "swatch",
-        "variant",
-        "variation",
-    }
+variant_axis_generic_tokens = frozenset(
+    str(token).strip().lower()
+    for token in tuple(VARIANT_AXIS_GENERIC_TOKENS or ())
+    if str(token).strip()
 )
-_VARIANT_AXIS_TECHNICAL_PATTERNS = (
-    re.compile(r"^(?:option|options?|select|selector|dropdown|variant|variation|styledselect)[_\s-]*\d+$", re.I),
-    re.compile(r"^(?:variation|variant|option|attribute|selector|styledselect)(?:[_\s-]+(?:selector|select))?(?:[_\s-]*\d+)?$", re.I),
-    re.compile(r"^[a-z]*select\d+$", re.I),
+variant_axis_technical_patterns = (
+    tuple(
+        re.compile(str(pattern), re.I)
+        for pattern in tuple(VARIANT_AXIS_TECHNICAL_PATTERNS or ())
+        if str(pattern).strip()
+    )
+)
+variant_quantity_attr_tokens = frozenset(
+    str(token).strip().lower()
+    for token in tuple(VARIANT_QUANTITY_ATTR_TOKENS or ())
+    if str(token).strip()
 )
 
 
@@ -133,13 +119,13 @@ def normalized_variant_axis_key(value: object) -> str:
     semantic_tokens = [
         token
         for token in tokens
-        if token in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS
+        if token in variant_axis_allowed_single_tokens
     ]
     if (
         len(semantic_tokens) == 1
         and all(
             token == semantic_tokens[0]
-            or token in _VARIANT_AXIS_GENERIC_TOKENS
+            or token in variant_axis_generic_tokens
             or token.isdigit()
             or len(token) <= 3
             for token in tokens
@@ -162,11 +148,11 @@ def normalized_variant_axis_display_name(value: object) -> str:
         return cleaned
     if len(tokens) == 1 and tokens[0] == axis_key:
         return cleaned
-    if axis_key not in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+    if axis_key not in variant_axis_allowed_single_tokens:
         return cleaned
     extra_tokens = [token for token in tokens if token != axis_key]
     if extra_tokens and all(
-        token in _VARIANT_AXIS_GENERIC_TOKENS
+        token in variant_axis_generic_tokens
         or token.isdigit()
         or len(token) <= 3
         for token in extra_tokens
@@ -254,8 +240,8 @@ def resolve_variant_group_name(node: Any) -> str:
         if variant_axis_name_is_semantic(cleaned_name):
             normalized_name = normalized_variant_axis_key(cleaned_name)
             tokens = [token for token in re.split(r"[^a-z0-9]+", cleaned_name.lower()) if token]
-            if normalized_name in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS and any(
-                token.isdigit() or token in _VARIANT_AXIS_GENERIC_TOKENS
+            if normalized_name in variant_axis_allowed_single_tokens and any(
+                token.isdigit() or token in variant_axis_generic_tokens
                 for token in tokens
             ):
                 return normalized_name
@@ -310,11 +296,11 @@ def _resolve_machine_variant_group_name(value: object) -> str:
     normalized_tokens = [token for token in normalized.split("_") if token]
     if not normalized_tokens:
         return ""
-    if normalized in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+    if normalized in variant_axis_allowed_single_tokens:
         return normalized
     if all(
-        token in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS
-        or token in _VARIANT_AXIS_GENERIC_TOKENS
+        token in variant_axis_allowed_single_tokens
+        or token in variant_axis_generic_tokens
         or token.isdigit()
         for token in normalized_tokens
     ):
@@ -344,6 +330,8 @@ def _variant_group_node_attrs_are_noise(node: Any) -> bool:
     if not probe:
         return False
     if any(token in probe for token in _VARIANT_GROUP_ATTR_NOISE_TOKENS):
+        return True
+    if any(token in probe for token in variant_context_noise_tokens):
         return True
     return any(pattern.search(probe) for pattern in _VARIANT_GROUP_ATTR_NOISE_PATTERNS)
 
@@ -445,13 +433,9 @@ def _semantic_group_label_from_text(value: object) -> str:
     ]
     for candidate in candidates:
         normalized = normalized_variant_axis_key(candidate)
-        if normalized in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+        if normalized in variant_axis_allowed_single_tokens:
             return normalized
     return ""
-
-
-def _looks_like_variant_axis_name(value: object) -> bool:
-    return variant_axis_name_is_semantic(value)
 
 
 def variant_axis_name_is_semantic(value: object) -> bool:
@@ -461,9 +445,9 @@ def variant_axis_name_is_semantic(value: object) -> bool:
         return False
     if _variant_axis_label_is_noise(cleaned):
         return False
-    if any(pattern.fullmatch(lowered) for pattern in _VARIANT_AXIS_TECHNICAL_PATTERNS):
+    if any(pattern.fullmatch(lowered) for pattern in variant_axis_technical_patterns):
         return False
-    if re.fullmatch(r"[a-z0-9]+", lowered) and lowered in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+    if re.fullmatch(r"[a-z0-9]+", lowered) and lowered in variant_axis_allowed_single_tokens:
         return True
     tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
     if not tokens or len(tokens) > 4:
@@ -476,23 +460,17 @@ def variant_axis_name_is_semantic(value: object) -> bool:
     axis_tokens = [token for token in axis_key.split("_") if token]
     if not axis_tokens:
         return False
-    if any(pattern.fullmatch(axis_key) for pattern in _VARIANT_AXIS_TECHNICAL_PATTERNS):
+    if any(pattern.fullmatch(axis_key) for pattern in variant_axis_technical_patterns):
         return False
-    if any(token in _VARIANT_AXIS_ALLOWED_SINGLE_TOKENS for token in axis_tokens):
+    if any(token in variant_axis_allowed_single_tokens for token in axis_tokens):
         return True
     non_generic_tokens = [
-        token for token in axis_tokens if token not in _VARIANT_AXIS_GENERIC_TOKENS and not token.isdigit()
+        token for token in axis_tokens if token not in variant_axis_generic_tokens and not token.isdigit()
     ]
     if not non_generic_tokens:
         return False
     return True
 
-
-
-_QUANTITY_ATTR_TOKENS: frozenset[str] = frozenset({
-    "quantity", "qty", "amount", "item-count", "number-of-items",
-    "number_of_items", "item_count", "howmany",
-})
 
 
 def _select_is_quantity_node(node: Any) -> bool:
@@ -505,7 +483,7 @@ def _select_is_quantity_node(node: Any) -> bool:
         if not value:
             continue
         tokens = re.split(r"[^a-z0-9]+", value)
-        if any(t in _QUANTITY_ATTR_TOKENS for t in tokens):
+        if any(t in variant_quantity_attr_tokens for t in tokens):
             return True
     return False
 

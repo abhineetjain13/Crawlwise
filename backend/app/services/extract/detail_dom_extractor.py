@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
+    DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
     VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
@@ -74,6 +75,11 @@ _variant_option_value_noise_tokens = frozenset(
 _variant_option_value_ui_noise_phrases = tuple(
     str(token).strip().lower()
     for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
+    if str(token).strip()
+)
+_variant_artifact_value_tokens = frozenset(
+    str(token).strip().lower()
+    for token in tuple(DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or ())
     if str(token).strip()
 )
 
@@ -313,9 +319,13 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
     if not value:
         return True
     lowered = value.lower()
+    compact = re.sub(r"[^a-z0-9%#]+", "", lowered)
     return (
-        not value
-        or re.sub(r"[^a-z0-9]+", "", lowered) in _variant_option_value_noise_tokens
+        compact in _variant_option_value_noise_tokens
+        or compact in _variant_artifact_value_tokens
+        or re.fullmatch(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?", compact) is not None
+        or re.fullmatch(r"\d+\s*%\s*(?:off)?", lowered) is not None
+        or ("%" in lowered and any(token in lowered for token in ("off", "discount", "promo")))
         or lowered in {"select", "choose", "option", "size guide"}
         or any(phrase in lowered for phrase in _variant_option_value_ui_noise_phrases)
         or (

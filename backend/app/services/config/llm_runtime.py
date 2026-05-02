@@ -100,14 +100,14 @@ class LLMRuntimeSettings(BaseSettings):
             except (InvalidOperation, ValueError):
                 continue
         if not pricing and raw is not DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD:
-            fallback = self.model_copy(
-                update={
-                    "token_pricing_json": json.dumps(
-                        DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD
-                    )
-                }
-            )
-            return fallback.get_token_pricing()
+            for key, value in DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD.items():
+                provider, separator, model = str(key or "").partition("/")
+                if not separator:
+                    continue
+                pricing[(provider.strip().lower(), model.strip().lower())] = (
+                    Decimal(str(value[0])),
+                    Decimal(str(value[1])),
+                )
         return pricing
 
 

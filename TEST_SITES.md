@@ -36,6 +36,22 @@ https://www.thriftbooks.com/browse/?b.search=science
 https://www.thomann.de/gb/guitars.html
 https://www.rockler.com/wood/exotic-lumber
 https://www.govplanet.com/for-sale/equipment
+https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127
+https://31philliplim.com/collections
+https://ar.puma.com/lo-mas-vendido
+https://www.karenmillen.com/eu/categories/womens-trousers
+https://www.ganni.com/en-gb/trainers/
+https://www.phase-eight.com/clothing/dresses/
+https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos
+https://savannahs.com/collections/all-boots
+https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products
+https://www.dyson.in/vacuum-cleaners/cord-free
+https://www.grailed.com/categories/womenswear/blazers
+https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating
+https://www.firstcry.com/sets-and--suits/6/166?scat=166&gender=girl,unisex&ref2=menu_dd_girl-fashion_sets-and-suits_H
+https://www.stadiumgoods.com/collections/adidas-shoes
+https://www2.hm.com/en_in/men/shoes/view-all.html
+https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html?trksrc=navbar&trkid=l2
 
 ## Section LJ — Listing Jobs
 
@@ -54,27 +70,6 @@ https://jobs.80000hours.org/jobs
 https://cryptocurrencyjobs.co/
 https://euremotejobs.com/
 https://www.instahyre.com/search-jobs
-
-## Section DC — Detail Commerce
-
-https://www.thomann.de/gb/akg_k702.htm
-https://www.discogs.com/release/249504
-https://www.ifixit.com/products/iphone-16-plus-battery
-https://www.vitacost.com/vitacost-vitamin-d3-mini-gels
-https://www.abebooks.com/9780132350884/Clean-Code-Handbook-Agile-Software-0132350882/plp
-https://www.rockler.com/rockler-table-saw-crosscut-sled
-https://www.backmarket.com/en-us/p/iphone-15-plus
-https://31philliplim.com/collections/the-luna-bag-1/products/luna-1
-https://zadig-et-voltaire.com/eu/uk/p/JMTS01771443/t-shirt-teddyx-blue-sixtine
-https://ar.puma.com/pd/zapatillas-mostro-ecstasy-unisex/397328.html?color=07
-https://www.karenmillen.com/eu/product/karen-millen-cotton-utility-button-detail-barrel-leg-trouser_bkk28382?colour=ivory
-https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail
-https://www.kitchenaid.com/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html
-https://www.phase-eight.com/product/lucinda-spot-midi-dress-10015500806.html
-https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-seersucker-sutton-suit-2
-https://savannahs.com/collections/all-boots/products/pavlova-100-lace-up-blush-satin-boots-cl28517s
-https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants?g_aidx=Listing_by_listing_quality_production&g_aqid=dcff41da6c7483961c0b500769d4c7bc
-https://www.desertcart.in/products/808107894-hormone-healthy-eats-100-recipes-to-balance-your-hormones-support?source=search
 
 ## Section DJ — Detail Jobs
 
@@ -104,23 +99,6 @@ https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b
 https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=14fa7571-bfac-427f-aa18-9488391d4c5e&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings
 
 ## Section CE — Commerce Extended
-
-https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127
-https://31philliplim.com/collections
-https://ar.puma.com/lo-mas-vendido
-https://www.karenmillen.com/eu/categories/womens-trousers
-https://www.ganni.com/en-gb/trainers/
-https://www.phase-eight.com/clothing/dresses/
-https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos
-https://savannahs.com/collections/all-boots
-https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products
-https://www.dyson.in/vacuum-cleaners/cord-free
-https://www.grailed.com/categories/womenswear/blazers
-https://www.desertcart.in/search?query=Nutrition+%26+Healthy+Eating
-https://www.firstcry.com/sets-and--suits/6/166?scat=166&gender=girl,unisex&ref2=menu_dd_girl-fashion_sets-and-suits_H
-https://www.stadiumgoods.com/collections/adidas-shoes
-https://www2.hm.com/en_in/men/shoes/view-all.html
-https://www.zivame.com/sleepwear-nightwear/sleep-pyjama-sets.html?trksrc=navbar&trkid=l2
 
 https://www.sneakersnstuff.com/products/dime-soft-rock-crewneck-dime2sp2542blk
 https://www.samsclub.com/ip/Scotch-Heavy-Duty-Shipping-Packaging-Tape-Dispensers-1-88-x-27-7-yd-6-Pack/5113185138?classType=REGULAR
@@ -156,3 +134,20 @@ https://www.fashionnova.com/products/just-vibes-strapless-pant-set-yellow?recomm
 https://www.puravidabracelets.com/products/black-seascape-stretch-bracelet?pr_prod_strat=e5_desc&pr_rec_id=3ef961ba9&pr_rec_pid=7216396632150&pr_ref_pid=7559267778646&pr_seq=uniform&variant=41298450153558
 https://www.untuckit.com/collections/shirts/products/cameron-wr-2
 https://www.decathlon.co.uk/p/pressurised-padel-balls-pb-speed-tri-pack/347273/m8804642
+https://www.thomann.de/gb/akg_k702.htm
+https://www.discogs.com/release/249504
+https://www.ifixit.com/products/iphone-16-plus-battery
+https://www.vitacost.com/vitacost-vitamin-d3-mini-gels
+https://www.rockler.com/rockler-table-saw-crosscut-sled
+https://www.backmarket.com/en-us/p/iphone-15-plus
+https://31philliplim.com/collections/the-luna-bag-1/products/luna-1
+https://zadig-et-voltaire.com/eu/uk/p/JMTS01771443/t-shirt-teddyx-blue-sixtine
+https://ar.puma.com/pd/zapatillas-mostro-ecstasy-unisex/397328.html?color=07
+https://www.karenmillen.com/eu/product/karen-millen-cotton-utility-button-detail-barrel-leg-trouser_bkk28382?colour=ivory
+https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail
+https://www.kitchenaid.com/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html
+https://www.phase-eight.com/product/lucinda-spot-midi-dress-10015500806.html
+https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-seersucker-sutton-suit-2
+https://savannahs.com/collections/all-boots/products/pavlova-100-lace-up-blush-satin-boots-cl28517s
+https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants?g_aidx=Listing_by_listing_quality_production&g_aqid=dcff41da6c7483961c0b500769d4c7bc
+https://www.desertcart.in/products/808107894-hormone-healthy-eats-100-recipes-to-balance-your-hormones-support?source=search

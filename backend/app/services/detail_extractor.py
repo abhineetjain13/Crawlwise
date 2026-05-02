@@ -20,7 +20,6 @@ from app.services.config.extraction_rules import (
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
     DETAIL_CATEGORY_SOURCE_RANKS,
     DETAIL_LONG_TEXT_SOURCE_RANKS,
-    DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES,
     DETAIL_TITLE_SOURCE_RANKS,
     SOURCE_PRIORITY,
 )
@@ -86,9 +85,11 @@ from app.services.extract.detail_record_finalizer import (
     repair_ecommerce_detail_record_quality,
     sanitize_variant_row as _sanitize_variant_row,  # noqa: F401
 )
+from app.services.extract.detail_text_sanitizer import detail_candidate_is_valid
 from app.services.extract.detail_price_extractor import (
     backfill_detail_price_from_html,
     drop_low_signal_zero_detail_price,
+    reconcile_detail_price_magnitudes,
     reconcile_detail_currency_with_url as _reconcile_detail_currency_with_url,
 )
 from app.services.extract.detail_title_scorer import (
@@ -162,7 +163,7 @@ def _add_sourced_candidate(
     *,
     source: str,
 ) -> None:
-    if _long_text_candidate_is_noise(field_name, value, source=source):
+    if not detail_candidate_is_valid(field_name, value, source=source):
         return
     before = len(candidates.get(field_name, []))
     add_candidate(candidates, field_name, value)
@@ -173,35 +174,6 @@ def _add_sourced_candidate(
     bucket = field_sources.setdefault(field_name, [])
     if source not in bucket:
         bucket.append(source)
-
-
-def _long_text_candidate_is_noise(
-    field_name: str,
-    value: object,
-    *,
-    source: str | None = None,
-) -> bool:
-    if field_name not in LONG_TEXT_FIELDS:
-        return False
-    cleaned = clean_text(value)
-    lowered = cleaned.lower()
-    if not lowered:
-        return True
-    if lowered in DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES:
-        return True
-    if field_name in {"description", "specifications"} and lowered.startswith(
-        ("check the details", "product summary")
-    ):
-        return True
-    if (
-        source == "dom_sections"
-        and field_name in {"description", "specifications", "product_details"}
-        and len(cleaned.split()) <= 4
-        and not any(token in cleaned for token in ".:;!?\n")
-    ):
-        return True
-    return len(cleaned.split()) < 2
-
 
 def _collect_record_candidates(
     record: dict[str, Any],
@@ -1040,6 +1012,7 @@ def _finalize_early_detail_record(
     js_state_objects: dict[str, Any],
 ) -> dict[str, Any]:
     backfill_detail_price_from_html(record, html=html)
+    reconcile_detail_price_magnitudes(record)
     _backfill_variants_from_dom_if_missing(
         record,
         soup=soup,
@@ -1104,6 +1077,7 @@ def _finalize_dom_detail_record(
     js_state_objects: dict[str, Any],
 ) -> dict[str, Any]:
     backfill_detail_price_from_html(record, html=html)
+    reconcile_detail_price_magnitudes(record)
     drop_low_signal_zero_detail_price(record)
     _backfill_variants_from_dom_if_missing(
         record,
@@ -1442,6 +1416,7 @@ def extract_detail_records(
     if surface == "ecommerce_detail":
         normalize_variant_record(record)
         backfill_detail_price_from_html(record, html=html)
+        reconcile_detail_price_magnitudes(record)
         _reconcile_detail_currency_with_url(record, page_url=page_url)
     if surface == "ecommerce_detail" and _looks_like_site_shell_record(
         record,

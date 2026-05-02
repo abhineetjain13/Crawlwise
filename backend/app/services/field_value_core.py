@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 from html.parser import HTMLParser
 from html import unescape
@@ -127,14 +128,11 @@ _NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
     if str(key or "").strip()
 ) | {"availability", "available", "in_stock", "stock_status"}
 
-
 def _object_list(value: object) -> list:
     return list(value) if isinstance(value, list) else []
 
-
 def _object_dict(value: object) -> dict:
     return dict(value) if isinstance(value, dict) else {}
-
 
 def _safe_int(value: object, *, default: int | None = None) -> int | None:
     if value is None or value == "":
@@ -143,7 +141,6 @@ def _safe_int(value: object, *, default: int | None = None) -> int | None:
         return int(str(value))
     except (ValueError, TypeError):
         return default
-
 
 def _coerce_int(value: object, *, default: int = 0) -> int:
     if isinstance(value, bool):
@@ -154,7 +151,6 @@ def _coerce_int(value: object, *, default: int = 0) -> int:
         return int(str(value).strip())
     except (ValueError, TypeError):
         return default
-
 
 object_list = _object_list
 object_dict = _object_dict
@@ -476,10 +472,30 @@ def direct_record_to_surface_fields(
 
 def coerce_text(value: object) -> str | None:
     if isinstance(value, str):
+        literal_rows = _coerce_literal_text_list(value)
+        if literal_rows:
+            return text_or_none(" ".join(literal_rows))
         if "<" in value or _HTML_ENTITY_RE.search(value):
             return text_or_none(html_to_text(value))
         return text_or_none(value)
     return text_or_none(value)
+
+
+def _coerce_literal_text_list(value: str) -> list[str]:
+    text = str(value or "").strip()
+    if not text.startswith("[") or not text.endswith("]"):
+        return []
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return []
+    if not isinstance(parsed, (list, tuple)):
+        return []
+    return [
+        clean_text(item)
+        for item in parsed
+        if not isinstance(item, (dict, list, tuple, set)) and clean_text(item)
+    ]
 
 
 def extract_price_text(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -8,16 +9,18 @@ from bs4 import BeautifulSoup
 
 from app.services.config.extraction_rules import (
     DETAIL_CENT_BASED_PRICE_CURRENCIES,
-    DETAIL_CENT_PRICE_HOST_SUFFIXES,
     DETAIL_CURRENT_PRICE_SELECTORS,
     DETAIL_CURRENCY_JSONLD_PATTERN,
     DETAIL_CURRENCY_META_SELECTORS,
+    DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS,
     DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA,
     DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO,
     DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES,
     DETAIL_ORIGINAL_PRICE_SELECTORS,
+    DETAIL_PRICE_CENT_MAGNITUDE_RATIO,
     DETAIL_PRICE_JSONLD_PATTERN,
     DETAIL_PRICE_JSONLD_TYPE_PATTERN,
+    DETAIL_PRICE_MAGNITUDE_EPSILON,
     DETAIL_PRICE_META_SELECTORS,
     PAGE_URL_CURRENCY_HINTS_RAW,
 )
@@ -30,11 +33,14 @@ from app.services.normalizers import normalize_decimal_price
 
 _LOW_SIGNAL_ZERO_PRICE_SOURCES = frozenset(DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES)
 _AUTHORITATIVE_PRICE_SOURCES = frozenset({"adapter", "network_payload"})
+_STRICT_PARENT_PRICE_SOURCES = frozenset({"network_payload"})
 _CENT_BASED_CURRENCIES = frozenset(DETAIL_CENT_BASED_PRICE_CURRENCIES)
-_CENT_PRICE_HOST_SUFFIXES = tuple(
-    str(host).strip().lower()
-    for host in tuple(DETAIL_CENT_PRICE_HOST_SUFFIXES or ())
-    if str(host).strip()
+_PRICE_CENT_MAGNITUDE_RATIO = Decimal(str(DETAIL_PRICE_CENT_MAGNITUDE_RATIO))
+_PRICE_MAGNITUDE_EPSILON = Decimal(str(DETAIL_PRICE_MAGNITUDE_EPSILON))
+installment_price_text_tokens = tuple(
+    str(token).strip().lower()
+    for token in tuple(DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS or ())
+    if str(token).strip()
 )
 _DETAIL_PRICE_JSONLD_TYPE_RE = re.compile(str(DETAIL_PRICE_JSONLD_TYPE_PATTERN))
 _DETAIL_PRICE_JSONLD_RE = re.compile(str(DETAIL_PRICE_JSONLD_PATTERN))
@@ -68,6 +74,20 @@ def backfill_detail_price_from_html(
         append_record_field_source(record, "currency", "dom_text")
 
     price = _detail_price_from_html(soup, currency=currency)
+    visible_price = _detail_price_from_selector_text(
+        soup,
+        selectors=DETAIL_CURRENT_PRICE_SELECTORS,
+        currency=currency,
+    )
+    if visible_price and (
+        _detail_price_is_cent_magnitude_copy(price, visible_price)
+        or _should_override_record_price_from_dom(
+            record=record,
+            dom_price=visible_price,
+            record_price_is_low_signal=record_price_is_low_signal,
+        )
+    ):
+        price = visible_price
     if price in (None, "", [], {}):
         return
     if _should_override_record_price_from_dom(
@@ -80,6 +100,7 @@ def backfill_detail_price_from_html(
     if isinstance(selected_variant, dict) and (
         selected_variant.get("price") in (None, "", [], {})
         or _detail_price_value_is_low_signal(selected_variant.get("price"))
+        or _detail_price_is_cent_magnitude_copy(selected_variant.get("price"), price)
     ):
         selected_variant["price"] = price
         if currency and selected_variant.get("currency") in (None, "", [], {}):
@@ -92,6 +113,7 @@ def backfill_detail_price_from_html(
             if (
                 variant.get("price") not in (None, "", [], {})
                 and not _detail_price_value_is_low_signal(variant.get("price"))
+                and not _detail_price_is_cent_magnitude_copy(variant.get("price"), price)
             ):
                 continue
             variant["price"] = price
@@ -200,15 +222,37 @@ def reconcile_detail_currency_with_url(
                     )
 
 
-def normalize_detail_cent_prices_for_context(
-    record: dict[str, Any],
-    *,
-    page_url: str,
-) -> None:
-    if not _detail_price_context_uses_cents(page_url):
+def reconcile_detail_price_magnitudes(record: dict[str, Any]) -> None:
+    parent_price = detail_price_decimal(record.get("price"))
+    variant_rows = [
+        row
+        for row in [record.get("selected_variant"), *list(record.get("variants") or [])]
+        if isinstance(row, dict)
+    ]
+    variant_prices = [
+        detail_price_decimal(row.get("price"))
+        for row in variant_rows
+        if detail_price_decimal(row.get("price")) is not None
+    ]
+    safe_variant_price = _single_decimal_value(variant_prices)
+    if (
+        parent_price is not None
+        and safe_variant_price is not None
+        and _decimal_is_cent_magnitude_copy(parent_price, safe_variant_price)
+        and not (record_field_sources(record, "price") & _STRICT_PARENT_PRICE_SOURCES)
+    ):
+        record["price"] = _format_price_decimal(safe_variant_price)
+        append_record_field_source(record, "price", "variant_price_magnitude")
+        parent_price = safe_variant_price
+    if parent_price is None:
         return
-    for container in _detail_price_containers(record):
-        _normalize_cent_price_container(container)
+    for index, row in enumerate(variant_rows):
+        row_price = detail_price_decimal(row.get("price"))
+        if row_price is None:
+            continue
+        if _decimal_is_cent_magnitude_copy(row_price, parent_price):
+            row["price"] = _format_price_decimal(parent_price)
+            append_record_field_source(record, f"variants[{index}].price", "parent_price_magnitude")
 
 
 def record_field_sources(record: dict[str, Any], field_name: str) -> set[str]:
@@ -253,6 +297,8 @@ def _should_override_record_price_from_dom(
     if current_price in (None, "", [], {}):
         return True
     if record_price_is_low_signal:
+        return True
+    if _detail_price_is_cent_magnitude_copy(current_price, dom_price):
         return True
     if not _detail_price_is_visible_outlier(current_price, dom_price):
         return False
@@ -311,48 +357,6 @@ def normalize_mismatched_host_currency_price(
     return normalized
 
 
-def _detail_price_context_uses_cents(page_url: str) -> bool:
-    hostname = str(urlparse(str(page_url or "")).hostname or "").strip().lower()
-    return bool(
-        hostname
-        and any(hostname == suffix or hostname.endswith(f".{suffix}") for suffix in _CENT_PRICE_HOST_SUFFIXES)
-    )
-
-
-def _detail_price_containers(record: dict[str, Any]) -> list[dict[str, Any]]:
-    containers = [record]
-    selected_variant = record.get("selected_variant")
-    if isinstance(selected_variant, dict):
-        containers.append(selected_variant)
-    variants = record.get("variants")
-    if isinstance(variants, list):
-        containers.extend(variant for variant in variants if isinstance(variant, dict))
-    return containers
-
-
-def _normalize_cent_price_container(container: dict[str, Any]) -> None:
-    for field_name in ("price", "original_price"):
-        normalized = _normalize_cent_integer_price(container.get(field_name))
-        if normalized:
-            container[field_name] = normalized
-
-
-def _normalize_cent_integer_price(value: object) -> str | None:
-    text = text_or_none(value)
-    if not text or "." in text:
-        return None
-    digits_only = re.sub(r"\D+", "", text)
-    if len(digits_only) < 4:
-        return None
-    normalized = normalize_decimal_price(text, interpret_integral_as_cents=True)
-    if normalized is None:
-        return None
-    try:
-        return f"{float(normalized):.2f}"
-    except (TypeError, ValueError):
-        return normalized
-
-
 def _reconcile_container_currency(
     container: dict[str, Any],
     *,
@@ -398,34 +402,34 @@ def _html_currency_conflicts_with_strong_host_hint(
 
 
 def _price_value_is_zero(value: object) -> bool:
-    normalized = _normalized_price_value(value)
-    return bool(normalized) and _coerce_float(normalized, default=1.0) == 0.0
+    normalized = detail_price_decimal(value)
+    return normalized is not None and normalized == Decimal("0")
 
 
 def _price_value_is_positive(value: object) -> bool:
-    normalized = _normalized_price_value(value)
-    return bool(normalized) and _coerce_float(normalized, default=0.0) > 0.0
+    normalized = detail_price_decimal(value)
+    return normalized is not None and normalized > Decimal("0")
 
 
 def _detail_price_value_is_low_signal(value: object) -> bool:
-    normalized = _normalized_price_value(value)
-    if not normalized:
+    price = detail_price_decimal(value)
+    if price is None:
         return False
-    try:
-        price = float(normalized)
-    except ValueError:
-        return False
-    return 0.0 < price <= 1.0
+    return Decimal("0") < price <= Decimal("1")
 
 
 def _detail_price_is_visible_outlier(value: object, visible_value: object) -> bool:
-    current = _coerce_float(_normalized_price_value(value), default=0.0)
-    visible = _coerce_float(_normalized_price_value(visible_value), default=0.0)
-    if current <= 0 or visible <= 0 or visible <= current:
+    current = detail_price_decimal(value)
+    visible = detail_price_decimal(visible_value)
+    if current is None or visible is None or current <= 0 or visible <= 0:
         return False
-    if visible - current < float(DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA):
+    if _decimal_is_cent_magnitude_copy(current, visible):
+        return True
+    if visible <= current:
         return False
-    return current <= visible * float(DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO)
+    if visible - current < Decimal(str(DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA)):
+        return False
+    return current <= visible * Decimal(str(DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO))
 
 
 def _normalized_price_value(value: object) -> str | None:
@@ -435,6 +439,50 @@ def _normalized_price_value(value: object) -> str | None:
     if re.fullmatch(r"\d+(?:\.\d+)?", text):
         return text
     return normalize_decimal_price(text, interpret_integral_as_cents=False)
+
+
+def detail_price_decimal(value: object) -> Decimal | None:
+    normalized = _normalized_price_value(value)
+    if not normalized:
+        return None
+    try:
+        return Decimal(str(normalized))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _format_price_decimal(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.01")), "f")
+
+
+def format_detail_price_decimal(value: object) -> str | None:
+    price = detail_price_decimal(value)
+    if price is None:
+        return None
+    return _format_price_decimal(price)
+
+
+def _detail_price_is_cent_magnitude_copy(value: object, reference: object) -> bool:
+    value_decimal = detail_price_decimal(value)
+    reference_decimal = detail_price_decimal(reference)
+    return bool(
+        value_decimal is not None
+        and reference_decimal is not None
+        and _decimal_is_cent_magnitude_copy(value_decimal, reference_decimal)
+    )
+
+
+def _decimal_is_cent_magnitude_copy(value: Decimal, reference: Decimal) -> bool:
+    if value <= 0 or reference <= 0:
+        return False
+    return abs(value - (reference * _PRICE_CENT_MAGNITUDE_RATIO)) <= _PRICE_MAGNITUDE_EPSILON
+
+
+def _single_decimal_value(values: list[Decimal]) -> Decimal | None:
+    unique = {_format_price_decimal(value) for value in values if value > 0}
+    if len(unique) != 1:
+        return None
+    return Decimal(next(iter(unique)))
 
 
 def _detail_record_has_positive_price_corroboration(record: dict[str, Any]) -> bool:
@@ -514,6 +562,8 @@ def _detail_price_from_selector_text(
 ) -> str | None:
     for selector in selectors:
         for node in soup.select(selector):
+            if _price_node_looks_like_installment(node):
+                continue
             raw_value = node.get("aria-label") if hasattr(node, "get") else None
             if raw_value in (None, "", [], {}):
                 raw_value = node.get_text(" ", strip=True)
@@ -521,6 +571,24 @@ def _detail_price_from_selector_text(
             if normalized:
                 return normalized
     return None
+
+
+def _price_node_looks_like_installment(node: object) -> bool:
+    text_parts: list[str] = []
+    for candidate in (node,):
+        if candidate is None:
+            continue
+        if hasattr(candidate, "get_text"):
+            text_parts.append(candidate.get_text(" ", strip=True))
+        if hasattr(candidate, "get"):
+            for attr_name in ("aria-label",):
+                raw = candidate.get(attr_name)
+                if isinstance(raw, list):
+                    text_parts.extend(str(item) for item in raw)
+                elif raw not in (None, "", [], {}):
+                    text_parts.append(str(raw))
+    lowered = " ".join(text_parts).lower()
+    return any(token in lowered for token in installment_price_text_tokens)
 
 
 def _detail_currency_from_html(soup: BeautifulSoup) -> str | None:
@@ -559,29 +627,14 @@ def _normalize_detail_price_candidate(
     text = text_or_none(value)
     if not text:
         return None
-    digits_only = re.sub(r"\D+", "", text)
     if (
         currency
         and re.fullmatch(r"\d+(?:\.\d+)?", text)
         and "." not in text
-        and len(digits_only) <= 3
+        and len(re.sub(r"\D+", "", text)) <= 3
     ):
         return text
-    return normalize_decimal_price(
-        text,
-        interpret_integral_as_cents=(
-            "." not in text
-            and len(digits_only) >= 4
-            and currency in _CENT_BASED_CURRENCIES
-        ),
-    )
-
-
-def _coerce_float(value: object, default: float = 0.0) -> float:
-    try:
-        return float(str(value))
-    except (TypeError, ValueError):
-        return default
+    return normalize_decimal_price(text, interpret_integral_as_cents=False)
 
 
 __all__ = [
@@ -589,8 +642,10 @@ __all__ = [
     "backfill_detail_price_from_html",
     "detail_currency_hint_is_host_level",
     "drop_low_signal_zero_detail_price",
+    "format_detail_price_decimal",
     "normalize_mismatched_host_currency_price",
-    "normalize_detail_cent_prices_for_context",
+    "reconcile_detail_price_magnitudes",
     "reconcile_detail_currency_with_url",
     "record_field_sources",
+    "detail_price_decimal",
 ]

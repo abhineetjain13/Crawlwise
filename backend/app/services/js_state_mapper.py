@@ -141,31 +141,67 @@ def _map_ecommerce_detail_state(
     base_record: dict[str, Any] = {}
     for state_key, payload in js_state_objects.items():
         normalized_payload = _normalized_state_payload(state_key, payload)
-        product, extractor = _extract_product_payload_from_normalized(
+        product_payloads = _extract_product_payloads_from_normalized(
             state_key,
             normalized_payload,
         )
-        if not isinstance(product, dict):
-            continue
-        mapped = _map_product_payload(
-            product,
-            page_url=page_url,
-            category_fallback_from_type=(state_key == "__NUXT_DATA__"),
-            field_jmespaths=(
-                extractor.field_jmespaths if extractor is not None else None
-            ),
-        )
-        if mapped:
-            if not base_record:
-                base_record = mapped
-            elif _mapped_product_identity_matches(base_record, mapped, page_url=page_url):
-                base_record = _merge_same_product_record(
-                    base_record,
-                    mapped,
-                    page_url=page_url,
-                )
+        for product, extractor in product_payloads:
+            if not isinstance(product, dict):
+                continue
+            mapped = _map_product_payload(
+                product,
+                page_url=page_url,
+                category_fallback_from_type=(state_key == "__NUXT_DATA__"),
+                field_jmespaths=(
+                    extractor.field_jmespaths if extractor is not None else None
+                ),
+            )
+            if mapped:
+                if not base_record:
+                    base_record = mapped
+                elif _mapped_product_identity_matches(base_record, mapped, page_url=page_url):
+                    base_record = _merge_same_product_record(
+                        base_record,
+                        mapped,
+                        page_url=page_url,
+                    )
     return base_record
 
+def _extract_product_payloads_from_normalized(
+    state_key: str,
+    normalized_payload: Any,
+) -> list[tuple[dict[str, Any], JSStateExtractorConfig | None]]:
+    products: list[tuple[dict[str, Any], JSStateExtractorConfig | None]] = []
+    for extractor in platform_js_state_extractors(
+        surface="ecommerce_detail",
+        state_key=state_key,
+    ):
+        for root_path in extractor.root_paths.get(state_key, []):
+            candidate = _path_value(normalized_payload, root_path)
+            if _looks_like_product_payload(candidate):
+                products.append((dict(candidate), extractor))
+    products.extend((product, None) for product in _find_product_payloads(normalized_payload))
+    if products:
+        return _dedupe_product_payloads(products)
+    return []
+def _dedupe_product_payloads(
+    products: list[tuple[dict[str, Any], JSStateExtractorConfig | None]],
+) -> list[tuple[dict[str, Any], JSStateExtractorConfig | None]]:
+    deduped: list[tuple[dict[str, Any], JSStateExtractorConfig | None]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for product, extractor in products:
+        key = tuple(
+            sorted(
+                (field_name, str(product.get(field_name)))
+                for field_name in ("id", "product_id", "productId", "sku", "handle", "title", "name")
+                if product.get(field_name) not in (None, "", [], {})
+            )
+        ) + (("__keys__", ",".join(sorted(str(key) for key in product))),)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((product, extractor))
+    return deduped[:8]
 def _merge_same_product_record(
     base_record: dict[str, Any],
     incoming: dict[str, Any],
@@ -211,7 +247,6 @@ def _merge_same_product_record(
 
     _refresh_record_from_selected_variant(merged)
     return compact_dict(merged)
-
 def _merge_variant_axes(existing_axes: Any, incoming_axes: Any) -> dict[str, list[str]]:
     merged: dict[str, list[str]] = {}
     for axes in (existing_axes, incoming_axes):
@@ -230,7 +265,6 @@ def _merge_variant_axes(existing_axes: Any, incoming_axes: Any) -> dict[str, lis
                 seen.add(cleaned_value.lower())
                 bucket.append(cleaned_value)
     return merged
-
 def _refresh_record_from_selected_variant(record: dict[str, Any]) -> None:
     selected_variant = record.get("selected_variant")
     if not isinstance(selected_variant, dict):
@@ -269,20 +303,6 @@ def _mapped_product_identity_matches(
     base_title = text_or_none(base_record.get("title"))
     mapped_title = text_or_none(mapped.get("title"))
     return bool(base_title and mapped_title and base_title == mapped_title)
-
-def _extract_product_payload_from_normalized(
-    state_key: str,
-    normalized_payload: Any,
-) -> tuple[dict[str, Any] | None, JSStateExtractorConfig | None]:
-    for extractor in platform_js_state_extractors(
-        surface="ecommerce_detail",
-        state_key=state_key,
-    ):
-        for root_path in extractor.root_paths.get(state_key, []):
-            candidate = _path_value(normalized_payload, root_path)
-            if _looks_like_product_payload(candidate):
-                return dict(candidate), extractor
-    return _find_product_payload(normalized_payload), None
 
 def _normalized_state_payload(state_key: str, payload: Any) -> Any:
     if state_key == "__NUXT_DATA__":
@@ -345,32 +365,29 @@ def _looks_like_product_payload(value: Any) -> bool:
     ) and any(key in value for key in ("title", "name", "pn"))
 
 def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict[str, Any] | None:
+    payloads = _find_product_payloads(value, depth=depth, limit=limit)
+    return payloads[0] if payloads else None
+
+
+def _find_product_payloads(
+    value: Any,
+    *,
+    depth: int = 0,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
     if depth > limit:
-        return None
-    best_payload: dict[str, Any] | None = None
-    best_score: tuple[int, ...] | None = None
+        return []
+    payloads: list[dict[str, Any]] = []
     if _looks_like_product_payload(value):
-        best_payload = dict(value)
-        best_score = _product_payload_score(best_payload)
+        payloads.append(dict(value))
     if isinstance(value, dict):
         for item in value.values():
-            found = _find_product_payload(item, depth=depth + 1, limit=limit)
-            if found is None:
-                continue
-            score = _product_payload_score(found)
-            if best_payload is None or best_score is None or score > best_score:
-                best_payload = found
-                best_score = score
+            payloads.extend(_find_product_payloads(item, depth=depth + 1, limit=limit))
     elif isinstance(value, list):
         for item in value[:25]:
-            found = _find_product_payload(item, depth=depth + 1, limit=limit)
-            if found is None:
-                continue
-            score = _product_payload_score(found)
-            if best_payload is None or best_score is None or score > best_score:
-                best_payload = found
-                best_score = score
-    return best_payload
+            payloads.extend(_find_product_payloads(item, depth=depth + 1, limit=limit))
+    payloads.sort(key=_product_payload_score, reverse=True)
+    return payloads[:8]
 
 def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
     raw_variants = _as_list(product.get("variants"))

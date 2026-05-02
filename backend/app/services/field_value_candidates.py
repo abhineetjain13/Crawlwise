@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from urllib.parse import urlparse
 
@@ -28,6 +29,8 @@ from app.services.field_value_core import (
 )
 from app.services.extract.shared_variant_logic import normalized_variant_axis_key, resolve_variants
 from app.services.normalizers import normalize_decimal_price
+
+logger = logging.getLogger(__name__)
 
 
 def candidate_fingerprint(value: object) -> str:
@@ -102,10 +105,13 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
             return 0.0
 
     try:
-        if all(isinstance(x, dict) and x.get("position") for x in raw_items):
+        if all(
+            isinstance(x, dict) and isinstance(x.get("position"), (int, float))
+            for x in raw_items
+        ):
             raw_items = sorted(raw_items, key=_get_position)
     except Exception:
-        pass
+        logger.exception("Failed to sort breadcrumb itemListElement by position")
 
     names: list[str] = []
     strip_chars = " \t\n\r" + "".join(DETAIL_BREADCRUMB_SEPARATOR_LABELS)
@@ -123,14 +129,11 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
         if lowered in DETAIL_BREADCRUMB_ROOT_LABELS:
             return True
         if page_url:
-            try:
-                host = urlparse(page_url).netloc.lower()
-                if host.startswith("www."):
-                    host = host[4:]
-                if lowered == host or lowered == host.split(".")[0]:
-                    return True
-            except ValueError:
-                pass
+            host = urlparse(page_url).netloc.lower()
+            if host.startswith("www."):
+                host = host[4:]
+            if host and (lowered == host or lowered == host.split(".")[0]):
+                return True
         return False
 
     if len(names) > 1 and _is_root_label(names[-1]) and not _is_root_label(names[0]):

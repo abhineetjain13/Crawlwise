@@ -1,12 +1,10 @@
 from __future__ import annotations
-
 import json
 import logging
 import time
 from json import loads as parse_json
 from string import Template
 from typing import Annotated, Any, Literal, NotRequired, TypedDict
-
 from app.core.metrics import observe_llm_task_duration, record_llm_task_outcome
 from app.models.crawl import CrawlRun
 from app.models.llm import LLMCostLog, LLMCostLogOutcome
@@ -49,7 +47,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
-
 
 def _require_present_value(value: Any) -> Any:
     if value in (None, "", [], {}):
@@ -262,13 +259,14 @@ async def run_prompt_task(
                     error_category=(
                         ""
                         if error_category == LLMErrorCategory.NONE
-                        else str(error_category or "")
+                        else str(error_category)
                     ),
                     error_message=str(error_message or ""),
                 )
             )
             await session.flush()
         except SQLAlchemyError:
+            await session.rollback()
             logger.warning("Failed to persist LLM cost log", exc_info=True)
 
     config = await resolve_run_config(session, run_id=run_id, task_type=task_type)

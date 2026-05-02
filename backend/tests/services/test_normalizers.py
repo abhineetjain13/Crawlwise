@@ -61,6 +61,17 @@ def test_normalize_value_unwraps_singleton_barcode_list_and_rounds_rating() -> N
     assert normalize_value("rating", "2.399113082039911") == 2.4
 
 
+def test_coerce_text_fields_join_literal_list_strings() -> None:
+    assert (
+        coerce_field_value(
+            "product_details",
+            "['Leather upper with perforated toe box', 'Rubber outsole']",
+            "",
+        )
+        == "Leather upper with perforated toe box Rubber outsole"
+    )
+
+
 def test_normalize_availability_schema_url() -> None:
     assert (
         normalize_value("availability", "https://schema.org/LimitedAvailability")

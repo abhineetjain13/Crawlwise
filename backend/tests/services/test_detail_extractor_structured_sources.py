@@ -485,7 +485,7 @@ def test_extract_ecommerce_detail_gender_from_explicit_structured_attribute() ->
     assert rows[0]["gender"] == "Women"
 
 
-def test_extract_ecommerce_detail_category_from_breadcrumblist_json_ld() -> None:
+def test_extract_ecommerce_detail_ignores_breadcrumblist_json_ld_category() -> None:
     html = """
     <html>
       <head>
@@ -517,8 +517,73 @@ def test_extract_ecommerce_detail_category_from_breadcrumblist_json_ld() -> None
     )
 
     assert len(rows) == 1
+    assert "category" not in rows[0]
+
+
+def test_extract_ecommerce_detail_category_from_dom_breadcrumb() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {"@context": "https://schema.org", "@type": "Product", "name": "Linen Midi Dress"}
+        </script>
+      </head>
+      <body>
+        <nav aria-label="Breadcrumb">
+          <ol>
+            <li><a href="/">Home</a></li>
+            <li><a href="/women">Women</a></li>
+            <li><a href="/women/dresses">Dresses</a></li>
+            <li><span>Linen Midi Dress</span></li>
+          </ol>
+        </nav>
+        <h1>Linen Midi Dress</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/linen-midi-dress",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
     assert rows[0]["category"] == "Women > Dresses"
     assert rows[0]["gender"] == "women"
+
+
+def test_extract_ecommerce_detail_dom_breadcrumb_drops_ui_tokens_and_title_suffix() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {"@context": "https://schema.org", "@type": "Product", "name": "Trail Shoe Pro"}
+        </script>
+      </head>
+      <body>
+        <nav class="breadcrumbs">
+          <a>Back</a>
+          <a>Home</a>
+          <a>Men</a>
+          <a>Shoes</a>
+          <span>Trail-Shoe Pro</span>
+        </nav>
+        <h1>Trail Shoe Pro</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-shoe-pro",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["category"] == "Men > Shoes"
 
 
 def test_extract_ecommerce_detail_from_nuxt_payload_with_self_referential_wrapper() -> None:
@@ -1179,6 +1244,38 @@ def test_extract_ecommerce_detail_ignores_newsletter_fields_inside_size_containe
     assert record["selected_variant"]["option_values"] == {"size": "M"}
     assert "Email" not in record["variant_axes"]["size"]
     assert "Sign up for updates and promotions" not in record["variant_axes"]["size"]
+
+
+def test_extract_ecommerce_detail_rejects_promo_and_hex_only_dom_variant_values() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Everyday Tee</h1>
+        <div class="promo-swatch-group" aria-label="Discount">
+          <button type="button" aria-label="20% off"></button>
+          <button type="button" aria-label="30% off"></button>
+        </div>
+        <div class="color-swatch-group" aria-label="Color">
+          <button type="button" data-value="#ffffff"></button>
+          <button type="button" data-value="#000000"></button>
+        </div>
+        <div class="color-swatch-group" aria-label="Color">
+          <button type="button" aria-label="Black" style="background:#000"></button>
+          <button type="button" aria-label="White" style="background:#fff"></button>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/everyday-tee",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["variant_axes"] == {"color": ["Black", "White"]}
 
 
 def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availability() -> None:
@@ -3263,6 +3360,45 @@ def test_extract_ecommerce_detail_prunes_irrelevant_nested_related_products_from
     )
 
 
+def test_build_detail_record_drops_related_product_rows_mapped_as_variants() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Going Coconuts</h1></main></body></html>",
+        "https://colourpop.com/products/going-coconuts-eyeshadow-palette",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Going Coconuts",
+                "price": "14.00",
+                "currency": "USD",
+                "variants": [
+                    {
+                        "title": "Blowin' Smoke",
+                        "price": "14.00",
+                        "currency": "USD",
+                        "image_url": "https://cdn.example.com/blowin-smoke.jpg",
+                    },
+                    {
+                        "title": "Going Coconuts - Light",
+                        "option_values": {"shade": "Light"},
+                        "price": "14.00",
+                        "currency": "USD",
+                    },
+                ],
+            }
+        ],
+    )
+
+    assert record["variants"] == [
+        {
+            "title": "Going Coconuts - Light",
+            "option_values": {"shade": "Light"},
+            "price": "14.00",
+            "currency": "USD",
+        }
+    ]
+
+
 def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_and_legal_tail() -> None:
     html = "<html><body><main><h1>Black Seascape Stretch Bracelet</h1></main></body></html>"
 
@@ -3414,24 +3550,166 @@ def test_build_detail_record_drops_v6_target_fulfillment_description() -> None:
     assert "description" not in record
 
 
-def test_build_detail_record_normalizes_v6_cent_integer_prices_by_host_context() -> None:
+def test_build_detail_record_rejects_audit_artifact_candidates_before_selection() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Audit Widget</h1><img src='/widget.jpg'></main></body></html>",
+        "https://example.com/products/audit-widget",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Audit Widget",
+                "category": "Back > Home > Men > Shoes",
+                "sku": "COPY-1720644688978",
+                "product_type": "inline",
+                "price": "unavailable",
+                "description": "Useful product copy Show More",
+                "variants": [{"name": "off", "value": False}],
+            }
+        ],
+    )
+
+    assert record["title"] == "Audit Widget"
+    assert "category" not in record
+    assert "sku" not in record
+    assert "product_type" not in record
+    assert "price" not in record
+    assert "description" not in record
+    assert "variants" not in record
+
+
+def test_build_detail_record_rejects_structural_identity_artifacts() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Stand Mixer</h1></main></body></html>",
+        "https://www.example.com/products/stand-mixer",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "plp",
+                "product_id": "specifications",
+                "product_type": "BRIGHTCOVE VIDEO",
+                "price": "449",
+                "currency": "USD",
+            }
+        ],
+    )
+
+    assert record["title"] == "Stand Mixer"
+    assert "product_id" not in record
+    assert "product_type" not in record
+
+
+def test_build_detail_record_trims_long_text_ui_tail_when_product_copy_remains() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Cotton Shirt</h1></main></body></html>",
+        "https://example.com/products/cotton-shirt",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Cotton Shirt",
+                "description": "Soft cotton shirt with relaxed fit and reinforced seams Show More",
+            }
+        ],
+    )
+
+    assert record["description"] == "Soft cotton shirt with relaxed fit and reinforced seams"
+
+
+def test_build_detail_record_drops_duplicate_specifications_and_materials_ui_labels() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Linen Jacket</h1></main></body></html>",
+        "https://example.com/products/linen-jacket",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Linen Jacket",
+                "description": "Lightweight linen jacket with horn buttons.",
+                "specifications": "Lightweight linen jacket with horn buttons.",
+                "materials": "Reviews\nCare\nLinen shell",
+            }
+        ],
+    )
+
+    assert record["description"] == "Lightweight linen jacket with horn buttons."
+    assert "specifications" not in record
+    assert record["materials"] == "Linen shell"
+
+
+def test_build_detail_record_drops_global_guide_and_glossary_text() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Oxford Shirt</h1></main></body></html>",
+        "https://example.com/products/oxford-shirt",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Oxford Shirt",
+                "description": (
+                    "Regular Fit - Our classic cut. Slim Fit - Two inches less. "
+                    "Relaxed Fit - Roomier through the body."
+                ),
+                "materials": (
+                    "Fabric glossary. The word 'seersucker' originates from Persian. "
+                    "Oxford cloth is a basket weave."
+                ),
+            }
+        ],
+    )
+
+    assert "description" not in record
+    assert "materials" not in record
+
+
+def test_build_detail_record_keeps_valid_candidates_after_candidate_gate() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Trail Shoe</h1><img src='/shoe.jpg'></main></body></html>",
+        "https://example.com/products/trail-shoe",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Trail Shoe",
+                "category": "Men > Shoes",
+                "sku": "TRAIL-100",
+                "product_type": "Running Shoes",
+                "price": "129.95",
+                "description": "Lightweight trail shoe with grippy outsole.",
+                "variant_axes": {"size": ["8", "9"]},
+                "variants": [{"sku": "TRAIL-100-8", "option_values": {"size": "8"}}],
+            }
+        ],
+    )
+
+    assert record["category"] == "Men > Shoes"
+    assert record["sku"] == "TRAIL-100"
+    assert record["product_type"] == "Running Shoes"
+    assert record["price"] == "129.95"
+    assert record["description"] == "Lightweight trail shoe with grippy outsole."
+    assert record["variant_axes"] == {"size": ["8", "9"]}
+    assert record["variants"][0]["option_values"] == {"size": "8"}
+
+
+def test_build_detail_record_preserves_integral_price_magnitude_without_cent_context() -> None:
     cases = [
         (
             "https://in.puma.com/in/en/pd/deviate-nitro-elite-4-run-club-mens-road-running-shoes/312907",
             "9999",
-            "99.99",
+            "9999.00",
             "INR",
         ),
         (
             "https://www.farfetch.com/shopping/men/designer-sneakers-item-123.aspx",
             "13880",
-            "138.80",
+            "13880.00",
             "USD",
         ),
         (
             "https://www.ssense.com/en-us/men/product/willy-chavarria/brown-ruff-rider-leather-jacket/19072301",
             "3890",
-            "38.90",
+            "3890.00",
             "USD",
         ),
     ]
@@ -3460,6 +3738,24 @@ def test_build_detail_record_normalizes_v6_cent_integer_prices_by_host_context()
 
         assert record["price"] == expected_price
         assert record["variants"][0]["price"] == expected_price
+
+
+def test_extract_detail_preserves_visible_integer_price_magnitude() -> None:
+    rows = extract_records(
+        """
+        <html><body><main>
+          <h1>Archive Jacket</h1>
+          <div data-testid="price">$1012</div>
+          <p class="description">Archive jacket starting at $1012.</p>
+        </main></body></html>
+        """,
+        "https://www.grailed.com/listings/archive-jacket",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["price"] == "1012.00"
 
 
 def test_build_detail_record_rejects_broken_extensionless_transformed_image_urls() -> None:
@@ -3604,6 +3900,86 @@ def test_build_detail_record_backfills_low_signal_one_dollar_prices_from_dom() -
     assert record["price"] == "100.00"
     assert record["variants"][0]["price"] == "100.00"
     assert record["selected_variant"]["price"] == "100.00"
+
+
+def test_extract_detail_corrects_100x_structured_price_from_visible_dom_price() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Kitchen Mixer",
+          "offers": {"price": "22999.00", "priceCurrency": "USD"}
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Kitchen Mixer</h1>
+          <div data-testid="price">$229.99</div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/kitchen-mixer",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["price"] == "229.99"
+
+
+def test_build_detail_record_corrects_parent_price_from_variant_magnitude_match() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Road Running Shoes</h1></main></body></html>",
+        "https://example.com/products/road-running-shoes",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Road Running Shoes",
+                "price": "9999.00",
+                "currency": "USD",
+                "variants": [
+                    {
+                        "variant_id": "ROAD-9",
+                        "price": "99.99",
+                        "currency": "USD",
+                        "option_values": {"size": "9"},
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert record["price"] == "99.99"
+    assert record["variants"][0]["price"] == "99.99"
+
+
+def test_extract_detail_skips_installment_price_when_total_price_exists() -> None:
+    html = """
+    <html><body><main>
+      <h1>Sectional Sofa</h1>
+      <div class="price financing">Pay in 4 payments of $50.00 with Klarna</div>
+      <div class="price total">$200.00</div>
+    </main></body></html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/sectional-sofa",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["price"] == "200.00"
 
 
 def test_build_detail_record_replaces_uuid_sku_with_merch_code() -> None:

@@ -1,15 +1,12 @@
 from __future__ import annotations
-
 import logging
 import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
-
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRecord, CrawlRun, DataEnrichmentJob, EnrichedProduct
 from app.models.user import User
@@ -54,12 +51,9 @@ from app.services.field_value_core import (
 from app.services.llm_runtime import run_prompt_task
 from app.services.normalizers import normalize_decimal_price
 from app.services.product_intelligence.matching import source_domain
-
 _token_re = re.compile(r"[a-z0-9]+")
 _PRICE_RANGE_RE = re.compile(r"(.+?)(?:\s+(?:to)\s+|\s*[-–]\s*)(.+)", re.I)
 logger = logging.getLogger(__name__)
-
-
 async def create_data_enrichment_job(
     session: AsyncSession,
     *,
@@ -75,7 +69,6 @@ async def create_data_enrichment_job(
         raise ValueError("Data Enrichment needs at least one ecommerce detail record")
     if source_run_id is not None:
         await require_accessible_run(session, run_id=source_run_id, user=user)
-
     accepted_records: list[CrawlRecord] = []
     skipped_status = 0
     skipped_surface = 0
@@ -94,10 +87,8 @@ async def create_data_enrichment_job(
             skipped_status += 1
             continue
         accepted_records.append(record)
-
     if not accepted_records:
         raise ValueError("No unenriched ecommerce detail records selected")
-
     job = DataEnrichmentJob(
         user_id=user.id,
         source_run_id=source_run_id,
@@ -115,24 +106,19 @@ async def create_data_enrichment_job(
     )
     session.add(job)
     await session.flush()
-
     for record in accepted_records:
         record.enrichment_status = DATA_ENRICHMENT_STATUS_PENDING
         record.enriched_at = None
         await _upsert_enriched_product(session, job=job, record=record)
-
     await session.commit()
     await session.refresh(job)
     return job
-
-
 async def run_data_enrichment_job(job_id: int) -> None:
     async with SessionLocal() as session:
         job = await session.get(DataEnrichmentJob, job_id)
         if job is None or job.status != DATA_ENRICHMENT_STATUS_PENDING:
             return
         await _run_job(session, job)
-
 
 async def list_data_enrichment_jobs(
     session: AsyncSession,
@@ -656,6 +642,7 @@ def _normalize_sizes(
     category_supports_size = (
         _category_supports_attribute(category_match, "size")
         if category_match
+        # With no taxonomy match, only assume size support when category text is absent.
         else not clean_text(data.get("category") or data.get("product_type"))
     )
     if not values and not category_supports_size:
@@ -760,18 +747,9 @@ def _compiled_material_strip_patterns() -> tuple[re.Pattern[str], ...]:
     return tuple(compiled)
 
 
-_COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS: tuple[
-    re.Pattern[str], ...
-] | None = None
-
-
+@lru_cache(maxsize=1)
 def _material_strip_patterns() -> tuple[re.Pattern[str], ...]:
-    global _COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS
-    if _COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS is None:
-        _COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS = (
-            _compiled_material_strip_patterns()
-        )
-    return _COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS
+    return _compiled_material_strip_patterns()
 
 
 def _strip_material_context_noise(value: str) -> str:

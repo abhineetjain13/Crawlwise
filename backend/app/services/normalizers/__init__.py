@@ -77,9 +77,9 @@ def _normalize_bool(value: object) -> bool | str:
     if isinstance(value, bool):
         return value
     text = _normalize_text(value).lower()
-    if text in REMOTE_BOOLEAN_TRUE_TOKENS:
+    if text in tuple(REMOTE_BOOLEAN_TRUE_TOKENS or ()):
         return True
-    if text in REMOTE_BOOLEAN_FALSE_TOKENS:
+    if text in tuple(REMOTE_BOOLEAN_FALSE_TOKENS or ()):
         return False
     return _normalize_text(value)
 

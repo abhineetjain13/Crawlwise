@@ -30,7 +30,6 @@ from app.services.field_policy import (
     normalize_field_key,
     normalize_requested_field,
 )
-
 from app.services.field_value_candidates import add_candidate
 from app.services.field_value_core import (
     IMAGE_FIELDS,

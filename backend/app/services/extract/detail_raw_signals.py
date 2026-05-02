@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
+import re
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -10,6 +12,8 @@ from app.services.config.extraction_rules import (
     DETAIL_BREADCRUMB_ROOT_LABELS,
     DETAIL_BREADCRUMB_SEPARATOR_LABELS,
     DETAIL_BREADCRUMB_SELECTORS,
+    DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO,
+    DETAIL_CATEGORY_UI_TOKENS,
     DETAIL_GENDER_TERMS,
 )
 from app.services.field_value_core import clean_text
@@ -121,13 +125,14 @@ def _trim_breadcrumb_labels(
     if not rows:
         return []
 
+    root_labels = {
+        clean_text(label).casefold()
+        for label in tuple(DETAIL_BREADCRUMB_ROOT_LABELS or ())
+        if clean_text(label)
+    }
+
     def _is_root_label(text: str) -> bool:
         lowered = clean_text(text).casefold()
-        root_labels = {
-            clean_text(label).casefold()
-            for label in tuple(DETAIL_BREADCRUMB_ROOT_LABELS or ())
-            if clean_text(label)
-        }
         if lowered in root_labels:
             return True
         if page_url:
@@ -144,12 +149,42 @@ def _trim_breadcrumb_labels(
     if len(rows) > 1 and _is_root_label(rows[-1]) and not _is_root_label(rows[0]):
         rows.reverse()
 
-    if _is_root_label(rows[0]):
-        rows = rows[1:]
+    category_ui_tokens = {
+        clean_text(token).casefold()
+        for token in tuple(DETAIL_CATEGORY_UI_TOKENS or ())
+        if clean_text(token)
+    }
+    rows = [
+        row
+        for row in rows
+        if not _is_root_label(row)
+        and clean_text(row).casefold() not in category_ui_tokens
+    ]
+    if not rows:
+        return []
     title = clean_text(current_title).casefold()
-    if len(rows) >= 1 and title and clean_text(rows[-1]).casefold() == title:
+    if len(rows) >= 1 and title and _breadcrumb_label_matches_title(rows[-1], title):
         rows = rows[:-1]
     return rows
+
+
+def _breadcrumb_label_matches_title(label: object, title: str) -> bool:
+    label_normalized = _breadcrumb_title_key(label)
+    title_normalized = _breadcrumb_title_key(title)
+    if not label_normalized or not title_normalized:
+        return False
+    if len(label_normalized) < 8:
+        return False
+    if label_normalized == title_normalized:
+        return True
+    return (
+        SequenceMatcher(None, label_normalized, title_normalized).ratio()
+        >= float(DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO)
+    )
+
+
+def _breadcrumb_title_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", clean_text(value).casefold())
 
 
 def dedupe_adjacent(values: list[str]) -> list[str]:

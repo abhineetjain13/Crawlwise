@@ -307,6 +307,28 @@ def test_reduce_html_for_selector_synthesis_preserves_shadow_root_boundaries() -
     assert "Waterproof membrane" in reduced
 
 
+def test_reduce_html_for_selector_synthesis_preserves_price_and_buy_box_controls() -> None:
+    reduced = reduce_html_for_selector_synthesis(
+        """
+        <html><body>
+          <main>
+            <form class="buy-box" data-product-id="sku-1">
+              <span class="price" data-price="229.99" itemprop="price">$229.99</span>
+              <button type="button" aria-label="Size 9" data-variant-id="v9">9</button>
+              <input name="sku" data-sku="sku-1" value="sku-1" />
+            </form>
+          </main>
+        </body></html>
+        """
+    )
+
+    assert "data-price=\"229.99\"" in reduced
+    assert "itemprop=\"price\"" in reduced
+    assert "aria-label=\"Size 9\"" in reduced
+    assert "data-variant-id=\"v9\"" in reduced
+    assert "data-sku=\"sku-1\"" in reduced
+
+
 def test_extract_records_deep_merges_structured_variant_fields_across_tiers() -> None:
     html = """
     <html>

@@ -607,7 +607,9 @@ export default function ProductIntelligencePage() {
                                         e.stopPropagation();
                                         if (candidate.url) toggleUrl(candidate.url);
                                       }}
-                                      aria-label="Select product for batch crawl"
+                                      aria-label={`Select product for batch crawl: ${
+                                        stringField(record.title) || candidate.url
+                                      }`}
                                       className="border-divider text-accent focus:ring-accent mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded"
                                     />
                                   </div>

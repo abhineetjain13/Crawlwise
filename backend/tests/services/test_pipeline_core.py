@@ -120,6 +120,34 @@ def test_empty_extraction_retry_skips_static_detail_price_html() -> None:
     }
 
 
+def test_empty_detail_extraction_retry_skips_collection_seed() -> None:
+    request = AcquisitionRequest(
+        run_id=1,
+        url="https://example.com/collections/widgets",
+        plan=AcquisitionPlan(surface="ecommerce_detail"),
+    )
+    acquisition_result = AcquisitionResult(
+        request=request,
+        final_url=request.url,
+        html="<html><body><h1>Widgets</h1></body></html>",
+        method="curl_cffi",
+        status_code=200,
+    )
+
+    decision = _empty_extraction_browser_retry_decision(
+        acquisition_result,
+        [],
+        surface="ecommerce_detail",
+        requested_fields=[],
+        selector_rules=[],
+    )
+
+    assert decision == {
+        "should_retry": False,
+        "reason": "non_detail_seed",
+    }
+
+
 def test_low_quality_detail_retry_targets_real_non_browser_fetches() -> None:
     request = AcquisitionRequest(
         run_id=1,
@@ -183,8 +211,6 @@ def test_low_quality_detail_retry_skips_when_limited_canonical_fields_complete()
             {
                 "title": "Widget Prime",
                 "price": "19.99",
-                "currency": "USD",
-                "brand": "Acme",
                 "image_url": "https://example.com/widget.jpg",
             }
         ],
@@ -231,7 +257,7 @@ async def test_missing_repair_fields_uses_default_ecommerce_targets(
     )
 
     assert "price" not in missing
-    assert missing == ["currency", "brand", "image_url"]
+    assert missing == ["image_url"]
 
 
 @pytest.mark.asyncio

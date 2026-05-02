@@ -15,6 +15,10 @@ from app.services.config.extraction_rules import (
     VARIANT_FIELDS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.extract.detail_identity import (
+    detail_url_is_collection_like,
+    detail_url_is_utility,
+)
 from app.services.extract.shared_variant_logic import variant_dom_cues_present
 from app.services.field_policy import (
     browser_retry_target_fields_for_surface,
@@ -46,6 +50,8 @@ def empty_extraction_browser_retry_decision(
     content_type = str(getattr(acquisition_result, "content_type", "") or "").lower()
     if "json" in content_type:
         return {"should_retry": False, "reason": "json_response"}
+    if _detail_request_url_is_non_detail_seed(acquisition_result, surface=surface):
+        return {"should_retry": False, "reason": "non_detail_seed"}
     if _empty_detail_extraction_has_static_evidence(
         acquisition_result,
         surface=surface,
@@ -57,6 +63,25 @@ def empty_extraction_browser_retry_decision(
         # For now, we keep this as is but ensure _empty_detail_extraction_has_static_evidence is strict.
         return {"should_retry": False, "reason": "static_detail_extractable"}
     return {"should_retry": True, "reason": "empty_non_browser_html"}
+
+
+def _detail_request_url_is_non_detail_seed(
+    acquisition_result: AcquisitionResult,
+    *,
+    surface: str,
+) -> bool:
+    if "detail" not in str(surface or "").strip().lower():
+        return False
+    request_url = str(
+        getattr(getattr(acquisition_result, "request", None), "url", "") or ""
+    )
+    final_url = str(getattr(acquisition_result, "final_url", "") or "")
+    for candidate_url in (request_url, final_url):
+        if detail_url_is_collection_like(candidate_url) or detail_url_is_utility(
+            candidate_url
+        ):
+            return True
+    return False
 
 
 def records_missing_repair_fields(

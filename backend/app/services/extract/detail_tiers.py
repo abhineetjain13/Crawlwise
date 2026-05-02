@@ -126,7 +126,7 @@ def _detail_json_ld_payload_is_irrelevant(payload: object) -> bool:
         if str(item or "").strip()
     }
     if normalized_types & {"breadcrumblist", "breadcrumb_list"}:
-        return False
+        return True
     if not normalized_types:
         return False
     irrelevant_types = {str(value).strip().lower() for value in DETAIL_IRRELEVANT_JSON_LD_TYPES}

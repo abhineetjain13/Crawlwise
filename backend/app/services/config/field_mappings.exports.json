@@ -235,8 +235,6 @@
     "ecommerce_detail": [
       "price",
       "title",
-      "currency",
-      "brand",
       "image_url"
     ]
   },
@@ -244,8 +242,6 @@
     "ecommerce_detail": [
       "price",
       "title",
-      "currency",
-      "brand",
       "image_url"
     ]
   },

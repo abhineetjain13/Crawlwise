@@ -1,9 +1,9 @@
 # Active Plan
 
 **Current:** Data Quality Extraction Hardening -> `docs/plans/data-quality-extraction-hardening-plan.md`
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Started:** 2026-05-02
-**Last slice completed:** None
+**Last slice completed:** Post-complete audit follow-up — output audit regressions
 
 ## Previous
 - Acquisition & Parsing Deduplication (COMPLETE) -> `docs/plans/parsing-deduplication-plan.md`

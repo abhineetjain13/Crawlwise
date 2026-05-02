@@ -57,14 +57,62 @@ DETAIL_LOW_SIGNAL_TITLE_VALUES = frozenset(
         "frequently bought together",
         "mens shoes",
         "men's shoes",
+        "plp",
         "womens shoes",
         "women's shoes",
         "shoes",
     }
 )
 DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES = frozenset({"criteoproductrail"})
+DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES = frozenset(
+    {"brightcove video", "criteoproductrail", "default", "tag", "inline"}
+)
+DETAIL_ARTIFACT_IDENTIFIER_VALUES = frozenset(
+    {"description", "details", "product details", "specification", "specifications"}
+)
+DETAIL_ARTIFACT_SKU_PREFIXES = ("copy-",)
+DETAIL_CATEGORY_UI_TOKENS = frozenset(
+    {"back", "home", "next", "previous", "view all", "..."}
+)
+DETAIL_LONG_TEXT_UI_TAIL_PHRASES = (
+    "show more",
+    "more details",
+    "learn more",
+)
+DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS = 4
+DETAIL_MATERIALS_POLLUTION_TOKENS = ("care", "reviews")
+DETAIL_GUIDE_GLOSSARY_TEXT_PATTERNS = (
+    r"\b(?:regular|slim|relaxed)\s+fit\b.{0,240}\b(?:regular|slim|relaxed)\s+fit\b",
+    r"\b(?:fabric|material)\s+glossary\b",
+    r"\bthe\s+word\s+['\"][a-z -]+['\"]\s+originates\b",
+)
+DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS = frozenset(
+    {"discount", "false", "off", "on", "sale", "true"}
+)
+DETAIL_VARIANT_CONTEXT_NOISE_TOKENS = (
+    "account",
+    "footer",
+    "header",
+    "newsletter",
+    "promo",
+    "promotion",
+    "search",
+    "signup",
+)
 DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA = 10.0
 DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO = 0.1
+DETAIL_PRICE_CENT_MAGNITUDE_RATIO = 100
+DETAIL_PRICE_MAGNITUDE_EPSILON = 0.01
+DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS = (
+    "afterpay",
+    "affirm",
+    "installment",
+    "klarna",
+    "monthly payment",
+    "pay in",
+    "payments of",
+    "per month",
+)
 DETAIL_BREADCRUMB_ROOT_LABELS = frozenset({"home", "shop", "store"})
 DETAIL_BREADCRUMB_SELECTORS = (
     "[aria-label*='breadcrumb' i] li",
@@ -78,6 +126,7 @@ DETAIL_BREADCRUMB_CONTAINER_SELECTORS = (
 )
 DETAIL_BREADCRUMB_SEPARATOR_LABELS = frozenset({">", "/", "\\", "|", "›", "»", "→"})
 DETAIL_BREADCRUMB_LABEL_PREFIXES = ("shop all ",)
+DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO = 0.92
 DETAIL_CATEGORY_SOURCE_RANKS = {
     "dom_breadcrumb": 1,
     "json_ld": 2,
@@ -128,12 +177,6 @@ ORACLE_HCM_LOCATION_LIST_KEYS = (
 DETAIL_FULFILLMENT_LONG_TEXT_PATTERNS = (
     r"\b(?:shipping|delivery|pickup|pick\s*up)\b.{0,80}\b(?:checkout|options?|available)\b",
     r"\bget\s+it\s+today\b.{0,120}\b(?:shipping|delivery|pickup|pick\s*up)\b",
-)
-DETAIL_CENT_PRICE_HOST_SUFFIXES = (
-    "farfetch.com",
-    "kith.com",
-    "puma.com",
-    "ssense.com",
 )
 DETAIL_IDENTITY_FIELDS = frozenset({"title", "image_url"})
 VARIANT_FIELDS = frozenset({"variants", "selected_variant"})
@@ -350,6 +393,59 @@ VARIANT_OPTION_TEXT_FIELDS = frozenset(
         "style",
     }
 )
+VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
+    {
+        *VARIANT_OPTION_TEXT_FIELDS,
+        "colour",
+        "cup",
+        "edition",
+        "finish",
+        "flavor",
+        "flavour",
+        "format",
+        "fit",
+        "memory",
+        "model",
+        "pack",
+        "scent",
+        "shade",
+        "type",
+        "weight",
+    }
+)
+VARIANT_AXIS_GENERIC_TOKENS = frozenset(
+    {
+        "attribute",
+        "choice",
+        "dropdown",
+        "option",
+        "options",
+        "select",
+        "selected",
+        "selector",
+        "styledselect",
+        "swatch",
+        "variant",
+        "variation",
+    }
+)
+VARIANT_AXIS_TECHNICAL_PATTERNS = (
+    r"^(?:option|options?|select|selector|dropdown|variant|variation|styledselect)[_\s-]*\d+$",
+    r"^(?:variation|variant|option|attribute|selector|styledselect)(?:[_\s-]+(?:selector|select))?(?:[_\s-]*\d+)?$",
+    r"^[a-z]*select\d+$",
+)
+VARIANT_QUANTITY_ATTR_TOKENS = frozenset(
+    {
+        "amount",
+        "howmany",
+        "item-count",
+        "item_count",
+        "number-of-items",
+        "number_of_items",
+        "quantity",
+        "qty",
+    }
+)
 VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS = (
     r"[$€£¥₹]\s*\d",
     r"\b\d[\d.,]*\s*(?:usd|eur|gbp|inr|aud|cad|ars)\b",
@@ -362,23 +458,31 @@ MAX_CANDIDATES_PER_FIELD = crawler_runtime_settings.max_candidates_per_field
 _EXTRA_EXPORTS = [
     "AVAILABILITY_URL_MAP",
     "BARE_HOST_URL_RE",
-    "DETAIL_CENT_PRICE_HOST_SUFFIXES",
     "DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS",
     "DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS",
     "DETAIL_FULFILLMENT_LONG_TEXT_PATTERNS",
+    "DETAIL_GUIDE_GLOSSARY_TEXT_PATTERNS",
     "DETAIL_IDENTITY_FIELDS",
     "DETAIL_LONG_TEXT_SOURCE_RANKS",
     "DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES",
     "DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX",
     "DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES",
+    "DETAIL_ARTIFACT_IDENTIFIER_VALUES",
     "DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA",
     "DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO",
+    "DETAIL_PRICE_CENT_MAGNITUDE_RATIO",
+    "DETAIL_PRICE_MAGNITUDE_EPSILON",
+    "DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS",
+    "DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS",
+    "DETAIL_MATERIALS_POLLUTION_TOKENS",
+    "DETAIL_VARIANT_CONTEXT_NOISE_TOKENS",
     "DETAIL_LOW_SIGNAL_TITLE_VALUES",
     "DETAIL_BREADCRUMB_ROOT_LABELS",
     "DETAIL_BREADCRUMB_SELECTORS",
     "DETAIL_BREADCRUMB_CONTAINER_SELECTORS",
     "DETAIL_BREADCRUMB_LABEL_PREFIXES",
     "DETAIL_BREADCRUMB_SEPARATOR_LABELS",
+    "DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO",
     "DETAIL_CATEGORY_SOURCE_RANKS",
     "DETAIL_GENDER_TERMS",
     "DETAIL_GENERIC_TERMINAL_TOKENS",
@@ -415,9 +519,13 @@ _EXTRA_EXPORTS = [
     "STRUCTURED_OBJECT_LIST_FIELDS",
     "URL_FIELDS",
     "VARIANT_FIELDS",
+    "VARIANT_AXIS_ALLOWED_SINGLE_TOKENS",
+    "VARIANT_AXIS_GENERIC_TOKENS",
+    "VARIANT_AXIS_TECHNICAL_PATTERNS",
     "VARIANT_OPTION_VALUE_UI_NOISE_PHRASES",
     "VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS",
     "VARIANT_OPTION_TEXT_FIELDS",
+    "VARIANT_QUANTITY_ATTR_TOKENS",
     "VARIANT_SIZE_ALIAS_SUFFIXES",
 ]
 

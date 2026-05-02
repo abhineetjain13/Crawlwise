@@ -648,6 +648,7 @@ def _persisted_run_result(
         "sample_title": str(data.get("title") or "")[:120],
         "sample_url": str(data.get("url") or "")[:240],
         "sample_record_data": data,
+        "sample_source_trace": _object_dict(first_trace),
         "sample_records": sample_records,
         "sample_semantics": _sample_semantics(data),
         "listing_contract": _listing_contract(rows),
@@ -718,6 +719,12 @@ def evaluate_quality(
         "variant_presence_ok": _quality_variant_presence_ok(result, expectations=expectations),
         "variant_labels_ok": _quality_variant_labels_ok(result, expectations=expectations),
         "selected_variant_price_ok": _quality_selected_variant_price_ok(result, expectations=expectations),
+        "price_sane_ok": _quality_price_sane_ok(result, expectations=expectations),
+        "category_clean_ok": _quality_category_clean_ok(result, expectations=expectations),
+        "long_text_clean_ok": _quality_long_text_clean_ok(result, expectations=expectations),
+        "variant_artifacts_ok": _quality_variant_artifacts_ok(result, expectations=expectations),
+        "system_artifacts_ok": _quality_system_artifacts_ok(result, expectations=expectations),
+        "repair_diagnostics_ok": _quality_repair_diagnostics_ok(result, expectations=expectations),
     }
     observed_failure_mode = _observed_quality_failure_mode(
         site,
@@ -749,6 +756,12 @@ def _quality_expectations(
         "require_identity": surface.endswith("_detail"),
         "require_listing_noise_free": surface.endswith("_listing"),
         "require_price": False,
+        "require_price_sane": False,
+        "require_clean_category": False,
+        "require_clean_long_text": False,
+        "require_clean_variants": False,
+        "require_clean_system_fields": False,
+        "require_repair_diagnostics": False,
         "expect_variants": False,
         "require_semantic_variant_labels": False,
         "require_selected_variant_price": False,
@@ -833,6 +846,141 @@ def _quality_selected_variant_price_ok(
     return bool(semantics.get("selected_variant_has_price"))
 
 
+def _quality_price_sane_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_price_sane"):
+        return True
+    record = _object_dict(result.get("sample_record_data"))
+    price = _price_number(record.get("price"))
+    if price is None:
+        selected_variant = _object_dict(record.get("selected_variant"))
+        price = _price_number(selected_variant.get("price"))
+    if price is None or price <= 0:
+        return False
+    currency = str(record.get("currency") or "").strip().upper()
+    max_price = 100000.0 if currency == "INR" else 10000.0
+    return price <= max_price
+
+
+def _quality_category_clean_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_clean_category"):
+        return True
+    category = str(_object_dict(result.get("sample_record_data")).get("category") or "")
+    if not category.strip():
+        return True
+    lowered = f" {category.lower()} "
+    if any(token in lowered for token in (" previous ", " next ", " view all ", " back ")):
+        return False
+    parts = [part.strip().lower() for part in re.split(r">\s*|/+", category) if part.strip()]
+    if any(part in {"home", "..."} or part.startswith("...") or part.endswith("...") for part in parts):
+        return False
+    title = " ".join(str(result.get("sample_title") or "").strip().lower().split())
+    return not bool(title and parts and parts[-1] == title)
+
+
+def _quality_long_text_clean_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_clean_long_text"):
+        return True
+    record = _object_dict(result.get("sample_record_data"))
+    description = _normalized_space(record.get("description"))
+    specifications = _normalized_space(record.get("specifications"))
+    if description and specifications and description == specifications:
+        return False
+    for field_name in ("description", "product_details", "specifications", "materials", "care"):
+        text = _normalized_space(record.get(field_name))
+        lowered = text.lower()
+        if not lowered:
+            continue
+        if lowered.endswith((" show more", " more details")) or " learn more about our materials" in lowered:
+            return False
+        if "choose from same day delivery" in lowered or "free standard delivery" in lowered:
+            return False
+        if field_name == "materials" and re.search(r"\breviews?\s*\(", lowered):
+            return False
+    return True
+
+
+def _quality_variant_artifacts_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_clean_variants"):
+        return True
+    record = _object_dict(result.get("sample_record_data"))
+    values: list[object] = []
+    values.extend(_object_dict(record.get("variant_axes")).keys())
+    for axis_values in _object_dict(record.get("variant_axes")).values():
+        values.extend(_object_list(axis_values))
+    for row in [_object_dict(record.get("selected_variant")), *_object_list(record.get("variants"))]:
+        if isinstance(row, dict):
+            values.extend(row.keys())
+            values.extend(row.values())
+            values.extend(_object_dict(row.get("option_values")).values())
+    for value in values:
+        if isinstance(value, bool):
+            return False
+        text = _normalized_space(value).lower()
+        if not text:
+            continue
+        if text in {"off", "on", "discount", "sale", "false", "true"}:
+            return False
+        if re.fullmatch(r"\d+\s*%", text) or re.fullmatch(r"#[0-9a-f]{6}", text):
+            return False
+    return True
+
+
+def _quality_system_artifacts_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_clean_system_fields"):
+        return True
+    record = _object_dict(result.get("sample_record_data"))
+    sku = str(record.get("sku") or "").strip().lower()
+    product_type = str(record.get("product_type") or "").strip().lower()
+    return not (sku.startswith("copy-") or product_type in {"default", "tag", "inline"})
+
+
+def _quality_repair_diagnostics_ok(
+    result: dict[str, object],
+    *,
+    expectations: dict[str, bool],
+) -> bool:
+    if not expectations.get("require_repair_diagnostics"):
+        return True
+    record = _object_dict(result.get("sample_record_data"))
+    missing = [
+        field_name
+        for field_name in ("price", "title", "image_url")
+        if record.get(field_name) in (None, "", [], {})
+    ]
+    if not missing:
+        return True
+    trace = _object_dict(result.get("sample_source_trace"))
+    extraction = _object_dict(trace.get("extraction"))
+    field_repair = _object_dict(extraction.get("field_repair") or trace.get("field_repair"))
+    self_heal = _object_dict(extraction.get("self_heal") or trace.get("self_heal"))
+    return bool(
+        field_repair.get("reason")
+        or field_repair.get("action")
+        or self_heal.get("error")
+        or "triggered" in self_heal
+    )
+
+
 def _price_requirement_failed(
     result: dict[str, object],
     *,
@@ -875,6 +1023,18 @@ def _observed_quality_failure_mode(
         return "axis_pollution"
     if expectations.get("require_selected_variant_price") and not checks["selected_variant_price_ok"]:
         return "selected_variant_price_missing"
+    if expectations.get("require_price_sane") and not checks["price_sane_ok"]:
+        return "price_magnitude_anomaly"
+    if expectations.get("require_clean_category") and not checks["category_clean_ok"]:
+        return "category_pollution"
+    if expectations.get("require_clean_long_text") and not checks["long_text_clean_ok"]:
+        return "long_text_pollution"
+    if expectations.get("require_clean_variants") and not checks["variant_artifacts_ok"]:
+        return "variant_artifact_pollution"
+    if expectations.get("require_clean_system_fields") and not checks["system_artifacts_ok"]:
+        return "system_artifact_pollution"
+    if expectations.get("require_repair_diagnostics") and not checks["repair_diagnostics_ok"]:
+        return "repair_diagnostic_missing"
     if _price_requirement_failed(result, expectations=expectations):
         return "thin_detail"
     seeded_failure_mode = str(site.get("seed_failure_mode") or "").strip().lower()
@@ -898,6 +1058,12 @@ def _quality_verdict(
         "listing_chrome_noise",
         "promo_or_wrong_page",
         "shell_false_success",
+        "price_magnitude_anomaly",
+        "category_pollution",
+        "long_text_pollution",
+        "variant_artifact_pollution",
+        "system_artifact_pollution",
+        "repair_diagnostic_missing",
     }:
         return "bad_output"
     if _price_requirement_failed(result, expectations=expectations):
@@ -1064,3 +1230,24 @@ def _looks_numeric_price(value: object) -> bool:
     elif "." in text and re.fullmatch(r"^\d{1,3}(?:\.\d{3})+$", text):
         normalized = text.replace(".", "")
     return bool(re.fullmatch(r"^\d+(?:\.\d+)?$", normalized))
+
+
+def _price_number(value: object) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = re.sub(r"[^0-9.,]+", "", text)
+    if "." in normalized and "," in normalized:
+        normalized = normalized.replace(",", "")
+    elif "," in normalized and re.fullmatch(r"\d+,\d{1,2}", normalized):
+        normalized = normalized.replace(",", ".")
+    else:
+        normalized = normalized.replace(",", "")
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
+def _normalized_space(value: object) -> str:
+    return " ".join(str(value or "").strip().split())

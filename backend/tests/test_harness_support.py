@@ -404,6 +404,184 @@ def test_evaluate_quality_flags_axis_pollution_as_gap() -> None:
     assert quality["quality_checks"]["variant_labels_ok"] is False
 
 
+def test_evaluate_quality_flags_audit_price_magnitude_anomaly() -> None:
+    site = {
+        "surface": "ecommerce_detail",
+        "quality_expectations": {
+            "require_identity": True,
+            "require_price": True,
+            "require_price_sane": True,
+        },
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://example.com/products/food-processor",
+        "sample_title": "KitchenAid Food Processor",
+        "sample_url": "https://example.com/products/food-processor",
+        "populated_fields": 8,
+        "sample_record_data": {
+            "title": "KitchenAid Food Processor",
+            "url": "https://example.com/products/food-processor",
+            "price": "22999.00",
+            "currency": "USD",
+        },
+        "sample_semantics": {"price_present": True},
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["observed_failure_mode"] == "price_magnitude_anomaly"
+    assert quality["quality_checks"]["price_sane_ok"] is False
+
+
+def test_evaluate_quality_flags_audit_category_pollution() -> None:
+    site = {
+        "surface": "ecommerce_detail",
+        "quality_expectations": {"require_clean_category": True},
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://example.com/products/shoe",
+        "sample_title": "Stan Smith Shoes",
+        "sample_url": "https://example.com/products/shoe",
+        "populated_fields": 8,
+        "sample_record_data": {
+            "title": "Stan Smith Shoes",
+            "url": "https://example.com/products/shoe",
+            "category": "Back > Home > Men > Shoes",
+            "price": "99.99",
+        },
+        "sample_semantics": {"price_present": True},
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["observed_failure_mode"] == "category_pollution"
+    assert quality["quality_checks"]["category_clean_ok"] is False
+
+
+def test_evaluate_quality_flags_audit_long_text_pollution() -> None:
+    site = {
+        "surface": "ecommerce_detail",
+        "quality_expectations": {"require_clean_long_text": True},
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://example.com/products/duvet",
+        "sample_title": "Cotton Duvet",
+        "sample_url": "https://example.com/products/duvet",
+        "populated_fields": 8,
+        "sample_record_data": {
+            "title": "Cotton Duvet",
+            "url": "https://example.com/products/duvet",
+            "description": "Choose from Same Day Delivery, Drive Up or Order Pickup",
+            "price": "49.99",
+        },
+        "sample_semantics": {"price_present": True},
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["observed_failure_mode"] == "long_text_pollution"
+    assert quality["quality_checks"]["long_text_clean_ok"] is False
+
+
+def test_evaluate_quality_flags_audit_variant_and_system_artifacts() -> None:
+    site = {
+        "surface": "ecommerce_detail",
+        "quality_expectations": {
+            "require_clean_variants": True,
+            "require_clean_system_fields": True,
+        },
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://example.com/products/jacket",
+        "sample_title": "Leather Jacket",
+        "sample_url": "https://example.com/products/jacket",
+        "populated_fields": 10,
+        "sample_record_data": {
+            "title": "Leather Jacket",
+            "url": "https://example.com/products/jacket",
+            "price": "1500.00",
+            "sku": "COPY-1720644688978",
+            "product_type": "inline",
+            "variant_axes": {"discount": ["20%"]},
+            "variants": [{"option_values": {"discount": "20%"}}],
+        },
+        "sample_semantics": {
+            "price_present": True,
+            "variant_count": 1,
+            "selected_variant_present": False,
+            "variant_axes_keys": ["discount"],
+            "variant_axes_semantic": False,
+        },
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["observed_failure_mode"] == "variant_artifact_pollution"
+    assert quality["quality_checks"]["variant_artifacts_ok"] is False
+    assert quality["quality_checks"]["system_artifacts_ok"] is False
+
+
+def test_evaluate_quality_flags_missing_repair_diagnostics() -> None:
+    site = {
+        "surface": "ecommerce_detail",
+        "quality_expectations": {"require_repair_diagnostics": True},
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://example.com/products/widget",
+        "sample_title": "Widget",
+        "sample_record_data": {"title": "Widget"},
+        "sample_source_trace": {"extraction": {}},
+        "sample_semantics": {"price_present": False},
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_verdict"] == "bad_output"
+    assert quality["observed_failure_mode"] == "repair_diagnostic_missing"
+    assert quality["quality_checks"]["repair_diagnostics_ok"] is False
+
+
+def test_evaluate_quality_accepts_visible_repair_diagnostics() -> None:
+    site = {
+        "surface": "ecommerce_detail",
+        "quality_expectations": {"require_repair_diagnostics": True},
+    }
+    result = {
+        "surface": "ecommerce_detail",
+        "requested_url": "https://example.com/products/widget",
+        "sample_title": "Widget",
+        "sample_record_data": {"title": "Widget"},
+        "sample_source_trace": {
+            "extraction": {
+                "field_repair": {
+                    "action": "skipped",
+                    "reason": "llm_disabled",
+                }
+            }
+        },
+        "sample_semantics": {"price_present": False},
+        "failure_mode": "success",
+    }
+
+    quality = evaluate_quality(site, result)
+
+    assert quality["quality_checks"]["repair_diagnostics_ok"] is True
+
+
 def test_evaluate_quality_flags_listing_chrome_noise() -> None:
     site = {
         "url": "https://www.customink.com/products/sweatshirts/hoodies/71",

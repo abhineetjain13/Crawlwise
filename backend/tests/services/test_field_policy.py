@@ -64,8 +64,6 @@ def test_ecommerce_repair_targets_union_user_fields_with_limited_defaults() -> N
         "sku",
         "price",
         "title",
-        "currency",
-        "brand",
         "image_url",
     ]
 
@@ -74,7 +72,22 @@ def test_ecommerce_browser_retry_targets_do_not_force_deep_variant_fields() -> N
     assert browser_retry_target_fields_for_surface("ecommerce_detail", []) == [
         "price",
         "title",
-        "currency",
+        "image_url",
+    ]
+
+
+def test_ecommerce_repair_targets_include_deep_fields_only_when_requested() -> None:
+    assert repair_target_fields_for_surface(
+        "ecommerce_detail",
+        ["brand", "sku", "availability", "variants", "selected_variant", "variant_axes"],
+    ) == [
         "brand",
+        "sku",
+        "availability",
+        "variants",
+        "selected_variant",
+        "variant_axes",
+        "price",
+        "title",
         "image_url",
     ]

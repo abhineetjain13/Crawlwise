@@ -44,6 +44,7 @@ from app.services.config.product_intelligence import (
     SOURCE_TYPE_UNKNOWN,
     GOOGLE_NATIVE_BROWSER_ENGINE,
     GOOGLE_NATIVE_BLOCKED_HTML_PATTERNS,
+    GOOGLE_NATIVE_BLOCKED_CLASSIFICATION_OFFSET,
     GOOGLE_NATIVE_BLOCKED_URL_PATTERNS,
     GOOGLE_NATIVE_HOME_URL,
     GOOGLE_NATIVE_IGNORED_DOMAINS,
@@ -402,7 +403,9 @@ def _google_native_blocked(url: str, html: str) -> bool:
     normalized_html = str(html or "").lower()
     if any(pattern in normalized_html for pattern in GOOGLE_NATIVE_BLOCKED_HTML_PATTERNS):
         return True
-    classification = classify_blocked_page(str(html or ""), 0)
+    classification = classify_blocked_page(
+        str(html or ""), GOOGLE_NATIVE_BLOCKED_CLASSIFICATION_OFFSET
+    )
     return bool(classification.blocked)
 
 
