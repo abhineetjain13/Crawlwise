@@ -12,6 +12,7 @@ from app.services.config.extraction_rules import (
     DETAIL_SHELL_STATE_TOKENS,
     JS_REQUIRED_PLACEHOLDER_PHRASES,
     PRICE_FIELDS,
+    VARIANT_FIELDS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extract.shared_variant_logic import variant_dom_cues_present
@@ -210,7 +211,7 @@ def _empty_detail_extraction_has_static_evidence(
     if matched_requested_fields:
         return True
 
-    # If static HTML exposes a price and an identity signal (title OR image_url), browser retry is a waste.
+    # If static HTML exposes configured price and identity fields, browser retry is a waste.
     has_price = bool(
         extractable_fields & set(PRICE_FIELDS)
     ) or _html_has_configured_detail_price(soup)
@@ -287,10 +288,7 @@ def _missing_fields_have_static_html_evidence(
         soup
     ):
         return True
-    if normalized_missing & {
-        "variants",
-        "selected_variant",
-    } and variant_dom_cues_present(soup):
+    if normalized_missing & set(VARIANT_FIELDS) and variant_dom_cues_present(soup):
         return True
     return False
 

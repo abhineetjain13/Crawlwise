@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 
 from sqlalchemy import (
     Boolean,
@@ -17,6 +18,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+
+
+class LLMCostLogOutcome(StrEnum):
+    SUCCESS = "success"
+    ERROR = "error"
 
 
 class LLMConfig(Base):
@@ -43,7 +49,8 @@ class LLMCostLog(Base):
     __tablename__ = "llm_cost_log"
     __table_args__ = (
         CheckConstraint(
-            "outcome in ('success', 'error')", name="ck_llm_cost_log_outcome"
+            f"outcome in ('{LLMCostLogOutcome.SUCCESS.value}', '{LLMCostLogOutcome.ERROR.value}')",
+            name="ck_llm_cost_log_outcome",
         ),
     )
 
@@ -58,7 +65,9 @@ class LLMCostLog(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("0"))
     domain: Mapped[str] = mapped_column(String(255), default="")
-    outcome: Mapped[str] = mapped_column(String(20), default="success")
+    outcome: Mapped[str] = mapped_column(
+        String(20), default=LLMCostLogOutcome.SUCCESS.value
+    )
     error_category: Mapped[str] = mapped_column(String(60), default="")
     error_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(

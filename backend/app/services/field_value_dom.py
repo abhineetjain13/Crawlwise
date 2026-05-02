@@ -46,11 +46,21 @@ from app.services.field_value_core import (
 from app.services.xpath_service import validate_xpath_syntax
 
 logger = logging.getLogger(__name__)
-_VARIANT_OPTION_CHILD_DROP_RE = tuple(
-    re.compile(str(pattern), re.I)
-    for pattern in tuple(VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS or ())
-    if str(pattern).strip()
-)
+
+
+def _compile_variant_option_child_drop_patterns() -> tuple[re.Pattern[str], ...]:
+    compiled: list[re.Pattern[str]] = []
+    for pattern in tuple(VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS or ()):
+        if not str(pattern).strip():
+            continue
+        try:
+            compiled.append(re.compile(str(pattern), re.I))
+        except re.error:
+            logger.warning("Skipping invalid variant option child-drop pattern: %r", pattern)
+    return tuple(compiled)
+
+
+_VARIANT_OPTION_CHILD_DROP_RE = _compile_variant_option_child_drop_patterns()
 
 _candidate_cleanup_raw = EXTRACTION_RULES.get("candidate_cleanup")
 _CANDIDATE_CLEANUP = (
@@ -487,8 +497,7 @@ def _attribute_text(value: object) -> str:
     return str(value or "")
 
 
-def _variant_option_node_text(node: Tag, field_name: str) -> str:
-    del field_name
+def _variant_option_node_text(node: Tag, _field_name: str) -> str:
     if not node.find(True):
         return node.get_text(" ", strip=True)
     pruned = deepcopy(node)

@@ -91,9 +91,7 @@ def test_listing_extractor_preserves_css_card_field_output() -> None:
     assert rows[0]["review_count"] == 128
 
 
-def test_listing_extractor_prefers_row_detail_link_and_name_over_breadcrumb_links() -> (
-    None
-):
+def test_listing_extractor_prefers_row_detail_link_and_name_over_breadcrumb_links() -> None:
     html = """
     <html>
       <body>
@@ -333,9 +331,7 @@ def test_listing_extractor_does_not_emit_additional_images() -> None:
     ]
 
 
-def test_listing_extractor_prefers_explicit_price_node_over_description_mentions_and_keeps_currency() -> (
-    None
-):
+def test_listing_extractor_prefers_explicit_price_node_over_description_mentions_and_keeps_currency() -> None:
     html = """
     <html>
       <body>
@@ -409,9 +405,7 @@ def test_listing_extractor_avoids_numeric_title_nodes_when_real_title_exists() -
     ]
 
 
-def test_listing_extractor_filters_category_cloud_links_when_supported_product_tiles_exist() -> (
-    None
-):
+def test_listing_extractor_filters_category_cloud_links_when_supported_product_tiles_exist() -> None:
     product_rows = "\n".join(
         f"""
         <li class="product-grid-product">
@@ -661,9 +655,7 @@ def test_detail_extractor_ignores_js_state_inside_removed_noise_containers() -> 
     assert record["_source"] != "js_state"
 
 
-def test_listing_extractor_ignores_structured_payloads_inside_removed_noise_containers() -> (
-    None
-):
+def test_listing_extractor_ignores_structured_payloads_inside_removed_noise_containers() -> None:
     html = """
     <html>
       <body>
@@ -762,9 +754,7 @@ def test_detail_extractor_reads_category_from_dom_breadcrumbs() -> None:
     assert record["gender"] == "women"
 
 
-def test_detail_extractor_prefers_visible_breadcrumb_category_over_structured_category() -> (
-    None
-):
+def test_detail_extractor_prefers_visible_breadcrumb_category_over_structured_category() -> None:
     record = build_detail_record(
         """
         <html>
@@ -803,9 +793,7 @@ def test_detail_extractor_prefers_visible_breadcrumb_category_over_structured_ca
     assert record["gender"] == "women"
 
 
-def test_listing_extractor_prefers_structured_name_over_item_position_for_title() -> (
-    None
-):
+def test_listing_extractor_prefers_structured_name_over_item_position_for_title() -> None:
     html = """
     <html>
       <head>
@@ -1106,9 +1094,7 @@ async def test_belk_adapter_extracts_nested_state_brand_price_and_currency() -> 
 
 
 @pytest.mark.asyncio
-async def test_belk_adapter_prefers_real_currency_fields_over_scalar_price_text() -> (
-    None
-):
+async def test_belk_adapter_prefers_real_currency_fields_over_scalar_price_text() -> None:
     result = await BelkAdapter().extract(
         "https://www.belk.com/home/",
         """

@@ -322,8 +322,10 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
             "size guide" in lowered
             and re.search(r"\b(?:please\s+)?select\b", lowered) is not None
         )
-        or re.fullmatch(r"[-\s]*(?:click\s+to\s+)?(?:choose|select)\b.*", lowered)
-        is not None
+        or (
+            re.fullmatch(r"[-\s]*(?:click\s+to\s+)?(?:choose|select)\b.*", lowered)
+            is not None
+        )
         or re.fullmatch(r"[-\s]+.+[-\s]+", lowered) is not None
         or re.fullmatch(r"\(\d+\)", value) is not None
         or re.fullmatch(r"\d{3,5}/\d{2,5}/\d{2,5}", value) is not None

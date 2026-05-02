@@ -1,5 +1,8 @@
 # Self-Healing Extraction & Field Quality Plan
 
+**Status:** SUPERSEDED by `docs/plans/data-quality-extraction-hardening-plan.md` on 2026-05-02.
+**Reason:** Merged into the data-quality hardening plan to avoid parallel unverified extraction plans.
+
 **Objective:** Improve canonical requested field coverage for ecommerce detail runs before re-running `testsites.md`. Main pain: missing `price`, missing `brand`, missing `availability`, weak `variants`, and polluted variant values. Use browser rendering and LLM when the user enabled them. Do not add brittle per-site selectors as the main fix.
 
 **Implementation status:** Slice 1 complete. Slice 2 in progress; low-quality browser retry now exists but needed narrower default field targeting plus URL-budget gating after timeout regressions on Amazon/Apple/Kith. Slice 5 targeting fix complete. Slice 6 targeting fix complete. Verified with `pytest tests -q` on 2026-04-30: 1090 passed, 4 skipped.

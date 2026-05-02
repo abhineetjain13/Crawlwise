@@ -25,7 +25,6 @@ BLOCK_SIGNATURES = {
         "why do i have to complete a captcha",
         "our systems have detected unusual traffic from your computer network",
         "this page checks to see if it's really you sending the requests",
-        "unusual traffic from your computer network",
     ],
     "active_provider_markers": [
         {"marker": "px-captcha", "provider": "perimeterx"},

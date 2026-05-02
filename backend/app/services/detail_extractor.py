@@ -957,9 +957,11 @@ def _requires_dom_completion(
     if normalized_surface == "ecommerce_detail":
         breadcrumb_category = breadcrumb_category_from_dom(
             breadcrumb_soup or soup,
-            current_title=record.get("title"),
+            current_title=text_or_none(record.get("title")),
         )
-        if breadcrumb_category and record.get("category") != breadcrumb_category:
+        record_category = _normalized_category_path(record.get("category"))
+        dom_category = _normalized_category_path(breadcrumb_category)
+        if dom_category and record_category != dom_category:
             return True
     if normalized_surface == "ecommerce_detail" and variant_dom_cues_present(soup):
         return True
@@ -1016,6 +1018,15 @@ def _requires_dom_completion(
         if str(field_name).strip()
     }
     return bool(requested_missing_fields & selector_backed_fields)
+
+
+def _normalized_category_path(value: object) -> str:
+    text = clean_text(value).casefold()
+    return " > ".join(
+        part
+        for part in re.split(r"\s*(?:>|/|›|»|→|\|)\s*", text)
+        if part
+    )
 
 
 def _finalize_early_detail_record(

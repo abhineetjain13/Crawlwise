@@ -18,6 +18,8 @@ from app.models.crawl import (
 )
 from app.models.user import User
 from app.services.config.product_intelligence import (
+    ADMIN_ROLE,
+    CRAWL_RUN_FINAL_STATUSES,
     ECOMMERCE_DETAIL_SURFACE,
     PRIVATE_LABEL_EXCLUDE,
     PRIVATE_LABEL_FLAG,
@@ -178,7 +180,7 @@ async def list_product_intelligence_jobs(
     limit: int = 25,
 ) -> list[ProductIntelligenceJob]:
     statement = select(ProductIntelligenceJob).order_by(ProductIntelligenceJob.id.desc()).limit(limit)
-    if user.role != "admin":
+    if user.role != ADMIN_ROLE:
         statement = statement.where(ProductIntelligenceJob.user_id == user.id)
     return list((await session.scalars(statement)).all())
 
@@ -191,7 +193,7 @@ async def get_product_intelligence_job(
     refresh: bool = False,
 ) -> ProductIntelligenceJob:
     job = await session.get(ProductIntelligenceJob, job_id)
-    if job is None or (user.role != "admin" and job.user_id != user.id):
+    if job is None or (user.role != ADMIN_ROLE and job.user_id != user.id):
         raise LookupError("Product Intelligence job not found")
     if refresh:
         return await refresh_product_intelligence_job(session, job=job)
@@ -406,7 +408,7 @@ async def _persist_discovery_job(
     session.add(job)
     await session.flush()
 
-    source_product_ids_by_index: dict[int, int] = {}
+    source_products_by_index: dict[int, ProductIntelligenceSourceProduct] = {}
     snapshots_lookup = resolved_snapshots or {}
     llm_enabled = bool(options.get("llm_enrichment_enabled"))
     for index, row in enumerate(source_rows[: _option_int(options, "max_source_products", default=product_intelligence_settings.max_source_products)]):
@@ -434,8 +436,14 @@ async def _persist_discovery_job(
             payload=snapshot,
         )
         session.add(source)
-        await session.flush()
-        source_product_ids_by_index[index] = source.id
+        source_products_by_index[index] = source
+
+    await session.flush()
+    source_product_ids_by_index = {
+        index: source.id
+        for index, source in source_products_by_index.items()
+        if source.id is not None
+    }
 
     for candidate_payload in discovered_payloads:
         if "source_index" not in candidate_payload or candidate_payload.get("source_index") is None:
@@ -630,7 +638,7 @@ async def _score_candidate_if_ready(
     if candidate_run is None:
         candidate.status = PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_FAILED
         return True
-    if candidate_run.status not in {"completed", "failed", "killed", "proxy_exhausted"}:
+    if candidate_run.status not in CRAWL_RUN_FINAL_STATUSES:
         return False
     record = await session.scalar(
         select(CrawlRecord)

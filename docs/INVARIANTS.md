@@ -169,7 +169,7 @@ is a crawler bug, not stricter security detection.
 - Browser escalation triggers for a URL that returned 200 with complete requested/default high-value fields
 - Browser-side code writes logical extraction fields directly into the record instead of returning observation artifacts
 - Browser acquisition captures a screenshot when `capture_screenshot=False`
-- A learned real Chrome success causes a later run to launch Patchright first without explicit user override or stale-contract fallback
+- A learned real Chrome success causes a later run to launch Patchright first without explicit user override or after the contract has been marked stale (see Rule 9)
 
 ---
 
@@ -215,11 +215,14 @@ Detail extraction must also reject collection/category URLs that expose product-
 - Run-scoped and domain-scoped browser storage must stay engine-scoped; `chromium`, `patchright`, and `real_chrome` state must not bleed across engines.
 - Browser-to-HTTP handoff may only reuse sanitized engine-scoped session state on the same proxy identity. If proxy affinity cannot be proven, skip handoff and stay browser-first.
 - Host browser-first memory is for repeated hard blocks, not one noisy challenge hit.
-- Risky detail browser fetches may warm the site origin before direct PDP navigation; that warmup happens before the target nav, not after a challenge page already landed.
+- Detail browser fetches to hosts with recent challenge history may warm the site origin (e.g., preflight DNS, TCP/TLS handshake, or resource prefetch) before direct PDP navigation; that warmup happens before the target nav, not after a challenge page already landed.
 - Learned acquisition contracts live in editable `DomainRunProfile` memory scoped by normalized `(domain, surface)`. They may prefer a proven browser engine and safe engine-scoped cookie handoff, but explicit run settings always override them.
 - Future crawls must reuse the successful acquisition/data-extraction path and learned selectors for the domain/surface without fresh experimentation unless the user explicitly changes settings, enables experimentation, resets learned memory, or the contract becomes stale.
-- If safe cookies exist for the saved engine, curl handoff may be tried first; on drift/block/empty output, fallback must use the proven browser engine before normal auto policy.
-- Repeated quality failures mark the acquisition contract stale. Stale contracts must not keep forcing browser engine or curl handoff choices.
+- When safe cookies exist for the saved engine:
+  1. Try curl handoff first.
+  2. On drift/block/empty output, fallback to the proven browser engine.
+  3. On further failure, revert to the normal auto policy.
+- After 3 consecutive quality failures the acquisition contract is marked stale. Stale contracts must not keep forcing browser engine or curl handoff choices.
 
 **Why this is here:**
 Static cleanup advice to persist/reuse more browser state caused a real regression on 2026-04-23. The crawler started replaying PerimeterX challenge state (`_px*`, `pxcts`, PX localStorage) across runs, which poisoned acquisition on multiple sites. Any future "simplification" of cookie memory must preserve this guard and its regression tests.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from bs4 import BeautifulSoup
 
 from app.services.config.extraction_rules import (
@@ -33,7 +35,7 @@ def gender_from_detail_context(*values: object) -> str | None:
 def breadcrumb_category_from_dom(
     soup: BeautifulSoup,
     *,
-    current_title: object = None,
+    current_title: str | None = None,
     page_url: str = "",
 ) -> str | None:
     labels = breadcrumb_labels_from_dom(soup, current_title=current_title, page_url=page_url)
@@ -43,22 +45,35 @@ def breadcrumb_category_from_dom(
 def breadcrumb_labels_from_dom(
     soup: BeautifulSoup,
     *,
-    current_title: object = None,
+    current_title: str | None = None,
     page_url: str = "",
 ) -> list[str]:
     for selector in DETAIL_BREADCRUMB_SELECTORS:
-        labels = _clean_breadcrumb_labels(
-            node.get_text(" ", strip=True) for node in soup.select(str(selector))
-        )
-        labels = _trim_breadcrumb_labels(labels, current_title=current_title, page_url=page_url)
-        if labels:
-            return labels
+        nodes = soup.select(str(selector))
+        if not nodes:
+            continue
+        # Group by closest nav, ul, ol, or generic div parent to avoid flattening multiple breadcrumbs
+        groups = {}
+        for node in nodes:
+            parent = node.parent
+            while parent and parent.name not in ("nav", "ul", "ol", "div", "section"):
+                parent = parent.parent
+            if not parent:
+                parent = node.parent
+            groups.setdefault(id(parent), []).append(node)
+        for group_nodes in groups.values():
+            labels = _clean_breadcrumb_labels(
+                node.get_text(" ", strip=True) for node in group_nodes
+            )
+            labels = _trim_breadcrumb_labels(labels, current_title=current_title, page_url=page_url)
+            if labels:
+                return labels
     for selector in DETAIL_BREADCRUMB_CONTAINER_SELECTORS:
         for container in soup.select(str(selector)):
-            labels = _breadcrumb_labels_from_container(container)
-            labels = _trim_breadcrumb_labels(labels, current_title=current_title, page_url=page_url)
-        if labels:
-            return labels
+            container_labels = _breadcrumb_labels_from_container(container)
+            container_labels = _trim_breadcrumb_labels(container_labels, current_title=current_title, page_url=page_url)
+            if container_labels:
+                return container_labels
     return []
 
 
@@ -99,30 +114,40 @@ def _clean_breadcrumb_label(value: object) -> str:
 def _trim_breadcrumb_labels(
     labels: list[str],
     *,
-    current_title: object = None,
+    current_title: str | None = None,
     page_url: str = "",
 ) -> list[str]:
     rows = list(labels)
     if not rows:
         return []
-    
-    first_lower = rows[0].strip().lower()
-    is_root = first_lower in DETAIL_BREADCRUMB_ROOT_LABELS
-    if not is_root and page_url:
-        try:
-            from urllib.parse import urlparse
-            host = urlparse(page_url).netloc.lower()
-            if host.startswith("www."):
-                host = host[4:]
-            if first_lower == host or first_lower == host.split(".")[0]:
-                is_root = True
-        except Exception:
-            pass
 
-    if is_root:
+    def _is_root_label(text: str) -> bool:
+        lowered = clean_text(text).casefold()
+        root_labels = {
+            clean_text(label).casefold()
+            for label in tuple(DETAIL_BREADCRUMB_ROOT_LABELS or ())
+            if clean_text(label)
+        }
+        if lowered in root_labels:
+            return True
+        if page_url:
+            try:
+                host = urlparse(page_url).netloc.casefold()
+                if host.startswith("www."):
+                    host = host[4:]
+                if lowered == host or lowered == host.split(".")[0]:
+                    return True
+            except ValueError:
+                pass
+        return False
+
+    if len(rows) > 1 and _is_root_label(rows[-1]) and not _is_root_label(rows[0]):
+        rows.reverse()
+
+    if _is_root_label(rows[0]):
         rows = rows[1:]
     title = clean_text(current_title).casefold()
-    if len(rows) >= 2 and title and clean_text(rows[-1]).casefold() == title:
+    if len(rows) >= 1 and title and clean_text(rows[-1]).casefold() == title:
         rows = rows[:-1]
     return rows
 

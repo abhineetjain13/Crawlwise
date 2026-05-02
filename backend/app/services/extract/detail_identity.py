@@ -7,10 +7,14 @@ from urllib.parse import parse_qsl, urlparse
 from app.services.config.extraction_rules import (
     CANDIDATE_PLACEHOLDER_VALUES,
     DETAIL_COLLECTION_PATH_TOKENS,
+    DETAIL_GENERIC_TERMINAL_TOKENS,
+    DETAIL_IDENTITY_CODE_MIN_LENGTH,
+    DETAIL_IDENTITY_STOPWORDS,
     DETAIL_NON_PAGE_FILE_EXTENSIONS,
     DETAIL_PRODUCT_PATH_TOKENS,
     DETAIL_SEARCH_QUERY_KEYS,
     DETAIL_UTILITY_PATH_TOKENS,
+    JOB_LISTING_DETAIL_ROOT_MARKERS,
     JOB_LISTING_DETAIL_PATH_MARKERS,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_NON_LISTING_PATH_TOKENS,
@@ -25,29 +29,6 @@ from app.services.field_value_core import (
 )
 
 logger = logging.getLogger(__name__)
-_DETAIL_IDENTITY_STOPWORDS = frozenset(
-    {
-        "and",
-        "buy",
-        "fit",
-        "for",
-        "men",
-        "online",
-        "oversized",
-        "product",
-        "products",
-        "shirt",
-        "shirts",
-        "souled",
-        "store",
-        "tee",
-        "tees",
-        "the",
-        "tshirt",
-        "tshirts",
-        "women",
-    }
-)
 _DETAIL_URL_PLACEHOLDER_SEGMENTS = frozenset(
     {
         str(value).strip().lower()
@@ -137,18 +118,9 @@ def _job_detail_like_path(url: str) -> bool:
         return True
     if re.match(r"jobs?-\d", terminal):
         return True
-    detail_roots = {
-        "job",
-        "jobs",
-        "opening",
-        "position",
-        "posting",
-        "career",
-        "careers",
-    }
     for index, segment in enumerate(segments[:-1]):
         normalized = segment.strip().lower()
-        if normalized not in detail_roots:
+        if normalized not in JOB_LISTING_DETAIL_ROOT_MARKERS:
             continue
         next_segment = segments[index + 1].strip().lower()
         if next_segment and not _job_listing_url_is_hub(
@@ -249,26 +221,7 @@ def _detail_title_from_url(page_url: str) -> str | None:
     path_segments = _detail_url_path_segments(page_url)
     if not path_segments:
         return None
-    generic_terminal_tokens = {
-        "color",
-        "colors",
-        "detail",
-        "dp",
-        "job",
-        "jobs",
-        "p",
-        "product",
-        "products",
-        "release",
-        "size",
-        "sizes",
-        "style",
-        "styles",
-        "variant",
-        "variants",
-        "width",
-        "widths",
-    }
+    generic_terminal_tokens = set(DETAIL_GENERIC_TERMINAL_TOKENS)
     for index in range(len(path_segments) - 1, -1, -1):
         segment = path_segments[index]
         terminal = re.sub(r"\.(html?|htm)$", "", segment, flags=re.I)
@@ -278,7 +231,9 @@ def _detail_title_from_url(page_url: str) -> str | None:
             continue
         embedded_codes = [
             normalized
-            for match in re.findall(r"[A-Za-z0-9]{8,}", terminal)
+            for match in re.findall(
+                rf"[A-Za-z0-9]{{{DETAIL_IDENTITY_CODE_MIN_LENGTH},}}", terminal
+            )
             if (normalized := _normalized_detail_identity_code(match))
         ]
         if embedded_codes:
@@ -286,7 +241,7 @@ def _detail_title_from_url(page_url: str) -> str | None:
                 chunk.lower() for chunk in re.findall(r"[A-Za-z]+", terminal)
             ]
             if not alpha_chunks or all(
-                any(token in chunk for token in generic_terminal_tokens)
+                set(_path_segment_tokens(chunk)) <= generic_terminal_tokens
                 for chunk in alpha_chunks
             ):
                 continue
@@ -480,6 +435,7 @@ def _detail_identity_record_tokens(record: dict[str, object]) -> set[str]:
     return tokens
 
 
+
 def _detail_url_matches_requested_identity(
     candidate_url: str,
     *,
@@ -548,7 +504,7 @@ def _detail_identity_tokens(value: object) -> set[str]:
     return {
         token
         for token in re.split(r"[^a-z0-9]+", cleaned)
-        if len(token) >= 3 and token not in _DETAIL_IDENTITY_STOPWORDS
+        if len(token) >= 3 and token not in DETAIL_IDENTITY_STOPWORDS
     }
 
 
@@ -571,7 +527,9 @@ def _detail_identity_codes_from_url(url: object) -> set[str]:
         code_like_terminal = _detail_segment_code(terminal)
         if code_like_terminal:
             codes.add(code_like_terminal)
-        for match in re.findall(r"[A-Za-z0-9]{8,}", terminal):
+        for match in re.findall(
+            rf"[A-Za-z0-9]{{{DETAIL_IDENTITY_CODE_MIN_LENGTH},}}", terminal
+        ):
             normalized = _normalized_detail_identity_code(match)
             if normalized:
                 codes.add(normalized)
@@ -616,7 +574,7 @@ def _detail_segment_code(value: object) -> str | None:
 
 def _normalized_detail_identity_code(value: object) -> str | None:
     text = re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).upper()
-    if len(text) < 8:
+    if len(text) < DETAIL_IDENTITY_CODE_MIN_LENGTH:
         return None
     if not re.search(r"\d", text):
         return None
@@ -644,6 +602,32 @@ def _detail_redirect_identity_is_mismatched(
         return False
     if not _detail_url_looks_like_product(requested):
         return False
+
+    if current and requested == current:
+        requested_title = _detail_title_from_url(requested)
+        has_product_like_signal = any(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in (
+                "image_url",
+                "additional_images",
+                "price",
+                "brand",
+                "description",
+                "availability",
+                "category",
+                "product_details",
+                "selected_variant",
+                "variants",
+            )
+        )
+        if has_product_like_signal:
+            return False
+        if requested_title and _same_url_title_only_shell_like(
+            record, page_url=requested
+        ):
+            return True
+        return False
+
     requested_codes = _detail_identity_codes_from_url(requested)
     record_field_codes = _detail_identity_codes_from_record_fields(record)
     if (
@@ -683,37 +667,7 @@ def _detail_redirect_identity_is_mismatched(
             requested_page_url=requested,
         ):
             return True
-    if current and requested == current:
-        requested_title = _detail_title_from_url(requested)
-        has_product_like_signal = any(
-            record.get(field_name) not in (None, "", [], {})
-            for field_name in (
-                "image_url",
-                "additional_images",
-                "price",
-                "brand",
-                "description",
-                "availability",
-                "category",
-                "product_details",
-                "selected_variant",
-                "variants",
-            )
-        )
-        if (
-            requested_title
-            and has_product_like_signal
-            and not _record_matches_requested_detail_identity(
-                record,
-                requested_page_url=requested,
-            )
-        ):
-            return True
-        if requested_title and _same_url_title_only_shell_like(
-            record, page_url=requested
-        ):
-            return True
-        return False
+
     if not current or requested == current:
         return False
     if not same_site(requested, current):

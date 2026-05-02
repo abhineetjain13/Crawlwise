@@ -82,6 +82,7 @@ export default function AdminUsersPage() {
               { value: 'active', label: 'Active' },
               { value: 'inactive', label: 'Inactive' },
             ]}
+            ariaLabel="User status"
             className="sm:min-w-[180px]"
           />
         </div>

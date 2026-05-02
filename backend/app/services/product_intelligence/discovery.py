@@ -43,6 +43,8 @@ from app.services.config.product_intelligence import (
     SOURCE_TYPE_RETAILER,
     SOURCE_TYPE_UNKNOWN,
     GOOGLE_NATIVE_BROWSER_ENGINE,
+    GOOGLE_NATIVE_BLOCKED_HTML_PATTERNS,
+    GOOGLE_NATIVE_BLOCKED_URL_PATTERNS,
     GOOGLE_NATIVE_HOME_URL,
     GOOGLE_NATIVE_IGNORED_DOMAINS,
     GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS,
@@ -57,6 +59,7 @@ from app.services.config.product_intelligence import (
     GOOGLE_NATIVE_THUMBNAIL_ANCESTOR_DEPTH,
     GOOGLE_NATIVE_THUMBNAIL_MIN_SRC_LENGTH,
     GOOGLE_NATIVE_TITLE_SELECTOR,
+    GOOGLE_NATIVE_TYPING_EXTRA_WAIT_MS,
     product_intelligence_settings,
 )
 from app.services.field_value_core import clean_text
@@ -340,7 +343,10 @@ async def _google_native_session():
                     if callable(fill) and callable(press):
                         await fill(normalized_query)
                         await press("Enter")
-                        await page.wait_for_timeout(int(GOOGLE_NATIVE_RESULT_WAIT_MS) + 1500)
+                        await page.wait_for_timeout(
+                            int(GOOGLE_NATIVE_RESULT_WAIT_MS)
+                            + int(GOOGLE_NATIVE_TYPING_EXTRA_WAIT_MS)
+                        )
                     else:
                         await page.goto(
                             _google_native_search_url(normalized_query, result_limit),
@@ -391,15 +397,12 @@ def _page_url(page: object) -> str:
 
 def _google_native_blocked(url: str, html: str) -> bool:
     normalized_url = str(url or "").lower()
-    if "/sorry/" in normalized_url:
+    if any(pattern in normalized_url for pattern in GOOGLE_NATIVE_BLOCKED_URL_PATTERNS):
         return True
     normalized_html = str(html or "").lower()
-    if (
-        "unusual traffic from your computer network" in normalized_html
-        or "really you sending the requests" in normalized_html
-    ):
+    if any(pattern in normalized_html for pattern in GOOGLE_NATIVE_BLOCKED_HTML_PATTERNS):
         return True
-    classification = classify_blocked_page(str(html or ""), 200)
+    classification = classify_blocked_page(str(html or ""), 0)
     return bool(classification.blocked)
 
 

@@ -322,7 +322,7 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
     <tr key={product.id} className="group/row hover:bg-background-alt/30 transition-colors">
       <td className="bg-panel group-hover/row:bg-background-alt/50 sticky left-0 z-10 transition-colors">
         <div className="flex items-center gap-2 py-1.5">
-          <Badge tone="neutral" className="h-5 shrink-0 px-1.5 font-mono text-sm opacity-70">
+          <Badge tone="neutral" className="h-5 shrink-0 px-1.5 font-mono text-xs opacity-60">
             #{product.source_record_id}
           </Badge>
           {product.source_url ? (

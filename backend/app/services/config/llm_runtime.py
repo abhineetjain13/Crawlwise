@@ -21,6 +21,8 @@ PARSE_PROVIDER_JSON_ERROR = (
 )
 DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD = {
     "groq/llama-3.3-70b-versatile": [0.59, 0.79],
+    "anthropic/claude-3-5-haiku-latest": [0.8, 4.0],
+    "nvidia/meta/llama-3.1-70b-instruct": [0.35, 0.4],
 }
 
 
@@ -97,6 +99,15 @@ class LLMRuntimeSettings(BaseSettings):
                 )
             except (InvalidOperation, ValueError):
                 continue
+        if not pricing and raw is not DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD:
+            fallback = self.model_copy(
+                update={
+                    "token_pricing_json": json.dumps(
+                        DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD
+                    )
+                }
+            )
+            return fallback.get_token_pricing()
         return pricing
 
 

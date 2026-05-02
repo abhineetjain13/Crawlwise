@@ -71,7 +71,6 @@ class LLMCostLogResponse(BaseModel):
     outcome: Literal["success", "error"] = "success"
     error_category: Literal[
         "",
-        "none",
         "rate_limited",
         "timeout",
         "auth_failure",

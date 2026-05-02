@@ -26,9 +26,7 @@ def test_normalize_additional_images_preserves_url_lists_with_commas() -> None:
     ]
 
 
-def test_normalize_decimal_price_rejects_ambiguous_integer_text_without_price_context() -> (
-    None
-):
+def test_normalize_decimal_price_rejects_ambiguous_integer_text_without_price_context() -> None:
     assert normalize_decimal_price("126") is None
 
 
@@ -38,15 +36,11 @@ def test_normalize_decimal_price_accepts_currency_context_for_integer_text() -> 
     assert normalize_decimal_price("INR 499") == "499"
 
 
-def test_normalize_decimal_price_accepts_price_keyword_context_for_integer_text() -> (
-    None
-):
+def test_normalize_decimal_price_accepts_price_keyword_context_for_integer_text() -> None:
     assert normalize_decimal_price("price 126") == "126"
 
 
-def test_normalize_decimal_price_preserves_decimal_strings_without_currency_symbol() -> (
-    None
-):
+def test_normalize_decimal_price_preserves_decimal_strings_without_currency_symbol() -> None:
     assert normalize_decimal_price("59.99") == "59.99"
 
 
@@ -115,9 +109,7 @@ def test_normalize_variant_record_preserves_referenced_single_value_axes() -> No
     assert all("scent" in variant["option_values"] for variant in record["variants"])
 
 
-def test_normalize_variant_record_prunes_global_axes_and_collapses_permutations() -> (
-    None
-):
+def test_normalize_variant_record_prunes_global_axes_and_collapses_permutations() -> None:
     variants = []
     for size in ("8 US", "9 US"):
         for site in ("Kith.com", "Kith.eu"):
@@ -193,9 +185,7 @@ def test_normalize_variant_record_preserves_identity_less_selected_variant() -> 
     assert record["selected_variant"]["option_values"] == {"size": "Large"}
 
 
-def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliases() -> (
-    None
-):
+def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliases() -> None:
     record = {
         "variant_axes": {"size": ["3", "4", "8", "8 US"]},
         "variants": [
@@ -270,9 +260,7 @@ def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliase
     assert record["selected_variant"]["availability"] == "out_of_stock"
 
 
-def test_detail_record_quality_repairs_invalid_original_prices_and_selected_variant_availability() -> (
-    None
-):
+def test_detail_record_quality_repairs_invalid_original_prices_and_selected_variant_availability() -> None:
     record = {
         "sku": "M20324",
         "url": "https://www.adidas.com/us/stan-smith-shoes/M20324.html",

@@ -133,9 +133,16 @@ DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS = (
     r"\bcare\b.*$",
     r"\bcare instructions?\b.*$",
     r"\bwash\b.*$",
-    r"\biron\b.*$",
+    r"\biron(?:ing)?\s+instructions?\b.*$",
+    r"\bdo\s+not\s+iron\b.*$",
     r"\bdry clean\b.*$",
 )
+"""Taxonomy conflict blocks.
+
+``context_terms`` are positive source-text cues. ``path_terms`` are taxonomy
+path exclusions. Values are case-insensitive and may be phrases; a block
+rejects a candidate only when source context and excluded path both match.
+"""
 DATA_ENRICHMENT_TAXONOMY_CONTEXT_BLOCKS = (
     {
         "context_terms": (

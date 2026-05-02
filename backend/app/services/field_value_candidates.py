@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 from app.services.config.extraction_rules import (
     DETAIL_BREADCRUMB_ROOT_LABELS,
@@ -91,6 +92,21 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
     raw_items = payload.get("itemListElement")
     if not isinstance(raw_items, list):
         return []
+    
+    def _get_position(item: Any) -> float:
+        if not isinstance(item, dict):
+            return 0.0
+        try:
+            return float(item.get("position", 0))
+        except (ValueError, TypeError):
+            return 0.0
+
+    try:
+        if all(isinstance(x, dict) and x.get("position") for x in raw_items):
+            raw_items = sorted(raw_items, key=_get_position)
+    except Exception:
+        pass
+
     names: list[str] = []
     strip_chars = " \t\n\r" + "".join(DETAIL_BREADCRUMB_SEPARATOR_LABELS)
     for item in raw_items:
@@ -102,22 +118,27 @@ def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[st
     if not names:
         return []
     
-    first_lower = names[0].lower()
-    is_root = first_lower in DETAIL_BREADCRUMB_ROOT_LABELS
-    if not is_root and page_url:
-        try:
-            from urllib.parse import urlparse
-            host = urlparse(page_url).netloc.lower()
-            if host.startswith("www."):
-                host = host[4:]
-            if first_lower == host or first_lower == host.split(".")[0]:
-                is_root = True
-        except Exception:
-            pass
+    def _is_root_label(text: str) -> bool:
+        lowered = text.strip().lower()
+        if lowered in DETAIL_BREADCRUMB_ROOT_LABELS:
+            return True
+        if page_url:
+            try:
+                host = urlparse(page_url).netloc.lower()
+                if host.startswith("www."):
+                    host = host[4:]
+                if lowered == host or lowered == host.split(".")[0]:
+                    return True
+            except ValueError:
+                pass
+        return False
 
-    if is_root:
+    if len(names) > 1 and _is_root_label(names[-1]) and not _is_root_label(names[0]):
+        names.reverse()
+
+    if _is_root_label(names[0]):
         names = names[1:]
-    if len(names) >= 2:
+    if len(names) >= 1:
         names = names[:-1]
     return [name for name in names if name]
 

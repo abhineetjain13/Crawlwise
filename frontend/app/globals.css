@@ -1054,7 +1054,7 @@ html:not([data-theme='dark']) .focus-ring:focus-visible {
 .compact-data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: var(--table-font-size);
 }
 
 .compact-data-table thead {
@@ -1267,7 +1267,7 @@ html:not([data-theme='dark']) .compact-data-table {
 
 .metric-pulse-value {
   font-family: var(--font-mono-family);
-  font-size: 32px;
+  font-size: var(--text-2xl);
   font-weight: var(--weight-bold);
   color: var(--text-primary);
   line-height: 1;

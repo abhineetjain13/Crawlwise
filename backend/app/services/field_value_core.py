@@ -337,6 +337,8 @@ _MULTI_PART_PUBLIC_SUFFIXES = frozenset(
     }
 )
 
+_HTML_ENTITY_RE = re.compile(r"&(?:#[0-9]+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]+);")
+
 
 def registrable_host(url: str) -> str:
     host = (urlparse(url).hostname or "").lower().strip(".")
@@ -474,7 +476,7 @@ def direct_record_to_surface_fields(
 
 def coerce_text(value: object) -> str | None:
     if isinstance(value, str):
-        if "<" in value or "&" in value:
+        if "<" in value or _HTML_ENTITY_RE.search(value):
             return text_or_none(html_to_text(value))
         return text_or_none(value)
     return text_or_none(value)

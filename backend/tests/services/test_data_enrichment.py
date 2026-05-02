@@ -394,9 +394,7 @@ def test_data_enrichment_llm_prompt_context_excludes_raw_artifacts() -> None:
     assert context["taxonomy_version"] == DATA_ENRICHMENT_TAXONOMY_VERSION
 
 
-def test_data_enrichment_variant_dict_values_do_not_pollute_sizes_or_availability() -> (
-    None
-):
+def test_data_enrichment_variant_dict_values_do_not_pollute_sizes_or_availability() -> None:
     enrichment = _build_deterministic_enrichment(
         {
             "title": "Cotton Shirt",

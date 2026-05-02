@@ -136,12 +136,69 @@ DETAIL_CENT_PRICE_HOST_SUFFIXES = (
     "ssense.com",
 )
 DETAIL_IDENTITY_FIELDS = frozenset({"title", "image_url"})
+VARIANT_FIELDS = frozenset({"variants", "selected_variant"})
 VARIANT_SIZE_ALIAS_SUFFIXES = (" us",)
 VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "sign up",
     "updates and promotions",
 )
 OPTION_VALUE_NOISE_WORDS = ("popular", "sale", "discount", "off")
+DETAIL_IDENTITY_STOPWORDS = frozenset(
+    {
+        "and",
+        "buy",
+        "fit",
+        "for",
+        "men",
+        "online",
+        "oversized",
+        "product",
+        "products",
+        "shirt",
+        "shirts",
+        "souled",
+        "store",
+        "tee",
+        "tees",
+        "the",
+        "tshirt",
+        "tshirts",
+        "women",
+    }
+)
+DETAIL_GENERIC_TERMINAL_TOKENS = frozenset(
+    {
+        "color",
+        "colors",
+        "detail",
+        "dp",
+        "job",
+        "jobs",
+        "p",
+        "product",
+        "productpage",
+        "products",
+        "release",
+        "size",
+        "sizes",
+        "style",
+        "styles",
+        "variant",
+        "variants",
+        "width",
+        "widths",
+    }
+)
+JOB_LISTING_DETAIL_ROOT_MARKERS = frozenset(
+    {"job", "jobs", "opening", "position", "posting", "career", "careers"}
+)
+DETAIL_IDENTITY_CODE_MIN_LENGTH = 8
+REMOTE_BOOLEAN_TRUE_TOKENS = frozenset(
+    {"true", "1", "yes", "remote", "fully remote", "work from home", "telecommute"}
+)
+REMOTE_BOOLEAN_FALSE_TOKENS = frozenset(
+    {"false", "0", "no", "onsite", "on site", "office"}
+)
 DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS = frozenset(
     {
         "boot",
@@ -278,10 +335,10 @@ AVAILABILITY_URL_MAP = {
     "http://schema.org/limitedavailability": "limited_stock",
     "schema.org/limitedavailability": "limited_stock",
     "limitedavailability": "limited_stock",
-    "https://schema.org/preorder": "preorder",
-    "http://schema.org/preorder": "preorder",
-    "schema.org/preorder": "preorder",
-    "preorder": "preorder",
+    "https://schema.org/preorder": "pre_order",
+    "http://schema.org/preorder": "pre_order",
+    "schema.org/preorder": "pre_order",
+    "preorder": "pre_order",
 }
 VARIANT_OPTION_TEXT_FIELDS = frozenset(
     {
@@ -324,12 +381,16 @@ _EXTRA_EXPORTS = [
     "DETAIL_BREADCRUMB_SEPARATOR_LABELS",
     "DETAIL_CATEGORY_SOURCE_RANKS",
     "DETAIL_GENDER_TERMS",
+    "DETAIL_GENERIC_TERMINAL_TOKENS",
+    "DETAIL_IDENTITY_CODE_MIN_LENGTH",
     "DETAIL_TITLE_DIMENSION_SIZE_PATTERN",
+    "DETAIL_IDENTITY_STOPWORDS",
     "DYNAMIC_FIELD_NAME_MAX_TOKENS",
     "EXPORT_IMAGE_URL_SUFFIXES",
     "IMAGE_FIELDS",
     "INTEGER_VALUE_FIELDS",
     "JSON_RECORD_LIST_KEYS",
+    "JOB_LISTING_DETAIL_ROOT_MARKERS",
     "LISTING_PRICE_NODE_SELECTORS",
     "LISTING_PROMINENT_TITLE_TAGS",
     "LONG_TEXT_FIELDS",
@@ -341,6 +402,8 @@ _EXTRA_EXPORTS = [
     "ORACLE_HCM_LOCATION_LIST_KEYS",
     "ORACLE_HCM_SITE_PATH_RE",
     "OPTION_VALUE_NOISE_WORDS",
+    "REMOTE_BOOLEAN_FALSE_TOKENS",
+    "REMOTE_BOOLEAN_TRUE_TOKENS",
     "PERCENT_RE",
     "PRICE_VALUE_FIELDS",
     "RATING_RE",
@@ -351,6 +414,7 @@ _EXTRA_EXPORTS = [
     "STRUCTURED_OBJECT_FIELDS",
     "STRUCTURED_OBJECT_LIST_FIELDS",
     "URL_FIELDS",
+    "VARIANT_FIELDS",
     "VARIANT_OPTION_VALUE_UI_NOISE_PHRASES",
     "VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS",
     "VARIANT_OPTION_TEXT_FIELDS",

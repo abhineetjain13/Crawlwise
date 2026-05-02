@@ -97,7 +97,17 @@ GOOGLE_NATIVE_PROVIDER_PAYLOAD = "google_native"
 GOOGLE_NATIVE_BROWSER_ENGINE = "real_chrome"
 GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS = 20000
 GOOGLE_NATIVE_RESULT_WAIT_MS = 2500
+GOOGLE_NATIVE_TYPING_EXTRA_WAIT_MS = 1500
 GOOGLE_NATIVE_SUBMIT_KEY = "Enter"
+GOOGLE_NATIVE_BLOCKED_URL_PATTERNS = ("/sorry/",)
+GOOGLE_NATIVE_BLOCKED_HTML_PATTERNS = (
+    "unusual traffic from your computer network",
+    "really you sending the requests",
+)
+ADMIN_ROLE = "admin"
+CRAWL_RUN_FINAL_STATUSES = frozenset(
+    {"completed", "failed", "killed", "proxy_exhausted"}
+)
 PRODUCT_INTELLIGENCE_LLM_TASK = "product_intelligence_enrichment"
 PRODUCT_INTELLIGENCE_BRAND_INFERENCE_LLM_TASK = "product_intelligence_brand_inference"
 

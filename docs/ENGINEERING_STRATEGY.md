@@ -162,7 +162,7 @@ Adding local product-universe dictionaries for enrichment categories, materials,
 
 **Violation looks like:** `DATA_ENRICHMENT_TAXONOMY_TOKEN_ALIASES`, `matching sets -> outfit sets`, a growing list of material names in config, or a color catalog copied into service code.
 
-**Fix:** Use `shopify_categories.json` for category paths and category attribute handles. Use `shopify_attributes.json` for Shopify-defined attribute values. If matching fails, improve generic matching mechanics in `data_enrichment/shopify_catalog.py` using taxonomy paths, category attribute handles, and normalized tokens. Local config may strip UI noise or define source-field lookup, but it must not become a shadow product taxonomy.
+**Fix:** Use canonical taxonomy files at `backend/app/data/enrichment/shopify_categories.json` for category paths and category attribute handles, and `backend/app/data/enrichment/shopify_attributes.json` for Shopify-defined attribute values. If matching fails, improve generic matching mechanics in `backend/app/services/data_enrichment/shopify_catalog.py` using taxonomy paths, category attribute handles, and normalized tokens. Local config may strip UI noise or define source-field lookup, but it must not become a shadow product taxonomy. Owner: `data_enrichment/` subsystem.
 
 ---
 

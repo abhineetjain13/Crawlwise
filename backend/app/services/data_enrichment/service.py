@@ -633,8 +633,6 @@ def _normalize_sizes(
     terms: dict[str, object],
     category_match: dict[str, object] | None = None,
 ) -> tuple[list[str] | None, str | None]:
-    if category_match and not _category_supports_attribute(category_match, "size"):
-        return None, None
     size_config = term_dict(terms, "size_systems")
     aliases_value = size_config.get("aliases")
     aliases_dict = aliases_value if isinstance(aliases_value, dict) else {}
@@ -655,6 +653,13 @@ def _normalize_sizes(
             "selected_variant",
         ),
     ]
+    category_supports_size = (
+        _category_supports_attribute(category_match, "size")
+        if category_match
+        else not clean_text(data.get("category") or data.get("product_type"))
+    )
+    if not values and not category_supports_size:
+        return None, None
     normalized: list[str] = []
     seen: set[str] = set()
     detected_system = None
@@ -662,7 +667,12 @@ def _normalize_sizes(
         cleaned = clean_text(value).strip()
         if not cleaned:
             continue
-        if not _plausible_size_value(cleaned, aliases=aliases, systems=systems):
+        if not _plausible_size_value(
+            cleaned,
+            aliases=aliases,
+            systems=systems,
+            require_strong=not category_supports_size,
+        ):
             continue
         canonical = aliases.get(
             cleaned.casefold(), cleaned.upper() if len(cleaned) <= 4 else cleaned
@@ -682,12 +692,17 @@ def _plausible_size_value(
     *,
     aliases: dict[str, str],
     systems: dict[str, set[str]],
+    require_strong: bool = False,
 ) -> bool:
     normalized = clean_text(value).casefold()
     if normalized in aliases:
         return True
+    if require_strong and not re.search(r"[a-z]", normalized):
+        return False
     if any(normalized in values for values in systems.values()):
         return True
+    if require_strong:
+        return False
     return bool(re.fullmatch(r"\d+(?:\.\d+)?(?:\s*(?:m|t|w|y|us|uk|eu))?", normalized))
 
 
@@ -719,9 +734,8 @@ def _normalize_materials(
     found: list[str] = []
     seen: set[str] = set()
     values = _candidate_values(data, *DATA_ENRICHMENT_MATERIAL_PRIMARY_FIELDS)
-    if not values:
-        values = _candidate_values(data, *DATA_ENRICHMENT_MATERIAL_FALLBACK_FIELDS)
-    for value in values:
+    fallback_values = _candidate_values(data, *DATA_ENRICHMENT_MATERIAL_FALLBACK_FIELDS)
+    for value in [*values, *fallback_values]:
         lowered = _strip_material_context_noise(
             clean_text(strip_html_tags(value)).casefold()
         )
@@ -746,14 +760,23 @@ def _compiled_material_strip_patterns() -> tuple[re.Pattern[str], ...]:
     return tuple(compiled)
 
 
-COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS = (
-    _compiled_material_strip_patterns()
-)
+_COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS: tuple[
+    re.Pattern[str], ...
+] | None = None
+
+
+def _material_strip_patterns() -> tuple[re.Pattern[str], ...]:
+    global _COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS
+    if _COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS is None:
+        _COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS = (
+            _compiled_material_strip_patterns()
+        )
+    return _COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS
 
 
 def _strip_material_context_noise(value: str) -> str:
     cleaned = value
-    for pattern in COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS:
+    for pattern in _material_strip_patterns():
         cleaned = pattern.sub("", cleaned)
     return clean_text(cleaned)
 

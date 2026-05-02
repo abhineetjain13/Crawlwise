@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 from app.core.metrics import observe_llm_task_duration, record_llm_task_outcome
 from app.models.crawl import CrawlRun
-from app.models.llm import LLMCostLog
+from app.models.llm import LLMCostLog, LLMCostLogOutcome
 from app.services.config.llm_runtime import (
     PARSE_PROVIDER_JSON_ERROR,
     llm_runtime_settings,
@@ -45,6 +45,7 @@ from pydantic import (
     ValidationError,
     field_validator,
 )
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -235,29 +236,40 @@ async def run_prompt_task(
         error_message: str = "",
         error_category: LLMErrorCategory = LLMErrorCategory.NONE,
     ) -> None:
-        persisted_run_id = run_id
-        if run_id is not None:
-            existing_run = await session.get(CrawlRun, run_id)
-            if existing_run is None:
-                persisted_run_id = None
-        session.add(
-            LLMCostLog(
-                run_id=persisted_run_id,
-                provider=provider,
-                model=model,
-                task_type=task_type,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cost_usd=estimate_cost_usd(
-                    provider, model, input_tokens, output_tokens
-                ),
-                domain=domain,
-                outcome="error" if error_message else "success",
-                error_category=str(error_category or LLMErrorCategory.NONE),
-                error_message=str(error_message or ""),
+        try:
+            persisted_run_id = run_id
+            if run_id is not None:
+                existing_run = await session.get(CrawlRun, run_id)
+                if existing_run is None:
+                    persisted_run_id = None
+            session.add(
+                LLMCostLog(
+                    run_id=persisted_run_id,
+                    provider=provider,
+                    model=model,
+                    task_type=task_type,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=estimate_cost_usd(
+                        provider, model, input_tokens, output_tokens
+                    ),
+                    domain=domain,
+                    outcome=(
+                        LLMCostLogOutcome.ERROR.value
+                        if error_message
+                        else LLMCostLogOutcome.SUCCESS.value
+                    ),
+                    error_category=(
+                        ""
+                        if error_category == LLMErrorCategory.NONE
+                        else str(error_category or "")
+                    ),
+                    error_message=str(error_message or ""),
+                )
             )
-        )
-        await session.flush()
+            await session.flush()
+        except SQLAlchemyError:
+            logger.warning("Failed to persist LLM cost log", exc_info=True)
 
     config = await resolve_run_config(session, run_id=run_id, task_type=task_type)
     task = get_prompt_task(task_type)

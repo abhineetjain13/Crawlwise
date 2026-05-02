@@ -106,7 +106,7 @@ def estimate_cost_usd(
     return cost.quantize(Decimal("0.0001"))
 
 
-def _safe_token_count(value: object) -> int:
+def _safe_token_count(value: int | None) -> int:
     try:
         return max(0, int(value or 0))
     except (TypeError, ValueError):

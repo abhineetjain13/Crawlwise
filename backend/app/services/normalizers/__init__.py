@@ -5,7 +5,12 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.services.config.extraction_rules import AVAILABILITY_URL_MAP, CURRENCY_CODES
+from app.services.config.extraction_rules import (
+    AVAILABILITY_URL_MAP,
+    CURRENCY_CODES,
+    REMOTE_BOOLEAN_FALSE_TOKENS,
+    REMOTE_BOOLEAN_TRUE_TOKENS,
+)
 from app.services.config.field_mappings import (
     NORMALIZER_BOOLEAN_FIELDS,
     NORMALIZER_DECIMAL_FIELDS,
@@ -18,6 +23,7 @@ _CURRENCY_CODE_CONTEXT_PATTERN = (
     "|".join(
         re.escape(str(code).lower())
         for code in tuple(CURRENCY_CODES or ())
+        # Exclude "rs": common substring false positive; "rs.?" is handled as rupee context.
         if isinstance(code, str) and str(code).strip().lower() != "rs"
     )
     or r"(?!)"
@@ -71,17 +77,9 @@ def _normalize_bool(value: object) -> bool | str:
     if isinstance(value, bool):
         return value
     text = _normalize_text(value).lower()
-    if text in {
-        "true",
-        "1",
-        "yes",
-        "remote",
-        "fully remote",
-        "work from home",
-        "telecommute",
-    }:
+    if text in REMOTE_BOOLEAN_TRUE_TOKENS:
         return True
-    if text in {"false", "0", "no", "onsite", "on site", "office"}:
+    if text in REMOTE_BOOLEAN_FALSE_TOKENS:
         return False
     return _normalize_text(value)
 
@@ -168,7 +166,7 @@ def _normalize_availability(value: object) -> str:
     text = _normalize_text(value)
     lowered = text.lower()
     mapped = (AVAILABILITY_URL_MAP or {}).get(lowered.rstrip("/"))
-    if mapped:
+    if mapped is not None:
         return str(mapped)
     normalized_enum = lowered.replace("-", "_").replace(" ", "_")
     if normalized_enum in _AVAILABILITY_TOKENS:

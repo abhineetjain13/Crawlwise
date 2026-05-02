@@ -674,11 +674,11 @@ export function MetricPulseItem({
 }>) {
   return (
     <div className="metric-pulse-item group/metric">
-      <div className="metric-pulse-accent" />
+      <div className="metric-pulse-accent" aria-hidden="true" />
       <div className="metric-pulse-label">
         {Icon && <Icon className="size-3.5" />}
         {label}
-        {pulse && <div className="pulse-dot ml-auto" />}
+        {pulse && <div className="pulse-dot ml-auto" aria-hidden="true" />}
       </div>
       <div className="metric-pulse-value">{value}</div>
       {trend && <div className="mt-auto">{trend}</div>}
@@ -689,8 +689,8 @@ export function MetricPulseItem({
 export function MetricPulseSkeleton() {
   return (
     <div className="metric-pulse-item">
-      <div className="skeleton h-3 w-16" />
-      <div className="skeleton mt-2 h-8 w-24" />
+      <Skeleton className="h-3 w-16" />
+      <Skeleton className="mt-2 h-8 w-24" />
     </div>
   );
 }
