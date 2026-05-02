@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from copy import deepcopy
 import regex as regex_lib
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse, unquote
 
@@ -18,6 +20,8 @@ from app.services.config.extraction_rules import (
     PRODUCT_GALLERY_CONTEXT_HINTS,
     SEMANTIC_SECTION_NOISE,
     SEMANTIC_SECTION_LABEL_SKIP_TOKENS,
+    VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS,
+    VARIANT_OPTION_TEXT_FIELDS,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -42,6 +46,11 @@ from app.services.field_value_core import (
 from app.services.xpath_service import validate_xpath_syntax
 
 logger = logging.getLogger(__name__)
+_VARIANT_OPTION_CHILD_DROP_RE = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS or ())
+    if str(pattern).strip()
+)
 
 _candidate_cleanup_raw = EXTRACTION_RULES.get("candidate_cleanup")
 _CANDIDATE_CLEANUP = (
@@ -52,10 +61,7 @@ _PAGE_FILE_EXTENSIONS = (".asp", ".aspx", ".htm", ".html", ".jsp", ".php")
 _IMAGE_URL_HINTS = tuple(_CANDIDATE_CLEANUP.get("image_url_hint_tokens") or ())
 _NON_PRIMARY_IMAGE_SECTION_HINTS = tuple(
     str(token).lower()
-    for token in (
-        SEMANTIC_SECTION_NOISE.get("label_skip_tokens")
-        or ()
-    )
+    for token in (SEMANTIC_SECTION_NOISE.get("label_skip_tokens") or ())
 )
 _CDN_IMAGE_QUERY_PARAMS = frozenset(CDN_IMAGE_QUERY_PARAMS or ())
 _CDN_IMAGE_PATH_SUFFIX_RE = regex_lib.compile(
@@ -77,11 +83,7 @@ def _selector_regex_timeout_seconds() -> float | None:
 
 
 _SECTION_SKIP_PATTERNS = tuple(
-    str(token).lower()
-    for token in (
-        SEMANTIC_SECTION_NOISE.get("skip_patterns")
-        or ()
-    )
+    str(token).lower() for token in (SEMANTIC_SECTION_NOISE.get("skip_patterns") or ())
 )
 
 
@@ -199,7 +201,11 @@ def dedupe_image_urls(urls: list[str]) -> list[str]:
             continue
         current_score, current_index, current_url = current
         if score > current_score or (score == current_score and index < current_index):
-            best_by_key[canonical] = (score, current_index, url if score > current_score else current_url)
+            best_by_key[canonical] = (
+                score,
+                current_index,
+                url if score > current_score else current_url,
+            )
     return [best_by_key[key][2] for key in order]
 
 
@@ -248,7 +254,10 @@ def _is_in_product_gallery_context(node: Tag, *, max_depth: int = 6) -> bool:
     depth = 0
     in_main = False
     while isinstance(current, Tag) and depth < max_depth:
-        if current.name == "main" or str(current.get("role") or "").strip().lower() == "main":
+        if (
+            current.name == "main"
+            or str(current.get("role") or "").strip().lower() == "main"
+        ):
             in_main = True
         context = _node_attr_text(current)
         if any(hint in context for hint in PRODUCT_GALLERY_CONTEXT_HINTS):
@@ -281,7 +290,9 @@ def _gallery_image_score(node: Tag, candidate_url: str) -> int:
     score = 0
     if any(hint in context for hint in PRODUCT_GALLERY_CONTEXT_HINTS):
         score += 4
-    elif node.find_parent(["main"]) is not None and _looks_like_image_asset_url(candidate_url):
+    elif node.find_parent(["main"]) is not None and _looks_like_image_asset_url(
+        candidate_url
+    ):
         score += 2
     width = str(node.get("width") or "").strip()
     height = str(node.get("height") or "").strip()
@@ -330,12 +341,18 @@ def _is_other_detail_link(
     if not candidate:
         return False
     lowered = candidate.lower()
-    if lowered.startswith(("#", "javascript:", "mailto:")) or _looks_like_image_asset_url(candidate):
+    if lowered.startswith(
+        ("#", "javascript:", "mailto:")
+    ) or _looks_like_image_asset_url(candidate):
         return False
     page_parts = urlparse(page_url)
     candidate_parts = urlparse(candidate)
-    same_host = (page_parts.hostname or "").lower() == (candidate_parts.hostname or "").lower()
-    same_path = (page_parts.path.rstrip("/") or "/") == (candidate_parts.path.rstrip("/") or "/")
+    same_host = (page_parts.hostname or "").lower() == (
+        candidate_parts.hostname or ""
+    ).lower()
+    same_path = (page_parts.path.rstrip("/") or "/") == (
+        candidate_parts.path.rstrip("/") or "/"
+    )
     if same_host and same_path:
         return False
     is_detail_surface = "detail" in str(surface or "").lower()
@@ -398,7 +415,10 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
             image_candidates,
             page_url,
         )
-        if node.name not in {"img", "source"} and str(node.get("as") or "").lower() != "image":
+        if (
+            node.name not in {"img", "source"}
+            and str(node.get("as") or "").lower() != "image"
+        ):
             urls = [url for url in urls if _looks_like_image_asset_url(url)]
         if field_name == "additional_images":
             return urls or None
@@ -411,11 +431,23 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
         return urls[0] if urls else None
     if node.name == "meta":
         return coerce_field_value(field_name, node.get("content"), page_url)
-    for attr_name in ("content", "value", "datetime", "data-value", "data-price", "data-availability"):
+    for attr_name in (
+        "content",
+        "value",
+        "datetime",
+        "data-value",
+        "data-price",
+        "data-availability",
+    ):
         attr_value = node.get(attr_name)
         if attr_value not in (None, "", [], {}):
             return coerce_field_value(field_name, attr_value, page_url)
-    text_value = coerce_field_value(field_name, node.get_text(" ", strip=True), page_url)
+    raw_text = (
+        _variant_option_node_text(node, field_name)
+        if _looks_like_variant_option_node(node, field_name)
+        else node.get_text(" ", strip=True)
+    )
+    text_value = coerce_field_value(field_name, raw_text, page_url)
     if field_name in LONG_TEXT_FIELDS and not _section_text_is_meaningful(
         node,
         label=field_name,
@@ -423,6 +455,50 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
     ):
         return None
     return text_value
+
+
+def _looks_like_variant_option_node(node: Tag, field_name: str) -> bool:
+    if field_name not in VARIANT_OPTION_TEXT_FIELDS:
+        return False
+    if node.name in {"option", "button"}:
+        return True
+    role = str(node.get("role") or "").strip().lower()
+    if role in {"option", "radio", "button", "tab"}:
+        return True
+    context = " ".join(
+        _attribute_text(value)
+        for value in (
+            node.get("class"),
+            node.get("aria-label"),
+            node.get("data-testid"),
+            node.get("data-test"),
+            node.get("data-qa"),
+            node.get("name"),
+        )
+    ).lower()
+    return any(
+        token in context for token in ("option", "swatch", "variant", field_name)
+    )
+
+
+def _attribute_text(value: object) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(str(item or "") for item in value)
+    return str(value or "")
+
+
+def _variant_option_node_text(node: Tag, field_name: str) -> str:
+    del field_name
+    if not node.find(True):
+        return node.get_text(" ", strip=True)
+    pruned = deepcopy(node)
+    for child in list(pruned.find_all(True)):
+        text = clean_text(child.get_text(" ", strip=True))
+        if text and any(
+            pattern.search(text) for pattern in _VARIANT_OPTION_CHILD_DROP_RE
+        ):
+            child.decompose()
+    return pruned.get_text(" ", strip=True)
 
 
 def extract_selector_values(
@@ -457,7 +533,9 @@ def extract_xpath_values(
     try:
         matches = tree.xpath(xpath)
     except etree.XPathError:
-        logger.warning("Failed to evaluate xpath selector for %s: %s", field_name, xpath)
+        logger.warning(
+            "Failed to evaluate xpath selector for %s: %s", field_name, xpath
+        )
         return []
     values: list[object] = []
     limited_matches: list[object]
@@ -591,7 +669,9 @@ def extract_page_images(
                 continue
             if _is_garbage_image_candidate(node, candidate):
                 continue
-            scored_values.append((_gallery_image_score(node, candidate), index, candidate))
+            scored_values.append(
+                (_gallery_image_score(node, candidate), index, candidate)
+            )
     ordered = [
         candidate
         for _score, _index, candidate in sorted(
@@ -746,7 +826,9 @@ def _extract_sibling_content(node: Tag, *, label: str = "") -> str:
         if isinstance(sibling, Tag) and sibling.name in _SECTION_STOP_TAGS:
             break
         text = clean_text(
-            sibling.get_text(" ", strip=True) if isinstance(sibling, Tag) else str(sibling)
+            sibling.get_text(" ", strip=True)
+            if isinstance(sibling, Tag)
+            else str(sibling)
         )
         if not text:
             continue
@@ -808,7 +890,8 @@ def _section_text_is_meaningful(
             for candidate in node.select("p, li, dd, td, dt")
             if candidate.find_parent(
                 ["a", "button", "summary"],
-            ) is None
+            )
+            is None
             and str(candidate.get("role") or "").strip().lower()
             not in {"button", "tab"}
         )
@@ -848,11 +931,15 @@ def _find_wrapped_section_content(node: Tag, *, label: str) -> str:
                     continue
                 seen.add(id(target))
                 text = _section_text(target, label=label)
-                if len(text) >= 12 and _section_text_is_meaningful(
-                    target,
-                    label=label,
-                    text=text,
-                ) and (not best_text or len(text) < len(best_text)):
+                if (
+                    len(text) >= 12
+                    and _section_text_is_meaningful(
+                        target,
+                        label=label,
+                        text=text,
+                    )
+                    and (not best_text or len(text) < len(best_text))
+                ):
                     best_text = text
         parent = container.parent
         container = parent if isinstance(parent, Tag) else None
@@ -871,8 +958,10 @@ def _section_content_is_heading_like(
         return False
     if lowered == clean_text(label).lower():
         return True
-    if _is_section_label(cleaned) and len(cleaned.split()) <= 6 and not any(
-        token in cleaned for token in ".:;!?\n"
+    if (
+        _is_section_label(cleaned)
+        and len(cleaned.split()) <= 6
+        and not any(token in cleaned for token in ".:;!?\n")
     ):
         for heading in safe_select(root, _SECTION_LABEL_SELECTOR):
             heading_label = _section_label_text(heading)
@@ -958,22 +1047,30 @@ def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
         target = root.find(id=target_id)
         if isinstance(target, Tag):
             text = _section_text(target, label=label)
-            if len(text) >= 12 and _section_text_is_meaningful(
-                target,
-                label=label,
-                text=text,
-            ) and not _section_matches_page_heading(root, text):
+            if (
+                len(text) >= 12
+                and _section_text_is_meaningful(
+                    target,
+                    label=label,
+                    text=text,
+                )
+                and not _section_matches_page_heading(root, text)
+            ):
                 return text
 
     if node.name == "summary":
         parent = node.parent if isinstance(node.parent, Tag) else None
         if isinstance(parent, Tag) and parent.name == "details":
             text = _section_text(parent, label=label)
-            if len(text) >= 12 and _section_text_is_meaningful(
-                parent,
-                label=label,
-                text=text,
-            ) and not _section_matches_page_heading(root, text):
+            if (
+                len(text) >= 12
+                and _section_text_is_meaningful(
+                    parent,
+                    label=label,
+                    text=text,
+                )
+                and not _section_matches_page_heading(root, text)
+            ):
                 return text
 
     sibling_content = _extract_sibling_content(node, label=label)
@@ -1041,9 +1138,8 @@ def requested_content_extractability(
     dom_pattern_fields = {
         field_name
         for field_name in fields
-        if (
-            selector := str(dom_patterns.get(field_name) or "").strip()
-        ) and _dom_pattern_has_extractable_content(safe_select(root, selector))
+        if (selector := str(dom_patterns.get(field_name) or "").strip())
+        and _dom_pattern_has_extractable_content(safe_select(root, selector))
     }
     selector_backed_fields = {
         normalize_field_key(str(row.get("field_name") or ""))
@@ -1059,12 +1155,16 @@ def requested_content_extractability(
     extractable_fields = section_fields | dom_pattern_fields | selector_backed_fields
     matched_requested_fields = sorted(requested & extractable_fields)
     return {
-        "verified": bool(matched_requested_fields or (not requested and section_fields)),
+        "verified": bool(
+            matched_requested_fields or (not requested and section_fields)
+        ),
         "matched_requested_fields": matched_requested_fields,
         "extractable_fields": sorted(extractable_fields),
         "section_fields": sorted(section_fields),
         "dom_pattern_fields": sorted(dom_pattern_fields),
-        "selector_backed_fields": sorted(field for field in selector_backed_fields if field),
+        "selector_backed_fields": sorted(
+            field for field in selector_backed_fields if field
+        ),
     }
 
 
@@ -1185,4 +1285,8 @@ def apply_selector_fallbacks(
         if not canonical:
             canonical = alias_lookup.get(normalize_requested_field(label))
         if canonical:
-            _add(canonical, coerce_field_value(canonical, value, page_url), "dom_selector")
+            _add(
+                canonical,
+                coerce_field_value(canonical, value, page_url),
+                "dom_selector",
+            )

@@ -45,7 +45,7 @@ def test_detail_extractor_preserves_css_dom_field_output() -> None:
 
     assert record["title"] == "Widget Prime"
     assert record["price"] == "19.99"
-    assert record["rating"] == "4.8"
+    assert record["rating"] == 4.8
     assert record["review_count"] == 128
 
 
@@ -87,11 +87,13 @@ def test_listing_extractor_preserves_css_card_field_output() -> None:
     assert rows[0]["url"] == "https://example.com/products/widget-prime"
     assert rows[0]["price"] == "19.99"
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
-    assert rows[0]["rating"] == "4.7"
+    assert rows[0]["rating"] == 4.7
     assert rows[0]["review_count"] == 128
 
 
-def test_listing_extractor_prefers_row_detail_link_and_name_over_breadcrumb_links() -> None:
+def test_listing_extractor_prefers_row_detail_link_and_name_over_breadcrumb_links() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -331,7 +333,9 @@ def test_listing_extractor_does_not_emit_additional_images() -> None:
     ]
 
 
-def test_listing_extractor_prefers_explicit_price_node_over_description_mentions_and_keeps_currency() -> None:
+def test_listing_extractor_prefers_explicit_price_node_over_description_mentions_and_keeps_currency() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -405,7 +409,9 @@ def test_listing_extractor_avoids_numeric_title_nodes_when_real_title_exists() -
     ]
 
 
-def test_listing_extractor_filters_category_cloud_links_when_supported_product_tiles_exist() -> None:
+def test_listing_extractor_filters_category_cloud_links_when_supported_product_tiles_exist() -> (
+    None
+):
     product_rows = "\n".join(
         f"""
         <li class="product-grid-product">
@@ -655,7 +661,9 @@ def test_detail_extractor_ignores_js_state_inside_removed_noise_containers() -> 
     assert record["_source"] != "js_state"
 
 
-def test_listing_extractor_ignores_structured_payloads_inside_removed_noise_containers() -> None:
+def test_listing_extractor_ignores_structured_payloads_inside_removed_noise_containers() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -754,7 +762,50 @@ def test_detail_extractor_reads_category_from_dom_breadcrumbs() -> None:
     assert record["gender"] == "women"
 
 
-def test_listing_extractor_prefers_structured_name_over_item_position_for_title() -> None:
+def test_detail_extractor_prefers_visible_breadcrumb_category_over_structured_category() -> (
+    None
+):
+    record = build_detail_record(
+        """
+        <html>
+          <head>
+            <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "Product",
+              "name": "Just Vibes Strapless Pant Set - Yellow",
+              "category": "Furniture Sets",
+              "image": "https://example.com/pant-set.jpg",
+              "offers": {"@type": "Offer", "price": "18.00", "priceCurrency": "USD"}
+            }
+            </script>
+          </head>
+          <body>
+            <nav class="MuiBreadcrumbs-root">
+              <ol>
+                <li><a href="/women">Women</a></li>
+                <li aria-hidden="true">›</li>
+                <li><a href="/matching-sets">Shop All Matching Sets</a></li>
+                <li aria-hidden="true">›</li>
+                <li><span>Just Vibes Strapless Pant Set - Yellow</span></li>
+              </ol>
+            </nav>
+            <main><h1>Just Vibes Strapless Pant Set - Yellow</h1></main>
+          </body>
+        </html>
+        """,
+        "https://example.com/products/just-vibes-strapless-pant-set-yellow",
+        "ecommerce_detail",
+        None,
+    )
+
+    assert record["category"] == "Women > Matching Sets"
+    assert record["gender"] == "women"
+
+
+def test_listing_extractor_prefers_structured_name_over_item_position_for_title() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -1008,7 +1059,9 @@ async def test_amazon_adapter_extracts_detail_completeness_fields() -> None:
     assert record["availability"] == "In Stock."
     assert record["product_type"] == "Computer Graphics Cards"
     assert record["features"] == ["24GB GDDR6X memory", "Triple-fan cooling"]
-    assert record["additional_images"] == ["https://m.media-amazon.com/images/I/71tLsSyLUZL._SX900_.jpg"]
+    assert record["additional_images"] == [
+        "https://m.media-amazon.com/images/I/71tLsSyLUZL._SX900_.jpg"
+    ]
 
 
 @pytest.mark.asyncio
@@ -1053,7 +1106,9 @@ async def test_belk_adapter_extracts_nested_state_brand_price_and_currency() -> 
 
 
 @pytest.mark.asyncio
-async def test_belk_adapter_prefers_real_currency_fields_over_scalar_price_text() -> None:
+async def test_belk_adapter_prefers_real_currency_fields_over_scalar_price_text() -> (
+    None
+):
     result = await BelkAdapter().extract(
         "https://www.belk.com/home/",
         """
@@ -1165,7 +1220,10 @@ async def test_amazon_adapter_does_not_fabricate_multi_axis_twister_product() ->
 
     record = result.records[0]
     assert "variants" not in record
-    assert record["variant_axes"] == {"color": ["Black", "Blue"], "size": ["Large", "X-Large"]}
+    assert record["variant_axes"] == {
+        "color": ["Black", "Blue"],
+        "size": ["Large", "X-Large"],
+    }
 
 
 @pytest.mark.asyncio
@@ -1222,7 +1280,10 @@ async def test_nike_adapter_maps_preloaded_state_product() -> None:
     assert record["size"] == "S"
     assert record["variant_axes"] == {"size": ["XXS", "S"]}
     assert record["available_sizes"] == ["XXS", "S"]
-    assert record["selected_variant"]["option_values"] == {"size": "S", "color": "Green"}
+    assert record["selected_variant"]["option_values"] == {
+        "size": "S",
+        "color": "Green",
+    }
     assert record["selected_variant"]["availability"] == "in_stock"
 
 
@@ -1273,7 +1334,9 @@ async def test_nike_detail_extraction_uses_adapter_and_rejects_shell_json_ld() -
     </html>
     """
     url = "https://www.nike.in/nike-pro-men-s-dri-fit-tight-sleeveless-fitness-top/p/24809354"
-    adapter_records = (await NikeAdapter().extract(url, html, "ecommerce_detail")).records
+    adapter_records = (
+        await NikeAdapter().extract(url, html, "ecommerce_detail")
+    ).records
     records = extract_detail_records(
         html,
         url,

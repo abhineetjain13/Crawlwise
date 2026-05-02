@@ -93,7 +93,9 @@ async def test_data_enrichment_skips_already_enriched_records(
     await db_session.commit()
     await db_session.refresh(record)
 
-    with pytest.raises(ValueError, match="No unenriched ecommerce detail records selected"):
+    with pytest.raises(
+        ValueError, match="No unenriched ecommerce detail records selected"
+    ):
         await create_data_enrichment_job(
             db_session,
             user=test_user,
@@ -120,7 +122,9 @@ async def test_data_enrichment_rejects_non_ecommerce_detail_records(
     await db_session.commit()
     await db_session.refresh(record)
 
-    with pytest.raises(ValueError, match="No unenriched ecommerce detail records selected"):
+    with pytest.raises(
+        ValueError, match="No unenriched ecommerce detail records selected"
+    ):
         await create_data_enrichment_job(
             db_session,
             user=test_user,
@@ -390,7 +394,9 @@ def test_data_enrichment_llm_prompt_context_excludes_raw_artifacts() -> None:
     assert context["taxonomy_version"] == DATA_ENRICHMENT_TAXONOMY_VERSION
 
 
-def test_data_enrichment_variant_dict_values_do_not_pollute_sizes_or_availability() -> None:
+def test_data_enrichment_variant_dict_values_do_not_pollute_sizes_or_availability() -> (
+    None
+):
     enrichment = _build_deterministic_enrichment(
         {
             "title": "Cotton Shirt",
@@ -444,6 +450,35 @@ def test_data_enrichment_category_uses_primary_category_before_title_noise() -> 
     assert "Cup Sleeves" not in str(enrichment["category_path"])
 
 
+def test_data_enrichment_uses_apparel_context_for_pant_set_taxonomy() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Fashion Nova Pant Set",
+            "category": "Women Pant Sets",
+            "product_type": "Pant Set",
+        },
+        source_url="https://example.com/products/pant-set",
+    )
+
+    assert (
+        enrichment["category_path"] == "Apparel & Accessories > Clothing > Outfit Sets"
+    )
+
+
+def test_data_enrichment_maps_apparel_breadcrumb_matching_sets_to_outfit_sets() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Just Vibes Strapless Pant Set - Yellow",
+            "category": "Women > Matching Sets",
+        },
+        source_url="https://www.fashionnova.com/products/just-vibes-strapless-pant-set-yellow",
+    )
+
+    assert (
+        enrichment["category_path"] == "Apparel & Accessories > Clothing > Outfit Sets"
+    )
+
+
 def test_data_enrichment_exact_shopify_path_match_wins() -> None:
     enrichment = _build_deterministic_enrichment(
         {
@@ -485,6 +520,60 @@ def test_data_enrichment_seo_keywords_filter_stopwords_from_all_sources() -> Non
     assert "sale" not in keywords
     assert "with" not in keywords
     assert "linen" in keywords
+
+
+def test_data_enrichment_does_not_normalize_non_apparel_numeric_size() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "ColourPop 24 pan eyeshadow palette",
+            "category": "Beauty > Makeup > Eyeshadow",
+            "size": "24",
+        },
+        source_url="https://example.com/products/palette",
+    )
+
+    assert enrichment["size_normalized"] is None
+    assert enrichment["size_system"] is None
+
+
+def test_data_enrichment_materials_ignore_care_instruction_noise() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Linen Shirt",
+            "category": "Shirts",
+            "product_attributes": {"Composition": "100% linen"},
+            "description": "Care: Iron warm if needed. Cotton denim leather glossary.",
+        },
+        source_url="https://example.com/products/shirt",
+    )
+
+    assert enrichment["materials_normalized"] == ["linen"]
+
+
+def test_data_enrichment_price_infers_firstcry_currency() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Black Seascape Stretch Bracelet",
+            "price": "868.21",
+            "category": "Bracelets",
+        },
+        source_url="https://www.firstcry.com/example/product-detail",
+    )
+
+    assert enrichment["price_normalized"] == {"amount": 868.21, "currency": "INR"}
+
+
+def test_data_enrichment_seo_keywords_include_title_bigrams() -> None:
+    enrichment = _build_deterministic_enrichment(
+        {
+            "title": "Black Seascape Stretch Bracelet",
+            "price": "868.21",
+            "category": "Bracelets",
+        },
+        source_url="https://www.firstcry.com/example/product-detail",
+    )
+
+    assert "black seascape" in set(enrichment["seo_keywords"] or [])
 
 
 @pytest.mark.asyncio

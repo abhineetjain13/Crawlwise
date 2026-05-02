@@ -13,6 +13,7 @@ from app.models.crawl import (
 )
 from app.schemas.product_intelligence import ProductIntelligenceDiscoveryRequest
 from app.services.config.product_intelligence import (
+    GOOGLE_NATIVE_HOME_URL,
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_CRAWL_QUEUED,
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_CRAWL_TIMEOUT,
     ProductIntelligenceSettings,
@@ -21,6 +22,7 @@ from app.services.config.product_intelligence import (
 from app.services.llm_config_service import get_prompt_task
 from app.services.product_intelligence.discovery import (
     SearchResult,
+    _google_native_blocked,
     _google_native_session,
     _parse_google_native_results,
     build_search_queries,
@@ -57,8 +59,56 @@ def test_product_intelligence_query_excludes_source_and_uses_identifier() -> Non
 
     assert queries
     assert "site:levi.com" in queries[0]
-    assert any("04511-2406" in query for query in queries)
     assert all("-site:belk.com" in query for query in queries)
+    assert any("levi's" in query for query in queries)
+    assert len(queries) <= 5
+
+
+def test_product_intelligence_query_keeps_brand_in_all_queries_when_brand_exists() -> None:
+    queries = build_search_queries(
+        {
+            "brand": "Mamaearth",
+            "title": "Vit. C Daily Glow Cream 150g",
+            "sku": "20510856",
+        },
+        source_domain_value="myntra.com",
+    )
+
+    assert queries
+    assert any("mamaearth" in query for query in queries)
+    assert all("-site:myntra.com" in query for query in queries)
+    assert queries[0] == 'mamaearth vit c daily glow cream 150g 20510856 -site:myntra.com'
+    assert len(queries) <= 5
+
+
+def test_product_intelligence_query_prefers_clean_brand_query_before_buy_for_aggregator_sources() -> None:
+    queries = build_search_queries(
+        {
+            "brand": "Asaya",
+            "title": "Even Evermore Cream 50g",
+            "sku": "31145778",
+        },
+        source_domain_value="flipkart.com",
+    )
+
+    assert queries
+    assert queries[0] == 'asaya even evermore cream 50g 31145778 -site:flipkart.com'
+    assert len(queries) <= 4
+
+
+def test_product_intelligence_query_uses_brandless_fallback_only_when_brand_missing() -> None:
+    queries = build_search_queries(
+        {
+            "title": "Vit. C Daily Glow Cream 150g",
+            "sku": "20510856",
+        },
+        source_domain_value="myntra.com",
+    )
+
+    assert queries
+    assert any('20510856' in query for query in queries)
+    assert all("mamaearth" not in query for query in queries)
+    assert len(queries) == 2
 
 
 def test_product_intelligence_scorer_returns_breakdown() -> None:
@@ -108,6 +158,12 @@ def test_product_intelligence_classification_avoids_suffix_collisions() -> None:
     assert classify_source_type("shop.amazon.com", {}) == "marketplace"
 
 
+def test_product_intelligence_classifies_common_aggregator_sources() -> None:
+    assert classify_source_type("www.myntra.com", {}) == "retailer"
+    assert classify_source_type("www.nykaa.com", {}) == "retailer"
+    assert classify_source_type("www.flipkart.com", {}) == "marketplace"
+
+
 def test_product_intelligence_classifies_known_mall_mirrors_as_aggregators() -> None:
     assert classify_source_type("thesummitbirmingham.com", {}) == "aggregator"
     assert classify_source_type("www.coolspringsgalleria.com", {}) == "aggregator"
@@ -149,7 +205,7 @@ def test_product_intelligence_query_uses_brand_and_currency_inferred_from_belk_s
     assert snapshot["normalized_brand"] == "modern southern home"
     assert snapshot["currency"] == "USD"
     assert queries
-    assert '"modern southern home"' in queries[0]
+    assert 'modern southern home' in queries[0]
 
 
 def test_product_intelligence_request_accepts_max_sources_and_url_aliases() -> None:
@@ -316,6 +372,17 @@ def test_parse_google_native_results_extracts_thumbnail_from_result_container() 
     assert results[0].payload["thumbnail"] == "https://example.com/thumb.jpg"
 
 
+def test_google_native_block_detection_flags_google_unusual_traffic_page() -> None:
+    html = """
+    <html><body>
+      <p>Our systems have detected unusual traffic from your computer network.</p>
+      <p>This page checks to see if it's really you sending the requests.</p>
+    </body></html>
+    """
+
+    assert _google_native_blocked("https://www.google.com/sorry/index", html) is True
+
+
 def test_google_native_thumbnail_flows_into_snapshot_image_url() -> None:
     snapshot = extract_search_result_snapshot(
         {
@@ -345,13 +412,21 @@ def test_google_native_intelligence_keeps_provider_label() -> None:
 @pytest.mark.asyncio
 async def test_google_native_session_reuses_single_page_across_queries(monkeypatch) -> None:
     actions: list[str] = []
+    current_url = GOOGLE_NATIVE_HOME_URL
+    html_by_url: dict[str, str] = {}
 
     class _Page:
         async def goto(self, url: str, *, wait_until: str, timeout: int):
+            nonlocal current_url
+            current_url = url
             actions.append(f"goto:{url}")
 
         async def wait_for_timeout(self, timeout_ms: int) -> None:
             actions.append(f"wait:{timeout_ms}")
+
+        @property
+        def url(self) -> str:
+            return current_url
 
     class _Runtime:
         def page(self, **kwargs):
@@ -376,17 +451,16 @@ async def test_google_native_session_reuses_single_page_across_queries(monkeypat
         return {"enabled": True}
 
     async def _fake_html(_page):
-        return """
-        <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fwidget"><h3>Widget</h3></a>
-        """
+        return html_by_url.get(
+            current_url,
+            """
+            <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fwidget"><h3>Widget</h3></a>
+            """,
+        )
 
     monkeypatch.setattr(
         "app.services.product_intelligence.discovery.get_browser_runtime",
         _fake_runtime,
-    )
-    monkeypatch.setattr(
-        "app.services.product_intelligence.discovery.emit_browser_behavior_activity",
-        _fake_behavior,
     )
     monkeypatch.setattr(
         "app.services.product_intelligence.discovery.get_page_html",
@@ -394,18 +468,106 @@ async def test_google_native_session_reuses_single_page_across_queries(monkeypat
     )
 
     async with _google_native_session() as run_query:
+        html_by_url[_fake_search_url("blue shoe", 3)] = """
+        <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fwidget"><h3>Widget</h3></a>
+        """
+        html_by_url[_fake_search_url("red shoe", 3)] = """
+        <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fother"><h3>Other Widget</h3></a>
+        """
+        html_by_url[_fake_search_url("green shoe", 3)] = """
+        <a href="/url?q=https%3A%2F%2Fshop.example.com%2Fp%2Fthird"><h3>Third Widget</h3></a>
+        """
         first = await run_query("blue shoe", 3)
         second = await run_query("red shoe", 3)
         third = await run_query("green shoe", 3)
 
-    # One real-chrome runtime acquisition, ONE page acquired, then released exactly once.
+    # One runtime acquisition, then a fresh page per query.
     assert actions.count("page-acquired:google.com") == 1
     assert actions.count("page-released") == 1
-    # Three search navigations within the single page session, no extra page() calls.
     search_navs = [action for action in actions if action.startswith("goto:") and "/search" in action]
     assert len(search_navs) == 3
     assert first[0].url == "https://shop.example.com/p/widget"
     assert second and third
+
+
+@pytest.mark.asyncio
+async def test_google_native_session_stops_after_google_sorry_page(monkeypatch) -> None:
+    actions: list[str] = []
+    current_url = GOOGLE_NATIVE_HOME_URL
+    html_by_url: dict[str, str] = {}
+
+    class _Page:
+        async def goto(self, url: str, *, wait_until: str, timeout: int):
+            nonlocal current_url
+            current_url = url
+            actions.append(f"goto:{url}")
+
+        async def wait_for_timeout(self, timeout_ms: int) -> None:
+            actions.append(f"wait:{timeout_ms}")
+
+        @property
+        def url(self) -> str:
+            return current_url
+
+    class _Runtime:
+        def page(self, **kwargs):
+            actions.append(f"page-acquired:{kwargs.get('domain')}")
+
+            class _Context:
+                async def __aenter__(self):
+                    return _Page()
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    actions.append("page-released")
+                    return None
+
+            return _Context()
+
+    async def _fake_runtime(*, browser_engine: str):
+        actions.append(f"engine:{browser_engine}")
+        return _Runtime()
+
+    async def _fake_behavior(_page):
+        actions.append("behavior")
+        return {"enabled": True}
+
+    async def _fake_html(_page):
+        return html_by_url.get(current_url, "")
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery.get_browser_runtime",
+        _fake_runtime,
+    )
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery.get_page_html",
+        _fake_html,
+    )
+
+    blocked_url = _fake_search_url("blue shoe", 3)
+    html_by_url[blocked_url] = """
+    <html><body>
+      <p>Our systems have detected unusual traffic from your computer network.</p>
+      <p>This page checks to see if it's really you sending the requests.</p>
+    </body></html>
+    """
+
+    async with _google_native_session() as run_query:
+        first = await run_query("blue shoe", 3)
+        second = await run_query("red shoe", 3)
+
+    assert first == []
+    assert second == []
+    search_navs = [action for action in actions if action.startswith("goto:") and "/search" in action]
+    assert len(search_navs) == 1
+
+
+def _fake_search_url(query: str, limit: int) -> str:
+    from urllib.parse import urlencode
+
+    return (
+        f"https://www.google.com/search?"
+        f"{urlencode({'q': query, 'num': str(limit)})}"
+    )
 
 
 def test_product_intelligence_llm_prompt_registered() -> None:
@@ -1054,6 +1216,57 @@ async def test_product_intelligence_discovery_preview_returns_source_and_payload
 
 
 @pytest.mark.asyncio
+async def test_product_intelligence_discovery_prefers_row_source_url_for_query_exclusion(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch,
+) -> None:
+    seen_queries: list[str] = []
+
+    async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
+        del provider, limit
+        seen_queries.append(query)
+        return [
+            SearchResult(
+                url="https://www.example-brand.com/p/item.html",
+                payload={"provider": "google_native", "title": "Example Item"},
+            )
+        ]
+
+    monkeypatch.setattr(
+        "app.services.product_intelligence.discovery._search_results",
+        fake_search_results,
+    )
+
+    response = await discover_product_intelligence_candidates(
+        db_session,
+        user=test_user,
+        payload={
+            "source_records": [
+                {
+                    "source_url": "https://www.myntra.com/shoes/example-item",
+                    "data": {
+                        "title": "Example Item",
+                        "brand": "Example Brand",
+                        "url": "https://www.belk.com/p/stale-item.html",
+                    },
+                }
+            ],
+            "options": {
+                "max_source_products": 1,
+                "max_candidates_per_product": 1,
+                "search_provider": "serpapi",
+            },
+        },
+    )
+
+    assert seen_queries
+    assert all("-site:myntra.com" in query for query in seen_queries)
+    assert all("-site:belk.com" not in query for query in seen_queries)
+    assert response["candidates"][0]["source_url"] == "https://www.myntra.com/shoes/example-item"
+
+
+@pytest.mark.asyncio
 async def test_product_intelligence_discovery_reuses_one_query_runner_for_multiple_sources(
     db_session: AsyncSession,
     test_user,
@@ -1235,7 +1448,7 @@ async def test_product_intelligence_discovery_searches_title_only_sources(
     monkeypatch,
 ) -> None:
     async def fake_search_results(provider: str, query: str, *, limit: int | None = None) -> list[SearchResult]:
-        title_token = query.split('"')[1].split()[0]
+        title_token = query.split()[0]
         return [
             SearchResult(url=f"https://www.example-retailer.com/p/{title_token}-1.html", payload={"provider": provider, "title": title_token}),
             SearchResult(url=f"https://www.example-brand.com/p/{title_token}-2.html", payload={"provider": provider, "title": title_token}),
@@ -1246,6 +1459,7 @@ async def test_product_intelligence_discovery_searches_title_only_sources(
         "app.services.product_intelligence.discovery._search_results",
         fake_search_results,
     )
+
 
     response = await discover_product_intelligence_candidates(
         db_session,

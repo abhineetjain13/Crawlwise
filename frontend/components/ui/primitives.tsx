@@ -51,10 +51,23 @@ export function Field({
   hint,
   children,
 }: Readonly<{ label: string; hint?: string; children: ReactNode }>) {
+  const enhancedChildren = React.Children.map(children, (child) => {
+    if (
+      React.isValidElement(child) &&
+      child.type === Dropdown &&
+      !(child.props as { ariaLabel?: string }).ariaLabel
+    ) {
+      return React.cloneElement(
+        child as React.ReactElement<{ ariaLabel?: string }>,
+        { ariaLabel: label },
+      );
+    }
+    return child;
+  });
   return (
     <label className="grid gap-1.5">
       <span className="field-label">{label}</span>
-      {children}
+      {enhancedChildren}
       {hint ? <span className="field-hint">{hint}</span> : null}
     </label>
   );

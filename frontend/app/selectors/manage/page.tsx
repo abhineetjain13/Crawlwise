@@ -755,6 +755,7 @@ export default function DomainMemoryManagePage() {
               label: surfaceLabel(surface),
             })),
           ]}
+          ariaLabel="Filter by surface"
         />
       </div>
 

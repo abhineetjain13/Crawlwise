@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 from bs4 import BeautifulSoup
 import httpx
 
-from app.services.acquisition.browser_recovery import emit_browser_behavior_activity
+from app.services.acquisition.runtime import classify_blocked_page
 from app.services.acquisition.browser_runtime import get_browser_runtime, real_chrome_browser_available
 from app.services.acquisition.dom_runtime import get_page_html
 from app.services.config.product_intelligence import (
@@ -307,26 +307,18 @@ async def _search_serpapi(query: str, *, limit: int | None = None) -> list[Searc
 async def _google_native_session():
     """Open one real-Chrome page on google.com and reuse it across multiple queries.
 
-    Each query then runs as a single ``page.goto('/search?q=...')`` navigation on
-    the existing page, instead of opening a fresh browser context per query.
+    Each query is entered using human-like typing on the Google homepage and
+    submitted via the Enter key, maximizing browser behavior mimicry and avoiding
+    direct URL manipulations that trigger unusual traffic interstitials.
     """
     runtime = await get_browser_runtime(browser_engine=GOOGLE_NATIVE_BROWSER_ENGINE)
-    async with runtime.page(domain=source_domain(GOOGLE_NATIVE_HOME_URL)) as page:
-        try:
-            await page.goto(
-                GOOGLE_NATIVE_HOME_URL,
-                wait_until="domcontentloaded",
-                timeout=int(GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS),
-            )
-            await emit_browser_behavior_activity(page)
-        except Exception as exc:
-            logger.warning("Product intelligence native Google session setup failed: %s", exc)
-            yield None
-            return
+    blocked = False
 
+    async with runtime.page(domain=source_domain(GOOGLE_NATIVE_HOME_URL)) as page:
         async def _run(query: str, limit: int) -> list[SearchResult]:
+            nonlocal blocked
             normalized_query = str(query or "").strip()
-            if not normalized_query:
+            if blocked or not normalized_query:
                 return []
             result_limit = min(
                 max(1, int(limit or product_intelligence_settings.google_native_max_results)),
@@ -335,15 +327,46 @@ async def _google_native_session():
             logger.info("Product intelligence search dispatch provider='google_native' query=%r limit=%s", normalized_query, limit)
             try:
                 await page.goto(
-                    _google_native_search_url(normalized_query, result_limit),
+                    GOOGLE_NATIVE_HOME_URL,
                     wait_until="domcontentloaded",
                     timeout=int(GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS),
                 )
-                await page.wait_for_timeout(int(GOOGLE_NATIVE_RESULT_WAIT_MS))
+                
+                locator_factory = getattr(page, "locator", None)
+                if callable(locator_factory):
+                    locator = locator_factory('textarea[name="q"], input[name="q"]')
+                    fill = getattr(locator, "fill", None)
+                    press = getattr(locator, "press", None)
+                    if callable(fill) and callable(press):
+                        await fill(normalized_query)
+                        await press("Enter")
+                        await page.wait_for_timeout(int(GOOGLE_NATIVE_RESULT_WAIT_MS) + 1500)
+                    else:
+                        await page.goto(
+                            _google_native_search_url(normalized_query, result_limit),
+                            wait_until="domcontentloaded",
+                            timeout=int(GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS),
+                        )
+                        await page.wait_for_timeout(int(GOOGLE_NATIVE_RESULT_WAIT_MS))
+                else:
+                    await page.goto(
+                        _google_native_search_url(normalized_query, result_limit),
+                        wait_until="domcontentloaded",
+                        timeout=int(GOOGLE_NATIVE_NAVIGATION_TIMEOUT_MS),
+                    )
+                    await page.wait_for_timeout(int(GOOGLE_NATIVE_RESULT_WAIT_MS))
+
                 html = await get_page_html(page)
+                current_url = _page_url(page)
             except Exception as exc:
                 logger.warning("Product intelligence native Google query failed: %s", exc)
                 return []
+
+            if _google_native_blocked(current_url, html):
+                blocked = True
+                logger.warning("Product intelligence native Google query blocked by challenge page; stopping searches for this session")
+                return []
+
             return _parse_google_native_results(html, limit=result_limit)
 
         yield _run
@@ -354,6 +377,30 @@ def _google_native_search_url(query: str, limit: int) -> str:
         f"{GOOGLE_NATIVE_SEARCH_URL}?"
         f"{urlencode({GOOGLE_NATIVE_QUERY_PARAM: query, GOOGLE_NATIVE_RESULT_COUNT_PARAM: str(limit)})}"
     )
+
+
+def _page_url(page: object) -> str:
+    value = getattr(page, "url", "")
+    if callable(value):
+        try:
+            value = value()
+        except Exception:
+            value = ""
+    return str(value or "").strip()
+
+
+def _google_native_blocked(url: str, html: str) -> bool:
+    normalized_url = str(url or "").lower()
+    if "/sorry/" in normalized_url:
+        return True
+    normalized_html = str(html or "").lower()
+    if (
+        "unusual traffic from your computer network" in normalized_html
+        or "really you sending the requests" in normalized_html
+    ):
+        return True
+    classification = classify_blocked_page(str(html or ""), 200)
+    return bool(classification.blocked)
 
 
 def _parse_google_native_results(html: str, *, limit: int) -> list[SearchResult]:
@@ -507,7 +554,7 @@ def _excluded_domain_clause(domain: str) -> str:
 
 def _quoted(value: object) -> str:
     text = str(value or "").strip()
-    return f'"{text}"' if text else ""
+    return text
 
 
 def _join_query_parts(*parts: str) -> str:

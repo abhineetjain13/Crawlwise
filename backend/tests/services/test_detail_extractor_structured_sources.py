@@ -18,7 +18,9 @@ from app.services.extraction_runtime import extract_records
 from tests.fixtures.loader import read_optional_artifact_text
 
 
-def test_detail_currency_hint_host_matching_avoids_partial_word_false_positive() -> None:
+def test_detail_currency_hint_host_matching_avoids_partial_word_false_positive() -> (
+    None
+):
     assert (
         detail_currency_hint_is_host_level(
             "https://www.notarget.com/products/widget",
@@ -221,7 +223,9 @@ def test_extract_ecommerce_detail_from_opengraph() -> None:
     assert record["_source"] == "opengraph"
 
 
-def test_extract_ecommerce_detail_keeps_page_url_when_opengraph_url_is_site_root() -> None:
+def test_extract_ecommerce_detail_keeps_page_url_when_opengraph_url_is_site_root() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -247,7 +251,10 @@ def test_extract_ecommerce_detail_keeps_page_url_when_opengraph_url_is_site_root
     assert len(rows) == 1
     record = rows[0]
     assert record["title"] == "Personal Blender"
-    assert record["url"] == "https://demo.spreecommerce.org/us/en/products/personal-blender"
+    assert (
+        record["url"]
+        == "https://demo.spreecommerce.org/us/en/products/personal-blender"
+    )
     assert record["_source"] == "opengraph"
 
 
@@ -280,11 +287,19 @@ def test_extract_ecommerce_detail_ignores_placeholder_same_site_json_ld_url() ->
     )
 
     assert len(rows) == 1
-    assert rows[0]["title"] == "Biltmore Egyptian Collection Medium/Firm Support Pillow, White, King, Cotton"
-    assert rows[0]["url"] == "https://www.joinhoney.com/it/shop/belk/p/7367171691114074156_8bce8b8cc8892988fb42b26670ceaa09_7121c9215dcc3274f45b6a172cf8e8a8"
+    assert (
+        rows[0]["title"]
+        == "Biltmore Egyptian Collection Medium/Firm Support Pillow, White, King, Cotton"
+    )
+    assert (
+        rows[0]["url"]
+        == "https://www.joinhoney.com/it/shop/belk/p/7367171691114074156_8bce8b8cc8892988fb42b26670ceaa09_7121c9215dcc3274f45b6a172cf8e8a8"
+    )
 
 
-def test_extract_ecommerce_detail_ignores_review_json_ld_title_description_and_images() -> None:
+def test_extract_ecommerce_detail_ignores_review_json_ld_title_description_and_images() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -329,7 +344,9 @@ def test_extract_ecommerce_detail_ignores_review_json_ld_title_description_and_i
     assert record["image_url"] == "https://example.com/images/product.jpg"
 
 
-def test_extract_ecommerce_detail_ignores_nested_person_name_inside_product_json_ld() -> None:
+def test_extract_ecommerce_detail_ignores_nested_person_name_inside_product_json_ld() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -512,7 +529,9 @@ def test_extract_ecommerce_detail_category_from_breadcrumblist_json_ld() -> None
     assert rows[0]["gender"] == "women"
 
 
-def test_extract_ecommerce_detail_from_nuxt_payload_with_self_referential_wrapper() -> None:
+def test_extract_ecommerce_detail_from_nuxt_payload_with_self_referential_wrapper() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -655,7 +674,12 @@ def test_extract_ecommerce_detail_keeps_adapter_title_over_longer_dom_h1() -> No
         "https://example.com/products/widget-prime",
         "ecommerce_detail",
         max_records=5,
-        adapter_records=[{"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}],
+        adapter_records=[
+            {
+                "title": "Widget Prime",
+                "url": "https://example.com/products/widget-prime",
+            }
+        ],
     )
 
     assert len(rows) == 1
@@ -861,7 +885,9 @@ def test_extract_ecommerce_detail_drops_low_signal_zero_display_price() -> None:
     assert "price" not in record
 
 
-def test_extract_ecommerce_detail_keeps_structured_zero_price_with_authoritative_offer() -> None:
+def test_extract_ecommerce_detail_keeps_structured_zero_price_with_authoritative_offer() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -917,7 +943,9 @@ def test_extract_ecommerce_detail_keeps_raw_json_zero_price() -> None:
     assert record["_source"] == "raw_json"
 
 
-def test_extract_ecommerce_detail_rejects_collection_url_with_visible_tile_prices() -> None:
+def test_extract_ecommerce_detail_rejects_collection_url_with_visible_tile_prices() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1023,7 +1051,10 @@ async def test_myntra_adapter_extracts_detail_media_and_variants() -> None:
     assert len(rows) == 1
     record = rows[0]
     assert record["title"] == "KALINI Floral Embroidered Kurta"
-    assert record["image_url"] == "https://assets.myntassets.com/assets/images/30721580/image-1.jpg"
+    assert (
+        record["image_url"]
+        == "https://assets.myntassets.com/assets/images/30721580/image-1.jpg"
+    )
     assert record["additional_images"] == [
         "https://assets.myntassets.com/assets/images/30721580/image-2.jpg",
         "https://assets.myntassets.com/assets/images/30721580/image-3.jpg",
@@ -1035,7 +1066,9 @@ async def test_myntra_adapter_extracts_detail_media_and_variants() -> None:
 
 
 @pytest.mark.asyncio
-async def test_myntra_adapter_allows_dom_description_fill_when_detail_payload_is_sparse() -> None:
+async def test_myntra_adapter_allows_dom_description_fill_when_detail_payload_is_sparse() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -1080,12 +1113,13 @@ async def test_myntra_adapter_allows_dom_description_fill_when_detail_payload_is
     record = rows[0]
     assert record["title"] == "KALINI Floral Embroidered Kurta"
     assert (
-        record["description"]
-        == "Soft cotton fabric with embroidered floral detailing."
+        record["description"] == "Soft cotton fabric with embroidered floral detailing."
     )
 
 
-def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_js_state_is_absent() -> None:
+def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_js_state_is_absent() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1121,7 +1155,10 @@ def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_j
     assert "option2_name" not in record
     assert "option2_values" not in record
     assert record["available_sizes"] == "S, M, L"
-    assert record["variant_axes"] == {"size": ["S", "M", "L"], "color": ["Black", "Olive"]}
+    assert record["variant_axes"] == {
+        "size": ["S", "M", "L"],
+        "color": ["Black", "Olive"],
+    }
     assert record["variant_count"] == 6
     assert isinstance(record["variants"], list)
     assert len(record["variants"]) == 6
@@ -1130,7 +1167,9 @@ def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_j
     assert "color" not in record["variants"][0]
 
 
-def test_extract_ecommerce_detail_ignores_newsletter_fields_inside_size_container() -> None:
+def test_extract_ecommerce_detail_ignores_newsletter_fields_inside_size_container() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1162,7 +1201,9 @@ def test_extract_ecommerce_detail_ignores_newsletter_fields_inside_size_containe
     assert "Sign up for updates and promotions" not in record["variant_axes"]["size"]
 
 
-def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availability() -> None:
+def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availability() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1211,7 +1252,9 @@ def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availa
     assert record["variants"][1]["stock_quantity"] == 17
 
 
-def test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site_hardcoding() -> None:
+def test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site_hardcoding() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1300,7 +1343,9 @@ def test_extract_ecommerce_detail_recovers_variant_urls_from_dom_choice_links() 
     )
 
 
-def test_extract_ecommerce_detail_recovers_variant_urls_from_js_state_option_mapping() -> None:
+def test_extract_ecommerce_detail_recovers_variant_urls_from_js_state_option_mapping() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -1378,9 +1423,7 @@ def test_extract_ecommerce_detail_recovers_variant_urls_from_js_state_option_map
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["variant_axes"] == {
-        "color": ["Transparent Grey", "Transparent Pink"]
-    }
+    assert record["variant_axes"] == {"color": ["Transparent Grey", "Transparent Pink"]}
     assert record["variant_count"] == 2
     assert record["variants"][0]["variant_id"] == "140632"
     assert record["variants"][0]["url"] == (
@@ -1421,7 +1464,9 @@ def test_extract_ecommerce_detail_skips_unnamed_dom_variant_groups() -> None:
     assert "variants" not in record
 
 
-def test_extract_ecommerce_detail_ignores_review_qa_controls_and_payment_icons() -> None:
+def test_extract_ecommerce_detail_ignores_review_qa_controls_and_payment_icons() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1460,8 +1505,14 @@ def test_extract_ecommerce_detail_ignores_review_qa_controls_and_payment_icons()
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["image_url"] == "https://cdn.example.com/products/food-processor.jpg?width=1200"
-    assert record["specifications"] == "7 cup work bowl with high, low, and pulse speed controls."
+    assert (
+        record["image_url"]
+        == "https://cdn.example.com/products/food-processor.jpg?width=1200"
+    )
+    assert (
+        record["specifications"]
+        == "7 cup work bowl with high, low, and pulse speed controls."
+    )
     assert "additional_images" not in record
     assert "option1_name" not in record
     assert "variant_axes" not in record
@@ -1497,7 +1548,9 @@ def test_extract_ecommerce_detail_does_not_use_bundle_upsell_as_title() -> None:
     assert record["title"] != "Frequently Bought Together"
 
 
-def test_extract_ecommerce_detail_ignores_sort_filter_and_availability_controls_as_variants() -> None:
+def test_extract_ecommerce_detail_ignores_sort_filter_and_availability_controls_as_variants() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1538,7 +1591,9 @@ def test_extract_ecommerce_detail_ignores_sort_filter_and_availability_controls_
     assert "selected_variant" not in record
 
 
-def test_extract_ecommerce_detail_does_not_treat_etsy_report_radios_as_variants() -> None:
+def test_extract_ecommerce_detail_does_not_treat_etsy_report_radios_as_variants() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1583,7 +1638,9 @@ def test_extract_ecommerce_detail_does_not_treat_etsy_report_radios_as_variants(
     assert "variants" not in record
 
 
-def test_extract_ecommerce_detail_does_not_treat_shipping_country_selector_as_variant_axis() -> None:
+def test_extract_ecommerce_detail_does_not_treat_shipping_country_selector_as_variant_axis() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1628,7 +1685,9 @@ def test_extract_ecommerce_detail_does_not_treat_shipping_country_selector_as_va
     assert "option2_name" not in record
 
 
-def test_extract_ecommerce_detail_splits_style_and_size_from_compound_select_before_color() -> None:
+def test_extract_ecommerce_detail_splits_style_and_size_from_compound_select_before_color() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1679,7 +1738,9 @@ def test_extract_ecommerce_detail_splits_style_and_size_from_compound_select_bef
     }
 
 
-def test_extract_ecommerce_detail_does_not_treat_question_radiogroup_as_size_variants() -> None:
+def test_extract_ecommerce_detail_does_not_treat_question_radiogroup_as_size_variants() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1710,7 +1771,9 @@ def test_extract_ecommerce_detail_does_not_treat_question_radiogroup_as_size_var
     assert "variants" not in record
 
 
-def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fallback() -> None:
+def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fallback() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1750,7 +1813,9 @@ def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fall
     }
 
 
-def test_extract_ecommerce_detail_backfills_selected_variant_price_from_record_when_dom_variants_are_sparse() -> None:
+def test_extract_ecommerce_detail_backfills_selected_variant_price_from_record_when_dom_variants_are_sparse() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1783,7 +1848,9 @@ def test_extract_ecommerce_detail_backfills_selected_variant_price_from_record_w
     assert record["selected_variant"]["price"] == "99.00"
 
 
-def test_extract_ecommerce_detail_prunes_single_value_marketing_axes_from_final_variant_record() -> None:
+def test_extract_ecommerce_detail_prunes_single_value_marketing_axes_from_final_variant_record() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -1840,7 +1907,9 @@ def test_extract_ecommerce_detail_prunes_single_value_marketing_axes_from_final_
     assert record["selected_variant"]["price"] == "58.00"
 
 
-def test_extract_ecommerce_detail_backfills_missing_variant_price_from_ld_json_price() -> None:
+def test_extract_ecommerce_detail_backfills_missing_variant_price_from_ld_json_price() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -1904,7 +1973,9 @@ def test_extract_ecommerce_detail_backfills_missing_variant_price_from_ld_json_p
     assert record["variants"][0]["price"] == "100.00"
 
 
-def test_extract_ecommerce_detail_ignores_generic_selector_axis_names_without_semantic_labels() -> None:
+def test_extract_ecommerce_detail_ignores_generic_selector_axis_names_without_semantic_labels() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1934,7 +2005,9 @@ def test_extract_ecommerce_detail_ignores_generic_selector_axis_names_without_se
     assert "selected_variant" not in record
 
 
-def test_extract_ecommerce_detail_infers_unlabeled_select_variants_and_ignores_translate_widget() -> None:
+def test_extract_ecommerce_detail_infers_unlabeled_select_variants_and_ignores_translate_widget() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -1983,7 +2056,9 @@ def test_extract_ecommerce_detail_infers_unlabeled_select_variants_and_ignores_t
     assert "language_translate_widget" not in str(record.get("variant_axes") or "")
 
 
-def test_extract_ecommerce_detail_keeps_size_axis_when_bad_dom_label_says_color() -> None:
+def test_extract_ecommerce_detail_keeps_size_axis_when_bad_dom_label_says_color() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2040,7 +2115,9 @@ def test_extract_ecommerce_detail_keeps_size_axis_when_bad_dom_label_says_color(
     assert "AVAILABILITY" not in record.get("product_attributes", {})
 
 
-def test_variant_option_availability_does_not_treat_disabled_control_as_out_of_stock() -> None:
+def test_variant_option_availability_does_not_treat_disabled_control_as_out_of_stock() -> (
+    None
+):
     soup = BeautifulSoup(
         """
         <li class="size disabled selected">
@@ -2093,7 +2170,9 @@ def test_extract_detail_variants_from_plain_buttons_without_data_attributes() ->
     assert record["selected_variant"]["option_values"] == {"size": "S"}
 
 
-def test_extract_automobile_detail_ignores_irrelevant_video_json_ld_when_dom_title_exists() -> None:
+def test_extract_automobile_detail_ignores_irrelevant_video_json_ld_when_dom_title_exists() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2136,7 +2215,10 @@ def test_extract_automobile_detail_ignores_irrelevant_video_json_ld_when_dom_tit
     assert len(rows) == 1
     record = rows[0]
     assert record["title"] == "Abarth 500e 42kWh Turismo Auto 3dr"
-    assert record["url"] == "https://www.autotrader.co.uk/cars/leasing/product/202402287036788"
+    assert (
+        record["url"]
+        == "https://www.autotrader.co.uk/cars/leasing/product/202402287036788"
+    )
     assert record["_source"] == "dom_h1"
 
 
@@ -2173,7 +2255,9 @@ def test_extract_automobile_detail_accepts_vehicle_json_ld_title_and_image() -> 
     assert record["_source"] == "json_ld"
 
 
-def test_extract_ecommerce_detail_allows_dom_variants_to_fill_weak_js_state_variants() -> None:
+def test_extract_ecommerce_detail_allows_dom_variants_to_fill_weak_js_state_variants() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2225,10 +2309,15 @@ def test_extract_ecommerce_detail_allows_dom_variants_to_fill_weak_js_state_vari
     record = rows[0]
     assert record["variant_axes"] == {"size": ["S", "M"], "color": ["Black", "Olive"]}
     assert len(record["variants"]) == 4
-    assert record["selected_variant"]["option_values"] == {"size": "S", "color": "Black"}
+    assert record["selected_variant"]["option_values"] == {
+        "size": "S",
+        "color": "Black",
+    }
 
 
-def test_extract_ecommerce_detail_merges_deduped_additional_images_across_js_state_and_dom() -> None:
+def test_extract_ecommerce_detail_merges_deduped_additional_images_across_js_state_and_dom() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2273,14 +2362,19 @@ def test_extract_ecommerce_detail_merges_deduped_additional_images_across_js_sta
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["image_url"] == "https://cdn.example.com/products/trail-runner-1.jpg?width=1200"
+    assert (
+        record["image_url"]
+        == "https://cdn.example.com/products/trail-runner-1.jpg?width=1200"
+    )
     assert record["additional_images"] == [
         "https://cdn.example.com/products/trail-runner-2.jpg?width=1200",
         "https://cdn.example.com/products/trail-runner-3.jpg?width=1200",
     ]
 
 
-def test_extract_detail_keeps_dom_images_live_when_structured_data_only_has_primary_image() -> None:
+def test_extract_detail_keeps_dom_images_live_when_structured_data_only_has_primary_image() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2335,7 +2429,9 @@ def test_extract_detail_keeps_dom_images_live_when_structured_data_only_has_prim
     ]
 
 
-def test_extract_ecommerce_detail_prefers_full_dom_description_and_keeps_product_details_separate() -> None:
+def test_extract_ecommerce_detail_prefers_full_dom_description_and_keeps_product_details_separate() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2389,7 +2485,9 @@ def test_extract_ecommerce_detail_prefers_full_dom_description_and_keeps_product
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["description"].startswith("Launch new markets fast Compact, actionable insights for modern retail.")
+    assert record["description"].startswith(
+        "Launch new markets fast Compact, actionable insights for modern retail."
+    )
     assert "Rapidly launch new markets" in record["description"]
     assert "Headless architecture benefits" in record["description"]
     assert record["product_details"] == (
@@ -2399,7 +2497,9 @@ def test_extract_ecommerce_detail_prefers_full_dom_description_and_keeps_product
     assert "specifications" not in record
 
 
-def test_extract_ecommerce_detail_keeps_dom_tier_live_for_product_details_without_requested_fields() -> None:
+def test_extract_ecommerce_detail_keeps_dom_tier_live_for_product_details_without_requested_fields() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2496,7 +2596,9 @@ def test_extract_ecommerce_detail_dedupes_next_image_proxy_duplicates() -> None:
     assert "additional_images" not in record
 
 
-def test_extract_ecommerce_detail_keeps_real_description_when_dom_sections_only_see_tabs() -> None:
+def test_extract_ecommerce_detail_keeps_real_description_when_dom_sections_only_see_tabs() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2551,7 +2653,9 @@ def test_extract_ecommerce_detail_keeps_real_description_when_dom_sections_only_
     assert "handle" not in record
 
 
-def test_extract_ecommerce_detail_maps_anchor_hash_product_description_upstream() -> None:
+def test_extract_ecommerce_detail_maps_anchor_hash_product_description_upstream() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2755,7 +2859,9 @@ def test_extract_ecommerce_detail_maps_zara_composition_block_to_materials() -> 
     assert "dimensions" not in record
 
 
-def test_extract_detail_keeps_requested_custom_dom_sections_live_past_structured_early_exit() -> None:
+def test_extract_detail_keeps_requested_custom_dom_sections_live_past_structured_early_exit() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2809,7 +2915,9 @@ def test_extract_detail_keeps_requested_custom_dom_sections_live_past_structured
     assert record["_extraction_tiers"]["early_exit"] is None
 
 
-def test_extract_detail_matches_exact_requested_section_label_without_collapsing_it() -> None:
+def test_extract_detail_matches_exact_requested_section_label_without_collapsing_it() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -2883,13 +2991,18 @@ def test_extract_detail_keeps_company_details_body_for_requested_custom_field() 
     assert record["company_details"].startswith(
         "Lyotex Lifesciences Private Limited is a reliable name in the manufacturing"
     )
-    assert "Business Type Manufacturer, Supplier, Trading Company" in record["company_details"]
+    assert (
+        "Business Type Manufacturer, Supplier, Trading Company"
+        in record["company_details"]
+    )
     assert "GST NO 27AAECL9071B1ZK" in record["company_details"]
     assert record["_field_sources"]["company_details"] == ["dom_sections"]
 
 
 def test_extract_detail_keeps_slug_match_when_identity_codes_disagree() -> None:
-    requested_url = "https://example.com/products/widget-premium?dwvar_ABCD1234_color=red"
+    requested_url = (
+        "https://example.com/products/widget-premium?dwvar_ABCD1234_color=red"
+    )
     html = """
     <html>
       <head>
@@ -2925,7 +3038,9 @@ def test_extract_detail_keeps_slug_match_when_identity_codes_disagree() -> None:
     assert rows[0]["title"] == "Widget Premium"
 
 
-def test_extract_detail_rejects_same_url_identity_mismatch_from_carousel_product() -> None:
+def test_extract_detail_rejects_same_url_identity_mismatch_from_carousel_product() -> (
+    None
+):
     requested_url = "https://www.target.com/p/apple-airpods-pro-2nd-generation-with-magsafe-case-usb-c/-/A-89791402"
     html = """
     <html>
@@ -2991,8 +3106,12 @@ def test_extract_detail_keeps_nike_record_when_canonical_drops_style_code() -> N
     assert rows[0]["part_number"] == "CW2288-111"
 
 
-def test_extract_detail_keeps_shopify_collection_detail_when_canonical_collapses_path() -> None:
-    requested_url = "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000"
+def test_extract_detail_keeps_shopify_collection_detail_when_canonical_collapses_path() -> (
+    None
+):
+    requested_url = (
+        "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000"
+    )
     html = """
     <html>
       <head>
@@ -3062,7 +3181,9 @@ def test_extract_detail_corrects_host_currency_hint_integer_cent_price() -> None
     assert rows[0]["price"] == "282.00"
 
 
-def test_extract_detail_drops_decimal_price_when_currency_conflicts_with_host_hint() -> None:
+def test_extract_detail_drops_decimal_price_when_currency_conflicts_with_host_hint() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -3121,7 +3242,9 @@ def test_extract_detail_cleans_tracking_pixels_and_video_thumbs_from_images() ->
     assert "additional_images" not in rows[0]
 
 
-def test_build_detail_record_runs_dom_tier_when_authoritative_record_has_no_images() -> None:
+def test_build_detail_record_runs_dom_tier_when_authoritative_record_has_no_images() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -3148,10 +3271,15 @@ def test_build_detail_record_runs_dom_tier_when_authoritative_record_has_no_imag
         ],
     )
 
-    assert record["image_url"] == "https://cdn.example.com/products/cozyla-calendar-main.jpg"
+    assert (
+        record["image_url"]
+        == "https://cdn.example.com/products/cozyla-calendar-main.jpg"
+    )
 
 
-def test_extract_ecommerce_detail_prunes_irrelevant_nested_related_products_from_structured_data() -> None:
+def test_extract_ecommerce_detail_prunes_irrelevant_nested_related_products_from_structured_data() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -3195,10 +3323,14 @@ def test_extract_ecommerce_detail_prunes_irrelevant_nested_related_products_from
     record = rows[0]
     assert record["description"] == "Neutral coconut shades only."
     assert record["image_url"].endswith("EyePalette-GoingCoconuts-Closed-PDP.jpg")
-    assert all("ForeverYours" not in image for image in record.get("additional_images", []))
+    assert all(
+        "ForeverYours" not in image for image in record.get("additional_images", [])
+    )
 
 
-def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_and_legal_tail() -> None:
+def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_and_legal_tail() -> (
+    None
+):
     html = "<html><body><main><h1>Black Seascape Stretch Bracelet</h1></main></body></html>"
 
     record = build_detail_record(
@@ -3226,7 +3358,7 @@ def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_an
                     "https://www.puravidabracelets.com/cdn/shop/files/square-image_3_1.jpg?crop=center&height=600&v=1774914906&width=600",
                     "https://www.puravidabracelets.com/cdn/shop/products/Solid_Black_ed35d7f8-dc76-4e8a-9e2b-821126dbb895.jpg?v=1718918266&width=1200",
                     "https://www.macys.com/shop/product/1&fmt=webp",
-                    "https://www.fashionnova.com/products/R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+                    "https://www.fashionnova.com/products/R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
                 ],
                 "variants": [
                     {
@@ -3237,7 +3369,10 @@ def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_an
                     {
                         "price": "8.00",
                         "currency": "USD",
-                        "option_values": {"toggle_color_swatches": "Swatch", "color": "Black"},
+                        "option_values": {
+                            "toggle_color_swatches": "Swatch",
+                            "color": "Black",
+                        },
                     },
                 ],
                 "selected_variant": {
@@ -3257,7 +3392,12 @@ def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_an
     assert "50907BLCK" in record["image_url"]
     assert all(
         bad_token not in " ".join(record.get("additional_images", []))
-        for bad_token in ("square-image", "Solid_Black", "macys.com/shop/product", "R0lGODlhAQAB")
+        for bad_token in (
+            "square-image",
+            "Solid_Black",
+            "macys.com/shop/product",
+            "R0lGODlhAQAB",
+        )
     )
     assert record["variants"] == [
         {
@@ -3276,7 +3416,9 @@ def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_an
     }
 
 
-def test_build_detail_record_drops_v6_widget_fulfillment_and_variant_scalar_noise() -> None:
+def test_build_detail_record_drops_v6_widget_fulfillment_and_variant_scalar_noise() -> (
+    None
+):
     record = build_detail_record(
         "<html><body><main><h1>V6 Test Sneaker</h1></main></body></html>",
         "https://www.example.com/products/v6-test-sneaker",
@@ -3299,7 +3441,9 @@ def test_build_detail_record_drops_v6_widget_fulfillment_and_variant_scalar_nois
     assert record["color"] == "Black"
 
 
-def test_build_detail_record_drops_v6_generic_title_cross_product_text_and_ad_product_type() -> None:
+def test_build_detail_record_drops_v6_generic_title_cross_product_text_and_ad_product_type() -> (
+    None
+):
     record = build_detail_record(
         "<html><body><main><h1>Calvin Klein Bernard Lace-Up Oxfords</h1></main></body></html>",
         "https://www.macys.com/shop/product/calvin-klein-mens-bernard-lace-up-oxfords?ID=12345",
@@ -3341,7 +3485,9 @@ def test_build_detail_record_drops_v6_target_fulfillment_description() -> None:
     assert "description" not in record
 
 
-def test_build_detail_record_normalizes_v6_cent_integer_prices_by_host_context() -> None:
+def test_build_detail_record_normalizes_v6_cent_integer_prices_by_host_context() -> (
+    None
+):
     cases = [
         (
             "https://in.puma.com/in/en/pd/deviate-nitro-elite-4-run-club-mens-road-running-shoes/312907",
@@ -3374,7 +3520,13 @@ def test_build_detail_record_normalizes_v6_cent_integer_prices_by_host_context()
                     "title": "V6 Price Product",
                     "price": raw_price,
                     "currency": currency,
-                    "variants": [{"price": raw_price, "currency": currency, "option_values": {"size": "M"}}],
+                    "variants": [
+                        {
+                            "price": raw_price,
+                            "currency": currency,
+                            "option_values": {"size": "M"},
+                        }
+                    ],
                 }
             ],
         )
@@ -3383,7 +3535,9 @@ def test_build_detail_record_normalizes_v6_cent_integer_prices_by_host_context()
         assert record["variants"][0]["price"] == expected_price
 
 
-def test_build_detail_record_rejects_broken_extensionless_transformed_image_urls() -> None:
+def test_build_detail_record_rejects_broken_extensionless_transformed_image_urls() -> (
+    None
+):
     record = build_detail_record(
         "<html><body><main><h1>Adidas Samba OG Shoes</h1></main></body></html>",
         "https://www.zappos.com/p/adidas-samba-og/product/12345",
@@ -3429,7 +3583,9 @@ def test_build_detail_record_rejects_cross_sell_images_by_filename_identity() ->
         ],
     )
 
-    assert record["image_url"].endswith("Nike-Dunk-Low-Retro-White-Black-2021-Product.jpg")
+    assert record["image_url"].endswith(
+        "Nike-Dunk-Low-Retro-White-Black-2021-Product.jpg"
+    )
     assert record["additional_images"] == [
         "https://images.stockx.com/360/Nike-Dunk-Low-Retro-White-Black-2021/Images/Nike-Dunk-Low-Retro-White-Black-2021/Lv2/img01.jpg"
     ]
@@ -3679,14 +3835,27 @@ def test_build_detail_record_backfills_shared_variant_image_and_availability() -
                 "image_url": "https://res.cloudinary.com/ssenseweb/image/upload/item.jpg",
                 "availability": "out_of_stock",
                 "variants": [
-                    {"size": "S", "price": "3890", "currency": "USD", "option_values": {"size": "S"}},
-                    {"size": "M", "price": "3890", "currency": "USD", "option_values": {"size": "M"}},
+                    {
+                        "size": "S",
+                        "price": "3890",
+                        "currency": "USD",
+                        "option_values": {"size": "S"},
+                    },
+                    {
+                        "size": "M",
+                        "price": "3890",
+                        "currency": "USD",
+                        "option_values": {"size": "M"},
+                    },
                 ],
             }
         ],
     )
 
-    assert record["variants"][0]["image_url"] == "https://res.cloudinary.com/ssenseweb/image/upload/item.jpg"
+    assert (
+        record["variants"][0]["image_url"]
+        == "https://res.cloudinary.com/ssenseweb/image/upload/item.jpg"
+    )
     assert record["variants"][1]["availability"] == "out_of_stock"
 
 
@@ -3722,7 +3891,9 @@ def test_build_detail_record_repairs_nike_uuid_variant_skus_and_empty_prices() -
     assert record["sku"] == "CW2288-111"
 
 
-def test_build_detail_record_repairs_shopify_cent_variant_prices_and_numeric_titles() -> None:
+def test_build_detail_record_repairs_shopify_cent_variant_prices_and_numeric_titles() -> (
+    None
+):
     record = build_detail_record(
         "<html><body><main><h1>SATISFY TheROCKER - Jet Black</h1></main></body></html>",
         "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000",
@@ -3793,9 +3964,21 @@ def test_build_detail_record_drops_low_signal_numeric_only_variants() -> None:
                 "price": "989.99",
                 "currency": "USD",
                 "variants": [
-                    {"price": "989.99", "currency": "USD", "option_values": {"size": "1"}},
-                    {"price": "989.99", "currency": "USD", "option_values": {"size": "2"}},
-                    {"price": "989.99", "currency": "USD", "option_values": {"size": "3"}},
+                    {
+                        "price": "989.99",
+                        "currency": "USD",
+                        "option_values": {"size": "1"},
+                    },
+                    {
+                        "price": "989.99",
+                        "currency": "USD",
+                        "option_values": {"size": "2"},
+                    },
+                    {
+                        "price": "989.99",
+                        "currency": "USD",
+                        "option_values": {"size": "3"},
+                    },
                 ],
                 "selected_variant": {
                     "price": "989.99",
@@ -3808,11 +3991,85 @@ def test_build_detail_record_drops_low_signal_numeric_only_variants() -> None:
 
     assert "variants" not in record
     assert "variant_axes" not in record
+
+
+def test_extract_hm_productgroup_detail_from_code_only_url() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "ProductGroup",
+          "name": "Canvas espadrilles",
+          "description": "Espadrilles in canvas with a braided jute trim around the soles.",
+          "brand": {"@type": "Brand", "name": "H&M"},
+          "image": "https://image.hm.com/assets/hm/9e/92/main.jpg",
+          "hasVariant": [
+            {
+              "@type": "Product",
+              "sku": "1317259001003",
+              "name": "Canvas espadrilles - Black",
+              "color": "Black",
+              "size": "6",
+              "image": "https://image.hm.com/assets/hm/9e/92/black.jpg",
+              "offers": {
+                "@type": "Offer",
+                "url": "https://www2.hm.com/en_in/productpage.1317259001.html",
+                "priceCurrency": "INR",
+                "price": 1499
+              }
+            },
+            {
+              "@type": "Product",
+              "sku": "1317259002003",
+              "name": "Canvas espadrilles - Beige",
+              "color": "Beige",
+              "size": "6",
+              "image": "https://image.hm.com/assets/hm/fb/81/beige.jpg",
+              "offers": {
+                "@type": "Offer",
+                "url": "https://www2.hm.com/en_in/productpage.1317259002.html",
+                "priceCurrency": "INR",
+                "price": 1499
+              }
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Black</h1>
+          <div class="price">Rs. 1,499.00</div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www2.hm.com/en_in/productpage.1317259001.html",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Canvas espadrilles"
+    assert record["price"] == "1499.00"
+    assert record["brand"] == "H&M"
+    assert record["currency"] == "INR"
+    assert record["_source"] == "json_ld"
+    assert record["url"] == "https://www2.hm.com/en_in/productpage.1317259001.html"
+    assert record["image_url"] == "https://image.hm.com/assets/hm/9e/92/main.jpg"
     assert "selected_variant" not in record
     assert "size" not in record
 
 
-def test_extract_detail_backfills_current_price_variants_and_strips_unavailable_suffixes() -> None:
+def test_extract_detail_backfills_current_price_variants_and_strips_unavailable_suffixes() -> (
+    None
+):
     html = """
     <html>
       <body>

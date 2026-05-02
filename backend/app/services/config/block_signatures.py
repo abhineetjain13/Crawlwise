@@ -23,6 +23,9 @@ BLOCK_SIGNATURES = {
         "pardon our interruption",
         "please turn javascript on",
         "why do i have to complete a captcha",
+        "our systems have detected unusual traffic from your computer network",
+        "this page checks to see if it's really you sending the requests",
+        "unusual traffic from your computer network",
     ],
     "active_provider_markers": [
         {"marker": "px-captcha", "provider": "perimeterx"},
@@ -75,6 +78,7 @@ BLOCK_SIGNATURES = {
         "access denied": "access_denied",
         "powered and protected by akamai": "akamai_banner",
         "datadome": "datadome_marker",
+        "unusual traffic from your computer network": "google_unusual_traffic",
     },
     "content_tolerant_strong_markers": [
         "captcha",
@@ -92,6 +96,7 @@ BLOCK_SIGNATURES = {
         r"you\s+have\s+been\s+blocked",
         r"security\s+check",
         r"pardon\s+our\s+interruption",
+        r"unusual\s+traffic",
     ],
     "challenge_elements": {
         "iframe_src_markers": {

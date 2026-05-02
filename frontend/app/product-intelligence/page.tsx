@@ -403,7 +403,7 @@ export default function ProductIntelligencePage() {
                     title="Select all filtered URLs"
                   />
                 ) : null}
-                <h2 className="type-label text-muted text-[10px] font-normal tracking-widest">
+                <h2 className="type-label text-muted text-xs font-normal tracking-widest">
                   DISCOVERED CANDIDATES
                 </h2>
               </div>
@@ -439,7 +439,7 @@ export default function ProductIntelligencePage() {
                 {selectedDomainSummary ? (
                   <>
                     <div className="bg-accent border-accent flex items-center gap-2 rounded border px-2 py-1">
-                      <span className="text-[10px] font-bold tracking-tight text-white uppercase">
+                      <span className="text-xs font-bold tracking-tight text-white uppercase">
                         {selectedDomainSummary.count} selected
                       </span>
                     </div>
@@ -501,7 +501,7 @@ export default function ProductIntelligencePage() {
                 {groupedCandidates.map((group, groupIndex) => (
                   <details key={group.sourceIndex} className="group" open={groupIndex === 0}>
                     <summary className="hover:bg-background-alt/50 flex cursor-pointer list-none items-center gap-4 px-4 py-3 transition-colors select-none">
-                      <div className="border-divider bg-background text-muted group-open:bg-accent group-open:border-accent flex size-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold group-open:text-white">
+                      <div className="border-divider bg-background text-muted group-open:bg-accent group-open:border-accent flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold group-open:text-white">
                         {group.candidates.length}
                       </div>
                       <div className="min-w-0 flex-1">
@@ -577,7 +577,7 @@ export default function ProductIntelligencePage() {
                                 )}
                                 <div
                                   className={cn(
-                                    'absolute right-1.5 bottom-1.5 rounded-md border px-1.5 py-0.5 text-[10px] font-bold shadow-sm',
+                                    'absolute right-1.5 bottom-1.5 rounded-md border px-1.5 py-0.5 text-xs font-bold shadow-sm',
                                     score >= 0.6
                                       ? 'bg-success border-success text-white'
                                       : score >= 0.4
@@ -607,6 +607,7 @@ export default function ProductIntelligencePage() {
                                         e.stopPropagation();
                                         if (candidate.url) toggleUrl(candidate.url);
                                       }}
+                                      aria-label={`Select ${stringField(record.title) || candidate.url} for batch crawl`}
                                       className="border-divider text-accent focus:ring-accent mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded"
                                     />
                                   </div>
@@ -618,7 +619,7 @@ export default function ProductIntelligencePage() {
                                       </div>
                                     )}
                                     {(stringField(record.brand) || candidate.source_brand) && (
-                                      <div className="text-muted text-[10px] font-medium tracking-wider uppercase">
+                                      <div className="text-muted text-xs font-medium tracking-wider uppercase">
                                         {stringField(record.brand) || candidate.source_brand}
                                       </div>
                                     )}
@@ -626,7 +627,7 @@ export default function ProductIntelligencePage() {
                                 </div>
 
                                 <div
-                                  className="text-muted/80 mt-2 truncate font-mono text-[10px]"
+                                  className="text-muted/80 mt-2 truncate font-mono text-xs"
                                   title={candidate.domain}
                                 >
                                   {candidate.domain}
@@ -639,7 +640,7 @@ export default function ProductIntelligencePage() {
                                 type="button"
                                 variant="ghost"
                                 size="sm"
-                                className="text-muted hover:text-accent h-6 px-2 text-[10px] font-bold tracking-tight uppercase"
+                                className="text-muted hover:text-accent h-6 px-2 text-xs font-bold tracking-tight uppercase"
                                 onClick={() => setJsonModalCandidate(candidate)}
                               >
                                 <Code2 className="mr-1.5 size-3" /> Raw JSON
@@ -648,7 +649,7 @@ export default function ProductIntelligencePage() {
                                 href={candidate.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-accent flex items-center gap-1 text-[10px] font-bold tracking-tight uppercase hover:underline"
+                                className="text-accent flex items-center gap-1 text-xs font-bold tracking-tight uppercase hover:underline"
                               >
                                 View Source <ExternalLink className="size-2.5" />
                               </a>

@@ -47,13 +47,13 @@ function RunRow({
             <Tooltip content={run.url} align="start">
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="type-mono-standard link-accent text-primary block max-w-[280px] truncate leading-[1.4] font-normal no-underline transition-colors"
+                className="type-mono-standard link-accent text-primary block max-w-[280px] truncate leading-[1.4] font-medium no-underline transition-colors"
               >
                 {domain || `Run #${run.id}`}
               </Link>
             </Tooltip>
 
-            <div className="flex items-center gap-1 opacity-10 transition-opacity group-hover:opacity-100">
+            <div className="flex items-center gap-1 opacity-10 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
               <button
                 type="button"
                 onClick={(e) => {
@@ -61,8 +61,9 @@ function RunRow({
                   e.stopPropagation();
                   void navigator.clipboard.writeText(run.url);
                 }}
-                className="text-muted hover:text-accent transition-colors"
+                className="text-muted hover:text-accent inline-flex min-h-6 min-w-6 items-center justify-center transition-colors"
                 title="Copy URL"
+                aria-label="Copy URL"
               >
                 <Copy className="size-3" />
               </button>
@@ -70,8 +71,9 @@ function RunRow({
                 href={run.url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-muted hover:text-accent transition-colors"
+                className="text-muted hover:text-accent inline-flex min-h-6 min-w-6 items-center justify-center transition-colors"
                 title="Open original URL"
+                aria-label="Open original URL"
               >
                 <ExternalLink className="size-3" />
               </a>
@@ -115,7 +117,7 @@ function RunRow({
 
       {/* Actions */}
       <td className="text-right whitespace-nowrap">
-        <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <Link
             href={`/crawl?run_id=${run.id}`}
             className="ui-on-accent-surface focus-ring border-accent bg-accent hover:border-accent-hover hover:bg-accent-hover inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-[var(--radius-md)] border px-[9px] text-sm leading-none font-medium no-underline shadow-xs transition-[background-color,color,border-color,box-shadow,opacity,transform] hover:-translate-y-px"

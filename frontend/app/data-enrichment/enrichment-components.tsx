@@ -26,11 +26,11 @@ export function EnrichmentStatus({
       <div className="flex items-center gap-2">
         <Badge
           tone={llmEnabled ? 'accent' : 'neutral'}
-          className="h-5 px-1.5 text-[10px] font-bold tracking-tight uppercase"
+          className="h-5 px-1.5 text-xs font-bold tracking-tight uppercase"
         >
           {llmEnabled ? 'LLM ENABLED' : 'RULES ONLY'}
         </Badge>
-        <Badge tone="info" className="h-5 px-1.5 text-[10px] font-bold tracking-tight uppercase">
+        <Badge tone="info" className="h-5 px-1.5 text-xs font-bold tracking-tight uppercase">
           {sourceCount} RECORDS
         </Badge>
       </div>
@@ -73,11 +73,11 @@ export function EnrichmentTableLoading({ llmEnabled }: Readonly<{ llmEnabled: bo
 function EnrichmentLoadingStep({ label, detail }: Readonly<{ label: string; detail: string }>) {
   return (
     <div className="border-divider bg-background-alt/50 hover:bg-background-alt rounded-[var(--radius-md)] border px-3 py-2 transition-colors">
-      <div className="text-foreground flex items-center gap-2 text-[11px] font-bold tracking-tight uppercase">
+      <div className="text-foreground flex items-center gap-2 text-xs font-bold tracking-tight uppercase">
         <span className="bg-accent size-1.5 animate-pulse rounded-full" />
         {label}
       </div>
-      <div className="text-muted mt-1 text-[10px] leading-tight">{detail}</div>
+      <div className="text-muted mt-1 text-xs leading-tight">{detail}</div>
     </div>
   );
 }

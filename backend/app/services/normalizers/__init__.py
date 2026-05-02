@@ -5,19 +5,23 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.services.config.extraction_rules import CURRENCY_CODES
+from app.services.config.extraction_rules import AVAILABILITY_URL_MAP, CURRENCY_CODES
 from app.services.config.field_mappings import (
     NORMALIZER_BOOLEAN_FIELDS,
     NORMALIZER_DECIMAL_FIELDS,
     NORMALIZER_INTEGER_FIELDS,
     NORMALIZER_LIST_TEXT_FIELDS,
 )
+
 _NUMERIC_TEXT_RE = re.compile(r"[-+]?\d[\d.,]*")
-_CURRENCY_CODE_CONTEXT_PATTERN = "|".join(
-    re.escape(str(code).lower())
-    for code in tuple(CURRENCY_CODES or ())
-    if isinstance(code, str) and str(code).strip().lower() != "rs"
-) or r"(?!)"
+_CURRENCY_CODE_CONTEXT_PATTERN = (
+    "|".join(
+        re.escape(str(code).lower())
+        for code in tuple(CURRENCY_CODES or ())
+        if isinstance(code, str) and str(code).strip().lower() != "rs"
+    )
+    or r"(?!)"
+)
 _CURRENCY_CONTEXT_RE = re.compile(
     (
         r"[$€£¥₹]|(?:^|\b)(?:price|sale|now|from|starting(?:\s+at)?|mrp|msrp|cost|"
@@ -67,7 +71,15 @@ def _normalize_bool(value: object) -> bool | str:
     if isinstance(value, bool):
         return value
     text = _normalize_text(value).lower()
-    if text in {"true", "1", "yes", "remote", "fully remote", "work from home", "telecommute"}:
+    if text in {
+        "true",
+        "1",
+        "yes",
+        "remote",
+        "fully remote",
+        "work from home",
+        "telecommute",
+    }:
         return True
     if text in {"false", "0", "no", "onsite", "on site", "office"}:
         return False
@@ -155,6 +167,9 @@ def _normalize_availability(value: object) -> str:
         return "in_stock" if value else "out_of_stock"
     text = _normalize_text(value)
     lowered = text.lower()
+    mapped = (AVAILABILITY_URL_MAP or {}).get(lowered.rstrip("/"))
+    if mapped:
+        return str(mapped)
     normalized_enum = lowered.replace("-", "_").replace(" ", "_")
     if normalized_enum in _AVAILABILITY_TOKENS:
         return normalized_enum
@@ -204,7 +219,10 @@ def normalize_value(field_name: str, value: object) -> object:
                     return ""
         result = normalize_decimal_price(value)
         return result if result is not None else ""
-    if normalized_field.endswith("_count") or normalized_field in NORMALIZER_INTEGER_FIELDS:
+    if (
+        normalized_field.endswith("_count")
+        or normalized_field in NORMALIZER_INTEGER_FIELDS
+    ):
         return _normalize_int(value)
     if isinstance(value, str):
         return _normalize_text(value)
@@ -238,7 +256,7 @@ def _unwrap_singleton_literal_list(value: str) -> str | None:
     return _normalize_text(parsed[0])
 
 
-def _normalize_rating(value: str) -> str:
+def _normalize_rating(value: str) -> float | str:
     text = _normalize_text(value)
     if not text:
         return ""
@@ -247,15 +265,15 @@ def _normalize_rating(value: str) -> str:
     except (InvalidOperation, ValueError):
         return text
     quantized = decimal.quantize(Decimal("0.01"))
-    normalized = format(quantized.normalize(), "f")
-    if "." in normalized:
-        normalized = normalized.rstrip("0").rstrip(".")
-    return normalized or "0"
+    normalized = float(quantized)
+    return normalized
 
 
 def normalize_record_fields(record: dict[str, Any]) -> dict[str, Any]:
     return {
-        str(key): (value if str(key).startswith("_") else normalize_value(str(key), value))
+        str(key): (
+            value if str(key).startswith("_") else normalize_value(str(key), value)
+        )
         for key, value in dict(record or {}).items()
         if value not in (None, "", [], {})
     }

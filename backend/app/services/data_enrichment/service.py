@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -16,6 +17,9 @@ from app.services.config.data_enrichment import (
     DATA_ENRICHMENT_BASE_REQUIRED_ATTRIBUTES,
     DATA_ENRICHMENT_LLM_BACKFILL_FIELDS,
     DATA_ENRICHMENT_LLM_TASK,
+    DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS,
+    DATA_ENRICHMENT_MATERIAL_FALLBACK_FIELDS,
+    DATA_ENRICHMENT_MATERIAL_PRIMARY_FIELDS,
     DATA_ENRICHMENT_SKIP_RECORD_STATUSES,
     DATA_ENRICHMENT_STATUS_DEGRADED,
     DATA_ENRICHMENT_STATUS_ENRICHED,
@@ -53,6 +57,7 @@ from app.services.product_intelligence.matching import source_domain
 
 _token_re = re.compile(r"[a-z0-9]+")
 _PRICE_RANGE_RE = re.compile(r"(.+?)(?:\s+(?:to)\s+|\s*[-–]\s*)(.+)", re.I)
+logger = logging.getLogger(__name__)
 
 
 async def create_data_enrichment_job(
@@ -315,6 +320,11 @@ def _build_deterministic_enrichment(
     price_normalized = _normalize_price(data, source_url=source_url)
     repository = _load_attribute_repository()
     terms = repository_terms(repository)
+    category_candidates = _top_taxonomy_candidates(data)
+    category_match = category_candidates[0] if category_candidates else None
+    category_path = (
+        text_or_none(category_match.get("category_path")) if category_match else None
+    )
     color_family = _normalize_from_terms(
         [
             *_candidate_values(
@@ -333,7 +343,11 @@ def _build_deterministic_enrichment(
         ],
         term_dict(terms, "color_families"),
     )
-    size_normalized, size_system = _normalize_sizes(data, terms=terms)
+    size_normalized, size_system = _normalize_sizes(
+        data,
+        terms=terms,
+        category_match=category_match,
+    )
     gender_normalized = _normalize_from_terms(
         _candidate_values(data, "gender", "category", "product_type", "title"),
         term_dict(terms, "gender_terms"),
@@ -350,13 +364,6 @@ def _build_deterministic_enrichment(
             ),
         ],
         term_dict(terms, "availability_terms"),
-    )
-    category_candidates = _top_taxonomy_candidates(data)
-    category_match = category_candidates[0] if category_candidates else None
-    category_path = (
-        text_or_none(category_match.get("category_path"))
-        if category_match
-        else None
     )
     seo_keywords = _build_seo_keywords(
         data,
@@ -434,7 +441,9 @@ async def _run_llm_enrichment(
     }
 
 
-def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> list[str]:
+def _apply_llm_payload(
+    product: EnrichedProduct, payload: dict[str, object]
+) -> list[str]:
     applied: list[str] = []
     repository = _load_attribute_repository()
     terms = repository_terms(repository)
@@ -457,8 +466,13 @@ def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> 
             applied.append("color_family")
     if product.size_normalized is None:
         size_normalized, size_system = _normalize_sizes(
-            {"size": payload.get("size_normalized"), "size_system": payload.get("size_system")},
+            {
+                "size": payload.get("size_normalized"),
+                "size_system": payload.get("size_system"),
+                "category": product.category_path,
+            },
             terms=terms,
+            category_match=_match_category_path({"category": product.category_path}),
         )
         if size_normalized:
             product.size_normalized = size_normalized
@@ -470,7 +484,9 @@ def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> 
         size_system = text_or_none(payload.get("size_system"))
         known_systems = {
             str(key)
-            for key in _object_dict(term_dict(terms, "size_systems").get("systems")).keys()
+            for key in _object_dict(
+                term_dict(terms, "size_systems").get("systems")
+            ).keys()
         }
         if size_system and size_system in known_systems:
             product.size_system = size_system
@@ -494,7 +510,9 @@ def _apply_llm_payload(product: EnrichedProduct, payload: dict[str, object]) -> 
             applied.append("materials_normalized")
     if product.availability_normalized is None:
         availability_normalized = _normalize_from_terms(
-            _string_list(payload.get("availability_normalized"), max_items=1, max_chars=60)
+            _string_list(
+                payload.get("availability_normalized"), max_items=1, max_chars=60
+            )
             or [payload.get("availability_normalized")],
             term_dict(terms, "availability_terms"),
         )
@@ -610,8 +628,13 @@ def _normalize_price(
 
 
 def _normalize_sizes(
-    data: dict[str, object], *, terms: dict[str, object]
+    data: dict[str, object],
+    *,
+    terms: dict[str, object],
+    category_match: dict[str, object] | None = None,
 ) -> tuple[list[str] | None, str | None]:
+    if category_match and not _category_supports_attribute(category_match, "size"):
+        return None, None
     size_config = term_dict(terms, "size_systems")
     aliases_value = size_config.get("aliases")
     aliases_dict = aliases_value if isinstance(aliases_value, dict) else {}
@@ -668,6 +691,19 @@ def _plausible_size_value(
     return bool(re.fullmatch(r"\d+(?:\.\d+)?(?:\s*(?:m|t|w|y|us|uk|eu))?", normalized))
 
 
+def _category_supports_attribute(
+    category_match: dict[str, object],
+    attribute_handle: str,
+) -> bool:
+    taxonomy_reference = _object_dict(category_match.get("taxonomy_reference"))
+    handles = {
+        str(item).replace("-", "_")
+        for item in _object_list(taxonomy_reference.get("attribute_handles"))
+        if str(item or "").strip()
+    }
+    return str(attribute_handle or "").replace("-", "_") in handles
+
+
 def _detect_size_system(value: str, systems: dict[str, set[str]]) -> str | None:
     normalized = clean_text(value).casefold()
     for system, values in systems.items():
@@ -682,10 +718,13 @@ def _normalize_materials(
     material_terms = term_dict(terms, "material_terms")
     found: list[str] = []
     seen: set[str] = set()
-    for value in _candidate_values(
-        data, "materials", "product_attributes", "description", "title"
-    ):
-        lowered = clean_text(strip_html_tags(value)).casefold()
+    values = _candidate_values(data, *DATA_ENRICHMENT_MATERIAL_PRIMARY_FIELDS)
+    if not values:
+        values = _candidate_values(data, *DATA_ENRICHMENT_MATERIAL_FALLBACK_FIELDS)
+    for value in values:
+        lowered = _strip_material_context_noise(
+            clean_text(strip_html_tags(value)).casefold()
+        )
         for canonical, tokens in material_terms.items():
             if canonical in seen:
                 continue
@@ -695,6 +734,28 @@ def _normalize_materials(
                 found.append(str(canonical))
                 seen.add(str(canonical))
     return found or None
+
+
+def _compiled_material_strip_patterns() -> tuple[re.Pattern[str], ...]:
+    compiled: list[re.Pattern[str]] = []
+    for pattern in tuple(DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS or ()):
+        try:
+            compiled.append(re.compile(str(pattern), re.I))
+        except re.error:
+            logger.warning("Skipping invalid material strip pattern: %r", pattern)
+    return tuple(compiled)
+
+
+COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS = (
+    _compiled_material_strip_patterns()
+)
+
+
+def _strip_material_context_noise(value: str) -> str:
+    cleaned = value
+    for pattern in COMPILED_DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+    return clean_text(cleaned)
 
 
 def _normalize_from_terms(values: list[object], terms: dict[str, object]) -> str | None:
@@ -785,9 +846,12 @@ def _build_seo_keywords(
     keywords: list[str] = []
     seen: set[str] = set()
     title_tokens = _keyword_tokens(data.get("title"), stopwords)
+    unigram_tokens = _keyword_tokens(
+        " ".join(clean_text(part) for part in raw_parts), stopwords
+    )
     for token in [
-        *_keyword_tokens(" ".join(clean_text(part) for part in raw_parts), stopwords),
-        *list(_bigrams(title_tokens)),
+        *unigram_tokens,
+        *_semantic_bigrams(title_tokens, set(unigram_tokens)),
     ]:
         cleaned = clean_text(token).casefold()
         if len(cleaned) < 3 or cleaned in stopwords or cleaned in seen:
@@ -797,6 +861,22 @@ def _build_seo_keywords(
         if len(keywords) >= data_enrichment_settings.max_seo_keywords:
             break
     return keywords or None
+
+
+def _semantic_bigrams(tokens: list[str], unigrams: set[str]) -> list[str]:
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for index in range(len(tokens) - 1):
+        first = tokens[index]
+        second = tokens[index + 1]
+        if first not in unigrams or second not in unigrams:
+            continue
+        phrase = clean_text(f"{first} {second}").casefold()
+        if not phrase or phrase in seen:
+            continue
+        seen.add(phrase)
+        phrases.append(phrase)
+    return phrases
 
 
 def _llm_prompt_context(
@@ -834,7 +914,9 @@ def _llm_prompt_context(
                         "score": candidate.get("score"),
                     }
                 )
-                for candidate in category_candidates[: data_enrichment_settings.llm_taxonomy_hint_count]
+                for candidate in category_candidates[
+                    : data_enrichment_settings.llm_taxonomy_hint_count
+                ]
             ],
             "category_attributes": _category_attribute_handles(category_anchor),
         }
@@ -860,7 +942,9 @@ def _taxonomy_hint(
         )
     candidate_paths = ", ".join(
         str(item.get("category_path") or "")
-        for item in category_candidates[: data_enrichment_settings.llm_taxonomy_hint_count]
+        for item in category_candidates[
+            : data_enrichment_settings.llm_taxonomy_hint_count
+        ]
         if str(item.get("category_path") or "").strip()
     )
     if candidate_paths:
@@ -937,7 +1021,6 @@ def _product_attribute_diagnostics(
     data: dict[str, object],
     category_match: dict[str, object] | None,
 ) -> dict[str, object]:
-    repository = _load_attribute_repository()
     required = [str(item) for item in DATA_ENRICHMENT_BASE_REQUIRED_ATTRIBUTES]
     recommended: list[str] = []
     if category_match:
@@ -1093,9 +1176,7 @@ def _tokens(value: object) -> list[str]:
 
 def _keyword_tokens(value: object, stopwords: set[str]) -> list[str]:
     return [
-        token
-        for token in _tokens(value)
-        if len(token) >= 3 and token not in stopwords
+        token for token in _tokens(value) if len(token) >= 3 and token not in stopwords
     ]
 
 

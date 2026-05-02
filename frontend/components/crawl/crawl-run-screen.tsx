@@ -856,7 +856,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 href={run.url}
                 target="_blank"
                 rel="noreferrer"
-                className="type-mono-standard text-accent underline-offset-2 hover:underline"
+                className="font-mono text-sm font-medium text-accent underline-offset-2 hover:underline"
               >
                 {getDomain(run.url)}
               </a>
@@ -982,7 +982,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     href={run.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="type-mono-standard link-accent block truncate leading-[1.4] underline-offset-2 hover:underline"
+                    className="link-accent block truncate font-mono text-sm font-medium leading-[1.4] underline-offset-2 hover:underline"
                   >
                     {run.url}
                   </a>

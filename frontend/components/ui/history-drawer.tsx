@@ -112,7 +112,7 @@ export function HistoryDrawer({
                             {item.label}
                           </div>
                         )}
-                        <div className="text-muted flex w-full items-center justify-between text-[10px] font-medium tracking-wider uppercase">
+                        <div className="text-muted flex w-full items-center justify-between text-xs font-medium tracking-wider uppercase">
                           <span>{item.meta ?? 'No details'}</span>
                           <span className="font-mono">{formatShortDate(item.created_at)}</span>
                         </div>

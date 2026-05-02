@@ -133,6 +133,7 @@ export default function AdminUsersPage() {
                           { value: 'harness', label: 'harness' },
                           { value: 'admin', label: 'admin' },
                         ]}
+                        ariaLabel="User role"
                         className="min-w-24"
                       />
                     </td>
@@ -141,7 +142,7 @@ export default function AdminUsersPage() {
                         {user.is_active ? 'active' : 'inactive'}
                       </Badge>
                     </td>
-                    <td className="text-muted text-sm leading-[var(--leading-relaxed)]">
+                    <td className="text-muted text-xs leading-[var(--leading-relaxed)]">
                       {formatDate(user.created_at)}
                     </td>
                     <td className="text-right">

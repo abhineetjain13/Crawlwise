@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -67,4 +68,19 @@ class LLMCostLogResponse(BaseModel):
     output_tokens: int
     cost_usd: Decimal
     domain: str
+    outcome: Literal["success", "error"] = "success"
+    error_category: Literal[
+        "",
+        "none",
+        "rate_limited",
+        "timeout",
+        "auth_failure",
+        "client_error",
+        "provider_error",
+        "parse_failure",
+        "validation_failure",
+        "circuit_open",
+        "missing_config",
+    ] = ""
+    error_message: str = ""
     created_at: datetime

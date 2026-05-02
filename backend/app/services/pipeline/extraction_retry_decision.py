@@ -6,6 +6,7 @@ from app.services.acquisition.acquirer import AcquisitionResult, PageEvidence
 from app.services.acquisition.browser_readiness import analyze_html
 from app.services.config.extraction_rules import (
     DETAIL_CURRENT_PRICE_SELECTORS,
+    DETAIL_IDENTITY_FIELDS,
     DETAIL_SHELL_FRAMEWORK_TOKENS,
     DETAIL_SHELL_PRODUCT_DATA_TOKENS,
     DETAIL_SHELL_STATE_TOKENS,
@@ -209,9 +210,11 @@ def _empty_detail_extraction_has_static_evidence(
     if matched_requested_fields:
         return True
 
-    # If we see price fields AND BOTH title and image, that's decent evidence
-    has_price = bool(extractable_fields & set(PRICE_FIELDS)) or _html_has_configured_detail_price(soup)
-    has_identity = {"title", "image_url"} <= extractable_fields
+    # If static HTML exposes a price and an identity signal (title OR image_url), browser retry is a waste.
+    has_price = bool(
+        extractable_fields & set(PRICE_FIELDS)
+    ) or _html_has_configured_detail_price(soup)
+    has_identity = bool(set(DETAIL_IDENTITY_FIELDS) & extractable_fields)
 
     return bool(has_price and has_identity)
 
@@ -244,14 +247,16 @@ def _low_quality_detail_html_suggests_browser_retry(
         missing_fields=missing_fields,
     ):
         return False
-    if _html_looks_like_js_required_placeholder(analysis.title_text, analysis.visible_text, soup):
+    if _html_looks_like_js_required_placeholder(
+        analysis.title_text, analysis.visible_text, soup
+    ):
         return True
     lowered_html = analysis.lowered_html
     if any(token in lowered_html for token in DETAIL_SHELL_STATE_TOKENS):
         return True
-    return any(token in lowered_html for token in DETAIL_SHELL_FRAMEWORK_TOKENS) and any(
-        token in lowered_html for token in DETAIL_SHELL_PRODUCT_DATA_TOKENS
-    )
+    return any(
+        token in lowered_html for token in DETAIL_SHELL_FRAMEWORK_TOKENS
+    ) and any(token in lowered_html for token in DETAIL_SHELL_PRODUCT_DATA_TOKENS)
 
 
 def _missing_fields_have_static_html_evidence(
@@ -278,9 +283,14 @@ def _missing_fields_have_static_html_evidence(
     if matched_requested:
         return True
     normalized_missing = {str(field_name).strip() for field_name in missing_fields}
-    if normalized_missing & set(PRICE_FIELDS) and _html_has_configured_detail_price(soup):
+    if normalized_missing & set(PRICE_FIELDS) and _html_has_configured_detail_price(
+        soup
+    ):
         return True
-    if normalized_missing & {"variants", "selected_variant"} and variant_dom_cues_present(soup):
+    if normalized_missing & {
+        "variants",
+        "selected_variant",
+    } and variant_dom_cues_present(soup):
         return True
     return False
 

@@ -117,7 +117,7 @@ export default function JobsPage() {
                       {formatJobType(job.type)}
                     </td>
                     <td
-                      className="mono-body text-foreground max-w-[320px] truncate text-sm leading-[var(--leading-relaxed)]"
+                      className="mono-body text-foreground max-w-[320px] truncate text-sm font-medium leading-[var(--leading-relaxed)]"
                       title={job.url}
                     >
                       {job.url}

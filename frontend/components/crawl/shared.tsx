@@ -1365,7 +1365,7 @@ export const LogTerminal = memo(function LogTerminal({
         className="flex h-9 items-center justify-between border-b bg-black/[0.05] px-4 dark:bg-white/[0.05]"
         style={{ borderColor: 'var(--terminal-border)' }}
       >
-        <span className="text-muted font-mono text-[10px] font-bold tracking-[0.2em] uppercase">
+        <span className="text-muted font-mono text-xs font-bold tracking-[0.2em] uppercase">
           activity_stream.log
         </span>
         <div className="flex items-center gap-2">
@@ -1391,17 +1391,17 @@ export const LogTerminal = memo(function LogTerminal({
               />
             ))}
           </div>
-          <div className="flex items-center gap-2 opacity-60 transition-opacity group-hover/terminal:opacity-100">
+          <div className="flex items-center gap-2 opacity-60 transition-opacity group-hover/terminal:opacity-100 group-focus-within/terminal:opacity-100">
             <button
               onClick={() => navigateTriage('prev')}
-              className="rounded text-[10px] font-bold uppercase hover:text-blue-500 focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none"
+              className="rounded text-xs font-bold uppercase hover:text-blue-500 focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none"
             >
               Prev
             </button>
             <span className="opacity-20">/</span>
             <button
               onClick={() => navigateTriage('next')}
-              className="rounded text-[10px] font-bold uppercase hover:text-blue-500 focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none"
+              className="rounded text-xs font-bold uppercase hover:text-blue-500 focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none"
             >
               Next
             </button>
@@ -1447,7 +1447,7 @@ export const LogTerminal = memo(function LogTerminal({
                     severityTone(group, index),
                   )}
                 >
-                  <div className="text-muted font-mono text-[12px] font-medium tabular-nums">
+                  <div className="text-muted font-mono text-sm font-medium tabular-nums">
                     {(index + 1).toString().padStart(2, '0')}
                   </div>
                   <div className="min-w-0">
@@ -1457,14 +1457,14 @@ export const LogTerminal = memo(function LogTerminal({
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="block truncate font-mono text-[12px] font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+                        className="block truncate font-mono text-sm font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
                         title={group.url}
                       >
                         {formatShortUrlLabel(group.url)}
                       </a>
                     ) : (
                       <span
-                        className="text-secondary block truncate font-mono text-[12px] font-medium"
+                        className="text-secondary block truncate font-mono text-sm font-medium"
                         title={group.label}
                         onClick={(e) => e.stopPropagation()}
                       >
@@ -1472,19 +1472,19 @@ export const LogTerminal = memo(function LogTerminal({
                       </span>
                     )}
                   </div>
-                  <div className="text-secondary font-mono text-[12px] font-medium whitespace-nowrap tabular-nums">
-                    <span className="text-muted mr-1.5 font-sans text-[10px] font-bold tracking-wider uppercase">
+                  <div className="text-secondary font-mono text-sm font-medium whitespace-nowrap tabular-nums">
+                    <span className="text-muted mr-1.5 font-sans text-sm font-bold tracking-wider uppercase">
                       F:
                     </span>
                     {coverage.foundCount}/{coverage.totalCount || 0}
                   </div>
                   <div
                     className={cn(
-                      'font-mono text-[12px] font-medium whitespace-nowrap tabular-nums',
+                      'font-mono text-sm font-medium whitespace-nowrap tabular-nums',
                       confidence ? toneForConfidence(confidence.level) : 'text-muted',
                     )}
                   >
-                    <span className="text-muted mr-1.5 font-sans text-[10px] font-bold tracking-wider uppercase">
+                    <span className="text-muted mr-1.5 font-sans text-xs font-bold tracking-wider uppercase">
                       C:
                     </span>
                     {confidence ? `${Math.round(confidence.score * 100)}%` : '--'}
@@ -1493,7 +1493,7 @@ export const LogTerminal = memo(function LogTerminal({
                     {group.lastStage !== 'system' && (
                       <div
                         className={cn(
-                          'rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase',
+                          'rounded px-1.5 py-0.5 text-sm font-bold tracking-wider uppercase',
                           STAGE_CONFIG[group.lastStage].chipClass,
                         )}
                       >
@@ -1503,7 +1503,7 @@ export const LogTerminal = memo(function LogTerminal({
                   </div>
                   <div className="min-w-0">
                     <div
-                      className="text-secondary truncate font-mono text-[12px] font-medium"
+                      className="text-secondary truncate font-mono text-sm font-medium"
                       title={summaryLog?.message || ''}
                     >
                       {summaryLog
@@ -1517,7 +1517,7 @@ export const LogTerminal = memo(function LogTerminal({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-[12px] font-medium"
+                        className="h-7 px-2 text-xs font-medium"
                         onClick={(event) => {
                           event.stopPropagation();
                           setPeekedGroupKey(group.key);
@@ -1527,11 +1527,11 @@ export const LogTerminal = memo(function LogTerminal({
                         Peek
                       </Button>
                     ) : (
-                      <span className="text-[11px] opacity-25">--</span>
+                      <span className="text-xs opacity-25">--</span>
                     )}
                   </div>
                   <div className="pr-2 text-right">
-                    <div className="text-muted group-hover/row:text-secondary text-[11px] font-medium tracking-tight uppercase transition-colors">
+                    <div className="text-muted group-hover/row:text-secondary text-xs font-medium tracking-tight uppercase transition-colors">
                       {live && groups.length > 0 && group.key === groups[groups.length - 1].key
                         ? 'Active'
                         : expanded
@@ -1550,24 +1550,24 @@ export const LogTerminal = memo(function LogTerminal({
                             <div
                               key={row.key}
                               className={cn(
-                                'grid grid-cols-[64px_84px_minmax(0,1fr)_auto] items-center gap-4 px-4 py-2 text-[13px]',
+                                'grid grid-cols-[64px_84px_minmax(0,1fr)_auto] items-center gap-4 px-4 py-2 text-xs',
                                 expandedIndex % 2 === 0
                                   ? 'bg-black/[0.015] dark:bg-white/[0.015]'
                                   : 'bg-transparent',
                               )}
                             >
-                              <span className="text-muted font-mono text-[11px] font-medium tabular-nums">
+                              <span className="text-muted font-mono text-xs font-medium tabular-nums">
                                 {row.createdAt ? formatTimeHms(row.createdAt) : '--'}
                               </span>
                               <span
                                 className={cn(
-                                  'inline-flex text-[11px] font-semibold tracking-wider uppercase',
+                                  'inline-flex text-xs font-semibold tracking-wider uppercase',
                                   STAGE_CONFIG[row.stage].textOnlyClass,
                                 )}
                               >
                                 {STAGE_CONFIG[row.stage].label}
                               </span>
-                              <span className="text-secondary min-w-0 font-mono text-[13px] leading-relaxed font-medium break-words">
+                              <span className="text-secondary min-w-0 font-mono text-xs leading-relaxed font-medium break-words">
                                 {!row.createdAt
                                   ? row.message
                                   : renderLogContent(row.message, row.stage === 'system')}
@@ -1578,7 +1578,7 @@ export const LogTerminal = memo(function LogTerminal({
                                     type="button"
                                     variant="ghost"
                                     size="sm"
-                                    className="h-auto px-0 py-0 text-[14px] font-normal"
+                                    className="h-auto px-0 py-0 text-xs font-normal"
                                     onClick={() => {
                                       setPeekedGroupKey(group.key);
                                       setPeekedRecordIndex(0);
@@ -1592,7 +1592,7 @@ export const LogTerminal = memo(function LogTerminal({
                           );
                         })
                       ) : (
-                        <div className="px-3 py-2 text-[13px] opacity-40">
+                        <div className="px-3 py-2 text-xs opacity-40">
                           {TERMINAL_STRINGS.NO_LOGS}
                         </div>
                       )}
@@ -1629,16 +1629,16 @@ export const LogTerminal = memo(function LogTerminal({
               }}
             >
               <div>
-                <div className="text-accent text-[11px] tracking-[0.16em] uppercase">
+                <div className="text-accent text-xs tracking-[0.16em] uppercase">
                   {TERMINAL_STRINGS.PAYLOAD_PEEK}
                 </div>
-                <div className="mt-1 text-[13px] opacity-55">
+                <div className="mt-1 text-xs opacity-55">
                   {peekedGroup?.label ?? TERMINAL_STRINGS.SITE_PAYLOAD}
                 </div>
               </div>
               <button
                 onClick={() => setPeekedGroupKey(null)}
-                className="text-[13px] opacity-60 transition-colors hover:opacity-100"
+                className="text-xs opacity-60 transition-colors hover:opacity-100"
               >
                 Close
               </button>
@@ -1664,7 +1664,7 @@ export const LogTerminal = memo(function LogTerminal({
                   >
                     Prev
                   </Button>
-                  <span className="text-[13px] opacity-55">
+                  <span className="text-xs opacity-55">
                     {peekedGroup
                       ? `${Math.min(safePeekedRecordIndex + 1, peekedGroup.records.length)}/${peekedGroup.records.length}`
                       : '0/0'}
@@ -2039,22 +2039,22 @@ export function FieldEditorHeader() {
     <div className="hidden items-center gap-2 px-3 py-1.5 xl:grid xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
       <div />
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">Field</span>
-        <Info className="size-3 text-[#005a9e]/60" />
+        <span className="text-xs font-bold tracking-wider text-accent uppercase">Field</span>
+        <Info className="size-3 text-accent/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">CSS</span>
-        <Info className="size-3 text-[#005a9e]/60" />
+        <span className="text-xs font-bold tracking-wider text-accent uppercase">CSS</span>
+        <Info className="size-3 text-accent/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">XPath</span>
-        <Info className="size-3 text-[#005a9e]/60" />
+        <span className="text-xs font-bold tracking-wider text-accent uppercase">XPath</span>
+        <Info className="size-3 text-accent/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">Regex</span>
-        <Info className="size-3 text-[#005a9e]/60" />
+        <span className="text-xs font-bold tracking-wider text-accent uppercase">Regex</span>
+        <Info className="size-3 text-accent/60" />
       </div>
-      <span className="text-right text-[11px] font-bold tracking-wider text-[#005a9e] uppercase">
+      <span className="text-right text-xs font-bold tracking-wider text-accent uppercase">
         Actions
       </span>
     </div>

@@ -164,6 +164,8 @@ RETAILER_DOMAINS = {
     "kohls.com",
     "macys.com",
     "menswearhouse.com",
+    "myntra.com",
+    "nykaa.com",
     "nordstrom.com",
     "saksfifthavenue.com",
     "target.com",
@@ -191,6 +193,7 @@ MARKETPLACE_DOMAINS = {
     "ebay.in",
     "ebay.it",
     "etsy.com",
+    "flipkart.com",
 }
 
 AGGREGATOR_DOMAINS = {
@@ -261,6 +264,7 @@ class ProductIntelligenceSettings(BaseSettings):
     search_timeout_seconds: float = 20.0
     search_delay_ms: int = 800
     google_native_max_results: int = 10
+    google_native_max_queries_per_product: int = 2
     candidate_poll_seconds: float = 30.0
     candidate_poll_interval_seconds: float = 2.0
     confidence_threshold: float = 0.4
@@ -285,6 +289,9 @@ class ProductIntelligenceSettings(BaseSettings):
         self.search_timeout_seconds = max(1.0, float(self.search_timeout_seconds))
         self.search_delay_ms = max(0, int(self.search_delay_ms))
         self.google_native_max_results = max(1, int(self.google_native_max_results))
+        self.google_native_max_queries_per_product = max(
+            1, int(self.google_native_max_queries_per_product)
+        )
         self.candidate_poll_seconds = max(0.0, float(self.candidate_poll_seconds))
         self.candidate_poll_interval_seconds = max(
             0.5,

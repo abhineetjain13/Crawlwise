@@ -72,12 +72,33 @@ DETAIL_BREADCRUMB_SELECTORS = (
     "[aria-label*='breadcrumb' i] a",
     "[class*='breadcrumb' i] a",
 )
+DETAIL_BREADCRUMB_CONTAINER_SELECTORS = (
+    "[aria-label*='breadcrumb' i]",
+    "[class*='breadcrumb' i]",
+)
+DETAIL_BREADCRUMB_SEPARATOR_LABELS = frozenset({">", "/", "\\", "|", "›", "»", "→"})
+DETAIL_BREADCRUMB_LABEL_PREFIXES = ("shop all ",)
+DETAIL_CATEGORY_SOURCE_RANKS = {
+    "dom_breadcrumb": 1,
+    "json_ld": 2,
+    "microdata": 2,
+    "adapter": 3,
+    "network_payload": 4,
+    "js_state": 5,
+    "dom_selector": 6,
+}
 DETAIL_GENDER_TERMS = {
     "women": ("women", "womens", "women's", "woman", "ladies", "female"),
     "men": ("men", "mens", "men's", "man", "male"),
     "girls": ("girls", "girl"),
     "boys": ("boys", "boy"),
-    "unisex": ("unisex", "all gender", "all-gender", "gender neutral", "gender-neutral"),
+    "unisex": (
+        "unisex",
+        "all gender",
+        "all-gender",
+        "gender neutral",
+        "gender-neutral",
+    ),
 }
 ORACLE_HCM_CX_CONFIG_RE = re.compile(
     r"(?:var\s+|window\.)?CX_CONFIG\s*=\s*(\{.*?\})\s*(?:;|</script>)",
@@ -114,11 +135,13 @@ DETAIL_CENT_PRICE_HOST_SUFFIXES = (
     "puma.com",
     "ssense.com",
 )
+DETAIL_IDENTITY_FIELDS = frozenset({"title", "image_url"})
 VARIANT_SIZE_ALIAS_SUFFIXES = (" us",)
 VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "sign up",
     "updates and promotions",
 )
+OPTION_VALUE_NOISE_WORDS = ("popular", "sale", "discount", "off")
 DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS = frozenset(
     {
         "boot",
@@ -183,7 +206,9 @@ LISTING_PRICE_NODE_SELECTORS = (
     "[data-price]",
     "[aria-label*='price']",
 )
-LISTING_PROMINENT_TITLE_TAGS = frozenset({"strong", "b", "h1", "h2", "h3", "h4", "h5", "h6"})
+LISTING_PROMINENT_TITLE_TAGS = frozenset(
+    {"strong", "b", "h1", "h2", "h3", "h4", "h5", "h6"}
+)
 JSON_RECORD_LIST_KEYS = (
     "data",
     "edges",
@@ -202,7 +227,10 @@ PRICE_VALUE_FIELDS = frozenset(_PRICE_VALUE_FIELDS_RAW)
 SEMANTIC_SECTION_LABEL_SKIP_TOKENS = tuple(
     sorted(
         {
-            *(str(token).lower() for token in (_SEMANTIC_SECTION_NOISE.get("label_skip_tokens") or ())),
+            *(
+                str(token).lower()
+                for token in (_SEMANTIC_SECTION_NOISE.get("label_skip_tokens") or ())
+            ),
             "answer",
             "answers",
             "q&a",
@@ -222,15 +250,66 @@ STRUCTURED_OBJECT_FIELDS = frozenset(_STRUCTURED_OBJECT_FIELDS_RAW)
 STRUCTURED_OBJECT_LIST_FIELDS = frozenset(_STRUCTURED_OBJECT_LIST_FIELDS_RAW)
 URL_FIELDS = frozenset(_URL_FIELDS_RAW)
 
+NON_PRODUCT_IMAGE_HINTS = tuple(
+    dict.fromkeys(
+        [
+            *tuple(_STATIC_EXPORTS.get("NON_PRODUCT_IMAGE_HINTS", ())),
+            "arrow",
+            "loading",
+            "loding",
+            "spinner",
+        ]
+    )
+)
+PAGE_URL_CURRENCY_HINTS_RAW = {
+    **dict(_STATIC_EXPORTS.get("PAGE_URL_CURRENCY_HINTS_RAW", {})),
+    "firstcry.com/": "INR",
+}
+AVAILABILITY_URL_MAP = {
+    "https://schema.org/instock": "in_stock",
+    "http://schema.org/instock": "in_stock",
+    "schema.org/instock": "in_stock",
+    "instock": "in_stock",
+    "https://schema.org/outofstock": "out_of_stock",
+    "http://schema.org/outofstock": "out_of_stock",
+    "schema.org/outofstock": "out_of_stock",
+    "outofstock": "out_of_stock",
+    "https://schema.org/limitedavailability": "limited_stock",
+    "http://schema.org/limitedavailability": "limited_stock",
+    "schema.org/limitedavailability": "limited_stock",
+    "limitedavailability": "limited_stock",
+    "https://schema.org/preorder": "preorder",
+    "http://schema.org/preorder": "preorder",
+    "schema.org/preorder": "preorder",
+    "preorder": "preorder",
+}
+VARIANT_OPTION_TEXT_FIELDS = frozenset(
+    {
+        "color",
+        "condition",
+        "material",
+        "size",
+        "storage",
+        "style",
+    }
+)
+VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS = (
+    r"[$€£¥₹]\s*\d",
+    r"\b\d[\d.,]*\s*(?:usd|eur|gbp|inr|aud|cad|ars)\b",
+    r"\b(?:popular|sale|discount|off|sold out|unavailable|left in stock)\b",
+)
+
 DYNAMIC_FIELD_NAME_MAX_TOKENS = crawler_runtime_settings.dynamic_field_name_max_tokens
 MAX_CANDIDATES_PER_FIELD = crawler_runtime_settings.max_candidates_per_field
 
 _EXTRA_EXPORTS = [
+    "AVAILABILITY_URL_MAP",
     "BARE_HOST_URL_RE",
     "DETAIL_CENT_PRICE_HOST_SUFFIXES",
     "DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS",
     "DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS",
     "DETAIL_FULFILLMENT_LONG_TEXT_PATTERNS",
+    "DETAIL_IDENTITY_FIELDS",
     "DETAIL_LONG_TEXT_SOURCE_RANKS",
     "DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES",
     "DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX",
@@ -240,6 +319,10 @@ _EXTRA_EXPORTS = [
     "DETAIL_LOW_SIGNAL_TITLE_VALUES",
     "DETAIL_BREADCRUMB_ROOT_LABELS",
     "DETAIL_BREADCRUMB_SELECTORS",
+    "DETAIL_BREADCRUMB_CONTAINER_SELECTORS",
+    "DETAIL_BREADCRUMB_LABEL_PREFIXES",
+    "DETAIL_BREADCRUMB_SEPARATOR_LABELS",
+    "DETAIL_CATEGORY_SOURCE_RANKS",
     "DETAIL_GENDER_TERMS",
     "DETAIL_TITLE_DIMENSION_SIZE_PATTERN",
     "DYNAMIC_FIELD_NAME_MAX_TOKENS",
@@ -257,6 +340,7 @@ _EXTRA_EXPORTS = [
     "ORACLE_HCM_LANG_PATH_RE",
     "ORACLE_HCM_LOCATION_LIST_KEYS",
     "ORACLE_HCM_SITE_PATH_RE",
+    "OPTION_VALUE_NOISE_WORDS",
     "PERCENT_RE",
     "PRICE_VALUE_FIELDS",
     "RATING_RE",
@@ -268,6 +352,8 @@ _EXTRA_EXPORTS = [
     "STRUCTURED_OBJECT_LIST_FIELDS",
     "URL_FIELDS",
     "VARIANT_OPTION_VALUE_UI_NOISE_PHRASES",
+    "VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS",
+    "VARIANT_OPTION_TEXT_FIELDS",
     "VARIANT_SIZE_ALIAS_SUFFIXES",
 ]
 

@@ -13,6 +13,7 @@ from app.services.config.data_enrichment import (
     DATA_ENRICHMENT_SEO_STOPWORDS,
     DATA_ENRICHMENT_SHOPIFY_ATTRIBUTE_CRAWL_FIELDS,
     DATA_ENRICHMENT_SHOPIFY_NORMALIZATION_ATTRIBUTE_NAMES,
+    DATA_ENRICHMENT_TAXONOMY_CONTEXT_BLOCKS,
     DATA_ENRICHMENT_TAXONOMY_VERSION,
 )
 from app.services.field_value_core import clean_text, strip_html_tags
@@ -39,10 +40,21 @@ def normalize_category_path(value: object) -> str:
 
 def tokenize_text(value: object) -> list[str]:
     return [
-        token
+        normalized
         for token in _token_re.findall(clean_text(strip_html_tags(value)).casefold())
-        if token
+        if (normalized := normalize_taxonomy_token(token))
     ]
+
+
+def normalize_taxonomy_token(value: object) -> str:
+    token = str(value or "").strip().casefold()
+    if len(token) > 4 and token.endswith("ies"):
+        return f"{token[:-3]}y"
+    if len(token) > 4 and token.endswith("sses"):
+        return token[:-2]
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
 
 
 def repository_terms(repository: dict[str, object]) -> dict[str, object]:
@@ -121,7 +133,9 @@ def top_taxonomy_candidates(
     if exact_match:
         return [exact_match]
 
-    primary_tokens = pool_tokens(data, candidate_value_loader, "category", "product_type")
+    primary_tokens = pool_tokens(
+        data, candidate_value_loader, "category", "product_type"
+    )
     secondary_tokens = pool_tokens(data, candidate_value_loader, "title")
     tertiary_tokens = pool_tokens(data, candidate_value_loader, "brand", "materials")
     if not primary_tokens and not secondary_tokens and not tertiary_tokens:
@@ -129,13 +143,32 @@ def top_taxonomy_candidates(
 
     scored: list[dict[str, object]] = []
     for item in taxonomy_index.categories:
-        category_tokens = set(tokenize_text(item.get("category_path")))
+        category_tokens = set(
+            item.get("path_match_tokens") or tokenize_text(item.get("category_path"))
+        )
+        attribute_tokens = (
+            set(item.get("attribute_match_tokens") or ()) - category_tokens
+        )
         if not category_tokens:
+            continue
+        if taxonomy_context_conflicts(
+            primary_tokens | secondary_tokens | tertiary_tokens,
+            item.get("category_path"),
+        ):
             continue
         primary_score = weighted_overlap(primary_tokens, category_tokens)
         secondary_score = weighted_overlap(secondary_tokens, category_tokens)
         tertiary_score = weighted_overlap(tertiary_tokens, category_tokens)
-        score = primary_score + (secondary_score * 0.35) + (tertiary_score * 0.15)
+        attribute_score = weighted_overlap(
+            primary_tokens | secondary_tokens | tertiary_tokens,
+            attribute_tokens,
+        )
+        score = (
+            primary_score
+            + (secondary_score * 0.35)
+            + (tertiary_score * 0.15)
+            + (attribute_score * 0.3)
+        )
         if primary_score == 0 and score > 0:
             score *= 0.6
         if score < category_match_threshold:
@@ -155,6 +188,32 @@ def top_taxonomy_candidates(
         )
     )
     return scored[:limit]
+
+
+def taxonomy_context_conflicts(source_tokens: set[str], category_path: object) -> bool:
+    if not source_tokens:
+        return False
+    joined_source = " ".join(sorted(source_tokens))
+    path_text = clean_text(category_path).casefold()
+    if not path_text:
+        return False
+    for block in tuple(DATA_ENRICHMENT_TAXONOMY_CONTEXT_BLOCKS or ()):
+        if not isinstance(block, dict):
+            continue
+        context_terms = tuple(
+            str(item).casefold() for item in object_list(block.get("context_terms"))
+        )
+        path_terms = tuple(
+            str(item).casefold() for item in object_list(block.get("path_terms"))
+        )
+        if not context_terms or not path_terms:
+            continue
+        # Context terms may be multi-word phrases split across source tokens.
+        if not any(term in joined_source for term in context_terms):
+            continue
+        if any(term in path_text for term in path_terms):
+            return True
+    return False
 
 
 def taxonomy_reference_for_category_path(
@@ -197,9 +256,8 @@ def load_attribute_repository_data(path: Path) -> dict[str, object]:
         if clean_text(value)
     }
     color_families = {
-        canonical: [
-            token for token in aliases if token.casefold() in color_values
-        ] or list(aliases)
+        canonical: [token for token in aliases if token.casefold() in color_values]
+        or list(aliases)
         for canonical, aliases in DATA_ENRICHMENT_COLOR_FAMILY_ALIASES.items()
     }
     size_attribute = attribute_by_name(
@@ -221,7 +279,8 @@ def load_attribute_repository_data(path: Path) -> dict[str, object]:
             },
             "color_families": color_families,
             "gender_terms": {
-                key: list(values) for key, values in DATA_ENRICHMENT_GENDER_ALIASES.items()
+                key: list(values)
+                for key, values in DATA_ENRICHMENT_GENDER_ALIASES.items()
             },
             "material_terms": material_terms,
             "seo_stopwords": list(DATA_ENRICHMENT_SEO_STOPWORDS),
@@ -261,6 +320,8 @@ def load_taxonomy_index(path: Path) -> TaxonomyIndex:
                     if isinstance(item, dict) and str(item.get("handle") or "").strip()
                 ],
             }
+            row["path_match_tokens"] = set(tokenize_text(row["category_path"]))
+            row["attribute_match_tokens"] = category_attribute_match_tokens(row)
             rows.append(row)
             exact_lookup[normalized_path] = row
             if leaf:
@@ -275,7 +336,9 @@ def load_taxonomy_index(path: Path) -> TaxonomyIndex:
     )
 
 
-def attribute_by_name(attributes: list[dict[str, object]], name: str) -> dict[str, object]:
+def attribute_by_name(
+    attributes: list[dict[str, object]], name: str
+) -> dict[str, object]:
     normalized_name = str(name or "").strip().casefold()
     for item in attributes:
         if str(item.get("name") or "").strip().casefold() == normalized_name:
@@ -370,6 +433,14 @@ def pool_tokens(
         for value in candidate_value_loader(data, key):
             tokens.update(tokenize_text(value))
     return tokens
+
+
+def category_attribute_match_tokens(item: dict[str, object]) -> set[str]:
+    return set(
+        tokenize_text(
+            " ".join(str(handle) for handle in item.get("attribute_handles") or [])
+        )
+    )
 
 
 def weighted_overlap(source_tokens: set[str], category_tokens: set[str]) -> float:

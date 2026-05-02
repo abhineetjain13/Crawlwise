@@ -6,7 +6,11 @@ from app.services import crawl_fetch_runtime
 from app.services.acquisition.host_protection_memory import HostProtectionPolicy
 from app.services import detail_extractor
 from app.services.adapters.belk import BelkAdapter
-from app.services.extract.detail_identity import detail_url_is_utility
+from app.services.extract.detail_identity import (
+    detail_identity_codes_from_url,
+    detail_title_from_url,
+    detail_url_is_utility,
+)
 from app.services.extract.detail_price_extractor import backfill_detail_price_from_html
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
@@ -487,6 +491,13 @@ def test_detail_identity_allows_canonical_product_url_with_variant_sku_suffix() 
         )
         is None
     )
+
+
+def test_detail_identity_extracts_numeric_hm_product_codes_from_url() -> None:
+    url = "https://www2.hm.com/en_in/productpage.1317259001.html"
+
+    assert detail_identity_codes_from_url(url) == {"1317259001"}
+    assert detail_title_from_url(url) is None
 
 
 def test_extract_records_rejects_visual_artifact_cta_and_footer_clusters() -> None:
@@ -2103,6 +2114,7 @@ def test_extract_records_prefers_firstcry_style_dom_cards_over_menu_chrome() -> 
             "title": "Mark & Mia Half Raglan Sleeves Legged Swimsuit - Pink",
             "url": "https://www.firstcry.com/mark-and-mia/mark-and-mia-half-raglan-sleeves-legged-swimsuit-pink/21807023/product-detail",
             "price": "959.2",
+            "currency": "INR",
             "image_url": "https://cdn.fcglcdn.com/brainbees/images/products/300x364/21807023a.webp",
         }
     ]
@@ -2965,7 +2977,7 @@ def test_extract_ecommerce_detail_returns_normalized_record() -> None:
     assert record["category"] == "Widgets"
     assert record["image_url"] == "https://example.com/images/widget-1.jpg"
     assert any("widget-2.jpg" in value for value in record["additional_images"])
-    assert record["rating"] == "4.7"
+    assert record["rating"] == 4.7
     assert record["review_count"] == 128
     assert record["features"] == "Lightweight body Long battery life"
     assert record["materials"] == "Cotton blend"

@@ -67,6 +67,13 @@ def _row_data_payload(row: dict[str, object]) -> dict[str, object]:
     return {}
 
 
+def _resolved_source_url(
+    row: dict[str, object],
+    snapshot: dict[str, object],
+) -> str:
+    return str(row.get("source_url") or snapshot.get("url") or "").strip()
+
+
 async def create_product_intelligence_job(
     session: AsyncSession,
     *,
@@ -102,7 +109,7 @@ async def create_product_intelligence_job(
             raw=_row_data_payload(row),
             llm_enabled=llm_enabled,
         )
-        source_url = str(snapshot.get("url") or row.get("source_url") or "")
+        source_url = _resolved_source_url(row, snapshot)
         private_label = is_private_label(snapshot.get("brand"))
         session.add(
             ProductIntelligenceSourceProduct(
@@ -285,7 +292,7 @@ async def discover_product_intelligence_candidates(
             if is_private_label(snapshot.get("brand")) and options["private_label_mode"] == PRIVATE_LABEL_EXCLUDE:
                 continue
             processed_source_count += 1
-            source_url_value = str(snapshot.get("url") or row.get("source_url") or "")
+            source_url_value = _resolved_source_url(row, snapshot)
             discovered = await discover_candidates(
                 snapshot,
                 source_domain_value=normalize_domain(source_url_value),
@@ -408,7 +415,7 @@ async def _persist_discovery_job(
             raw=_row_data_payload(row),
             llm_enabled=llm_enabled,
         )
-        source_url = str(snapshot.get("url") or row.get("source_url") or "")
+        source_url = _resolved_source_url(row, snapshot)
         source = ProductIntelligenceSourceProduct(
             job_id=job.id,
             source_run_id=_as_int(row.get("source_run_id")) or source_run_id,

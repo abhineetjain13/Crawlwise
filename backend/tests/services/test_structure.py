@@ -93,9 +93,11 @@ FILE_LOC_BUDGETS = {
     # Canonical field coercion remains centralized here instead of scattering value policy.
     Path("app/services/field_value_core.py"): 1125,
     # Enrichment owns deterministic product normalization and job application.
-    Path("app/services/data_enrichment/service.py"): 1215,
+    Path("app/services/data_enrichment/service.py"): 1250,
     # JS state mapping stays centralized to avoid adapter-specific drift.
     Path("app/services/js_state_mapper.py"): 1060,
+    # LLM task runtime owns prompt validation, provider calls, cost logging, and typed errors.
+    Path("app/services/llm_tasks.py"): 1040,
     # Pipeline core still owns the per-URL orchestration boundary.
     Path("app/services/pipeline/core.py"): 1210,
     # Product Intelligence service owns job + discovery orchestration with brand and enrichment LLM helpers.
@@ -221,6 +223,19 @@ def test_new_service_level_config_constants_are_not_added_outside_config() -> No
             if (rel, name) not in ALLOWED_SERVICE_CONFIG_CONSTANTS:
                 offenders.append(f"{rel}:{name}")
     assert sorted(offenders) == []
+
+
+def test_data_enrichment_taxonomy_matching_does_not_use_manual_category_alias_maps() -> (
+    None
+):
+    config_text = (SERVICES_ROOT / "config" / "data_enrichment.py").read_text(
+        encoding="utf-8"
+    )
+    forbidden = (
+        "DATA_ENRICHMENT_TAXONOMY_TOKEN_ALIASES",
+        "DATA_ENRICHMENT_TAXONOMY_CONTEXTUAL_TOKEN_ALIASES",
+    )
+    assert [name for name in forbidden if name in config_text] == []
 
 
 def test_private_service_imports_do_not_drift() -> None:

@@ -23,5 +23,6 @@
   "cursorpyright.analysis.extraPaths": [
     "./backend"
   ],
-  "kiroAgent.configureMCP": "Disabled"
+  "kiroAgent.configureMCP": "Disabled",
+  "coderabbit.agentType": "Clipboard"
 }

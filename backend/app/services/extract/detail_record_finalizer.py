@@ -292,6 +292,12 @@ def _sanitize_detail_variant_payload(record: dict[str, Any], *, identity_url: st
         )
     ):
         selected_variant = dict(cleaned_variants[0])
+    if isinstance(selected_variant, dict) and _selected_variant_is_url_code_expansion(
+        selected_variant,
+        identity_url=identity_url,
+    ):
+        _drop_selected_variant_axis_scalars(record, selected_variant)
+        selected_variant = None
     if isinstance(selected_variant, dict):
         record["selected_variant"] = selected_variant
     else:
@@ -358,6 +364,36 @@ def _sanitize_variant_row(variant: dict[str, Any], *, identity_url: str) -> bool
             "color",
         )
     )
+
+
+def _selected_variant_is_url_code_expansion(
+    selected_variant: dict[str, Any],
+    *,
+    identity_url: str,
+) -> bool:
+    requested_codes = _detail_identity_codes_from_url(identity_url)
+    variant_codes = _detail_identity_codes_from_record_fields(selected_variant)
+    if not requested_codes or not variant_codes:
+        return False
+    if detail_identity_codes_match(requested_codes, variant_codes):
+        return False
+    return any(
+        variant_code.startswith(requested_code) and len(variant_code) > len(requested_code)
+        for requested_code in requested_codes
+        for variant_code in variant_codes
+    )
+
+
+def _drop_selected_variant_axis_scalars(
+    record: dict[str, Any],
+    selected_variant: dict[str, Any],
+) -> None:
+    option_values = selected_variant.get("option_values")
+    option_values = option_values if isinstance(option_values, dict) else {}
+    for field_name in ("size", "color"):
+        selected_value = clean_text(selected_variant.get(field_name) or option_values.get(field_name))
+        if selected_value and clean_text(record.get(field_name)).casefold() == selected_value.casefold():
+            record.pop(field_name, None)
 
 
 def repair_ecommerce_detail_record_quality(
@@ -657,9 +693,19 @@ def _rebuild_variant_axes_from_rows(record: dict[str, Any]) -> None:
                 variant_axes[str(axis_name)].append(cleaned_value)
     if variant_axes:
         record["variant_axes"] = variant_axes
-        for axis_name, axis_values in variant_axes.items():
-            if axis_name in {"size", "color"} and len(axis_values) == 1:
-                record[axis_name] = axis_values[0]
+        if isinstance(record.get("selected_variant"), dict):
+            for axis_name, axis_values in variant_axes.items():
+                if axis_name in {"size", "color"} and len(axis_values) == 1:
+                    record[axis_name] = axis_values[0]
+        else:
+            for axis_name, axis_values in variant_axes.items():
+                if (
+                    axis_name in {"size", "color"}
+                    and len(axis_values) == 1
+                    and clean_text(record.get(axis_name)).casefold()
+                    == clean_text(axis_values[0]).casefold()
+                ):
+                    record.pop(axis_name, None)
     else:
         record.pop("variant_axes", None)
 

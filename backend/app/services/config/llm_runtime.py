@@ -6,11 +6,22 @@ This module exports ``LLMRuntimeSettings``, ``SUPPORTED_LLM_PROVIDERS``, and the
 
 from __future__ import annotations
 
+import json
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 from app.services.config.runtime_settings import _settings_config
 
 SUPPORTED_LLM_PROVIDERS = frozenset({"groq", "anthropic", "nvidia"})
+PARSE_PROVIDER_JSON_ERROR = (
+    "Error: Provider response could not be parsed as structured JSON."
+)
+DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD = {
+    "groq/llama-3.3-70b-versatile": [0.59, 0.79],
+}
 
 
 class LLMRuntimeSettings(BaseSettings):
@@ -55,8 +66,48 @@ class LLMRuntimeSettings(BaseSettings):
     anthropic_temperature: float = 0.1
     nvidia_max_tokens: int = 1200
     nvidia_temperature: float = 0.1
+    token_pricing_json: str = Field(
+        default=json.dumps(DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD),
+        description=(
+            "JSON map of 'provider/model' to [input_per_million, output_per_million] USD."
+        ),
+    )
+
+    def get_token_pricing(self) -> dict[tuple[str, str], tuple[Decimal, Decimal]]:
+        """Return (provider, model) -> (input_per_million, output_per_million)."""
+        try:
+            raw = json.loads(self.token_pricing_json or "{}")
+        except json.JSONDecodeError:
+            raw = DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD
+        if not isinstance(raw, dict):
+            raw = DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD
+
+        pricing: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
+        for key, value in raw.items():
+            provider, separator, model = str(key or "").partition("/")
+            if not separator or provider.strip().lower() not in SUPPORTED_LLM_PROVIDERS:
+                continue
+            rates: Any = value
+            if not isinstance(rates, (list, tuple)) or len(rates) != 2:
+                continue
+            try:
+                pricing[(provider.strip().lower(), model.strip().lower())] = (
+                    Decimal(str(rates[0])),
+                    Decimal(str(rates[1])),
+                )
+            except (InvalidOperation, ValueError):
+                continue
+        return pricing
 
 
 llm_runtime_settings = LLMRuntimeSettings()
+LLM_TOKEN_PRICING_PER_MILLION_USD = llm_runtime_settings.get_token_pricing()
 
-__all__ = ["LLMRuntimeSettings", "SUPPORTED_LLM_PROVIDERS", "llm_runtime_settings"]
+__all__ = [
+    "DEFAULT_LLM_TOKEN_PRICING_PER_MILLION_USD",
+    "LLMRuntimeSettings",
+    "LLM_TOKEN_PRICING_PER_MILLION_USD",
+    "PARSE_PROVIDER_JSON_ERROR",
+    "SUPPORTED_LLM_PROVIDERS",
+    "llm_runtime_settings",
+]

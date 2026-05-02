@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-from app.services.extract.detail_record_finalizer import repair_ecommerce_detail_record_quality
+from bs4 import BeautifulSoup
+
+from app.services.extract.detail_record_finalizer import (
+    repair_ecommerce_detail_record_quality,
+)
 from app.services.extract.variant_record_normalization import normalize_variant_record
+from app.services.field_value_core import coerce_field_value
+from app.services.field_value_dom import extract_node_value
 from app.services.normalizers import normalize_decimal_price, normalize_value
 
 
@@ -20,7 +26,9 @@ def test_normalize_additional_images_preserves_url_lists_with_commas() -> None:
     ]
 
 
-def test_normalize_decimal_price_rejects_ambiguous_integer_text_without_price_context() -> None:
+def test_normalize_decimal_price_rejects_ambiguous_integer_text_without_price_context() -> (
+    None
+):
     assert normalize_decimal_price("126") is None
 
 
@@ -30,11 +38,15 @@ def test_normalize_decimal_price_accepts_currency_context_for_integer_text() -> 
     assert normalize_decimal_price("INR 499") == "499"
 
 
-def test_normalize_decimal_price_accepts_price_keyword_context_for_integer_text() -> None:
+def test_normalize_decimal_price_accepts_price_keyword_context_for_integer_text() -> (
+    None
+):
     assert normalize_decimal_price("price 126") == "126"
 
 
-def test_normalize_decimal_price_preserves_decimal_strings_without_currency_symbol() -> None:
+def test_normalize_decimal_price_preserves_decimal_strings_without_currency_symbol() -> (
+    None
+):
     assert normalize_decimal_price("59.99") == "59.99"
 
 
@@ -52,7 +64,37 @@ def test_normalize_value_price_normalizes_clean_decimal_strings() -> None:
 
 def test_normalize_value_unwraps_singleton_barcode_list_and_rounds_rating() -> None:
     assert normalize_value("barcode", "['0840424803104']") == "0840424803104"
-    assert normalize_value("rating", "2.399113082039911") == "2.4"
+    assert normalize_value("rating", "2.399113082039911") == 2.4
+
+
+def test_normalize_availability_schema_url() -> None:
+    assert (
+        normalize_value("availability", "https://schema.org/LimitedAvailability")
+        == "limited_stock"
+    )
+
+
+def test_field_coercion_repairs_source_quality_before_enrichment() -> None:
+    assert coerce_field_value("brand", {"0": "Apple"}, "") == "Apple"
+    assert (
+        coerce_field_value("availability", "https://schema.org/LimitedAvailability", "")
+        == "limited_stock"
+    )
+    assert coerce_field_value("rating", {"ratingValue": "4.5"}, "") == 4.5
+    assert coerce_field_value("product_type", {"variationGroup": True}, "") is None
+
+
+def test_variant_option_dom_text_drops_child_price_badges() -> None:
+    soup = BeautifulSoup(
+        """
+        <button role="radio" class="color-option">
+          <span>Black</span><span>$382.00</span>
+        </button>
+        """,
+        "html.parser",
+    )
+
+    assert extract_node_value(soup.button, "color", "https://example.com") == "Black"
 
 
 def test_normalize_variant_record_preserves_referenced_single_value_axes() -> None:
@@ -73,7 +115,9 @@ def test_normalize_variant_record_preserves_referenced_single_value_axes() -> No
     assert all("scent" in variant["option_values"] for variant in record["variants"])
 
 
-def test_normalize_variant_record_prunes_global_axes_and_collapses_permutations() -> None:
+def test_normalize_variant_record_prunes_global_axes_and_collapses_permutations() -> (
+    None
+):
     variants = []
     for size in ("8 US", "9 US"):
         for site in ("Kith.com", "Kith.eu"):
@@ -102,9 +146,10 @@ def test_normalize_variant_record_prunes_global_axes_and_collapses_permutations(
 
     assert record["variant_axes"] == {"size": ["8 US", "9 US"]}
     assert record["variant_count"] == 2
-    assert [
-        variant["option_values"] for variant in record["variants"]
-    ] == [{"size": "8 US"}, {"size": "9 US"}]
+    assert [variant["option_values"] for variant in record["variants"]] == [
+        {"size": "8 US"},
+        {"size": "9 US"},
+    ]
 
 
 def test_normalize_variant_record_strips_currently_unavailable_suffixes() -> None:
@@ -148,7 +193,9 @@ def test_normalize_variant_record_preserves_identity_less_selected_variant() -> 
     assert record["selected_variant"]["option_values"] == {"size": "Large"}
 
 
-def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliases() -> None:
+def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliases() -> (
+    None
+):
     record = {
         "variant_axes": {"size": ["3", "4", "8", "8 US"]},
         "variants": [
@@ -223,7 +270,9 @@ def test_normalize_variant_record_merges_semantic_duplicate_rows_and_size_aliase
     assert record["selected_variant"]["availability"] == "out_of_stock"
 
 
-def test_detail_record_quality_repairs_invalid_original_prices_and_selected_variant_availability() -> None:
+def test_detail_record_quality_repairs_invalid_original_prices_and_selected_variant_availability() -> (
+    None
+):
     record = {
         "sku": "M20324",
         "url": "https://www.adidas.com/us/stan-smith-shoes/M20324.html",

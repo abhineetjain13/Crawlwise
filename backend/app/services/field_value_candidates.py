@@ -5,6 +5,7 @@ from typing import Any
 
 from app.services.config.extraction_rules import (
     DETAIL_BREADCRUMB_ROOT_LABELS,
+    DETAIL_BREADCRUMB_SEPARATOR_LABELS,
     DETAIL_GENDER_TERMS,
     DETAIL_IRRELEVANT_JSON_LD_TYPES,
     INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS,
@@ -86,24 +87,43 @@ def _breadcrumb_item_name(item: object) -> str | None:
     return text_or_none(item.get("name") or item.get("title"))
 
 
-def _breadcrumb_names(payload: dict[str, object]) -> list[str]:
+def _breadcrumb_names(payload: dict[str, object], page_url: str = "") -> list[str]:
     raw_items = payload.get("itemListElement")
     if not isinstance(raw_items, list):
         return []
     names: list[str] = []
+    strip_chars = " \t\n\r" + "".join(DETAIL_BREADCRUMB_SEPARATOR_LABELS)
     for item in raw_items:
         name = _breadcrumb_item_name(item)
         if name:
-            names.append(name)
-    if names and names[0].strip().lower() in DETAIL_BREADCRUMB_ROOT_LABELS:
+            clean_name = name.strip(strip_chars)
+            if clean_name and clean_name not in DETAIL_BREADCRUMB_SEPARATOR_LABELS:
+                names.append(clean_name)
+    if not names:
+        return []
+    
+    first_lower = names[0].lower()
+    is_root = first_lower in DETAIL_BREADCRUMB_ROOT_LABELS
+    if not is_root and page_url:
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(page_url).netloc.lower()
+            if host.startswith("www."):
+                host = host[4:]
+            if first_lower == host or first_lower == host.split(".")[0]:
+                is_root = True
+        except Exception:
+            pass
+
+    if is_root:
         names = names[1:]
     if len(names) >= 2:
         names = names[:-1]
-    return [name for name in names if name.strip()]
+    return [name for name in names if name]
 
 
-def _breadcrumb_category_path(payload: dict[str, object]) -> str | None:
-    names = _breadcrumb_names(payload)
+def _breadcrumb_category_path(payload: dict[str, object], page_url: str = "") -> str | None:
+    names = _breadcrumb_names(payload, page_url)
     return " > ".join(names) if names else None
 
 
@@ -418,7 +438,7 @@ def collect_structured_candidates(
                         coerce_field_value(canonical, item.get("value"), page_url),
                     )
         if breadcrumb_list:
-            category_path = _breadcrumb_category_path(payload)
+            category_path = _breadcrumb_category_path(payload, page_url)
             if category_path:
                 add_candidate(candidates, "category", category_path)
                 gender = _gender_from_text(category_path)
@@ -478,6 +498,8 @@ def collect_structured_candidates(
                 list_item_wrapper
                 and normalized_key in {"item", "name", "title", "position"}
             ):
+                continue
+            if "productgroup" in normalized_type and normalized_key in {"has_variant", "hasvariant"}:
                 continue
             canonical = alias_lookup.get(normalized_key)
             if canonical and not (

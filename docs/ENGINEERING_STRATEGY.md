@@ -157,6 +157,13 @@ Importing underscore-prefixed names from another service module because "the hel
 
 **Fix:** Either keep the logic inside the owner and call a public function, or promote the helper into the canonical owner file for that concern. Private imports that already exist must be treated as explicit debt with a shrinking allowlist in `backend/tests/services/test_structure.py`. No new private cross-module imports.
 
+### AP-18: Product taxonomy bloat
+Adding local product-universe dictionaries for enrichment categories, materials, colors, sizes, or category synonyms instead of using Shopify's taxonomy and attribute files.
+
+**Violation looks like:** `DATA_ENRICHMENT_TAXONOMY_TOKEN_ALIASES`, `matching sets -> outfit sets`, a growing list of material names in config, or a color catalog copied into service code.
+
+**Fix:** Use `shopify_categories.json` for category paths and category attribute handles. Use `shopify_attributes.json` for Shopify-defined attribute values. If matching fails, improve generic matching mechanics in `data_enrichment/shopify_catalog.py` using taxonomy paths, category attribute handles, and normalized tokens. Local config may strip UI noise or define source-field lookup, but it must not become a shadow product taxonomy.
+
 ---
 
 ## Required Hygiene Gates

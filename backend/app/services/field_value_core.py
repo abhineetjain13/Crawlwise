@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse
 
 from app.services.extraction_html_helpers import html_to_text
 from app.services.config.extraction_rules import (
+    AVAILABILITY_URL_MAP,
     BARE_HOST_URL_RE,
     CSS_NOISE_PATTERN,
     CURRENCY_ALIAS_PATTERNS,
@@ -27,6 +28,7 @@ from app.services.config.extraction_rules import (
     LISTING_WEAK_TITLES,
     LONG_TEXT_FIELDS,
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
+    OPTION_VALUE_NOISE_WORDS,
     PAGE_URL_CURRENCY_HINTS_RAW,
     PRICE_VALUE_FIELDS,
     RATING_RE,
@@ -100,6 +102,11 @@ _OPTION_VALUE_SUFFIX_NOISE_RE = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS or ())
     if str(pattern).strip()
+)
+_OPTION_VALUE_NOISE_WORD_PATTERN = "|".join(
+    re.escape(str(word))
+    for word in tuple(OPTION_VALUE_NOISE_WORDS or ())
+    if str(word).strip()
 )
 WHITESPACE_RE = re.compile(r"\s+")
 ALL_CANONICAL_FIELDS = sorted(
@@ -547,6 +554,26 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
     if not text:
         return None
     cleaned = text
+    if field_name in {"color", "condition", "material", "size", "storage", "style"}:
+        for pattern in _OPTION_VALUE_SUFFIX_NOISE_RE:
+            cleaned = clean_text(pattern.sub("", cleaned))
+        cleaned = re.sub(
+            rf"\s+(?:{_CURRENCY_SYMBOL_PATTERN})\s*\d[\d.,]*.*$", "", cleaned
+        )
+        cleaned = re.sub(
+            rf"\s+\d[\d.,]*\s*(?:{_CURRENCY_CODE_PATTERN})\b.*$",
+            "",
+            cleaned,
+            flags=re.I,
+        )
+        if _OPTION_VALUE_NOISE_WORD_PATTERN:
+            cleaned = re.sub(
+                rf"\s+\b(?:{_OPTION_VALUE_NOISE_WORD_PATTERN})\b.*$",
+                "",
+                cleaned,
+                flags=re.I,
+            )
+        cleaned = clean_text(cleaned)
     if field_name == "color":
         match = re.fullmatch(r"select\s+(.+?)\s+color", cleaned, flags=re.I)
         if match is not None:
@@ -563,8 +590,6 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = re.sub(r"^size\s*:\s*", "", cleaned, flags=re.I)
         cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
         cleaned = clean_text(cleaned)
-        for pattern in _OPTION_VALUE_SUFFIX_NOISE_RE:
-            cleaned = clean_text(pattern.sub("", cleaned))
     return cleaned or None
 
 
@@ -776,17 +801,38 @@ def coerce_availability_dict(value: object) -> str | None:
     for key in explicit_keys:
         candidate = value.get(key)
         if candidate not in (None, "", [], {}):
-            if isinstance(candidate, bool):
-                return "in_stock" if candidate else "out_of_stock"
-            return coerce_text(candidate)
+            return coerce_availability_value(candidate)
     if len(value) == 1:
         for key in ("name", "value"):
             candidate = value.get(key)
             if candidate not in (None, "", [], {}):
-                if isinstance(candidate, bool):
-                    return "in_stock" if candidate else "out_of_stock"
-                return coerce_text(candidate)
+                return coerce_availability_value(candidate)
     return None
+
+
+def coerce_availability_value(value: object) -> str | None:
+    if isinstance(value, bool):
+        return "in_stock" if value else "out_of_stock"
+    text = coerce_text(value)
+    if not text:
+        return None
+    lowered = text.strip().lower().rstrip("/")
+    mapped = dict(AVAILABILITY_URL_MAP or {}).get(lowered)
+    if mapped:
+        return str(mapped)
+    return text
+
+
+def coerce_rating_value(value: object) -> float | None:
+    text = coerce_text(value)
+    if not text:
+        return None
+    match = RATING_RE.search(text)
+    candidate = match.group(0) if match else text
+    try:
+        return float(candidate)
+    except (TypeError, ValueError):
+        return None
 
 
 def coerce_field_value(field_name: str, value: object, page_url: str) -> object | None:
@@ -817,9 +863,12 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         value,
         dict,
     ):
-        return _coerce_brand_text(
-            value.get("name") or value.get("title") or value.get("value")
-        )
+        explicit_value = value.get("name") or value.get("title") or value.get("value")
+        if explicit_value in (None, "", [], {}) and set(value.keys()) <= {
+            str(index) for index in range(len(value))
+        }:
+            explicit_value = list(value.values())[0] if value else None
+        return _coerce_brand_text(explicit_value)
     if field_name in {"brand", "company", "dealer_name", "vendor"}:
         return _coerce_brand_text(value)
     if field_name == "category" and isinstance(value, dict):
@@ -829,6 +878,16 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             or value.get("slug")
             or value.get("value")
         )
+    if field_name == "product_type":
+        if isinstance(value, dict):
+            return coerce_structured_scalar(
+                value,
+                keys=("name", "title", "label", "value", "text", "type"),
+            )
+        text = coerce_text(value)
+        if text and text.lstrip().startswith(("{", "[")):
+            return None
+        return text or None
     if field_name == "gender" and isinstance(value, dict):
         return coerce_text(
             value.get("name")
@@ -836,7 +895,7 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             or value.get("label")
             or value.get("value")
         )
-    if field_name in {"color", "size"}:
+    if field_name in {"color", "condition", "material", "size", "storage", "style"}:
         return _sanitize_option_scalar(
             field_name,
             coerce_structured_scalar(
@@ -887,7 +946,7 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
     if field_name == "rating" and isinstance(value, dict):
         for key in ("ratingValue", "value", "rating", "score"):
             if value.get(key) not in (None, "", [], {}):
-                return coerce_text(value.get(key))
+                return coerce_rating_value(value.get(key))
         return None
     if field_name == "review_count" and isinstance(value, dict):
         for key in (
@@ -904,6 +963,8 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         return "in_stock" if value else "out_of_stock"
     if field_name == "availability" and isinstance(value, dict):
         return coerce_availability_dict(value)
+    if field_name == "availability":
+        return coerce_availability_value(value)
     if field_name in URL_FIELDS:
         urls = extract_urls(value, page_url)
         return urls[0] if urls else None
@@ -932,11 +993,16 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         return normalized_rows or None
     if field_name in LONG_TEXT_FIELDS:
         return coerce_text(value)
+    if field_name == "rating":
+        return coerce_rating_value(value)
     return coerce_text(value)
 
 
 def _coerce_brand_text(value: object) -> str | None:
     text = coerce_text(value)
+    if not text:
+        return None
+    text = re.sub(r"^\s*\d+\s+(?=[A-Za-z])", "", text).strip()
     if not text:
         return None
     parsed = urlparse(text)

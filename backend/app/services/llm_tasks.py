@@ -10,13 +10,20 @@ from typing import Annotated, Any, Literal, NotRequired, TypedDict
 from app.core.metrics import observe_llm_task_duration, record_llm_task_outcome
 from app.models.crawl import CrawlRun
 from app.models.llm import LLMCostLog
-from app.services.config.llm_runtime import llm_runtime_settings
+from app.services.config.llm_runtime import (
+    PARSE_PROVIDER_JSON_ERROR,
+    llm_runtime_settings,
+)
 from app.services.llm_cache import (
     build_llm_cache_key,
     load_cached_llm_result,
     store_cached_llm_result,
 )
-from app.services.llm_circuit_breaker import ERROR_PREFIX, LLMErrorCategory, classify_error
+from app.services.llm_circuit_breaker import (
+    ERROR_PREFIX,
+    LLMErrorCategory,
+    classify_error,
+)
 from app.services.llm_config_service import (
     get_prompt_task,
     load_prompt_file,
@@ -29,10 +36,19 @@ from app.services.llm_types import LLMTaskResult
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 from bs4 import BeautifulSoup, Tag
 from app.services.record_export_service import render_markdown_block
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
 
 def _require_present_value(value: Any) -> Any:
     if value in (None, "", [], {}):
@@ -120,7 +136,9 @@ class _ProductIntelligenceEnrichmentPayload(BaseModel):
 
     @field_validator("reason_updates")
     @classmethod
-    def _validate_reason_updates(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _validate_reason_updates(
+        cls, value: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         allowed = {
             "reason_name",
             "reason_code",
@@ -171,8 +189,12 @@ _PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
     "field_cleanup_review": TypeAdapter(_FieldCleanupReviewPayload),
     "page_classification": TypeAdapter(_PageClassificationPayload),
     "schema_inference": TypeAdapter(_SchemaInferencePayload),
-    "product_intelligence_enrichment": TypeAdapter(_ProductIntelligenceEnrichmentPayload),
-    "product_intelligence_brand_inference": TypeAdapter(_ProductIntelligenceBrandInferencePayload),
+    "product_intelligence_enrichment": TypeAdapter(
+        _ProductIntelligenceEnrichmentPayload
+    ),
+    "product_intelligence_brand_inference": TypeAdapter(
+        _ProductIntelligenceBrandInferencePayload
+    ),
     "data_enrichment_semantic": TypeAdapter(_DataEnrichmentSemanticPayload),
 }
 
@@ -203,6 +225,39 @@ async def run_prompt_task(
             seconds=time.monotonic() - started_at,
         )
         return result
+
+    async def _record_cost_log(
+        *,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        error_message: str = "",
+        error_category: LLMErrorCategory = LLMErrorCategory.NONE,
+    ) -> None:
+        persisted_run_id = run_id
+        if run_id is not None:
+            existing_run = await session.get(CrawlRun, run_id)
+            if existing_run is None:
+                persisted_run_id = None
+        session.add(
+            LLMCostLog(
+                run_id=persisted_run_id,
+                provider=provider,
+                model=model,
+                task_type=task_type,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=estimate_cost_usd(
+                    provider, model, input_tokens, output_tokens
+                ),
+                domain=domain,
+                outcome="error" if error_message else "success",
+                error_category=str(error_category or LLMErrorCategory.NONE),
+                error_message=str(error_message or ""),
+            )
+        )
+        await session.flush()
 
     config = await resolve_run_config(session, run_id=run_id, task_type=task_type)
     task = get_prompt_task(task_type)
@@ -267,6 +322,15 @@ async def run_prompt_task(
         user_prompt=safe_user_prompt,
     )
     if raw.startswith(ERROR_PREFIX):
+        error_category = classify_error(raw)
+        await _record_cost_log(
+            provider=provider,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            error_message=raw,
+            error_category=error_category,
+        )
         return _finish(
             LLMTaskResult(
                 payload=None,
@@ -275,12 +339,21 @@ async def run_prompt_task(
                 provider=provider,
                 model=model,
                 error_message=raw,
-                error_category=classify_error(raw),
+                error_category=error_category,
             )
         )
 
     payload: object = _parse_payload(raw, response_type=response_type)
     if payload is None:
+        error_message = PARSE_PROVIDER_JSON_ERROR
+        await _record_cost_log(
+            provider=provider,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            error_message=error_message,
+            error_category=LLMErrorCategory.PARSE_FAILURE,
+        )
         return _finish(
             LLMTaskResult(
                 payload=None,
@@ -288,9 +361,7 @@ async def run_prompt_task(
                 output_tokens=output_tokens,
                 provider=provider,
                 model=model,
-                error_message=(
-                    "Error: Provider response could not be parsed as structured JSON."
-                ),
+                error_message=error_message,
                 error_category=LLMErrorCategory.PARSE_FAILURE,
             )
         )
@@ -301,6 +372,15 @@ async def run_prompt_task(
             payload = inner
     payload, validation_error = _validate_task_payload(task_type, payload)
     if validation_error is not None:
+        error_message = f"Error: {validation_error}"
+        await _record_cost_log(
+            provider=provider,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            error_message=error_message,
+            error_category=LLMErrorCategory.VALIDATION_FAILURE,
+        )
         return _finish(
             LLMTaskResult(
                 payload=None,
@@ -308,29 +388,17 @@ async def run_prompt_task(
                 output_tokens=output_tokens,
                 provider=provider,
                 model=model,
-                error_message=f"Error: {validation_error}",
+                error_message=error_message,
                 error_category=LLMErrorCategory.VALIDATION_FAILURE,
             )
         )
 
-    persisted_run_id = run_id
-    if run_id is not None:
-        existing_run = await session.get(CrawlRun, run_id)
-        if existing_run is None:
-            persisted_run_id = None
-    session.add(
-        LLMCostLog(
-            run_id=persisted_run_id,
-            provider=provider,
-            model=model,
-            task_type=task_type,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=estimate_cost_usd(provider, model, input_tokens, output_tokens),
-            domain=domain,
-        )
+    await _record_cost_log(
+        provider=provider,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
-    await session.flush()
     normalized_payload = payload if isinstance(payload, (dict, list)) else None
     result = LLMTaskResult(
         payload=normalized_payload,
@@ -379,7 +447,9 @@ async def discover_xpath_candidates(
         },
     )
     payload = result.payload
-    return (payload if isinstance(payload, list) else []), (result.error_message or None)
+    return (payload if isinstance(payload, list) else []), (
+        result.error_message or None
+    )
 
 
 async def extract_records_directly(
@@ -420,7 +490,9 @@ async def extract_records_directly(
         },
     )
     payload = result.payload
-    return (payload if isinstance(payload, list) else []), (result.error_message or None)
+    return (payload if isinstance(payload, list) else []), (
+        result.error_message or None
+    )
 
 
 async def extract_missing_fields(
@@ -453,7 +525,9 @@ async def extract_missing_fields(
         },
     )
     payload = result.payload
-    return (payload if isinstance(payload, dict) else {}), (result.error_message or None)
+    return (payload if isinstance(payload, dict) else {}), (
+        result.error_message or None
+    )
 
 
 async def review_field_candidates(
@@ -495,16 +569,15 @@ async def review_field_candidates(
                 llm_runtime_settings.html_snippet_max_chars,
                 anchors=[
                     *target_fields,
-                    *[
-                        str(existing_values.get(field) or "")
-                        for field in target_fields
-                    ],
+                    *[str(existing_values.get(field) or "") for field in target_fields],
                 ],
             ),
         },
     )
     payload = result.payload
-    return (payload if isinstance(payload, dict) else {}), (result.error_message or None)
+    return (payload if isinstance(payload, dict) else {}), (
+        result.error_message or None
+    )
 
 
 def _parse_payload(raw_text: str, *, response_type: str) -> dict | list | None:
@@ -524,7 +597,9 @@ def _validate_task_payload(
         validated = adapter.validate_python(payload)
     except ValidationError as exc:
         return payload, _format_validation_error(task_type, exc)
-    return validated.model_dump() if isinstance(validated, BaseModel) else validated, None
+    return validated.model_dump() if isinstance(
+        validated, BaseModel
+    ) else validated, None
 
 
 def _format_validation_error(task_type: str, exc: ValidationError) -> str:
@@ -613,9 +688,12 @@ def _load_prune_strip_attr_prefixes() -> tuple[str, ...]:
 def _load_prune_preserved_data_attr_prefixes() -> tuple[str, ...]:
     return tuple(
         prefix.strip().lower()
-        for prefix in llm_runtime_settings.html_prune_preserved_data_attr_prefixes.split(",")
+        for prefix in llm_runtime_settings.html_prune_preserved_data_attr_prefixes.split(
+            ","
+        )
         if prefix.strip()
     )
+
 
 def _prune_html_for_llm(html_text: str) -> str:
     stripped_tags = _load_prune_stripped_tags()
@@ -624,11 +702,15 @@ def _prune_html_for_llm(html_text: str) -> str:
     preserved_data_prefixes = _load_prune_preserved_data_attr_prefixes()
     preserved_script_ids = _load_prune_preserved_script_ids()
     strip_attr_prefixes = _load_prune_strip_attr_prefixes()
+
     def _preserve_tag(tag: Tag) -> bool:
         if tag.name != "script":
             return False
         script_type = str(tag.get("type") or "").strip().lower()
-        return script_type in preserved_script_types or str(tag.get("id") or "") in preserved_script_ids
+        return (
+            script_type in preserved_script_types
+            or str(tag.get("id") or "") in preserved_script_ids
+        )
 
     def _keep_attr(key: str, _value: object) -> bool:
         return key in preserved_attrs or not _should_strip_llm_attr(
@@ -968,9 +1050,7 @@ def _compact_json_value(
     if isinstance(value, list):
         return [
             _compact_json_value(item, depth=depth + 1, max_depth=max_depth)
-            for item in value[
-                : llm_runtime_settings.prompt_compact_json_max_list_items
-            ]
+            for item in value[: llm_runtime_settings.prompt_compact_json_max_list_items]
         ]
     return _compact_leaf_value(value)
 
@@ -979,9 +1059,7 @@ def _compact_leaf_value(value: Any) -> Any:
     if isinstance(value, str):
         stripped = value.strip()
         if len(stripped) > llm_runtime_settings.prompt_compact_leaf_string_max_chars:
-            return stripped[
-                : llm_runtime_settings.prompt_compact_leaf_string_max_chars
-            ]
+            return stripped[: llm_runtime_settings.prompt_compact_leaf_string_max_chars]
         return stripped
     return value
 

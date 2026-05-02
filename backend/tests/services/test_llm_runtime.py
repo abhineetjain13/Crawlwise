@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from app.services import llm_tasks
 from app.models.llm import LLMCostLog
 from app.services import llm_runtime
+from app.services.llm_provider_client import estimate_cost_usd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+MODEL_GROQ = "llama-3.3-70b-versatile"
+
+
+def test_estimate_cost_usd_uses_configured_groq_rates() -> None:
+    assert estimate_cost_usd("groq", MODEL_GROQ, 1000, 1000) == Decimal("0.0014")
+    assert estimate_cost_usd("groq", MODEL_GROQ, 0, 0) == Decimal("0.0000")
+    assert estimate_cost_usd("groq", MODEL_GROQ, None, None) == Decimal("0.0000")
 
 
 @pytest.mark.asyncio
@@ -41,9 +52,13 @@ async def test_run_prompt_task_returns_validated_payload(
         stored_keys.append(cache_key)
         assert result.payload == {"materials": "Cotton blend"}
 
-    monkeypatch.setattr("app.services.llm_tasks.resolve_run_config", fake_resolve_run_config)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.resolve_run_config", fake_resolve_run_config
+    )
     monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
-    monkeypatch.setattr("app.services.llm_tasks.load_prompt_file", fake_load_prompt_file)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_prompt_file", fake_load_prompt_file
+    )
     monkeypatch.setattr(
         "app.services.llm_tasks.call_provider_with_retry",
         fake_call_provider_with_retry,
@@ -107,9 +122,13 @@ async def test_run_prompt_task_returns_typed_provider_failure(
     async def fake_store_cached_llm_result(_cache_key: str, _result) -> None:
         raise AssertionError("provider failures must not be cached as success")
 
-    monkeypatch.setattr("app.services.llm_tasks.resolve_run_config", fake_resolve_run_config)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.resolve_run_config", fake_resolve_run_config
+    )
     monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
-    monkeypatch.setattr("app.services.llm_tasks.load_prompt_file", fake_load_prompt_file)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_prompt_file", fake_load_prompt_file
+    )
     monkeypatch.setattr(
         "app.services.llm_tasks.call_provider_with_retry",
         fake_call_provider_with_retry,
@@ -140,7 +159,10 @@ async def test_run_prompt_task_returns_typed_provider_failure(
     assert result.payload is None
     assert result.error_category == llm_runtime.LLMErrorCategory.RATE_LIMITED
     assert "rate limited" in result.error_message.lower()
-    assert cost_logs == []
+    assert len(cost_logs) == 1
+    assert cost_logs[0].outcome == "error"
+    assert cost_logs[0].error_category == str(llm_runtime.LLMErrorCategory.RATE_LIMITED)
+    assert "rate limited" in cost_logs[0].error_message.lower()
 
 
 @pytest.mark.asyncio
@@ -164,7 +186,11 @@ async def test_run_prompt_task_validates_direct_record_extraction_array_payload(
         return "Return JSON."
 
     async def fake_call_provider_with_retry(**_kwargs):
-        return '[{"title":"Widget Prime","url":"https://example.com/products/widget"}]', 12, 8
+        return (
+            '[{"title":"Widget Prime","url":"https://example.com/products/widget"}]',
+            12,
+            8,
+        )
 
     async def fake_load_cached_llm_result(_cache_key: str):
         return None
@@ -172,9 +198,13 @@ async def test_run_prompt_task_validates_direct_record_extraction_array_payload(
     async def fake_store_cached_llm_result(_cache_key: str, _result) -> None:
         return None
 
-    monkeypatch.setattr("app.services.llm_tasks.resolve_run_config", fake_resolve_run_config)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.resolve_run_config", fake_resolve_run_config
+    )
     monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
-    monkeypatch.setattr("app.services.llm_tasks.load_prompt_file", fake_load_prompt_file)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_prompt_file", fake_load_prompt_file
+    )
     monkeypatch.setattr(
         "app.services.llm_tasks.call_provider_with_retry",
         fake_call_provider_with_retry,
@@ -230,9 +260,13 @@ async def test_run_prompt_task_rejects_invalid_product_intelligence_enrichment(
     async def fake_store_cached_llm_result(_cache_key: str, _result) -> None:
         raise AssertionError("invalid payloads must not be cached")
 
-    monkeypatch.setattr("app.services.llm_tasks.resolve_run_config", fake_resolve_run_config)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.resolve_run_config", fake_resolve_run_config
+    )
     monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
-    monkeypatch.setattr("app.services.llm_tasks.load_prompt_file", fake_load_prompt_file)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_prompt_file", fake_load_prompt_file
+    )
     monkeypatch.setattr(
         "app.services.llm_tasks.call_provider_with_retry",
         fake_call_provider_with_retry,
@@ -256,7 +290,10 @@ async def test_run_prompt_task_rejects_invalid_product_intelligence_enrichment(
 
     assert result.payload is None
     assert result.error_category == llm_runtime.LLMErrorCategory.VALIDATION_FAILURE
-    assert "product_intelligence_enrichment payload validation failed" in result.error_message
+    assert (
+        "product_intelligence_enrichment payload validation failed"
+        in result.error_message
+    )
 
 
 @pytest.mark.asyncio
@@ -284,12 +321,22 @@ async def test_run_prompt_task_rejects_unknown_product_intelligence_reason_keys(
     async def fake_store_cached_llm_result(_cache_key: str, _result) -> None:
         raise AssertionError("invalid payloads must not be cached")
 
-    monkeypatch.setattr("app.services.llm_tasks.resolve_run_config", fake_resolve_run_config)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.resolve_run_config", fake_resolve_run_config
+    )
     monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
-    monkeypatch.setattr("app.services.llm_tasks.load_prompt_file", lambda _path: "Return JSON.")
-    monkeypatch.setattr("app.services.llm_tasks.call_provider_with_retry", fake_call_provider_with_retry)
-    monkeypatch.setattr("app.services.llm_tasks.load_cached_llm_result", fake_load_cached_llm_result)
-    monkeypatch.setattr("app.services.llm_tasks.store_cached_llm_result", fake_store_cached_llm_result)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_prompt_file", lambda _path: "Return JSON."
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.call_provider_with_retry", fake_call_provider_with_retry
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_cached_llm_result", fake_load_cached_llm_result
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.store_cached_llm_result", fake_store_cached_llm_result
+    )
 
     result = await llm_runtime.run_prompt_task(
         db_session,
@@ -336,7 +383,9 @@ def test_truncate_html_prefers_markdown_dense_anchor_context() -> None:
 
 
 def test_truncate_html_renders_markdown_like_blocks() -> None:
-    html = "<h1>Product Title</h1><p>Short description.</p><ul><li>Free shipping</li></ul>"
+    html = (
+        "<h1>Product Title</h1><p>Short description.</p><ul><li>Free shipping</li></ul>"
+    )
 
     rendered = llm_tasks._truncate_html(html, 200)
 

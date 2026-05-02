@@ -27,8 +27,12 @@ ECOMMERCE_DETAIL_SURFACE = "ecommerce_detail"
 DATA_ENRICHMENT_TAXONOMY_FILENAME = "shopify_categories.json"
 DATA_ENRICHMENT_ATTRIBUTES_FILENAME = "shopify_attributes.json"
 DATA_ENRICHMENT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "enrichment"
-DATA_ENRICHMENT_TAXONOMY_PATH = DATA_ENRICHMENT_DATA_DIR / DATA_ENRICHMENT_TAXONOMY_FILENAME
-DATA_ENRICHMENT_ATTRIBUTES_PATH = DATA_ENRICHMENT_DATA_DIR / DATA_ENRICHMENT_ATTRIBUTES_FILENAME
+DATA_ENRICHMENT_TAXONOMY_PATH = (
+    DATA_ENRICHMENT_DATA_DIR / DATA_ENRICHMENT_TAXONOMY_FILENAME
+)
+DATA_ENRICHMENT_ATTRIBUTES_PATH = (
+    DATA_ENRICHMENT_DATA_DIR / DATA_ENRICHMENT_ATTRIBUTES_FILENAME
+)
 DATA_ENRICHMENT_BASE_REQUIRED_ATTRIBUTES = (
     "title",
     "description",
@@ -69,12 +73,28 @@ DATA_ENRICHMENT_COLOR_FAMILY_ALIASES = {
     "yellow": ("yellow",),
 }
 DATA_ENRICHMENT_GENDER_ALIASES = {
-    "female": ("female", "women", "woman", "womens", "women's", "ladies", "girl", "girls"),
+    "female": (
+        "female",
+        "women",
+        "woman",
+        "womens",
+        "women's",
+        "ladies",
+        "girl",
+        "girls",
+    ),
     "male": ("male", "men", "man", "mens", "men's", "boy", "boys"),
-    "unisex": ("unisex", "all gender", "all-gender", "gender neutral", "gender-neutral"),
+    "unisex": (
+        "unisex",
+        "all gender",
+        "all-gender",
+        "gender neutral",
+        "gender-neutral",
+    ),
 }
 DATA_ENRICHMENT_AVAILABILITY_TERMS = {
     "in_stock": (
+        "in_stock",
         "in stock",
         "available",
         "ready to ship",
@@ -82,7 +102,16 @@ DATA_ENRICHMENT_AVAILABILITY_TERMS = {
         "add to cart",
         "preorder available",
     ),
+    "limited_stock": (
+        "limited_stock",
+        "limited stock",
+        "limited availability",
+        "low stock",
+        "few left",
+        "left in stock",
+    ),
     "out_of_stock": (
+        "out_of_stock",
         "out of stock",
         "sold out",
         "unavailable",
@@ -92,6 +121,41 @@ DATA_ENRICHMENT_AVAILABILITY_TERMS = {
     "preorder": ("preorder", "pre-order", "pre order"),
     "backorder": ("backorder", "back order"),
 }
+DATA_ENRICHMENT_MATERIAL_PRIMARY_FIELDS = (
+    "materials",
+    "material",
+    "fabric",
+    "composition",
+    "product_attributes",
+)
+DATA_ENRICHMENT_MATERIAL_FALLBACK_FIELDS = ("description",)
+DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS = (
+    r"\bcare\b.*$",
+    r"\bcare instructions?\b.*$",
+    r"\bwash\b.*$",
+    r"\biron\b.*$",
+    r"\bdry clean\b.*$",
+)
+DATA_ENRICHMENT_TAXONOMY_CONTEXT_BLOCKS = (
+    {
+        "context_terms": (
+            "apparel",
+            "clothing",
+            "dress",
+            "fashion",
+            "pant",
+            "shirt",
+            "t-shirt",
+            "tee",
+            "trouser",
+        ),
+        "path_terms": ("furniture", "shopping bags"),
+    },
+    {
+        "context_terms": ("boot", "footwear", "oxford", "shoe", "sneaker"),
+        "path_terms": ("undergarments", "underwear"),
+    },
+)
 DATA_ENRICHMENT_SEO_STOPWORDS = (
     "a",
     "an",

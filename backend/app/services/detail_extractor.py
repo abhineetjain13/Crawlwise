@@ -18,6 +18,7 @@ from app.services.config.field_mappings import (
 from app.services.config.extraction_rules import (
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
+    DETAIL_CATEGORY_SOURCE_RANKS,
     DETAIL_LONG_TEXT_SOURCE_RANKS,
     DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES,
     DETAIL_TITLE_SOURCE_RANKS,
@@ -63,6 +64,7 @@ from app.services.extract.detail_dom_extractor import (
     primary_dom_context,
     variant_option_availability,  # noqa: F401
 )
+from app.services.extract.detail_raw_signals import breadcrumb_category_from_dom
 from app.services.extract.detail_identity import (
     detail_identity_codes_match,  # noqa: F401
     detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
@@ -117,6 +119,7 @@ class PreparedDetailExtraction:
     context: Any
     dom_parser: Any
     soup: BeautifulSoup
+    raw_soup: BeautifulSoup
     state: DetailTierState
     js_state_objects: dict[str, Any]
     js_state_record: dict[str, Any]
@@ -134,13 +137,21 @@ def _coerce_float(value: object, default: float = 0.0) -> float:
 
 def _field_source_rank(surface: str, field_name: str, source: str | None) -> int:
     if str(surface or "").strip().lower() == "ecommerce_detail":
+        if field_name == "category":
+            configured_rank = DETAIL_CATEGORY_SOURCE_RANKS.get(str(source or ""))
+            if configured_rank is not None:
+                return configured_rank
         if field_name == "title":
             return DETAIL_TITLE_SOURCE_RANKS.get(str(source or ""), 20)
         if field_name in LONG_TEXT_FIELDS:
             return DETAIL_LONG_TEXT_SOURCE_RANKS.get(str(source or ""), 20)
         if field_name in ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
             return 2
-    return 100 + _SOURCE_PRIORITY_RANK.get(str(source or ""), len(_SOURCE_PRIORITY_RANK))
+    return 100 + _SOURCE_PRIORITY_RANK.get(
+        str(source or ""), len(_SOURCE_PRIORITY_RANK)
+    )
+
+
 def _add_sourced_candidate(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
@@ -162,6 +173,7 @@ def _add_sourced_candidate(
     bucket = field_sources.setdefault(field_name, [])
     if source not in bucket:
         bucket.append(source)
+
 
 def _long_text_candidate_is_noise(
     field_name: str,
@@ -189,6 +201,8 @@ def _long_text_candidate_is_noise(
     ):
         return True
     return len(cleaned.split()) < 2
+
+
 def _collect_record_candidates(
     record: dict[str, Any],
     *,
@@ -218,6 +232,8 @@ def _collect_record_candidates(
             coerce_field_value(normalized_field, value, page_url),
             source=source,
         )
+
+
 def _collect_structured_payload_candidates(
     payload: object,
     *,
@@ -257,6 +273,8 @@ def _collect_structured_payload_candidates(
                 value,
                 source=source,
             )
+
+
 def _primary_source_for_record(
     record: dict[str, Any],
     selected_field_sources: dict[str, str],
@@ -277,7 +295,12 @@ def _primary_source_for_record(
         )
     return "structured_dom"
 
-_SOURCE_PRIORITY_RANK = {source_name: index for index, source_name in enumerate(SOURCE_PRIORITY)}
+
+_SOURCE_PRIORITY_RANK = {
+    source_name: index for index, source_name in enumerate(SOURCE_PRIORITY)
+}
+
+
 def _ordered_candidates_for_field(
     surface: str,
     field_name: str,
@@ -299,6 +322,7 @@ def _ordered_candidates_for_field(
         for index, value in enumerate(candidates.get(field_name, []))
     )
     return [(source, value) for _, _, source, value in indexed_entries]
+
 
 def _selector_self_heal_config(
     extraction_runtime_snapshot: dict[str, object] | None,
@@ -324,6 +348,7 @@ def _selector_self_heal_config(
         ),
     }
 
+
 def _selected_selector_trace(
     *,
     field_name: str,
@@ -345,11 +370,9 @@ def _selected_selector_trace(
     trace = next((row for row in traces if isinstance(row, dict)), {})
     if not isinstance(trace, dict):
         return None
-    return {
-        key: value
-        for key, value in trace.items()
-        if not str(key).startswith("_")
-    }
+    return {key: value for key, value in trace.items() if not str(key).startswith("_")}
+
+
 def _materialize_record(
     *,
     page_url: str,
@@ -392,7 +415,9 @@ def _materialize_record(
             value for source, value in ordered_candidates if source == selected_source
         ]
         finalized = (
-            finalize_candidate_value(field_name, [value for _, value in ordered_candidates])
+            finalize_candidate_value(
+                field_name, [value for _, value in ordered_candidates]
+            )
             if field_name in STRUCTURED_OBJECT_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS
             else finalize_candidate_value(field_name, winning_values)
         )
@@ -457,13 +482,17 @@ def _materialize_record(
     )
     selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
     record["_confidence"] = confidence
-    record["_extraction_tiers"] = {"completed": list(completed_tiers), "current": tier_name}
+    record["_extraction_tiers"] = {
+        "completed": list(completed_tiers),
+        "current": tier_name,
+    }
     record["_self_heal"] = {
         "enabled": bool(selector_self_heal["enabled"]),
         "triggered": False,
         "threshold": _coerce_float(selector_self_heal.get("threshold")),
     }
     return finalize_record(record, surface=surface)
+
 
 def _prune_irrelevant_detail_structured_payload(
     payload: object,
@@ -509,12 +538,17 @@ def _detail_structured_payload_is_irrelevant_product(
     requested_page_url: str,
 ) -> bool:
     raw_type = payload.get("@type")
-    normalized_type = " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
+    normalized_type = (
+        " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
+    )
     lowered_type = normalized_type.lower()
     payload_keys = {str(key).lower() for key in payload}
     looks_product_like = (
         "product" in lowered_type
-        or bool({"sku", "mpn", "productid", "offers", "price", "image", "url"} & payload_keys)
+        or bool(
+            {"sku", "mpn", "productid", "offers", "price", "image", "url"}
+            & payload_keys
+        )
         or (
             {"name", "description"} <= payload_keys
             and bool({"offers", "price", "image", "url"} & payload_keys)
@@ -522,12 +556,15 @@ def _detail_structured_payload_is_irrelevant_product(
     )
     if not looks_product_like:
         return False
-    candidate_url = absolute_url(page_url, payload.get("url") or payload.get("@id"))
+    raw_candidate_url = payload.get("url") or payload.get("@id")
+    candidate_url = absolute_url(page_url, raw_candidate_url)
     candidate_record = {
         "title": payload.get("name") or payload.get("title"),
         "description": payload.get("description"),
         "url": candidate_url,
-        "sku": payload.get("sku") or payload.get("productId") or payload.get("productID"),
+        "sku": payload.get("sku")
+        or payload.get("productId")
+        or payload.get("productID"),
         "part_number": payload.get("mpn"),
     }
     if _record_matches_requested_detail_identity(
@@ -540,26 +577,35 @@ def _detail_structured_payload_is_irrelevant_product(
         requested_page_url=requested_page_url,
     ):
         return False
+    if not text_or_none(raw_candidate_url):
+        return False
     requested_title = _detail_title_from_url(requested_page_url)
     candidate_title = clean_text(candidate_record.get("title"))
     requested_tokens = _detail_identity_tokens(requested_title)
     candidate_tokens = _detail_identity_tokens(candidate_title)
-    if requested_tokens and candidate_tokens and requested_tokens.isdisjoint(candidate_tokens):
+    if (
+        requested_tokens
+        and candidate_tokens
+        and requested_tokens.isdisjoint(candidate_tokens)
+    ):
         return True
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     candidate_codes = _detail_identity_codes_from_record_fields(candidate_record)
-    if requested_codes and candidate_codes and requested_codes.isdisjoint(candidate_codes):
+    if (
+        requested_codes
+        and candidate_codes
+        and requested_codes.isdisjoint(candidate_codes)
+    ):
         return True
     return False
+
 
 def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> bool:
     title = text_or_none(record.get("title")) or ""
     field_sources = _object_dict(record.get("_field_sources"))
     title_field_sources = _object_list(field_sources.get("title"))
     title_sources = {
-        str(source).strip()
-        for source in title_field_sources
-        if str(source).strip()
+        str(source).strip() for source in title_field_sources if str(source).strip()
     }
     if _detail_url_has_multiple_product_segments(page_url):
         return True
@@ -672,7 +718,8 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
     if (
         "url_slug" in title_sources
         and confidence_score < 0.5
-        and str(record.get("_source") or "").strip() in {"opengraph", "json_ld_page_level", "microdata"}
+        and str(record.get("_source") or "").strip()
+        in {"opengraph", "json_ld_page_level", "microdata"}
         and not any(
             record.get(field_name) not in (None, "", [], {})
             for field_name in strong_detail_fields
@@ -722,12 +769,16 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         and _description_looks_like_shell_copy(record.get("description"))
     ):
         return True
-    return not any(record.get(field_name) not in (None, "", [], {}) for field_name in strong_detail_fields)
+    return not any(
+        record.get(field_name) not in (None, "", [], {})
+        for field_name in strong_detail_fields
+    )
 
 
 def _detail_url_has_multiple_product_segments(url: str) -> bool:
     path = str(urlparse(url).path or "").lower()
     return any(path.count(segment) > 1 for segment in ("/prd/", "/dp/", "/products/"))
+
 
 def _detail_image_looks_like_tracking_or_shell(value: object) -> bool:
     image_url = text_or_none(value)
@@ -747,6 +798,7 @@ def _detail_image_looks_like_tracking_or_shell(value: object) -> bool:
         )
     )
 
+
 def _title_looks_like_brand_shell(title: str, *, page_url: str) -> bool:
     normalized_title = str(title or "").strip().lower()
     if not normalized_title:
@@ -758,16 +810,12 @@ def _title_looks_like_brand_shell(title: str, *, page_url: str) -> bool:
     if compact_title and compact_host and compact_title == compact_host:
         return True
     host_tokens = {
-        token
-        for token in re.split(r"[^a-z0-9]+", host_label)
-        if len(token) >= 3
+        token for token in re.split(r"[^a-z0-9]+", host_label) if len(token) >= 3
     }
     if not host_tokens:
         return False
     title_tokens = {
-        token
-        for token in re.split(r"[^a-z0-9]+", normalized_title)
-        if len(token) >= 3
+        token for token in re.split(r"[^a-z0-9]+", normalized_title) if len(token) >= 3
     }
     if not title_tokens or not (title_tokens & host_tokens):
         return False
@@ -776,6 +824,7 @@ def _title_looks_like_brand_shell(title: str, *, page_url: str) -> bool:
         extra_tokens <= set(DETAIL_BRAND_SHELL_TITLE_TOKENS)
         or (len(extra_tokens) <= 3 and len(title_tokens) <= 5)
     )
+
 
 def _description_looks_like_shell_copy(description: object) -> bool:
     normalized_description = str(text_or_none(description) or "").strip().lower()
@@ -786,17 +835,32 @@ def _description_looks_like_shell_copy(description: object) -> bool:
         for phrase in DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES
     )
 
+
 def _variant_axis_value_count(value: object) -> int:
     if not isinstance(value, dict):
         return 0
-    return sum(len([item for item in values if text_or_none(item)]) for values in value.values() if isinstance(values, list))
+    return sum(
+        len([item for item in values if text_or_none(item)])
+        for values in value.values()
+        if isinstance(values, list)
+    )
+
 
 def _variant_rows_with_option_values(value: object) -> int:
     if not isinstance(value, list):
         return 0
-    return sum(1 for row in value if isinstance(row, dict) and isinstance(row.get("option_values"), dict) and bool(row.get("option_values")))
+    return sum(
+        1
+        for row in value
+        if isinstance(row, dict)
+        and isinstance(row.get("option_values"), dict)
+        and bool(row.get("option_values"))
+    )
 
-def _variant_signal_strength(*, variant_axes: object, variants: object, selected_variant: object) -> tuple[int, int, int, int, int]:
+
+def _variant_signal_strength(
+    *, variant_axes: object, variants: object, selected_variant: object
+) -> tuple[int, int, int, int, int]:
     return (
         len(variant_axes) if isinstance(variant_axes, dict) else 0,
         _variant_axis_value_count(variant_axes),
@@ -809,15 +873,22 @@ def _variant_signal_strength(*, variant_axes: object, variants: object, selected
         ),
     )
 
+
 def _should_collect_dom_variants(
     candidates: dict[str, list[object]],
     dom_variants: dict[str, object],
 ) -> bool:
     if not any(candidates.get(field_name) for field_name in VARIANT_DOM_FIELD_NAMES):
         return True
-    existing_variant_axes = finalize_candidate_value("variant_axes", list(candidates.get("variant_axes") or []))
-    existing_variants = finalize_candidate_value("variants", list(candidates.get("variants") or []))
-    existing_selected_variant = finalize_candidate_value("selected_variant", list(candidates.get("selected_variant") or []))
+    existing_variant_axes = finalize_candidate_value(
+        "variant_axes", list(candidates.get("variant_axes") or [])
+    )
+    existing_variants = finalize_candidate_value(
+        "variants", list(candidates.get("variants") or [])
+    )
+    existing_selected_variant = finalize_candidate_value(
+        "selected_variant", list(candidates.get("selected_variant") or [])
+    )
     existing_strength = _variant_signal_strength(
         variant_axes=existing_variant_axes,
         variants=existing_variants,
@@ -832,6 +903,7 @@ def _should_collect_dom_variants(
     )
     return dom_strength > existing_strength
 
+
 def _materialize_image_fields(
     *,
     surface: str,
@@ -841,8 +913,12 @@ def _materialize_image_fields(
     values: list[str] = []
     primary_source: str | None = None
     ordered_candidates = [
-        *_ordered_candidates_for_field(surface, "image_url", candidates, candidate_sources),
-        *_ordered_candidates_for_field(surface, "additional_images", candidates, candidate_sources),
+        *_ordered_candidates_for_field(
+            surface, "image_url", candidates, candidate_sources
+        ),
+        *_ordered_candidates_for_field(
+            surface, "additional_images", candidates, candidate_sources
+        ),
     ]
     for source, raw_value in ordered_candidates:
         if primary_source is None and source:
@@ -866,6 +942,7 @@ def _missing_requested_fields(
             missing.add(normalized)
     return missing
 
+
 def _requires_dom_completion(
     *,
     record: dict[str, Any],
@@ -873,9 +950,17 @@ def _requires_dom_completion(
     requested_fields: list[str] | None,
     selector_rules: list[dict[str, object]] | None,
     soup: BeautifulSoup,
+    breadcrumb_soup: BeautifulSoup | None = None,
 ) -> bool:
     normalized_surface = str(surface or "").strip().lower()
     requested_missing_fields = _missing_requested_fields(record, requested_fields)
+    if normalized_surface == "ecommerce_detail":
+        breadcrumb_category = breadcrumb_category_from_dom(
+            breadcrumb_soup or soup,
+            current_title=record.get("title"),
+        )
+        if breadcrumb_category and record.get("category") != breadcrumb_category:
+            return True
     if normalized_surface == "ecommerce_detail" and variant_dom_cues_present(soup):
         return True
     if (
@@ -1036,6 +1121,7 @@ def _prepare_detail_extraction(
 ) -> PreparedDetailExtraction:
     context = prepare_extraction_context(html)
     dom_parser, soup = primary_dom_context(context, page_url=page_url)
+    raw_soup = BeautifulSoup(context.original_html, "html.parser")
     candidates: dict[str, list[object]] = {}
     candidate_sources: dict[str, list[str]] = {}
     field_sources: dict[str, list[str]] = {}
@@ -1066,6 +1152,7 @@ def _prepare_detail_extraction(
         context=context,
         dom_parser=dom_parser,
         soup=soup,
+        raw_soup=raw_soup,
         state=state,
         js_state_objects=js_state_objects,
         js_state_record=js_state_record,
@@ -1127,20 +1214,21 @@ def _collect_dom_detail_tier(
         soup=prepared.soup,
         selector_rules=selector_rules,
         apply_dom_fallbacks=(
-            lambda dom_parser, soup, page_url, surface, requested_fields, candidates,
-            candidate_sources, field_sources, selector_trace_candidates, *,
-            selector_rules=None: apply_dom_fallbacks(
-                dom_parser,
-                soup,
-                page_url=page_url,
-                surface=surface,
-                requested_fields=requested_fields,
-                candidates=candidates,
-                candidate_sources=candidate_sources,
-                field_sources=field_sources,
-                selector_trace_candidates=selector_trace_candidates,
-                selector_rules=selector_rules,
-                add_sourced_candidate=_add_sourced_candidate,
+            lambda dom_parser, soup, page_url, surface, requested_fields, candidates, candidate_sources, field_sources, selector_trace_candidates, *, selector_rules=None: (
+                apply_dom_fallbacks(
+                    dom_parser,
+                    soup,
+                    page_url=page_url,
+                    surface=surface,
+                    requested_fields=requested_fields,
+                    candidates=candidates,
+                    candidate_sources=candidate_sources,
+                    field_sources=field_sources,
+                    selector_trace_candidates=selector_trace_candidates,
+                    selector_rules=selector_rules,
+                    add_sourced_candidate=_add_sourced_candidate,
+                    breadcrumb_soup=prepared.raw_soup,
+                )
             )
         ),
         extract_variants_from_dom=(
@@ -1168,7 +1256,9 @@ def _can_skip_dom_tier(
     requested_fields: list[str] | None,
     selector_rules: list[dict[str, object]] | None,
 ) -> bool:
-    confidence_score = _coerce_float(_object_dict(record.get("_confidence")).get("score"))
+    confidence_score = _coerce_float(
+        _object_dict(record.get("_confidence")).get("score")
+    )
     threshold = _coerce_float(prepared.selector_self_heal.get("threshold"))
     return confidence_score >= threshold and not _requires_dom_completion(
         record=record,
@@ -1176,6 +1266,7 @@ def _can_skip_dom_tier(
         requested_fields=requested_fields,
         selector_rules=selector_rules,
         soup=prepared.soup,
+        breadcrumb_soup=prepared.raw_soup,
     )
 
 
@@ -1280,6 +1371,8 @@ def detail_record_rejection_reason(
     if _looks_like_site_shell_record(record, page_url=page_url):
         return "non_detail_seed"
     return None
+
+
 def infer_detail_failure_reason(
     html: str,
     page_url: str,
@@ -1310,6 +1403,8 @@ def infer_detail_failure_reason(
         page_url=page_url,
         requested_page_url=requested_page_url,
     )
+
+
 def extract_detail_records(
     html: str,
     page_url: str,

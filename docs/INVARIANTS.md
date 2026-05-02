@@ -78,6 +78,9 @@ For ecommerce detail, missing high-value fields such as `price`, `title`, and `i
 **Enrichment is not extraction cleanup.**
 Data enrichment consumes persisted `record.data` as the upstream extraction contract. It must not add blocklists, URL-token cleanup, UI-title suppression, category/source correction, or field-specific compensations for polluted canonical fields. If enrichment output exposes garbage such as URL tokens in `brand`, UI copy in `title`, impossible `size` values, or breadcrumb/category pollution, fix the acquisition/extraction candidate, coercion, ranking, or finalization path before persistence.
 
+**Shopify taxonomy and attributes are the enrichment source of truth.**
+Data enrichment must use `shopify_categories.json` for product category paths and category attribute handles, and `shopify_attributes.json` for Shopify-defined attribute values such as colors, sizes, fabrics, materials, and target gender. Do not build local product-universe dictionaries for categories, colors, materials, sizes, or category synonyms. Small local rules are allowed only for generic parsing mechanics such as token singularization, UI noise stripping, source-field lookup, and availability wording that Shopify does not model.
+
 **LLM is an explicit repair tier, not forbidden.**
 When `llm_enabled=True` and active config allows the relevant LLM workflow, LLM must be considered for missing requested/default canonical fields after deterministic/browser evidence has been used. It may fill empty fields with provenance and validation. It must not silently overwrite populated deterministic values.
 
@@ -95,6 +98,8 @@ When `llm_enabled=True` and active config allows the relevant LLM workflow, LLM 
 - Suppressing LLM repair when `llm_enabled=True`, config allows it, high-value fields are missing, and deterministic/browser evidence did not fill them
 - Letting LLM replace a populated adapter / structured / network / JS / DOM value without an explicit conflict-review workflow
 - Adding enrichment-side blocklists or cleanup to hide polluted extracted `title`, `brand`, `category`, `size`, `material`, or other canonical source fields
+- Adding local category synonym maps such as "matching sets -> outfit sets" instead of improving Shopify-backed taxonomy matching
+- Adding hand-maintained material/color/category lists when Shopify attributes or category metadata already contain the vocabulary
 
 ---
 
@@ -254,3 +259,17 @@ Static cleanup advice to persist/reuse more browser state caused a real regressi
 - A second plan is created to fix the same issue as a previous plan that was never verified
 
 **Fix:** If a plan was abandoned, treat its changes as potentially broken. Do not build on top of unverified work.
+
+---
+
+## 13. Google Search Mimicry Footprint
+
+**Rule:** Google native search discovery must mimic human behavior to avoid immediate blocks. 
+- **No random mouse jitter:** Never call `emit_browser_behavior_activity` on Google Search pages; erratic, high-speed mouse trajectories are a strong bot signal.
+- **Natural input:** Use `page.locator(...).fill()` and `Enter` rather than direct `goto` or slow character-by-character typing. 
+- **Natural syntax:** Queries must not use strict boolean dorking (e.g., exact match quotes around every word) unless explicitly required for specific repair.
+
+**VIOLATION signatures:**
+- `emit_browser_behavior_activity(page)` is called inside `_google_native_session`.
+- `_quoted` wraps every search token in double quotes.
+- `page.goto` is used for search execution instead of interacting with the search box.

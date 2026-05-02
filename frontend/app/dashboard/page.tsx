@@ -9,8 +9,9 @@ import { Badge, Button, StatCard } from '../../components/ui/primitives';
 import {
   DataRegionEmpty,
   EmptyPanel,
-  MetricGrid,
-  MetricSkeleton,
+  MetricPulse,
+  MetricPulseItem,
+  MetricPulseSkeleton,
   PageHeader,
   SkeletonRows,
   StatusDot,
@@ -37,7 +38,7 @@ function DomainBar({
   return (
     <div className="flex items-center gap-3 py-1.5">
       <span
-        className="mono-body text-secondary min-w-0 flex-1 truncate text-sm leading-[1.4] font-normal"
+        className="mono-body text-secondary min-w-0 flex-1 truncate text-xs leading-[1.4] font-normal"
         title={domain}
       >
         {domain}
@@ -48,7 +49,7 @@ function DomainBar({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="text-muted w-7 text-right text-sm leading-[var(--leading-normal)] font-normal tabular-nums">
+      <span className="text-muted w-7 text-right text-xs leading-[var(--leading-normal)] font-normal tabular-nums">
         {count}
       </span>
     </div>
@@ -84,16 +85,16 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       className="group hover:bg-background-elevated flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 no-underline transition-colors"
     >
       <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
-      <span className="mono-body text-primary group-hover:text-accent min-w-0 flex-1 truncate text-sm leading-[1.4] font-normal transition-colors">
+      <span className="mono-body text-primary group-hover:text-accent min-w-0 flex-1 truncate text-xs leading-[1.4] font-normal transition-colors">
         {domain || `Run #${run.id}`}
       </span>
-      <span className="text-muted text-sm leading-[var(--leading-normal)] font-normal tabular-nums">
+      <span className="text-muted text-xs leading-[var(--leading-normal)] font-normal tabular-nums">
         {recordCount.toLocaleString()} rec
       </span>
       <Badge tone={runExecutionTone(run.status, run.result_summary)}>
         {runExecutionLabel(run.status, run.result_summary)}
       </Badge>
-      <ArrowUpRight className="text-muted size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+      <ArrowUpRight className="text-muted size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" />
     </Link>
   );
 }
@@ -147,41 +148,38 @@ export default function DashboardPage() {
         }
       />
 
-      {/* ── KPI tiles ── */}
+      {/* ── Metric Pulse (Unified) ── */}
       {isLoading ? (
-        <MetricGrid>
-          <MetricSkeleton />
-          <MetricSkeleton />
-          <MetricSkeleton />
-          <MetricSkeleton />
-        </MetricGrid>
+        <MetricPulse>
+          <MetricPulseSkeleton />
+          <MetricPulseSkeleton />
+          <MetricPulseSkeleton />
+          <MetricPulseSkeleton />
+        </MetricPulse>
       ) : (
-        <MetricGrid>
-          <StatCard
+        <MetricPulse>
+          <MetricPulseItem
             label="Total Runs"
             value={(data?.total_runs ?? 0).toLocaleString()}
-            icon={<Hash className="size-3.5" />}
-            stripeColor="var(--metric-runs-color)"
+            icon={Hash}
           />
-          <StatCard
+          <MetricPulseItem
             label="Active Runs"
             value={(data?.active_runs ?? 0).toLocaleString()}
-            icon={<Activity className="size-3.5" />}
-            stripeColor="var(--metric-active-color)"
+            icon={Activity}
+            pulse={Boolean(data?.active_runs)}
           />
-          <StatCard
+          <MetricPulseItem
             label="Total Records"
             value={(data?.total_records ?? 0).toLocaleString()}
-            icon={<LayoutDashboard className="size-3.5" />}
-            stripeColor="var(--metric-records-color)"
+            icon={LayoutDashboard}
           />
-          <StatCard
+          <MetricPulseItem
             label="Unique Domains"
             value={totalDomains.toLocaleString()}
-            icon={<Globe className="size-3.5" />}
-            stripeColor="var(--metric-domains-color)"
+            icon={Globe}
           />
-        </MetricGrid>
+        </MetricPulse>
       )}
 
       {/* ── Status distribution bar ── */}

@@ -435,6 +435,7 @@ export default function SelectorsPage() {
                               { value: 'css_selector', label: 'CSS' },
                               { value: 'regex', label: 'Regex' },
                             ]}
+                            ariaLabel="Selector type"
                           />
                         </label>
 

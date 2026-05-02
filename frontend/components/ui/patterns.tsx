@@ -495,7 +495,7 @@ export function RunSummaryChips({
             <div className="flex items-center gap-1.5">
               <Icon className={cn('size-3.5 shrink-0 opacity-90', chip.tone)} aria-hidden="true" />
               <div className="flex items-baseline gap-2">
-                <span className="text-muted text-[10px] font-bold tracking-[0.05em] uppercase">
+                <span className="text-muted text-xs font-bold tracking-[0.05em] uppercase">
                   {chip.label}
                 </span>
                 <span
@@ -650,6 +650,47 @@ export function KVTile({
     <div className={cn('bg-background-elevated rounded-[var(--radius-md)] px-2.5 py-2', className)}>
       <div className="type-label">{label}</div>
       <div className="text-foreground pt-1 text-sm font-medium">{value}</div>
+    </div>
+  );
+}
+
+/* ─── MetricPulse ────────────────────────────────────────────────────────── */
+export function MetricPulse({ children }: Readonly<{ children: ReactNode }>) {
+  return <div className="metric-pulse-container">{children}</div>;
+}
+
+export function MetricPulseItem({
+  label,
+  value,
+  icon: Icon,
+  trend,
+  pulse,
+}: Readonly<{
+  label: string;
+  value: ReactNode;
+  icon?: LucideIcon;
+  trend?: ReactNode;
+  pulse?: boolean;
+}>) {
+  return (
+    <div className="metric-pulse-item group/metric">
+      <div className="metric-pulse-accent" />
+      <div className="metric-pulse-label">
+        {Icon && <Icon className="size-3.5" />}
+        {label}
+        {pulse && <div className="pulse-dot ml-auto" />}
+      </div>
+      <div className="metric-pulse-value">{value}</div>
+      {trend && <div className="mt-auto">{trend}</div>}
+    </div>
+  );
+}
+
+export function MetricPulseSkeleton() {
+  return (
+    <div className="metric-pulse-item">
+      <div className="skeleton h-3 w-16" />
+      <div className="skeleton mt-2 h-8 w-24" />
     </div>
   );
 }

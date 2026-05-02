@@ -199,7 +199,7 @@ export default function DataEnrichmentPage() {
         <section className="border-border bg-panel shadow-card overflow-hidden rounded-[var(--radius-xl)] border">
           <header className="border-divider flex flex-wrap items-center justify-between gap-4 border-b px-4 py-3">
             <div className="flex items-center gap-3">
-              <h2 className="type-label text-muted text-[10px] font-normal tracking-widest uppercase">
+              <h2 className="type-label text-muted text-xs font-normal tracking-widest uppercase">
                 {products.length > 0 ? 'ENRICHED OUTPUT' : 'SELECTED RECORDS'}
               </h2>
             </div>
@@ -210,7 +210,7 @@ export default function DataEnrichmentPage() {
                 size="sm"
                 onClick={() => void detailQuery.refetch()}
                 disabled={!resolvedJobId || detailQuery.isFetching}
-                className="text-muted hover:text-foreground h-8 px-2 text-[10px] font-bold tracking-tight uppercase"
+                className="text-muted hover:text-foreground h-8 px-2 text-xs font-bold tracking-tight uppercase"
               >
                 <RefreshCcw className="mr-1.5 size-3" />
                 Refresh
@@ -263,11 +263,11 @@ export default function DataEnrichmentPage() {
                     key={record.id ?? record.source_url ?? index}
                     className="hover:bg-background-alt/50 flex items-center gap-3 px-4 py-2.5 transition-colors"
                   >
-                    <span className="text-muted w-6 shrink-0 font-mono text-[10px]">
+                    <span className="text-muted w-6 shrink-0 font-mono text-xs">
                       {index + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-foreground truncate text-sm font-medium tracking-tight">
+                      <div className="text-foreground truncate text-xs font-medium tracking-tight">
                         {recordTitle(record)}
                       </div>
                       <div className="text-muted flex items-center gap-2 text-xs">
@@ -287,7 +287,7 @@ export default function DataEnrichmentPage() {
                     {badgeValue ? (
                       <Badge
                         tone="neutral"
-                        className="h-5 shrink-0 px-1.5 font-mono text-[10px] opacity-60"
+                        className="h-5 shrink-0 px-1.5 font-mono text-xs opacity-60"
                       >
                         #{badgeValue}
                       </Badge>
@@ -322,7 +322,7 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
     <tr key={product.id} className="group/row hover:bg-background-alt/30 transition-colors">
       <td className="bg-panel group-hover/row:bg-background-alt/50 sticky left-0 z-10 transition-colors">
         <div className="flex items-center gap-2 py-1.5">
-          <Badge tone="neutral" className="h-5 shrink-0 px-1.5 font-mono text-[10px] opacity-70">
+          <Badge tone="neutral" className="h-5 shrink-0 px-1.5 font-mono text-sm opacity-70">
             #{product.source_record_id}
           </Badge>
           {product.source_url ? (
@@ -330,7 +330,7 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
               href={product.source_url}
               target="_blank"
               rel="noreferrer"
-              className="text-accent block max-w-[140px] truncate text-[12px] font-medium transition-colors hover:underline"
+              className="text-accent block max-w-[140px] truncate text-sm font-medium transition-colors hover:underline"
               title={product.source_url}
             >
               {product.source_url.replace(/^https?:\/\/(www\.)?/, '')}
@@ -357,10 +357,10 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
             ) : isProcessing ? (
               <div className="flex items-center gap-1.5 opacity-40">
                 <Loader2 className="text-accent size-3 animate-spin" />
-                <span className="text-[10px] font-medium tracking-wide uppercase">Processing</span>
+                <span className="text-sm font-medium tracking-wide uppercase">Processing</span>
               </div>
             ) : (
-              <span className="text-muted/40 font-mono text-[10px]">--</span>
+              <span className="text-muted/40 font-mono text-sm">--</span>
             )}
           </td>
         );

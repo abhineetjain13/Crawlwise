@@ -237,7 +237,7 @@ export default function AdminLlmPage() {
                             {config.task_type}
                           </div>
                           {config.is_active ? (
-                            <div className="bg-success-bg text-success inline-flex items-center gap-1 rounded-full px-2 py-1 text-sm font-medium">
+                            <div className="bg-success-bg text-success inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium">
                               <CheckCircle2 className="size-3.5" />
                               active
                             </div>
@@ -279,19 +279,19 @@ export default function AdminLlmPage() {
                 <table className="w-full min-w-[850px] table-fixed border-collapse text-left">
                   <thead>
                     <tr className="border-divider/50 border-b">
-                      <th className="text-muted w-[140px] px-0 py-3 text-[11px] font-bold tracking-[0.1em] uppercase">
+                      <th className="text-muted w-[140px] px-0 py-3 text-xs font-bold tracking-[0.1em] uppercase">
                         Usage & Cost
                       </th>
-                      <th className="text-muted w-[180px] px-4 py-3 text-[11px] font-bold tracking-[0.1em] uppercase">
+                      <th className="text-muted w-[180px] px-4 py-3 text-xs font-bold tracking-[0.1em] uppercase">
                         Task Type
                       </th>
-                      <th className="text-muted w-[200px] px-4 py-3 text-[11px] font-bold tracking-[0.1em] uppercase">
+                      <th className="text-muted w-[200px] px-4 py-3 text-xs font-bold tracking-[0.1em] uppercase">
                         Target Entity
                       </th>
-                      <th className="text-muted px-4 py-3 text-[11px] font-bold tracking-[0.1em] uppercase">
+                      <th className="text-muted px-4 py-3 text-xs font-bold tracking-[0.1em] uppercase">
                         Provider / Model
                       </th>
-                      <th className="text-muted w-[90px] px-0 py-3 text-right text-[11px] font-bold tracking-[0.1em] uppercase">
+                      <th className="text-muted w-[90px] px-0 py-3 text-right text-xs font-bold tracking-[0.1em] uppercase">
                         Time
                       </th>
                     </tr>
@@ -311,9 +311,9 @@ export default function AdminLlmPage() {
                                 <span className="text-foreground text-sm leading-none font-medium tabular-nums">
                                   {totalTokens.toLocaleString()}
                                 </span>
-                                <span className="text-muted text-[11px] font-normal">tokens</span>
+                                <span className="text-muted text-sm font-normal">tokens</span>
                               </div>
-                              <span className="text-accent mt-1 font-mono text-[12px] leading-none font-medium">
+                              <span className="text-accent mt-1 font-mono text-sm leading-none font-medium">
                                 ${cost > 0 && cost < 0.0001 ? cost.toFixed(6) : cost.toFixed(4)}
                               </span>
                             </div>

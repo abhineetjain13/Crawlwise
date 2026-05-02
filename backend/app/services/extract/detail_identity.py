@@ -88,7 +88,9 @@ def listing_url_is_structural(url: str, page_url: str) -> bool:
         if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
             return True
         leading_tokens = tokenized_segments[:-1] if len(tokenized_segments) <= 2 else []
-        if any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens):
+        if any(
+            tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens
+        ):
             return True
     except Exception:
         logger.debug("URL structural check failed for %s", page_url, exc_info=True)
@@ -100,7 +102,9 @@ def listing_detail_like_path(url: str, *, is_job: bool) -> bool:
     if is_job:
         return _job_detail_like_path(lowered)
     parsed = urlparse(lowered)
-    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
+    segments = [
+        segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()
+    ]
     if "products" in segments:
         products_index = segments.index("products")
         tail_segments = segments[products_index + 1 :]
@@ -133,13 +137,23 @@ def _job_detail_like_path(url: str) -> bool:
         return True
     if re.match(r"jobs?-\d", terminal):
         return True
-    detail_roots = {"job", "jobs", "opening", "position", "posting", "career", "careers"}
+    detail_roots = {
+        "job",
+        "jobs",
+        "opening",
+        "position",
+        "posting",
+        "career",
+        "careers",
+    }
     for index, segment in enumerate(segments[:-1]):
         normalized = segment.strip().lower()
         if normalized not in detail_roots:
             continue
         next_segment = segments[index + 1].strip().lower()
-        if next_segment and not _job_listing_url_is_hub(f"https://example.com/{next_segment}/"):
+        if next_segment and not _job_listing_url_is_hub(
+            f"https://example.com/{next_segment}/"
+        ):
             return True
     return False
 
@@ -170,7 +184,9 @@ def _job_listing_url_is_hub(url: str) -> bool:
 
 def _job_listing_url_looks_like_posting(url: str) -> bool:
     parsed = urlparse(url.lower())
-    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
+    segments = [
+        segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()
+    ]
     if not segments:
         return False
     terminal = segments[-1]
@@ -217,18 +233,14 @@ def _job_listing_url_looks_like_posting(url: str) -> bool:
 def _detail_url_path_segments(url: str) -> list[str]:
     parsed = urlparse(str(url or ""))
     segments = [
-        segment
-        for segment in str(parsed.path or "").strip("/").split("/")
-        if segment
+        segment for segment in str(parsed.path or "").strip("/").split("/") if segment
     ]
     fragment = str(parsed.fragment or "").strip()
     if fragment:
         fragment_path = fragment.split("?", 1)[0].split("&", 1)[0].strip()
         if "/" in fragment_path:
             segments.extend(
-                segment
-                for segment in fragment_path.strip("!/").split("/")
-                if segment
+                segment for segment in fragment_path.strip("!/").split("/") if segment
             )
     return segments
 
@@ -262,11 +274,25 @@ def _detail_title_from_url(page_url: str) -> str | None:
         terminal = re.sub(r"\.(html?|htm)$", "", segment, flags=re.I)
         if not terminal or terminal.isdigit():
             continue
+        if re.fullmatch(r"[a-z]{2}(?:[_-][a-z]{2})?", terminal, re.I):
+            continue
+        embedded_codes = [
+            normalized
+            for match in re.findall(r"[A-Za-z0-9]{8,}", terminal)
+            if (normalized := _normalized_detail_identity_code(match))
+        ]
+        if embedded_codes:
+            alpha_chunks = [
+                chunk.lower() for chunk in re.findall(r"[A-Za-z]+", terminal)
+            ]
+            if not alpha_chunks or all(
+                any(token in chunk for token in generic_terminal_tokens)
+                for chunk in alpha_chunks
+            ):
+                continue
         if _detail_segment_looks_like_identity_code(terminal):
             parent_segment = (
-                str(path_segments[index - 1]).strip().lower()
-                if index > 0
-                else ""
+                str(path_segments[index - 1]).strip().lower() if index > 0 else ""
             )
             if parent_segment in {"product", "products", "item", "items"}:
                 return None
@@ -284,7 +310,9 @@ def _detail_title_from_url(page_url: str) -> str | None:
     return None
 
 
-def _detail_url_candidate_is_low_signal(candidate_url: object, *, page_url: str) -> bool:
+def _detail_url_candidate_is_low_signal(
+    candidate_url: object, *, page_url: str
+) -> bool:
     candidate = text_or_none(candidate_url)
     if not candidate:
         return False
@@ -296,7 +324,9 @@ def _detail_url_candidate_is_low_signal(candidate_url: object, *, page_url: str)
         return True
     candidate_path = str(candidate_parsed.path or "").strip()
     page_path = str(page_parsed.path or "").strip()
-    if any(candidate_path.lower().endswith(ext) for ext in DETAIL_NON_PAGE_FILE_EXTENSIONS):
+    if any(
+        candidate_path.lower().endswith(ext) for ext in DETAIL_NON_PAGE_FILE_EXTENSIONS
+    ):
         return True
     candidate_segments = {
         segment.strip().lower()
@@ -358,7 +388,9 @@ def _detail_url_looks_like_product(url: str) -> bool:
         return False
     if _detail_url_is_collection_like(url):
         return False
-    if any(token in terminal for token in ("category", "collections", "search", "sale")):
+    if any(
+        token in terminal for token in ("category", "collections", "search", "sale")
+    ):
         return False
     return any(separator in terminal for separator in ("-", "_"))
 
@@ -366,7 +398,9 @@ def _detail_url_looks_like_product(url: str) -> bool:
 def _detail_url_is_utility(url: str) -> bool:
     path_tokens = {
         token
-        for token in re.split(r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower())
+        for token in re.split(
+            r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower()
+        )
         if token
     }
     if any(token in path_tokens for token in DETAIL_PRODUCT_PATH_TOKENS):
@@ -375,18 +409,24 @@ def _detail_url_is_utility(url: str) -> bool:
         return True
     query_keys = {
         str(key).strip().lower()
-        for key, value in parse_qsl(str(urlparse(url).query or ""), keep_blank_values=False)
+        for key, value in parse_qsl(
+            str(urlparse(url).query or ""), keep_blank_values=False
+        )
         if str(key).strip() and str(value).strip()
     }
     if not query_keys:
         return False
-    return any(str(key).strip().lower() in query_keys for key in DETAIL_SEARCH_QUERY_KEYS)
+    return any(
+        str(key).strip().lower() in query_keys for key in DETAIL_SEARCH_QUERY_KEYS
+    )
 
 
 def _detail_url_is_collection_like(url: str) -> bool:
     path_tokens = {
         token
-        for token in re.split(r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower())
+        for token in re.split(
+            r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower()
+        )
         if token
     }
     if any(token in path_tokens for token in DETAIL_PRODUCT_PATH_TOKENS):
@@ -470,7 +510,11 @@ def _same_url_title_only_shell_like(
 ) -> bool:
     title = clean_text(record.get("title"))
     requested_title = clean_text(_detail_title_from_url(page_url))
-    if not title or not requested_title or title.casefold() != requested_title.casefold():
+    if (
+        not title
+        or not requested_title
+        or title.casefold() != requested_title.casefold()
+    ):
         return False
     if any(
         record.get(field_name) not in (None, "", [], {})
@@ -574,7 +618,7 @@ def _normalized_detail_identity_code(value: object) -> str | None:
     text = re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).upper()
     if len(text) < 8:
         return None
-    if not re.search(r"[A-Z]", text) or not re.search(r"\d", text):
+    if not re.search(r"\d", text):
         return None
     return text
 
@@ -602,9 +646,13 @@ def _detail_redirect_identity_is_mismatched(
         return False
     requested_codes = _detail_identity_codes_from_url(requested)
     record_field_codes = _detail_identity_codes_from_record_fields(record)
-    if requested_codes and record_field_codes and not detail_identity_codes_match(
-        requested_codes,
-        record_field_codes,
+    if (
+        requested_codes
+        and record_field_codes
+        and not detail_identity_codes_match(
+            requested_codes,
+            record_field_codes,
+        )
     ):
         candidate_url = text_or_none(record.get("url")) or current
         if not (
@@ -620,7 +668,11 @@ def _detail_redirect_identity_is_mismatched(
         ):
             return True
     candidate_url = text_or_none(record.get("url")) or current
-    if candidate_url and candidate_url != requested and same_site(requested, candidate_url):
+    if (
+        candidate_url
+        and candidate_url != requested
+        and same_site(requested, candidate_url)
+    ):
         if not _detail_url_matches_requested_identity(
             candidate_url,
             requested_page_url=requested,
@@ -657,7 +709,9 @@ def _detail_redirect_identity_is_mismatched(
             )
         ):
             return True
-        if requested_title and _same_url_title_only_shell_like(record, page_url=requested):
+        if requested_title and _same_url_title_only_shell_like(
+            record, page_url=requested
+        ):
             return True
         return False
     if not current or requested == current:

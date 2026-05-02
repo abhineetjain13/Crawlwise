@@ -4,7 +4,10 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
-from app.services.config.llm_runtime import SUPPORTED_LLM_PROVIDERS, llm_runtime_settings
+from app.services.config.llm_runtime import (
+    SUPPORTED_LLM_PROVIDERS,
+    llm_runtime_settings,
+)
 from app.services.llm_circuit_breaker import (
     ERROR_PREFIX,
     LLMErrorCategory,
@@ -85,11 +88,29 @@ async def call_provider_with_retry(
 def estimate_cost_usd(
     provider: str,
     model: str,
-    input_tokens: int,
-    output_tokens: int,
+    input_tokens: int | None,
+    output_tokens: int | None,
 ) -> Decimal:
-    del provider, model, input_tokens, output_tokens
-    return Decimal("0.0000")
+    rate = llm_runtime_settings.get_token_pricing().get(
+        (str(provider or "").strip().lower(), str(model or "").strip().lower())
+    )
+    if not rate:
+        return Decimal("0.0000")
+    input_rate, output_rate = rate
+    safe_input_tokens = _safe_token_count(input_tokens)
+    safe_output_tokens = _safe_token_count(output_tokens)
+    cost = (
+        (Decimal(safe_input_tokens) * Decimal(str(input_rate)))
+        + (Decimal(safe_output_tokens) * Decimal(str(output_rate)))
+    ) / Decimal("1000000")
+    return cost.quantize(Decimal("0.0001"))
+
+
+def _safe_token_count(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 async def test_provider_connection(
@@ -234,7 +255,7 @@ if frozenset(_PROVIDER_DISPATCH) != SUPPORTED_LLM_PROVIDERS:
 def _http_error(response: httpx.Response) -> str:
     return (
         f"{ERROR_PREFIX} HTTP {response.status_code}: "
-        f"{response.text[:llm_runtime_settings.provider_error_excerpt_chars]}"
+        f"{response.text[: llm_runtime_settings.provider_error_excerpt_chars]}"
     )
 
 
@@ -242,9 +263,7 @@ def _safe_json_response(response: httpx.Response) -> dict[str, Any]:
     try:
         data = response.json()
     except ValueError as exc:
-        raise ValueError(
-            f"Invalid JSON from LLM provider response: {exc}"
-        ) from exc
+        raise ValueError(f"Invalid JSON from LLM provider response: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("Invalid JSON from LLM provider response: expected object")
     return data
