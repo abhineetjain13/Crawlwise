@@ -6,16 +6,6 @@ Verify each finding against current code before fixing.
 
 ## Adapters
 
-### 1. amazon.py — SKU set to fallback ASIN
-**File:** `backend/app/services/adapters/amazon.py` · **Lines:** ~176–180
-
-`sku = asin` even when `asin` is a fallback from `_detail_value_from_table(detail_table, "item model number")`. Update so `product_id` retains the fallback but `sku` is only populated when a real ASIN was extracted (from URL or `detail_table["asin"]`). Otherwise omit `sku`.
-
-### 2. amazon.py — Selected variant dropped
-**File:** `backend/app/services/adapters/amazon.py` · **Line:** ~366
-
-Removing the selected variant breaks callers that rely on a single current variant record.
-
 ### 3. myntra.py — Variant count inconsistency
 **File:** `backend/app/services/adapters/myntra.py` · **Lines:** ~216, ~241
 
@@ -60,45 +50,6 @@ Narrowing the crawl sources can make enrichment miss color, size, and availabili
 
 `SELECTED_VARIANT_FIELD` is still referenced in color, size, and availability candidate sources. If selected_variant is no longer populated by adapters, these enrichment paths will never find data for products that only expose stock/color/size on the chosen variant.
 
-### 11. extraction_rules.py — String-typed price thresholds
-**File:** `backend/app/services/config/extraction_rules.py` · **Lines:** ~222–224
-
-`DETAIL_PRICE_COMPARISON_TOLERANCE = "0.01"`, `DETAIL_LOW_SIGNAL_PRICE_MAX = "1"`, `DETAIL_LOW_SIGNAL_PARENT_MIN = "10"` are defined as strings, causing type inconsistency with the surrounding numeric constants (`DETAIL_PRICE_MAGNITUDE_EPSILON = 0.01`, `DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA = 10.0`). Change to `Decimal("0.01")`, `Decimal("1")`, `Decimal("10")` (or floats) and update any code that expects strings.
-
-### 12. llm_runtime.py — No non-negative validation on rate Decimals
-**File:** `backend/app/services/config/llm_runtime.py` · **Lines:** ~49–53
-
-The `try` block converts rates to `Decimal` but does not check `>= 0`. Add validation: if either rate is negative, return `None` (same as existing error handling).
-
-### 13. normalizers/__init__.py — `_AVAILABILITY_TOKENS` not defensive
-**File:** `backend/app/services/normalizers/__init__.py` · **Line:** ~39
-
-`_AVAILABILITY_TOKENS = NORMALIZER_AVAILABILITY_TOKENS` assigns directly without `tuple()` wrapping or `or ()` fallback. If the config value is `None`, downstream iteration will raise `TypeError`. Mirror the defensive pattern used for other config symbols.
-
----
-
-## Extraction — Price
-
-### 14. detail_price_extractor.py — `original_price` source always "dom_text"
-**File:** `backend/app/services/extract/detail_price_extractor.py` · **Lines:** ~174–186
-
-`original_price` is assigned from `jsonld_original_price` or `_detail_original_price_from_html` but source is always "dom_text". Detect which source was used and set accordingly: `append_record_field_source(record, "original_price", "jsonld")` or `"dom_text"`.
-
-### 15. detail_price_extractor.py — Early return on currency-only skips later offers with prices
-**File:** `backend/app/services/extract/detail_price_extractor.py` · **Lines:** ~709–735
-
-In `_detail_jsonld_price_bundle`, the loop returns as soon as any offer has `price`, `original_price`, **or** `offer_currency`. An offer with only currency (e.g., "USD") causes an early return of `(None, None, "USD")`, skipping later offers with actual prices. Only return immediately when `price` or `original_price` is present; save currency and continue iterating. After the loop, return saved currency if no price was found.
-
-### 16. detail_price_extractor.py — `results` declared twice in `_offers_from_jsonld_node`
-**File:** `backend/app/services/extract/detail_price_extractor.py` · **Lines:** ~758–774
-
-`results: list[dict[str, Any]] = []` is declared in both the `list` branch (line ~761) and the `dict` branch (line ~767). While they're in separate branches and each returns independently, consolidate into a single declaration at the top of the function for clarity.
-
-### 17. detail_price_extractor.py — Module-level jsonld tuples should be underscore-prefixed
-**File:** `backend/app/services/extract/detail_price_extractor.py` · **Lines:** ~53–73
-
-`jsonld_graph_fields`, `jsonld_type_fields`, `jsonld_offer_fields`, `jsonld_price_fields`, `jsonld_original_price_fields`, `jsonld_price_specification_fields`, `jsonld_currency_fields` are module-level implementation details. Rename with leading underscore (`_jsonld_graph_fields`, etc.) and update all references in this file.
-
 ### 18. detail_price_extractor.py — Redundant early-return in `_detail_price_from_html`
 **File:** `backend/app/services/extract/detail_price_extractor.py` · **Lines:** ~579–581
 
@@ -107,16 +58,6 @@ In `_detail_jsonld_price_bundle`, the loop returns as soon as any offer has `pri
 ---
 
 ## Extraction — DOM & Variants
-
-### 19. detail_dom_extractor.py — Hardcoded promo noise tokens
-**File:** `backend/app/services/extract/detail_dom_extractor.py` · **Lines:** ~342–346
-
-`any(token in lowered for token in ("off", "discount", "promo"))` uses hardcoded tokens. Add `VARIANT_PROMO_NOISE_TOKENS` to extraction rules config and import it, matching the existing `VARIANT_OPTION_VALUE_NOISE_TOKENS` pattern.
-
-### 20. detail_record_finalizer.py — Hardcoded placeholder image checks
-**File:** `backend/app/services/extract/detail_record_finalizer.py` · **Lines:** ~850–854
-
-`"placeholder" in lowered`, `"via.placeholder.com" in lowered`, `lowered.endswith("/white.svg")` are hardcoded. Add `PLACEHOLDER_IMAGE_PATTERNS` to extraction rules config and replace the literals.
 
 ### 21. detail_record_finalizer.py — `strip_chars` TypeError risk
 **File:** `backend/app/services/extract/detail_record_finalizer.py` · **Line:** ~287
@@ -133,45 +74,6 @@ In `_detail_jsonld_price_bundle`, the loop returns as soon as any offer has `pri
 
 `feature_text.startswith("{") and feature_text.endswith("}")` is a heuristic that can false-positive on legitimate JSON-like feature text. Replace with `json.loads(feature_text)` in a try/except and only pop when the parsed result is a `dict`.
 
-### 24. detail_text_sanitizer.py — False positive on `[`-prefixed text
-**File:** `backend/app/services/extract/detail_text_sanitizer.py` · **Line:** ~381
-
-`text.lstrip().startswith(("{", "["))` returns `""` for any bracket-prefixed string, causing false positives for bracketed product descriptions. Only treat leading `{` as JSON, or perform lightweight JSON detection before returning `""`. Preserve `[`-prefixed strings unless they truly parse as structured data.
-
-### 25. detail_text_sanitizer.py — `heading_hits` substring false positives
-**File:** `backend/app/services/extract/detail_text_sanitizer.py` · **Lines:** ~430–432
-
-`heading_hits = sum(1 for token in guide_glossary_heading_tokens if token and token in lowered)` uses substring matching. Tokenize `lowered` into words (e.g., `re.findall(r"\w+")`) and check membership against a set for word-boundary matching.
-
-### 26. variant_record_normalization.py — Comment double `_enforce_variant_currency_context` call
-**File:** `backend/app/services/extract/variant_record_normalization.py` · **Lines:** ~52, ~57
-
-`_enforce_variant_currency_context` is called twice—before dedup and after backfill. Add inline comments explaining the ordering intent so future maintainers don't collapse them.
-
-### 27. variant_record_normalization.py — `any()` early return skips image backfill for other variants
-**File:** `backend/app/services/extract/variant_record_normalization.py` · **Lines:** ~514–518
-
-`if any(variant.get("image_url") not in (None, "", [], {}) for variant in variants): return` exits when **any** variant has an image, leaving others without. Remove the `any()` guard and always iterate, setting `variant["image_url"] = fallback_image` only when the variant's image is missing.
-
-### 28. variant_record_normalization.py — `max_rows` int conversion can raise
-**File:** `backend/app/services/extract/variant_record_normalization.py` · **Line:** ~446
-
-`max_rows = max(1, int(crawler_runtime_settings.detail_max_variant_rows))` will raise `ValueError`/`TypeError` for non-numeric settings. Wrap in try/except and fall back to a safe default.
-
-### 29. variant_record_normalization.py — Rebuilds frozenset on every `_value_is_placeholder` call
-**File:** `backend/app/services/extract/variant_record_normalization.py` · **Lines:** ~184–186
-
-`frozenset(VARIANT_PLACEHOLDER_VALUES or ())` and `tuple(VARIANT_PLACEHOLDER_PREFIXES or ())` are rebuilt every call. Pre-compute as module-level constants `_VARIANT_PLACEHOLDER_VALUES_SET` and `_VARIANT_PLACEHOLDER_PREFIXES_LOWER`.
-
-### 30. variant_record_normalization.py — `re.fullmatch` not pre-compiled for option fields
-**File:** `backend/app/services/extract/variant_record_normalization.py` · **Line:** ~535
-
-`re.fullmatch(r"option\d+_(?:name|values?)", str(field_name))` is called in a loop. Pre-compile as `_OPTION_FIELD_PATTERN = re.compile(r"option\d+_(?:name|values?)")` at module level.
-
----
-
-## Field Value & DOM Scoring
-
 ### 31. field_value_core.py — `_coerce_barcode` rebuilds set on every call
 **File:** `backend/app/services/field_value_core.py` · **Line:** ~1246
 
@@ -181,11 +83,6 @@ In `_detail_jsonld_price_bundle`, the loop returns as soon as any offer has `pri
 **File:** `backend/app/services/field_value_candidates.py` · **Lines:** ~809–818
 
 `isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))` appears twice—once in the `any()` filter and once in the list comprehension. Extract into a local variable (e.g., `has_option_values`) and reuse.
-
-### 33. field_value_dom.py — Duplicated context tokens in `_scope_is_product_like`
-**File:** `backend/app/services/field_value_dom.py` · **Lines:** ~384, ~393
-
-`_scope_score` uses `("product", "detail", "pdp")` and `_scope_is_product_like` uses `("product", "pdp", "detail")`—same tokens, different order, duplicated. Create a single `SCOPE_PRODUCT_CONTEXT_TOKENS` constant and reference it from both functions.
 
 ### 34. field_value_dom.py — Hardcoded feature section selectors
 **File:** `backend/app/services/field_value_dom.py` · **Line:** ~1355
@@ -219,20 +116,6 @@ Weights `4000`, `2000`, `1000` and inline tokens `("product", "detail", "pdp")` 
 ---
 
 ## Service Logic
-
-### 39. data_enrichment/service.py — Regex recompilation in hot path
-**File:** `backend/app/services/data_enrichment/service.py` · **Lines:** ~758–759
-
-Restore caching for compiled regexes. Add `@lru_cache(maxsize=1)` to `_material_strip_patterns` so calls from `_normalize_materials` don't recompile on every product. If dynamic config is required, implement a `cache_clear()` helper.
-
-### 40. public_record_firewall.py — Barcode→SKU bypasses shape check
-**File:** `backend/app/services/public_record_firewall.py` · **Lines:** ~78–87
-
-When `ROUTE_BARCODE_TO_SKU` is enabled, `routed_sku` is written directly to `data[SKU_FIELD]` bypassing `_public_record_field_shape_valid`. Add the shape check after computing `routed_sku` and only write if it passes.
-
----
-
-## Harness & Test Support
 
 ### 41. harness_support.py — Case-sensitive gender validation
 **File:** `backend/harness_support.py` · **Lines:** ~1188–1189
@@ -268,32 +151,12 @@ Change `assert len(rows) >= 1` to `assert len(rows) == 1` to catch unexpected du
 
 `test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site_hardcoding` asserts `variant_count` and `variants` are **absent**, meaning non-standard axes (Weight/Flavour) are ignored. Rename to `test_extract_ecommerce_detail_ignores_nonstandard_variant_axes` to match actual behavior.
 
-
 ## Acquisition — Browser Runtime
-
-### 50. browser_runtime.py — Hardcoded `"no_viewport": True` context option
-**File:** `backend/app/services/acquisition/browser_runtime.py` · **Lines:** ~426
-
-`{"no_viewport": True}` is hardcoded inside the native Chrome context branch. Move to a config constant (e.g., `NATIVE_REAL_CHROME_CONTEXT_OPTIONS`) under `app/services/config/` and pass it into `PlaywrightContextSpec(context_options=...)`.
-
-### 51. browser_runtime.py — Imports private `_playwright_masking_init_script`
-**File:** `backend/app/services/acquisition/browser_runtime.py` · **Line:** ~424
-
-`from app.services.acquisition.browser_identity import _playwright_masking_init_script` imports a private symbol. Promote it to a public name (`playwright_masking_init_script`) in `browser_identity` and update the import/call site.
 
 ### 52. browser_runtime.py — `inject_init_script` semantics inverted in native Chrome branch
 **File:** `backend/app/services/acquisition/browser_runtime.py` · **Lines:** ~420–427
 
 The native Chrome branch enters when `not inject_init_script` (i.e., caller says "don't inject"), yet it injects a masking init script anyway. In the non-native branch (line ~442), `if inject_init_script: return spec` means the flag enables the built-in script. The flag has opposite semantics in the two code paths. Either rename the parameter to clarify intent (e.g., `inject_standard_init_script`) or restructure so the native Chrome branch also respects the flag consistently.
-
-### 53. browser_runtime.py — Hardcoded warmup reason tokens
-**File:** `backend/app/services/acquisition/browser_runtime.py` · **Lines:** ~1580–1588
-
-The warmup eligibility check uses inline string literals (`"host-preference"`, `"http-escalation"`, `"platform-required"`, `"traversal-required"`, `"empty-extraction retry"`, `"thin-listing retry"`, `"vendor-block:"`). Extract into `WARMUP_ELIGIBLE_BROWSER_REASONS` and `WARMUP_VENDOR_BLOCK_PREFIX` config constants.
-
----
-
-## Config — Runtime Settings
 
 ### 54. runtime_settings.py — Silent clamp on `min_max_pages`
 **File:** `backend/app/services/config/runtime_settings.py` · **Lines:** ~372–373
@@ -319,49 +182,10 @@ The condition `getattr(self, field_name) is None` overwrites fields the user exp
 
 `aws_proxy_url: str = "http://localhost:4000/v1/chat/completions"` is a hardcoded local proxy URL. Either make it env-backed (e.g., `os.getenv("AWS_PROXY_URL", "")`) or add an explicit comment explaining the LiteLLM proxy architecture requirement.
 
-### 58. llm_config_service.py — AWS `"api_key_set": True` is misleading
-**File:** `backend/app/services/llm_config_service.py` · **Line:** ~175
-
-AWS Bedrock uses ambient credentials (IAM/boto3), not an API key. Hardcoding `"api_key_set": True` misleads about credential availability. Replace with `"uses_ambient_auth": True` or compute dynamically.
-
-### 59. llm_provider_client.py — Unconditional `api_key` check rejects AWS
-**File:** `backend/app/services/llm_provider_client.py` · **Lines:** ~33–34
-
-`if not api_key: return error` fires for AWS even though `_call_aws` deletes `api_key` and uses ambient auth. Make the check provider-aware: skip when `normalized_provider == "aws"`.
-
-### 60. llm_provider_client.py — `_call_aws` doesn't validate `aws_proxy_url`
-**File:** `backend/app/services/llm_provider_client.py` · **Lines:** ~250–255
-
-`_call_aws` creates an `httpx.AsyncClient` targeting `aws_proxy_url` without checking it's non-empty or a valid URL. Add validation at the start and return `_http_error(...)` if invalid.
-
-### 61. llm_provider_client.py — `base_delay_s` deleted, no retry backoff
-**File:** `backend/app/services/llm_provider_client.py` · **Line:** ~56
-
-`del base_delay_s` removes the backoff parameter, so retries happen with zero delay. Restore exponential backoff: `await asyncio.sleep(base_delay_s * (2 ** _attempt))` after a failed attempt.
-
----
-
-## Config — Field Mappings
-
-### 62. field_mappings.py — `_STATIC_EXPORTS.get(...)` can return `None`
-**File:** `backend/app/services/config/field_mappings.py` · **Line:** ~26
-
-`_STATIC_EXPORTS.get("NORMALIZER_LIST_TEXT_FIELDS", ())` is safe (has fallback), but the dynamic `globals()` injection at line 23 has no `None` guard. If a JSON key maps to `None`, the module-level symbol becomes `None` and downstream iteration crashes. Add a `or ()` fallback in the globals injection loop.
-
-### 63. field_mappings.py — `CANONICAL_URL_FIELD` declared but not wired
-**File:** `backend/app/services/config/field_mappings.py` · **Line:** ~205
-
-`CANONICAL_URL_FIELD = "canonical_url"` is defined but not used in `field_url_normalization.py` which hardcodes `{"apply_url", "canonical_url", "url"}` as inline literals. Wire the constant in.
-
----
-
-## Extraction — DOM & Variants (continued)
-
 ### 64. detail_dom_extractor.py — Positional fallback merges mismatched variants
 **File:** `backend/app/services/extract/detail_dom_extractor.py` · **Line:** ~1276
 
 When `dom_key` doesn't match any `existing_by_key`, the code falls back to `existing_by_index.get(index)`. If DOM order changes between extractions, this can merge unrelated variant pairs. Consider logging a warning when positional fallback is used, or tightening the `index_fallback_allowed` condition.
-
 
 ### 66. detail_text_sanitizer.py — `DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS` not precomputed
 **File:** `backend/app/services/extract/detail_text_sanitizer.py` · **Line:** ~433
@@ -391,21 +215,6 @@ When `merged_by_semantic.get(semantic_identity)` returns `None`, the row is sile
 ---
 
 ## Field URL Normalization
-
-### 71. field_url_normalization.py — Hardcoded tracking strip prefixes
-**File:** `backend/app/services/field_url_normalization.py` · **Line:** ~36
-
-`("ecommerce_", "job_")` is inline in `_surface_needs_tracking_strip`. Move to `TRACKING_STRIP_SURFACE_PREFIXES` in extraction rules config.
-
-### 72. field_url_normalization.py — Hardcoded URL field names and surface
-**File:** `backend/app/services/field_url_normalization.py` · **Lines:** ~140–143
-
-`{"apply_url", "canonical_url", "url"}` and `"ecommerce_detail"` are inline literals. Move to config constants `PUBLIC_RECORD_CANONICAL_URL_FIELDS` and `PUBLIC_RECORD_CANONICAL_SURFACE`, and import `CANONICAL_URL_FIELD` from field_mappings.
-
-### 73. field_url_normalization.py — Hardcoded scheme strings in concatenation check
-**File:** `backend/app/services/field_url_normalization.py` · **Line:** ~127
-
-`"https:/" in tail or "http:/" in tail` hardcodes two schemes, but `_URL_SCHEME_RE` matches more. Use the compiled pattern to search `tail` instead of hardcoded strings.
 
 ### 74. field_url_normalization.py — Magic number thresholds
 **File:** `backend/app/services/field_url_normalization.py` · **Lines:** ~23, ~89, ~92
@@ -450,20 +259,6 @@ When `merged_by_semantic.get(semantic_identity)` returns `None`, the row is sile
 
 `safe_select(root, selector)[:12]` uses a magic number. Define `_MAX_SELECTOR_MATCHES = 12` at module level and use it consistently.
 
-### 81. field_value_dom.py — Redundant `isinstance(attrs, dict)` check
-**File:** `backend/app/services/field_value_dom.py` · **Line:** ~322
-
-After the `not isinstance(attrs, dict)` branch handles traversal and continues, `attrs` is guaranteed to be a dict. The `isinstance(attrs, dict) and` prefix on line 322 is redundant—simplify to `if "hidden" in attrs:`.
-
-### 82. field_value_dom.py — `clone_visible` unbounded recursion
-**File:** `backend/app/services/field_value_dom.py` · **Lines:** ~414–424
-
-`clone_visible` recurses without depth limit. On deeply nested DOMs this can blow the stack. Add a `remaining_depth` parameter (default e.g., 50) and return `None` when exhausted.
-
----
-
-## JS State Mapper
-
 ### 84. js_state_mapper.py — Dead `flat_variants` assignment
 **File:** `backend/app/services/js_state_mapper.py` · **Line:** ~484
 
@@ -487,15 +282,6 @@ Adding `@lru_cache` to `_material_strip_patterns` (flag #39) would freeze patter
 
 ## Normalizers
 
-### 87. normalizers/__init__.py — `flat_tokens` sort recomputed every call
-**File:** `backend/app/services/normalizers/__init__.py` · **Lines:** ~171–176
-
-`flat_tokens` is built and sorted on every `_normalize_availability` call. Precompute as `_SORTED_AVAILABILITY_TOKENS` at module level so the O(n log n) sort runs once.
-
----
-
-## Pipeline
-
 ### 88. pipeline/core.py — `count_failure` argument inverted
 **File:** `backend/app/services/pipeline/core.py` · **Line:** ~1301
 
@@ -504,25 +290,6 @@ Adding `@lru_cache` to `_material_strip_patterns` (flag #39) would freeze patter
 ---
 
 ## Public Record Firewall
-
-### 89. public_record_firewall.py — Hardcoded `"url"` string
-**File:** `backend/app/services/public_record_firewall.py` · **Line:** ~53
-
-`allowed_fields.add("url")` uses a literal instead of the imported `URL_FIELD` constant. Replace with `allowed_fields.add(URL_FIELD)`.
-
-### 90. public_record_firewall.py — Hardcoded `"additional_images"` string
-**File:** `backend/app/services/public_record_firewall.py` · **Line:** ~126
-
-`field_name == "additional_images"` is a hardcoded literal. Add `ADDITIONAL_IMAGES_FIELD` to field_mappings config and import it, or add it to `STRUCTURED_MULTI_FIELDS` and check membership.
-
-### 91. public_record_firewall.py — `NAVIGATION_URL_FIELDS` should live in config
-**File:** `backend/app/services/public_record_firewall.py` · **Line:** ~37
-
-`NAVIGATION_URL_FIELDS = frozenset({URL_FIELD, APPLY_URL_FIELD, CANONICAL_URL_FIELD})` is defined in service code. Move to the field-mappings config module alongside the other URL field constants.
-
----
-
-## Harness & Test Support (continued)
 
 ### 92. harness_support.py — Redundant lower-bound re-check in price sanity
 **File:** `backend/harness_support.py` · **Line:** ~1009
