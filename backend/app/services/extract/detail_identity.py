@@ -66,10 +66,12 @@ def listing_url_is_structural(url: str, page_url: str) -> bool:
         ]
         tokenized_segments = [_path_segment_tokens(segment) for segment in raw_segments]
         terminal_tokens = tokenized_segments[-1] if tokenized_segments else set()
-        if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
+        terminal_raw = raw_segments[-1] if raw_segments else ""
+        non_listing_tokens = set(LISTING_NON_LISTING_PATH_TOKENS)
+        if terminal_tokens & non_listing_tokens or terminal_raw in non_listing_tokens:
             return True
         leading_tokens = tokenized_segments[:-1] if len(tokenized_segments) <= 2 else []
-        terminal_raw = raw_segments[-1] if raw_segments else ""
+        leading_raw = raw_segments[:-1] if len(raw_segments) <= 2 else []
         terminal_token_list = [
             token for token in re.split(r"[-.]+", terminal_raw) if token
         ]
@@ -84,11 +86,9 @@ def listing_url_is_structural(url: str, page_url: str) -> bool:
             and "-" in terminal_raw
             and not year_led_terminal
         )
-        if (
-            not terminal_looks_like_product_slug
-            and any(
-                tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens
-            )
+        if not terminal_looks_like_product_slug and (
+            any(tokens & non_listing_tokens for tokens in leading_tokens)
+            or any(segment in non_listing_tokens for segment in leading_raw)
         ):
             return True
     except Exception:

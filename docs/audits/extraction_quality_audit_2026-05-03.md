@@ -1,5 +1,38 @@
 # Extraction Quality Audit — 2026-05-03
 
+## Verification Status (2026-05-03, post-review)
+
+Each finding was re-verified against current code before any fix was applied
+("trust the bug, not the analysis"). Results:
+
+| # | Finding | Status |
+|---|---|---|
+| 1.1 | Vans bracket-noise pollution | **Fixed** — `_strip_bracket_artifact_noise` in `detail_text_sanitizer.py` recovers the longest prose chunk when 2+ consecutive brackets appear. Regression test: `test_audit_2026_05_03_description_fixes.py::TestBracketArtifactNoise`. |
+| 1.2 | Converse template URL (`URL_TO_THE_PRODUCT_IMAGE`) | Already fixed — `field_value_dom.py:485-499` rejects `url_to_`, `{{`, `{$`, `%%`, `[[`, `]]`. |
+| 1.3 | Sony Python-dict in `specifications` | Already fixed — `field_value_core.py:1164-1168` rejects dict/set/frozenset for scalar text fields. |
+| 2.1 / 2.2 | Patagonia / Barrow hidden colorway or size concatenation | Hidden-node filter already present via `_node_is_hidden_or_auxiliary` + `_pruned_text_scope_root` in `field_value_dom.py`. Any remaining leakage is from unmarked-hidden DOM (sites using class-only hiding via CSS rules) — needs live HTML to verify and is not a current, reproducible bug in unit tests. Deferred until a captured artifact exists. |
+| 3.1 | Urban Outfitters feedback form | Already covered — `SEMANTIC_SECTION_LABEL_SKIP_TOKENS` + `_pruned_text_scope_root` already skip feedback/review widgets. |
+| 3.2 | Jordan 5 shipping/tracking boilerplate | **Fixed** — new `DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS` entries for `tracking status reads`, `order is shipped ... tracking`, `label created ... tracking/carrier/status/shipping/hours`. Context-bound to avoid rejecting legitimate prose that mentions tracking devices. |
+| 3.3 | '47 `(US) - only $X. Fast shipping` marketing banner | **Fixed** — new disclaimer pattern `\([A-Z]{2,4}\)\s*[-–—]\s*only\s+\$\d`. |
+| 3.4 | Anthropologie SEO meta blurb | **Fixed** — new patterns `\bshop\s+the\b ... \bat\s+\S+\s+today\b` and `\bread\s+customer\s+reviews\b ... \b(?:discover\|learn\|and more)\b`. |
+| 3.5 | Nikwax quantity-as-`color` ("1") | Already fixed — `_sanitize_option_scalar` in `field_value_core.py:656-658` rejects 1-2 digit numerics for the color field. |
+| 4.1 / 4.2 | Sony / New Balance description truncation | Not verified — needs an actual captured HTML artifact to identify which cap fires. Tracked under Zyte Delta Slice 6. |
+| 4.3 / 4.4 | Allbirds / Birkenstock implicit single-variant color/size | Already fixed — `_infer_single_variant_axes` in `variant_record_normalization.py` plus regression tests already added in `test_detail_extractor_structured_sources.py`. |
+| 4.5 / 4.6 | Nike AF1 / Patagonia missing `variants` array | Not verified standalone — these require captured HTML or JS-state samples and overlap with Zyte Delta Slices 2 and 4. Deferred to those slices. |
+
+Regression tests for the three fixes applied in this pass live at
+`backend/tests/services/test_audit_2026_05_03_description_fixes.py` (10
+cases).
+
+All other findings were re-verified as either already fixed in code or
+requiring captured artifacts before acting. No guesswork fixes were applied.
+
+---
+
+# Original Audit Findings
+
+
+
 Scope: `backend/app/services/field_value_core.py`, `field_value_dom.py`, `detail_extractor.py`, `extract/detail_dom_extractor.py`, `extract/shared_variant_logic.py`, `extract/variant_record_normalization.py`, `extract/detail_record_finalizer.py`, `config/extraction_rules.py`, `js_state_mapper.py`, `structured_sources.py`
 
 

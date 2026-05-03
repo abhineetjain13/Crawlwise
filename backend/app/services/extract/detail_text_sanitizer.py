@@ -317,7 +317,9 @@ def sanitize_detail_long_text_fields(
 
 
 def sanitize_detail_long_text(text: str, *, title: str) -> str:
-    cleaned_text = _strip_long_text_ui_tail(clean_text(text))
+    cleaned_text = _strip_long_text_ui_tail(
+        _strip_bracket_artifact_noise(clean_text(text))
+    )
     if cleaned_text.lower() in low_signal_long_text_values:
         return ""
     if detail_long_text_is_numeric_sequence(cleaned_text):
@@ -376,6 +378,34 @@ def sanitize_detail_features(value: object, *, title: str) -> list[str]:
         seen.add(lowered)
         cleaned_rows.append(cleaned)
     return cleaned_rows
+
+
+_BRACKET_RUN_RE = re.compile(r"\[{2,}|\]{2,}")
+_BRACKETS_RE = re.compile(r"[\[\]]+")
+
+
+def _strip_bracket_artifact_noise(text: str) -> str:
+    """Recover prose from Vans-style `[[[Style]] [[SKU]] [prose]` artifacts.
+
+    Triggered only when the text contains runs of 2+ consecutive brackets,
+    a strong signal of JSON/template serialization leakage (audit 2026-05-03
+    1.1). Returns the longest prose chunk between bracket runs, or, as a
+    fallback, the bracket-stripped text.
+    """
+    if not text or not _BRACKET_RUN_RE.search(text):
+        return text
+    candidates: list[tuple[int, int, str]] = []
+    for index, part in enumerate(_BRACKETS_RE.split(text)):
+        cleaned = clean_text(part)
+        if not cleaned:
+            continue
+        word_count = len(cleaned.split())
+        if word_count >= 5:
+            candidates.append((word_count, index, cleaned))
+    if candidates:
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        return candidates[0][2]
+    return clean_text(_BRACKETS_RE.sub(" ", text))
 
 
 def _strip_long_text_ui_tail(text: str) -> str:

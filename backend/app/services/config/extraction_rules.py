@@ -122,6 +122,18 @@ DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS = (
     r"\bshipping\s+and\s+returns?\b.{0,240}\b(?:orders?|privacy|policy|refunds?|returns?)\b",
     r"\bcookie\s+(?:notice|policy|preferences?)\b",
     r"\bprivacy\s+policy\b",
+    # Audit 2026-05-03 3.2: Shipping/fulfillment status blurbs leaked into
+    # Jordan 5 description. Context-bound so legitimate prose that mentions
+    # tracking or shipping is not rejected.
+    r"\btracking\s+status\s+reads\b",
+    r"\border\s+is\s+shipped\b.{0,120}\b(?:tracking|email)\b",
+    r"\blabel\s+created\b.{0,80}\b(?:tracking|carrier|status|shipping|hours)\b",
+    # Audit 2026-05-03 3.3: Marketing banner openers like "(US) - only $35. Fast shipping..."
+    r"\([A-Z]{2,4}\)\s*[-\u2013\u2014]\s*only\s+\$\d",
+    # Audit 2026-05-03 3.4: SEO meta blurbs ("Shop the X at Brand today",
+    # "Read customer reviews ... and discover more").
+    r"\bshop\s+the\b.{0,160}\bat\s+\S+\s+today\b",
+    r"\bread\s+customer\s+reviews?\b.{0,160}\b(?:discover|learn|and\s+more)\b",
 )
 DETAIL_COOKIE_DISCLOSURE_TEXT_PATTERNS = (
     r"\bcookie\s+name\s+is\s+associated\s+with\b",
