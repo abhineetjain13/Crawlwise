@@ -685,12 +685,20 @@ async def _try_browser_http_handoff(
                 float(crawler_runtime_settings.http_timeout_seconds),
                 context.resolved_timeout,
             )
-            result = await _curl_fetch(
-                context.url,
-                handoff_timeout,
-                proxy=proxy,
-                cookie_header=cookie_header,
-            )
+            try:
+                result = await _curl_fetch(
+                    context.url,
+                    handoff_timeout,
+                    proxy=proxy,
+                    cookie_header=cookie_header,
+                )
+            except (httpx.HTTPError, OSError, TimeoutError):
+                logger.debug(
+                    "Handoff curl_fetch failed for %s; skipping handoff",
+                    context.url,
+                    exc_info=True,
+                )
+                return None
             result.browser_diagnostics = {
                 **dict(result.browser_diagnostics or {}),
                 "browser_http_handoff": True,

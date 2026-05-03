@@ -75,7 +75,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     model_config = _settings_config(env_prefix="CRAWLER_RUNTIME_")
 
     performance_profile: Literal["ULTRA_FAST", "BALANCED", "STEALTH"] = "BALANCED"
-    http_timeout_seconds: int = 20
+    http_timeout_seconds: int = 10
     acquisition_attempt_timeout_seconds: int = 90
     curl_impersonate_target: str = "chrome131"
     force_httpx: bool = False
