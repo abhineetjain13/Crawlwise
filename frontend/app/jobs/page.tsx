@@ -18,8 +18,15 @@ import {
   PageHeader,
   ProgressBar,
   SectionCard,
-  TableSurface,
 } from '../../components/ui/patterns';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../../components/ui/table';
 import { Badge, Button } from '../../components/ui/primitives';
 
 export default function JobsPage() {
@@ -57,7 +64,7 @@ export default function JobsPage() {
         description="Live run state for the local dev runner."
         actions={
           <div className="flex items-center gap-2">
-            <span className="text-muted text-sm leading-[var(--leading-normal)]">
+            <span className="text-muted type-caption">
               Last refreshed {lastRefreshed}
             </span>
             <Button
@@ -85,8 +92,8 @@ export default function JobsPage() {
         ) : jobsQuery.isError ? (
           <DataRegionError message="Failed to load jobs." />
         ) : jobs.length ? (
-          <TableSurface className="table-surface-flat">
-            <table className="compact-data-table min-w-[960px]">
+          <div className="surface-muted rounded-[var(--radius-md)] border">
+            <Table className="compact-data-table min-w-[960px]">
               <colgroup>
                 <col style={{ width: '10%' }} />
                 <col style={{ width: '10%' }} />
@@ -96,42 +103,42 @@ export default function JobsPage() {
                 <col style={{ width: '10%' }} />
                 <col style={{ width: '10%' }} />
               </colgroup>
-              <thead>
-                <tr>
-                  <th>Run ID</th>
-                  <th>Type</th>
-                  <th>Target URL</th>
-                  <th>Progress</th>
-                  <th>Started</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Run ID</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Target URL</TableHead>
+                  <TableHead>Progress</TableHead>
+                  <TableHead>Started</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {jobs.map((job) => (
-                  <tr key={job.run_id}>
-                    <td className="mono-body text-foreground text-sm leading-[1.5]">
+                  <TableRow key={job.run_id}>
+                    <TableCell className="type-caption-mono font-medium">
                       {job.run_id}
-                    </td>
-                    <td className="text-muted text-sm leading-[var(--leading-relaxed)]">
+                    </TableCell>
+                    <TableCell className="type-body">
                       {formatJobType(job.type)}
-                    </td>
-                    <td
-                      className="mono-body text-foreground max-w-[320px] truncate text-sm font-medium leading-[var(--leading-relaxed)]"
+                    </TableCell>
+                    <TableCell
+                      className="max-w-[320px] truncate type-caption-mono"
                       title={job.url}
                     >
                       {job.url}
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       <ProgressBar percent={job.progress} />
-                    </td>
-                    <td className="text-muted text-sm leading-[var(--leading-relaxed)]">
+                    </TableCell>
+                    <TableCell className="type-caption-mono text-muted">
                       {formatTimestamp(job.started_at)}
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       <StatusPill status={job.status} />
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       <div className="flex items-center gap-2">
                         <ActionButton
                           icon={XCircle}
@@ -147,12 +154,12 @@ export default function JobsPage() {
                           danger
                         />
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </TableSurface>
+              </TableBody>
+            </Table>
+          </div>
         ) : (
           <DataRegionEmpty
             title="No active jobs"
@@ -189,7 +196,7 @@ function ActionButton({
       variant={danger ? 'ghost' : 'secondary'}
       disabled={disabled}
       className={cn(
-        'h-7 px-2.5 text-sm leading-[var(--leading-normal)]',
+        'h-7 px-2.5 type-control',
         danger && 'text-danger hover:bg-danger/10 hover:text-danger',
       )}
       title={label}

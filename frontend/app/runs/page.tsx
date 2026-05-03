@@ -22,6 +22,14 @@ import type { CrawlRun, RunStatus } from '../../lib/api/types';
 import { formatRunsDate as formatDate } from '../../lib/format/date';
 import { getDomain } from '../../lib/format/domain';
 import { runExecutionLabel, runExecutionTone } from '../../lib/ui/status';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../../components/ui/table';
 import { cn } from '../../lib/utils';
 
 type StatusFilter = '' | RunStatus;
@@ -38,16 +46,16 @@ function RunRow({
   const domain = getDomain(run.url);
 
   return (
-    <tr className="group relative hover:z-50">
+    <TableRow className="group">
       {/* Domain + URL */}
-      <td className="overflow-visible">
+      <TableCell className="overflow-visible">
         <div className="flex items-center gap-2.5">
           <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
           <div className="flex min-w-0 items-center gap-2">
             <Tooltip content={run.url} align="start">
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="type-mono-standard link-accent text-primary block max-w-[280px] truncate leading-[1.4] font-medium no-underline transition-colors"
+                className="link-accent text-primary block max-w-[280px] truncate type-body font-medium no-underline transition-colors"
               >
                 {domain || `Run #${run.id}`}
               </Link>
@@ -80,47 +88,47 @@ function RunRow({
             </div>
           </div>
         </div>
-      </td>
+      </TableCell>
 
       {/* Mode */}
-      <td>
-        <span className="mono-body bg-background-elevated text-muted rounded-[3px] px-1.5 py-0.5 text-sm leading-[var(--leading-normal)]">
+      <TableCell>
+        <span className="type-caption-mono bg-background-elevated text-muted rounded-[var(--radius-sm)] px-1.5 py-0.5">
           {formatRunType(run.run_type)}
         </span>
-      </td>
+      </TableCell>
 
       {/* Status */}
-      <td>
+      <TableCell>
         <Badge tone={runExecutionTone(run.status, run.result_summary)}>
           {runExecutionLabel(run.status, run.result_summary)}
         </Badge>
-      </td>
+      </TableCell>
 
       {/* Records */}
-      <td className="text-right">
+      <TableCell className="text-right">
         <span
           className={cn(
-            'mono-body text-foreground text-sm leading-[var(--leading-normal)] font-normal tabular-nums',
+            'type-caption-mono tabular-nums',
             recordCount > 0 ? 'text-primary' : 'text-muted',
           )}
         >
           {recordCount > 0 ? recordCount.toLocaleString() : '—'}
         </span>
-      </td>
+      </TableCell>
 
       {/* Date */}
-      <td className="text-right">
-        <span className="mono-body text-muted text-sm leading-[var(--leading-normal)] tabular-nums">
+      <TableCell className="text-right">
+        <span className="type-caption-mono text-muted tabular-nums">
           {formatDate(run.created_at)}
         </span>
-      </td>
+      </TableCell>
 
       {/* Actions */}
-      <td className="text-right whitespace-nowrap">
+      <TableCell className="text-right whitespace-nowrap">
         <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <Link
             href={`/crawl?run_id=${run.id}`}
-            className="ui-on-accent-surface focus-ring border-accent bg-accent hover:border-accent-hover hover:bg-accent-hover inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-[var(--radius-md)] border px-[9px] text-sm leading-none font-medium no-underline shadow-xs transition-[background-color,color,border-color,box-shadow,opacity,transform] hover:-translate-y-px"
+            className="ui-on-accent-surface focus-ring border-accent bg-accent hover:border-accent-hover hover:bg-accent-hover inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-[var(--radius-md)] border px-[9px] type-control no-underline shadow-xs transition-[background-color,color,border-color,box-shadow,opacity,transform] hover:-translate-y-px"
           >
             Open <ArrowUpRight className="size-3" />
           </Link>
@@ -135,8 +143,8 @@ function RunRow({
             {pendingDelete ? '…' : 'Delete'}
           </Button>
         </div>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -276,26 +284,18 @@ export default function RunsPage() {
             );
           }
           return (
-            <table className="compact-data-table">
-              <colgroup>
-                <col style={{ width: '30%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '10%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '15%' }} />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>Run</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th className="text-right">Records</th>
-                  <th className="text-right">Started</th>
-                  <th className="text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table className="compact-data-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[30%]">Run</TableHead>
+                  <TableHead className="w-[15%]">Type</TableHead>
+                  <TableHead className="w-[15%]">Status</TableHead>
+                  <TableHead className="w-[10%] text-right">Records</TableHead>
+                  <TableHead className="w-[15%] text-right">Started</TableHead>
+                  <TableHead className="w-[15%] text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {visibleRuns.map((run) => (
                   <RunRow
                     key={run.id}
@@ -304,15 +304,15 @@ export default function RunsPage() {
                     onDelete={() => setDeleteTarget(run)}
                   />
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           );
         })()}
       </TableSurface>
 
       {/* Total count */}
       {visibleRuns.length > 0 && (
-        <p className="text-muted text-sm leading-[var(--leading-normal)]">
+        <p className="type-caption">
           Showing {visibleRuns.length} of {query.data?.meta?.total ?? visibleRuns.length} runs
         </p>
       )}

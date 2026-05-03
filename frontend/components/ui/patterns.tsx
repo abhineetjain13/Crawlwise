@@ -88,15 +88,12 @@ export function SectionHeader({
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-center gap-2">
           {Icon && <Icon className="text-muted size-3.5 shrink-0" />}
-          <h2
-            className="text-foreground m-0 leading-[var(--leading-tight)] font-medium"
-            style={{ fontSize: 'var(--text-md)' }}
-          >
+          <h2 className="type-heading-3 m-0">
             {title}
           </h2>
         </div>
         {description ? (
-          <div className="text-secondary w-full text-sm leading-[var(--leading-relaxed)]">
+          <div className="type-body w-full">
             {description}
           </div>
         ) : null}
@@ -167,8 +164,8 @@ export function TabBar({
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            'relative z-10 inline-flex shrink-0 items-center justify-center rounded-[4px] py-0 text-sm leading-[var(--leading-snug)] font-medium whitespace-nowrap transition-all duration-200',
-            padX,
+            'relative z-10 inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] py-0 text-sm leading-[var(--leading-snug)] font-medium whitespace-nowrap transition-all duration-200',
+          padX,
             value === option.value
               ? 'ui-on-accent-surface bg-accent shadow-[0_1px_2px_rgba(15,23,42,0.12)]'
               : 'text-secondary hover:text-foreground',
@@ -216,10 +213,10 @@ export function EmptyPanel({
   return (
     <div className="border-border-strong bg-subtle-panel grid min-h-32 place-items-center rounded-[var(--radius-xl)] border border-dashed px-6 py-8 text-center">
       <div className="space-y-1">
-        <p className="text-foreground text-sm leading-[var(--leading-relaxed)] font-medium">
+        <p className="type-body font-medium">
           {title}
         </p>
-        <p className="text-muted text-sm leading-[var(--leading-normal)]">{description}</p>
+        <p className="type-caption">{description}</p>
       </div>
     </div>
   );
@@ -286,7 +283,7 @@ export function MutedPanelMessage({
   return (
     <div
       className={cn(
-        'surface-muted text-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[var(--leading-relaxed)]',
+        'surface-muted text-muted rounded-[var(--radius-md)] border-dashed px-4 py-6 type-body',
         className,
       )}
     >
@@ -495,11 +492,11 @@ export function RunSummaryChips({
             <div className="flex items-center gap-1.5">
               <Icon className={cn('size-3.5 shrink-0 opacity-90', chip.tone)} aria-hidden="true" />
               <div className="flex items-baseline gap-2">
-                <span className="text-muted text-xs font-bold tracking-[0.05em] uppercase">
+                <span className="type-label-mono">
                   {chip.label}
                 </span>
                 <span
-                  className={cn('text-sm font-semibold tracking-tight tabular-nums', chip.tone)}
+                  className={cn('type-control tabular-nums', chip.tone)}
                 >
                   {chip.value}
                 </span>
@@ -604,17 +601,11 @@ export function NavList<T>({
           >
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div
-                  className="text-foreground truncate leading-[var(--leading-snug)] font-medium"
-                  style={{ fontSize: 'var(--text-sm)' }}
-                >
+                <div className="type-body font-medium truncate">
                   {renderLabel(item)}
                 </div>
                 {renderMeta ? (
-                  <div
-                    className="text-muted mt-2 flex flex-wrap gap-2 leading-[var(--leading-snug)]"
-                    style={{ fontSize: 'var(--text-xs)' }}
-                  >
+                  <div className="type-caption flex flex-wrap gap-2 mt-2">
                     {renderMeta(item)}
                   </div>
                 ) : null}
@@ -634,7 +625,7 @@ export function DetailRow({
   className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
-    <div className={cn('border-divider bg-background rounded-lg border px-3 py-3', className)}>
+    <div className={cn('border-divider bg-background rounded-[var(--radius-md)] border px-3 py-3', className)}>
       {children}
     </div>
   );
@@ -647,9 +638,9 @@ export function KVTile({
   className,
 }: Readonly<{ label: string; value: ReactNode; className?: string }>) {
   return (
-    <div className={cn('bg-background-elevated rounded-[var(--radius-md)] px-2.5 py-2', className)}>
-      <div className="type-label">{label}</div>
-      <div className="text-foreground pt-1 text-sm font-medium">{value}</div>
+    <div className={cn('bg-background-elevated rounded-[var(--radius-md)] px-2.5 py-1.5', className)}>
+      <div className="type-label syntax-key">{label}</div>
+      <div className="text-foreground type-caption-mono pt-0.5 font-medium">{value}</div>
     </div>
   );
 }

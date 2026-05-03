@@ -38,7 +38,7 @@ function DomainBar({
   return (
     <div className="flex items-center gap-3 py-1.5">
       <span
-        className="mono-body text-secondary min-w-0 flex-1 truncate text-xs leading-[1.4] font-normal"
+        className="type-caption-mono text-secondary min-w-0 flex-1 truncate"
         title={domain}
       >
         {domain}
@@ -49,7 +49,7 @@ function DomainBar({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="text-muted w-7 text-right text-xs leading-[var(--leading-normal)] font-normal tabular-nums">
+      <span className="type-caption-mono text-muted w-7 text-right">
         {count}
       </span>
     </div>
@@ -82,13 +82,13 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
   return (
     <Link
       href={`/crawl?run_id=${run.id}` as Route}
-      className="group hover:bg-background-elevated flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 no-underline transition-colors"
+      className="group hover:bg-accent/[0.04] flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 no-underline transition-colors"
     >
       <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
-      <span className="mono-body text-primary group-hover:text-accent min-w-0 flex-1 truncate text-xs leading-[1.4] font-normal transition-colors">
+      <span className="type-body font-medium group-hover:text-accent min-w-0 flex-1 truncate transition-colors">
         {domain || `Run #${run.id}`}
       </span>
-      <span className="text-muted text-xs leading-[var(--leading-normal)] font-normal tabular-nums">
+      <span className="type-caption text-muted tabular-nums">
         {recordCount.toLocaleString()} rec
       </span>
       <Badge tone={runExecutionTone(run.status, run.result_summary)}>
@@ -199,10 +199,10 @@ export default function DashboardPage() {
             {sortedStatusEntries.map(([status, count]) => (
               <div
                 key={status}
-                className="text-muted flex items-center gap-1.5 text-sm leading-[var(--leading-normal)] font-normal"
+                className="type-caption flex items-center gap-1.5"
               >
                 <Badge tone={statusTone(status)}>{statusLabel(status)}</Badge>
-                <span className="text-foreground text-sm leading-[var(--leading-normal)] font-medium tabular-nums">
+                <span className="type-caption-mono font-medium tabular-nums">
                   {count}
                 </span>
               </div>
@@ -220,7 +220,7 @@ export default function DashboardPage() {
           action={
             <Link
               href="/runs"
-              className="link-accent text-sm leading-[1.4] font-medium no-underline hover:underline"
+              className="link-accent type-control no-underline hover:underline"
             >
               View all
             </Link>

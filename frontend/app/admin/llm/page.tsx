@@ -5,12 +5,21 @@ import { CheckCircle2, PlugZap, Plus, Trash2 } from 'lucide-react';
 
 import { Button, Dropdown, Field, Input } from '../../../components/ui/primitives';
 import {
+  DetailRow,
   InlineAlert,
   MutedPanelMessage,
   PageHeader,
   SectionCard,
   SurfaceSection,
 } from '../../../components/ui/patterns';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../../../components/ui/table';
 import { api } from '../../../lib/api';
 import type {
   LlmConfigCreatePayload,
@@ -227,15 +236,18 @@ export default function AdminLlmPage() {
             {configs.length ? (
               <div className="space-y-3">
                 {configs.map((config) => (
-                  <div
+                  <DetailRow
                     key={config.id}
-                    className="border-border bg-background-elevated rounded-[var(--radius-lg)] border p-4"
+                    className="p-4"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <div className="text-foreground text-sm font-medium">
-                            {config.task_type}
+                          <div className="flex items-center gap-1.5">
+                            <span className="type-label syntax-key">task:</span>
+                            <span className="type-caption-mono syntax-string font-bold uppercase">
+                              {config.task_type}
+                            </span>
                           </div>
                           {config.is_active ? (
                             <div className="bg-success-bg text-success inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium">
@@ -244,10 +256,10 @@ export default function AdminLlmPage() {
                             </div>
                           ) : null}
                         </div>
-                        <div className="text-muted text-sm font-normal">
+                        <div className="text-muted type-body">
                           {config.provider} · {config.model}
                         </div>
-                        <div className="text-muted text-sm font-normal">
+                        <div className="text-muted type-body">
                           {config.api_key_set ? config.api_key_masked : 'env-backed or unset'}
                         </div>
                       </div>
@@ -261,7 +273,7 @@ export default function AdminLlmPage() {
                         <Trash2 className="size-3.5" />
                       </Button>
                     </div>
-                  </div>
+                  </DetailRow>
                 ))}
               </div>
             ) : (
@@ -276,90 +288,75 @@ export default function AdminLlmPage() {
             className="flex-1"
           >
             {costLog.length ? (
-              <div className="custom-scrollbar max-h-[700px] overflow-x-auto overflow-y-auto">
-                <table className="w-full min-w-[850px] table-fixed border-collapse text-left">
-                  <thead>
-                    <tr className="border-divider/50 border-b">
-                      <th className="text-muted w-[140px] px-0 py-3 text-xs font-bold tracking-[0.1em] uppercase">
-                        Usage & Cost
-                      </th>
-                      <th className="text-muted w-[180px] px-4 py-3 text-xs font-bold tracking-[0.1em] uppercase">
-                        Task Type
-                      </th>
-                      <th className="text-muted w-[200px] px-4 py-3 text-xs font-bold tracking-[0.1em] uppercase">
-                        Target Entity
-                      </th>
-                      <th className="text-muted px-4 py-3 text-xs font-bold tracking-[0.1em] uppercase">
-                        Provider / Model
-                      </th>
-                      <th className="text-muted w-[90px] px-0 py-3 text-right text-xs font-bold tracking-[0.1em] uppercase">
-                        Time
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-divider/20 divide-y">
-                    {costLog.slice(0, 40).map((entry) => {
-                      const totalTokens = entry.input_tokens + entry.output_tokens;
-                      const cost = parseFloat(entry.cost_usd);
-                      return (
-                        <tr
-                          key={entry.id}
-                          className="hover:bg-accent/[0.04] group transition-colors"
-                        >
-                          <td className="px-0 py-4">
-                            <div className="flex flex-col">
-                              <div className="flex items-baseline gap-1.5">
-                                <span className="text-foreground text-sm leading-none font-medium tabular-nums">
-                                  {totalTokens.toLocaleString()}
-                                </span>
-                                <span className="text-muted text-sm font-normal">tokens</span>
-                              </div>
-                              <span className="text-accent mt-1 font-mono text-sm leading-none font-medium">
-                                ${cost > 0 && cost < 0.0001 ? cost.toFixed(6) : cost.toFixed(4)}
+              <Table className="min-w-[850px] table-fixed">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[140px] px-0">Usage & Cost</TableHead>
+                    <TableHead className="w-[180px] px-4">Task Type</TableHead>
+                    <TableHead className="w-[200px] px-4">Target Entity</TableHead>
+                    <TableHead className="px-4">Provider / Model</TableHead>
+                    <TableHead className="w-[90px] px-0 text-right">Time</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {costLog.slice(0, 40).map((entry) => {
+                    const totalTokens = entry.input_tokens + entry.output_tokens;
+                    const cost = parseFloat(entry.cost_usd);
+                    return (
+                      <TableRow key={entry.id} className="group transition-colors">
+                        <TableCell className="px-0 py-4">
+                          <div className="flex flex-col">
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="text-foreground type-caption-mono font-medium tabular-nums">
+                                {totalTokens.toLocaleString()}
                               </span>
+                              <span className="text-muted type-caption">tokens</span>
                             </div>
-                          </td>
-                          <td className="px-4 py-4">
-                            <span className="text-foreground text-sm leading-normal font-medium">
-                              {entry.task_type.replace(/_/g, ' ')}
+                            <span className="text-accent mt-1 type-label-mono font-medium">
+                              ${cost > 0 && cost < 0.0001 ? cost.toFixed(6) : cost.toFixed(4)}
                             </span>
-                          </td>
-                          <td className="px-4 py-4">
-                            <div
-                              className="text-foreground/80 truncate text-sm font-normal"
-                              title={entry.domain || `Run #${entry.run_id}`}
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4 py-4">
+                          <span className="text-foreground type-body font-semibold">
+                            {entry.task_type.replace(/_/g, ' ')}
+                          </span>
+                        </TableCell>
+                        <TableCell className="px-4 py-4">
+                          <div
+                            className="text-foreground/80 truncate type-body"
+                            title={entry.domain || `Run #${entry.run_id}`}
+                          >
+                            {entry.domain || (entry.run_id ? `Run #${entry.run_id}` : 'system')}
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4 py-4">
+                          <div className="flex flex-col overflow-hidden leading-tight">
+                            <span className="text-foreground truncate type-body font-medium">
+                              {entry.provider}
+                            </span>
+                            <span
+                              className="text-muted truncate type-caption"
+                              title={entry.model}
                             >
-                              {entry.domain || (entry.run_id ? `Run #${entry.run_id}` : 'system')}
-                            </div>
-                          </td>
-                          <td className="px-4 py-4">
-                            <div className="flex flex-col overflow-hidden leading-tight">
-                              <span className="text-foreground truncate text-sm font-medium">
-                                {entry.provider}
-                              </span>
-                              <span
-                                className="text-muted truncate text-sm font-normal"
-                                title={entry.model}
-                              >
-                                {entry.model}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-0 py-4 text-right">
-                            <span className="text-muted group-hover:text-foreground text-sm font-normal transition-colors">
-                              {new Date(entry.created_at).toLocaleTimeString([], {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                hour12: false,
-                              })}
+                              {entry.model}
                             </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-0 py-4 text-right">
+                          <span className="text-muted group-hover:text-foreground type-caption-mono transition-colors">
+                            {new Date(entry.created_at).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: false,
+                            })}
+                          </span>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             ) : (
               <div className="p-12 text-center">
                 <MutedPanelMessage

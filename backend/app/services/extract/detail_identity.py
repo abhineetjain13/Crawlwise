@@ -18,6 +18,8 @@ from app.services.config.extraction_rules import (
     JOB_LISTING_DETAIL_PATH_MARKERS,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_NON_LISTING_PATH_TOKENS,
+    PRODUCT_SLUG_MIN_TERMINAL_TOKENS,
+    YEAR_SLUG_PATTERN,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_value_core import (
@@ -78,11 +80,13 @@ def listing_url_is_structural(url: str, page_url: str) -> bool:
         # Year-led slugs like 2025-ceo-letter are editorial, not product.
         year_led_terminal = bool(
             terminal_token_list
-            and re.fullmatch(r"(?:19|20)\d{2}", terminal_token_list[0])
+            and re.fullmatch(YEAR_SLUG_PATTERN, terminal_token_list[0])
         )
+        # Use the ordered token list (not the deduped set) so slugs like
+        # "blue-blue-widget" are still recognized as product slugs.
         terminal_looks_like_product_slug = (
-            len(terminal_tokens) >= 3
-            and any(re.search(r"[a-z]", token) for token in terminal_tokens)
+            len(terminal_token_list) >= PRODUCT_SLUG_MIN_TERMINAL_TOKENS
+            and any(re.search(r"[a-z]", token) for token in terminal_token_list)
             and "-" in terminal_raw
             and not year_led_terminal
         )

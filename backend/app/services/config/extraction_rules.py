@@ -148,6 +148,25 @@ DETAIL_COOKIE_DISCLOSURE_TEXT_PATTERNS = (
     r"\breal\s+time\s+bidding\b",
 )
 DETAIL_TRACKING_TOKEN_PATTERN = r"_[a-z][a-z0-9_]{2,}"
+# Year-led editorial slugs like 2025-ceo-letter / 2024-annual-report must not
+# be treated as product slugs. Centralized so tuning and tests stay in one place.
+YEAR_SLUG_PATTERN = r"(?:19|20)\d{2}"
+PRODUCT_SLUG_MIN_TERMINAL_TOKENS = 3
+# Gender artifact words reused by size-candidate rejection (variant_record_normalization).
+GENDER_ARTIFACT_WORDS = ("men", "mens", "women", "womens", "boys", "girls")
+# Common alpha size tokens used to tag a variant option as a size rather than
+# a color modifier.
+STANDARD_SIZE_VALUES = frozenset({"xs", "s", "m", "l", "xl", "xxl", "xxxl"})
+# Unresolved server-side template placeholders commonly left in image srcs.
+UNRESOLVED_TEMPLATE_URL_TOKENS = (
+    "url_to_",
+    "{{",
+    "}}",
+    "{$",
+    "%%",
+    "[[",
+    "]]",
+)
 DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS = frozenset(
     {"discount", "false", "off", "on", "sale", "true"}
 )
@@ -820,6 +839,11 @@ _EXTRA_EXPORTS = [
     "PLACEHOLDER_IMAGE_URL_PATTERNS",
     "URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS",
     "URL_CONCATENATION_SCHEME_PATTERN",
+    "YEAR_SLUG_PATTERN",
+    "PRODUCT_SLUG_MIN_TERMINAL_TOKENS",
+    "GENDER_ARTIFACT_WORDS",
+    "STANDARD_SIZE_VALUES",
+    "UNRESOLVED_TEMPLATE_URL_TOKENS",
 ]
 
 

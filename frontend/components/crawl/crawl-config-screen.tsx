@@ -91,7 +91,7 @@ const ADVANCED_CONTROL_ROW_CLASS =
 const ADVANCED_COLUMN_CLASS = 'flex flex-col gap-4';
 const ADVANCED_SUBSECTION_CLASS = 'flex flex-col gap-2.5';
 const ADVANCED_SECTION_TITLE_CLASS =
-  'flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-secondary';
+  'flex items-center gap-2 type-label-mono text-secondary uppercase';
 
 const DIAGNOSTICS_PRESETS: Record<DiagnosticsPreset, DomainRunProfile['diagnostics_profile']> = {
   lean: {
@@ -905,7 +905,7 @@ export function CrawlConfigScreen({
                     aria-label="Bulk URLs input"
                   />
                   {bulkUrls.trim() ? (
-                    <div className="bg-background/80 text-muted absolute right-2 bottom-2 rounded px-2 py-1 text-sm backdrop-blur-sm">
+                    <div className="bg-background/80 text-muted absolute right-2 bottom-2 rounded-[var(--radius-sm)] px-2 py-1 type-caption backdrop-blur-sm">
                       {parseLines(bulkUrls).length} URLs
                     </div>
                   ) : null}
@@ -926,11 +926,11 @@ export function CrawlConfigScreen({
                   />
                   <label
                     htmlFor="csv-file-input"
-                    className="ui-on-accent-surface bg-accent hover:bg-accent-hover cursor-pointer rounded-[var(--radius-md)] px-3 py-1.5 text-sm font-medium transition-colors"
+                    className="ui-on-accent-surface bg-accent hover:bg-accent-hover cursor-pointer rounded-[var(--radius-md)] px-3 py-1.5 type-control transition-colors"
                   >
                     Choose file
                   </label>
-                  <span className="text-muted text-sm">
+                  <span className="text-muted type-body">
                     {csvFile ? csvFile.name : 'No file chosen'}
                   </span>
                 </div>
@@ -954,7 +954,7 @@ export function CrawlConfigScreen({
             )}
 
             {savedProfileMessage ? (
-              <div className="border-subtle-panel-border bg-subtle-panel text-secondary rounded-[var(--radius-md)] border px-3 py-2 text-sm leading-[var(--leading-relaxed)]">
+              <div className="border-subtle-panel-border bg-subtle-panel text-secondary rounded-[var(--radius-md)] border px-3 py-2 type-body leading-[var(--leading-relaxed)]">
                 {savedProfileMessage}
               </div>
             ) : null}
@@ -1089,9 +1089,9 @@ export function CrawlConfigScreen({
                 </div>
 
                 {singleUrlMode && savedProfileLoaded ? (
-                  <div className="text-secondary text-sm leading-[var(--leading-relaxed)]">
+                  <div className="text-secondary type-body leading-[var(--leading-relaxed)]">
                     Saved domain profile active:{' '}
-                    <span className="type-mono-standard text-foreground">{savedProfileDomain}</span>{' '}
+                    <span className="type-label-mono text-foreground">{savedProfileDomain}</span>{' '}
                     · {surfaceLabel(surface)}
                   </div>
                 ) : null}
@@ -1147,7 +1147,7 @@ export function CrawlConfigScreen({
             </header>
             <div className="space-y-3 p-4">
               {fieldConfigMessage ? (
-                <p className="text-success text-sm leading-[var(--leading-relaxed)]">
+                <p className="text-success type-body leading-[var(--leading-relaxed)]">
                   {fieldConfigMessage}
                 </p>
               ) : null}
@@ -1199,7 +1199,7 @@ export function CrawlConfigScreen({
                     ))}
                   </>
                 ) : (
-                  <div className="surface-muted text-secondary rounded-lg border-dashed px-4 py-6 text-sm leading-[var(--leading-relaxed)]">
+                  <div className="surface-muted text-secondary rounded-[var(--radius-md)] border-dashed px-4 py-6 type-body leading-[var(--leading-relaxed)]">
                     No selector rows yet.
                   </div>
                 )}

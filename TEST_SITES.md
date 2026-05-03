@@ -191,3 +191,4 @@ https://www.yeti.com/coolers/hard-coolers/tundra/tundra-45.html#closeCSModal
 https://www.gucci.com/int/en/pr/men/accessories-for-men/scarves-for-men/scarves-for-men/gg-wool-silk-jacquard-stole-p-8705434GAK31360
 https://www.williams-sonoma.com/products/breville-the-bambino-plus/
 https://www.sony.co.in/interchangeable-lens-cameras/products/ilce-9m3?sku=ilce-9m3-in5
+https://www.therevolverclub.com/products/technics-sl-1200mk7?variant=39337238593654&country=IN%C2%A4cy=INR&srsltid=AfmBOorhNg50VFVA7JuwiVt-GvpmZo20096mRBth-CNZwRVTLnvRD8Asy5Q

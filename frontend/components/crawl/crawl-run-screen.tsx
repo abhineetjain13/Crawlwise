@@ -25,6 +25,7 @@ import remarkGfm from 'remark-gfm';
 import { HistoryDrawer, type HistoryItem } from '../ui/history-drawer';
 
 import { cn } from '../../lib/utils';
+import { syntaxHighlightJson } from '../../lib/ui/syntax';
 import {
   DataRegionEmpty,
   DataRegionLoading,
@@ -899,9 +900,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 href={run.url}
                 target="_blank"
                 rel="noreferrer"
-                className="font-mono text-sm font-medium text-accent underline-offset-2 hover:underline"
+                className="link-accent type-body font-mono underline-offset-2 hover:underline"
               >
-                {getDomain(run.url)}
+                {getDomain(run.url).toLowerCase()}
               </a>
             </span>
           ) : (
@@ -927,7 +928,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             title="Loading Crawl"
             description="Fetching run details and restoring the workspace."
           />
-          <div className="text-muted text-sm leading-[var(--leading-relaxed)]">
+          <div className="text-muted type-body leading-[var(--leading-relaxed)]">
             Run #{runId} is loading.
           </div>
         </Card>
@@ -976,7 +977,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             </span>
             <div className="flex items-center gap-3">
               {run ? (
-                <span className="border-divider bg-background-elevated text-foreground inline-flex items-center gap-1.5 rounded border px-2.5 py-1 font-mono text-sm tabular-nums">
+                <span className="border-divider bg-background-elevated text-foreground inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-2.5 py-1 type-caption-mono tabular-nums">
                   <Clock className="size-3.5" />
                   {elapsedLabel}
                 </span>
@@ -989,7 +990,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     scrollViewportToBottom(logViewportRef);
                     setLiveJumpAvailable(false);
                   }}
-                  className="bg-background-alt shadow-card inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm leading-[var(--leading-normal)]"
+                  className="bg-background-alt shadow-card inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2.5 py-1.5 type-control"
                 >
                   <ChevronsDown className="size-3.5" aria-hidden="true" />
                   Jump to Latest
@@ -1025,7 +1026,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     href={run.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="link-accent block truncate font-mono text-sm font-medium leading-[1.4] underline-offset-2 hover:underline"
+                    className="link-accent type-body font-mono block truncate underline-offset-2 hover:underline"
                   >
                     {run.url}
                   </a>
@@ -1163,7 +1164,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                             }
                           />
                           {hasMoreTableRecords ? (
-                            <div className="surface-muted text-muted flex items-center justify-between rounded-lg px-3 py-2 text-sm leading-[var(--leading-normal)]">
+                            <div className="surface-muted text-muted flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 type-body">
                               <span>
                                 Showing {tableRecords.length} of {tableTotal} records
                               </span>
@@ -1205,11 +1206,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           Copy
                         </Button>
                       </div>
-                      <pre className="crawl-terminal crawl-terminal-json max-h-[72vh] min-h-[55vh] overflow-y-auto pt-14 pb-4">
-                        {recordsJson}
-                      </pre>
+                      <pre
+                        className="crawl-terminal crawl-terminal-json max-h-[72vh] min-h-[55vh] overflow-y-auto pt-14 pb-4"
+                        dangerouslySetInnerHTML={{ __html: syntaxHighlightJson(recordsJson) }}
+                      />
                       {hasMoreJsonRecords ? (
-                        <div className="surface-muted text-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-sm leading-[var(--leading-normal)]">
+                        <div className="surface-muted text-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 type-body">
                           <span>
                             JSON previewing {jsonRecords.length} of {recordsTotal} records
                           </span>
@@ -1258,7 +1260,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           ))}
                         </div>
                       ) : markdown ? (
-                        <div className="surface-muted max-h-[72vh] min-h-[55vh] overflow-y-auto rounded-lg px-3 pt-12 pb-3">
+                        <div className="surface-muted max-h-[72vh] min-h-[55vh] overflow-y-auto rounded-[var(--radius-md)] px-3 pt-12 pb-3">
                           <article className="markdown-document max-w-none">
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
@@ -1314,7 +1316,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                               description={`Review extraction evidence for ${domainRecipe.domain} on ${domainRecipe.surface}. Keep what should compound, reject what should not.`}
                             />
                             <div className="grid gap-3 md:grid-cols-2">
-                              <div className="surface-muted text-secondary rounded-lg px-3 py-3 text-sm leading-[var(--leading-relaxed)]">
+                              <div className="surface-muted text-secondary rounded-[var(--radius-md)] px-3 py-3 type-body leading-[var(--leading-relaxed)]">
                                 <div className="field-label mb-1">Requested Coverage</div>
                                 Requested:{' '}
                                 {domainRecipe.requested_field_coverage.requested.join(', ') ||
@@ -1326,7 +1328,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 Missing:{' '}
                                 {domainRecipe.requested_field_coverage.missing.join(', ') || 'None'}
                               </div>
-                              <div className="surface-muted text-secondary rounded-lg px-3 py-3 text-sm leading-[var(--leading-relaxed)]">
+                              <div className="surface-muted text-secondary rounded-[var(--radius-md)] px-3 py-3 type-body leading-[var(--leading-relaxed)]">
                                 <div className="field-label mb-1">Acquisition Evidence</div>
                                 Method:{' '}
                                 {domainRecipe.acquisition_evidence.actual_fetch_method || '—'}
@@ -1364,7 +1366,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                     return (
                                       <div
                                         key={`${item.field_name}:${item.selector_kind ?? 'source'}:${item.selector_value ?? item.source_labels.join(',')}`}
-                                        className="border-divider bg-background rounded-lg border px-3 py-3 text-sm"
+                                        className="border-divider bg-background rounded-[var(--radius-md)] border px-3 py-3 type-body"
                                       >
                                         <div className="flex flex-wrap items-start justify-between gap-3">
                                           <div className="min-w-0 flex-1">
@@ -1389,7 +1391,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                                 </Badge>
                                               ) : null}
                                             </div>
-                                            <div className="text-muted mt-1 text-xs">
+                                            <div className="text-muted mt-1 type-caption">
                                               {selectorWinnerLabel(item.selector_kind)} · Sources:{' '}
                                               {item.source_labels.join(', ') || '—'}
                                             </div>

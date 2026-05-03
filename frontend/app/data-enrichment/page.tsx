@@ -21,6 +21,14 @@ import type {
   EnrichedProduct,
 } from '../../lib/api/types';
 import { STORAGE_KEYS } from '../../lib/constants/storage-keys';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../../components/ui/table';
 import { cn } from '../../lib/utils';
 
 type PrefillPayload = {
@@ -156,7 +164,7 @@ export default function DataEnrichmentPage() {
         description={descriptionText}
         actions={
           <div className="flex w-full flex-wrap items-center justify-end gap-2">
-            <label className="border-border bg-background-elevated text-foreground hover:bg-background-alt inline-flex h-[var(--control-height)] cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 text-sm transition-colors">
+            <label className="border-border bg-background-elevated text-foreground hover:bg-accent/[0.04] inline-flex h-[var(--control-height)] cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 type-body transition-colors">
               <input
                 type="checkbox"
                 checked={llmEnabled}
@@ -199,7 +207,7 @@ export default function DataEnrichmentPage() {
         <section className="border-border bg-panel shadow-card overflow-hidden rounded-[var(--radius-xl)] border">
           <header className="border-divider flex flex-wrap items-center justify-between gap-4 border-b px-4 py-3">
             <div className="flex items-center gap-3">
-              <h2 className="type-label text-muted text-xs font-normal tracking-widest uppercase">
+              <h2 className="type-label-mono">
                 {products.length > 0 ? 'ENRICHED OUTPUT' : 'SELECTED RECORDS'}
               </h2>
             </div>
@@ -210,7 +218,7 @@ export default function DataEnrichmentPage() {
                 size="sm"
                 onClick={() => void detailQuery.refetch()}
                 disabled={!resolvedJobId || detailQuery.isFetching}
-                className="text-muted hover:text-foreground h-8 px-2 text-xs font-bold tracking-tight uppercase"
+                className="text-muted hover:text-foreground h-8 px-2 type-label-mono"
               >
                 <RefreshCcw className="mr-1.5 size-3" />
                 Refresh
@@ -234,25 +242,25 @@ export default function DataEnrichmentPage() {
             <DataRegionLoading count={8} className="px-0" />
           ) : products.length ? (
             <div className="commerce-table surface-muted max-h-[70vh] overflow-auto">
-              <table className="compact-data-table min-w-[1200px] border-separate border-spacing-0">
-                <thead style={{ position: 'sticky', top: 0, zIndex: 20 }}>
-                  <tr className="bg-subtle-panel shadow-sm">
-                    <th className="bg-subtle-panel sticky left-0 z-30 w-[180px] border-r border-border/50">Record</th>
-                    {ENRICHED_FIELD_LABELS.map(([key, label]) => (
-                      <th key={String(key)} className="bg-subtle-panel">
-                        <div className="flex min-w-0 items-center gap-1">
-                          <span className="flex-1 truncate">{label.toUpperCase()}</span>
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-divider divide-y">
-                  {products.map((product) => (
-                    <EnrichedProductRow key={product.id} product={product} />
+            <Table className="min-w-[1200px] border-separate border-spacing-0">
+              <TableHeader className="sticky top-0 z-20">
+                <TableRow className="bg-subtle-panel shadow-sm">
+                  <TableHead className="bg-subtle-panel sticky left-0 z-30 w-[180px] border-r border-border/50">Record</TableHead>
+                  {ENRICHED_FIELD_LABELS.map(([key, label]) => (
+                    <TableHead key={String(key)} className="bg-subtle-panel">
+                      <div className="flex min-w-0 items-center gap-1">
+                        <span className="flex-1 truncate">{label}</span>
+                      </div>
+                    </TableHead>
                   ))}
-                </tbody>
-              </table>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {products.map((product) => (
+                  <EnrichedProductRow key={product.id} product={product} />
+                ))}
+              </TableBody>
+            </Table>
             </div>
           ) : sourceRecords.length ? (
             <div className="divide-divider divide-y">
@@ -261,16 +269,16 @@ export default function DataEnrichmentPage() {
                 return (
                   <div
                     key={record.id ?? record.source_url ?? index}
-                    className="hover:bg-background-alt/50 flex items-center gap-3 px-4 py-2.5 transition-colors"
+                    className="hover:bg-accent/[0.04] flex items-center gap-3 px-4 py-2.5 transition-colors"
                   >
                     <span className="text-muted w-6 shrink-0 font-mono text-xs">
                       {index + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-foreground truncate text-xs font-medium tracking-tight">
+                      <div className="type-body-sm font-medium truncate">
                         {recordTitle(record)}
                       </div>
-                      <div className="text-muted flex items-center gap-2 text-xs">
+                      <div className="text-muted flex items-center gap-2 type-caption">
                         {record.source_url ? (
                           <a
                             href={record.source_url}
@@ -319,8 +327,8 @@ export default function DataEnrichmentPage() {
 
 function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>) {
   return (
-    <tr key={product.id} className="group/row hover:bg-subtle-panel transition-colors">
-      <td className="bg-background group-hover/row:bg-subtle-panel sticky left-0 z-10 border-r border-border/50 transition-colors">
+    <TableRow key={product.id} className="group/row">
+      <TableCell className="bg-background group-hover/row:bg-accent/[0.04] sticky left-0 z-10 border-r border-border/50 transition-colors">
         <div className="flex items-center gap-2 py-1.5">
           <Badge tone="neutral" className="h-5 shrink-0 px-1.5 font-mono text-xs opacity-60">
             #{product.source_record_id}
@@ -330,14 +338,14 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
               href={product.source_url}
               target="_blank"
               rel="noreferrer"
-              className="text-accent block max-w-[140px] truncate text-sm font-medium transition-colors hover:underline"
+              className="link-accent block max-w-[140px] truncate type-body font-medium transition-colors hover:underline"
               title={product.source_url}
             >
               {product.source_url.replace(/^https?:\/\/(www\.)?/, '')}
             </a>
           ) : null}
         </div>
-      </td>
+      </TableCell>
       {ENRICHED_FIELD_LABELS.map(([key]) => {
         const value = product[key];
         const display = formatValue(value);
@@ -345,11 +353,10 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
         const isProcessing = product.status === 'pending' || product.status === 'running';
 
         return (
-          <td key={String(key)}>
+          <TableCell key={String(key)}>
             {isEnriched ? (
               <span
-                className="text-foreground block max-w-[260px] truncate leading-relaxed font-normal tracking-tight"
-                style={{ fontSize: 'var(--table-font-size)' }}
+                className="type-body block max-w-[260px] truncate"
                 title={display}
               >
                 {display}
@@ -357,15 +364,15 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
             ) : isProcessing ? (
               <div className="flex items-center gap-1.5 opacity-40">
                 <Loader2 className="text-accent size-3 animate-spin" />
-                <span className="text-sm font-medium tracking-wide uppercase">Processing</span>
+                <span className="type-label-mono">Processing</span>
               </div>
             ) : (
-              <span className="text-muted/40 font-mono text-sm">--</span>
+              <span className="text-muted/40 type-caption-mono">--</span>
             )}
-          </td>
+          </TableCell>
         );
       })}
-    </tr>
+    </TableRow>
   );
 }
 

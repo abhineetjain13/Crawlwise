@@ -10,7 +10,7 @@ export function Table({
 }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
     <div className="relative w-full overflow-auto">
-      <table className={cn('w-full caption-bottom leading-[var(--leading-relaxed)]', className)}>
+      <table className={cn('w-full caption-bottom', className)}>
         {children}
       </table>
     </div>
@@ -41,7 +41,7 @@ export function TableRow({
   return (
     <tr
       {...props}
-      className={cn('border-divider hover:bg-background-alt border-b transition-colors', className)}
+      className={cn('border-divider hover:bg-accent/[0.04] border-b transition-colors', className)}
     >
       {children}
     </tr>
@@ -54,13 +54,7 @@ export function TableHead({
 }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
     <th
-      className={cn('text-muted h-9 px-4 text-left align-middle uppercase', className)}
-      style={{
-        fontFamily: 'var(--table-header-font-family)',
-        fontSize: 'var(--table-header-font-size)',
-        fontWeight: 'var(--table-header-weight)',
-        letterSpacing: 'var(--table-header-tracking)',
-      }}
+      className={cn('type-label-mono syntax-key h-9 px-4 text-left align-middle', className)}
     >
       {children}
     </th>
@@ -74,8 +68,7 @@ export function TableCell({
 }: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
   return (
     <td
-      className={cn('text-secondary p-4 align-middle leading-[1.5] font-normal', className)}
-      style={{ fontSize: 'var(--table-font-size)' }}
+      className={cn('type-body py-1.5 px-4 align-middle', className)}
       colSpan={colSpan}
     >
       {children}

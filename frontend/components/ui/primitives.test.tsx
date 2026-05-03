@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { Dropdown } from './primitives';
 describe('Dropdown', () => {
-  it('uses sanitized stable option ids for option elements and aria-activedescendant', () => {
+  it('sanitizes option IDs and correctly manages aria-activedescendant for accessibility', () => {
     const handleChange = vi.fn();
 
     render(
@@ -18,9 +18,8 @@ describe('Dropdown', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('combobox', { name: 'Surface' }));
-
     const combobox = screen.getByRole('combobox', { name: 'Surface' });
+    fireEvent.click(combobox);
     const listbox = screen.getByRole('listbox');
     const activeDescendant = combobox.getAttribute('aria-activedescendant');
     const activeOption = screen.getByRole('option', { name: 'Jobs Detail' });

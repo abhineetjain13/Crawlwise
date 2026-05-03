@@ -11,6 +11,8 @@ from app.services.config.extraction_rules import (
     LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
+    PRODUCT_SLUG_MIN_TERMINAL_TOKENS,
+    YEAR_SLUG_PATTERN,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -330,10 +332,10 @@ def looks_like_utility_url(url: str) -> bool:
     # editorial/news URLs, not product slugs.
     year_led = bool(
         terminal_tokens
-        and re.fullmatch(r"(?:19|20)\d{2}", terminal_tokens[0])
+        and re.fullmatch(YEAR_SLUG_PATTERN, terminal_tokens[0])
     )
     terminal_is_product_slug = (
-        len(terminal_tokens) >= 3
+        len(terminal_tokens) >= PRODUCT_SLUG_MIN_TERMINAL_TOKENS
         and any(re.search(r"[a-z]", token) for token in terminal_tokens)
         and "-" in terminal_raw
         and not year_led

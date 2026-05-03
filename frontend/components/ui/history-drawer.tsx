@@ -67,61 +67,56 @@ export function HistoryDrawer({
               <p className="text-xs">No history found.</p>
             </div>
           ) : (
-            <table className="compact-data-table w-full">
-              <tbody>
-                {items.map((item) => (
-                  <tr
-                    key={item.id}
-                    className={cn(
-                      'border-divider hover:bg-background-alt cursor-pointer border-b transition-colors last:border-0',
-                      activeId === item.id && 'bg-background-alt',
-                    )}
-                    onClick={() => {
-                      onSelect(item.id);
-                      onClose();
-                    }}
-                  >
-                    <td className="p-0">
-                      <div className="flex w-full flex-col gap-1.5 p-3.5 text-left">
-                        <div className="flex w-full items-center justify-between">
-                          <span
-                            className={cn(
-                              'text-accent font-mono text-sm font-normal',
-                              activeId === item.id && 'font-bold',
-                            )}
-                          >
-                            #{item.id}
-                          </span>
-                          <Badge
-                            tone={
-                              item.status === 'complete' ||
-                              item.status === 'completed' ||
-                              item.status === 'success'
-                                ? 'success'
-                                : item.status === 'failed' || item.status === 'error'
-                                  ? 'danger'
-                                  : 'neutral'
-                            }
-                            className="origin-right scale-90"
-                          >
-                            {item.status}
-                          </Badge>
-                        </div>
-                        {item.label && (
-                          <div className="text-foreground max-w-[300px] truncate text-xs font-medium">
-                            {item.label}
-                          </div>
-                        )}
-                        <div className="text-muted flex w-full items-center justify-between text-xs font-medium tracking-wider uppercase">
-                          <span>{item.meta ?? 'No details'}</span>
-                          <span className="font-mono">{formatShortDate(item.created_at)}</span>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="divide-divider divide-y">
+              {items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={cn(
+                    'hover:bg-background-alt flex w-full flex-col gap-1.5 p-3.5 text-left transition-colors',
+                    activeId === item.id && 'bg-background-alt',
+                  )}
+                  onClick={() => {
+                    onSelect(item.id);
+                    onClose();
+                  }}
+                >
+                  <div className="flex w-full items-center justify-between">
+                    <span
+                      className={cn(
+                        'text-accent type-label-mono font-medium',
+                        activeId === item.id && 'font-bold',
+                      )}
+                    >
+                      #{item.id}
+                    </span>
+                    <Badge
+                      tone={
+                        item.status === 'complete' ||
+                        item.status === 'completed' ||
+                        item.status === 'success'
+                          ? 'success'
+                          : item.status === 'failed' || item.status === 'error'
+                            ? 'danger'
+                            : 'neutral'
+                      }
+                      className="origin-right scale-90"
+                    >
+                      {item.status}
+                    </Badge>
+                  </div>
+                  {item.label && (
+                    <div className="text-foreground max-w-[300px] truncate type-body font-semibold">
+                      {item.label}
+                    </div>
+                  )}
+                  <div className="text-muted flex w-full items-center justify-between type-caption">
+                    <span>{item.meta ?? 'No details'}</span>
+                    <span className="type-caption-mono">{formatShortDate(item.created_at)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
           )}
         </div>
       </div>

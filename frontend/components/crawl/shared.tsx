@@ -43,8 +43,17 @@ import type {
   CrawlRun,
   CrawlSurface,
 } from '../../lib/api/types';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../ui/table';
 import { formatTimeHms, parseApiDate } from '../../lib/format/date';
 import { cn } from '../../lib/utils';
+import { syntaxHighlightJson } from '../../lib/ui/syntax';
 
 export type CrawlTab = 'category' | 'pdp';
 export type CategoryMode = 'single' | 'sitemap' | 'bulk';
@@ -1503,7 +1512,7 @@ export const LogTerminal = memo(function LogTerminal({
                   </div>
                   <div className="min-w-0">
                     <div
-                      className="text-secondary truncate font-mono text-sm font-medium"
+                      className="text-secondary truncate type-caption-mono font-medium"
                       title={summaryLog?.message || ''}
                     >
                       {summaryLog
@@ -1517,7 +1526,7 @@ export const LogTerminal = memo(function LogTerminal({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-xs font-medium"
+                        className="h-7 px-2 type-control"
                         onClick={(event) => {
                           event.stopPropagation();
                           setPeekedGroupKey(group.key);
@@ -1527,11 +1536,11 @@ export const LogTerminal = memo(function LogTerminal({
                         Peek
                       </Button>
                     ) : (
-                      <span className="text-xs opacity-25">--</span>
+                      <span className="type-caption opacity-25">--</span>
                     )}
                   </div>
                   <div className="pr-2 text-right">
-                    <div className="text-muted group-hover/row:text-secondary text-xs font-medium tracking-tight uppercase transition-colors">
+                    <div className="text-muted group-hover/row:text-secondary type-label-mono uppercase transition-colors">
                       {live && groups.length > 0 && group.key === groups[groups.length - 1].key
                         ? 'Active'
                         : expanded
@@ -1629,10 +1638,10 @@ export const LogTerminal = memo(function LogTerminal({
               }}
             >
               <div>
-                <div className="text-accent text-xs tracking-[0.16em] uppercase">
+                <div className="text-accent type-label-mono uppercase">
                   {TERMINAL_STRINGS.PAYLOAD_PEEK}
                 </div>
-                <div className="mt-1 text-xs opacity-55">
+                <div className="mt-1 type-caption opacity-55">
                   {peekedGroup?.label ?? TERMINAL_STRINGS.SITE_PAYLOAD}
                 </div>
               </div>
@@ -1707,15 +1716,21 @@ export const LogTerminal = memo(function LogTerminal({
                   Copy
                 </Button>
               </div>
-              <pre className="text-[14px] leading-7 whitespace-pre-wrap">
-                {peekedGroup && peekedGroup.records[safePeekedRecordIndex]
-                  ? JSON.stringify(
-                      cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
-                      null,
-                      2,
-                    )
-                  : TERMINAL_STRINGS.NO_PAYLOAD}
-              </pre>
+              <pre
+                className="text-[14px] leading-7 whitespace-pre-wrap"
+                dangerouslySetInnerHTML={{
+                  __html:
+                    peekedGroup && peekedGroup.records[safePeekedRecordIndex]
+                      ? syntaxHighlightJson(
+                          JSON.stringify(
+                            cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
+                            null,
+                            2,
+                          ),
+                        )
+                      : TERMINAL_STRINGS.NO_PAYLOAD,
+                }}
+              />
             </div>
           </div>
         </div>
@@ -1846,7 +1861,7 @@ export function SliderRow({
           className="pr-8 text-right font-mono tabular-nums"
         />
         {suffix ? (
-          <span className="text-muted pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 text-sm leading-normal lowercase">
+          <span className="text-muted pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 type-caption lowercase">
             {suffix}
           </span>
         ) : null}
@@ -1907,7 +1922,7 @@ export function AdditionalFieldInput({
         className="font-mono"
       />
       {validationHint ? (
-        <p className="text-danger text-sm leading-[var(--leading-normal)]">{validationHint}</p>
+        <p className="text-danger type-caption">{validationHint}</p>
       ) : null}
       {chips.length ? (
         <div className="flex flex-wrap gap-1.5">
@@ -1917,7 +1932,7 @@ export function AdditionalFieldInput({
               type="button"
               onClick={() => onRemove(field)}
               aria-label={`Remove ${field}`}
-              className="border-subtle-panel-border bg-subtle-panel text-secondary inline-flex items-center gap-1 rounded-md border px-2 py-1 text-sm leading-[var(--leading-normal)]"
+              className="border-subtle-panel-border bg-subtle-panel text-secondary inline-flex items-center gap-1 rounded-[var(--radius-sm)] border px-2 py-1 type-caption-mono"
             >
               <X className="size-3.5 shrink-0" aria-hidden="true" />
               <span className="truncate">{field}</span>
@@ -1951,7 +1966,7 @@ export function ManualFieldEditor({
   showLabels?: boolean;
 }>) {
   return (
-    <div className="border-border/60 bg-background/50 space-y-1.5 rounded-md border p-2.5">
+    <div className="border-border/60 bg-background/50 space-y-1.5 rounded-[var(--radius-md)] border p-2.5">
       <div className="grid gap-2 xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
         <div className="text-muted/50 hidden items-center justify-center xl:flex">
           <GripVertical className="size-3.5" />
@@ -1963,7 +1978,7 @@ export function ManualFieldEditor({
             value={row.fieldName}
             onChange={(event) => onChange({ fieldName: event.target.value })}
             placeholder="price"
-            className="h-8 font-mono text-xs"
+            className="h-8 type-caption-mono"
           />
         </label>
         <ValidatedField
@@ -2002,7 +2017,7 @@ export function ManualFieldEditor({
                 size="sm"
                 onClick={onTest}
                 disabled={testing || testDisabled}
-                className="h-8 min-w-[64px] text-xs"
+                className="h-8 min-w-[64px] type-control"
               >
                 {testing ? '...' : 'Test'}
               </Button>
@@ -2021,7 +2036,7 @@ export function ManualFieldEditor({
       {message ? (
         <div
           className={cn(
-            'alert-surface px-2.5 py-1.5 text-xs leading-[var(--leading-normal)]',
+            'alert-surface px-2.5 py-1.5 type-caption',
             messageTone === 'success' && 'alert-success',
             messageTone === 'warning' && 'alert-warning',
             messageTone === 'danger' && 'alert-danger',
@@ -2039,22 +2054,22 @@ export function FieldEditorHeader() {
     <div className="hidden items-center gap-2 px-3 py-1.5 xl:grid xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
       <div />
       <div className="flex items-center gap-1.5">
-        <span className="text-xs font-bold tracking-wider text-accent uppercase">Field</span>
+        <span className="type-label-mono text-accent uppercase">Field</span>
         <Info className="size-3 text-accent/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-xs font-bold tracking-wider text-accent uppercase">CSS</span>
+        <span className="type-label-mono text-accent uppercase">CSS</span>
         <Info className="size-3 text-accent/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-xs font-bold tracking-wider text-accent uppercase">XPath</span>
+        <span className="type-label-mono text-accent uppercase">XPath</span>
         <Info className="size-3 text-accent/60" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="text-xs font-bold tracking-wider text-accent uppercase">Regex</span>
+        <span className="type-label-mono text-accent uppercase">Regex</span>
         <Info className="size-3 text-accent/60" />
       </div>
-      <span className="text-right text-xs font-bold tracking-wider text-accent uppercase">
+      <span className="text-right type-label-mono text-accent uppercase">
         Actions
       </span>
     </div>
@@ -2088,7 +2103,7 @@ function ValidatedField({
           onChange={(event) => onChange(event.target.value)}
           onBlur={(event) => onBlur(event.target.value)}
           placeholder={placeholder}
-          className="h-8 pr-9 font-mono text-xs"
+          className="h-8 pr-9 type-caption-mono"
         />
         <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
           {state === 'valid' ? <CheckCircle2 className="text-success/80 size-3.5" /> : null}
@@ -2235,13 +2250,17 @@ export const RecordsTable = memo(function RecordsTable({
 
   function renderCell(col: string, record: CrawlRecord) {
     const raw = formatCellDisplay(readRecordValue(record, col));
-    if (!raw || raw === '--') return <span className="ct-muted">--</span>;
+    if (!raw || raw === '--') return <span className="text-muted/40 type-caption-mono">--</span>;
 
     if (TITLE_KEYS.has(col)) {
-      return <span className="ct-title block max-w-[320px] truncate">{raw}</span>;
+      return (
+        <span className="type-body block max-w-[320px] truncate font-medium">
+          {raw}
+        </span>
+      );
     }
     if (PRICE_KEYS.has(col)) {
-      return <span className="ct-price">{raw}</span>;
+      return <span className="type-caption-mono font-medium">{raw}</span>;
     }
     if (URL_KEYS.has(col)) {
       const isSafe = raw.startsWith('http://') || raw.startsWith('https://');
@@ -2251,7 +2270,7 @@ export const RecordsTable = memo(function RecordsTable({
             href={raw}
             target="_blank"
             rel="noreferrer"
-            className="ct-url block max-w-[200px] truncate"
+            className="link-accent type-body font-mono block max-w-[200px] truncate transition-colors"
             title={raw}
           >
             {raw}
@@ -2260,10 +2279,7 @@ export const RecordsTable = memo(function RecordsTable({
       }
     }
     return (
-      <span
-        className="text-secondary block max-w-[260px] truncate leading-[var(--leading-snug)] font-normal"
-        style={{ fontSize: 'var(--table-font-size)' }}
-      >
+      <span className="text-secondary block max-w-[260px] truncate type-body">
         {raw}
       </span>
     );
@@ -2273,9 +2289,9 @@ export const RecordsTable = memo(function RecordsTable({
     <div
       ref={setContainerRef}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-      className="commerce-table surface-muted max-h-[70vh] overflow-auto rounded-lg"
+      className="commerce-table surface-muted max-h-[70vh] overflow-auto rounded-[var(--radius-md)] border"
     >
-      <table className="compact-data-table min-w-[960px]">
+      <Table className="compact-data-table min-w-[960px]">
         <colgroup>
           <col style={{ width: 32 }} />
           {hasImageCol ? <col style={{ width: 64 }} /> : null}
@@ -2287,63 +2303,75 @@ export const RecordsTable = memo(function RecordsTable({
             return <col key={col} style={{ width }} />;
           })}
         </colgroup>
-        <thead>
-          <tr>
-            <th className="w-10">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-10">
               <input
                 type="checkbox"
                 checked={selectedIds.length === records.length && records.length > 0}
                 onChange={(event) => onSelectAll(event.target.checked)}
               />
-            </th>
-            {hasImageCol ? <th>IMG</th> : null}
+            </TableHead>
+            {hasImageCol ? <TableHead>IMG</TableHead> : null}
             {dataColumns.map((col) => (
-              <th key={col}>
-                <div className="flex min-w-0 items-center gap-1">
-                  <span className="flex-1 truncate">{humanizeFieldName(col)}</span>
-                </div>
-              </th>
+              <TableHead
+                key={col}
+                className={cn(PRICE_KEYS.has(col) && 'text-right')}
+              >
+                {humanizeFieldName(col)}
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {topSpacerPx > 0 ? (
-            <tr aria-hidden="true">
-              <td colSpan={totalCols} style={{ height: `${topSpacerPx}px`, padding: 0 }} />
-            </tr>
+            <TableRow>
+              <TableCell colSpan={totalCols} style={{ height: topSpacerPx }} />
+            </TableRow>
           ) : null}
-          {windowedRecords.map((record) => (
-            <tr key={record.id}>
-              <td>
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(record.id)}
-                  onChange={(event) => onToggleRow(record.id, event.target.checked)}
-                />
-              </td>
-              {hasImageCol ? (
-                <td className="ct-image-cell">
-                  {(() => {
-                    const src = formatCellDisplay(readRecordValue(record, imageCol!));
-                    if (!src || src === '--') return <span className="ct-muted">--</span>;
-                    return <RecordThumbnail src={src} />;
-                  })()}
-                </td>
-              ) : null}
-              {dataColumns.map((col) => (
-                <td key={col} title={formatCellDisplay(readRecordValue(record, col))}>
-                  {renderCell(col, record)}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {windowedRecords.map((record) => {
+            const isSelected = selectedIds.includes(record.id);
+            const imageSrc = imageCol ? stringifyCell(readRecordValue(record, imageCol)) : '';
+
+            return (
+              <TableRow
+                key={record.id}
+                className={cn(isSelected && 'bg-accent/[0.04]')}
+              >
+                <TableCell>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={(event) => onToggleRow(record.id, event.target.checked)}
+                  />
+                </TableCell>
+                {hasImageCol ? (
+                  <TableCell>
+                    {imageSrc ? (
+                      <RecordThumbnail src={imageSrc} />
+                    ) : (
+                      <span className="text-muted/40 type-caption-mono">--</span>
+                    )}
+                  </TableCell>
+                ) : null}
+                {dataColumns.map((col) => (
+                  <TableCell
+                    key={col}
+                    className={cn(PRICE_KEYS.has(col) && 'text-right')}
+                  >
+                    {renderCell(col, record)}
+                  </TableCell>
+                ))}
+              </TableRow>
+            );
+          })}
           {bottomSpacerPx > 0 ? (
-            <tr aria-hidden="true">
-              <td colSpan={totalCols} style={{ height: `${bottomSpacerPx}px`, padding: 0 }} />
-            </tr>
+            <TableRow>
+              <TableCell colSpan={totalCols} style={{ height: bottomSpacerPx }} />
+            </TableRow>
           ) : null}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 });
@@ -2361,7 +2389,7 @@ export function ActionButton({
       size="sm"
       disabled={disabled}
       onClick={onClick}
-      className={cn('h-8 min-w-0 px-3', !danger && 'text-sm leading-[var(--leading-normal)]')}
+      className="h-8 min-w-0 px-3 type-control"
     >
       {label}
     </Button>
@@ -2378,8 +2406,8 @@ export function PreviewRow({
       <div className="field-label shrink-0">{label}</div>
       <div
         className={cn(
-          'text-foreground min-w-0 flex-1 text-right text-sm leading-[var(--leading-normal)]',
-          mono && 'type-mono-standard',
+          'text-foreground min-w-0 flex-1 text-right type-body',
+          mono && 'type-label-mono',
         )}
       >
         {value || '--'}

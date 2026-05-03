@@ -13,8 +13,15 @@ import {
   InlineAlert,
   PageHeader,
   SectionCard,
-  TableSurface,
 } from '../../../components/ui/patterns';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '../../../components/ui/table';
 
 type StatusFilter = 'all' | 'active' | 'inactive';
 
@@ -98,8 +105,8 @@ export default function AdminUsersPage() {
         {usersQuery.isLoading ? (
           <DataRegionLoading count={6} />
         ) : users.length ? (
-          <TableSurface className="table-surface-flat">
-            <table className="compact-data-table min-w-[840px]">
+          <div className="surface-muted rounded-[var(--radius-md)] border">
+            <Table className="compact-data-table min-w-[840px]">
               <colgroup>
                 <col style={{ width: '40%' }} />
                 <col style={{ width: '15%' }} />
@@ -107,22 +114,22 @@ export default function AdminUsersPage() {
                 <col style={{ width: '15%' }} />
                 <col style={{ width: '15%' }} />
               </colgroup>
-              <thead>
-                <tr>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Status</th>
-                  <th>Joined</th>
-                  <th className="text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Joined</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {users.map((user) => (
-                  <tr key={user.id}>
-                    <td className="text-foreground text-sm leading-[var(--leading-normal)] font-normal">
+                  <TableRow key={user.id}>
+                    <TableCell className="type-body font-normal">
                       {user.email}
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       <Dropdown<User['role']>
                         value={user.role}
                         onChange={(role) => {
@@ -137,16 +144,16 @@ export default function AdminUsersPage() {
                         ariaLabel="User role"
                         className="min-w-24"
                       />
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       <Badge tone={user.is_active ? 'success' : 'danger'}>
                         {user.is_active ? 'active' : 'inactive'}
                       </Badge>
-                    </td>
-                    <td className="text-muted text-xs leading-[var(--leading-relaxed)]">
+                    </TableCell>
+                    <TableCell className="type-caption text-muted">
                       {formatDate(user.created_at)}
-                    </td>
-                    <td className="text-right">
+                    </TableCell>
+                    <TableCell className="text-right">
                       <Button
                         type="button"
                         variant="secondary"
@@ -157,12 +164,12 @@ export default function AdminUsersPage() {
                       >
                         {user.is_active ? 'Deactivate' : 'Reactivate'}
                       </Button>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </TableSurface>
+              </TableBody>
+            </Table>
+          </div>
         ) : (
           <DataRegionEmpty
             title="No users found"
