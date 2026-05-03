@@ -234,12 +234,12 @@ export default function DataEnrichmentPage() {
             <DataRegionLoading count={8} className="px-0" />
           ) : products.length ? (
             <div className="commerce-table surface-muted max-h-[70vh] overflow-auto">
-              <table className="compact-data-table min-w-[1200px]">
-                <thead>
-                  <tr className="bg-background-alt/50">
-                    <th className="bg-background-alt sticky left-0 z-10 w-[180px]">Record</th>
+              <table className="compact-data-table min-w-[1200px] border-separate border-spacing-0">
+                <thead style={{ position: 'sticky', top: 0, zIndex: 20 }}>
+                  <tr className="bg-subtle-panel shadow-sm">
+                    <th className="bg-subtle-panel sticky left-0 z-30 w-[180px] border-r border-border/50">Record</th>
                     {ENRICHED_FIELD_LABELS.map(([key, label]) => (
-                      <th key={String(key)}>
+                      <th key={String(key)} className="bg-subtle-panel">
                         <div className="flex min-w-0 items-center gap-1">
                           <span className="flex-1 truncate">{label.toUpperCase()}</span>
                         </div>
@@ -319,8 +319,8 @@ export default function DataEnrichmentPage() {
 
 function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>) {
   return (
-    <tr key={product.id} className="group/row hover:bg-background-alt/30 transition-colors">
-      <td className="bg-panel group-hover/row:bg-background-alt/50 sticky left-0 z-10 transition-colors">
+    <tr key={product.id} className="group/row hover:bg-subtle-panel transition-colors">
+      <td className="bg-background group-hover/row:bg-subtle-panel sticky left-0 z-10 border-r border-border/50 transition-colors">
         <div className="flex items-center gap-2 py-1.5">
           <Badge tone="neutral" className="h-5 shrink-0 px-1.5 font-mono text-xs opacity-60">
             #{product.source_record_id}

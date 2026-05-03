@@ -179,3 +179,10 @@ https://www.notre-shop.com/collections/new-arrivals/products/joe-freshgoods-abzo
 https://sneakerpolitics.com/collections/hoodies/products/one-of-these-days-follow-the-road-pullover-hoodie-dark-brown
 https://www.shoepalace.com/products/jordan-hj0139-045-40th-anniversary-graphic-womens-short-sleeve-shirt-black-red-1?variant=43468991627470
 https://www.dtlr.com/collections/men/products/jordan-air-jordan-5-retro-white-metallic-mf-white-hq7978-103
+
+https://www.onepeloton.com/shop/tread
+https://www.nintendo.com/us/store/products/pragmata-switch-2/
+https://www.bose.com/p/earbuds/bose-ultra-open-earbuds/ULT-HEADPHONEOPN.html
+https://www.glossier.com/en-in/products/balm-dotcom
+https://www.usa.canon.com/shop/p/eos-r5
+https://www.lego.com/en-us/product/millennium-falcon-75192

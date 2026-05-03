@@ -270,7 +270,9 @@ DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS = (
     "payments of",
     "per month",
 )
-DETAIL_BREADCRUMB_ROOT_LABELS = frozenset({"home", "shop", "store"})
+DETAIL_BREADCRUMB_ROOT_LABELS = frozenset(
+    {"home", "shop", "store", "homepage", "frontpage", "index", "home page", "homepage home"}
+)
 DETAIL_BREADCRUMB_SELECTORS = (
     "[aria-label*='breadcrumb' i] li",
     "[class*='breadcrumb' i] li",

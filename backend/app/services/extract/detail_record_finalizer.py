@@ -9,6 +9,7 @@ from app.services.config.extraction_rules import (
     CANDIDATE_PLACEHOLDER_VALUES,
     DETAIL_CATEGORY_LABEL_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
+    DETAIL_BREADCRUMB_ROOT_LABELS,
     DETAIL_BREADCRUMB_SEPARATOR_LABELS,
     DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO,
     DETAIL_LOW_SIGNAL_PARENT_MIN,
@@ -39,6 +40,7 @@ from app.services.extract.detail_identity import (
     record_matches_requested_detail_identity as _record_matches_requested_detail_identity,
     semantic_detail_identity_tokens as _semantic_detail_identity_tokens,
 )
+from app.services.extract.detail_raw_signals import detail_breadcrumb_is_root_label
 from app.services.extract.detail_price_extractor import (
     backfill_detail_price_from_html,
     detail_price_decimal,
@@ -115,7 +117,7 @@ def _sanitize_ecommerce_detail_record(
     requested_page_url: str | None,
 ) -> None:
     identity_url = text_or_none(requested_page_url) or page_url
-    _sanitize_detail_placeholder_scalars(record)
+    _sanitize_detail_placeholder_scalars(record, identity_url=identity_url)
     _sanitize_detail_identity_scalars(record, identity_url=identity_url)
     _sanitize_detail_variant_payload(record, identity_url=identity_url)
     sanitize_detail_long_text_fields(
@@ -126,7 +128,9 @@ def _sanitize_ecommerce_detail_record(
     _reconcile_detail_availability_from_variants(record)
 
 
-def _sanitize_detail_placeholder_scalars(record: dict[str, Any]) -> None:
+def _sanitize_detail_placeholder_scalars(
+    record: dict[str, Any], *, identity_url: str = ""
+) -> None:
     title = clean_text(record.get("title"))
     if _detail_title_looks_like_placeholder(title) or detail_title_value_is_low_signal(
         title
@@ -141,6 +145,7 @@ def _sanitize_detail_placeholder_scalars(record: dict[str, Any]) -> None:
             category,
             title=record.get("title"),
             sku=record.get("sku"),
+            page_url=identity_url,
         )
         if cleaned_category:
             record["category"] = cleaned_category
@@ -263,17 +268,8 @@ def _detail_scalar_value_is_placeholder(value: object) -> bool:
     return cleaned in {"category", "default title", "uncategorized"}
 
 
-def _clean_detail_category_path(
-    value: object,
-    *,
-    title: object,
-    sku: object,
-) -> str:
-    parts = [
-        clean_text(part)
-        for part in re.split(r"\s*(?:>|/|›|»|→|\|)\s*", clean_text(value))
-        if clean_text(part)
-    ]
+def _clean_detail_category_path(value: object, *, title: object, sku: object, page_url: str = "") -> str:
+    parts = [clean_text(p) for p in re.split(r"\s*(?:>|/|›|»|→|\|)\s*", clean_text(value)) if clean_text(p)]
     if not parts:
         return ""
     ui_tokens = {
@@ -296,6 +292,9 @@ def _clean_detail_category_path(
         ):
             continue
         cleaned_parts.append(cleaned)
+    while cleaned_parts and detail_breadcrumb_is_root_label(cleaned_parts[0], page_url=page_url):
+        cleaned_parts.pop(0)
+
     identity_values = [clean_text(title), clean_text(sku)]
     while cleaned_parts and any(
         _category_part_matches_identity(cleaned_parts[-1], identity)

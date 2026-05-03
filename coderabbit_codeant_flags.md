@@ -6,49 +6,15 @@ Verify each finding against current code before fixing.
 
 ## Adapters
 
-### 3. myntra.py — Variant count inconsistency
-**File:** `backend/app/services/adapters/myntra.py` · **Lines:** ~216, ~241
-
-Variant counts become inconsistent after flattening the variant list. Detail records also no longer include variant metadata that downstream consumers expect.
-
-### 4. shopify.py — Selected variant & axis metadata dropped
-**File:** `backend/app/services/adapters/shopify.py` · **Line:** ~198
-
-Removing the selected-variant payload breaks consumers depending on the active variant's full data. Dropping variant axis metadata removes structured option information needed by callers.
-
 ### 5. shopify.py — Unused `_selectable_axes` from `_split_selectable_axes`
 **File:** `backend/app/services/adapters/shopify.py` · **Lines:** ~172–174, ~344
 
 `_selectable_axes` is assigned but never used after `self._split_selectable_axes(axes)`. Either unpack only `single_value_attributes` or create a dedicated method that returns just that value, and remove the unused `_selectable_axes` variable from both call sites.
 
-### 6. shopify.py — Variant count after flattening
-**File:** `backend/app/services/adapters/shopify.py` · **Line:** ~199
-
-`variant_count` is computed from `flat_variants` after flattening, which can produce an incorrect total when the adapter's internal variant structure differs from the flattened output.
 
 ---
 
 ## Config & Schema
-
-### 7. field_mappings.exports.json — Legacy variant aliases removed
-**File:** `backend/app/services/config/field_mappings.exports.json` · **Line:** ~73
-
-Dropping legacy variant aliases from the export breaks existing variant parsing for older payloads.
-
-### 8. field_mappings.exports.json — `price_original` missing from JS state fields
-**File:** `backend/app/services/config/field_mappings.exports.json` · **Line:** ~248
-
-Removing `price_original` from `ECOMMERCE_DETAIL_JS_STATE_FIELDS` creates a schema mismatch with the live extractor data model.
-
-### 9. data_enrichment.py — Narrowed crawl sources
-**File:** `backend/app/services/config/data_enrichment.py` · **Line:** ~142
-
-Narrowing the crawl sources can make enrichment miss color, size, and availability data on existing records.
-
-### 10. data_enrichment.py — `selected_variant` in enrichment sources
-**File:** `backend/app/services/config/data_enrichment.py` · **Lines:** ~151, ~160, ~165
-
-`SELECTED_VARIANT_FIELD` is still referenced in color, size, and availability candidate sources. If selected_variant is no longer populated by adapters, these enrichment paths will never find data for products that only expose stock/color/size on the chosen variant.
 
 ### 18. detail_price_extractor.py — Redundant early-return in `_detail_price_from_html`
 **File:** `backend/app/services/extract/detail_price_extractor.py` · **Lines:** ~579–581
@@ -387,3 +353,113 @@ Four tests call `map_js_state_to_fields` but have zero assertions. Add assertion
 **File:** `backend/app/services/config/extraction_rules.py` · **Line:** ~128
 
 `DETAIL_TEXT_SCOPE_SELECTORS` starts with `_STATIC_EXPORTS.get("DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR", "main")` which is dynamic at import time. If the JSON export changes, the first selector can misdirect detail extraction to the wrong DOM scope. Consider making the fallback order explicit and deterministic.
+
+
+Fix the following issues. The issues can be from different files or can overlap on same lines in one file.
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @backend/app/services/acquisition/browser_runtime.py at line 334, The hardcoded ignored args assigned to launch_kwargs["ignore_default_args"] should be moved into configuration and validated against Patchright's API: add a new config entry (e.g. IGNORED_DEFAULT_ARGS) in app/services/config/browser_fingerprint_profiles.py and read it where launch_kwargs is constructed so launch_kwargs["ignore_default_args"] = <config value> instead of the literal ["--enable-automation"]; also confirm that chromium.launch() in Patchright supports ignore_default_args and, if it does not, translate the config into the supported API (or use an alternative call) inside the same function where launch_kwargs is used to avoid runtime errors.
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @backend/app/services/config/browser_fingerprint_profiles.py around lines 34 - 46, Add the three new constants to the module export list and give WARMUP_VENDOR_BLOCK_PREFIX a type annotation: update __all__ to include "NATIVE_REAL_CHROME_CONTEXT_OPTIONS", "WARMUP_ELIGIBLE_BROWSER_REASONS", and "WARMUP_VENDOR_BLOCK_PREFIX", and change the WARMUP_VENDOR_BLOCK_PREFIX declaration to include a type (e.g., str) to match the other constants; verify the same change is applied consistently where these constants appear later in the file (around the other occurrences at lines ~309-318).
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @backend/app/services/config/field_mappings.py around lines 217 - 221, NAVIGATION_URL_FIELDS and PUBLIC_RECORD_CANONICAL_URL_FIELDS are defined as identical frozensets; either deduplicate by having one reference the other (e.g., set PUBLIC_RECORD_CANONICAL_URL_FIELDS = NAVIGATION_URL_FIELDS) or, if they are conceptually different, add a short clarifying comment above the two constants explaining their distinct purposes and why they currently contain the same members so future changes are clear; update references to PUBLIC_RECORD_CANONICAL_URL_FIELDS or NAVIGATION_URL_FIELDS accordingly.
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @backend/app/services/crawl_fetch_runtime.py around lines 788 - 796, The code assumes crawler_runtime_settings.http_timeout_seconds is a number and will raise TypeError if it's None; mirror the handoff-timeout guard used earlier by computing http_timeout only when http_timeout_seconds is not None. Specifically, in the block around http_timeout, check if crawler_runtime_settings.http_timeout_seconds is None and if so set http_timeout = context.resolved_timeout; otherwise set http_timeout = min(float(crawler_runtime_settings.http_timeout_seconds), context.resolved_timeout) before calling wait_for_host_slot and fetcher.
+
+- Verify each finding against the current code and only fix it if needed.
+
+In @backend/app/services/crawl_fetch_runtime.py around lines 684 - 690, The handoff_timeout calculation can raise TypeError if crawler_runtime_settings.http_timeout_seconds is None; update the logic around where handoff_timeout is computed (the block that sets handoff_timeout before calling _curl_fetch with context.url and context.resolved_timeout) to guard against None by using a default (e.g., treat None as 0 or another sensible default) or explicitly check for None and handle accordingly so float(...) is never called on None.
+
+- Verify each finding against the current code and only fix it if needed.
+
+### 108. browser_runtime.py — Hardcoded ignored args
+**File:** `backend/app/services/acquisition/browser_runtime.py` · **Line:** ~334
+
+The hardcoded `["--enable-automation"]` assigned to `launch_kwargs["ignore_default_args"]` should be moved into configuration (e.g., `app/services/config/browser_fingerprint_profiles.py`).
+
+### 109. browser_fingerprint_profiles.py — Missing exports and types
+**File:** `backend/app/services/config/browser_fingerprint_profiles.py` · **Lines:** ~34–46
+
+`WARMUP_VENDOR_BLOCK_PREFIX` needs a type annotation. Add `NATIVE_REAL_CHROME_CONTEXT_OPTIONS`, `WARMUP_ELIGIBLE_BROWSER_REASONS`, and `WARMUP_VENDOR_BLOCK_PREFIX` to `__all__`.
+
+### 110. field_mappings.py — Duplicate canonical/navigation url fields
+**File:** `backend/app/services/config/field_mappings.py` · **Lines:** ~217–221
+
+`NAVIGATION_URL_FIELDS` and `PUBLIC_RECORD_CANONICAL_URL_FIELDS` are identical. Deduplicate them or add a comment explaining why they must stay separate.
+
+### 111. crawl_fetch_runtime.py — TypeError risks on timeouts
+**File:** `backend/app/services/crawl_fetch_runtime.py` · **Lines:** ~684–690, ~788–796
+
+`crawler_runtime_settings.http_timeout_seconds` can be `None`. Calling `float()` on it for `handoff_timeout` or `http_timeout` will raise a TypeError.
+
+### 112. detail_dom_extractor.py — Overwriting existing variants
+**File:** `backend/app/services/extract/detail_dom_extractor.py` · **Lines:** ~1263–1271
+
+The loop populating `existing_by_key` overwrites earlier rows when `variant_id` or `url` duplicates. Either preserve the first occurrence or collect them in a list.
+
+### 113. detail_dom_extractor.py — Hex color regex uses A-F
+**File:** `backend/app/services/extract/detail_dom_extractor.py` · **Line:** ~347
+
+The regex `r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?"` checks against `compact` which is already lowercased. Simplify the character class to `[0-9a-f]`.
+
+### 114. detail_record_finalizer.py — Rebuilding placeholder pattern tuple
+**File:** `backend/app/services/extract/detail_record_finalizer.py` · **Lines:** ~851–852
+
+Calling `tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ())` per-call creates unnecessary allocation. Pre-compute a cached lowercased tuple at module load.
+
+### 115. detail_text_sanitizer.py — Brittle JSON object check
+**File:** `backend/app/services/extract/detail_text_sanitizer.py` · **Lines:** ~400–402
+
+Treating a leading `{` as sufficient to drop text is brittle. Use `json.loads` or a structural check to verify it's a real JSON object before dropping.
+
+### 116. shared_variant_logic.py — Hardcoded noise ancestor depth
+**File:** `backend/app/services/extract/shared_variant_logic.py` · **Lines:** ~162–166
+
+The fallback depth `3` is hardcoded. Extract to a config constant like `VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT`.
+
+### 117. variant_record_normalization.py — Hardcoded fallback max_rows
+**File:** `backend/app/services/extract/variant_record_normalization.py` · **Lines:** ~456–459
+
+The fallback `max_rows = 1` is hardcoded. Extract to a config constant like `DEFAULT_DETAIL_MAX_VARIANT_ROWS`.
+
+### 118. field_url_normalization.py — Unreachable and fragile code
+**File:** `backend/app/services/field_url_normalization.py` · **Lines:** ~28–35, ~122–137
+
+`len(scheme_matches) == 1` branch is unreachable because `_URL_SCHEME_RE.finditer` already finds all matches. Also, `URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS` is double-wrapped in `tuple()`.
+
+### 119. field_value_core.py — Redundant length check
+**File:** `backend/app/services/field_value_core.py` · **Lines:** ~656–661
+
+`re.fullmatch(r"\d{1,2}", cleaned)` already guarantees 1-2 chars. The trailing `and len(cleaned) <= 2` is redundant.
+
+### 120. field_value_dom.py — Bare int() calls on config values
+**File:** `backend/app/services/field_value_dom.py` · **Lines:** ~81, ~387–397
+
+Bare `int()` calls on config values like `MAX_SELECTOR_MATCHES` and `SCOPE_SCORE_MAIN_WEIGHT` will raise TypeError on `None`. Use `_safe_int`.
+
+### 121. llm_provider_client.py — Retry loop semantics and unused parameter
+**File:** `backend/app/services/llm_provider_client.py` · **Lines:** ~60–61, ~254
+
+The retry loop treats `max_retries` as total attempts. The `api_key` parameter is deleted using `del api_key` instead of prefixing with `_`.
+
+### 122. pipeline/core.py — Duplicated browser_attempted logic
+**File:** `backend/app/services/pipeline/core.py` · **Lines:** ~441–444
+
+The code duplicates logic to determine if the browser attempted. Use the existing `_browser_attempted(acquisition_result)` helper.
+
+### 123. test_state_mappers.py — Missing product-level mappings assertion
+**File:** `backend/tests/services/test_state_mappers.py` · **Lines:** ~97–146
+
+The test only asserts variant-level mappings. Extend it to assert product-level fields like `mapped["color"]` and `mapped["size"]`.
+
+### 124. crawl-run-screen.tsx — Tone badge logic warns on empty
+**File:** `frontend/components/crawl/crawl-run-screen.tsx` · **Lines:** ~1117–1129
+
+The Badge uses `tone={llmSummary.touchedRecords > 0 ? 'accent' : 'warning'}`, treating "LLM enabled, no repair" as a warning. Change fallback to a neutral tone.

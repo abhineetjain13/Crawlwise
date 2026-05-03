@@ -127,6 +127,27 @@ def _clean_breadcrumb_label(value: object) -> str:
     return text
 
 
+def detail_breadcrumb_is_root_label(text: str, page_url: str = "") -> bool:
+    lowered = clean_text(text).casefold()
+    root_labels = {
+        clean_text(label).casefold()
+        for label in tuple(DETAIL_BREADCRUMB_ROOT_LABELS or ())
+        if clean_text(label)
+    }
+    if lowered in root_labels:
+        return True
+    if page_url:
+        try:
+            host = urlparse(page_url).netloc.casefold()
+            if host.startswith("www."):
+                host = host[4:]
+            if lowered == host or lowered == host.split(".")[0]:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
 def _trim_breadcrumb_labels(
     labels: list[str],
     *,
@@ -137,28 +158,7 @@ def _trim_breadcrumb_labels(
     if not rows:
         return []
 
-    root_labels = {
-        clean_text(label).casefold()
-        for label in tuple(DETAIL_BREADCRUMB_ROOT_LABELS or ())
-        if clean_text(label)
-    }
-
-    def _is_root_label(text: str) -> bool:
-        lowered = clean_text(text).casefold()
-        if lowered in root_labels:
-            return True
-        if page_url:
-            try:
-                host = urlparse(page_url).netloc.casefold()
-                if host.startswith("www."):
-                    host = host[4:]
-                if lowered == host or lowered == host.split(".")[0]:
-                    return True
-            except ValueError:
-                pass
-        return False
-
-    if len(rows) > 1 and _is_root_label(rows[-1]) and not _is_root_label(rows[0]):
+    if len(rows) > 1 and detail_breadcrumb_is_root_label(rows[-1], page_url) and not detail_breadcrumb_is_root_label(rows[0], page_url):
         rows.reverse()
 
     category_ui_tokens = {
@@ -169,7 +169,7 @@ def _trim_breadcrumb_labels(
     rows = [
         row
         for row in rows
-        if not _is_root_label(row)
+        if not detail_breadcrumb_is_root_label(row, page_url)
         and clean_text(row).casefold() not in category_ui_tokens
     ]
     if not rows:
