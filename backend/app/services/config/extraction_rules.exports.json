@@ -4458,6 +4458,7 @@
       "product tips",
       "tips & advice",
       "tools & resources",
+      "financing offers",
       "explore accessories",
       "register your machine",
       "find the right part",
@@ -4481,6 +4482,7 @@
       "/customer-service",
       "/employers/posts/new",
       "/faq",
+      "/financing",
       "/help",
       "://instagram.com",
       "/login",
@@ -6114,12 +6116,19 @@
     "__type__": "frozenset",
     "items": [
       "business",
+      "campaign",
+      "campaigns",
       "community",
+      "dt",
       "help",
       "help_center",
+      "industry",
       "ink",
+      "landing",
+      "lp",
       "mission",
-      "services"
+      "services",
+      "solutions"
     ]
   },
   "TRAVERSAL_PRICE_HINT_RE": {

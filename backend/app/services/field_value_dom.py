@@ -482,10 +482,20 @@ def _is_in_product_gallery_context(node: Tag, *, max_depth: int = 6) -> bool:
     return False
 
 
+_UNRESOLVED_TEMPLATE_URL_RE = re.compile(
+    r"(url_to_|\{\{|\}\}|\{\$|%%|\[\[|\]\])",
+    re.IGNORECASE,
+)
+
+
 def _is_garbage_image_candidate(node: Tag, candidate_url: str) -> bool:
     lowered = str(candidate_url or "").lower()
     context = _image_node_context(node)
     if lowered.endswith(".svg") and not _is_in_product_gallery_context(node):
+        return True
+    # Reject unresolved server-side template placeholders such as
+    # "URL_TO_THE_PRODUCT_IMAGE", "{{image}}", "{$src}", "[[IMG]]".
+    if _UNRESOLVED_TEMPLATE_URL_RE.search(candidate_url or ""):
         return True
     if any(token in lowered for token in NON_PRODUCT_IMAGE_HINTS):
         return True

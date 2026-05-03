@@ -896,6 +896,37 @@ def _missing_requested_fields(
     return missing
 
 
+def _detail_long_text_value_looks_truncated(value: object) -> bool:
+    text = clean_text(value).rstrip()
+    return bool(text) and text.endswith(("...", "…"))
+
+
+def _requires_dom_long_text_completion(
+    record: dict[str, Any],
+    *,
+    extractable_fields: set[str],
+) -> bool:
+    if not (extractable_fields & DETAIL_LONG_TEXT_RANK_FIELDS):
+        return False
+    field_sources = _object_dict(record.get("_field_sources"))
+    weak_source_rank = DETAIL_LONG_TEXT_SOURCE_RANKS.get("opengraph", 20)
+    for field_name in extractable_fields & DETAIL_LONG_TEXT_RANK_FIELDS:
+        value = clean_text(record.get(field_name))
+        if not value:
+            continue
+        source_ranks = [
+            DETAIL_LONG_TEXT_SOURCE_RANKS.get(str(source or ""), 20)
+            for source in _object_list(field_sources.get(field_name))
+        ]
+        best_rank = min(source_ranks) if source_ranks else 20
+        if (
+            best_rank >= weak_source_rank
+            or _detail_long_text_value_looks_truncated(value)
+        ):
+            return True
+    return False
+
+
 def _requires_dom_completion(
     *,
     record: dict[str, Any],
@@ -952,6 +983,14 @@ def _requires_dom_completion(
     if extractable_fields & requested_missing_fields:
         return True
     if missing_high_value_fields or requested_missing_fields & high_value_fields:
+        return True
+    if (
+        normalized_surface == "ecommerce_detail"
+        and _requires_dom_long_text_completion(
+            record,
+            extractable_fields=extractable_fields,
+        )
+    ):
         return True
     optional_cue_fields = {
         field_name

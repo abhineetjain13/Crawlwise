@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import itertools
+import logging
 import re
 from collections.abc import Sequence
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from app.services.config.extraction_rules import (
     DETAIL_VARIANT_CONTEXT_NOISE_TOKENS,
@@ -50,17 +53,17 @@ _variant_group_attr_noise_patterns = tuple(
 )
 _variant_color_hint_words = frozenset(
     str(token).strip().lower()
-    for token in VARIANT_COLOR_HINT_WORDS
+    for token in (VARIANT_COLOR_HINT_WORDS or ())
     if str(token).strip()
 )
 _variant_size_value_patterns = tuple(
     re.compile(str(pattern), re.I)
-    for pattern in VARIANT_SIZE_VALUE_PATTERNS
+    for pattern in (VARIANT_SIZE_VALUE_PATTERNS or ())
     if str(pattern).strip()
 )
 _variant_option_value_noise_tokens = frozenset(
     str(token).strip().lower()
-    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
+    for token in (VARIANT_OPTION_VALUE_NOISE_TOKENS or ())
     if str(token).strip()
 )
 _variant_context_noise_tokens = frozenset(
@@ -185,6 +188,11 @@ def _variant_node_in_noise_context(node: Any) -> bool:
 def _variant_scope_roots(soup: Any) -> list[Any]:
     if not hasattr(soup, "select") or not _variant_scope_selector:
         return [soup]
+    # Defensive coercion: treat missing/invalid limit as "no limit".
+    try:
+        max_roots = int(VARIANT_SCOPE_MAX_ROOTS) if VARIANT_SCOPE_MAX_ROOTS is not None else None
+    except (TypeError, ValueError):
+        max_roots = None
     roots: list[Any] = []
     seen: set[int] = set()
     for node in soup.select(_variant_scope_selector):
@@ -198,7 +206,7 @@ def _variant_scope_roots(soup: Any) -> list[Any]:
             continue
         roots.append(node)
         seen.add(id(node))
-        if len(roots) >= VARIANT_SCOPE_MAX_ROOTS:
+        if max_roots is not None and len(roots) >= max_roots:
             break
     return roots or [soup]
 
@@ -1020,6 +1028,15 @@ def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
             continue
         merged = merged_by_semantic.get(semantic_identity)
         if merged is None:
+            # Defensive: we populated merged_by_semantic on the first pass, so a
+            # miss here signals a semantic-identity inconsistency. Preserve the
+            # original row rather than silently losing variant data.
+            logger.warning(
+                "variant merge missed semantic identity %r; preserving original row",
+                semantic_identity,
+            )
+            emitted_semantic.add(semantic_identity)
+            merged_rows.append(row)
             continue
         emitted_semantic.add(semantic_identity)
         merged_rows.append(merged)

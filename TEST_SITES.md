@@ -186,3 +186,7 @@ https://www.bose.com/p/earbuds/bose-ultra-open-earbuds/ULT-HEADPHONEOPN.html
 https://www.glossier.com/en-in/products/balm-dotcom
 https://www.usa.canon.com/shop/p/eos-r5
 https://www.lego.com/en-us/product/millennium-falcon-75192
+https://intl.fender.com/products/american-vintage-ii-1972-telecaster-thinline?variant=45940647035102
+https://www.yeti.com/coolers/hard-coolers/tundra/tundra-45.html#closeCSModal
+https://www.gucci.com/int/en/pr/men/accessories-for-men/scarves-for-men/scarves-for-men/gg-wool-silk-jacquard-stole-p-8705434GAK31360
+https://www.williams-sonoma.com/products/breville-the-bambino-plus/

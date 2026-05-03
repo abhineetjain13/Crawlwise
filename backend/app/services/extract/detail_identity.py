@@ -69,8 +69,26 @@ def listing_url_is_structural(url: str, page_url: str) -> bool:
         if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
             return True
         leading_tokens = tokenized_segments[:-1] if len(tokenized_segments) <= 2 else []
-        if any(
-            tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens
+        terminal_raw = raw_segments[-1] if raw_segments else ""
+        terminal_token_list = [
+            token for token in re.split(r"[-.]+", terminal_raw) if token
+        ]
+        # Year-led slugs like 2025-ceo-letter are editorial, not product.
+        year_led_terminal = bool(
+            terminal_token_list
+            and re.fullmatch(r"(?:19|20)\d{2}", terminal_token_list[0])
+        )
+        terminal_looks_like_product_slug = (
+            len(terminal_tokens) >= 3
+            and any(re.search(r"[a-z]", token) for token in terminal_tokens)
+            and "-" in terminal_raw
+            and not year_led_terminal
+        )
+        if (
+            not terminal_looks_like_product_slug
+            and any(
+                tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens
+            )
         ):
             return True
     except Exception:

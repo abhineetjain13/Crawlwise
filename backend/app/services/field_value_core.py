@@ -1161,6 +1161,11 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             else:
                 normalized_rows.append(normalized)
         return normalized_rows or None
+    # Reject dict/set values for scalar text fields rather than letting them
+    # fall through to `str(value)` and leak Python repr like
+    # "{'useOnlyPreMadeBundles': False}" into description/specifications.
+    if isinstance(value, (dict, set, frozenset)):
+        return None
     if field_name in LONG_TEXT_FIELDS:
         return coerce_long_text(value)
     if field_name == "rating":

@@ -104,11 +104,29 @@ def base_listing_fragment_score(node) -> int:
         score += 3
     else:
         score -= 3
-    if PRICE_RE.search(text):
+    has_price = bool(PRICE_RE.search(text))
+    if has_price:
         score += 3
     if tag_name in {"article", "li", "tr", "section"}:
         score += 2
+    # Strong "product card shape" bonus: a node that has a price, at least one
+    # image, and one or more anchors is almost certainly a complete card and
+    # should out-rank inner sibling subdivs (productInfo / productPricing)
+    # that only carry one of the three signals in isolation.
+    if (
+        has_price
+        and link_count >= 1
+        and _node_has_image_descendant(node)
+    ):
+        score += 4
     return score
+
+
+def _node_has_image_descendant(node) -> bool:
+    try:
+        return bool(node.css("img, picture source"))
+    except Exception:
+        return False
 
 
 def _node_listing_links(node) -> list[object]:

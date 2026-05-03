@@ -681,9 +681,11 @@ async def _try_browser_http_handoff(
             )
             if not cookie_header:
                 continue
-            handoff_timeout = min(
-                float(crawler_runtime_settings.http_timeout_seconds),
-                context.resolved_timeout,
+            _raw_handoff_timeout = crawler_runtime_settings.http_timeout_seconds
+            handoff_timeout = (
+                context.resolved_timeout
+                if _raw_handoff_timeout is None
+                else min(float(_raw_handoff_timeout), context.resolved_timeout)
             )
             try:
                 result = await _curl_fetch(
@@ -793,9 +795,11 @@ async def _attempt_http_fetch(
     attempt: int,
     max_attempts: int,
 ) -> PageFetchResult | object:
-    http_timeout = min(
-        float(crawler_runtime_settings.http_timeout_seconds),
-        context.resolved_timeout,
+    _raw_http_timeout = crawler_runtime_settings.http_timeout_seconds
+    http_timeout = (
+        context.resolved_timeout
+        if _raw_http_timeout is None
+        else min(float(_raw_http_timeout), context.resolved_timeout)
     )
     try:
         await wait_for_host_slot(context.url)

@@ -16,6 +16,7 @@ from app.services.extract.detail_price_extractor import (
     detail_currency_hint_is_host_level,
     reconcile_detail_currency_with_url,
 )
+from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
 from tests.fixtures.loader import read_optional_artifact_text
 
@@ -4715,3 +4716,96 @@ def test_extract_detail_rejects_known_error_page_titles() -> None:
     )
 
     assert rows == []
+
+
+def test_build_detail_record_prefers_dom_description_over_truncated_og_copy() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="NXT 5 Battery Charger &amp; Maintainer">
+        <meta property="og:description" content="Performance, safety, ease. Drivers can count on all three with CTEK's NXT 5 Battery Charger &amp; Maintainer, which is built both to charge and actively restore battery life. This is a fully automatic 4.3A charger that just needs...">
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "NXT 5 Battery Charger & Maintainer",
+          "brand": "CTEK",
+          "image": "https://example.com/images/charger.jpg",
+          "offers": {
+            "@type": "Offer",
+            "price": "124.99",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>NXT 5 Battery Charger &amp; Maintainer</h1>
+          <section>
+            <h2>Description</h2>
+            <p>
+              Performance, safety, ease. Drivers can count on all three with CTEK's
+              NXT 5 Battery Charger &amp; Maintainer, which is built both to charge
+              and actively restore battery life with the help of patented
+              desulphation and reconditioning modes. This is a fully automatic
+              4.3A charger that just needs a power outlet and can restore deeply
+              discharged batteries.
+            </p>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://www.tirerack.com/accessories/ctek-nxt-5-battery-charger-maintainer",
+        "ecommerce_detail",
+        None,
+    )
+
+    assert record["description"].endswith("restore deeply discharged batteries.")
+    assert record["description"].endswith(("...", "…")) is False
+
+
+def test_normalize_variant_record_infers_single_variant_color_from_title_slug() -> None:
+    record = {
+        "title": "Men's Wool Runners - Natural Black",
+        "url": "https://www.allbirds.com/products/mens-wool-runners-natural-black",
+        "variants": [
+            {
+                "url": "https://www.allbirds.com/products/mens-wool-runners-natural-black",
+            }
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {
+            "url": "https://www.allbirds.com/products/mens-wool-runners-natural-black",
+            "color": "Natural Black",
+        }
+    ]
+
+
+def test_normalize_variant_record_infers_single_variant_size_from_title_tokens() -> None:
+    record = {
+        "title": "Arizona Sandal - EU 42",
+        "url": "https://www.birkenstock.com/us/arizona-birko-flor/arizona-core-birkoflor-0-eva-u_1.html",
+        "variants": [
+            {
+                "url": "https://www.birkenstock.com/us/arizona-birko-flor/arizona-core-birkoflor-0-eva-u_1.html",
+            }
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {
+            "url": "https://www.birkenstock.com/us/arizona-birko-flor/arizona-core-birkoflor-0-eva-u_1.html",
+            "size": "EU 42",
+        }
+    ]

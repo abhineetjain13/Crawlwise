@@ -1191,11 +1191,6 @@ def _keyword_tokens(value: object, stopwords: set[str]) -> list[str]:
     ]
 
 
-def _bigrams(tokens: list[str]):
-    for index in range(len(tokens) - 1):
-        yield f"{tokens[index]} {tokens[index + 1]}"
-
-
 def _term_present(text: str, term: object) -> bool:
     normalized = clean_text(term).casefold()
     if not normalized:

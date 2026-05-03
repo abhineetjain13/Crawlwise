@@ -12,6 +12,7 @@ from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
 )
+from app.services.config.surface_hints import detail_path_hints
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import LISTING_UTILITY_TITLE_REGEXES, clean_text
 
@@ -312,9 +313,36 @@ def looks_like_utility_url(url: str) -> bool:
     parsed = urlsplit(normalized_url)
     segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
     if (
+        len(segments) >= 3
+        and any(marker in normalized_url for marker in detail_path_hints("ecommerce_detail"))
+    ):
+        return False
+    # A path segment that matches a structural/utility token makes the URL
+    # utility UNLESS the terminal segment looks like a product slug (>=3
+    # hyphen-separated alphanumeric tokens). Without the exemption, sites
+    # like Tire Rack that mount products under `/accessories/<slug>` would
+    # lose every product anchor.
+    terminal_raw = segments[-1] if segments else ""
+    terminal_tokens = [
+        token for token in re.split(r"[-.]+", terminal_raw) if token
+    ]
+    # "Year-led" slugs like 2025-ceo-letter or 2024-annual-report are
+    # editorial/news URLs, not product slugs.
+    year_led = bool(
+        terminal_tokens
+        and re.fullmatch(r"(?:19|20)\d{2}", terminal_tokens[0])
+    )
+    terminal_is_product_slug = (
+        len(terminal_tokens) >= 3
+        and any(re.search(r"[a-z]", token) for token in terminal_tokens)
+        and "-" in terminal_raw
+        and not year_led
+    )
+    if (
         not parsed.query
         and segments
         and any(segment in LISTING_NON_LISTING_PATH_TOKENS for segment in segments)
+        and not terminal_is_product_slug
     ):
         return True
     return any(

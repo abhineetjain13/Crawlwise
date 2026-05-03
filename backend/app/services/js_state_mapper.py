@@ -19,7 +19,6 @@ from app.services.extract.shared_variant_logic import (
 )
 from app.services.field_value_dom import dedupe_image_urls
 from app.services.field_value_core import extract_urls, text_or_none
-from app.services.field_value_core import flatten_variants_for_public_output
 from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
@@ -485,7 +484,6 @@ def _map_product_payload(
         product_stock = stock_quantity(product)
     color = variant_attribute(active_variant, "color")
     size = variant_attribute(active_variant, "size")
-    flat_variants = flatten_variants_for_public_output(variants, page_url=page_url)
 
     # Resolve brand/vendor: dict values need name extraction
     brand_raw = base.get("brand")

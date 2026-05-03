@@ -6,9 +6,11 @@ from urllib.parse import unquote, urlparse
 
 from app.services.config.extraction_rules import (
     CURRENCY_CODES,
+    VARIANT_COLOR_HINT_WORDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_PLACEHOLDER_PREFIXES,
     VARIANT_PLACEHOLDER_VALUES,
+    VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SIZE_VALUE_EXTRACT_PATTERNS,
 )
 from app.services.config.field_mappings import FLAT_VARIANT_KEYS
@@ -31,6 +33,16 @@ _VARIANT_SIZE_VALUE_EXTRACT_PATTERNS = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(VARIANT_SIZE_VALUE_EXTRACT_PATTERNS or ())
     if str(pattern).strip()
+)
+_VARIANT_SIZE_VALUE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_SIZE_VALUE_PATTERNS or ())
+    if str(pattern).strip()
+)
+_VARIANT_COLOR_HINT_WORDS = frozenset(
+    clean_text(value).lower()
+    for value in tuple(VARIANT_COLOR_HINT_WORDS or ())
+    if clean_text(value)
 )
 _CURRENCY_CODES_UPPER = frozenset(
     str(code).upper() for code in tuple(CURRENCY_CODES or ()) if str(code).strip()
@@ -57,6 +69,7 @@ _LEGACY_VARIANT_KEYS = ("selected_variant", "variant_axes", "available_sizes")
 
 def normalize_variant_record(record: dict[str, Any]) -> None:
     _infer_variant_sizes_from_titles(record)
+    _infer_single_variant_axes(record)
     _flatten_variant_rows(record)
     _clean_variant_rows(record)
     _enforce_variant_axis_contract(record)
@@ -224,24 +237,49 @@ def _infer_variant_sizes_from_titles(record: dict[str, Any]) -> None:
             variant["size"] = size_value
 
 
+def _infer_single_variant_axes(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) != 1:
+        return
+    variant = variants[0]
+    if not isinstance(variant, dict):
+        return
+    if not clean_text(variant.get("size")):
+        size_value = _variant_size_from_title_or_url(variant, record=record)
+        if size_value:
+            variant["size"] = size_value
+    if not clean_text(variant.get("color")):
+        color_value = _variant_color_from_title_or_url(variant, record=record)
+        if color_value:
+            variant["color"] = color_value
+
+
 def _variant_size_from_title_or_url(
     variant: dict[str, Any],
     *,
     record: dict[str, Any],
 ) -> str:
     candidates = [
-        variant.get("title"),
-        variant.get("name"),
-        _url_terminal_text(variant.get("url")),
+        (variant.get("title"), False),
+        (variant.get("name"), False),
+        (record.get("title"), True),
+        (_url_terminal_text(variant.get("url")), False),
+        (_url_terminal_text(record.get("url")), False),
     ]
     record_title = clean_text(record.get("title")).casefold()
-    for candidate in candidates:
+    for candidate, allow_record_title in candidates:
         text = clean_text(candidate)
         if not text:
             continue
-        if record_title and text.casefold() == record_title:
+        if not allow_record_title and record_title and text.casefold() == record_title:
             continue
         extracted = _extract_size_value(text)
+        if (
+            extracted
+            and extracted.lower() in {"xs", "s", "m", "l", "xl", "xxl", "xxxl"}
+            and re.search(r"\b(?:men|women|boys|girls)['’]?s\b", text.lower())
+        ):
+            continue
         if extracted:
             return extracted
     return ""
@@ -262,11 +300,106 @@ def _extract_size_value(value: object) -> str:
     text = clean_text(value)
     if not text:
         return ""
+    lowered_text = text.lower()
+
+    def _size_candidate_is_gender_artifact(candidate: str) -> bool:
+        return bool(
+            len(candidate) == 1
+            and re.search(
+                rf"\b(?:men|mens|women|womens|boys|girls)['’]?\s+{re.escape(candidate.lower())}\b",
+                lowered_text,
+            )
+        )
+
     for pattern in _VARIANT_SIZE_VALUE_EXTRACT_PATTERNS:
         match = pattern.search(text)
         if match is not None:
-            return clean_text(match.group(0))
+            candidate = clean_text(match.group(0))
+            if (
+                len(candidate) == 1
+                and (
+                    (
+                        match.start() > 0
+                        and text[match.start() - 1] in {"'", "’"}
+                    )
+                    or _size_candidate_is_gender_artifact(candidate)
+                )
+            ):
+                continue
+            if candidate.isdigit() and int(candidate) < 4:
+                continue
+            return candidate
+    tokens = [token for token in re.split(r"[^a-z0-9.]+", text, flags=re.I) if token]
+    for width in range(min(3, len(tokens)), 0, -1):
+        for index in range(0, len(tokens) - width + 1):
+            candidate = clean_text(" ".join(tokens[index : index + width]))
+            if not candidate:
+                continue
+            if _size_candidate_is_gender_artifact(candidate):
+                continue
+            if candidate.isdigit() and int(candidate) < 4:
+                continue
+            if any(pattern.fullmatch(candidate) for pattern in _VARIANT_SIZE_VALUE_PATTERNS):
+                return candidate
     return ""
+
+
+def _variant_color_from_title_or_url(
+    variant: dict[str, Any],
+    *,
+    record: dict[str, Any],
+) -> str:
+    for candidate in (
+        variant.get("title"),
+        variant.get("name"),
+        record.get("title"),
+        _url_terminal_text(variant.get("url")),
+        _url_terminal_text(record.get("url")),
+    ):
+        if color_value := _extract_color_value(candidate):
+            return color_value
+    return ""
+
+
+def _extract_color_value(value: object) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    for chunk in reversed(
+        [part for part in re.split(r"\s+[|/]\s+|\s+[–—-]\s+|\(", text) if clean_text(part)]
+    ):
+        if color_value := _extract_trailing_color_phrase(chunk):
+            return color_value
+    return _extract_trailing_color_phrase(text)
+
+
+def _extract_trailing_color_phrase(value: str) -> str:
+    tokens = [
+        token
+        for token in re.findall(r"[A-Za-z0-9]+", clean_text(value))
+        if token and not token.isdigit()
+    ]
+    if not tokens:
+        return ""
+    color_indexes = [
+        index
+        for index, token in enumerate(tokens)
+        if token.lower() in _VARIANT_COLOR_HINT_WORDS
+    ]
+    if not color_indexes:
+        return ""
+    if len(tokens) <= 3 and color_indexes[-1] == len(tokens) - 1:
+        return clean_text(" ".join(tokens)).title()
+    start = color_indexes[-1]
+    while start > 0 and tokens[start - 1].lower() in _VARIANT_COLOR_HINT_WORDS:
+        start -= 1
+    end = color_indexes[-1] + 1
+    while end < len(tokens) and tokens[end].lower() in _VARIANT_COLOR_HINT_WORDS:
+        end += 1
+    phrase = clean_text(" ".join(tokens[start:end]))
+    if not phrase or len(phrase.split()) > 4:
+        return ""
+    return phrase.title()
 
 
 def _dedupe_variant_rows(record: dict[str, Any]) -> None:

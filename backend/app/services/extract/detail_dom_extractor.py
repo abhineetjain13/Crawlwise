@@ -1267,7 +1267,9 @@ def _backfill_variants_from_dom_if_missing(
                 row.get("url")
             )
             if row_key:
-                existing_by_key[row_key] = row
+                # Preserve the first occurrence so duplicate variant_id/url
+                # keys cannot overwrite earlier rows and merge unrelated variants.
+                existing_by_key.setdefault(row_key, row)
             existing_by_index[index] = row
         index_fallback_allowed = bool(existing_variants) and (
             len(dom_variant_rows) == len(existing_variants)

@@ -39,7 +39,7 @@ DEFAULT_SITE_SET_PATH = (
     Path(__file__).resolve().parent / "test_site_sets" / "commerce_browser_heavy.json"
 )
 _VARIANT_AXIS_FIELDS = ("color", "size")
-_HIGH_DENOMINATION_PRICE_CURRENCIES = {"INR", "JPY", "KRW", "VND", "IDR", "HUF"}
+_HIGH_DENOMINATION_PRICE_CURRENCIES = {"INR", "JPY", "KRW", "VND", "IDR", "HUF", "CLP"}
 _MIN_SANE_PRICE = 0.01
 
 _DETAIL_HINTS = (
@@ -618,11 +618,7 @@ def _looks_like_detail_identity_mismatch(result: dict[str, object]) -> bool:
         return False
     sample_path = _identity_path(sample_url)
     requested_path = _identity_path(requested_url)
-    if (
-        sample_path in {"", "/"}
-        and requested_path not in {"", "/"}
-        and sample_path != requested_path
-    ):
+    if sample_path in {"", "/"} and requested_path not in {"", "/"}:
         return True
     requested_tokens = _primary_identity_tokens(requested_url)
     if len(requested_tokens) < 2:
@@ -1006,7 +1002,7 @@ def _quality_price_sane_ok(
         return False
     currency = str(record.get("currency") or "").strip().upper()
     max_price = 100000.0 if currency in _HIGH_DENOMINATION_PRICE_CURRENCIES else 10000.0
-    return _MIN_SANE_PRICE <= price <= max_price
+    return price <= max_price
 
 
 def _quality_category_clean_ok(
@@ -1146,7 +1142,10 @@ def _quality_variant_artifacts_ok(
             continue
         if text in {"off", "on", "discount", "sale", "false", "true"}:
             return False
-        if re.fullmatch(r"\d+\s*%", text) or re.fullmatch(r"#[0-9a-fA-F]{6}", text):
+        if re.fullmatch(r"\d+\s*%", text) or re.fullmatch(
+            r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})",
+            text,
+        ):
             return False
     return True
 

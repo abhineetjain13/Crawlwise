@@ -2,29 +2,6 @@
 
 Scope: `backend/app/services/field_value_core.py`, `field_value_dom.py`, `detail_extractor.py`, `extract/detail_dom_extractor.py`, `extract/shared_variant_logic.py`, `extract/variant_record_normalization.py`, `extract/detail_record_finalizer.py`, `config/extraction_rules.py`, `js_state_mapper.py`, `structured_sources.py`
 
-## 0. Wrong Currency
-
-### 0.1 New Balance Joe Freshgoods (U18908JY-5): USD vs INR — Site-Level Inconsistency
-
-**Symptom:** Currency is `USD` but visible price text shows `"Rs. 19,500.00"`.
-
-**Assessment — Likely site issue, not crawler bug:**
-- The site header shows a **currency selector set to "USD"** (top-right of page)
-- JSON-LD structured data contains `"priceCurrency": "USD"` — consistent with the active selector
-- Only the visible price text shows `"Rs. 19,500.00"`, which contradicts both the header and the structured data
-
-This is a **site-level inconsistency**: the retailer may have a default JSON-LD template of `"USD"` that does not update when the currency selector changes, or the `"Rs."` prefix is a display artifact (possibly from a stale localized string) while the actual transaction currency is USD.
-
-**Crawler behavior:** The crawler correctly extracted `USD` from JSON-LD, which aligns with the active currency selector. The `"Rs."` text from the DOM was deprioritized — which is the *correct* behavior when structured data and site UI agree. The real problem is that the site itself presents conflicting signals.
-
-**No code change needed** for this specific record unless the pattern repeats across multiple URLs on the same domain. If it does, the fix belongs at the adapter or domain-memory level, not in generic currency inference.
-
-**If a generic fix is still desired:** `detail_price_extractor.py` could add a **conflict-detection** step (not a blanket "reject USD") that:
-1. Flags when DOM-visible currency symbols (`Rs.`, `₹`, `AED`, `ZAR`, ...) conflict with both JSON-LD and `<html lang>`
-2. Surfaces the conflict in diagnostics rather than silently picking one
-3. Allows domain-specific overrides via `DomainRunProfile` or adapter config
-
----
 
 ## 1. Parsing Artifacts & Code Leakage
 
