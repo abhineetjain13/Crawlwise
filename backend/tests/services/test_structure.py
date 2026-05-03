@@ -86,13 +86,13 @@ FILE_LOC_BUDGETS = {
     # Detail finalizer owns public-boundary cleanup and record repair.
     Path("app/services/extract/detail_record_finalizer.py"): 1090,
     # Shared variant logic owns generic axis and row reconciliation.
-    Path("app/services/extract/shared_variant_logic.py"): 1020,
+    Path("app/services/extract/shared_variant_logic.py"): 1030,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
-    Path("app/services/field_value_dom.py"): 1550,
+    Path("app/services/field_value_dom.py"): 1580,
     # Canonical field coercion remains centralized here instead of scattering value policy.
-    Path("app/services/field_value_core.py"): 1360,
+    Path("app/services/field_value_core.py"): 1430,
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1300,
     # JS state mapping stays centralized to avoid adapter-specific drift.

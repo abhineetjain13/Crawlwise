@@ -19,6 +19,7 @@ from app.services.config.extraction_rules import (
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
     DETAIL_CATEGORY_SOURCE_RANKS,
+    DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_LONG_TEXT_SOURCE_RANKS,
     DETAIL_TITLE_SOURCE_RANKS,
     SOURCE_PRIORITY,
@@ -145,7 +146,7 @@ def _field_source_rank(surface: str, field_name: str, source: str | None) -> int
                 return configured_rank
         if field_name == "title":
             return DETAIL_TITLE_SOURCE_RANKS.get(str(source or ""), 20)
-        if field_name in LONG_TEXT_FIELDS or field_name == "features":
+        if field_name in DETAIL_LONG_TEXT_RANK_FIELDS:
             return DETAIL_LONG_TEXT_SOURCE_RANKS.get(str(source or ""), 20)
         if field_name in ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
             return 2

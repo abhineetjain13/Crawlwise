@@ -6,7 +6,7 @@ from copy import deepcopy
 import regex as regex_lib
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse, unquote
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 from lxml import etree
 from lxml import html as lxml_html
 from soupsieve import SelectorSyntaxError
@@ -14,6 +14,8 @@ from soupsieve import SelectorSyntaxError
 from app.services.config.extraction_rules import (
     CROSS_LINK_CONTAINER_HINTS,
     CDN_IMAGE_QUERY_PARAMS,
+    DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS,
+    DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS,
     DETAIL_LONG_TEXT_MAX_SECTION_CHARS,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
@@ -28,11 +30,17 @@ from app.services.config.extraction_rules import (
     PRODUCT_GALLERY_CONTEXT_HINTS,
     SEMANTIC_SECTION_NOISE,
     SEMANTIC_SECTION_LABEL_SKIP_TOKENS,
+    MAX_SELECTOR_MATCHES,
     VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS,
     VARIANT_OPTION_TEXT_FIELDS,
+    SCOPE_PRODUCT_CONTEXT_TOKENS,
+    SCOPE_SCORE_MAIN_WEIGHT,
+    SCOPE_SCORE_PRIORITY_WEIGHT,
+    SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.field_mappings import ADDITIONAL_IMAGES_FIELD
 from app.services.extraction_html_helpers import html_to_text
 from app.services.field_policy import (
     exact_requested_field_key,
@@ -55,6 +63,22 @@ from app.services.xpath_service import validate_xpath_syntax
 
 logger = logging.getLogger(__name__)
 
+def _safe_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+        return parsed if parsed >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+_max_section_blocks = _safe_int(DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS, 8)
+_max_section_chars = _safe_int(DETAIL_LONG_TEXT_MAX_SECTION_CHARS, 1200)
+_cross_product_container_tokens = tuple(
+    clean_text(token).lower() for token in tuple(DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS or ()) if clean_text(token)
+)
+_scope_product_context_tokens = tuple(
+    clean_text(token).lower() for token in tuple(SCOPE_PRODUCT_CONTEXT_TOKENS or ()) if clean_text(token)
+)
+_max_selector_matches = int(MAX_SELECTOR_MATCHES)
 
 def _compile_variant_option_child_drop_patterns() -> tuple[re.Pattern[str], ...]:
     compiled: list[re.Pattern[str]] = []
@@ -66,7 +90,6 @@ def _compile_variant_option_child_drop_patterns() -> tuple[re.Pattern[str], ...]
         except re.error:
             logger.warning("Skipping invalid variant option child-drop pattern: %r", pattern)
     return tuple(compiled)
-
 
 _VARIANT_OPTION_CHILD_DROP_RE = _compile_variant_option_child_drop_patterns()
 
@@ -278,10 +301,8 @@ def _node_attr_text(node: Tag, *, max_depth: int = 6) -> str:
         depth += 1
     return " ".join(parts).lower()
 
-
 def _field_uses_scoped_text(field_name: str) -> bool:
-    return field_name in LONG_TEXT_FIELDS or field_name == "features"
-
+    return field_name in DETAIL_LONG_TEXT_RANK_FIELDS
 
 def _node_within_scope(node: Tag, scope: Tag) -> bool:
     current: Tag | None = node
@@ -308,7 +329,7 @@ def _node_is_hidden_or_auxiliary(node: Tag) -> bool:
             current = parent if isinstance(parent, Tag) else None
             depth += 1
             continue
-        if isinstance(attrs, dict) and "hidden" in attrs:
+        if "hidden" in attrs:
             return True
         if str(attrs.get("aria-hidden") or "").strip().lower() == "true":
             return True
@@ -327,13 +348,12 @@ def _node_is_hidden_or_auxiliary(node: Tag) -> bool:
         depth += 1
     return False
 
-
 def _node_has_cross_product_cluster(node: Tag) -> bool:
     if not isinstance(getattr(node, "attrs", None), dict):
         return False
     links = [
         absolute_url("", str(link.get("href") or ""))
-        for link in node.select("a[href]")[:12]
+        for link in node.select("a[href]")[:_max_selector_matches]
         if clean_text(link.get_text(" ", strip=True) or link.get("aria-label"))
     ]
     product_links = [
@@ -344,10 +364,7 @@ def _node_has_cross_product_cluster(node: Tag) -> bool:
     if len(set(product_links)) >= 2:
         return True
     context = _node_attr_text(node, max_depth=1)
-    return any(
-        token in context
-        for token in ("also-viewed", "also viewed", "customers", "recommend", "related", "similar", "sponsored")
-    )
+    return any(token in context for token in _cross_product_container_tokens)
 
 
 def _candidate_text_scope_nodes(root: BeautifulSoup | Tag) -> list[Tag]:
@@ -367,25 +384,28 @@ def _scope_score(node: Tag) -> tuple[int, int]:
     text_len = len(clean_text(node.get_text(" ", strip=True)))
     score = text_len
     if node.name in {"main", "article"} or str(node.get("role") or "").strip().lower() == "main":
-        score += 4000
+        score += int(SCOPE_SCORE_MAIN_WEIGHT)
     if any(token in context for token in _detail_text_scope_priority_tokens):
-        score += 2000
+        score += int(SCOPE_SCORE_PRIORITY_WEIGHT)
     if DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR and (
         node.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR) is not None
         or any(
             token in context
-            for token in ("product", "detail", "pdp")
+            for token in _scope_product_context_tokens
         )
     ):
-        score += 1000
+        score += int(SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT)
     return score, text_len
 
 
 def _scope_is_product_like(node: Tag) -> bool:
     context = _node_attr_text(node, max_depth=2)
-    if any(token in context for token in ("product", "pdp", "detail")):
+    if any(token in context for token in _scope_product_context_tokens):
         return True
-    return node.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR) is not None
+    return bool(
+        DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR
+        and node.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR) is not None
+    )
 
 
 def _best_text_scope(root: BeautifulSoup | Tag) -> Tag | None:
@@ -400,11 +420,29 @@ def _pruned_text_scope_root(root: BeautifulSoup | Tag) -> BeautifulSoup | Tag:
     scope = _best_text_scope(root)
     if scope is None:
         return root
-    clone = deepcopy(scope)
-    for node in list(clone.find_all(True)):
+    soup = BeautifulSoup("", "html.parser")
+    def clone_visible(
+        node: Tag | NavigableString,
+        *,
+        remaining_depth: int = 50,
+    ) -> Tag | NavigableString | None:
+        if remaining_depth <= 0:
+            return None
+        if not isinstance(node, Tag):
+            return NavigableString(str(node)) if isinstance(node, NavigableString) else None
         if _node_is_hidden_or_auxiliary(node) or _node_has_cross_product_cluster(node):
-            node.decompose()
-    return clone
+            return None
+        clone = soup.new_tag(node.name, attrs=dict(getattr(node, "attrs", {}) or {}))
+        for child in node.children:
+            if (
+                child_clone := clone_visible(
+                    child,
+                    remaining_depth=remaining_depth - 1,
+                )
+            ) is not None:
+                clone.append(child_clone)
+        return clone
+    return clone_visible(scope) or root
 
 
 def _is_non_primary_image_context(node: Tag) -> bool:
@@ -594,7 +632,7 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
             and str(node.get("as") or "").lower() != "image"
         ):
             urls = [url for url in urls if _looks_like_image_asset_url(url)]
-        if field_name == "additional_images":
+        if field_name == ADDITIONAL_IMAGES_FIELD:
             return urls or None
         return urls[0] if urls else None
     if field_name in URL_FIELDS:
@@ -686,7 +724,7 @@ def extract_selector_values(
 ) -> list[object]:
     values: list[object] = []
     scoped_text_root = _best_text_scope(root) if _field_uses_scoped_text(field_name) else None
-    for node in safe_select(root, selector)[:12]:
+    for node in safe_select(root, selector)[:_max_selector_matches]:
         if _field_uses_scoped_text(field_name):
             if _node_is_hidden_or_auxiliary(node):
                 continue
@@ -723,12 +761,12 @@ def extract_xpath_values(
     values: list[object] = []
     limited_matches: list[object]
     if isinstance(matches, list):
-        limited_matches = [*matches[:12]]
+        limited_matches = [*matches[:_max_selector_matches]]
     elif isinstance(matches, (str, bytes, bool, float)):
         limited_matches = [matches]
     else:
         try:
-            limited_matches = list(matches)[:12]
+            limited_matches = list(matches)[:_max_selector_matches]
         except TypeError:
             limited_matches = [matches]
     for match in limited_matches:
@@ -862,7 +900,7 @@ def extract_page_images(
             key=lambda row: (-int(row[0]), int(row[1]), str(row[2])),
         )
     ]
-    return dedupe_image_urls(ordered)[:12]
+    return dedupe_image_urls(ordered)[:_max_selector_matches]
 
 
 def extract_label_value_pairs(root: BeautifulSoup | Tag) -> list[tuple[str, str]]:
@@ -1024,8 +1062,8 @@ def _extract_sibling_content(node: Tag, *, label: str = "") -> str:
             continue
         values.append(text)
         if (
-            len(values) >= int(DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS)
-            or sum(len(item) for item in values) >= int(DETAIL_LONG_TEXT_MAX_SECTION_CHARS)
+            len(values) >= _max_section_blocks
+            or sum(len(item) for item in values) >= _max_section_chars
         ):
             break
     return " ".join(values)
@@ -1410,7 +1448,7 @@ def requested_content_extractability(
 
 
 def _dom_pattern_has_extractable_content(nodes: list[Tag]) -> bool:
-    for node in list(nodes or [])[:12]:
+    for node in list(nodes or [])[:_max_selector_matches]:
         if clean_text(node.get_text(" ", strip=True)):
             return True
         attrs = getattr(node, "attrs", None)

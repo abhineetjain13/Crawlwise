@@ -1154,7 +1154,7 @@ def _playwright_context_options_from_identity(
     return options
 
 
-def _playwright_masking_init_script() -> str:
+def playwright_masking_init_script() -> str:
     globals_to_mask = [
         str(value or "").strip()
         for value in tuple(crawler_runtime_settings.browser_mask_playwright_globals or ())
@@ -1247,7 +1247,7 @@ def _playwright_init_script_from_identity(
             part for part in parts if str(part or "").strip()
         )
 
-    masking_script = _playwright_masking_init_script()
+    masking_script = playwright_masking_init_script()
     raw_fingerprint = identity.raw_fingerprint
     identity_seed = _playwright_identity_seed(
         identity,

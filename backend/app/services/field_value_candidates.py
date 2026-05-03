@@ -35,6 +35,8 @@ from app.services.extract.shared_variant_logic import (
 from app.services.normalizers import normalize_decimal_price
 
 logger = logging.getLogger(__name__)
+_structured_candidate_list_slice = int(STRUCTURED_CANDIDATE_LIST_SLICE)
+_structured_candidate_traversal_limit = int(STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT)
 
 
 def candidate_fingerprint(value: object) -> str:
@@ -278,7 +280,7 @@ def _structured_feature_rows(payload: dict[str, object], page_url: str) -> list[
 
     additional_properties = payload.get("additionalProperty")
     if isinstance(additional_properties, list):
-        for item in additional_properties[: int(STRUCTURED_CANDIDATE_LIST_SLICE)]:
+        for item in additional_properties[: _structured_candidate_list_slice]:
             if not isinstance(item, dict):
                 continue
             name = text_or_none(item.get("name") or item.get("label"))
@@ -477,7 +479,9 @@ def _structured_payload_types(payload: dict[str, object]) -> set[str]:
         if str(item or "").strip()
     }
     irrelevant_types = {
-        str(value).strip().lower() for value in DETAIL_IRRELEVANT_JSON_LD_TYPES
+        str(value).strip().lower()
+        for value in tuple(DETAIL_IRRELEVANT_JSON_LD_TYPES or ())
+        if str(value).strip()
     }
     if normalized_types and normalized_types <= irrelevant_types:
         return set()
@@ -491,7 +495,7 @@ def collect_structured_candidates(
     candidates: dict[str, list[object]],
     *,
     depth: int = 0,
-    limit: int = int(STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT),
+    limit: int = _structured_candidate_traversal_limit,
 ) -> None:
     if depth > limit:
         return
@@ -510,7 +514,7 @@ def collect_structured_candidates(
         )
         additional_properties = payload.get("additionalProperty")
         if isinstance(additional_properties, list):
-            for item in additional_properties[: int(STRUCTURED_CANDIDATE_LIST_SLICE)]:
+            for item in additional_properties[: _structured_candidate_list_slice]:
                 if not isinstance(item, dict):
                     continue
                 label = normalize_requested_field(
@@ -767,7 +771,7 @@ def collect_structured_candidates(
             if remote_hint:
                 add_candidate(candidates, "remote", remote_hint)
     elif isinstance(payload, list):
-        for item in payload[: int(STRUCTURED_CANDIDATE_LIST_SLICE)]:
+        for item in payload[: _structured_candidate_list_slice]:
             collect_structured_candidates(
                 item,
                 alias_lookup,
@@ -830,7 +834,7 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                 rows.append(text)
         if field_name in {"additional_images", "features", "tags"}:
             return rows or None
-        return rows or None
+        return "\n".join(rows) if rows else None
     if field_name in LONG_TEXT_FIELDS:
         text_rows: list[str] = []
         text_seen: set[str] = set()

@@ -205,6 +205,8 @@ class CrawlerRuntimeSettings(BaseSettings):
         "--disable-blink-features=AutomationControlled",
         "--disable-features=IsolateOrigins,site-per-process",
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        "--window-size=1920,1080",
+        "--disable-search-engine-choice-screen",
     )
     browser_use_new_headless: bool = True
     browser_runtime_pool_max_entries: int = 8

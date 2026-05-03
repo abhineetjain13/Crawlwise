@@ -26,6 +26,7 @@ const TASK_TYPES = [
   'field_cleanup_review',
   'page_classification',
   'schema_inference',
+  'data_enrichment_semantic',
 ];
 
 export default function AdminLlmPage() {

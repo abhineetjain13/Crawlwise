@@ -1553,6 +1553,9 @@ async def test_shared_browser_runtime_uses_native_context_for_real_chrome(
             del pattern, handler
             return None
 
+        async def add_init_script(self, script: str) -> None:
+            return None
+
         async def new_page(self):
             return SimpleNamespace(context=self)
 
@@ -1589,7 +1592,7 @@ async def test_shared_browser_runtime_uses_native_context_for_real_chrome(
     async with runtime.page():
         pass
 
-    assert captured_kwargs == [{}]
+    assert captured_kwargs == [{'no_viewport': True}]
 
 
 @pytest.mark.asyncio
@@ -1644,6 +1647,9 @@ async def test_shared_browser_runtime_uses_socks5_auth_bridge_and_keeps_context_
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
             del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
             return None
 
         async def new_page(self):
@@ -1711,6 +1717,8 @@ async def test_shared_browser_runtime_uses_socks5_auth_bridge_and_keeps_context_
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--window-size=1920,1080",
+                "--disable-search-engine-choice-screen",
                 "--headless=new",
             ],
             "proxy": {
@@ -1733,6 +1741,9 @@ async def test_shared_browser_runtime_launches_http_proxy_directly(
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
             del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
             return None
 
         async def new_page(self):
@@ -1786,6 +1797,8 @@ async def test_shared_browser_runtime_launches_http_proxy_directly(
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--window-size=1920,1080",
+                "--disable-search-engine-choice-screen",
                 "--headless=new",
             ],
             "proxy": {
@@ -1806,6 +1819,9 @@ async def test_shared_browser_runtime_launches_real_chrome_headful_for_fallback(
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
             del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
             return None
 
         async def new_page(self):
@@ -1869,8 +1885,11 @@ async def test_shared_browser_runtime_launches_real_chrome_headful_for_fallback(
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--window-size=1920,1080",
+                "--disable-search-engine-choice-screen",
             ],
             "executable_path": "C:/Chrome/chrome.exe",
+            "ignore_default_args": ["--enable-automation"],
         }
     ]
 
@@ -1940,6 +1959,9 @@ async def test_shared_browser_runtime_reuses_run_storage_state(
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
             del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
             return None
 
         async def new_page(self):
@@ -2086,6 +2108,9 @@ async def test_shared_browser_runtime_skips_storage_state_reuse_when_disallowed(
             del pattern, handler
             return None
 
+        async def add_init_script(self, script: str) -> None:
+            return None
+
         async def new_page(self):
             return object()
 
@@ -2145,6 +2170,9 @@ async def test_shared_browser_runtime_skips_domain_storage_for_proxied_runtime_b
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
             del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
             return None
 
         async def new_page(self):
@@ -2221,6 +2249,9 @@ async def test_shared_browser_runtime_suppresses_storage_state_persist_failures(
             del pattern, handler
             return None
 
+        async def add_init_script(self, script: str) -> None:
+            return None
+
         async def new_page(self):
             return object()
 
@@ -2281,6 +2312,9 @@ async def test_shared_browser_runtime_bounds_hung_context_cleanup(
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
             del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
             return None
 
         async def new_page(self):
@@ -2512,6 +2546,9 @@ async def test_shared_browser_runtime_snapshot_tracks_queue_without_private_sema
             del pattern, handler
             return None
 
+        async def add_init_script(self, script: str) -> None:
+            return None
+
         async def new_page(self):
             return object()
 
@@ -2562,6 +2599,9 @@ async def test_shared_browser_runtime_recycles_browser_without_deadlocking(
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
             del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
             return None
 
         async def new_page(self):
@@ -2642,6 +2682,9 @@ async def test_acquisition_shared_browser_runtime_recycles_after_driver_closed_o
     class FakeContext:
         async def route(self, pattern: str, handler) -> None:
             del pattern, handler
+            return None
+
+        async def add_init_script(self, script: str) -> None:
             return None
 
         async def new_page(self):

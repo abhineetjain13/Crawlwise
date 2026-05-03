@@ -1031,7 +1031,7 @@ async def test_amazon_adapter_extracts_detail_completeness_fields() -> None:
     )
 
     record = result.records[0]
-    assert "sku" not in record
+    assert record["sku"] == "B08J5F3G18"
     assert record["product_id"] == "B08J5F3G18"
     assert record["part_number"] == "24G-P5-3987-KR"
     assert record["barcode"] == "843368067763"

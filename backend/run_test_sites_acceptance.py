@@ -211,7 +211,7 @@ def _console_safe(value: object) -> str:
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run TEST_SITES.md tail against production harness owners.")
     parser.add_argument("--path", default=str(DEFAULT_TEST_SITES_PATH), help="Path to TEST_SITES.md")
-    parser.add_argument("--start-line", type=int, default=198, help="1-based start line")
+    parser.add_argument("--start-line", type=int, default=156, help="1-based start line")
     parser.add_argument("--limit", type=int, default=None, help="Optional site limit")
     parser.add_argument("--mode", choices=[HARNESS_MODE_FULL_PIPELINE, HARNESS_MODE_ACQUISITION_ONLY], default=HARNESS_MODE_FULL_PIPELINE, help="Run the full persisted pipeline or acquisition-only prefetch path.")
     parser.add_argument("--url", action="append", default=[], help="Explicit URL to smoke-test. Repeat to bypass TEST_SITES.md selection.")

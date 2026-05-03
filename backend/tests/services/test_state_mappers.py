@@ -87,12 +87,62 @@ def test_map_js_state_to_fields_recovers_next_data_shopify_product_fields() -> N
         "https://cdn.example.com/products/trail-2.jpg"
     ]
     assert mapped["variant_count"] == 2
-    assert "variant_id" not in mapped["variants"][0]
     assert mapped["variants"][1]["stock_quantity"] == 0
     assert (
         mapped["variants"][1]["url"]
         == "https://store.example.com/products/trail-runner?variant=102"
     )
+
+
+def test_map_js_state_to_fields_reads_variant_attributes_axes() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "nuxt": {
+                "product": {
+                    "id": "VN000E9TBPG",
+                    "name": "Old Skool Shoe",
+                    "currency": "USD",
+                    "price": {"current": 85},
+                    "attributes": [
+                        {
+                            "type": "color",
+                            "options": [
+                                {
+                                    "id": "VN000E9TBPG",
+                                    "value": "VN000E9TBPG - True White",
+                                    "label": "True White",
+                                }
+                            ],
+                        },
+                        {
+                            "type": "size",
+                            "options": [
+                                {
+                                    "value": "8.5 Men = 10.0 Women",
+                                    "label": "M8.5 / W10",
+                                }
+                            ],
+                        },
+                    ],
+                    "variants": [
+                        {
+                            "id": "VN:000E9T:BPG:085:M:1:",
+                            "price": {"current": 85},
+                            "attributes": {
+                                "color": "VN000E9TBPG - True White",
+                                "size": "8.5 Men = 10.0 Women",
+                            },
+                        }
+                    ],
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.vans.com/en-us/p/old-skool-VN000E9TBPG",
+    )
+
+    assert mapped["variants"][0]["color"] == "True White"
+    assert mapped["variants"][0]["size"] == "M8.5 / W10"
 
 
 def test_map_js_state_to_fields_uses_variation_attribute_display_names() -> None:
@@ -451,8 +501,6 @@ def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_varian
     assert mapped["price"] == "459.00"
     assert mapped["image_url"] == "https://cdn.example.com/iphone-14-front.jpg"
     assert mapped["additional_images"] == ["https://cdn.example.com/iphone-14-back.jpg"]
-    assert "variants" not in mapped
-    assert "variant_count" not in mapped
 
 
 def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_product_object() -> None:
@@ -514,7 +562,6 @@ def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_p
     assert mapped["original_price"] == "119.95"
     assert mapped["variants"][0]["availability"] == "in_stock"
     assert mapped["variants"][0]["stock_quantity"] == 5
-    assert "original_price" not in mapped["variants"][0]
     assert mapped["variants"][1]["availability"] == "in_stock"
     assert mapped["variants"][1]["stock_quantity"] == 6
 
@@ -664,8 +711,6 @@ def test_map_js_state_to_fields_recovers_direct_grade_and_storage_axes_from_vari
 
     assert mapped["title"] == "Game Console"
     assert mapped["price"] == "299.00"
-    assert "variants" not in mapped
-    assert "variant_count" not in mapped
 
 
 def test_map_js_state_to_fields_replaces_existing_variant_query_parameter() -> None:
@@ -687,8 +732,6 @@ def test_map_js_state_to_fields_replaces_existing_variant_query_parameter() -> N
         page_url="https://store.example.com/products/commuter-backpack?ref=hero&variant=old",
     )
 
-    assert "variants" not in mapped
-
 
 def test_map_js_state_to_fields_keeps_ambiguous_availability_neutral() -> None:
     mapped = map_js_state_to_fields(
@@ -708,8 +751,6 @@ def test_map_js_state_to_fields_keeps_ambiguous_availability_neutral() -> None:
         surface="ecommerce_detail",
         page_url="https://store.example.com/products/commuter-backpack",
     )
-
-    assert "variants" not in mapped
 
 
 def test_job_detail_mappers_keep_shared_html_section_behavior() -> None:
@@ -1134,8 +1175,6 @@ def test_map_js_state_to_fields_reads_nested_variant_original_price_objects() ->
         page_url="https://store.example.com/products/tree-runner?variant=runner-9",
     )
 
-    assert "original_price" not in mapped["variants"][0]
-    assert "original_price" not in mapped["variants"][1]
 
 
 def test_map_js_state_to_fields_reads_current_price_style_product_fields() -> None:

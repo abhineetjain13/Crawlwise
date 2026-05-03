@@ -12,13 +12,27 @@ from app.services.config.extraction_rules import (
     TRACKING_PARAM_PREFIXES,
     TRACKING_PRESERVED_SHORT_QUERY_KEYS,
     TRACKING_STRIP_URL_FIELDS,
+    TRACKING_STRIP_SURFACE_PREFIXES,
+    MAX_TRACKING_KEY_LENGTH,
+    MAX_TRACKING_VALUE_LENGTH,
+    URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS,
+    URL_CONCATENATION_SCHEME_PATTERN,
 )
 from app.services.config.field_mappings import (
+    PUBLIC_RECORD_CANONICAL_SURFACE,
+    PUBLIC_RECORD_CANONICAL_URL_FIELDS,
     PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_KEYS,
     PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_PREFIXES,
 )
 
-_SHORT_TRACKING_VALUE_RE = re.compile(r"^[a-z0-9_-]{0,8}$", re.I)
+_SHORT_TRACKING_VALUE_RE = re.compile(
+    rf"^[a-z0-9_-]{{0,{int(MAX_TRACKING_VALUE_LENGTH)}}}$",
+    re.I,
+)
+_URL_SCHEME_RE = re.compile(str(URL_CONCATENATION_SCHEME_PATTERN), re.I)
+_URL_CONCAT_ALLOWED_PREFIX_SEPARATORS = tuple(
+    str(value) for value in tuple(URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS or ())
+)
 
 
 def _text_or_none(value: object) -> str | None:
@@ -27,7 +41,7 @@ def _text_or_none(value: object) -> str | None:
 
 def _surface_needs_tracking_strip(surface: str | None) -> bool:
     normalized_surface = str(surface or "").strip().lower()
-    return normalized_surface.startswith(("ecommerce_", "job_"))
+    return normalized_surface.startswith(tuple(TRACKING_STRIP_SURFACE_PREFIXES or ()))
 
 
 def strip_tracking_query_params(url: object) -> str | None:
@@ -80,10 +94,10 @@ def _is_short_tracking_flag(
     lowered = key.lower()
     if not has_detail_context_tracking or lowered in TRACKING_PRESERVED_SHORT_QUERY_KEYS:
         return False
-    if len(lowered) > 3:
+    if len(lowered) > int(MAX_TRACKING_KEY_LENGTH):
         return False
     normalized_value = str(value or "").strip().lower()
-    if len(normalized_value) > 8:
+    if len(normalized_value) > int(MAX_TRACKING_VALUE_LENGTH):
         return False
     if normalized_value and _SHORT_TRACKING_VALUE_RE.fullmatch(normalized_value) is None:
         return False
@@ -105,6 +119,23 @@ def strip_record_tracking_params(
     return cleaned
 
 
+def is_concatenated_url(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    scheme_matches = list(_URL_SCHEME_RE.finditer(text))
+    if len(scheme_matches) > 1:
+        return any(
+            match.start() > 0
+            and text[match.start() - 1] not in _URL_CONCAT_ALLOWED_PREFIX_SEPARATORS
+            for match in scheme_matches[1:]
+        )
+    if len(scheme_matches) == 1:
+        tail = text[scheme_matches[0].end():]
+        return _URL_SCHEME_RE.search(tail) is not None
+    return False
+
+
 def canonical_public_record_url(
     url: object,
     *,
@@ -114,10 +145,10 @@ def canonical_public_record_url(
     text = _text_or_none(url)
     if not text:
         return None
-    if str(field_name or "").strip().lower() not in {"apply_url", "canonical_url", "url"}:
+    if str(field_name or "").strip().lower() not in PUBLIC_RECORD_CANONICAL_URL_FIELDS:
         return text
     normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface != "ecommerce_detail":
+    if normalized_surface != PUBLIC_RECORD_CANONICAL_SURFACE:
         return text
     parsed = urlparse(text)
     if not parsed.query:

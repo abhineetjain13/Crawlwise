@@ -14,6 +14,7 @@ from app.services.config.extraction_rules import (
     DETAIL_LOW_SIGNAL_PARENT_MIN,
     DETAIL_LOW_SIGNAL_PRICE_MAX,
     DETAIL_PRICE_COMPARISON_TOLERANCE,
+    PLACEHOLDER_IMAGE_URL_PATTERNS,
     VARIANT_OPTION_LABEL_MAX_WORDS,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
 )
@@ -106,7 +107,6 @@ def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
         record["additional_images"] = merged[1:]
         return
     record.pop("additional_images", None)
-
 
 def _sanitize_ecommerce_detail_record(
     record: dict[str, Any],
@@ -416,6 +416,7 @@ def _sanitize_variant_row(
             if not variant_axis_name_is_semantic(axis_name):
                 continue
             cleaned_options[axis_key] = cleaned_value
+            # Sync existing size/color scalars with cleaned option_values; do not populate missing axes.
             if axis_key in {"size", "color"} and variant.get(axis_key) not in (
                 None,
                 "",
@@ -428,17 +429,24 @@ def _sanitize_variant_row(
         else:
             variant.pop("option_values", None)
     for field_name in ("size", "color"):
-        cleaned_value = clean_text(variant.get(field_name))
-        if (
-            cleaned_value
-            and not _variant_option_value_is_noise(cleaned_value)
-            and not _option_value_repeats_product_title(
-                cleaned_value, title_hint=title_hint
-            )
-        ):
-            variant[field_name] = cleaned_value
-        else:
+        raw_value = variant.get(field_name)
+        cleaned_value = clean_text(raw_value)
+        if not cleaned_value:
+            # Preserve values from higher-priority sources even if clean_text
+            # returns empty (e.g. structured dict that coerce_field_value handles).
+            # Only drop if the raw value itself is empty/null.
+            if raw_value in (None, "", [], {}):
+                variant.pop(field_name, None)
+            continue
+        if _variant_option_value_is_noise(cleaned_value):
             variant.pop(field_name, None)
+            continue
+        if _option_value_repeats_product_title(
+            cleaned_value, title_hint=title_hint
+        ):
+            variant.pop(field_name, None)
+            continue
+        variant[field_name] = cleaned_value
     variant_url = text_or_none(variant.get("url"))
     if (
         variant_url
@@ -840,11 +848,7 @@ def _detail_image_candidate_is_usable(url: str, *, identity_url: str) -> bool:
     lowered = url.lower()
     if "base64," in lowered or lowered.startswith("data:"):
         return False
-    if (
-        "placeholder" in lowered
-        or "via.placeholder.com" in lowered
-        or lowered.endswith("/white.svg")
-    ):
+    if any(pattern in lowered for pattern in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ())):
         return False
     if _detail_image_url_is_extensionless_transform(path):
         return False
@@ -860,6 +864,12 @@ def _detail_image_candidate_is_usable(url: str, *, identity_url: str) -> bool:
     if (
         candidate_title
         and _detail_image_title_has_identity_signal(candidate_title)
+        and not (
+            (candidate_codes := _detail_identity_codes_from_url(url))
+            and detail_identity_codes_match(
+                _detail_identity_codes_from_url(identity_url), candidate_codes
+            )
+        )
         and not _detail_image_title_matches_requested_identity(
             candidate_title,
             requested_page_url=identity_url,
@@ -868,13 +878,11 @@ def _detail_image_candidate_is_usable(url: str, *, identity_url: str) -> bool:
         return False
     return True
 
-
 def _detail_image_url_is_extensionless_transform(path: str) -> bool:
     filename = unquote(str(path or "").rsplit("/", 1)[-1])
     if re.search(r"\.(?:avif|gif|jpe?g|png|svg|tiff?|webp)$", filename, re.I):
         return False
     return re.search(r"\._[A-Z]+_[A-Z]{2}\d+\s*$", filename, re.I) is not None
-
 
 def _detail_path_looks_like_image_asset(path: str, lowered_url: str) -> bool:
     lowered_path = str(path or "").lower()

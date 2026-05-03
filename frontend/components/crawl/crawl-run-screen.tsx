@@ -107,6 +107,31 @@ function mergeLogs(current: CrawlLog[], incoming: CrawlLog[]) {
     .slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS);
 }
 
+function llmTouchedFieldNames(record: CrawlRecord): string[] {
+  const raw =
+    record.raw_data && typeof record.raw_data === 'object'
+      ? (record.raw_data as Record<string, unknown>)
+      : {};
+  const touched = new Set<string>();
+  const source = typeof raw._source === 'string' ? raw._source : '';
+  if (source.startsWith('llm_')) {
+    touched.add('_record');
+  }
+  const fieldSources =
+    raw._field_sources && typeof raw._field_sources === 'object'
+      ? (raw._field_sources as Record<string, unknown>)
+      : {};
+  for (const [fieldName, value] of Object.entries(fieldSources)) {
+    if (
+      Array.isArray(value) &&
+      value.some((item) => typeof item === 'string' && item.startsWith('llm_'))
+    ) {
+      touched.add(fieldName);
+    }
+  }
+  return Array.from(touched);
+}
+
 function isSafeHref(href: string) {
   try {
     const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
@@ -587,6 +612,24 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     () => (tableRecords.length ? tableRecords : records),
     [records, tableRecords],
   );
+  const llmSummary = useMemo(() => {
+    const llmRequested = Boolean(run?.settings?.llm_enabled);
+    const touchedFields = new Set<string>();
+    let touchedRecords = 0;
+    for (const record of batchSourceRecords) {
+      const fields = llmTouchedFieldNames(record);
+      if (!fields.length) {
+        continue;
+      }
+      touchedRecords += 1;
+      fields.forEach((fieldName) => touchedFields.add(fieldName));
+    }
+    return {
+      requested: llmRequested,
+      touchedRecords,
+      touchedFields: touchedFields.size,
+    };
+  }, [batchSourceRecords, run?.settings?.llm_enabled]);
   const resultUrls = useMemo(
     () => uniqueStrings(batchSourceRecords.map((record) => extractRecordUrl(record))),
     [batchSourceRecords],
@@ -1070,11 +1113,29 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 />
               }
               summary={
-                <RunSummaryChips
-                  duration={summary.duration}
-                  verdict={humanizeVerdict(verdict).toLowerCase()}
-                  quality={humanizeQuality(completedQualityLevel).toLowerCase()}
-                />
+                <div className="flex flex-wrap items-center justify-end gap-2.5">
+                  {llmSummary.requested ? (
+                    <Badge
+                      tone={llmSummary.touchedRecords > 0 ? 'accent' : 'warning'}
+                      title={
+                        llmSummary.touchedRecords > 0
+                          ? `LLM used ${llmSummary.touchedRecords} record(s) / ${llmSummary.touchedFields} field(s)`
+                          : 'LLM enabled, no visible repair'
+                      }
+                    >
+                      {llmSummary.touchedRecords > 0
+                        ? `LLM used ${llmSummary.touchedRecords} rec / ${llmSummary.touchedFields} fld`
+                        : 'LLM on, no visible repair'}
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral">LLM off</Badge>
+                  )}
+                  <RunSummaryChips
+                    duration={summary.duration}
+                    verdict={humanizeVerdict(verdict).toLowerCase()}
+                    quality={humanizeQuality(completedQualityLevel).toLowerCase()}
+                  />
+                </div>
               }
               content={
                 <>

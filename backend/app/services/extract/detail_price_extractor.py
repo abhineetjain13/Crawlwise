@@ -50,25 +50,25 @@ _installment_price_text_tokens = tuple(
     for token in tuple(DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS or ())
     if str(token).strip()
 )
-jsonld_graph_fields = tuple(
+_jsonld_graph_fields = tuple(
     str(field) for field in tuple(DETAIL_JSONLD_GRAPH_FIELDS or ())
 )
-jsonld_type_fields = tuple(
+_jsonld_type_fields = tuple(
     str(field) for field in tuple(DETAIL_JSONLD_TYPE_FIELDS or ())
 )
-jsonld_offer_fields = tuple(
+_jsonld_offer_fields = tuple(
     str(field) for field in tuple(DETAIL_JSONLD_OFFER_FIELDS or ())
 )
-jsonld_price_fields = tuple(
+_jsonld_price_fields = tuple(
     str(field) for field in tuple(DETAIL_JSONLD_PRICE_FIELDS or ())
 )
-jsonld_original_price_fields = tuple(
+_jsonld_original_price_fields = tuple(
     str(field) for field in tuple(DETAIL_JSONLD_ORIGINAL_PRICE_FIELDS or ())
 )
-jsonld_price_specification_fields = tuple(
+_jsonld_price_specification_fields = tuple(
     str(field) for field in tuple(DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS or ())
 )
-jsonld_currency_fields = tuple(
+_jsonld_currency_fields = tuple(
     str(field) for field in tuple(DETAIL_JSONLD_CURRENCY_FIELDS or ())
 )
 _DETAIL_PRICE_JSONLD_TYPE_RE = re.compile(str(DETAIL_PRICE_JSONLD_TYPE_PATTERN))
@@ -182,8 +182,9 @@ def backfill_detail_price_from_html(
         [],
         {},
     ):
+        original_price_source = "json_ld" if jsonld_original_price else "dom_text"
         record["original_price"] = original_price
-        append_record_field_source(record, "original_price", "dom_text")
+        append_record_field_source(record, "original_price", original_price_source)
     if (
         isinstance(selected_variant, dict)
         and original_price not in (None, "", [], {})
@@ -706,16 +707,18 @@ def _detail_jsonld_price_bundle(
     *,
     currency: str | None,
 ) -> tuple[str | None, str | None, str | None]:
+    saved_currency = text_or_none(currency)
     for offer in _iter_jsonld_offers(soup):
-        offer_currency = _first_text(offer, jsonld_currency_fields) or currency
+        offer_currency = _first_text(offer, _jsonld_currency_fields) or currency
+        saved_currency = text_or_none(offer_currency) or saved_currency
         price = _first_normalized_price(
             offer,
-            jsonld_price_fields,
+            _jsonld_price_fields,
             currency=offer_currency,
         )
         original_price = _first_normalized_price(
             offer,
-            jsonld_original_price_fields,
+            _jsonld_original_price_fields,
             currency=offer_currency,
         )
         spec_original = _price_from_jsonld_specifications(
@@ -730,9 +733,9 @@ def _detail_jsonld_price_bundle(
             original_price = (
                 format_detail_price_decimal(original_price) or original_price
             )
-        if price or original_price or offer_currency:
+        if price or original_price:
             return price, original_price, text_or_none(offer_currency)
-    return None, None, None
+    return None, None, saved_currency
 
 
 def _iter_jsonld_offers(soup: BeautifulSoup) -> list[dict[str, Any]]:
@@ -756,26 +759,25 @@ def _iter_jsonld_payloads(soup: BeautifulSoup) -> list[Any]:
 
 
 def _offers_from_jsonld_node(value: Any) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
     if isinstance(value, list):
-        results: list[dict[str, Any]] = []
         for item in value:
             results.extend(_offers_from_jsonld_node(item))
         return results
     if not isinstance(value, dict):
         return []
-    results: list[dict[str, Any]] = []
-    for field_name in jsonld_graph_fields:
+    for field_name in _jsonld_graph_fields:
         results.extend(_offers_from_jsonld_node(value.get(field_name)))
     node_type = _jsonld_type_text(value)
     if node_type in {"offer", "aggregateoffer"}:
         results.append(value)
-    for field_name in jsonld_offer_fields:
+    for field_name in _jsonld_offer_fields:
         results.extend(_offers_from_jsonld_node(value.get(field_name)))
     return results
 
 
 def _jsonld_type_text(value: dict[str, Any]) -> str:
-    for field_name in jsonld_type_fields:
+    for field_name in _jsonld_type_fields:
         raw_type = value.get(field_name)
         if isinstance(raw_type, list):
             raw_type = next((item for item in raw_type if text_or_none(item)), None)
@@ -816,7 +818,7 @@ def _price_from_jsonld_specifications(
     current_price: str | None,
 ) -> str | None:
     specs: list[Any] = []
-    for field_name in jsonld_price_specification_fields:
+    for field_name in _jsonld_price_specification_fields:
         raw_specs = offer.get(field_name)
         if isinstance(raw_specs, list):
             specs.extend(raw_specs)
@@ -828,7 +830,7 @@ def _price_from_jsonld_specifications(
         if not isinstance(spec, dict):
             continue
         price = detail_price_decimal(
-            _first_normalized_price(spec, jsonld_price_fields, currency=currency)
+            _first_normalized_price(spec, _jsonld_price_fields, currency=currency)
         )
         if price is None:
             continue

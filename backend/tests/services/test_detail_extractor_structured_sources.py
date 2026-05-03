@@ -53,6 +53,38 @@ def test_reconcile_detail_currency_with_url_tracks_nested_currency_sources() -> 
     assert "url_currency_hint" in record["_field_sources"]["variants[0].currency"]
 
 
+def test_extract_ecommerce_detail_jsonld_skips_currency_only_offer() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Trail Runner",
+          "offers": [
+            {"@type": "Offer", "priceCurrency": "USD"},
+            {"@type": "Offer", "price": "129.95", "priceCurrency": "USD"}
+          ]
+        }
+        </script>
+      </head>
+      <body><h1>Trail Runner</h1></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["price"] == "129.95"
+    assert rows[0]["currency"] == "USD"
+
+
 def test_extract_ecommerce_detail_rejects_url_like_structured_brand() -> None:
     html = """
     <html>
@@ -1527,6 +1559,9 @@ def test_extract_ecommerce_detail_ignores_newsletter_fields_inside_size_containe
 
     assert len(rows) == 1
     record = rows[0]
+    assert record["title"] == "Soft Rock Crewneck"
+    assert "Email" not in str(record.get("size", ""))
+    assert "Sign up" not in json.dumps(record)
 
 
 def test_extract_ecommerce_detail_rejects_promo_and_hex_only_dom_variant_values() -> None:
@@ -1558,6 +1593,52 @@ def test_extract_ecommerce_detail_rejects_promo_and_hex_only_dom_variant_values(
     )
 
     assert len(rows) == 1
+    record = rows[0]
+    assert "20% off" not in json.dumps(record)
+    assert "#ffffff" not in json.dumps(record)
+    assert record["variants"] == [
+        {"color": "Black"},
+        {"color": "White"},
+    ]
+
+
+def test_extract_ecommerce_detail_rejects_cookie_disclosure_title_and_description() -> None:
+    html = """
+    <html>
+      <head><title>Barrow Short-sleeved T-shirt</title></head>
+      <body>
+        <div id="onetrust-preference-center">
+          <h1>_clck</h1>
+          <section>
+            <h2>Description</h2>
+            <p>
+              This cookie name is associated with software from Dynatrace.
+              Used by Microsoft Clarity to connect multiple page views.
+              Cookie descriptions are displayed in the Cookie List on the Preference Center.
+            </p>
+          </section>
+        </div>
+        <main class="product-detail">
+          <div class="brand">Barrow</div>
+          <span class="price">INR 7217.00</span>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.luisaviaroma.com/en-in/p/barrow/kids-boys/83I-UKD027",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Barrow Short-sleeved T-shirt"
+    assert record.get("description") in (None, "")
+    assert "_clck" not in json.dumps(record)
+    assert "Microsoft Clarity" not in json.dumps(record)
 
 
 def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availability() -> None:
@@ -3946,6 +4027,23 @@ def test_build_detail_record_rejects_broken_extensionless_transformed_image_urls
     assert record["additional_images"] == [
         "https://m.media-amazon.com/images/I/adidas-samba-og-shoes-alt._AC_UL1500_.jpg"
     ]
+
+
+def test_build_detail_record_keeps_product_image_when_identity_code_is_in_url() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Old Skool Shoe</h1></main></body></html>",
+        "https://www.vans.com/en-us/p/old-skool-VN000E9TBPG",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Old Skool Shoe",
+                "image_url": "https://assets.vans.com/images/t_Thumbnail/v1/VN000E9TBPG-HERO/Old-Skool-Shoe-VANS-HERO.png",
+            }
+        ],
+    )
+
+    assert "VN000E9TBPG-HERO" in record["image_url"]
 
 
 def test_build_detail_record_rejects_cross_sell_images_by_filename_identity() -> None:

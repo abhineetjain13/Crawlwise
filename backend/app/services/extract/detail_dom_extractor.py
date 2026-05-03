@@ -13,6 +13,7 @@ from selectolax.lexbor import LexborHTMLParser
 from app.services.config.extraction_rules import (
     DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
+    VARIANT_PROMO_NOISE_TOKENS,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
     VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
@@ -78,6 +79,11 @@ _variant_option_value_noise_tokens = frozenset(
 _variant_option_value_ui_noise_phrases = tuple(
     str(token).strip().lower()
     for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
+    if str(token).strip()
+)
+_variant_promo_noise_tokens = tuple(
+    str(token).strip().lower()
+    for token in tuple(VARIANT_PROMO_NOISE_TOKENS or ())
     if str(token).strip()
 )
 _variant_artifact_value_tokens = frozenset(
@@ -338,11 +344,10 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
     return (
         compact in _variant_option_value_noise_tokens
         or compact in _variant_artifact_value_tokens
-        or re.fullmatch(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?", compact) is not None
-        or re.fullmatch(r"\d+\s*%\s*off", lowered) is not None
+        or re.fullmatch(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?", compact) is not None
         or (
             "%" in lowered
-            and any(token in lowered for token in ("off", "discount", "promo"))
+            and any(token in lowered for token in _variant_promo_noise_tokens)
         )
         or lowered in {"select", "choose", "option", "size guide"}
         or any(phrase in lowered for phrase in _variant_option_value_ui_noise_phrases)
@@ -1254,28 +1259,28 @@ def _backfill_variants_from_dom_if_missing(
     dom_variant_rows = [
         row for row in list(dom_variants.get("variants") or []) if isinstance(row, dict)
     ]
-    if dom_variant_rows and (
-        not existing_variants or len(dom_variant_rows) > len(existing_variants)
-    ):
-        existing_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    if dom_variant_rows:
+        existing_by_key: dict[str, dict[str, Any]] = {}
         existing_by_index: dict[int, dict[str, Any]] = {}
         for index, row in enumerate(existing_variants):
             row_key = text_or_none(row.get("variant_id")) or text_or_none(
                 row.get("url")
             )
             if row_key:
-                existing_by_key[("", row_key)] = row
+                existing_by_key[row_key] = row
             existing_by_index[index] = row
+        index_fallback_allowed = bool(existing_variants) and (
+            len(dom_variant_rows) == len(existing_variants)
+            or abs(len(dom_variant_rows) - len(existing_variants)) <= 1
+        )
         merged_rows: list[dict[str, Any]] = []
         for index, dom_row in enumerate(dom_variant_rows):
             dom_key = text_or_none(dom_row.get("variant_id")) or text_or_none(
                 dom_row.get("url")
             )
-            existing_row = (
-                existing_by_key.get(("", dom_key or ""))
-                if dom_key
-                else existing_by_index.get(index)
-            )
+            existing_row = existing_by_key.get(dom_key or "") if dom_key else None
+            if existing_row is None and index_fallback_allowed:
+                existing_row = existing_by_index.get(index)
             merged_rows.append(
                 merge_variant_pair(dom_row, existing_row)
                 if isinstance(existing_row, dict)

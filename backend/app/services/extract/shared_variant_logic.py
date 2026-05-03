@@ -28,68 +28,68 @@ from app.services.config.extraction_rules import (
 )
 from app.services.field_value_core import clean_text, text_or_none
 
-_VARIANT_AXIS_LABEL_NOISE_TOKENS = frozenset(
+_variant_axis_label_noise_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_AXIS_LABEL_NOISE_TOKENS or ())
     if str(token).strip()
 )
-_VARIANT_AXIS_LABEL_NOISE_PATTERNS = tuple(
+_variant_axis_label_noise_patterns = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(VARIANT_AXIS_LABEL_NOISE_PATTERNS or ())
     if str(pattern).strip()
 )
-_VARIANT_GROUP_ATTR_NOISE_TOKENS = frozenset(
+_variant_group_attr_noise_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_GROUP_ATTR_NOISE_TOKENS or ())
     if str(token).strip()
 )
-_VARIANT_GROUP_ATTR_NOISE_PATTERNS = tuple(
+_variant_group_attr_noise_patterns = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(VARIANT_GROUP_ATTR_NOISE_PATTERNS or ())
     if str(pattern).strip()
 )
-_VARIANT_COLOR_HINT_WORDS = frozenset(
+_variant_color_hint_words = frozenset(
     str(token).strip().lower()
     for token in VARIANT_COLOR_HINT_WORDS
     if str(token).strip()
 )
-_VARIANT_SIZE_VALUE_PATTERNS = tuple(
+_variant_size_value_patterns = tuple(
     re.compile(str(pattern), re.I)
     for pattern in VARIANT_SIZE_VALUE_PATTERNS
     if str(pattern).strip()
 )
-_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
+_variant_option_value_noise_tokens = frozenset(
     str(token).strip().lower()
     for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
     if str(token).strip()
 )
-variant_context_noise_tokens = frozenset(
+_variant_context_noise_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(DETAIL_VARIANT_CONTEXT_NOISE_TOKENS or ())
     if str(token).strip()
 )
-variant_scope_selector = str(DETAIL_VARIANT_SCOPE_SELECTOR or "").strip()
-_VARIANT_SIZE_ALIAS_SUFFIXES = tuple(
+_variant_scope_selector = str(DETAIL_VARIANT_SCOPE_SELECTOR or "").strip()
+_variant_size_alias_suffixes = tuple(
     str(token).strip().lower()
     for token in tuple(VARIANT_SIZE_ALIAS_SUFFIXES or ())
     if str(token).strip()
 )
-variant_axis_allowed_single_tokens = frozenset(
+_variant_axis_allowed_single_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_AXIS_ALLOWED_SINGLE_TOKENS or ())
     if str(token).strip()
 )
-variant_axis_generic_tokens = frozenset(
+_variant_axis_generic_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_AXIS_GENERIC_TOKENS or ())
     if str(token).strip()
 )
-variant_axis_technical_patterns = tuple(
+_variant_axis_technical_patterns = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(VARIANT_AXIS_TECHNICAL_PATTERNS or ())
     if str(pattern).strip()
 )
-variant_quantity_attr_tokens = frozenset(
+_variant_quantity_attr_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_QUANTITY_ATTR_TOKENS or ())
     if str(token).strip()
@@ -101,10 +101,10 @@ def _variant_axis_label_is_noise(value: object) -> bool:
     if not lowered:
         return False
     tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
-    if any(token in _VARIANT_AXIS_LABEL_NOISE_TOKENS for token in tokens):
+    if any(token in _variant_axis_label_noise_tokens for token in tokens):
         return True
     return any(
-        pattern.search(lowered) for pattern in _VARIANT_AXIS_LABEL_NOISE_PATTERNS
+        pattern.search(lowered) for pattern in _variant_axis_label_noise_patterns
     )
 
 
@@ -117,11 +117,11 @@ def normalized_variant_axis_key(value: object) -> str:
     normalized = str(aliases.get(text) or text)
     tokens = [token for token in normalized.split("_") if token]
     semantic_tokens = [
-        token for token in tokens if token in variant_axis_allowed_single_tokens
+        token for token in tokens if token in _variant_axis_allowed_single_tokens
     ]
     if len(semantic_tokens) == 1 and all(
         token == semantic_tokens[0]
-        or token in variant_axis_generic_tokens
+        or token in _variant_axis_generic_tokens
         or token.isdigit()
         or len(token) <= 3
         for token in tokens
@@ -143,11 +143,11 @@ def normalized_variant_axis_display_name(value: object) -> str:
         return cleaned
     if len(tokens) == 1 and tokens[0] == axis_key:
         return cleaned
-    if axis_key not in variant_axis_allowed_single_tokens:
+    if axis_key not in _variant_axis_allowed_single_tokens:
         return cleaned
     extra_tokens = [token for token in tokens if token != axis_key]
     if extra_tokens and all(
-        token in variant_axis_generic_tokens or token.isdigit() or len(token) <= 3
+        token in _variant_axis_generic_tokens or token.isdigit() or len(token) <= 3
         for token in extra_tokens
     ):
         return axis_key
@@ -159,8 +159,13 @@ def variant_dom_cues_present(soup: Any) -> bool:
 
 
 def _variant_node_in_noise_context(node: Any) -> bool:
+    # Validate depth config; fall back to 3 if missing or invalid
+    try:
+        depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH))
+    except (TypeError, ValueError):
+        depth = 3
     current = node
-    for _ in range(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH):
+    for _ in range(depth):
         if current is None or not hasattr(current, "get"):
             return False
         parts: list[str] = []
@@ -171,18 +176,18 @@ def _variant_node_in_noise_context(node: Any) -> bool:
             elif value not in (None, "", [], {}):
                 parts.append(str(value))
         probe = clean_text(" ".join(parts)).lower()
-        if probe and any(token in probe for token in variant_context_noise_tokens):
+        if probe and any(token in probe for token in _variant_context_noise_tokens):
             return True
         current = getattr(current, "parent", None)
     return False
 
 
 def _variant_scope_roots(soup: Any) -> list[Any]:
-    if not hasattr(soup, "select") or not variant_scope_selector:
+    if not hasattr(soup, "select") or not _variant_scope_selector:
         return [soup]
     roots: list[Any] = []
     seen: set[int] = set()
-    for node in soup.select(variant_scope_selector):
+    for node in soup.select(_variant_scope_selector):
         if id(node) in seen or _variant_node_in_noise_context(node):
             continue
         if not (
@@ -293,8 +298,8 @@ def resolve_variant_group_name(node: Any) -> str:
                 for token in re.split(r"[^a-z0-9]+", cleaned_name.lower())
                 if token
             ]
-            if normalized_name in variant_axis_allowed_single_tokens and any(
-                token.isdigit() or token in variant_axis_generic_tokens
+            if normalized_name in _variant_axis_allowed_single_tokens and any(
+                token.isdigit() or token in _variant_axis_generic_tokens
                 for token in tokens
             ):
                 return normalized_name
@@ -334,7 +339,7 @@ def infer_variant_group_name_from_values(values: Sequence[object]) -> str:
     size_hits = sum(
         1
         for value in cleaned_values
-        if any(pattern.fullmatch(value) for pattern in _VARIANT_SIZE_VALUE_PATTERNS)
+        if any(pattern.fullmatch(value) for pattern in _variant_size_value_patterns)
     )
     if size_hits >= 2 and size_hits / len(cleaned_values) >= 0.5:
         return "size"
@@ -354,11 +359,11 @@ def _resolve_machine_variant_group_name(value: object) -> str:
     normalized_tokens = [token for token in normalized.split("_") if token]
     if not normalized_tokens:
         return ""
-    if normalized in variant_axis_allowed_single_tokens:
+    if normalized in _variant_axis_allowed_single_tokens:
         return normalized
     if all(
-        token in variant_axis_allowed_single_tokens
-        or token in variant_axis_generic_tokens
+        token in _variant_axis_allowed_single_tokens
+        or token in _variant_axis_generic_tokens
         or token.isdigit()
         for token in normalized_tokens
     ):
@@ -387,11 +392,11 @@ def _variant_group_node_attrs_are_noise(node: Any) -> bool:
     probe = clean_text(" ".join(parts)).lower()
     if not probe:
         return False
-    if any(token in probe for token in _VARIANT_GROUP_ATTR_NOISE_TOKENS):
+    if any(token in probe for token in _variant_group_attr_noise_tokens):
         return True
-    if any(token in probe for token in variant_context_noise_tokens):
+    if any(token in probe for token in _variant_context_noise_tokens):
         return True
-    return any(pattern.search(probe) for pattern in _VARIANT_GROUP_ATTR_NOISE_PATTERNS)
+    return any(pattern.search(probe) for pattern in _variant_group_attr_noise_patterns)
 
 
 def _node_attr_can_hold_group_label(node: Any) -> bool:
@@ -470,7 +475,7 @@ def _select_option_values_are_noise(node: Any) -> bool:
     normalized = {
         re.sub(r"[^a-z0-9]+", "", value.lower()) for value in values if value.strip()
     }
-    return bool(normalized) and normalized <= _VARIANT_OPTION_VALUE_NOISE_TOKENS
+    return bool(normalized) and normalized <= _variant_option_value_noise_tokens
 
 
 def _value_looks_like_color(value: object) -> bool:
@@ -481,7 +486,7 @@ def _value_looks_like_color(value: object) -> bool:
     ]
     if not tokens:
         return False
-    return any(token in _VARIANT_COLOR_HINT_WORDS for token in tokens)
+    return any(token in _variant_color_hint_words for token in tokens)
 
 
 def _semantic_group_label_from_text(value: object) -> str:
@@ -495,7 +500,7 @@ def _semantic_group_label_from_text(value: object) -> str:
     ]
     for candidate in candidates:
         normalized = normalized_variant_axis_key(candidate)
-        if normalized in variant_axis_allowed_single_tokens:
+        if normalized in _variant_axis_allowed_single_tokens:
             return normalized
     return ""
 
@@ -507,17 +512,17 @@ def variant_axis_name_is_semantic(value: object) -> bool:
         return False
     if _variant_axis_label_is_noise(cleaned):
         return False
-    if any(pattern.fullmatch(lowered) for pattern in variant_axis_technical_patterns):
+    if any(pattern.fullmatch(lowered) for pattern in _variant_axis_technical_patterns):
         return False
     if (
         re.fullmatch(r"[a-z0-9]+", lowered)
-        and lowered in variant_axis_allowed_single_tokens
+        and lowered in _variant_axis_allowed_single_tokens
     ):
         return True
     tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
     if not tokens or len(tokens) > 4:
         return False
-    if any(token in _VARIANT_AXIS_LABEL_NOISE_TOKENS for token in tokens):
+    if any(token in _variant_axis_label_noise_tokens for token in tokens):
         return False
     axis_key = normalized_variant_axis_key(cleaned)
     if not axis_key or len(axis_key) > 32:
@@ -525,14 +530,14 @@ def variant_axis_name_is_semantic(value: object) -> bool:
     axis_tokens = [token for token in axis_key.split("_") if token]
     if not axis_tokens:
         return False
-    if any(pattern.fullmatch(axis_key) for pattern in variant_axis_technical_patterns):
+    if any(pattern.fullmatch(axis_key) for pattern in _variant_axis_technical_patterns):
         return False
-    if any(token in variant_axis_allowed_single_tokens for token in axis_tokens):
+    if any(token in _variant_axis_allowed_single_tokens for token in axis_tokens):
         return True
     non_generic_tokens = [
         token
         for token in axis_tokens
-        if token not in variant_axis_generic_tokens and not token.isdigit()
+        if token not in _variant_axis_generic_tokens and not token.isdigit()
     ]
     if not non_generic_tokens:
         return False
@@ -549,7 +554,7 @@ def _select_is_quantity_node(node: Any) -> bool:
         if not value:
             continue
         tokens = re.split(r"[^a-z0-9]+", value)
-        if any(t in variant_quantity_attr_tokens for t in tokens):
+        if any(t in _variant_quantity_attr_tokens for t in tokens):
             return True
     return False
 
@@ -780,8 +785,8 @@ def variant_identity(variant: dict[str, Any]) -> str | None:
                 f"{axis}={value}" for axis, value in normalized_pairs
             )
     variant_url = text_or_none(variant.get("url"))
-    if variant_url:
-        return f"url:{variant_url}"
+    # URL-based identity causes duplicate rows; unidentifiable variants
+    # are handled by merge_variant_rows instead.
     return None
 
 
@@ -793,7 +798,7 @@ def _canonical_variant_axis_value(axis_name: object, value: object) -> str:
     if axis_key != "size":
         return cleaned
     lowered = cleaned.lower()
-    for suffix in _VARIANT_SIZE_ALIAS_SUFFIXES:
+    for suffix in _variant_size_alias_suffixes:
         if lowered.endswith(suffix):
             base = clean_text(cleaned[: -len(suffix)])
             if base:
@@ -951,11 +956,21 @@ def merge_variant_pair(
 def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
     """Merge variant row lists by canonical identity. Richer row wins per identity.
 
-    Order is preserved by first appearance. Rows without a derivable identity
-    are dropped (no stable way to dedupe them).
+    Two-stage algorithm:
+    1) Exact-identity dedupe: rows sharing the same ``variant_identity`` are
+       merged via ``merge_variant_pair`` (richer row as primary). Order is
+       preserved by first appearance using ``ordered_keys``.
+    2) Semantic merge: rows sharing the same ``variant_semantic_identity``
+       (e.g. same size+color but different SKU) are merged similarly via
+       ``merge_variant_pair`` using ``variant_row_richness`` to pick primary.
+       ``emitted_semantic`` prevents duplicates from being emitted twice.
+
+    Rows with no semantic identity are preserved and re-emitted unchanged
+    (no stable way to dedupe them).
     """
     merged_by_identity: dict[str, dict[str, Any]] = {}
     ordered_keys: list[str] = []
+    identityless_rows: list[dict[str, Any]] = []
     for rows in row_lists:
         if not isinstance(rows, list):
             continue
@@ -964,6 +979,7 @@ def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
                 continue
             identity = variant_identity(row)
             if not identity:
+                identityless_rows.append(dict(row))
                 continue
             current = merged_by_identity.get(identity)
             if current is None:
@@ -977,6 +993,7 @@ def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
             )
             merged_by_identity[identity] = merge_variant_pair(primary, secondary)
     deduped_rows = [merged_by_identity[key] for key in ordered_keys]
+    deduped_rows.extend(identityless_rows)
     merged_by_semantic: dict[str, dict[str, Any]] = {}
     for row in deduped_rows:
         semantic_identity = variant_semantic_identity(row)

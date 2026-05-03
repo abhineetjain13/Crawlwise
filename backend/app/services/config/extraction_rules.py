@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,7 @@ DETAIL_GUIDE_GLOSSARY_HEADING_TOKENS = (
     "materials",
     "size",
 )
+DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS = 3
 DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS = (
     r"\bbuy\s+now\s+with\s+free\s+shipping\b",
     r"\bbuyer\s+protection\s+guaranteed\b",
@@ -121,11 +123,24 @@ DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS = (
     r"\bcookie\s+(?:notice|policy|preferences?)\b",
     r"\bprivacy\s+policy\b",
 )
+DETAIL_COOKIE_DISCLOSURE_TEXT_PATTERNS = (
+    r"\bcookie\s+name\s+is\s+associated\s+with\b",
+    r"\bcookie\s+descriptions?\s+are\s+displayed\b",
+    r"\bcookiepedia\b",
+    r"\bpreference\s+center\b",
+    r"\bcloudflare\s+bot\s+management\b",
+    r"\bmicrosoft\s+clarity\b",
+    r"\bdynatrace\b",
+    r"\bcriteo\b",
+    r"\bgoogle\s+adsense\b",
+    r"\breal\s+time\s+bidding\b",
+)
+DETAIL_TRACKING_TOKEN_PATTERN = r"_[a-z][a-z0-9_]{2,}"
 DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS = frozenset(
     {"discount", "false", "off", "on", "sale", "true"}
 )
 DETAIL_TEXT_SCOPE_SELECTORS = (
-    DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
+    _STATIC_EXPORTS.get("DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR", "main"),
     "main",
     "article",
     "[role='main']",
@@ -162,6 +177,15 @@ DETAIL_TEXT_SCOPE_EXCLUDE_TOKENS = (
     "sponsored",
     "you-may-also-like",
     "you may also like",
+)
+DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS = (
+    "also-viewed",
+    "also viewed",
+    "customers",
+    "recommend",
+    "related",
+    "similar",
+    "sponsored",
 )
 DETAIL_TEXT_HIDDEN_STYLE_TOKENS = (
     "display:none",
@@ -209,9 +233,9 @@ DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA = 10.0
 DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO = 0.1
 DETAIL_PRICE_CENT_MAGNITUDE_RATIO = 100
 DETAIL_PRICE_MAGNITUDE_EPSILON = 0.01
-DETAIL_PRICE_COMPARISON_TOLERANCE = "0.01"
-DETAIL_LOW_SIGNAL_PRICE_MAX = "1"
-DETAIL_LOW_SIGNAL_PARENT_MIN = "10"
+DETAIL_PRICE_COMPARISON_TOLERANCE = Decimal("0.01")
+DETAIL_LOW_SIGNAL_PRICE_MAX = Decimal("1")
+DETAIL_LOW_SIGNAL_PARENT_MIN = Decimal("10")
 VARIANT_OPTION_LABEL_MAX_WORDS = 6
 DETAIL_ORIGINAL_PRICE_SELECTORS = (
     *tuple(_STATIC_EXPORTS.get("DETAIL_ORIGINAL_PRICE_SELECTORS", ())),
@@ -327,7 +351,56 @@ VARIANT_PLACEHOLDER_VALUES = frozenset(
     {"default title", "choose", "option", "select", "swatch"}
 )
 VARIANT_PLACEHOLDER_PREFIXES = ("please select", "open ")
+SIZE_REJECT_TOKENS = frozenset(
+    {
+        "customer reviews",
+        "description",
+        "details",
+        "overview",
+        "photos",
+        "questions & answers",
+        "q&a",
+        "ratings",
+        "reviews",
+        "shipping",
+        "specifications",
+        "verified purchases",
+    }
+)
+PLACEHOLDER_IMAGE_URL_PATTERNS = (
+    "via.placeholder.com",
+    "placehold.co",
+    "placeholder.com",
+    "/1x1",
+    "1x1.gif",
+    "pixel.gif",
+    "spacer.gif",
+    "blank.gif",
+    "transparent.gif",
+    "clear.gif",
+)
+URL_CONCATENATION_SCHEME_PATTERN = r"https?:/+"
+URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS = (
+    " ",
+    "\t",
+    "\n",
+    ",",
+    ";",
+    ")",
+    "]",
+    "}",
+    ">",
+)
 OPTION_VALUE_NOISE_WORDS = ("popular", "sale", "discount", "off")
+VARIANT_PROMO_NOISE_TOKENS = ("off", "discount", "promo")
+TRACKING_STRIP_SURFACE_PREFIXES = ("ecommerce_", "job_")
+MAX_TRACKING_KEY_LENGTH = 3
+MAX_TRACKING_VALUE_LENGTH = 8
+SCOPE_PRODUCT_CONTEXT_TOKENS = ("product", "detail", "pdp")
+SCOPE_SCORE_MAIN_WEIGHT = 4000
+SCOPE_SCORE_PRIORITY_WEIGHT = 2000
+SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT = 1000
+MAX_SELECTOR_MATCHES = 12
 DETAIL_IDENTITY_STOPWORDS = frozenset(
     {
         "and",
@@ -445,6 +518,7 @@ LONG_TEXT_FIELDS = frozenset(
     for field_name in tuple(_LONG_TEXT_FIELDS_RAW or ())
     if str(field_name) != "features"
 )
+DETAIL_LONG_TEXT_RANK_FIELDS = frozenset({*LONG_TEXT_FIELDS, "features"})
 LISTING_PRICE_NODE_SELECTORS = (
     "[itemprop='price']",
     "[class*='price']",
@@ -627,9 +701,11 @@ _EXTRA_EXPORTS = [
     "BARE_HOST_URL_RE",
     "DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS",
     "DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS",
+    "DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS",
     "DETAIL_FULFILLMENT_LONG_TEXT_PATTERNS",
     "DETAIL_GUIDE_GLOSSARY_TEXT_PATTERNS",
     "DETAIL_IDENTITY_FIELDS",
+    "DETAIL_LONG_TEXT_RANK_FIELDS",
     "DETAIL_LONG_TEXT_SOURCE_RANKS",
     "DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES",
     "DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX",
@@ -653,6 +729,7 @@ _EXTRA_EXPORTS = [
     "DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS",
     "DETAIL_JSONLD_TYPE_FIELDS",
     "DETAIL_GUIDE_GLOSSARY_HEADING_TOKENS",
+    "DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS",
     "DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS",
     "DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS",
     "DETAIL_LONG_TEXT_MAX_SECTION_CHARS",
@@ -725,6 +802,10 @@ _EXTRA_EXPORTS = [
     "VARIANT_OPTION_TEXT_FIELDS",
     "VARIANT_QUANTITY_ATTR_TOKENS",
     "VARIANT_SIZE_ALIAS_SUFFIXES",
+    "SIZE_REJECT_TOKENS",
+    "PLACEHOLDER_IMAGE_URL_PATTERNS",
+    "URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS",
+    "URL_CONCATENATION_SCHEME_PATTERN",
 ]
 
 

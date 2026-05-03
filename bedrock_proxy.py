@@ -33,14 +33,16 @@ _bootstrap_env()
 
 DEFAULT_MODEL_ID = os.environ.get(
     "BEDROCK_MODEL_ID",
-    "global.anthropic.claude-opus-4-7",
+    "amazon.nova-lite-v1:0",
 )
 
 MODEL_ALIASES = {
-    "claude-4.7": DEFAULT_MODEL_ID,
-    "claude 4.7": DEFAULT_MODEL_ID,
-    "claude-opus-4-7": DEFAULT_MODEL_ID,
-    "anthropic.claude-opus-4-7": DEFAULT_MODEL_ID,
+    "nova-lite": DEFAULT_MODEL_ID,
+    "nova-pro": "amazon.nova-pro-v1:0",
+    "claude-4.7": "global.anthropic.claude-opus-4-7",
+    "claude 4.7": "global.anthropic.claude-opus-4-7",
+    "claude-opus-4-7": "global.anthropic.claude-opus-4-7",
+    "anthropic.claude-opus-4-7": "global.anthropic.claude-opus-4-7",
     "us.anthropic.claude-opus-4-7": "us.anthropic.claude-opus-4-7",
     "global.anthropic.claude-opus-4-7": "global.anthropic.claude-opus-4-7",
 }
@@ -302,11 +304,11 @@ def list_models():
 
 @app.route('/health', methods=['GET'])
 def health():
+    return jsonify({"status": "ok"})
+
 if __name__ == '__main__':
     print("Starting Bedrock proxy on port 4000...")
     print("OpenAI-compatible endpoint: http://localhost:4000/v1/chat/completions")
     print(f"Model: {DEFAULT_MODEL_ID}")
     debug = os.environ.get("FLASK_DEBUG", "").lower() in ("1", "true")
     app.run(host='0.0.0.0', port=4000, debug=debug)
-    print(f"Model: {DEFAULT_MODEL_ID}")
-    app.run(host='0.0.0.0', port=4000, debug=True)

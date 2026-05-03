@@ -128,6 +128,8 @@ def provider_env_key(provider: str) -> str:
         return settings.anthropic_api_key
     if normalized == "nvidia":
         return settings.nvidia_api_key
+    if normalized == "aws":
+        return "ambient"
     return ""
 
 
@@ -165,6 +167,16 @@ def llm_provider_catalog() -> list[dict[str, Any]]:
             "recommended_models": [
                 "claude-3-5-haiku-latest",
                 "claude-sonnet-4-20250514",
+            ],
+        },
+        {
+            "provider": "aws",
+            "label": "AWS Bedrock",
+            "api_key_set": False,
+            "uses_ambient_auth": True,
+            "recommended_models": [
+                "amazon.nova-lite-v1:0",
+                "amazon.nova-pro-v1:0",
             ],
         },
     ]

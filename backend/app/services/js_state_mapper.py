@@ -183,6 +183,8 @@ def _extract_product_payloads_from_normalized(
     if products:
         return _dedupe_product_payloads(products)
     return []
+
+
 def _dedupe_product_payloads(
     products: list[tuple[dict[str, Any], JSStateExtractorConfig | None]],
 ) -> list[tuple[dict[str, Any], JSStateExtractorConfig | None]]:
@@ -201,6 +203,8 @@ def _dedupe_product_payloads(
         seen.add(key)
         deduped.append((product, extractor))
     return deduped[:8]
+
+
 def _merge_same_product_record(
     base_record: dict[str, Any],
     incoming: dict[str, Any],
@@ -230,13 +234,8 @@ def _merge_same_product_record(
         incoming.get("variants"),
     )
     if merged_variants:
-        flat_variants = flatten_variants_for_public_output(
-            merged_variants,
-            page_url=page_url,
-        )
-        if flat_variants:
-            merged["variants"] = flat_variants
-            merged["variant_count"] = len(flat_variants)
+        merged["variants"] = merged_variants
+        merged["variant_count"] = len(merged_variants)
     return compact_dict(merged)
 
 def _mapped_product_identity_matches(
@@ -252,7 +251,7 @@ def _mapped_product_identity_matches(
             return base_value == mapped_value
     base_url = text_or_none(base_record.get("url"))
     mapped_url = text_or_none(mapped.get("url"))
-    if (base_url or mapped_url) and base_url and mapped_url and base_url == mapped_url:
+    if base_url and mapped_url and base_url == mapped_url:
         return True
     base_title = text_or_none(base_record.get("title"))
     mapped_title = text_or_none(mapped.get("title"))
@@ -524,8 +523,8 @@ def _map_product_payload(
             ),
             "additional_images": images[1:] if len(images) > 1 else None,
             "image_count": len(images) or None,
-            "variants": flat_variants,
-            "variant_count": len(flat_variants or []) or None,
+            "variants": variants or None,
+            "variant_count": len(variants) if variants else None,
             "tags": base.get("tags") if isinstance(base.get("tags"), list) else None,
             "created_at": base.get("created_at"),
             "updated_at": base.get("updated_at"),
@@ -862,6 +861,20 @@ def _variant_option_values(
             )
     if option_values:
         return option_values
+    attributes = variant.get("attributes")
+    if isinstance(attributes, dict):
+        for axis_name, raw_value in attributes.items():
+            axis_key = normalized_variant_axis_key(axis_name)
+            cleaned = text_or_none(raw_value)
+            if not axis_key or not cleaned or not variant_axis_name_is_semantic(axis_name):
+                continue
+            option_values[axis_key] = _display_option_value(
+                axis_key,
+                cleaned,
+                option_value_labels=option_value_labels,
+            )
+    if option_values:
+        return option_values
     raw_options = _as_list(variant.get("options"))
     for index in range(1, 4):
         axis_name = (
@@ -907,6 +920,8 @@ def _option_value_labels(product: dict[str, Any]) -> dict[str, dict[str, str]]:
     if not isinstance(raw_attributes, list):
         raw_attributes = product.get("variation_attributes")
     if not isinstance(raw_attributes, list):
+        raw_attributes = product.get("attributes")
+    if not isinstance(raw_attributes, list):
         return labels
     # Direct axis keys prefer raw IDs already matching their normalized form,
     # so later label mapping skips normalized duplicates like color over colorID.
@@ -924,7 +939,12 @@ def _option_value_labels(product: dict[str, Any]) -> dict[str, dict[str, str]]:
     for attribute in raw_attributes:
         if not isinstance(attribute, dict):
             continue
-        axis_name = text_or_none(attribute.get("id") or attribute.get("name") or attribute.get("label"))
+        axis_name = text_or_none(
+            attribute.get("id")
+            or attribute.get("name")
+            or attribute.get("label")
+            or attribute.get("type")
+        )
         axis_key = normalized_variant_axis_key(axis_name or "")
         if not axis_key:
             continue
@@ -932,11 +952,13 @@ def _option_value_labels(product: dict[str, Any]) -> dict[str, dict[str, str]]:
             continue
         values = attribute.get("values")
         if not isinstance(values, list):
+            values = attribute.get("options")
+        if not isinstance(values, list):
             continue
         for item in values:
             if not isinstance(item, dict):
                 continue
-            raw_value = text_or_none(item.get("value") or item.get("id"))
+            raw_value = text_or_none(item.get("value") or item.get("id") or item.get("slug"))
             display = text_or_none(
                 item.get("name")
                 or item.get("displayValue")
@@ -946,6 +968,9 @@ def _option_value_labels(product: dict[str, Any]) -> dict[str, dict[str, str]]:
             if not raw_value or not display:
                 continue
             labels.setdefault(axis_key, {})[raw_value] = display
+            item_id = text_or_none(item.get("id") or item.get("slug"))
+            if item_id:
+                labels.setdefault(axis_key, {})[item_id] = display
     return labels
 
 def _display_option_value(

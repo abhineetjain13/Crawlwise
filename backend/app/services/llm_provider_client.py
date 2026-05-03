@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from app.services.config.llm_runtime import (
@@ -30,7 +32,7 @@ async def call_provider(
     user_prompt: str,
 ) -> tuple[str, int, int]:
     normalized_provider = str(provider or "").strip().lower()
-    if not api_key:
+    if normalized_provider != "aws" and not api_key:
         return f"{ERROR_PREFIX} Missing API key", 0, 0
     if normalized_provider not in SUPPORTED_LLM_PROVIDERS:
         return f"{ERROR_PREFIX} Unsupported provider: {provider}", 0, 0
@@ -53,10 +55,10 @@ async def call_provider_with_retry(
     max_retries: int = llm_runtime_settings.provider_retry_max_retries,
     base_delay_s: float = llm_runtime_settings.provider_retry_base_delay_seconds,
 ) -> tuple[str, int, int]:
-    del base_delay_s
     normalized_provider = str(provider or "").strip().lower()
     last_error = ""
-    for _attempt in range(max(1, max_retries)):
+    attempts = max(1, max_retries)
+    for _attempt in range(attempts):
         if await circuit_is_open(normalized_provider):
             message = (
                 f"{ERROR_PREFIX} Circuit breaker open for provider "
@@ -82,6 +84,8 @@ async def call_provider_with_retry(
         }:
             return result, input_tokens, output_tokens
         last_error = result
+        if _attempt + 1 < attempts:
+            await asyncio.sleep(max(0.0, float(base_delay_s)) * (2**_attempt))
     return last_error or f"{ERROR_PREFIX} Provider call failed", 0, 0
 
 
@@ -240,10 +244,43 @@ async def _call_nvidia(
     return _extract_chat_completion_payload(_safe_json_response(response))
 
 
+
+async def _call_aws(
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> tuple[str, int, int]:
+    del api_key
+    proxy_url = str(llm_runtime_settings.aws_proxy_url or "").strip()
+    parsed_proxy_url = urlparse(proxy_url)
+    if parsed_proxy_url.scheme not in {"http", "https"} or not parsed_proxy_url.netloc:
+        return f"{ERROR_PREFIX} Invalid AWS proxy URL", 0, 0
+    async with httpx.AsyncClient(
+        timeout=llm_runtime_settings.provider_timeout_seconds
+    ) as client:
+        response = await client.post(
+            proxy_url,
+            headers={"Content-Type": JSON_CONTENT_TYPE},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "max_tokens": llm_runtime_settings.aws_max_tokens,
+                "temperature": llm_runtime_settings.aws_temperature,
+            },
+        )
+    if response.status_code != 200:
+        return _http_error(response), 0, 0
+    return _extract_chat_completion_payload(_safe_json_response(response))
+
 _PROVIDER_DISPATCH = {
     "groq": _call_groq,
     "anthropic": _call_anthropic,
     "nvidia": _call_nvidia,
+    "aws": _call_aws,
 }
 
 if frozenset(_PROVIDER_DISPATCH) != SUPPORTED_LLM_PROVIDERS:

@@ -681,9 +681,13 @@ async def _try_browser_http_handoff(
             )
             if not cookie_header:
                 continue
+            handoff_timeout = min(
+                float(crawler_runtime_settings.http_timeout_seconds),
+                context.resolved_timeout,
+            )
             result = await _curl_fetch(
                 context.url,
-                context.resolved_timeout,
+                handoff_timeout,
                 proxy=proxy,
                 cookie_header=cookie_header,
             )
@@ -781,11 +785,15 @@ async def _attempt_http_fetch(
     attempt: int,
     max_attempts: int,
 ) -> PageFetchResult | object:
+    http_timeout = min(
+        float(crawler_runtime_settings.http_timeout_seconds),
+        context.resolved_timeout,
+    )
     try:
         await wait_for_host_slot(context.url)
         if proxy is not None:
-            return await fetcher(context.url, context.resolved_timeout, proxy=proxy)
-        return await fetcher(context.url, context.resolved_timeout)
+            return await fetcher(context.url, http_timeout, proxy=proxy)
+        return await fetcher(context.url, http_timeout)
     except (httpx.HTTPError, OSError, TimeoutError) as exc:
         context.last_error = exc
         logger.debug(

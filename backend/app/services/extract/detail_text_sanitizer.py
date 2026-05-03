@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -9,11 +10,13 @@ from app.services.config.extraction_rules import (
     DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES,
     DETAIL_ARTIFACT_SKU_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
+    DETAIL_COOKIE_DISCLOSURE_TEXT_PATTERNS,
     DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS,
     DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS,
     DETAIL_DOCUMENT_LINK_LABEL_PATTERNS,
     DETAIL_FULFILLMENT_ONLY_LONG_TEXT_PHRASES,
     DETAIL_FULFILLMENT_LONG_TEXT_PATTERNS,
+    DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS,
     DETAIL_GUIDE_GLOSSARY_HEADING_TOKENS,
     DETAIL_GUIDE_GLOSSARY_TEXT_PATTERNS,
     DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES,
@@ -26,6 +29,7 @@ from app.services.config.extraction_rules import (
     DETAIL_MATERIALS_POLLUTION_TOKENS,
     DETAIL_NOISE_PREFIXES,
     DETAIL_TITLE_DIMENSION_SIZE_PATTERN,
+    DETAIL_TRACKING_TOKEN_PATTERN,
     DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
 )
 from app.services.field_value_core import LONG_TEXT_FIELDS, clean_text, text_or_none
@@ -91,7 +95,25 @@ cross_product_text_generic_tokens = frozenset(
     if clean_text(value)
 )
 title_dimension_size_re = re.compile(str(DETAIL_TITLE_DIMENSION_SIZE_PATTERN), re.I)
+tracking_token_re = re.compile(str(DETAIL_TRACKING_TOKEN_PATTERN), re.I)
+cookie_disclosure_text_patterns = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(DETAIL_COOKIE_DISCLOSURE_TEXT_PATTERNS or ())
+    if str(pattern).strip()
+)
 low_signal_numeric_size_max = int(DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX)
+_detail_noise_prefixes = tuple(
+    clean_text(prefix).lower()
+    for prefix in tuple(DETAIL_NOISE_PREFIXES or ())
+    if clean_text(prefix)
+)
+_long_text_ui_tail_min_product_words = int(DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS)
+_guide_glossary_heading_min_hits = int(DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS)
+artifact_price_values = frozenset(
+    clean_text(v).lower()
+    for v in tuple(DETAIL_ARTIFACT_PRICE_VALUES or ())
+    if clean_text(v)
+)
 
 
 def detail_title_value_is_low_signal(value: object) -> bool:
@@ -124,12 +146,19 @@ def detail_candidate_is_valid(
 ) -> bool:
     return not (
         _long_text_candidate_is_noise(field_name, value, source=source)
+        or _title_candidate_is_artifact(field_name, value)
         or _category_candidate_is_noise(field_name, value)
         or _sku_candidate_is_artifact(field_name, value)
         or _identifier_candidate_is_artifact(field_name, value)
         or _product_type_candidate_is_artifact(field_name, value)
         or _price_candidate_is_artifact(field_name, value)
         or _variant_candidate_is_artifact(field_name, value)
+    )
+
+
+def _title_candidate_is_artifact(field_name: str, value: object) -> bool:
+    return field_name == "title" and bool(
+        tracking_token_re.fullmatch(clean_text(value))
     )
 
 
@@ -180,7 +209,7 @@ def _price_candidate_is_artifact(field_name: str, value: object) -> bool:
     if field_name not in {"price", "sale_price", "original_price"}:
         return False
     cleaned = clean_text(value).lower()
-    if cleaned in frozenset(DETAIL_ARTIFACT_PRICE_VALUES or ()):
+    if cleaned in artifact_price_values:
         return True
     if re.search(r"(^|[^\d])-\s*\d", cleaned):
         return True
@@ -236,14 +265,12 @@ def _long_text_candidate_is_noise(
     if not lowered or lowered in low_signal_long_text_values:
         return True
     if field_name in {"description", "specifications"} and lowered.startswith(
-        tuple(DETAIL_NOISE_PREFIXES or ())
+        _detail_noise_prefixes
     ):
         return True
     tail_stripped = _strip_long_text_ui_tail(cleaned)
     if tail_stripped != cleaned:
-        return len(tail_stripped.split()) < int(
-            DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS
-        )
+        return len(tail_stripped.split()) < _long_text_ui_tail_min_product_words
     if (
         source == "dom_sections"
         and field_name in {"description", "specifications", "product_details"}
@@ -252,6 +279,8 @@ def _long_text_candidate_is_noise(
     ):
         return True
     if any(pattern.search(cleaned) for pattern in guide_glossary_text_patterns):
+        return True
+    if detail_long_text_is_cookie_disclosure_dump(cleaned):
         return True
     return len(cleaned.split()) < 2
 
@@ -297,6 +326,8 @@ def sanitize_detail_long_text(text: str, *, title: str) -> str:
         return ""
     if detail_long_text_is_guide_or_glossary_dump(cleaned_text):
         return ""
+    if detail_long_text_is_cookie_disclosure_dump(cleaned_text):
+        return ""
     if detail_long_text_is_document_label_cluster(text):
         return ""
     chunks = [
@@ -337,8 +368,6 @@ def sanitize_detail_features(value: object, *, title: str) -> list[str]:
         lowered = cleaned.lower()
         if (
             not cleaned
-            or detail_long_text_is_numeric_sequence(cleaned)
-            or detail_long_text_is_guide_or_glossary_dump(cleaned)
             or any(pattern.search(cleaned) for pattern in long_text_disclaimer_patterns)
         ):
             continue
@@ -368,7 +397,8 @@ def _clean_materials_pollution(value: object) -> str:
     text = clean_text(value)
     if not text:
         return ""
-    if text.lstrip().startswith(("{", "[")):
+    stripped = text.lstrip()
+    if stripped.startswith("{") or _text_is_structured_json_array(stripped):
         return ""
     if detail_long_text_is_fulfillment_only(text) or any(
         pattern.search(text) for pattern in long_text_disclaimer_patterns
@@ -417,10 +447,27 @@ def detail_long_text_is_guide_or_glossary_dump(text: str) -> bool:
     if any(pattern.search(cleaned) for pattern in guide_glossary_text_patterns):
         return True
     lowered = cleaned.lower()
-    heading_hits = sum(
-        1 for token in guide_glossary_heading_tokens if token and token in lowered
+    words = set(re.findall(r"\w+", lowered))
+    heading_hits = sum(1 for token in guide_glossary_heading_tokens if token in words)
+    return heading_hits >= _guide_glossary_heading_min_hits
+
+
+def _text_is_structured_json_array(text: str) -> bool:
+    if not text.startswith("["):
+        return False
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, list)
+
+
+def detail_long_text_is_cookie_disclosure_dump(text: str) -> bool:
+    cleaned = clean_text(text)
+    return bool(
+        cleaned
+        and any(pattern.search(cleaned) for pattern in cookie_disclosure_text_patterns)
     )
-    return heading_hits >= 3
 
 
 def detail_long_text_chunk_is_legal_tail(chunk: str) -> bool:

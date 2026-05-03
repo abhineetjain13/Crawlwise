@@ -109,6 +109,11 @@ from app.services.config.extraction_rules import (
     BROWSER_DETAIL_READINESS_HINTS,
     DETAIL_EXPAND_KEYWORD_EXTENSIONS,
 )
+from app.services.config.browser_fingerprint_profiles import (
+    NATIVE_REAL_CHROME_CONTEXT_OPTIONS,
+    WARMUP_ELIGIBLE_BROWSER_REASONS,
+    WARMUP_VENDOR_BLOCK_PREFIX,
+)
 from app.services.config.network_capture import (
     BLOCKED_BROWSER_RESOURCE_TYPES,
     BLOCKED_BROWSER_ROUTE_TOKENS,
@@ -326,6 +331,7 @@ class SharedBrowserRuntime:
                         "Real Chrome executable is not available for browser runtime"
                     )
                 launch_kwargs["executable_path"] = self.executable_path
+                launch_kwargs["ignore_default_args"] = ["--enable-automation"]
             launch_proxy_config = await self._launch_proxy_config_for_browser()
             if launch_proxy_config is not None:
                 launch_kwargs["proxy"] = launch_proxy_config
@@ -416,13 +422,14 @@ class SharedBrowserRuntime:
         locality_profile: dict[str, object] | None = None,
         inject_init_script: bool = False,
     ) -> PlaywrightContextSpec:
-        if (
-            _use_native_real_chrome_context(self.browser_engine)
-            and not inject_init_script
-        ):
+        if _use_native_real_chrome_context(self.browser_engine):
+            from app.services.acquisition.browser_identity import playwright_masking_init_script
+
             return PlaywrightContextSpec(
-                context_options={},
-                init_script=None,
+                context_options=dict(NATIVE_REAL_CHROME_CONTEXT_OPTIONS),
+                init_script=playwright_masking_init_script()
+                if inject_init_script
+                else None,
             )
         browser_major_version = None
         if self._browser is not None:
@@ -1576,13 +1583,8 @@ async def _maybe_warm_origin_before_navigation(
         return
     reason = str(browser_reason or "").strip().lower()
     if not (
-        reason == "host-preference"
-        or reason == "http-escalation"
-        or reason == "platform-required"
-        or reason == "traversal-required"
-        or reason == "empty-extraction retry"
-        or reason == "thin-listing retry"
-        or reason.startswith("vendor-block:")
+        reason in WARMUP_ELIGIBLE_BROWSER_REASONS
+        or reason.startswith(WARMUP_VENDOR_BLOCK_PREFIX)
     ):
         return
     warm_pause_ms = max(0, int(crawler_runtime_settings.origin_warm_pause_ms or 0))

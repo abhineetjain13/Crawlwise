@@ -39,7 +39,8 @@ DEFAULT_SITE_SET_PATH = (
     Path(__file__).resolve().parent / "test_site_sets" / "commerce_browser_heavy.json"
 )
 _VARIANT_AXIS_FIELDS = ("color", "size")
-_HIGH_DENOMINATION_PRICE_CURRENCIES = {"INR", "JPY", "KRW"}
+_HIGH_DENOMINATION_PRICE_CURRENCIES = {"INR", "JPY", "KRW", "VND", "IDR", "HUF"}
+_MIN_SANE_PRICE = 0.01
 
 _DETAIL_HINTS = (
     "/products/",
@@ -1001,11 +1002,11 @@ def _quality_price_sane_ok(
         return True
     record = _object_dict(result.get("sample_record_data"))
     price = _price_number(record.get("price"))
-    if price is None or price <= 0:
+    if price is None or price < _MIN_SANE_PRICE:
         return False
     currency = str(record.get("currency") or "").strip().upper()
     max_price = 100000.0 if currency in _HIGH_DENOMINATION_PRICE_CURRENCIES else 10000.0
-    return price <= max_price
+    return _MIN_SANE_PRICE <= price <= max_price
 
 
 def _quality_category_clean_ok(
@@ -1145,7 +1146,7 @@ def _quality_variant_artifacts_ok(
             continue
         if text in {"off", "on", "discount", "sale", "false", "true"}:
             return False
-        if re.fullmatch(r"\d+\s*%", text) or re.fullmatch(r"#[0-9a-f]{6}", text):
+        if re.fullmatch(r"\d+\s*%", text) or re.fullmatch(r"#[0-9a-fA-F]{6}", text):
             return False
     return True
 

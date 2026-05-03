@@ -20,10 +20,10 @@ _STATIC_EXPORTS = {
 }
 
 for _name, _value in _STATIC_EXPORTS.items():
-    globals()[_name] = _value
+    globals()[_name] = _value if _value is not None else ()
 
 NORMALIZER_LIST_TEXT_FIELDS = frozenset(
-    {*tuple(_STATIC_EXPORTS.get("NORMALIZER_LIST_TEXT_FIELDS", ()) or ()), "features"}
+    {*_STATIC_EXPORTS.get("NORMALIZER_LIST_TEXT_FIELDS", ()), "features"}
 )
 
 JS_STATE_GLOM_SKIP: tuple[object, ...] = ("", [], {})
@@ -198,6 +198,15 @@ JS_STATE_VARIANT_FIELD_SPEC = {
 COLOR_FIELD = "color"
 SIZE_FIELD = "size"
 WIDTH_FIELD = "width"
+PRICE_FIELD = "price"
+CURRENCY_FIELD = "currency"
+URL_FIELD = "url"
+APPLY_URL_FIELD = "apply_url"
+CANONICAL_URL_FIELD = "canonical_url"
+IMAGE_URL_FIELD = "image_url"
+ADDITIONAL_IMAGES_FIELD = "additional_images"
+AVAILABILITY_FIELD = "availability"
+STOCK_QUANTITY_FIELD = "stock_quantity"
 VARIANTS_FIELD = "variants"
 AVAILABLE_SIZES_FIELD = "available_sizes"
 VARIANT_AXES_FIELD = "variant_axes"
@@ -205,16 +214,21 @@ SELECTED_VARIANT_FIELD = "selected_variant"
 BARCODE_FIELD = "barcode"
 SKU_FIELD = "sku"
 ROUTE_BARCODE_TO_SKU = True
+NAVIGATION_URL_FIELDS = frozenset({URL_FIELD, APPLY_URL_FIELD, CANONICAL_URL_FIELD})
+PUBLIC_RECORD_CANONICAL_URL_FIELDS = frozenset(
+    {APPLY_URL_FIELD, CANONICAL_URL_FIELD, URL_FIELD}
+)
+PUBLIC_RECORD_CANONICAL_SURFACE = "ecommerce_detail"
 FLAT_VARIANT_KEYS: tuple[str, ...] = (
     COLOR_FIELD,
     SIZE_FIELD,
     SKU_FIELD,
-    "price",
-    "currency",
-    "url",
-    "image_url",
-    "availability",
-    "stock_quantity",
+    PRICE_FIELD,
+    CURRENCY_FIELD,
+    URL_FIELD,
+    IMAGE_URL_FIELD,
+    AVAILABILITY_FIELD,
+    STOCK_QUANTITY_FIELD,
 )
 PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS = frozenset(
     {"page_markdown", "table_markdown", "record_type"}
@@ -312,9 +326,16 @@ _EXTRA_EXPORTS = [
     "JS_STATE_PRODUCT_FIELD_SPEC",
     "JS_STATE_VARIANT_FIELD_SPEC",
     "AVAILABLE_SIZES_FIELD",
+    "APPLY_URL_FIELD",
+    "AVAILABILITY_FIELD",
     "BARCODE_FIELD",
+    "CANONICAL_URL_FIELD",
     "COLOR_FIELD",
+    "CURRENCY_FIELD",
     "FLAT_VARIANT_KEYS",
+    "IMAGE_URL_FIELD",
+    "NORMALIZER_LIST_TEXT_FIELDS",
+    "PRICE_FIELD",
     "PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS",
     "PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS",
     "PUBLIC_RECORD_LEGACY_VARIANT_FIELDS",
@@ -329,6 +350,8 @@ _EXTRA_EXPORTS = [
     "SELECTED_VARIANT_FIELD",
     "SIZE_FIELD",
     "SKU_FIELD",
+    "STOCK_QUANTITY_FIELD",
+    "URL_FIELD",
     "VARIANTS_FIELD",
     "VARIANT_AXES_FIELD",
     "WIDTH_FIELD",

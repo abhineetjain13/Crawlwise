@@ -214,6 +214,20 @@ describe('buildDispatch', () => {
     expect(dispatch.settings.respect_robots_txt).toBe(false);
   });
 
+  it('persists the llm toggle in settings', () => {
+    const enabledDispatch = buildDispatch(
+      baseConfig({
+        smart_extraction: true,
+      }),
+      [],
+      { runProfile: baseProfile() },
+    );
+    const disabledDispatch = buildDispatch(baseConfig(), [], { runProfile: baseProfile() });
+
+    expect(enabledDispatch.settings.llm_enabled).toBe(true);
+    expect(disabledDispatch.settings.llm_enabled).toBe(false);
+  });
+
   it('submits pdp batch as ecommerce detail with URL list', () => {
     const dispatch = buildDispatch(
       baseConfig({

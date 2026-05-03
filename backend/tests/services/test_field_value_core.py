@@ -14,6 +14,7 @@ from app.services.field_value_core import (
     validate_and_clean,
     validate_record_for_surface,
 )
+from app.services.extract.shared_variant_logic import merge_variant_rows
 from app.services.public_record_firewall import public_record_data_for_surface
 
 
@@ -524,16 +525,15 @@ def test_extract_urls_trims_trailing_punctuation_from_embedded_urls() -> None:
     ]
 
 
-def test_extract_urls_splits_concatenated_absolute_urls() -> None:
+def test_extract_urls_rejects_concatenated_absolute_urls() -> None:
+    # Concatenated URLs are corrupted data (two products merged into one string),
+    # not two valid products. Reject entirely.
     urls = extract_urls(
         "https://www.asos.com/us/foo/prd/1https://www.asos.com/us/bar/prd/2",
         "https://www.asos.com/us/foo/prd/1",
     )
 
-    assert urls == [
-        "https://www.asos.com/us/foo/prd/1",
-        "https://www.asos.com/us/bar/prd/2",
-    ]
+    assert urls == []
 
 
 def test_extract_urls_preserves_balanced_parentheses_and_brackets() -> None:
@@ -584,3 +584,100 @@ def test_infer_brand_from_product_url_rejects_numeric_product_id_prefix() -> Non
         )
         is None
     )
+
+
+# --- Slice A: Field-value validation tests ---
+
+
+def test_coerce_color_rejects_single_digit_from_quantity_input() -> None:
+    assert coerce_field_value("color", "1", "https://example.com/p") is None
+    assert coerce_field_value("color", "2", "https://example.com/p") is None
+    assert coerce_field_value("color", "99", "https://example.com/p") is None
+
+
+def test_coerce_color_keeps_valid_color_names() -> None:
+    assert coerce_field_value("color", "Black Onyx", "https://example.com/p") == "Black Onyx"
+    assert coerce_field_value("color", "Navy Blue", "https://example.com/p") == "Navy Blue"
+
+
+def test_coerce_color_rejects_tracking_pixel_classes() -> None:
+    assert coerce_field_value("color", "_clck", "https://example.com/p") is None
+    assert coerce_field_value("color", "_fbp", "https://example.com/p") is None
+
+
+def test_coerce_size_rejects_ui_tab_labels() -> None:
+    assert coerce_field_value("size", "Photos", "https://example.com/p") is None
+    assert coerce_field_value("size", "Verified Purchases", "https://example.com/p") is None
+    assert coerce_field_value("size", "Reviews", "https://example.com/p") is None
+    assert coerce_field_value("size", "Description", "https://example.com/p") is None
+    assert coerce_field_value("size", "Specifications", "https://example.com/p") is None
+
+
+def test_coerce_size_keeps_valid_sizes() -> None:
+    assert coerce_field_value("size", "M", "https://example.com/p") == "M"
+    assert coerce_field_value("size", "10", "https://example.com/p") == "10"
+    assert coerce_field_value("size", "XL", "https://example.com/p") == "XL"
+
+
+def test_extract_urls_filters_placeholder_images() -> None:
+    assert extract_urls(
+        "https://via.placeholder.com/600", "https://example.com/p"
+    ) == []
+    assert extract_urls(
+        "https://cdn.example.com/pixel.gif", "https://example.com/p"
+    ) == []
+
+
+def test_extract_urls_filters_concatenated_urls() -> None:
+    assert extract_urls(
+        "https://www.selfridges.com/p/123/https:/www.mytheresa.com/p/456",
+        "https://example.com/p",
+    ) == []
+
+
+def test_extract_urls_keeps_normal_urls() -> None:
+    urls = extract_urls(
+        "https://cdn.example.com/product/image.jpg", "https://example.com/p"
+    )
+    assert len(urls) == 1
+    assert "product/image.jpg" in urls[0]
+
+
+def test_public_firewall_rejects_concatenated_url() -> None:
+    record = {
+        "url": "https://www.selfridges.com/p/123/https:/www.mytheresa.com/p/456",
+        "title": "Test Product",
+    }
+    data, rejected = public_record_data_for_surface(
+        record, surface="ecommerce_detail", page_url="https://www.selfridges.com/p/123"
+    )
+    assert "url" not in data
+    # URL is rejected at coercion (extract_urls returns empty for concatenated URLs)
+    assert rejected.get("url") in {"concatenated_url", "empty_after_coercion"}
+
+
+def test_integer_fields_reject_embedded_numeric_junk() -> None:
+    assert coerce_field_value("stock_quantity", "abc123", "https://example.com/p") is None
+    assert coerce_field_value("stock_quantity", "1,234", "https://example.com/p") == 1234
+
+
+def test_public_firewall_does_not_route_invalid_barcode_to_sku() -> None:
+    data, rejected = public_record_data_for_surface(
+        {"barcode": {"bad": "shape"}},
+        surface="ecommerce_detail",
+        page_url="https://example.com/p",
+    )
+
+    assert "sku" not in data
+    assert rejected["barcode"] == "empty_after_coercion"
+
+
+def test_merge_variant_rows_keeps_axis_only_rows_without_url_identity() -> None:
+    rows = merge_variant_rows(
+        [
+            {"size": "8", "price": "100"},
+            {"size": "9", "price": "100"},
+        ]
+    )
+
+    assert [row["size"] for row in rows] == ["8", "9"]

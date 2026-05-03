@@ -22,10 +22,10 @@ from app.services.config.field_mappings import (
 _NUMERIC_TEXT_RE = re.compile(r"[-+]?\d[\d.,]*")
 _CURRENCY_CODE_CONTEXT_PATTERN = (
     "|".join(
-        re.escape(str(code).lower())
+        re.escape(code.lower())
         for code in tuple(CURRENCY_CODES or ())
         # Exclude "rs": common substring false positive; "rs.?" is handled as rupee context.
-        if isinstance(code, str) and str(code).strip().lower() != "rs"
+        if isinstance(code, str) and code.strip().lower() != "rs"
     )
     or r"(?!)"
 )
@@ -36,7 +36,16 @@ _CURRENCY_CONTEXT_RE = re.compile(
     ),
     re.I,
 )
-_AVAILABILITY_TOKENS = NORMALIZER_AVAILABILITY_TOKENS
+_AVAILABILITY_TOKENS = dict(NORMALIZER_AVAILABILITY_TOKENS or {})
+_sorted_availability_tokens = sorted(
+    [
+        (token, normalized)
+        for normalized, tokens in _AVAILABILITY_TOKENS.items()
+        for token in tuple(tokens or ())
+    ],
+    key=lambda item: len(item[0]),
+    reverse=True,
+)
 
 
 def _normalize_text(value: object) -> str:
@@ -62,13 +71,17 @@ def _normalize_text_list(value: object) -> object:
     return rows
 
 
+_NORMALIZED_BOOLEAN_TRUE = frozenset(REMOTE_BOOLEAN_TRUE_TOKENS or ())
+_NORMALIZED_BOOLEAN_FALSE = frozenset(REMOTE_BOOLEAN_FALSE_TOKENS or ())
+
+
 def _normalize_bool(value: object) -> bool | str:
     if isinstance(value, bool):
         return value
     text = _normalize_text(value).lower()
-    if text in tuple(REMOTE_BOOLEAN_TRUE_TOKENS or ()):
+    if text in _NORMALIZED_BOOLEAN_TRUE:
         return True
-    if text in tuple(REMOTE_BOOLEAN_FALSE_TOKENS or ()):
+    if text in _NORMALIZED_BOOLEAN_FALSE:
         return False
     return _normalize_text(value)
 
@@ -164,13 +177,7 @@ def _normalize_availability(value: object) -> str:
         return "in_stock"
     if lowered in {"false", "0", "no"}:
         return "out_of_stock"
-    flat_tokens = [
-        (token, normalized)
-        for normalized, tokens in _AVAILABILITY_TOKENS.items()
-        for token in tokens
-    ]
-    flat_tokens.sort(key=lambda t: len(t[0]), reverse=True)
-    for token, normalized in flat_tokens:
+    for token, normalized in _sorted_availability_tokens:
         if token in lowered:
             return normalized
     return text

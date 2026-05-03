@@ -169,7 +169,7 @@ Adding per-field cleanup in adapters, enrichment, exports, or UI because a bad `
 
 **Violation looks like:** barcode cleanup in export code, brand suffix stripping in enrichment, or another SKU prefix scrubber outside the public-field coercion owner.
 
-**Fix:** Public field validation and final coercion stay in the single boundary owner. Extend that owner and delete the duplicate helper.
+**Fix:** Public field validation and final coercion stay in the single boundary owner (`field_value_core.py` / `FieldCoercion`). Extend that owner and delete the duplicate helper.
 
 ### AP-20: Synthesizing parent fields from `selected_variant`
 Backfilling parent `price`, `currency`, `availability`, `color`, `size`, or `image_url` from a synthetic `selected_variant` record instead of extracting parent fields directly and flattening public variants separately.

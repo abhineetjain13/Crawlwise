@@ -79,7 +79,12 @@ Ecommerce detail candidate admission must reject semantic artifacts before ranki
 
 Public ecommerce detail output has a flat variant contract. Persisted/exported `variants` rows may contain only `color`, `size`, `sku`, `price`, `currency`, `url`, `image_url`, `availability`, and `stock_quantity`, plus top-level `variant_count`. Public output must not expose `selected_variant`, `variant_axes`, `available_sizes`, `option_*`, variant `title`, nested `option_values`, or variant-only identity helpers. If legacy rows are still present internally, the public boundary must flatten and strip them before persistence/export.
 
-Public-field identity validators are single-owner rules at the public boundary. `barcode` is digits-only with allowed lengths `8/12/13/14`, otherwise it is absent and may be rerouted to `sku`. `gender` must be one of `Men`, `Women`, `Unisex`, `Kids`, `Boys`, `Girls` or absent. `brand` must not keep trailing region/site suffixes like `| US` or `- UK`. `product_id`, `title`, and `product_type` must drop structural/internal tokens such as `plp`, `pdp`, `specifications`, and media-player tokens.
+Public-field identity validators are single-owner rules at the public boundary (`field_value_core.py` / `FieldCoercion`):
+
+- **`barcode`**: digits-only, allowed lengths `8`, `12`, `13`, `14`; otherwise absent and may be rerouted to `sku`.
+- **`gender`**: must be one of `Men`, `Women`, `Unisex`, `Kids`, `Boys`, `Girls` or absent.
+- **`brand`**: must not keep trailing region/site suffixes (`| US`, `- UK`).
+- **`product_id`, `title`, `product_type`**: must drop structural/internal tokens (`plp`, `pdp`, `specifications`, media-player tokens).
 
 **Enrichment is not extraction cleanup.**
 Data enrichment consumes persisted `record.data` as the upstream extraction contract. It must not add blocklists, URL-token cleanup, UI-title suppression, category/source correction, or field-specific compensations for polluted canonical fields. If enrichment output exposes garbage such as URL tokens in `brand`, UI copy in `title`, impossible `size` values, or breadcrumb/category pollution, fix the acquisition/extraction candidate, coercion, ranking, or finalization path before persistence.

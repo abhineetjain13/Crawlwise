@@ -15,6 +15,7 @@ from app.services.config.extraction_rules import (
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
     DETAIL_LOW_SIGNAL_TITLE_VALUES,
+    DETAIL_TRACKING_TOKEN_PATTERN,
     IMAGE_FIELDS,
     INTEGER_VALUE_FIELDS,
     LISTING_ACTION_NOISE_PATTERNS,
@@ -30,10 +31,12 @@ from app.services.config.extraction_rules import (
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
     OPTION_VALUE_NOISE_WORDS,
     PAGE_URL_CURRENCY_HINTS_RAW,
+    PLACEHOLDER_IMAGE_URL_PATTERNS,
     PRICE_VALUE_FIELDS,
     RATING_RE,
     REVIEW_COUNT_RE as _REVIEW_COUNT_RE,
     REVIEW_TITLE_RE,
+    SIZE_REJECT_TOKENS,
     STRUCTURED_MULTI_FIELDS,
     STRUCTURED_OBJECT_FIELDS,
     STRUCTURED_OBJECT_LIST_FIELDS,
@@ -42,6 +45,7 @@ from app.services.config.extraction_rules import (
 )
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
+    ADDITIONAL_IMAGES_FIELD,
     FIELD_ALIASES,
     FLAT_VARIANT_KEYS,
     PUBLIC_RECORD_BARCODE_LENGTHS,
@@ -52,9 +56,11 @@ from app.services.config.field_mappings import (
     PUBLIC_RECORD_LEGACY_VARIANT_FIELDS,
     PUBLIC_RECORD_PRODUCT_TYPE_NOISE_TOKENS,
     PUBLIC_RECORD_SKU_DRAFT_PREFIX_PATTERN,
+    URL_FIELD,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_url_normalization import (
+    is_concatenated_url,
     strip_record_tracking_params,
     strip_tracking_query_params as _strip_tracking_query_params,
 )
@@ -181,6 +187,7 @@ LISTING_UTILITY_TITLE_REGEXES = tuple(
 _CSS_NOISE_RE = re.compile(str(CSS_NOISE_PATTERN), re.I)
 _LEADING_CSS_BLOCK_RE = re.compile(r"^(?:\s*\.[a-z0-9_-]+\{[^{}]*\})+", re.I)
 _BARE_HOST_URL_RE = BARE_HOST_URL_RE
+_tracking_token_re = re.compile(str(DETAIL_TRACKING_TOKEN_PATTERN), re.I)
 
 
 def clean_text(value: object) -> str:
@@ -198,6 +205,8 @@ def is_title_noise(title: object) -> bool:
     if "undefined" in lowered or lowered in {"nan", "none", "null"}:
         return True
     if cleaned.isdigit():
+        return True
+    if _tracking_token_re.fullmatch(cleaned):
         return True
     if _REVIEW_TITLE_RE.fullmatch(cleaned):
         return True
@@ -398,9 +407,9 @@ def surface_fields(surface: str, requested_fields: list[str] | None) -> list[str
     normalized_surface = str(surface or "").strip().lower()
     fields = list(CANONICAL_SCHEMAS.get(normalized_surface, ALL_CANONICAL_FIELDS))
     allowed_fields = set(fields)
-    if "url" not in fields:
-        fields.append("url")
-        allowed_fields.add("url")
+    if URL_FIELD not in fields:
+        fields.append(URL_FIELD)
+        allowed_fields.add(URL_FIELD)
     for field_name in list(requested_fields or []):
         exact_field = exact_requested_field_key(field_name)
         if (
@@ -527,7 +536,7 @@ def _coerce_structured_multi_rows(field_name: str, value: object) -> list[str]:
             rows.extend(_coerce_structured_multi_rows(field_name, item))
         return rows
     if isinstance(value, (list, tuple, set)):
-        rows: list[str] = []
+        rows = []
         for item in value:
             rows.extend(_coerce_structured_multi_rows(field_name, item))
         return rows
@@ -644,6 +653,12 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
             )
         cleaned = clean_text(cleaned)
     if field_name == "color":
+        # Reject single-digit numeric values from quantity inputs (e.g. "1")
+        if re.fullmatch(r"\d{1,2}", cleaned) and len(cleaned) <= 2:
+            return None
+        # Reject tracking pixel classes (e.g. "_clck", "_fbp")
+        if re.fullmatch(r"_[a-z]+", cleaned, flags=re.I):
+            return None
         match = re.fullmatch(r"select\s+(.+?)\s+color", cleaned, flags=re.I)
         if match is not None:
             cleaned = clean_text(match.group(1))
@@ -669,6 +684,9 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
         cleaned = clean_text(cleaned)
         if re.search(r"\bplease\s+select\b", cleaned, flags=re.I):
+            return None
+        # Reject UI navigation tab labels (e.g. "Photos", "Verified Purchases")
+        if cleaned.strip().lower() in frozenset(SIZE_REJECT_TOKENS or ()):
             return None
     if cleaned.strip().casefold() in {"none", "null", "- / null", "n/a", "na"}:
         return None
@@ -742,6 +760,9 @@ def extract_urls(value: object, page_url: str) -> list[str]:
             return results
         if _looks_like_malformed_relative_url_candidate(text):
             return results
+        # Reject strings that concatenate two distinct product URLs
+        if is_concatenated_url(text):
+            return results
         embedded_urls = re.findall(r"https?://(?:(?!https?://)[^\s,])+", text)
         if len(embedded_urls) >= 2:
             for candidate in embedded_urls:
@@ -751,12 +772,11 @@ def extract_urls(value: object, page_url: str) -> list[str]:
                 )
                 if absolute:
                     results.append(absolute)
-            return results
-        absolute = absolute_url(page_url, _trim_trailing_url_candidate(text))
-        if absolute:
-            results.append(absolute)
-        return results
-    if isinstance(value, dict):
+        else:
+            absolute = absolute_url(page_url, _trim_trailing_url_candidate(text))
+            if absolute:
+                results.append(absolute)
+    elif isinstance(value, dict):
         for key in ("url", "href", "src", "contentUrl", "image", "thumbnail"):
             candidate = value.get(key)
             if candidate in (None, "", [], {}):
@@ -770,6 +790,10 @@ def extract_urls(value: object, page_url: str) -> list[str]:
     for candidate in results:
         normalized = candidate.lower()
         if not candidate or normalized in seen:
+            continue
+        if _is_placeholder_image_url(candidate):
+            continue
+        if is_concatenated_url(candidate):
             continue
         seen.add(normalized)
         deduped.append(candidate)
@@ -797,6 +821,20 @@ def _looks_like_malformed_relative_url_candidate(value: str) -> bool:
     if head.startswith("r0lgodlh"):
         return True
     return any(token in head for token in ("g_auto", "f_auto", "q_auto", "c_fill"))
+
+
+_placeholder_image_url_tokens = tuple(
+    token.lower()
+    for token in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ())
+    if str(token).strip()
+)
+
+
+def _is_placeholder_image_url(value: str) -> bool:
+    lowered = str(value or "").strip().lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in _placeholder_image_url_tokens)
 
 
 def flatten_variants_for_public_output(
@@ -1034,9 +1072,15 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         return int(value)
     if field_name in _INTEGER_FIELD_NAMES and isinstance(value, str):
         text = coerce_text(value)
-        if text and not re.search(r"\d", text):
+        if not text:
             return None
-        return text or None
+        normalized = text.replace(",", "").strip()
+        if not re.fullmatch(r"[-+]?\d+", normalized):
+            return None
+        try:
+            return int(normalized)
+        except (TypeError, ValueError):
+            return None
     if field_name in {
         "price",
         "sale_price",
@@ -1092,7 +1136,7 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         return urls[0] if urls else None
     if field_name in IMAGE_FIELDS:
         urls = extract_urls(value, page_url)
-        if field_name == "additional_images":
+        if field_name == ADDITIONAL_IMAGES_FIELD:
             return urls or None
         return urls[0] if urls else None
     if field_name in STRUCTURED_MULTI_FIELDS:
@@ -1216,6 +1260,8 @@ def _coerce_sku(value: object) -> str | None:
         return None
     had_draft_prefix = bool(_SKU_DRAFT_PREFIX_RE.match(text))
     cleaned = _SKU_DRAFT_PREFIX_RE.sub("", text).strip()
+    if cleaned.startswith(("{", "[")):
+        return None
     if had_draft_prefix and re.fullmatch(r"\d{10,}", cleaned):
         return None
     if _looks_like_tracking_hash_sku(cleaned):

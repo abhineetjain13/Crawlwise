@@ -32,11 +32,25 @@ _VARIANT_SIZE_VALUE_EXTRACT_PATTERNS = tuple(
     for pattern in tuple(VARIANT_SIZE_VALUE_EXTRACT_PATTERNS or ())
     if str(pattern).strip()
 )
+_CURRENCY_CODES_UPPER = frozenset(
+    str(code).upper() for code in tuple(CURRENCY_CODES or ()) if str(code).strip()
+)
 _VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS or ())
     if str(pattern).strip()
 )
+_VARIANT_PLACEHOLDER_VALUES_SET = frozenset(
+    clean_text(value).lower()
+    for value in tuple(VARIANT_PLACEHOLDER_VALUES or ())
+    if clean_text(value)
+)
+_VARIANT_PLACEHOLDER_PREFIXES_LOWER = tuple(
+    clean_text(prefix).lower()
+    for prefix in tuple(VARIANT_PLACEHOLDER_PREFIXES or ())
+    if clean_text(prefix)
+)
+_OPTION_FIELD_PATTERN = re.compile(r"option\d+_(?:name|values?)")
 
 _LEGACY_VARIANT_KEYS = ("selected_variant", "variant_axes", "available_sizes")
 
@@ -148,9 +162,7 @@ def _currency_code(value: object) -> str:
     text = text_or_none(value)
     if text:
         upper = text.upper()
-        if upper in frozenset(
-            str(code).upper() for code in tuple(CURRENCY_CODES or ())
-        ):
+        if upper in _CURRENCY_CODES_UPPER:
             return upper
     return ""
 
@@ -180,9 +192,8 @@ def _value_is_placeholder(value: str) -> bool:
     lowered = clean_text(value).lower()
     if not lowered:
         return True
-    return lowered in frozenset(VARIANT_PLACEHOLDER_VALUES or ()) or any(
-        lowered.startswith(str(prefix).lower())
-        for prefix in tuple(VARIANT_PLACEHOLDER_PREFIXES or ())
+    return lowered in _VARIANT_PLACEHOLDER_VALUES_SET or any(
+        lowered.startswith(prefix) for prefix in _VARIANT_PLACEHOLDER_PREFIXES_LOWER
     )
 
 
@@ -442,7 +453,10 @@ def _enforce_variant_payload_limits(record: dict[str, Any]) -> None:
     variants = record.get("variants")
     if not isinstance(variants, list) or not variants:
         return
-    max_rows = max(1, int(crawler_runtime_settings.detail_max_variant_rows))
+    try:
+        max_rows = max(1, int(crawler_runtime_settings.detail_max_variant_rows))
+    except (TypeError, ValueError):
+        max_rows = 1
     if len(variants) <= max_rows:
         return
     kept = [
@@ -510,11 +524,6 @@ def _backfill_variant_shared_fields_from_record(record: dict[str, Any]) -> None:
     fallback_image = record.get("image_url")
     if fallback_image in (None, "", [], {}):
         return
-    if any(
-        isinstance(variant, dict) and variant.get("image_url") not in (None, "", [], {})
-        for variant in variants
-    ):
-        return
     for variant in variants:
         if isinstance(variant, dict) and variant.get("image_url") in (None, "", [], {}):
             variant["image_url"] = fallback_image
@@ -531,5 +540,5 @@ def _enforce_flat_variant_contract(record: dict[str, Any]) -> None:
     for field_name in _LEGACY_VARIANT_KEYS:
         record.pop(field_name, None)
     for field_name in list(record):
-        if re.fullmatch(r"option\d+_(?:name|values?)", str(field_name)):
+        if _OPTION_FIELD_PATTERN.fullmatch(str(field_name)):
             record.pop(field_name, None)

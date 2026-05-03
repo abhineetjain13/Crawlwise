@@ -1,10 +1,13 @@
 # Active Plan
 
-**Current:** Zyte Delta Architectural Fixes -> `docs/plans/zyte-delta-architectural-fixes-plan.md`
-**Status:** IN PROGRESS
+**Current:** Audit 3 Regression + Persistent Fixes -> `docs/plans/audit3-regression-and-persistent-fixes-plan.md`
+**Status:** DRAFT
+**Started:** 2026-05-03
+**Current execution focus:** Slice A (field-value validation), Slice B (URL integrity), Slice C (codeant sweep)
+
+**Parallel:** Zyte Delta Architectural Fixes -> `docs/plans/zyte-delta-architectural-fixes-plan.md`
+**Status:** IN PROGRESS (Slices 1-4 done, Slice 6-7 pending)
 **Started:** 2026-05-02
-**Last slice completed:** Slices 2-4 focused verify passed
-**Current execution focus:** Slice 6 description fidelity and Slice 7 acceptance/test purge
 
 ## Previous
 - Data Quality Extraction Hardening (COMPLETE) -> `docs/plans/data-quality-extraction-hardening-plan.md`

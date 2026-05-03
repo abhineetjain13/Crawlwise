@@ -66,6 +66,11 @@ def _asin_from_url(url: str) -> str | None:
     return match.group(1).upper() if match else None
 
 
+def _asin_like(value: object) -> str | None:
+    text = str(value or "").strip().upper()
+    return text if re.fullmatch(r"[A-Z0-9]{10}", text) else None
+
+
 def _clean_detail_text(value: object) -> str | None:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text or None
@@ -135,10 +140,11 @@ class AmazonAdapter(BaseAdapter):
         if not title_el:
             return None
         detail_table = self._detail_table(parser)
-        asin = (
-            _asin_from_url(url)
-            or self._detail_value_from_table(detail_table, "asin")
-            or self._detail_value_from_table(detail_table, "item model number")
+        real_asin = _asin_from_url(url) or _asin_like(
+            self._detail_value_from_table(detail_table, "asin")
+        )
+        asin = real_asin or self._detail_value_from_table(
+            detail_table, "item model number"
         )
         rating_text = selectolax_node_text(rating_el)
         rating_match = re.search(r"(\d+\.?\d*)", rating_text)
@@ -174,6 +180,7 @@ class AmazonAdapter(BaseAdapter):
             "availability": _clean_detail_text(selectolax_node_text(avail_el)),
             "currency": currency,
             "product_id": asin,
+            "sku": real_asin,
             "part_number": self._detail_value_from_table(
                 detail_table, "item model number"
             ),
@@ -319,7 +326,6 @@ class AmazonAdapter(BaseAdapter):
         if not dim_order:
             return {}
         axis_entries: dict[str, list[dict[str, object]]] = {}
-        axis_values_by_name: dict[str, list[str]] = {}
         selected_values: dict[str, str] = {}
         record: dict[str, object] = {}
         for raw_dim in dim_order:
@@ -348,8 +354,7 @@ class AmazonAdapter(BaseAdapter):
             if not values:
                 continue
             axis_entries[axis_name] = entries
-            axis_values_by_name[axis_name] = values
-        if not axis_values_by_name:
+        if not axis_entries:
             return {}
         variants = self._twister_variants(
             state.get("sortedVariations"),
