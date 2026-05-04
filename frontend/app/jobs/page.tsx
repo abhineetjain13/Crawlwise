@@ -64,9 +64,7 @@ export default function JobsPage() {
         description="Live run state for the local dev runner."
         actions={
           <div className="flex items-center gap-2">
-            <span className="text-muted type-caption">
-              Last refreshed {lastRefreshed}
-            </span>
+            <span className="text-muted type-caption">Last refreshed {lastRefreshed}</span>
             <Button
               variant="secondary"
               type="button"
@@ -92,8 +90,11 @@ export default function JobsPage() {
         ) : jobsQuery.isError ? (
           <DataRegionError message="Failed to load jobs." />
         ) : jobs.length ? (
-          <div className="surface-muted rounded-[var(--radius-md)] border">
-            <Table className="compact-data-table min-w-[960px]">
+          <div className="surface-muted overflow-x-auto rounded-[var(--radius-md)] border">
+            <Table
+              wrapperClassName="max-h-[70vh]"
+              className="compact-data-table min-w-[960px] table-fixed"
+            >
               <colgroup>
                 <col style={{ width: '10%' }} />
                 <col style={{ width: '10%' }} />
@@ -117,16 +118,9 @@ export default function JobsPage() {
               <TableBody>
                 {jobs.map((job) => (
                   <TableRow key={job.run_id}>
-                    <TableCell className="type-caption-mono font-medium">
-                      {job.run_id}
-                    </TableCell>
-                    <TableCell className="type-body">
-                      {formatJobType(job.type)}
-                    </TableCell>
-                    <TableCell
-                      className="max-w-[320px] truncate type-caption-mono"
-                      title={job.url}
-                    >
+                    <TableCell className="type-caption-mono font-medium">{job.run_id}</TableCell>
+                    <TableCell className="type-body">{formatJobType(job.type)}</TableCell>
+                    <TableCell className="type-caption-mono max-w-[320px] truncate" title={job.url}>
                       {job.url}
                     </TableCell>
                     <TableCell>
@@ -196,7 +190,7 @@ function ActionButton({
       variant={danger ? 'ghost' : 'secondary'}
       disabled={disabled}
       className={cn(
-        'h-7 px-2.5 type-control',
+        'type-control h-7 px-2.5',
         danger && 'text-danger hover:bg-danger/10 hover:text-danger',
       )}
       title={label}

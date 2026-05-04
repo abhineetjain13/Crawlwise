@@ -14,6 +14,16 @@ export type HistoryItem = {
   meta?: string;
 };
 
+const STATUS_TONE_MAP: Record<string, 'success' | 'danger' | 'neutral' | 'warning' | 'info'> = {
+  complete: 'success',
+  completed: 'success',
+  success: 'success',
+  failed: 'danger',
+  error: 'danger',
+  running: 'info',
+  pending: 'neutral',
+};
+
 export function HistoryDrawer({
   open,
   onClose,
@@ -91,26 +101,18 @@ export function HistoryDrawer({
                       #{item.id}
                     </span>
                     <Badge
-                      tone={
-                        item.status === 'complete' ||
-                        item.status === 'completed' ||
-                        item.status === 'success'
-                          ? 'success'
-                          : item.status === 'failed' || item.status === 'error'
-                            ? 'danger'
-                            : 'neutral'
-                      }
+                      tone={STATUS_TONE_MAP[item.status] ?? 'neutral'}
                       className="origin-right scale-90"
                     >
                       {item.status}
                     </Badge>
                   </div>
                   {item.label && (
-                    <div className="text-foreground max-w-[300px] truncate type-body font-semibold">
+                    <div className="text-foreground type-body max-w-[300px] truncate font-semibold">
                       {item.label}
                     </div>
                   )}
-                  <div className="text-muted flex w-full items-center justify-between type-caption">
+                  <div className="text-muted type-caption flex w-full items-center justify-between">
                     <span>{item.meta ?? 'No details'}</span>
                     <span className="type-caption-mono">{formatShortDate(item.created_at)}</span>
                   </div>

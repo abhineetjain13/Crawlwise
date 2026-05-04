@@ -50,22 +50,22 @@ export function Field({
   label,
   hint,
   children,
-}: Readonly<{ label: string; hint?: string; children: ReactNode }>) {
+  className,
+}: Readonly<{ label: string; hint?: string; children: ReactNode; className?: string }>) {
   const enhancedChildren = React.Children.map(children, (child) => {
     if (
       React.isValidElement(child) &&
       child.type === Dropdown &&
       !(child.props as { ariaLabel?: string }).ariaLabel
     ) {
-      return React.cloneElement(
-        child as React.ReactElement<{ ariaLabel?: string }>,
-        { ariaLabel: label },
-      );
+      return React.cloneElement(child as React.ReactElement<{ ariaLabel?: string }>, {
+        ariaLabel: label,
+      });
     }
     return child;
   });
   return (
-    <label className="grid gap-1.5">
+    <label className={cn('grid gap-1.5', className)}>
       <span className="field-label">{label}</span>
       {enhancedChildren}
       {hint ? <span className="field-hint">{hint}</span> : null}
@@ -261,7 +261,7 @@ export function Dropdown<T extends string>({
               onMouseEnter={cancelClose}
               onMouseLeave={scheduleClose}
               className={cn(
-                'border-border bg-background-elevated fixed z-[300] w-max rounded-[var(--radius-lg)] border py-1 shadow-lg overflow-y-auto max-h-[320px]',
+                'border-border bg-background-elevated fixed z-[300] max-h-[320px] w-max overflow-y-auto rounded-[var(--radius-lg)] border py-1 shadow-lg',
                 listboxPosition.side === 'bottom'
                   ? 'animate-[dropdown-in_150ms_cubic-bezier(0.16,1,0.3,1)]'
                   : 'animate-[dropdown-in-up_150ms_cubic-bezier(0.16,1,0.3,1)]',

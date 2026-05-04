@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUpRight, Copy, ExternalLink, Plus, Trash2 } from 'lucide-react';
+import { ArrowRightCircle, ArrowUpRight, Copy, ExternalLink, Plus, Trash2 } from 'lucide-react';
 
 import { Badge, Button, Dropdown, Input, Tooltip } from '../../components/ui/primitives';
 import { ConfirmDialog } from '../../components/ui/dialog';
@@ -55,13 +55,13 @@ function RunRow({
             <Tooltip content={run.url} align="start">
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="link-accent text-primary block max-w-[280px] truncate type-body font-medium no-underline transition-colors"
+                className="link-accent text-primary type-body block max-w-[280px] truncate font-medium no-underline transition-colors"
               >
                 {domain || `Run #${run.id}`}
               </Link>
             </Tooltip>
 
-            <div className="flex items-center gap-1 opacity-10 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            <div className="flex items-center gap-1 opacity-10 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
               <button
                 type="button"
                 onClick={(e) => {
@@ -125,13 +125,13 @@ function RunRow({
 
       {/* Actions */}
       <TableCell className="text-right whitespace-nowrap">
-        <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-          <Link
-            href={`/crawl?run_id=${run.id}`}
-            className="ui-on-accent-surface focus-ring border-accent bg-accent hover:border-accent-hover hover:bg-accent-hover inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-[var(--radius-md)] border px-[9px] type-control no-underline shadow-xs transition-[background-color,color,border-color,box-shadow,opacity,transform] hover:-translate-y-px"
-          >
-            Open <ArrowUpRight className="size-3" />
-          </Link>
+        <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+          <Button variant="accent" size="sm" asChild className="h-7 px-3">
+            <Link href={`/crawl/${run.id}`}>
+              Open
+              <ArrowRightCircle className="ml-1 size-3" />
+            </Link>
+          </Button>
           <Button
             type="button"
             variant="danger"
@@ -212,7 +212,7 @@ export default function RunsPage() {
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack h-full">
       <PageHeader
         title="Run History"
         actions={
@@ -284,7 +284,10 @@ export default function RunsPage() {
             );
           }
           return (
-            <Table className="compact-data-table">
+            <Table
+              wrapperClassName="max-h-[calc(100vh-320px)]"
+              className="compact-data-table table-fixed"
+            >
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[30%]">Run</TableHead>

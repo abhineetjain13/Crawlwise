@@ -74,7 +74,10 @@ export function JsonModal({
           </Button>
         </div>
         <div className="flex-1 overflow-auto p-4">
-          <pre className="crawl-terminal crawl-terminal-json text-xs leading-relaxed" dangerouslySetInnerHTML={{ __html: syntaxHighlightJson(text) }} />
+          <pre
+            className="crawl-terminal crawl-terminal-json"
+            dangerouslySetInnerHTML={{ __html: syntaxHighlightJson(text) }}
+          />
         </div>
         <div className="border-divider flex items-center justify-end gap-2 border-t px-4 py-3">
           <Button

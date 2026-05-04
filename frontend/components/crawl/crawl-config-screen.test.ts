@@ -57,6 +57,17 @@ function baseProfile(overrides: DomainRunProfileOverrides = {}): DomainRunProfil
       capture_browser_diagnostics: true,
       ...overrides.diagnostics_profile,
     },
+    acquisition_contract: {
+      preferred_browser_engine: 'auto',
+      prefer_browser: false,
+      prefer_curl_handoff: false,
+      handoff_cookie_engine: 'auto',
+      last_quality_success: null,
+      stale_after_failures: {
+        failure_count: 0,
+        stale: false,
+      },
+    },
     source_run_id: overrides.source_run_id ?? null,
     saved_at: overrides.saved_at ?? null,
   };

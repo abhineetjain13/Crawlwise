@@ -106,7 +106,10 @@ export default function AdminUsersPage() {
           <DataRegionLoading count={6} />
         ) : users.length ? (
           <div className="surface-muted rounded-[var(--radius-md)] border">
-            <Table className="compact-data-table min-w-[840px]">
+            <Table
+              wrapperClassName="max-h-[70vh]"
+              className="compact-data-table min-w-[840px] table-fixed"
+            >
               <colgroup>
                 <col style={{ width: '40%' }} />
                 <col style={{ width: '15%' }} />
@@ -126,9 +129,7 @@ export default function AdminUsersPage() {
               <TableBody>
                 {users.map((user) => (
                   <TableRow key={user.id}>
-                    <TableCell className="type-body font-normal">
-                      {user.email}
-                    </TableCell>
+                    <TableCell className="type-body font-normal">{user.email}</TableCell>
                     <TableCell>
                       <Dropdown<User['role']>
                         value={user.role}

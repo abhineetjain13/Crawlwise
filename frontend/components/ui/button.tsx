@@ -3,6 +3,7 @@
 import type { ComponentPropsWithoutRef } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 
+import { Slot } from '@radix-ui/react-slot';
 import { cn } from '../../lib/utils';
 
 export const buttonVariants = cva(
@@ -35,8 +36,18 @@ export const buttonVariants = cva(
   },
 );
 
-export type ButtonProps = ComponentPropsWithoutRef<'button'> & VariantProps<typeof buttonVariants>;
+export interface ButtonProps
+  extends ComponentPropsWithoutRef<'button'>, VariantProps<typeof buttonVariants> {
+  asChild?: boolean;
+}
 
-export function Button({ className, variant, size, ...props }: Readonly<ButtonProps>) {
-  return <button {...props} className={cn(buttonVariants({ variant, size }), className)} />;
+export function Button({
+  className,
+  variant,
+  size,
+  asChild = false,
+  ...props
+}: Readonly<ButtonProps>) {
+  const Comp = asChild ? Slot : 'button';
+  return <Comp {...props} className={cn(buttonVariants({ variant, size }), className)} />;
 }

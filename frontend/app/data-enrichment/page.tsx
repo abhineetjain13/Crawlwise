@@ -11,7 +11,8 @@ import {
   DataRegionLoading,
   InlineAlert,
   PageHeader,
-} from '../../components/ui/patterns';
+  TableSurface,
+} from '../../components/ui/patterns'; // Finalizing patterns import
 import { Badge, Button } from '../../components/ui/primitives';
 import { api } from '../../lib/api';
 import { EnrichmentStatus, EnrichmentTableLoading } from './enrichment-components';
@@ -158,13 +159,13 @@ export default function DataEnrichmentPage() {
     'Normalize ecommerce detail records into category, price, attribute, and discovery fields.';
 
   return (
-    <div className="page-stack gap-4">
+    <div className="page-stack h-full">
       <PageHeader
         title="Data Enrichment"
         description={descriptionText}
         actions={
           <div className="flex w-full flex-wrap items-center justify-end gap-2">
-            <label className="border-border bg-background-elevated text-foreground hover:bg-accent/[0.04] inline-flex h-[var(--control-height)] cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 type-body transition-colors">
+            <label className="border-border bg-background-elevated text-foreground hover:bg-accent/[0.04] type-body inline-flex h-[var(--control-height)] cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 transition-colors">
               <input
                 type="checkbox"
                 checked={llmEnabled}
@@ -197,57 +198,61 @@ export default function DataEnrichmentPage() {
 
       {isRunning ? (
         <EnrichmentStatus
-          sourceCount={activeJob?.summary?.accepted_count ?? sourceRecords.length}
+          sourceCount={Number(activeJob?.summary?.accepted_count) || sourceRecords.length}
           llmEnabled={Boolean(activeJob?.options?.llm_enabled)}
         />
       ) : null}
 
       {/* ── Main Results ── */}
-      <div className="mb-8">
-        <section className="border-border bg-panel shadow-card overflow-hidden rounded-[var(--radius-xl)] border">
-          <header className="border-divider flex flex-wrap items-center justify-between gap-4 border-b px-4 py-3">
-            <div className="flex items-center gap-3">
-              <h2 className="type-label-mono">
-                {products.length > 0 ? 'ENRICHED OUTPUT' : 'SELECTED RECORDS'}
-              </h2>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => void detailQuery.refetch()}
-                disabled={!resolvedJobId || detailQuery.isFetching}
-                className="text-muted hover:text-foreground h-8 px-2 type-label-mono"
-              >
-                <RefreshCcw className="mr-1.5 size-3" />
-                Refresh
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => setHistoryOpen(true)}
-                aria-label="Enrichment History"
-                className="text-muted hover:text-foreground h-8 w-8"
-              >
-                <History className="size-4" />
-              </Button>
-            </div>
-          </header>
+      <TableSurface className="mb-8" contentClassName="flex flex-col">
+        <header className="border-divider flex flex-wrap items-center justify-between gap-4 border-b px-4 py-3">
+          <div className="flex items-center gap-3">
+            <h2 className="type-label-mono">
+              {products.length > 0 ? 'ENRICHED OUTPUT' : 'SELECTED RECORDS'}
+            </h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void detailQuery.refetch()}
+              disabled={!resolvedJobId || detailQuery.isFetching}
+              className="text-muted hover:text-foreground type-label-mono h-8 px-2"
+            >
+              <RefreshCcw className="mr-1.5 size-3" />
+              Refresh
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setHistoryOpen(true)}
+              aria-label="Enrichment History"
+              className="text-muted hover:text-foreground h-8 w-8"
+            >
+              <History className="size-4" />
+            </Button>
+          </div>
+        </header>
 
-          {isRunning && completedCount === 0 ? (
-            <EnrichmentTableLoading llmEnabled={Boolean(activeJob?.options?.llm_enabled)} />
-          ) : detailQuery.isLoading && !isRunning ? (
-            <DataRegionLoading count={8} className="px-0" />
-          ) : products.length ? (
-            <div className="commerce-table surface-muted max-h-[70vh] overflow-auto">
-            <Table className="min-w-[1200px] border-separate border-spacing-0">
+        {isRunning && completedCount === 0 ? (
+          <EnrichmentTableLoading llmEnabled={Boolean(activeJob?.options?.llm_enabled)} />
+        ) : detailQuery.isLoading && !isRunning ? (
+          <DataRegionLoading count={8} className="px-0" />
+        ) : products.length ? (
+          <div className="commerce-table overflow-x-auto">
+            <Table
+              wrapperClassName="max-h-[calc(100vh-200px)]"
+              className="min-w-[1200px] table-fixed border-separate border-spacing-0"
+            >
               <TableHeader className="sticky top-0 z-20">
                 <TableRow className="bg-subtle-panel shadow-sm">
-                  <TableHead className="bg-subtle-panel sticky left-0 z-30 w-[180px] border-r border-border/50">Record</TableHead>
+                  <TableHead className="bg-subtle-panel border-border/50 sticky left-0 z-30 w-[180px] border-r">
+                    Record
+                  </TableHead>
                   {ENRICHED_FIELD_LABELS.map(([key, label]) => (
-                    <TableHead key={String(key)} className="bg-subtle-panel">
+                    <TableHead key={String(key)} className="bg-subtle-panel w-[160px]">
                       <div className="flex min-w-0 items-center gap-1">
                         <span className="flex-1 truncate">{label}</span>
                       </div>
@@ -261,57 +266,52 @@ export default function DataEnrichmentPage() {
                 ))}
               </TableBody>
             </Table>
-            </div>
-          ) : sourceRecords.length ? (
-            <div className="divide-divider divide-y">
-              {sourceRecords.map((record, index) => {
-                const badgeValue = record.id ?? record.source_url;
-                return (
-                  <div
-                    key={record.id ?? record.source_url ?? index}
-                    className="hover:bg-accent/[0.04] flex items-center gap-3 px-4 py-2.5 transition-colors"
-                  >
-                    <span className="text-muted w-6 shrink-0 font-mono text-xs">
-                      {index + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="type-body-sm font-medium truncate">
-                        {recordTitle(record)}
-                      </div>
-                      <div className="text-muted flex items-center gap-2 type-caption">
-                        {record.source_url ? (
-                          <a
-                            href={record.source_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-accent truncate opacity-80 hover:underline"
-                            title={record.source_url}
-                          >
-                            {record.source_url}
-                          </a>
-                        ) : null}
-                      </div>
+          </div>
+        ) : sourceRecords.length ? (
+          <div className="divide-divider divide-y overflow-auto">
+            {sourceRecords.map((record, index) => {
+              const badgeValue = record.id ?? record.source_url;
+              return (
+                <div
+                  key={record.id ?? record.source_url ?? index}
+                  className="hover:bg-accent/[0.04] flex items-center gap-3 px-4 py-2.5 transition-colors"
+                >
+                  <span className="text-muted w-6 shrink-0 font-mono text-xs">{index + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="type-body-sm truncate font-medium">{recordTitle(record)}</div>
+                    <div className="text-muted type-caption flex items-center gap-2">
+                      {record.source_url ? (
+                        <a
+                          href={record.source_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-accent truncate opacity-80 hover:underline"
+                          title={record.source_url}
+                        >
+                          {record.source_url}
+                        </a>
+                      ) : null}
                     </div>
-                    {badgeValue ? (
-                      <Badge
-                        tone="neutral"
-                        className="h-5 shrink-0 px-1.5 font-mono text-xs opacity-60"
-                      >
-                        #{badgeValue}
-                      </Badge>
-                    ) : null}
                   </div>
-                );
-              })}
-            </div>
-          ) : (
-            <DataRegionEmpty
-              title="No records selected"
-              description="Open an ecommerce detail run and send selected records here to begin enrichment."
-            />
-          )}
-        </section>
-      </div>
+                  {badgeValue ? (
+                    <Badge
+                      tone="neutral"
+                      className="h-5 shrink-0 px-1.5 font-mono text-xs opacity-60"
+                    >
+                      #{badgeValue}
+                    </Badge>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <DataRegionEmpty
+            title="No records selected"
+            description="Open an ecommerce detail run and send selected records here to begin enrichment."
+          />
+        )}
+      </TableSurface>
 
       <HistoryDrawer
         open={historyOpen}
@@ -327,8 +327,8 @@ export default function DataEnrichmentPage() {
 
 function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>) {
   return (
-    <TableRow key={product.id} className="group/row">
-      <TableCell className="bg-background group-hover/row:bg-accent/[0.04] sticky left-0 z-10 border-r border-border/50 transition-colors">
+    <TableRow className="group/row">
+      <TableCell className="bg-background group-hover/row:bg-accent/[0.04] border-border/50 sticky left-0 z-10 border-r transition-colors">
         <div className="flex items-center gap-2 py-1.5">
           <Badge tone="neutral" className="h-5 shrink-0 px-1.5 font-mono text-xs opacity-60">
             #{product.source_record_id}
@@ -338,7 +338,7 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
               href={product.source_url}
               target="_blank"
               rel="noreferrer"
-              className="link-accent block max-w-[140px] truncate type-body font-medium transition-colors hover:underline"
+              className="link-accent type-body block max-w-[140px] truncate font-medium transition-colors hover:underline"
               title={product.source_url}
             >
               {product.source_url.replace(/^https?:\/\/(www\.)?/, '')}
@@ -355,10 +355,7 @@ function EnrichedProductRow({ product }: Readonly<{ product: EnrichedProduct }>)
         return (
           <TableCell key={String(key)}>
             {isEnriched ? (
-              <span
-                className="type-body block max-w-[260px] truncate"
-                title={display}
-              >
+              <span className="type-body block max-w-[260px] truncate" title={display}>
                 {display}
               </span>
             ) : isProcessing ? (

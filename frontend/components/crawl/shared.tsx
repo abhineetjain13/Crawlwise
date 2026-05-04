@@ -43,14 +43,7 @@ import type {
   CrawlRun,
   CrawlSurface,
 } from '../../lib/api/types';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '../ui/table';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { formatTimeHms, parseApiDate } from '../../lib/format/date';
 import { cn } from '../../lib/utils';
 import { syntaxHighlightJson } from '../../lib/ui/syntax';
@@ -102,7 +95,7 @@ export function uniqueFields(values: string[]) {
 
 export function cleanRequestedField(value: string) {
   return String(value || '')
-    .replace(/\s+/g, ' ')
+    .replace(/\s+/g, '')
     .trim();
 }
 
@@ -275,8 +268,8 @@ export function decodeUrlsForDisplay<T>(value: T): T {
 
 export function humanizeFieldName(value: string) {
   const normalized = String(value || '')
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/[_-]+/g, '')
+    .replace(/\s+/g, '')
     .trim();
   if (!normalized) return '';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
@@ -354,7 +347,7 @@ export function extractionVerdictTone(verdict: string) {
 }
 
 export function humanizeVerdict(verdict: string) {
-  return verdict.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  return verdict.replace(/_/g, '').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 export type QualityLevel = 'high' | 'medium' | 'low' | 'unknown';
 
@@ -629,57 +622,53 @@ function getLogIconStyle(level: string, message: string): { iconCls: string; bgC
   const isError = logMessageIsError(level, message);
   const hasUrl = /https?:\/\//i.test(message);
 
-  if (isError) return { iconCls: 'text-rose-600 dark:text-rose-400', bgCls: 'bg-rose-500/10' };
+  if (isError) return { iconCls: 'text-danger', bgCls: 'bg-danger-bg' };
   if (level === 'warning' || level === 'warn')
-    return { iconCls: 'text-orange-600 dark:text-orange-400', bgCls: 'bg-orange-500/10' };
+    return { iconCls: 'text-warning', bgCls: 'bg-warning-bg' };
 
-  if (msg.includes('starting crawl'))
-    return { iconCls: 'text-sky-700 dark:text-sky-400', bgCls: 'bg-sky-500/10' };
+  if (msg.includes('starting crawl')) return { iconCls: 'text-info', bgCls: 'bg-info-bg' };
   if (msg.includes('ignoring robots.txt'))
-    return { iconCls: 'text-orange-600 dark:text-orange-400', bgCls: 'bg-orange-500/10' };
-  if (msg.includes('resolved'))
-    return { iconCls: 'text-slate-600 dark:text-slate-400', bgCls: 'bg-slate-500/10' };
-  if (msg.includes('acquired'))
-    return { iconCls: 'text-indigo-600 dark:text-indigo-400', bgCls: 'bg-indigo-500/10' };
-  if (msg.includes('extracted'))
-    return { iconCls: 'text-emerald-700 dark:text-emerald-400', bgCls: 'bg-emerald-500/12' };
+    return { iconCls: 'text-warning', bgCls: 'bg-warning-bg' };
+  if (msg.includes('resolved')) return { iconCls: 'text-muted ', bgCls: 'bg-zinc-500/10' };
+  if (msg.includes('acquired')) return { iconCls: 'text-info', bgCls: 'bg-indigo-500/10' };
+  if (msg.includes('extracted')) return { iconCls: 'text-success', bgCls: 'bg-success-bg' };
   if (msg.includes('normalized') || msg.includes('normalised'))
-    return { iconCls: 'text-amber-700 dark:text-amber-400', bgCls: 'bg-amber-500/12' };
-  if (msg.includes('persisted'))
-    return { iconCls: 'text-fuchsia-700 dark:text-fuchsia-400', bgCls: 'bg-fuchsia-500/12' };
+    return { iconCls: 'text-warning', bgCls: 'bg-warning-bg' };
+  if (msg.includes('persisted')) return { iconCls: 'text-success', bgCls: 'bg-success-bg' };
   if (msg.includes('page loaded') || msg.includes('page load'))
-    return { iconCls: 'text-amber-700 dark:text-amber-400', bgCls: 'bg-amber-500/12' };
+    return { iconCls: 'text-warning', bgCls: 'bg-warning-bg' };
   if (
     msg.includes('challenge') ||
     msg.includes('blocked') ||
     msg.includes('captcha') ||
     msg.includes('bot check')
   )
-    return { iconCls: 'text-orange-600 dark:text-orange-400', bgCls: 'bg-orange-500/12' };
+    return { iconCls: 'text-danger', bgCls: 'bg-danger-bg' };
   if (msg.includes('acquiring') || msg.includes('fetching'))
-    return { iconCls: 'text-indigo-600 dark:text-indigo-400', bgCls: 'bg-indigo-500/12' };
+    return { iconCls: 'text-info', bgCls: 'bg-info-bg' };
   if (
     msg.includes('browser') ||
     msg.includes('patchright') ||
     msg.includes('playwright') ||
     msg.includes('headless')
   )
-    return { iconCls: 'text-violet-600 dark:text-violet-400', bgCls: 'bg-violet-500/12' };
-  if (msg.includes('record'))
-    return { iconCls: 'text-emerald-600 dark:text-emerald-400', bgCls: 'bg-emerald-500/12' };
-  if (hasUrl) return { iconCls: 'text-indigo-600 dark:text-indigo-400', bgCls: 'bg-indigo-500/12' };
+    return { iconCls: 'text-violet-600', bgCls: 'bg-violet-500/12' };
+  if (msg.includes('record')) return { iconCls: 'text-success', bgCls: 'bg-success-bg' };
+  if (hasUrl) return { iconCls: 'text-info', bgCls: 'bg-info-bg' };
   if (
     msg.includes('complete') ||
     msg.includes('success') ||
     msg.includes('done') ||
     msg.includes('finished')
   )
-    return { iconCls: 'text-emerald-600 dark:text-emerald-400', bgCls: 'bg-emerald-500/10' };
+    return { iconCls: 'text-success', bgCls: 'bg-success-bg' };
   if (msg.includes('retry') || msg.includes('retrying'))
-    return { iconCls: 'text-sky-600 dark:text-sky-400', bgCls: 'bg-sky-500/12' };
-  if (level === 'debug')
-    return { iconCls: 'text-muted/40 dark:text-white/20', bgCls: 'bg-transparent' };
-  return { iconCls: 'text-muted/60 dark:text-white/40', bgCls: 'bg-black/[0.03] dark:bg-white/5' };
+    return { iconCls: 'text-info', bgCls: 'bg-info-bg' };
+  if (level === 'debug') return { iconCls: 'text-muted', bgCls: 'bg-transparent' };
+  return {
+    iconCls: 'text-secondary',
+    bgCls: 'bg-[color-mix(in_srgb,var(--bg-alt)_50%,transparent)]',
+  };
 }
 
 function logMessageIsError(level: string, message: string): boolean {
@@ -713,41 +702,38 @@ const DISPLAY_LOG_STAGES: LogStage[] = ['acquisition', 'extraction', 'normalize'
 export const STAGE_CONFIG: Record<LogStage, LogStageConfig> = {
   acquisition: {
     label: 'Acquire',
-    borderClass: 'border-indigo-200 dark:border-indigo-500/30',
-    chipClass: 'bg-indigo-600 text-white font-medium',
+    borderClass: 'border-info/30',
+    chipClass: 'bg-info text-white font-medium',
     textOnlyClass: 'text-info font-medium',
-    panelClass:
-      'border-indigo-200 dark:border-indigo-500/20 bg-indigo-50/50 dark:bg-indigo-500/[0.05]',
+    panelClass: 'border-info/20 bg-info-bg',
   },
   extraction: {
     label: 'Extract',
-    borderClass: 'border-violet-200 dark:border-violet-500/30',
-    chipClass: 'bg-violet-600 text-white font-medium',
+    borderClass: 'border-accent/30',
+    chipClass: 'bg-accent text-accent-fg font-medium',
     textOnlyClass: 'text-accent font-medium',
-    panelClass:
-      'border-violet-200 dark:border-violet-500/20 bg-violet-50/50 dark:bg-violet-500/[0.05]',
+    panelClass: 'border-accent/20 bg-accent-subtle',
   },
   normalize: {
     label: 'Normalize',
-    borderClass: 'border-amber-200 dark:border-amber-500/30',
-    chipClass: 'bg-amber-600 text-white font-medium',
-    textOnlyClass: 'text-warning font-medium',
-    panelClass: 'border-amber-200 dark:border-amber-500/20 bg-amber-50/50 dark:bg-amber-500/[0.05]',
+    borderClass: 'border-orange-400/30',
+    chipClass: 'bg-orange-500 text-white font-bold',
+    textOnlyClass: 'text-orange-500 font-bold',
+    panelClass: 'border-orange-400/20 bg-orange-500/10',
   },
   persistence: {
     label: 'Persist',
-    borderClass: 'border-emerald-200 dark:border-emerald-500/30',
-    chipClass: 'bg-emerald-600 text-white font-medium',
-    textOnlyClass: 'text-success font-medium',
-    panelClass:
-      'border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/[0.05]',
+    borderClass: 'border-indigo-400/30',
+    chipClass: 'bg-indigo-500 text-white font-bold',
+    textOnlyClass: 'text-indigo-500 font-bold',
+    panelClass: 'border-indigo-400/20 bg-indigo-500/10',
   },
   system: {
     label: 'Run',
-    borderClass: 'border-slate-300 dark:border-white/10',
-    chipClass: 'bg-slate-600 text-white font-medium',
+    borderClass: 'border-border-strong',
+    chipClass: 'bg-zinc-700 text-white font-medium',
     textOnlyClass: 'text-muted font-medium',
-    panelClass: 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-white/[0.03]',
+    panelClass: 'border-border bg-subtle-panel-bg',
   },
 };
 
@@ -974,16 +960,19 @@ export function buildLogSiteGroups(logs: CrawlLog[], records: CrawlRecord[] = []
 }
 
 function severityTone(group: LogSiteGroup, index: number) {
+  // REMOVED ALL BACKGROUND COLORS AS PER USER REQUEST - TERMINAL IS NOW MONOCHROMATIC
   if (group.hasError) {
-    return 'bg-rose-50/60 dark:bg-rose-500/10';
+    return 'bg-transparent border-l-2 border-l-danger';
   }
   if (group.hasWarning) {
-    return 'bg-amber-50/60 dark:bg-amber-500/10';
+    return 'bg-transparent border-l-2 border-l-warning';
   }
   if (group.recordCount > 0 || group.stageLogs.persistence.length > 0) {
-    return 'bg-emerald-50/50 dark:bg-emerald-500/10';
+    return 'bg-transparent border-l-2 border-l-success';
   }
-  return index % 2 === 0 ? 'bg-black/[0.02] dark:bg-white/[0.02]' : 'bg-transparent';
+  return index % 2 === 0
+    ? 'bg-[color-mix(in_srgb,var(--bg-alt)_40%,transparent)]'
+    : 'bg-transparent';
 }
 
 function severityLabel(group: LogSiteGroup) {
@@ -1092,10 +1081,10 @@ function groupFieldCoverage(group: LogSiteGroup, requestedFields: string[]) {
 }
 
 function toneForConfidence(level: string) {
-  if (level === 'high') return 'text-emerald-600 dark:text-emerald-400';
-  if (level === 'medium') return 'text-amber-600 dark:text-amber-400';
-  if (level === 'low') return 'text-rose-600 dark:text-rose-400';
-  return 'text-slate-500 dark:text-white/50';
+  if (level === 'high') return 'text-success';
+  if (level === 'medium') return 'text-warning';
+  if (level === 'low') return 'text-danger';
+  return 'text-muted';
 }
 
 type ExpandedLogRow = {
@@ -1137,7 +1126,7 @@ function buildExpandedRows(
       key: `${group.key}-fields`,
       stage: 'persistence',
       level: 'info',
-      message: parts.join(' | '),
+      message: parts.join('| '),
       payloadAction: group.records.length > 0,
     });
   }
@@ -1163,7 +1152,7 @@ function formatShortUrlLabel(url: string) {
 function sanitizeLogMessage(message: string) {
   return String(message || '')
     .replace(/\s*\[corr=[^\]]+\]/gi, '')
-    .replace(/\s{2,}/g, ' ')
+    .replace(/\s{2,}/g, '')
     .trim();
 }
 
@@ -1173,7 +1162,7 @@ function ShortenedUrl({ url }: { url: string }) {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-blue-600 underline decoration-blue-500/20 underline-offset-2 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+      className="text-info decoration-info/20 hover:text-accent type-body underline underline-offset-4 transition-colors"
       title={url}
       onClick={(e) => e.stopPropagation()}
     >
@@ -1371,14 +1360,14 @@ export const LogTerminal = memo(function LogTerminal({
       }}
     >
       <div
-        className="flex h-9 items-center justify-between border-b bg-black/[0.05] px-4 dark:bg-white/[0.05]"
+        className="flex h-9 items-center justify-between border-b bg-[color-mix(in_srgb,var(--text-primary)_5%,transparent)] px-4"
         style={{ borderColor: 'var(--terminal-border)' }}
       >
-        <span className="text-muted font-mono text-xs font-bold tracking-[0.2em] uppercase">
+        <span className="text-muted type-label-mono tracking-[0.25em] uppercase">
           activity_stream.log
         </span>
-        <div className="flex items-center gap-2">
-          <div className="group/scrubber relative flex h-3 w-32 cursor-crosshair items-center rounded-full bg-black/10 px-1 dark:bg-white/10">
+        <div className="flex items-center gap-3">
+          <div className="group/scrubber relative flex h-2 w-32 cursor-crosshair items-center rounded-sm bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)]">
             {timelineTicks.map((tick) => (
               <div
                 key={tick.key}
@@ -1387,30 +1376,30 @@ export const LogTerminal = memo(function LogTerminal({
                 aria-label={`Jump to ${tick.key}`}
                 onClick={() => jumpToGroup(tick.key)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
+                  if (e.key === 'Enter' || e.key === '') {
                     e.preventDefault();
                     jumpToGroup(tick.key);
                   }
                 }}
                 className={cn(
-                  'absolute h-2 w-0.5 cursor-pointer rounded-full transition-transform hover:scale-y-150 focus-visible:scale-y-150 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none',
+                  'focus-visible:ring-accent absolute h-full w-0.5 cursor-pointer transition-transform hover:scale-y-125 focus-visible:scale-y-125 focus-visible:ring-1 focus-visible:outline-none',
                   tick.tone,
                 )}
                 style={{ left: `${tick.percent}%` }}
               />
             ))}
           </div>
-          <div className="flex items-center gap-2 opacity-60 transition-opacity group-hover/terminal:opacity-100 group-focus-within/terminal:opacity-100">
+          <div className="flex items-center gap-3 opacity-60 transition-opacity group-focus-within/terminal:opacity-100 group-hover/terminal:opacity-100">
             <button
               onClick={() => navigateTriage('prev')}
-              className="rounded text-xs font-bold uppercase hover:text-blue-500 focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none"
+              className="type-label-mono hover:text-accent focus-visible:text-accent focus-visible:outline-none"
             >
               Prev
             </button>
-            <span className="opacity-20">/</span>
+            <span className="bg-muted h-3 w-px opacity-20" />
             <button
               onClick={() => navigateTriage('next')}
-              className="rounded text-xs font-bold uppercase hover:text-blue-500 focus-visible:text-blue-500 focus-visible:ring-1 focus-visible:ring-blue-500 focus-visible:outline-none"
+              className="type-label-mono hover:text-accent focus-visible:text-accent focus-visible:outline-none"
             >
               Next
             </button>
@@ -1446,7 +1435,7 @@ export const LogTerminal = memo(function LogTerminal({
                   aria-label={`${expanded ? 'Collapse' : 'Expand'} logs for ${group.url || group.label}`}
                   onClick={() => toggleGroup(group.key)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
+                    if (e.key === 'Enter' || e.key === '') {
                       e.preventDefault();
                       toggleGroup(group.key);
                     }
@@ -1456,7 +1445,7 @@ export const LogTerminal = memo(function LogTerminal({
                     severityTone(group, index),
                   )}
                 >
-                  <div className="text-muted font-mono text-sm font-medium tabular-nums">
+                  <div className="type-body text-muted font-medium opacity-60">
                     {(index + 1).toString().padStart(2, '0')}
                   </div>
                   <div className="min-w-0">
@@ -1466,14 +1455,14 @@ export const LogTerminal = memo(function LogTerminal({
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="block truncate font-mono text-sm font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+                        className="text-info block truncate text-sm font-normal underline-offset-4 hover:underline"
                         title={group.url}
                       >
                         {formatShortUrlLabel(group.url)}
                       </a>
                     ) : (
                       <span
-                        className="text-secondary block truncate font-mono text-sm font-medium"
+                        className="text-secondary block truncate text-sm font-normal"
                         title={group.label}
                         onClick={(e) => e.stopPropagation()}
                       >
@@ -1481,22 +1470,23 @@ export const LogTerminal = memo(function LogTerminal({
                       </span>
                     )}
                   </div>
-                  <div className="text-secondary font-mono text-sm font-medium whitespace-nowrap tabular-nums">
+                  <div className="type-body text-secondary font-medium whitespace-nowrap">
                     <span className="text-muted mr-1.5 font-sans text-sm font-bold tracking-wider uppercase">
                       F:
                     </span>
                     {coverage.foundCount}/{coverage.totalCount || 0}
                   </div>
-                  <div
-                    className={cn(
-                      'font-mono text-sm font-medium whitespace-nowrap tabular-nums',
-                      confidence ? toneForConfidence(confidence.level) : 'text-muted',
-                    )}
-                  >
-                    <span className="text-muted mr-1.5 font-sans text-xs font-bold tracking-wider uppercase">
+                  <div className="type-body font-medium whitespace-nowrap">
+                    <span className="text-muted mr-1.5 font-sans text-sm font-bold tracking-wider uppercase">
                       C:
                     </span>
-                    {confidence ? `${Math.round(confidence.score * 100)}%` : '--'}
+                    <span
+                      className={cn(
+                        confidence ? toneForConfidence(confidence.level) : 'text-muted',
+                      )}
+                    >
+                      {confidence ? `${Math.round(confidence.score * 100)}%` : '--'}
+                    </span>
                   </div>
                   <div className="flex items-center justify-center">
                     {group.lastStage !== 'system' && (
@@ -1512,7 +1502,7 @@ export const LogTerminal = memo(function LogTerminal({
                   </div>
                   <div className="min-w-0">
                     <div
-                      className="text-secondary truncate type-caption-mono font-medium"
+                      className="type-control text-secondary truncate"
                       title={summaryLog?.message || ''}
                     >
                       {summaryLog
@@ -1526,7 +1516,7 @@ export const LogTerminal = memo(function LogTerminal({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 type-control"
+                        className="type-control h-7 px-2"
                         onClick={(event) => {
                           event.stopPropagation();
                           setPeekedGroupKey(group.key);
@@ -1551,7 +1541,7 @@ export const LogTerminal = memo(function LogTerminal({
                 </div>
 
                 {expanded ? (
-                  <div className="bg-black/[0.03] shadow-[inset_0_4px_12px_rgba(0,0,0,0.03)] dark:bg-white/[0.03] dark:shadow-[inset_0_4px_12px_rgba(0,0,0,0.15)]">
+                  <div className="bg-[color-mix(in_srgb,var(--bg-alt)_60%,transparent)]">
                     <div className="overflow-hidden">
                       {expandedRows.length ? (
                         expandedRows.map((row, expandedIndex) => {
@@ -1561,7 +1551,7 @@ export const LogTerminal = memo(function LogTerminal({
                               className={cn(
                                 'grid grid-cols-[64px_84px_minmax(0,1fr)_auto] items-center gap-4 px-4 py-2 text-xs',
                                 expandedIndex % 2 === 0
-                                  ? 'bg-black/[0.015] dark:bg-white/[0.015]'
+                                  ? 'bg-[color-mix(in_srgb,var(--bg-alt)_35%,transparent)]'
                                   : 'bg-transparent',
                               )}
                             >
@@ -1576,7 +1566,7 @@ export const LogTerminal = memo(function LogTerminal({
                               >
                                 {STAGE_CONFIG[row.stage].label}
                               </span>
-                              <span className="text-secondary min-w-0 font-mono text-xs leading-relaxed font-medium break-words">
+                              <span className="type-body text-secondary min-w-0 font-medium break-words">
                                 {!row.createdAt
                                   ? row.message
                                   : renderLogContent(row.message, row.stage === 'system')}
@@ -1619,7 +1609,7 @@ export const LogTerminal = memo(function LogTerminal({
       </div>
 
       {activePeekedGroupKey ? (
-        <div className="absolute inset-0 z-40 bg-black/10 dark:bg-black/20">
+        <div className="absolute inset-0 z-40 bg-[color-mix(in_srgb,var(--bg-base)_60%,transparent)] backdrop-blur-sm">
           <div
             ref={peekPanelRef}
             className="animate-in slide-in-from-right absolute inset-y-0 right-0 z-50 w-[32rem] max-w-full border-l duration-300"
@@ -1637,100 +1627,64 @@ export const LogTerminal = memo(function LogTerminal({
                 backgroundColor: 'var(--terminal-bg)',
               }}
             >
-              <div>
-                <div className="text-accent type-label-mono uppercase">
+              <div className="min-w-0 flex-1">
+                <div className="text-accent type-label-mono text-[10px] font-bold tracking-wider uppercase">
                   {TERMINAL_STRINGS.PAYLOAD_PEEK}
                 </div>
-                <div className="mt-1 type-caption opacity-55">
+                <div
+                  className="mt-0.5 truncate pr-4 text-xs font-medium tabular-nums"
+                  style={{ color: 'var(--text-muted)' }}
+                  title={peekedGroup?.label ?? ''}
+                >
                   {peekedGroup?.label ?? TERMINAL_STRINGS.SITE_PAYLOAD}
                 </div>
               </div>
               <button
                 onClick={() => setPeekedGroupKey(null)}
-                className="text-xs opacity-60 transition-colors hover:opacity-100"
+                className="hover:text-foreground text-xs font-medium transition-colors"
+                style={{ color: 'var(--text-muted)' }}
               >
                 Close
               </button>
             </div>
-            <div className="max-h-[calc(100%-48px)] overflow-y-auto p-4">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
+            <div className="relative h-[calc(100%-60px)] overflow-hidden p-4">
+              <div className="group relative h-full">
+                <div className="absolute top-3 right-3 z-10 opacity-0 transition-all group-hover:opacity-100">
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    disabled={!peekedGroup || peekedGroup.records.length <= 1}
-                    onClick={() =>
-                      setPeekedRecordIndex((current) => {
-                        if (!peekedGroup || peekedGroup.records.length <= 1) {
-                          return 0;
-                        }
-                        return (
-                          (current - 1 + peekedGroup.records.length) % peekedGroup.records.length
-                        );
-                      })
-                    }
+                    className="h-7 bg-[#1e1e1e]/80 text-[10px] text-white backdrop-blur-sm hover:bg-white/10 hover:text-white"
+                    onClick={() => {
+                      if (!peekedGroup) return;
+                      const currentRecord =
+                        peekedGroup.records[safePeekedRecordIndex] ?? peekedGroup.records[0];
+                      if (!currentRecord) return;
+                      void navigator.clipboard.writeText(
+                        JSON.stringify(cleanRecordForDisplay(currentRecord), null, 2),
+                      );
+                    }}
                   >
-                    Prev
-                  </Button>
-                  <span className="text-xs opacity-55">
-                    {peekedGroup
-                      ? `${Math.min(safePeekedRecordIndex + 1, peekedGroup.records.length)}/${peekedGroup.records.length}`
-                      : '0/0'}
-                  </span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={!peekedGroup || peekedGroup.records.length <= 1}
-                    onClick={() =>
-                      setPeekedRecordIndex((current) => {
-                        if (!peekedGroup || peekedGroup.records.length <= 1) {
-                          return 0;
-                        }
-                        return (current + 1) % peekedGroup.records.length;
-                      })
-                    }
-                  >
-                    Next
+                    <Copy className="mr-1.5 size-3" />
+                    Copy
                   </Button>
                 </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    if (!peekedGroup) {
-                      return;
-                    }
-                    const currentRecord =
-                      peekedGroup.records[safePeekedRecordIndex] ?? peekedGroup.records[0];
-                    if (!currentRecord) {
-                      return;
-                    }
-                    void navigator.clipboard.writeText(
-                      JSON.stringify(cleanRecordForDisplay(currentRecord), null, 2),
-                    );
+                <pre
+                  className="crawl-terminal crawl-terminal-json h-full max-h-full overflow-auto"
+                  dangerouslySetInnerHTML={{
+                    __html:
+                      peekedGroup && peekedGroup.records[safePeekedRecordIndex]
+                        ? syntaxHighlightJson(
+                            JSON.stringify(
+                              cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
+                              null,
+                              2,
+                            ),
+                          )
+                        : TERMINAL_STRINGS.NO_PAYLOAD,
                   }}
-                >
-                  Copy
-                </Button>
+                />
               </div>
-              <pre
-                className="text-[14px] leading-7 whitespace-pre-wrap"
-                dangerouslySetInnerHTML={{
-                  __html:
-                    peekedGroup && peekedGroup.records[safePeekedRecordIndex]
-                      ? syntaxHighlightJson(
-                          JSON.stringify(
-                            cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
-                            null,
-                            2,
-                          ),
-                        )
-                      : TERMINAL_STRINGS.NO_PAYLOAD,
-                }}
-              />
             </div>
           </div>
         </div>
@@ -1761,8 +1715,10 @@ export function SettingSection({
     : null;
 
   return (
-    <div className="flex h-9 w-full items-center transition-all">
-      <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+    // Outer wrapper is flex-col so the children panel is a sibling of the control row,
+    // not a child inside the h-9 constraint that would clip it.
+    <div className="w-full">
+      <div className="grid h-9 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
         <div className="flex min-w-0 items-center gap-1.5">
           {renderedIcon ? (
             <div
@@ -1776,7 +1732,7 @@ export function SettingSection({
               {renderedIcon}
             </div>
           ) : null}
-          <div className="field-label mb-0 min-w-0">{label}</div>
+          <div className="type-control min-w-0">{label}</div>
           <Tooltip content={description}>
             <Info className="text-muted hover:text-secondary size-3.5 cursor-help transition-colors" />
           </Tooltip>
@@ -1785,6 +1741,7 @@ export function SettingSection({
           <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
         </div>
       </div>
+      {/* Children panel as sibling — can animate height freely */}
       {children ? (
         <div
           className={cn(
@@ -1827,7 +1784,7 @@ export function SliderRow({
       className={cn('grid w-full gap-2.5 md:grid-cols-[140px_minmax(0,1fr)_112px] md:items-center')}
     >
       <div className="flex min-w-0 items-center gap-1.5">
-        <span className="field-label mb-0">{label}</span>
+        <span className="type-control">{label}</span>
         {description ? (
           <Tooltip content={description}>
             <Info className="text-muted hover:text-secondary size-3.5 cursor-help transition-colors" />
@@ -1861,7 +1818,7 @@ export function SliderRow({
           className="pr-8 text-right font-mono tabular-nums"
         />
         {suffix ? (
-          <span className="text-muted pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 type-caption lowercase">
+          <span className="text-muted type-caption pointer-events-none absolute top-1/2 right-1.5 -translate-y-1/2 lowercase">
             {suffix}
           </span>
         ) : null}
@@ -1913,7 +1870,7 @@ export function AdditionalFieldInput({
 
   return (
     <label className="grid gap-1.5">
-      <span className="field-label">Additional Fields</span>
+      <span className="type-control">Additional Fields</span>
       <Input
         value={value}
         onChange={(event) => handleChange(event.target.value)}
@@ -1921,9 +1878,7 @@ export function AdditionalFieldInput({
         placeholder="price, sku, Features & Benefits, Product Story"
         className="font-mono"
       />
-      {validationHint ? (
-        <p className="text-danger type-caption">{validationHint}</p>
-      ) : null}
+      {validationHint ? <p className="text-danger type-caption">{validationHint}</p> : null}
       {chips.length ? (
         <div className="flex flex-wrap gap-1.5">
           {chips.map((field) => (
@@ -1932,7 +1887,7 @@ export function AdditionalFieldInput({
               type="button"
               onClick={() => onRemove(field)}
               aria-label={`Remove ${field}`}
-              className="border-subtle-panel-border bg-subtle-panel text-secondary inline-flex items-center gap-1 rounded-[var(--radius-sm)] border px-2 py-1 type-caption-mono"
+              className="border-subtle-panel-border bg-subtle-panel text-secondary type-body inline-flex items-center gap-1 rounded-[var(--radius-sm)] border px-2 py-1"
             >
               <X className="size-3.5 shrink-0" aria-hidden="true" />
               <span className="truncate">{field}</span>
@@ -1966,7 +1921,7 @@ export function ManualFieldEditor({
   showLabels?: boolean;
 }>) {
   return (
-    <div className="border-border/60 bg-background/50 space-y-1.5 rounded-[var(--radius-md)] border p-2.5">
+    <div className="border-border bg-panel space-y-1.5 rounded-[var(--radius-md)] border p-2.5">
       <div className="grid gap-2 xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
         <div className="text-muted/50 hidden items-center justify-center xl:flex">
           <GripVertical className="size-3.5" />
@@ -1978,7 +1933,7 @@ export function ManualFieldEditor({
             value={row.fieldName}
             onChange={(event) => onChange({ fieldName: event.target.value })}
             placeholder="price"
-            className="h-8 type-caption-mono"
+            className="type-body h-8"
           />
         </label>
         <ValidatedField
@@ -2017,7 +1972,7 @@ export function ManualFieldEditor({
                 size="sm"
                 onClick={onTest}
                 disabled={testing || testDisabled}
-                className="h-8 min-w-[64px] type-control"
+                className="type-control h-8 min-w-[64px]"
               >
                 {testing ? '...' : 'Test'}
               </Button>
@@ -2036,7 +1991,7 @@ export function ManualFieldEditor({
       {message ? (
         <div
           className={cn(
-            'alert-surface px-2.5 py-1.5 type-caption',
+            'alert-surface type-caption px-2.5 py-1.5',
             messageTone === 'success' && 'alert-success',
             messageTone === 'warning' && 'alert-warning',
             messageTone === 'danger' && 'alert-danger',
@@ -2054,24 +2009,22 @@ export function FieldEditorHeader() {
     <div className="hidden items-center gap-2 px-3 py-1.5 xl:grid xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
       <div />
       <div className="flex items-center gap-1.5">
-        <span className="type-label-mono text-accent uppercase">Field</span>
-        <Info className="size-3 text-accent/60" />
+        <span className="type-label-mono text-accent">Field</span>
+        <Info className="text-accent/60 size-3" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="type-label-mono text-accent uppercase">CSS</span>
-        <Info className="size-3 text-accent/60" />
+        <span className="type-label-mono text-accent">CSS</span>
+        <Info className="text-accent/60 size-3" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="type-label-mono text-accent uppercase">XPath</span>
-        <Info className="size-3 text-accent/60" />
+        <span className="type-label-mono text-accent">XPath</span>
+        <Info className="text-accent/60 size-3" />
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="type-label-mono text-accent uppercase">Regex</span>
-        <Info className="size-3 text-accent/60" />
+        <span className="type-label-mono text-accent">Regex</span>
+        <Info className="text-accent/60 size-3" />
       </div>
-      <span className="text-right type-label-mono text-accent uppercase">
-        Actions
-      </span>
+      <span className="type-label-mono text-accent text-right">Actions</span>
     </div>
   );
 }
@@ -2103,7 +2056,7 @@ function ValidatedField({
           onChange={(event) => onChange(event.target.value)}
           onBlur={(event) => onBlur(event.target.value)}
           placeholder={placeholder}
-          className="h-8 pr-9 type-caption-mono"
+          className="type-body h-8 pr-9"
         />
         <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center">
           {state === 'valid' ? <CheckCircle2 className="text-success/80 size-3.5" /> : null}
@@ -2214,6 +2167,30 @@ export const RecordsTable = memo(function RecordsTable({
   const dataColumns = visibleColumns.filter((col) => !IMAGE_KEYS.has(col));
   const hasImageCol = !!imageCol;
   const totalCols = dataColumns.length + (hasImageCol ? 1 : 0) + 1;
+
+  const urlColIndex = dataColumns.findIndex((col) => URL_KEYS.has(col));
+  const maxStickyDataIndex = urlColIndex >= 0 ? urlColIndex : -1;
+  const stickyDataCols = new Set(
+    maxStickyDataIndex >= 0 ? dataColumns.slice(0, maxStickyDataIndex + 1) : [],
+  );
+
+  function getDataColWidth(col: string): number {
+    if (URL_KEYS.has(col)) return 250;
+    if (TITLE_KEYS.has(col)) return 300;
+    if (PRICE_KEYS.has(col)) return 100;
+    return 150;
+  }
+
+  function getStickyLeft(col: '__checkbox__' | '__image__' | string): number {
+    if (col === '__checkbox__') return 0;
+    if (col === '__image__') return 32;
+    let left = 32 + (hasImageCol ? 64 : 0);
+    for (const c of dataColumns) {
+      if (c === col) break;
+      left += getDataColWidth(c);
+    }
+    return left;
+  }
   const rowHeightPx = 48;
   const overscanRows = 8;
   const [scrollTop, setScrollTop] = useState(0);
@@ -2250,17 +2227,13 @@ export const RecordsTable = memo(function RecordsTable({
 
   function renderCell(col: string, record: CrawlRecord) {
     const raw = formatCellDisplay(readRecordValue(record, col));
-    if (!raw || raw === '--') return <span className="text-muted/40 type-caption-mono">--</span>;
+    if (!raw || raw === '--') return <span className="text-muted/40 type-body">--</span>;
 
     if (TITLE_KEYS.has(col)) {
-      return (
-        <span className="type-body block max-w-[320px] truncate font-medium">
-          {raw}
-        </span>
-      );
+      return <span className="type-body block max-w-[320px] truncate font-medium">{raw}</span>;
     }
     if (PRICE_KEYS.has(col)) {
-      return <span className="type-caption-mono font-medium">{raw}</span>;
+      return <span className="text-foreground type-body font-bold tabular-nums">{raw}</span>;
     }
     if (URL_KEYS.has(col)) {
       const isSafe = raw.startsWith('http://') || raw.startsWith('https://');
@@ -2270,7 +2243,7 @@ export const RecordsTable = memo(function RecordsTable({
             href={raw}
             target="_blank"
             rel="noreferrer"
-            className="link-accent type-body font-mono block max-w-[200px] truncate transition-colors"
+            className="link-accent block max-w-[200px] truncate text-sm transition-colors"
             title={raw}
           >
             {raw}
@@ -2278,67 +2251,62 @@ export const RecordsTable = memo(function RecordsTable({
         );
       }
     }
-    return (
-      <span className="text-secondary block max-w-[260px] truncate type-body">
-        {raw}
-      </span>
-    );
+    return <span className="text-secondary block max-w-[260px] truncate text-sm">{raw}</span>;
   }
 
   return (
-    <div
-      ref={setContainerRef}
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-      className="commerce-table surface-muted max-h-[70vh] overflow-auto rounded-[var(--radius-md)] border"
-    >
-      <Table className="compact-data-table min-w-[960px]">
-        <colgroup>
-          <col style={{ width: 32 }} />
-          {hasImageCol ? <col style={{ width: 64 }} /> : null}
-          {dataColumns.map((col) => {
-            let width: string | number = 'auto';
-            if (URL_KEYS.has(col)) width = '22%';
-            else if (TITLE_KEYS.has(col)) width = '18%';
-            else if (PRICE_KEYS.has(col)) width = '10%';
-            return <col key={col} style={{ width }} />;
-          })}
-        </colgroup>
-        <TableHeader>
+    <div className="surface-muted max-h-[calc(100vh-272px)] overflow-hidden rounded-[var(--radius-md)] border">
+      <Table
+        className="compact-data-table min-w-max"
+        wrapperClassName="max-h-[calc(100vh-276px)] scrollbar-stable"
+      >
+        <TableHeader className="bg-background sticky top-0 z-40">
           <TableRow>
-            <TableHead className="w-10">
+            <TableHead className="bg-background sticky left-0 z-50 w-10">
               <input
                 type="checkbox"
                 checked={selectedIds.length === records.length && records.length > 0}
                 onChange={(event) => onSelectAll(event.target.checked)}
               />
             </TableHead>
-            {hasImageCol ? <TableHead>IMG</TableHead> : null}
-            {dataColumns.map((col) => (
-              <TableHead
-                key={col}
-                className={cn(PRICE_KEYS.has(col) && 'text-right')}
-              >
-                {humanizeFieldName(col)}
+            {hasImageCol ? (
+              <TableHead className="bg-background sticky left-10 z-50 w-16 text-center">
+                IMG
               </TableHead>
-            ))}
+            ) : null}
+            {dataColumns.map((col, idx) => {
+              const isFirstData = idx === 0;
+              const isUrl = URL_KEYS.has(col.toLowerCase());
+              const leftOffset = isFirstData ? (hasImageCol ? 104 : 40) : undefined;
+              return (
+                <TableHead
+                  key={col}
+                  style={
+                    leftOffset !== undefined
+                      ? { left: leftOffset, width: isUrl ? 280 : 180 }
+                      : undefined
+                  }
+                  className={cn(
+                    'bg-background whitespace-nowrap',
+                    PRICE_KEYS.has(col) && 'text-right',
+                    isFirstData && 'sticky z-50',
+                    isUrl && 'min-w-[280px]',
+                  )}
+                >
+                  {humanizeFieldName(col)}
+                </TableHead>
+              );
+            })}
           </TableRow>
         </TableHeader>
         <TableBody>
-          {topSpacerPx > 0 ? (
-            <TableRow>
-              <TableCell colSpan={totalCols} style={{ height: topSpacerPx }} />
-            </TableRow>
-          ) : null}
-          {windowedRecords.map((record) => {
+          {records.map((record) => {
             const isSelected = selectedIds.includes(record.id);
             const imageSrc = imageCol ? stringifyCell(readRecordValue(record, imageCol)) : '';
 
             return (
-              <TableRow
-                key={record.id}
-                className={cn(isSelected && 'bg-accent/[0.04]')}
-              >
-                <TableCell>
+              <TableRow key={record.id} className={cn(isSelected && 'bg-accent/[0.04]')}>
+                <TableCell className="bg-background sticky left-0 z-30">
                   <input
                     type="checkbox"
                     checked={isSelected}
@@ -2346,30 +2314,39 @@ export const RecordsTable = memo(function RecordsTable({
                   />
                 </TableCell>
                 {hasImageCol ? (
-                  <TableCell>
+                  <TableCell className="bg-background sticky left-10 z-30 text-center">
                     {imageSrc ? (
                       <RecordThumbnail src={imageSrc} />
                     ) : (
-                      <span className="text-muted/40 type-caption-mono">--</span>
+                      <span className="text-muted/40 type-body">--</span>
                     )}
                   </TableCell>
                 ) : null}
-                {dataColumns.map((col) => (
-                  <TableCell
-                    key={col}
-                    className={cn(PRICE_KEYS.has(col) && 'text-right')}
-                  >
-                    {renderCell(col, record)}
-                  </TableCell>
-                ))}
+                {dataColumns.map((col, idx) => {
+                  const isFirstData = idx === 0;
+                  const isUrl = URL_KEYS.has(col.toLowerCase());
+                  const leftOffset = isFirstData ? (hasImageCol ? 104 : 40) : undefined;
+                  return (
+                    <TableCell
+                      key={col}
+                      style={
+                        leftOffset !== undefined
+                          ? { left: leftOffset, width: isUrl ? 280 : 180 }
+                          : undefined
+                      }
+                      className={cn(
+                        PRICE_KEYS.has(col) && 'text-right',
+                        isFirstData && 'bg-background sticky z-30',
+                        isUrl && 'min-w-[280px]',
+                      )}
+                    >
+                      {renderCell(col, record)}
+                    </TableCell>
+                  );
+                })}
               </TableRow>
             );
           })}
-          {bottomSpacerPx > 0 ? (
-            <TableRow>
-              <TableCell colSpan={totalCols} style={{ height: bottomSpacerPx }} />
-            </TableRow>
-          ) : null}
         </TableBody>
       </Table>
     </div>
@@ -2389,7 +2366,7 @@ export function ActionButton({
       size="sm"
       disabled={disabled}
       onClick={onClick}
-      className="h-8 min-w-0 px-3 type-control"
+      className="type-control h-8 min-w-0 px-3"
     >
       {label}
     </Button>
@@ -2406,7 +2383,7 @@ export function PreviewRow({
       <div className="field-label shrink-0">{label}</div>
       <div
         className={cn(
-          'text-foreground min-w-0 flex-1 text-right type-body',
+          'text-foreground type-body min-w-0 flex-1 text-right',
           mono && 'type-label-mono',
         )}
       >

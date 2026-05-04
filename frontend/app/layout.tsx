@@ -1,14 +1,21 @@
+import type { Metadata } from 'next';
 import './globals.css';
+
+import { IBM_Plex_Sans, JetBrains_Mono } from 'next/font/google';
+
 import { AppShell } from '../components/layout/app-shell';
 import { QueryProvider } from '../components/ui/query-provider';
-import { Outfit, JetBrains_Mono } from 'next/font/google';
 
-const mainFont = Outfit({
+// Primary sans — variable name must match globals.css: var(--font-primary-source, 'IBM Plex Sans')
+const mainFont = IBM_Plex_Sans({
   subsets: ['latin'],
   variable: '--font-primary-source',
   weight: ['300', '400', '500', '600', '700'],
+  style: ['normal', 'italic'],
+  display: 'swap',
 });
 
+// Mono — variable name must match globals.css: var(--font-victor-mono, 'Victor Mono')
 const monoFont = JetBrains_Mono({
   subsets: ['latin'],
   variable: '--font-jetbrains-mono',
@@ -16,22 +23,28 @@ const monoFont = JetBrains_Mono({
   display: 'swap',
 });
 
-// Runs before first paint to set theme and prevent FOUC
-const themeScript = `
- (() => {
- const stored = window.localStorage.getItem("crawlerai-theme");
- const dark = stored === "dark" || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
- document.documentElement.dataset.theme = dark ? "dark" : "light";
- })();
-`;
+export const metadata: Metadata = {
+  title: 'CrawlerAI',
+  description: 'Web crawling and structured data extraction platform.',
+};
+
+// Runs before first paint — sets data-theme to prevent FOUC
+const themeScript = `(()=>{const s=localStorage.getItem("crawlerai-theme");const d=s==="dark"||(!s&&matchMedia("(prefers-color-scheme:dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";})();`;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        {/* Inline theme script — must be synchronous to block FOUC */}
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${mainFont.variable} ${mainFont.className} ${monoFont.variable}`}>
+      {/*
+        Only apply font variables here, NOT mainFont.className.
+        mainFont.className hardcodes a font-family class directly on body,
+        bypassing the CSS variable cascade in globals.css entirely.
+        The variables are picked up by --font-primary-family and --font-mono-family.
+      */}
+      <body className={`${mainFont.variable} ${monoFont.variable}`}>
         <div className="noise-overlay" aria-hidden="true" />
         <QueryProvider>
           <AppShell>{children}</AppShell>

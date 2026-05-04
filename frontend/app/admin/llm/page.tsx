@@ -15,10 +15,10 @@ import {
 import {
   Table,
   TableBody,
-  TableCell,
   TableHead,
   TableHeader,
   TableRow,
+  TableCell,
 } from '../../../components/ui/table';
 import { api } from '../../../lib/api';
 import type {
@@ -141,6 +141,7 @@ export default function AdminLlmPage() {
       />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        {/* ── Left column: create form + active configs */}
         <div className="page-stack">
           <SectionCard
             title="Create Config"
@@ -211,7 +212,7 @@ export default function AdminLlmPage() {
                 disabled={testing}
               >
                 <PlugZap className="size-3.5" />
-                {testing ? 'Testing...' : 'Test Connection'}
+                {testing ? 'Testing…' : 'Test Connection'}
               </Button>
               <Button
                 type="button"
@@ -220,7 +221,7 @@ export default function AdminLlmPage() {
                 disabled={saving || !form.model.trim()}
               >
                 <Plus className="size-3.5" />
-                {saving ? 'Saving...' : 'Save Config'}
+                {saving ? 'Saving…' : 'Save Config'}
               </Button>
             </div>
 
@@ -236,32 +237,29 @@ export default function AdminLlmPage() {
             {configs.length ? (
               <div className="space-y-3">
                 {configs.map((config) => (
-                  <DetailRow
-                    key={config.id}
-                    className="p-4"
-                  >
+                  <DetailRow key={config.id}>
                     <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
+                      <div className="min-w-0 space-y-1">
+                        {/* Task name + active badge */}
                         <div className="flex items-center gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <span className="type-label syntax-key">task:</span>
-                            <span className="type-caption-mono syntax-string font-bold uppercase">
-                              {config.task_type}
-                            </span>
-                          </div>
+                          <span className="type-control text-foreground truncate">
+                            {config.task_type}
+                          </span>
                           {config.is_active ? (
-                            <div className="bg-success-bg text-success inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium">
-                              <CheckCircle2 className="size-3.5" />
+                            <span className="bg-success-bg text-success inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs leading-none font-medium">
+                              <CheckCircle2 className="size-3" aria-hidden="true" />
                               active
-                            </div>
+                            </span>
                           ) : null}
                         </div>
-                        <div className="text-muted type-body">
+                        {/* Provider · model */}
+                        <p className="type-caption text-muted m-0">
                           {config.provider} · {config.model}
-                        </div>
-                        <div className="text-muted type-body">
+                        </p>
+                        {/* API key status */}
+                        <p className="type-caption text-muted m-0">
                           {config.api_key_set ? config.api_key_masked : 'env-backed or unset'}
-                        </div>
+                        </p>
                       </div>
                       <Button
                         type="button"
@@ -281,6 +279,8 @@ export default function AdminLlmPage() {
             )}
           </SectionCard>
         </div>
+
+        {/* ── Right column: cost log */}
         <div className="page-stack">
           <SectionCard
             title="Recent Cost Log"
@@ -288,75 +288,98 @@ export default function AdminLlmPage() {
             className="flex-1"
           >
             {costLog.length ? (
-              <Table className="min-w-[850px] table-fixed">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[140px] px-0">Usage & Cost</TableHead>
-                    <TableHead className="w-[180px] px-4">Task Type</TableHead>
-                    <TableHead className="w-[200px] px-4">Target Entity</TableHead>
-                    <TableHead className="px-4">Provider / Model</TableHead>
-                    <TableHead className="w-[90px] px-0 text-right">Time</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {costLog.slice(0, 40).map((entry) => {
-                    const totalTokens = entry.input_tokens + entry.output_tokens;
-                    const cost = parseFloat(entry.cost_usd);
-                    return (
-                      <TableRow key={entry.id} className="group transition-colors">
-                        <TableCell className="px-0 py-4">
-                          <div className="flex flex-col">
-                            <div className="flex items-baseline gap-1.5">
-                              <span className="text-foreground type-caption-mono font-medium tabular-nums">
-                                {totalTokens.toLocaleString()}
+              <div className="custom-scrollbar max-h-[700px] overflow-x-auto overflow-y-auto">
+                {/* Shared Table components — type-label-mono headers, accent hover rows */}
+                <Table className="min-w-[850px] table-fixed">
+                  <TableHeader>
+                    <TableRow className="border-divider/50">
+                      <TableHead className="w-[140px] px-0">Usage &amp; Cost</TableHead>
+                      <TableHead className="w-[180px]">Task Type</TableHead>
+                      <TableHead className="w-[200px]">Target Entity</TableHead>
+                      <TableHead>Provider / Model</TableHead>
+                      <TableHead className="w-[90px] px-0 text-right">Time</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {costLog.slice(0, 40).map((entry) => {
+                      const totalTokens = entry.input_tokens + entry.output_tokens;
+                      const cost = parseFloat(entry.cost_usd) || 0;
+                      return (
+                        <TableRow key={entry.id} className="group transition-colors">
+                          <TableCell className="px-0 py-4">
+                            <div className="flex flex-col">
+                              <div className="flex items-baseline gap-1.5">
+                                <span className="text-foreground type-caption-mono font-medium tabular-nums">
+                                  {totalTokens.toLocaleString()}
+                                </span>
+                                <span className="text-muted type-caption">tokens</span>
+                              </div>
+                              <span className="text-accent type-label-mono mt-1 font-medium">
+                                ${cost > 0 && cost < 0.0001 ? cost.toFixed(6) : cost.toFixed(4)}
                               </span>
-                              <span className="text-muted type-caption">tokens</span>
                             </div>
-                            <span className="text-accent mt-1 type-label-mono font-medium">
-                              ${cost > 0 && cost < 0.0001 ? cost.toFixed(6) : cost.toFixed(4)}
+                          </TableCell>
+
+                          {/* Task type */}
+                          <TableCell className="px-4 py-4">
+                            <span className="type-control text-foreground">
+                              {entry.task_type.replace(/_/g, ' ')}
                             </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="px-4 py-4">
-                          <span className="text-foreground type-body font-semibold">
-                            {entry.task_type.replace(/_/g, ' ')}
-                          </span>
-                        </TableCell>
-                        <TableCell className="px-4 py-4">
-                          <div
-                            className="text-foreground/80 truncate type-body"
+                          </TableCell>
+
+                          {/* Domain / run target */}
+                          <TableCell
+                            className="px-4 py-4"
                             title={entry.domain || `Run #${entry.run_id}`}
                           >
-                            {entry.domain || (entry.run_id ? `Run #${entry.run_id}` : 'system')}
-                          </div>
-                        </TableCell>
-                        <TableCell className="px-4 py-4">
-                          <div className="flex flex-col overflow-hidden leading-tight">
-                            <span className="text-foreground truncate type-body font-medium">
-                              {entry.provider}
+                            <span className="text-foreground/80 block truncate">
+                              {entry.domain || (entry.run_id ? `Run #${entry.run_id}` : 'system')}
                             </span>
-                            <span
-                              className="text-muted truncate type-caption"
-                              title={entry.model}
-                            >
-                              {entry.model}
+                          </TableCell>
+
+                          {/* Provider + model stacked */}
+                          <TableCell className="px-4 py-4">
+                            <div className="flex flex-col overflow-hidden">
+                              <span className="type-control text-foreground truncate">
+                                {entry.provider}
+                              </span>
+                              <span
+                                className="type-caption text-muted truncate"
+                                title={entry.model}
+                              >
+                                {entry.model}
+                              </span>
+                            </div>
+                          </TableCell>
+
+                          <TableCell className="px-0 py-4 text-right">
+                            <span className="type-caption-mono text-muted group-hover:text-foreground transition-colors">
+                              {(() => {
+                                const d = new Date(entry.created_at);
+                                const now = new Date();
+                                const isToday = d.toDateString() === now.toDateString();
+                                const yesterday = new Date();
+                                yesterday.setDate(now.getDate() - 1);
+                                const isYesterday = d.toDateString() === yesterday.toDateString();
+
+                                const timeStr = d.toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  hour12: false,
+                                });
+
+                                if (isToday) return timeStr;
+                                if (isYesterday) return `Yesterday ${timeStr}`;
+                                return `${d.toLocaleDateString([], { month: '2-digit', day: '2-digit' })} ${timeStr}`;
+                              })()}
                             </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="px-0 py-4 text-right">
-                          <span className="text-muted group-hover:text-foreground type-caption-mono transition-colors">
-                            {new Date(entry.created_at).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              hour12: false,
-                            })}
-                          </span>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
             ) : (
               <div className="p-12 text-center">
                 <MutedPanelMessage

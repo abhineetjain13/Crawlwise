@@ -403,9 +403,7 @@ export default function ProductIntelligencePage() {
                     title="Select all filtered URLs"
                   />
                 ) : null}
-                <h2 className="type-label-mono text-muted uppercase">
-                  DISCOVERED CANDIDATES
-                </h2>
+                <h2 className="type-label-mono text-muted uppercase">DISCOVERED CANDIDATES</h2>
               </div>
 
               {discovery?.candidates.length ? (
@@ -417,7 +415,7 @@ export default function ProductIntelligencePage() {
                       value={searchText}
                       onChange={(e) => setSearchText(e.target.value)}
                       placeholder="Filter by title, domain, or brand..."
-                      className="bg-background-alt focus:bg-background focus:border-accent/20 h-8 border-transparent pl-8 type-body"
+                      className="bg-background-alt focus:bg-background focus:border-accent/20 type-body h-8 border-transparent pl-8"
                     />
                   </div>
                   <Dropdown
@@ -430,7 +428,7 @@ export default function ProductIntelligencePage() {
                       { value: 'low', label: `Low (${confidenceDistribution.low})` },
                     ]}
                     ariaLabel="Filter by confidence"
-                    className="h-8 w-[160px] type-control"
+                    className="type-control h-8 w-[160px]"
                   />
                 </div>
               ) : null}
@@ -501,27 +499,27 @@ export default function ProductIntelligencePage() {
                 {groupedCandidates.map((group, groupIndex) => (
                   <details key={group.sourceIndex} className="group" open={groupIndex === 0}>
                     <summary className="hover:bg-background-alt/50 flex cursor-pointer list-none items-center gap-4 px-4 py-3 transition-colors select-none">
-                      <div className="border-divider bg-background text-muted group-open:bg-accent group-open:border-accent flex size-6 shrink-0 items-center justify-center rounded-full border type-caption-mono font-bold group-open:text-white">
+                      <div className="border-divider bg-background text-muted group-open:bg-accent group-open:border-accent type-caption-mono flex size-6 shrink-0 items-center justify-center rounded-full border font-bold group-open:text-white">
                         {group.candidates.length}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span
-                            className="text-foreground truncate type-body font-medium"
+                            className="text-foreground type-body truncate font-medium"
                             title={group.sourceTitle}
                           >
                             {group.sourceTitle}
                           </span>
                           <Badge
                             tone="neutral"
-                            className="h-4 px-1.5 type-label-mono uppercase opacity-60"
+                            className="type-label-mono h-4 px-1.5 uppercase opacity-60"
                           >
                             Source
                           </Badge>
                         </div>
                         <div className="mt-0.5 flex items-center gap-3">
                           {group.sourceBrand && group.sourceBrand !== '--' && (
-                            <span className="text-muted flex items-center gap-1.5 type-caption">
+                            <span className="text-muted type-caption flex items-center gap-1.5">
                               <Layers className="size-3 opacity-50" />
                               {group.sourceBrand}
                             </span>
@@ -577,7 +575,7 @@ export default function ProductIntelligencePage() {
                                 )}
                                 <div
                                   className={cn(
-                                    'absolute right-1.5 bottom-1.5 rounded-md border px-1.5 py-0.5 type-caption-mono font-bold shadow-sm',
+                                    'type-caption-mono absolute right-1.5 bottom-1.5 rounded-md border px-1.5 py-0.5 font-bold shadow-sm',
                                     score >= 0.6
                                       ? 'bg-success border-success text-white'
                                       : score >= 0.4
@@ -596,7 +594,7 @@ export default function ProductIntelligencePage() {
                                       href={candidate.url}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="group/link text-foreground hover:text-accent line-clamp-2 type-body font-normal transition-colors"
+                                      className="group/link text-foreground hover:text-accent type-body line-clamp-2 font-normal transition-colors"
                                     >
                                       {stringField(record.title) || candidate.url}
                                     </a>
@@ -629,7 +627,7 @@ export default function ProductIntelligencePage() {
                                 </div>
 
                                 <div
-                                  className="text-muted/80 mt-2 truncate type-caption-mono"
+                                  className="text-muted/80 type-caption-mono mt-2 truncate"
                                   title={candidate.domain}
                                 >
                                   {candidate.domain}
@@ -642,7 +640,7 @@ export default function ProductIntelligencePage() {
                                 type="button"
                                 variant="ghost"
                                 size="sm"
-                                className="text-muted hover:text-accent h-6 px-2 type-label-mono uppercase"
+                                className="text-muted hover:text-accent type-label-mono h-6 px-2 uppercase"
                                 onClick={() => setJsonModalCandidate(candidate)}
                               >
                                 <Code2 className="mr-1.5 size-3" /> Raw JSON
@@ -651,7 +649,7 @@ export default function ProductIntelligencePage() {
                                 href={candidate.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-accent flex items-center gap-1 type-label-mono uppercase hover:underline"
+                                className="text-accent type-label-mono flex items-center gap-1 uppercase hover:underline"
                               >
                                 View Source <ExternalLink className="size-2.5" />
                               </a>
@@ -679,12 +677,15 @@ export default function ProductIntelligencePage() {
                       key={`${record.id ?? 'src'}-${index}`}
                       className="hover:bg-background-alt flex items-center gap-3 px-3 py-2.5"
                     >
-                      <span className="text-muted w-6 shrink-0 type-caption-mono">{index + 1}</span>
+                      <span className="text-muted type-caption-mono w-6 shrink-0">{index + 1}</span>
                       <div className="min-w-0 flex-1">
-                        <div className="text-foreground truncate type-body font-medium" title={title}>
+                        <div
+                          className="text-foreground type-body truncate font-medium"
+                          title={title}
+                        >
                           {title}
                         </div>
-                        <div className="text-muted flex items-center gap-2 type-caption">
+                        <div className="text-muted type-caption flex items-center gap-2">
                           <span>{brand}</span>
                           <span className="type-caption-mono">{price}</span>
                           {url ? (

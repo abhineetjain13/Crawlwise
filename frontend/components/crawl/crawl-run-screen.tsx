@@ -1,7 +1,5 @@
 'use client';
 
-import './crawl.module.css';
-
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowRightCircle,
@@ -29,6 +27,7 @@ import { syntaxHighlightJson } from '../../lib/ui/syntax';
 import {
   DataRegionEmpty,
   DataRegionLoading,
+  DetailRow,
   InlineAlert,
   PageHeader,
   RunSummaryChips,
@@ -578,13 +577,28 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     for (const record of [...tableRecords, ...records]) {
       for (const source of [record.data, record.raw_data]) {
         Object.keys(source ?? {}).forEach((key) => {
-          if (!key.startsWith('_')) {
+          const normalized = key.toLowerCase();
+          if (
+            !key.startsWith('_') &&
+            normalized !== 'canonical_url' &&
+            normalized !== 'source_run_id' &&
+            normalized !== 'run_id' &&
+            normalized !== 'product'
+          ) {
             columns.add(key);
           }
         });
       }
     }
-    return Array.from(columns);
+    const URL_KEYS = new Set(['url', 'source_url', 'product_url', 'canonical_url']);
+    const sorted = Array.from(columns).sort((a, b) => {
+      const aIsUrl = URL_KEYS.has(a.toLowerCase());
+      const bIsUrl = URL_KEYS.has(b.toLowerCase());
+      if (aIsUrl && !bIsUrl) return -1;
+      if (!aIsUrl && bIsUrl) return 1;
+      return 0;
+    });
+    return sorted;
   }, [tableRecords, records]);
 
   const filteredTableRecords = tableRecords;
@@ -879,7 +893,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             title="Unable to Load Crawl"
             description="The run workspace could not be restored."
           />
-          <div className="text-danger text-sm leading-[var(--leading-relaxed)]">
+          <div className="text-danger type-body">
             {runQuery.error instanceof Error
               ? runQuery.error.message
               : 'Unknown crawl loading error.'}
@@ -900,7 +914,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 href={run.url}
                 target="_blank"
                 rel="noreferrer"
-                className="link-accent type-body font-mono underline-offset-2 hover:underline"
+                className="link-accent type-body underline-offset-2 hover:underline"
               >
                 {getDomain(run.url).toLowerCase()}
               </a>
@@ -966,18 +980,24 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       ) : null}
       {!showRunLoadingState && !terminal ? (
         <Card className="section-card overflow-hidden">
-          <header className="cs-panel-header">
-            <span className="cs-panel-title flex items-center gap-2">
+          <header className="border-border flex h-10 items-center justify-between border-b bg-[color-mix(in_srgb,var(--bg-alt)_40%,var(--bg-panel))] px-4">
+            <span className="type-label-mono text-secondary flex items-center gap-2">
               Live Log Stream
               {logSocketOnline ? (
-                <span className="cs-live-dot is-success" />
+                <span
+                  className="bg-success inline-block size-1.5 animate-pulse rounded-full shadow-[0_0_6px_var(--success)]"
+                  aria-label="Connected"
+                />
               ) : (
-                <span className="cs-live-dot" />
+                <span
+                  className="bg-muted inline-block size-1.5 rounded-full"
+                  aria-label="Disconnected"
+                />
               )}
             </span>
             <div className="flex items-center gap-3">
               {run ? (
-                <span className="border-divider bg-background-elevated text-foreground inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-2.5 py-1 type-caption-mono tabular-nums">
+                <span className="border-divider bg-background-elevated text-foreground type-body inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 tabular-nums">
                   <Clock className="size-3.5" />
                   {elapsedLabel}
                 </span>
@@ -990,7 +1010,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     scrollViewportToBottom(logViewportRef);
                     setLiveJumpAvailable(false);
                   }}
-                  className="bg-background-alt shadow-card inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2.5 py-1.5 type-control"
+                  className="bg-background-alt shadow-card type-control inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2.5 py-1.5"
                 >
                   <ChevronsDown className="size-3.5" aria-hidden="true" />
                   Jump to Latest
@@ -1026,14 +1046,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     href={run.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="link-accent type-body font-mono block truncate underline-offset-2 hover:underline"
+                    className="link-accent type-body block truncate underline-offset-2 hover:underline"
                   >
                     {run.url}
                   </a>
                 ) : (
-                  <p className="text-muted text-sm leading-[var(--leading-relaxed)]">
-                    Waiting for completed run data.
-                  </p>
+                  <p className="text-muted type-body">Waiting for completed run data.</p>
                 )
               }
               actions={
@@ -1164,7 +1182,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                             }
                           />
                           {hasMoreTableRecords ? (
-                            <div className="surface-muted text-muted flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 type-body">
+                            <div className="surface-muted text-muted type-body flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2">
                               <span>
                                 Showing {tableRecords.length} of {tableTotal} records
                               </span>
@@ -1177,7 +1195,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                               </Button>
                             </div>
                           ) : null}
-                          {tableRecords.length < tableTotal && hasMoreTableRecords ? (
+                          {hasMoreTableRecords ? (
                             <InlineAlert
                               tone="warning"
                               message={`Table view is currently showing ${tableRecords.length} of ${tableTotal} records. Load more rows or export JSON/CSV for the full dataset.`}
@@ -1207,11 +1225,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         </Button>
                       </div>
                       <pre
-                        className="crawl-terminal crawl-terminal-json max-h-[72vh] min-h-[55vh] overflow-y-auto pt-14 pb-4"
+                        className="crawl-terminal crawl-terminal-json max-h-[72vh] min-h-[55vh]"
                         dangerouslySetInnerHTML={{ __html: syntaxHighlightJson(recordsJson) }}
                       />
                       {hasMoreJsonRecords ? (
-                        <div className="surface-muted text-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 type-body">
+                        <div className="surface-muted text-muted type-body mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2">
                           <span>
                             JSON previewing {jsonRecords.length} of {recordsTotal} records
                           </span>
@@ -1251,7 +1269,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         </Button>
                       </div>
                       {markdownQuery.isLoading && !markdown ? (
-                        <div className="surface-muted space-y-2 rounded-lg px-3 pt-12 pb-3">
+                        <div className="surface-muted space-y-2 rounded-[var(--radius-lg)] px-3 pt-12 pb-3">
                           {Array.from({ length: 8 }, (_, index) => (
                             <div
                               key={index}
@@ -1278,7 +1296,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           </article>
                         </div>
                       ) : (
-                        <div className="surface-muted text-muted grid min-h-40 place-items-center rounded-lg border-dashed text-sm leading-[var(--leading-relaxed)]">
+                        <div className="surface-muted text-muted type-body grid min-h-40 place-items-center rounded-[var(--radius-lg)] border-dashed">
                           No markdown is available for this run.
                         </div>
                       )}
@@ -1316,7 +1334,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                               description={`Review extraction evidence for ${domainRecipe.domain} on ${domainRecipe.surface}. Keep what should compound, reject what should not.`}
                             />
                             <div className="grid gap-3 md:grid-cols-2">
-                              <div className="surface-muted text-secondary rounded-[var(--radius-md)] px-3 py-3 type-body leading-[var(--leading-relaxed)]">
+                              <div className="surface-muted text-secondary type-body rounded-[var(--radius-md)] px-3 py-3 leading-[var(--leading-relaxed)]">
                                 <div className="field-label mb-1">Requested Coverage</div>
                                 Requested:{' '}
                                 {domainRecipe.requested_field_coverage.requested.join(', ') ||
@@ -1328,7 +1346,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 Missing:{' '}
                                 {domainRecipe.requested_field_coverage.missing.join(', ') || 'None'}
                               </div>
-                              <div className="surface-muted text-secondary rounded-[var(--radius-md)] px-3 py-3 type-body leading-[var(--leading-relaxed)]">
+                              <div className="surface-muted text-secondary type-body rounded-[var(--radius-md)] px-3 py-3 leading-[var(--leading-relaxed)]">
                                 <div className="field-label mb-1">Acquisition Evidence</div>
                                 Method:{' '}
                                 {domainRecipe.acquisition_evidence.actual_fetch_method || '—'}
@@ -1351,7 +1369,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                             <div className="space-y-3">
                               <div>
                                 <div className="field-label mb-0">Field Learning</div>
-                                <p className="text-secondary mt-1 text-sm leading-[var(--leading-normal)]">
+                                <p className="text-secondary type-body mt-1">
                                   Keep accepted field evidence or reject bad field evidence for
                                   future runs on this domain and surface.
                                 </p>
@@ -1364,14 +1382,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                     const rejectPending =
                                       recipeActionPending === `field:${item.field_name}:reject`;
                                     return (
-                                      <div
+                                      <DetailRow
                                         key={`${item.field_name}:${item.selector_kind ?? 'source'}:${item.selector_value ?? item.source_labels.join(',')}`}
-                                        className="border-divider bg-background rounded-[var(--radius-md)] border px-3 py-3 type-body"
                                       >
                                         <div className="flex flex-wrap items-start justify-between gap-3">
                                           <div className="min-w-0 flex-1">
                                             <div className="flex flex-wrap items-center gap-2">
-                                              <span className="text-foreground font-medium">
+                                              <span className="type-control text-foreground">
                                                 {item.field_name}
                                               </span>
                                               {item.selector_kind ? (
@@ -1391,12 +1408,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                                 </Badge>
                                               ) : null}
                                             </div>
-                                            <div className="text-muted mt-1 type-caption">
+                                            <div className="type-caption text-muted mt-1">
                                               {selectorWinnerLabel(item.selector_kind)} · Sources:{' '}
                                               {item.source_labels.join(', ') || '—'}
                                             </div>
                                             {item.selector_value ? (
-                                              <code className="mt-2 block truncate text-xs">
+                                              <code className="type-caption-mono text-secondary mt-2 block truncate">
                                                 {item.selector_value}
                                               </code>
                                             ) : null}
@@ -1417,7 +1434,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                                 )
                                               }
                                             >
-                                              {keepPending ? 'Keeping...' : 'Keep'}
+                                              {keepPending ? 'Keeping…' : 'Keep'}
                                             </Button>
                                             <Button
                                               variant="ghost"
@@ -1434,17 +1451,19 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                                 )
                                               }
                                             >
-                                              {rejectPending ? 'Rejecting...' : 'Reject'}
+                                              {rejectPending ? 'Rejecting…' : 'Reject'}
                                             </Button>
                                           </div>
                                         </div>
-                                      </div>
+                                      </DetailRow>
                                     );
                                   })}
                                 </div>
                               ) : (
-                                <div className="surface-muted text-secondary rounded-lg border-dashed px-3 py-3 text-sm leading-[var(--leading-relaxed)]">
-                                  No field learning signals were captured for this run.
+                                <div className="surface-muted rounded-[var(--radius-lg)] border border-dashed px-3 py-3">
+                                  <p className="type-body text-secondary m-0">
+                                    No field learning signals were captured for this run.
+                                  </p>
                                 </div>
                               )}
                             </div>

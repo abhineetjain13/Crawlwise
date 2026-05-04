@@ -13,15 +13,9 @@ import { Skeleton } from './primitives';
 export { InlineAlert } from './alert';
 
 function stableNodeSignature(value: ReactNode): string {
-  if (value == null) {
-    return '';
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false';
-  }
-  if (typeof value === 'string' || typeof value === 'number') {
-    return String(value);
-  }
+  if (value == null) return '';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
   if (Array.isArray(value)) {
     return `[${value.map((entry) => stableNodeSignature(entry)).join('|')}]`;
   }
@@ -62,12 +56,10 @@ export function PageHeader({
   const syncHeader = useEffectEvent(() => {
     setHeader({ title, description, actions });
   });
-
   useLayoutEffect(() => {
     syncHeader();
   }, [signature]);
   useLayoutEffect(() => () => setHeader(null), [setHeader]);
-
   return null;
 }
 
@@ -85,18 +77,13 @@ export function SectionHeader({
 }>) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0 flex-1 space-y-2">
+      <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex items-center gap-2">
           {Icon && <Icon className="text-muted size-3.5 shrink-0" />}
-          <h2 className="type-heading-3 m-0">
-            {title}
-          </h2>
+          {/* type-heading-3: text-md, semibold, tight leading, tight tracking */}
+          <h2 className="type-heading-3 m-0">{title}</h2>
         </div>
-        {description ? (
-          <div className="type-body w-full">
-            {description}
-          </div>
-        ) : null}
+        {description ? <div className="type-body">{description}</div> : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>
@@ -136,7 +123,7 @@ export function TabBar({
             aria-pressed={value === option.value}
             onClick={() => onChange(option.value)}
             className={cn(
-              'relative -mb-px inline-flex shrink-0 items-center justify-center text-sm leading-[var(--leading-snug)] font-medium whitespace-nowrap transition-all',
+              'type-control relative -mb-px inline-flex shrink-0 items-center justify-center whitespace-nowrap transition-all',
               padX,
               value === option.value
                 ? 'border-accent text-accent border-b-2'
@@ -164,8 +151,8 @@ export function TabBar({
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            'relative z-10 inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] py-0 text-sm leading-[var(--leading-snug)] font-medium whitespace-nowrap transition-all duration-200',
-          padX,
+            'type-control relative z-10 inline-flex shrink-0 items-center justify-center rounded-[4px] py-0 whitespace-nowrap transition-all duration-200',
+            padX,
             value === option.value
               ? 'ui-on-accent-surface bg-accent shadow-[0_1px_2px_rgba(15,23,42,0.12)]'
               : 'text-secondary hover:text-foreground',
@@ -191,9 +178,8 @@ export function ProgressBar({ percent }: Readonly<{ percent: number }>) {
           style={{ width: `${Math.min(percent, 100)}%` }}
         />
       </div>
-      <div className="text-muted text-sm leading-[var(--leading-normal)] tabular-nums">
-        {percent}%
-      </div>
+      {/* type-caption-mono: mono 11px, tabular-nums, muted */}
+      <div className="type-caption-mono">{percent}%</div>
     </div>
   );
 }
@@ -213,10 +199,8 @@ export function EmptyPanel({
   return (
     <div className="border-border-strong bg-subtle-panel grid min-h-32 place-items-center rounded-[var(--radius-xl)] border border-dashed px-6 py-8 text-center">
       <div className="space-y-1">
-        <p className="type-body font-medium">
-          {title}
-        </p>
-        <p className="type-caption">{description}</p>
+        <p className="type-subheading m-0">{title}</p>
+        <p className="type-body m-0">{description}</p>
       </div>
     </div>
   );
@@ -243,6 +227,8 @@ export function SectionCard({
     </Card>
   );
 }
+
+/* ─── SurfaceSection ─────────────────────────────────────────────────────── */
 export function SurfaceSection({
   title,
   description,
@@ -283,12 +269,12 @@ export function MutedPanelMessage({
   return (
     <div
       className={cn(
-        'surface-muted text-muted rounded-[var(--radius-md)] border-dashed px-4 py-6 type-body',
+        'surface-muted rounded-[var(--radius-lg)] border border-dashed px-4 py-6',
         className,
       )}
     >
-      <p className="text-foreground m-0 font-medium">{title}</p>
-      <p className="m-0 mt-1.5">{description}</p>
+      <p className="type-subheading m-0">{title}</p>
+      <p className="type-body m-0 mt-1.5">{description}</p>
     </div>
   );
 }
@@ -312,7 +298,7 @@ export function MetricSkeleton() {
   return (
     <div className="border-border bg-panel shadow-card relative space-y-2 overflow-hidden rounded-[var(--radius-xl)] border p-4">
       <Skeleton className="h-3 w-20" />
-      <Skeleton className="h-9 w-28" />
+      <Skeleton className="mt-2 h-9 w-28" />
       <Skeleton className="h-3 w-16" />
     </div>
   );
@@ -338,6 +324,7 @@ export function StatusDot({
             : tone === 'info'
               ? 'bg-info'
               : 'bg-muted';
+
   return (
     <span
       className={cn('inline-block size-1.5 shrink-0 rounded-full', toneClass, className)}
@@ -350,10 +337,7 @@ export function StatusDot({
 export function SurfacePanel({
   children,
   className,
-}: Readonly<{
-  children: ReactNode;
-  className?: string;
-}>) {
+}: Readonly<{ children: ReactNode; className?: string }>) {
   return <Card className={cn('p-0', className)}>{children}</Card>;
 }
 
@@ -403,8 +387,6 @@ export function RunSummaryChips({
   const normalizedVerdict = verdict.toLowerCase();
   const normalizedQuality = quality.toLowerCase();
 
-  // Themed tones and backgrounds matching the requested high-density aesthetic
-  // Themed tones and backgrounds using CSS variables for dark mode support
   const verdictTone =
     normalizedVerdict === 'success'
       ? 'text-success'
@@ -477,29 +459,25 @@ export function RunSummaryChips({
   ];
 
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2.5">
+    <div className="flex flex-wrap items-center justify-end gap-2">
       {chips.map((chip) => {
         const Icon = chip.icon;
         return (
           <div
             key={chip.label}
             className={cn(
-              'inline-flex items-center gap-2.5 rounded-xl px-3 py-1.5 transition-all hover:brightness-[0.98]',
+              'inline-flex items-center gap-1.5 rounded-[var(--radius-lg)] px-2 py-1 transition-all hover:brightness-[0.98]',
               chip.bg,
             )}
           >
-            <div className={cn('h-4 w-[3.5px] shrink-0 rounded-full', chip.bar)} />
-            <div className="flex items-center gap-1.5">
-              <Icon className={cn('size-3.5 shrink-0 opacity-90', chip.tone)} aria-hidden="true" />
-              <div className="flex items-baseline gap-2">
-                <span className="type-label-mono">
+            <div className={cn('h-3 w-[3px] shrink-0 rounded-full', chip.bar)} />
+            <div className="flex items-center gap-1">
+              <Icon className={cn('size-3 shrink-0 opacity-90', chip.tone)} aria-hidden="true" />
+              <div className="flex items-baseline gap-1.5">
+                <span className="type-body-sm font-medium tracking-wider uppercase">
                   {chip.label}
                 </span>
-                <span
-                  className={cn('type-control tabular-nums', chip.tone)}
-                >
-                  {chip.value}
-                </span>
+                <span className={cn('type-body-sm tabular-nums', chip.tone)}>{chip.value}</span>
               </div>
             </div>
           </div>
@@ -595,17 +573,16 @@ export function NavList<T>({
             className={cn(
               'w-full rounded-[var(--radius-xl)] border px-3 py-3 text-left transition-colors',
               isActive
-                ? 'border-accent bg-subtle-panel shadow-card'
-                : 'border-divider bg-background hover:bg-background-elevated',
+                ? 'border-accent shadow-card bg-[color-mix(in_srgb,var(--accent)_6%,var(--bg-panel))]'
+                : 'border-border bg-background hover:bg-background-elevated',
             )}
           >
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="type-body font-medium truncate">
-                  {renderLabel(item)}
-                </div>
+                {/* type-control: sm, medium weight — interactive labels */}
+                <div className="type-control text-foreground truncate">{renderLabel(item)}</div>
                 {renderMeta ? (
-                  <div className="type-caption flex flex-wrap gap-2 mt-2">
+                  <div className="type-caption text-muted mt-2 flex flex-wrap gap-2">
                     {renderMeta(item)}
                   </div>
                 ) : null}
@@ -619,13 +596,18 @@ export function NavList<T>({
   );
 }
 
-/* ─── DetailRow — bordered content row for lists ────────────────────────── */
+/* ─── DetailRow — bordered content row for list items ────────────────────── */
 export function DetailRow({
   children,
   className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
-    <div className={cn('border-divider bg-background rounded-[var(--radius-md)] border px-3 py-3', className)}>
+    <div
+      className={cn(
+        'border-border bg-background rounded-[var(--radius-lg)] border px-3 py-3',
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -635,12 +617,20 @@ export function DetailRow({
 export function KVTile({
   label,
   value,
+  mono = false,
   className,
-}: Readonly<{ label: string; value: ReactNode; className?: string }>) {
+}: Readonly<{ label: string; value: ReactNode; mono?: boolean; className?: string }>) {
   return (
-    <div className={cn('bg-background-elevated rounded-[var(--radius-md)] px-2.5 py-1.5', className)}>
-      <div className="type-label syntax-key">{label}</div>
-      <div className="text-foreground type-caption-mono pt-0.5 font-medium">{value}</div>
+    <div className={cn('bg-background-elevated rounded-[var(--radius-md)] px-2.5 py-2', className)}>
+      <div className="type-label">{label}</div>
+      <div
+        className={cn(
+          'text-foreground pt-1',
+          mono ? 'type-caption-mono font-medium' : 'type-control',
+        )}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -667,7 +657,7 @@ export function MetricPulseItem({
     <div className="metric-pulse-item group/metric">
       <div className="metric-pulse-accent" aria-hidden="true" />
       <div className="metric-pulse-label">
-        {Icon && <Icon className="size-3.5" />}
+        {Icon && <Icon className="size-3.5" aria-hidden="true" />}
         {label}
         {pulse && <div className="pulse-dot ml-auto" aria-hidden="true" />}
       </div>

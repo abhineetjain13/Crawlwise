@@ -27,11 +27,12 @@ export const badgeVariants = cva(
 export type BadgeProps = {
   children: ReactNode;
   className?: string;
-} & VariantProps<typeof badgeVariants>;
+} & VariantProps<typeof badgeVariants> &
+  React.HTMLAttributes<HTMLSpanElement>;
 
-export function Badge({ children, tone, className }: Readonly<BadgeProps>) {
+export function Badge({ children, tone, className, ...props }: Readonly<BadgeProps>) {
   return (
-    <span className={cn(badgeVariants({ tone }), className)}>
+    <span {...props} className={cn(badgeVariants({ tone }), className)}>
       <span
         className={cn('size-1 rounded-full bg-current', tone === 'accent' && 'animate-pulse')}
         aria-hidden

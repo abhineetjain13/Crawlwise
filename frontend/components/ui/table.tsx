@@ -7,12 +7,11 @@ import { cn } from '../../lib/utils';
 export function Table({
   children,
   className,
-}: Readonly<{ children: ReactNode; className?: string }>) {
+  wrapperClassName,
+}: Readonly<{ children: ReactNode; className?: string; wrapperClassName?: string }>) {
   return (
-    <div className="relative w-full overflow-auto">
-      <table className={cn('w-full caption-bottom', className)}>
-        {children}
-      </table>
+    <div className={cn('relative w-full overflow-auto', wrapperClassName)}>
+      <table className={cn('w-full caption-bottom', className)}>{children}</table>
     </div>
   );
 }
@@ -41,7 +40,13 @@ export function TableRow({
   return (
     <tr
       {...props}
-      className={cn('border-divider hover:bg-accent/[0.04] border-b transition-colors', className)}
+      className={cn(
+        // Hairline bottom border; fades on last row via TableBody selector
+        'border-border border-b transition-colors',
+        // Hover: subtle accent-tinted bg works in both themes
+        'hover:bg-[color-mix(in_srgb,var(--accent)_5%,var(--bg-panel))]',
+        className,
+      )}
     >
       {children}
     </tr>
@@ -52,9 +57,14 @@ export function TableHead({
   children,
   className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
+  // type-label-mono: IBM Plex Mono, 11px, semibold, uppercase, wide tracking
   return (
     <th
-      className={cn('type-label-mono syntax-key h-9 px-4 text-left align-middle', className)}
+      className={cn(
+        'text-secondary h-8 px-4 text-left align-middle text-xs font-semibold tracking-wide uppercase',
+        className,
+      )}
+      style={{ fontFamily: 'var(--font-primary-family)' }}
     >
       {children}
     </th>
@@ -68,7 +78,8 @@ export function TableCell({
 }: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
   return (
     <td
-      className={cn('type-body py-1.5 px-4 align-middle', className)}
+      className={cn('text-primary px-4 py-2 align-middle leading-normal font-normal', className)}
+      style={{ fontFamily: 'var(--font-primary-family)', fontSize: 'var(--text-sm)' }}
       colSpan={colSpan}
     >
       {children}
