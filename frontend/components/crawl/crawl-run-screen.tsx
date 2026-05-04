@@ -590,7 +590,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         });
       }
     }
-    const URL_KEYS = new Set(['url', 'source_url', 'product_url', 'canonical_url']);
+    const URL_KEYS = new Set(['url', 'source_url', 'product_url']);
     const sorted = Array.from(columns).sort((a, b) => {
       const aIsUrl = URL_KEYS.has(a.toLowerCase());
       const bIsUrl = URL_KEYS.has(b.toLowerCase());

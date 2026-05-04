@@ -301,7 +301,13 @@ export default function AdminLlmPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {costLog.slice(0, 40).map((entry) => {
+                    {(() => {
+                      const now = new Date();
+                      const todayStr = now.toDateString();
+                      const yesterdayDate = new Date();
+                      yesterdayDate.setDate(now.getDate() - 1);
+                      const yesterdayStr = yesterdayDate.toDateString();
+                      return costLog.slice(0, 40).map((entry) => {
                       const totalTokens = entry.input_tokens + entry.output_tokens;
                       const cost = parseFloat(entry.cost_usd) || 0;
                       return (
@@ -356,11 +362,9 @@ export default function AdminLlmPage() {
                             <span className="type-caption-mono text-muted group-hover:text-foreground transition-colors">
                               {(() => {
                                 const d = new Date(entry.created_at);
-                                const now = new Date();
-                                const isToday = d.toDateString() === now.toDateString();
-                                const yesterday = new Date();
-                                yesterday.setDate(now.getDate() - 1);
-                                const isYesterday = d.toDateString() === yesterday.toDateString();
+                                const dStr = d.toDateString();
+                                const isToday = dStr === todayStr;
+                                const isYesterday = dStr === yesterdayStr;
 
                                 const timeStr = d.toLocaleTimeString([], {
                                   hour: '2-digit',
@@ -376,7 +380,8 @@ export default function AdminLlmPage() {
                           </TableCell>
                         </TableRow>
                       );
-                    })}
+                      });
+                    })()}
                   </TableBody>
                 </Table>
               </div>

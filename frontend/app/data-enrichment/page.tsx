@@ -12,7 +12,7 @@ import {
   InlineAlert,
   PageHeader,
   TableSurface,
-} from '../../components/ui/patterns'; // Finalizing patterns import
+} from '../../components/ui/patterns';
 import { Badge, Button } from '../../components/ui/primitives';
 import { api } from '../../lib/api';
 import { EnrichmentStatus, EnrichmentTableLoading } from './enrichment-components';
@@ -198,7 +198,7 @@ export default function DataEnrichmentPage() {
 
       {isRunning ? (
         <EnrichmentStatus
-          sourceCount={Number(activeJob?.summary?.accepted_count) || sourceRecords.length}
+          sourceCount={Number(activeJob?.summary?.accepted_count ?? sourceRecords.length)}
           llmEnabled={Boolean(activeJob?.options?.llm_enabled)}
         />
       ) : null}

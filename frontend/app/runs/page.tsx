@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRightCircle, ArrowUpRight, Copy, ExternalLink, Plus, Trash2 } from 'lucide-react';
+import { ArrowRightCircle, Copy, ExternalLink, Plus, Trash2 } from 'lucide-react';
 
 import { Badge, Button, Dropdown, Input, Tooltip } from '../../components/ui/primitives';
 import { ConfirmDialog } from '../../components/ui/dialog';
@@ -285,6 +285,7 @@ export default function RunsPage() {
           }
           return (
             <Table
+              // 320px = page header + filters bar + table chrome + footer padding
               wrapperClassName="max-h-[calc(100vh-320px)]"
               className="compact-data-table table-fixed"
             >

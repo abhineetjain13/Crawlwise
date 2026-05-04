@@ -101,7 +101,7 @@ export function HistoryDrawer({
                       #{item.id}
                     </span>
                     <Badge
-                      tone={STATUS_TONE_MAP[item.status] ?? 'neutral'}
+                      tone={STATUS_TONE_MAP[(item.status ?? '').toLowerCase()] ?? 'neutral'}
                       className="origin-right scale-90"
                     >
                       {item.status}

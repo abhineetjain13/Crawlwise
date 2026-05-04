@@ -648,7 +648,7 @@ select:focus-visible:not(.focus-ring) {
 /* Mono label — table column headers, terminal section markers */
 .type-label-mono {
   font-family: var(--font-mono-family);
-  font-size: var(--font-mono-size-sm); /* 11px — mono sets its own size */
+  font-size: var(--font-mono-size-sm); /* 12px — mono sets its own size */
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;

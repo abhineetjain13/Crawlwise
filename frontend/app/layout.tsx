@@ -15,7 +15,7 @@ const mainFont = IBM_Plex_Sans({
   display: 'swap',
 });
 
-// Mono — variable name must match globals.css: var(--font-victor-mono, 'Victor Mono')
+// Mono — variable name must match globals.css: var(--font-jetbrains-mono, 'JetBrains Mono')
 const monoFont = JetBrains_Mono({
   subsets: ['latin'],
   variable: '--font-jetbrains-mono',
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
 };
 
 // Runs before first paint — sets data-theme to prevent FOUC
-const themeScript = `(()=>{const s=localStorage.getItem("crawlerai-theme");const d=s==="dark"||(!s&&matchMedia("(prefers-color-scheme:dark)").matches);document.documentElement.dataset.theme=d?"dark":"light";})();`;
+const themeScript = `(()=>{let d=false;try{const s=localStorage.getItem("crawlerai-theme");d=s==="dark"||(!s&&matchMedia("(prefers-color-scheme:dark)").matches);}catch(e){try{d=matchMedia("(prefers-color-scheme:dark)").matches;}catch(_){d=false;}}document.documentElement.dataset.theme=d?"dark":"light";})();`;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (

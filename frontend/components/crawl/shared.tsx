@@ -94,9 +94,7 @@ export function uniqueFields(values: string[]) {
 }
 
 export function cleanRequestedField(value: string) {
-  return String(value || '')
-    .replace(/\s+/g, '')
-    .trim();
+  return String(value || '').replace(/\s+/g, '');
 }
 
 export function uniqueRequestedFields(values: string[]) {
@@ -347,7 +345,7 @@ export function extractionVerdictTone(verdict: string) {
 }
 
 export function humanizeVerdict(verdict: string) {
-  return verdict.replace(/_/g, '').replace(/\b\w/g, (char) => char.toUpperCase());
+  return verdict.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 export type QualityLevel = 'high' | 'medium' | 'low' | 'unknown';
 
@@ -1126,7 +1124,7 @@ function buildExpandedRows(
       key: `${group.key}-fields`,
       stage: 'persistence',
       level: 'info',
-      message: parts.join('| '),
+      message: parts.join(' | '),
       payloadAction: group.records.length > 0,
     });
   }
@@ -1152,7 +1150,7 @@ function formatShortUrlLabel(url: string) {
 function sanitizeLogMessage(message: string) {
   return String(message || '')
     .replace(/\s*\[corr=[^\]]+\]/gi, '')
-    .replace(/\s{2,}/g, '')
+    .replace(/\s{2,}/g, ' ')
     .trim();
 }
 
@@ -1376,7 +1374,7 @@ export const LogTerminal = memo(function LogTerminal({
                 aria-label={`Jump to ${tick.key}`}
                 onClick={() => jumpToGroup(tick.key)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === '') {
+                  if (e.key === 'Enter' || e.key === ' ' || e.code === 'Space') {
                     e.preventDefault();
                     jumpToGroup(tick.key);
                   }
@@ -2168,29 +2166,6 @@ export const RecordsTable = memo(function RecordsTable({
   const hasImageCol = !!imageCol;
   const totalCols = dataColumns.length + (hasImageCol ? 1 : 0) + 1;
 
-  const urlColIndex = dataColumns.findIndex((col) => URL_KEYS.has(col));
-  const maxStickyDataIndex = urlColIndex >= 0 ? urlColIndex : -1;
-  const stickyDataCols = new Set(
-    maxStickyDataIndex >= 0 ? dataColumns.slice(0, maxStickyDataIndex + 1) : [],
-  );
-
-  function getDataColWidth(col: string): number {
-    if (URL_KEYS.has(col)) return 250;
-    if (TITLE_KEYS.has(col)) return 300;
-    if (PRICE_KEYS.has(col)) return 100;
-    return 150;
-  }
-
-  function getStickyLeft(col: '__checkbox__' | '__image__' | string): number {
-    if (col === '__checkbox__') return 0;
-    if (col === '__image__') return 32;
-    let left = 32 + (hasImageCol ? 64 : 0);
-    for (const c of dataColumns) {
-      if (c === col) break;
-      left += getDataColWidth(c);
-    }
-    return left;
-  }
   const rowHeightPx = 48;
   const overscanRows = 8;
   const [scrollTop, setScrollTop] = useState(0);

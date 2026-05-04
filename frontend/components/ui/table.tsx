@@ -57,14 +57,13 @@ export function TableHead({
   children,
   className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
-  // type-label-mono: IBM Plex Mono, 11px, semibold, uppercase, wide tracking
+  // Header: primary sans family with text-xs sizing, semibold, uppercase, wide tracking
   return (
     <th
       className={cn(
-        'text-secondary h-8 px-4 text-left align-middle text-xs font-semibold tracking-wide uppercase',
+        'text-secondary h-8 px-4 text-left align-middle text-xs font-semibold tracking-wide uppercase [font-family:var(--font-primary-family)]',
         className,
       )}
-      style={{ fontFamily: 'var(--font-primary-family)' }}
     >
       {children}
     </th>
@@ -78,8 +77,10 @@ export function TableCell({
 }: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
   return (
     <td
-      className={cn('text-primary px-4 py-2 align-middle leading-normal font-normal', className)}
-      style={{ fontFamily: 'var(--font-primary-family)', fontSize: 'var(--text-sm)' }}
+      className={cn(
+        'text-primary px-4 py-2 align-middle leading-normal font-normal [font-family:var(--font-primary-family)] text-[length:var(--text-sm)]',
+        className,
+      )}
       colSpan={colSpan}
     >
       {children}
