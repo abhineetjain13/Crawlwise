@@ -111,8 +111,16 @@ _NON_PRIMARY_IMAGE_SECTION_HINTS = tuple(
 )
 _CDN_IMAGE_QUERY_PARAMS = frozenset(CDN_IMAGE_QUERY_PARAMS or ())
 _CDN_IMAGE_PATH_SUFFIX_RE = regex_lib.compile(
-    r"_(?:\d+x\d+|pico|icon|thumb|small|compact|medium|large|grande|original)(?=\.[a-z0-9]+$)",
+    r"(?:"
+    r"_(?:\d+x\d+|pico|icon|thumb|thumbnail|small|compact|medium|large|grande|original)"
+    r"|[._](?:AC_)?(?:US|SR|SL|SX|SY|SS)\d+_?"
+    r"|/t_(?:default|thumbnail|pdp_\d+_v\d+|web_pdp_\d+_v\d+)"
+    r")(?=\.[a-z0-9]+$|/|$)",
     regex_lib.I,
+)
+_IMAGE_PATH_DIMENSION_RE = re.compile(
+    r"(?:[/?_=-])(?:w|wid|width|h|hei|height|sl|sx|sy|us)?[_=-]?(\d{2,4})(?:x(\d{2,4}))?",
+    re.I,
 )
 
 
@@ -190,7 +198,7 @@ def _looks_like_image_asset_url(url: str) -> bool:
 
 def canonical_image_url(url: str) -> str:
     effective_url = _effective_image_url(url)
-    parsed = urlparse(str(effective_url or "").strip())
+    parsed = urlparse(_normalize_image_url_text(effective_url))
     filtered_query = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
@@ -207,7 +215,7 @@ def canonical_image_url(url: str) -> str:
 
 
 def _effective_image_url(url: str) -> str:
-    text = str(url or "").strip()
+    text = _normalize_image_url_text(url)
     if not text:
         return ""
     parsed = urlparse(text)
@@ -221,13 +229,23 @@ def _effective_image_url(url: str) -> str:
     return unquote(wrapped) or text
 
 
+def _normalize_image_url_text(url: object) -> str:
+    text = str(url or "").strip()
+    if text.startswith("https:////"):
+        text = "https://" + text[len("https:////") :]
+    if text.startswith("http:////"):
+        text = "http://" + text[len("http:////") :]
+    return text
+
+
 def _is_proxy_image_url(url: str) -> bool:
     path = str(urlparse(str(url or "").strip()).path or "").lower()
     return "/_next/image" in path
 
 
 def image_candidate_score(url: str) -> tuple[int, int, int, int]:
-    parsed = urlparse(str(url or "").strip())
+    normalized_url = _normalize_image_url_text(url)
+    parsed = urlparse(normalized_url)
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     numeric_params = {
         str(key or "").strip().lower(): str(value or "").strip()
@@ -246,6 +264,12 @@ def image_candidate_score(url: str) -> tuple[int, int, int, int]:
     _HEIGHT_NAMES = tuple(p for p in ("height", "h") if p in _CDN_IMAGE_QUERY_PARAMS)
     width = _int_param(*_WIDTH_NAMES)
     height = _int_param(*_HEIGHT_NAMES)
+    if not width or not height:
+        for match in _IMAGE_PATH_DIMENSION_RE.finditer(normalized_url):
+            first = int(match.group(1) or 0)
+            second = int(match.group(2) or 0)
+            width = max(width, first)
+            height = max(height, second or first)
     area = width * height if width and height else max(width, height)
     return (0 if _is_proxy_image_url(url) else 1, area, width, height)
 
@@ -254,7 +278,8 @@ def dedupe_image_urls(urls: list[str]) -> list[str]:
     best_by_key: dict[str, tuple[tuple[int, int, int, int], int, str]] = {}
     order: list[str] = []
     for index, url in enumerate(urls):
-        lowered = str(url or "").strip().lower()
+        normalized_url = _normalize_image_url_text(url)
+        lowered = normalized_url.lower()
         if (
             not lowered
             or lowered.endswith(".mp4")
@@ -268,7 +293,7 @@ def dedupe_image_urls(urls: list[str]) -> list[str]:
         score = image_candidate_score(url)
         current = best_by_key.get(canonical)
         if current is None:
-            best_by_key[canonical] = (score, index, url)
+            best_by_key[canonical] = (score, index, normalized_url)
             order.append(canonical)
             continue
         current_score, current_index, current_url = current
@@ -276,7 +301,7 @@ def dedupe_image_urls(urls: list[str]) -> list[str]:
             best_by_key[canonical] = (
                 score,
                 current_index,
-                url if score > current_score else current_url,
+                normalized_url if score > current_score else current_url,
             )
     return [best_by_key[key][2] for key in order]
 
@@ -357,8 +382,19 @@ def _node_is_hidden_or_auxiliary(node: Tag) -> bool:
 def _node_has_cross_product_cluster(node: Tag, *, page_url: str = "") -> bool:
     if not isinstance(getattr(node, "attrs", None), dict):
         return False
-    links = [absolute_url(page_url, str(link.get("href") or "")) for link in node.select("a[href]")[:_max_selector_matches] if clean_text(link.get_text(" ", strip=True) or link.get("aria-label"))]
-    product_links = [l for l in links if l and any(m in urlparse(l).path.lower() for m in detail_path_hints("ecommerce_detail"))]
+    links: list[str] = []
+    for link in node.select("a[href]")[:_max_selector_matches]:
+        link_text = clean_text(link.get_text(" ", strip=True) or link.get("aria-label"))
+        if not link_text:
+            continue
+        resolved = absolute_url(page_url, str(link.get("href") or ""))
+        if resolved:
+            links.append(resolved)
+    product_links = [
+        link
+        for link in links
+        if any(marker in urlparse(link).path.lower() for marker in detail_path_hints("ecommerce_detail"))
+    ]
     if len(set(product_links)) >= 2:
         return True
     context = _node_attr_text(node, max_depth=1)
@@ -1364,7 +1400,8 @@ def _split_feature_text(text: str) -> list[str]:
         if not cleaned:
             continue
         if re.search(r"(?:^|\s)-\s+\S", cleaned):
-            parts = [part for part in re.split(r"\s+-\s+", cleaned.lstrip("- ")) if part]
+            dash_cleaned = re.sub(r"^-\s*", "", cleaned)
+            parts = [part for part in re.split(r"\s+-\s+", dash_cleaned) if part]
             if len(parts) > 1:
                 rows.extend(clean_text(part) for part in parts if clean_text(part))
                 continue

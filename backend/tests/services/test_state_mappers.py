@@ -195,6 +195,7 @@ def test_map_js_state_to_fields_uses_variation_attribute_display_names() -> None
     )
 
     assert mapped["color"] == "Cool Grey"
+    assert mapped["size"] == "S"
 
 
 def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None:

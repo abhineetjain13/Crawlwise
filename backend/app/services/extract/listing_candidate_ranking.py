@@ -9,6 +9,7 @@ from app.services.config.extraction_rules import (
     LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_EDITORIAL_URL_TOKENS,
     LISTING_NON_LISTING_PATH_TOKENS,
+    LISTING_PRODUCT_DETAIL_ID_RE,
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
     PRODUCT_SLUG_MIN_TERMINAL_TOKENS,
@@ -316,7 +317,10 @@ def looks_like_utility_url(url: str) -> bool:
     segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
     if (
         len(segments) >= 3
-        and any(marker in normalized_url for marker in detail_path_hints("ecommerce_detail"))
+        and (
+            LISTING_PRODUCT_DETAIL_ID_RE.search(normalized_url) is not None
+            or any(marker in normalized_url for marker in detail_path_hints("ecommerce_detail"))
+        )
     ):
         return False
     # A path segment that matches a structural/utility token makes the URL
@@ -348,7 +352,7 @@ def looks_like_utility_url(url: str) -> bool:
     ):
         return True
     return any(
-        re.search(rf"{re.escape(token)}(?:[/?#]|$)", normalized_url)
+        re.search(rf"{re.escape(token)}(?:[-_/?#]|$)", normalized_url)
         for token in LISTING_UTILITY_URL_TOKENS
     )
 

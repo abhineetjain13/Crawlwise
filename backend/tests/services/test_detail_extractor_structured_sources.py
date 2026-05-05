@@ -1687,7 +1687,7 @@ def test_extract_ecommerce_detail_recovers_radio_size_variants_with_stock_availa
     assert record["variants"][1]["stock_quantity"] == 17
 
 
-def test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site_hardcoding() -> None:
+def test_extract_ecommerce_detail_ignores_nonpublic_dom_variant_axes() -> None:
     html = """
     <html>
       <body>
@@ -1715,17 +1715,15 @@ def test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site
 
     assert len(rows) == 1
     record = rows[0]
-    # Weight × Flavour = 2 × 2 = 4 cartesian variants
-    assert record["variant_count"] == 4
+    assert record["variant_count"] == 2
     assert isinstance(record["variants"], list)
-    assert len(record["variants"]) == 4
-    # Verify axes are properly extracted
-    weights = {str(v.get("weight")) for v in record["variants"]}
-    flavours = {str(v.get("flavor")) for v in record["variants"]}
-    assert "4.4 Lb" in weights
-    assert "0.4 Lb" in weights
-    assert "Rich Chocolate" in flavours
-    assert "Blue Tokai Coffee" in flavours
+    assert len(record["variants"]) == 2
+    assert {variant.get("color") for variant in record["variants"]} == {
+        "Rich Chocolate",
+        "Blue Tokai Coffee",
+    }
+    assert all("weight" not in variant for variant in record["variants"])
+    assert all("flavor" not in variant for variant in record["variants"])
 
 
 def test_extract_ecommerce_detail_recovers_variant_urls_from_dom_choice_links() -> None:
@@ -2039,8 +2037,8 @@ def test_extract_ecommerce_detail_does_not_treat_etsy_report_radios_as_variants(
     record = rows[0]
     assert record["title"] == "Black Popular And In Demand Unisex T-Shirt"
     assert record["price"] == "2476.00"
-    assert record["variants"][0]["type"] == "It's not handmade, vintage, or craft supplies"
-    assert record["variant_count"] == 3
+    assert "variants" not in record
+    assert "variant_count" not in record
 
 
 def test_extract_ecommerce_detail_does_not_treat_shipping_country_selector_as_variant_axis() -> None:
@@ -2083,7 +2081,7 @@ def test_extract_ecommerce_detail_does_not_treat_shipping_country_selector_as_va
     record = rows[0]
     assert record["title"] == "Custom Embroidered Mom Picture Sweatshirt"
     assert record["variant_count"] == 2
-    assert "choose_country" not in record.get("variant_axes", {})
+    assert "choose_country" not in str(record.get("variants") or "")
 
 
 def test_extract_ecommerce_detail_splits_style_and_size_from_compound_select_before_color() -> None:
@@ -3663,10 +3661,8 @@ def test_build_detail_record_drops_related_product_rows_mapped_as_variants() -> 
         ],
     )
 
-    # Related products survived because 'shade' is now a supported axis.
-    assert "variants" in record
-    assert record["variants"][0]["shade"] == "Light"
-    assert record["variant_count"] == 1
+    assert "variants" not in record
+    assert "variant_count" not in record
 
 
 def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_and_legal_tail() -> None:

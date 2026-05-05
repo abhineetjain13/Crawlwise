@@ -7,7 +7,11 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from app.services.field_value_core import coerce_field_value
-from app.services.field_value_dom import _is_garbage_image_candidate, extract_feature_rows
+from app.services.field_value_dom import (
+    _is_garbage_image_candidate,
+    dedupe_image_urls,
+    extract_feature_rows,
+)
 
 
 def _img(src: str) -> Tag | None:
@@ -20,23 +24,41 @@ def _img(src: str) -> Tag | None:
 
 def test_unresolved_template_image_url_is_garbage() -> None:
     node = _img("https://cdn.example.com/shop/p/foo/URL_TO_THE_PRODUCT_IMAGE")
+    assert node is not None
     assert _is_garbage_image_candidate(node, node.get("src")) is True
 
 
 def test_handlebars_template_image_url_is_garbage() -> None:
     node = _img("https://cdn.example.com/{{image}}.jpg")
+    assert node is not None
     assert _is_garbage_image_candidate(node, node.get("src")) is True
 
 
 def test_bracket_placeholder_image_url_is_garbage() -> None:
     node = _img("https://cdn.example.com/[[image]]/hero.jpg")
+    assert node is not None
     assert _is_garbage_image_candidate(node, node.get("src")) is True
 
 
 def test_resolved_image_url_is_not_garbage() -> None:
     node = _img("https://cdn.example.com/product/hero-image.jpg")
+    assert node is not None
     # Not garbage on its own (URL has no template tokens).
     assert _is_garbage_image_candidate(node, node.get("src")) is False
+
+
+def test_dedupe_image_urls_keeps_highest_resolution_cdn_variant() -> None:
+    assert dedupe_image_urls(
+        [
+            "https://cdn.example.com/widget.jpg?width=120",
+            "https://cdn.example.com/widget.jpg?width=1200",
+            "https:////cdn.example.com/alt.jpg?wid=80&hei=80",
+            "https:////cdn.example.com/alt.jpg?wid=1000&hei=1000",
+        ]
+    ) == [
+        "https://cdn.example.com/widget.jpg?width=1200",
+        "https://cdn.example.com/alt.jpg?wid=1000&hei=1000",
+    ]
 
 
 def test_dash_separated_feature_text_splits_into_rows() -> None:

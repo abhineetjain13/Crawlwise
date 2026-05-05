@@ -5,9 +5,10 @@ import re
 from urllib.parse import urlsplit
 from typing import Callable
 
-from selectolax.lexbor import LexborHTMLParser
+from selectolax.lexbor import LexborHTMLParser, SelectolaxError
 
 from app.services.config.extraction_rules import (
+    LISTING_CHROME_TEXT_LIMIT,
     LISTING_FALLBACK_CONTAINER_SELECTOR,
     LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_STRUCTURE_NEGATIVE_HINTS,
@@ -51,7 +52,7 @@ def listing_node_css(node, selector: str) -> list[object]:
         return []
     try:
         return list(node.css(selector))
-    except Exception:
+    except (SelectolaxError, ValueError):
         logger.warning("Skipping invalid listing selector: %s", selector, exc_info=True)
         return []
 
@@ -283,7 +284,7 @@ def _node_looks_like_listing_chrome(node) -> bool:
     signature = _listing_node_signature(node)
     if any(token in signature for token in LISTING_NON_LISTING_PATH_TOKENS):
         return True
-    text = listing_node_text(node)[:800]
+    text = listing_node_text(node)[: int(LISTING_CHROME_TEXT_LIMIT)]
     return any(
         token in text
         for token in (

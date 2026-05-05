@@ -25,6 +25,8 @@ from app.services.config.extraction_rules import (
     DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO,
     DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES,
     DETAIL_ORIGINAL_PRICE_SELECTORS,
+    DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX,
+    DETAIL_PARENT_VARIANT_PRICE_RATIO_MIN,
     DETAIL_PRICE_CENT_MAGNITUDE_RATIO,
     DETAIL_PRICE_JSONLD_PATTERN,
     DETAIL_PRICE_JSONLD_TYPE_PATTERN,
@@ -45,6 +47,8 @@ _STRICT_PARENT_PRICE_SOURCES = frozenset({"network_payload"})
 _CENT_BASED_CURRENCIES = frozenset(DETAIL_CENT_BASED_PRICE_CURRENCIES)
 _PRICE_CENT_MAGNITUDE_RATIO = Decimal(str(DETAIL_PRICE_CENT_MAGNITUDE_RATIO))
 _PRICE_MAGNITUDE_EPSILON = Decimal(str(DETAIL_PRICE_MAGNITUDE_EPSILON))
+_PARENT_VARIANT_PRICE_RATIO_MIN = Decimal(str(DETAIL_PARENT_VARIANT_PRICE_RATIO_MIN))
+_PARENT_VARIANT_PRICE_RATIO_MAX = Decimal(str(DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX))
 _installment_price_text_tokens = tuple(
     str(token).strip().lower()
     for token in tuple(DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS or ())
@@ -347,11 +351,11 @@ def reconcile_parent_price_against_variant_range(record: dict[str, Any]) -> None
     variant_dicts = [variant for variant in variants if isinstance(variant, dict)]
     if not variant_dicts:
         return
-    variant_prices = [
-        detail_price_decimal(variant.get("price"))
-        for variant in variant_dicts
-        if detail_price_decimal(variant.get("price")) is not None
-    ]
+    variant_prices: list[Decimal] = []
+    for variant in variant_dicts:
+        parsed_price = detail_price_decimal(variant.get("price"))
+        if parsed_price is not None:
+            variant_prices.append(parsed_price)
     if len(variant_prices) < len(variant_dicts):
         # At least one variant lacks a price; skip to avoid misjudging the
         # distribution.
@@ -364,7 +368,10 @@ def reconcile_parent_price_against_variant_range(record: dict[str, Any]) -> None
     # Same-order-of-magnitude guard: skip cents/units magnitude gaps so the
     # dedicated magnitude reconciler can handle them.
     ratio = parent_price / unanimous_variant_price
-    if ratio < Decimal("0.5") or ratio > Decimal("2"):
+    if (
+        ratio < _PARENT_VARIANT_PRICE_RATIO_MIN
+        or ratio > _PARENT_VARIANT_PRICE_RATIO_MAX
+    ):
         return
     if record_field_sources(record, "price") & _STRICT_PARENT_PRICE_SOURCES:
         return

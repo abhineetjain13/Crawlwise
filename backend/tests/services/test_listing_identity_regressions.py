@@ -9,10 +9,9 @@ These guard two real failures observed in the DB crawl history:
 """
 from __future__ import annotations
 
+import pytest
+
 from app.services.extract.detail_identity import listing_url_is_structural
-from app.services.extract.listing_candidate_ranking import (
-    _unsupported_non_detail_ecommerce_merchandise_hint,
-)
 
 
 def test_tirerack_product_url_is_not_structural() -> None:
@@ -42,6 +41,10 @@ def test_product_slug_in_utility_prefix_path_is_not_structural() -> None:
 
 def test_dell_landing_page_not_rescued_as_merchandise() -> None:
     """`/en-us/lp/dt/<slug>` is a Dell landing page, not a product."""
+    from app.services.extract.listing_candidate_ranking import (
+        _unsupported_non_detail_ecommerce_merchandise_hint,
+    )
+
     assert (
         _unsupported_non_detail_ecommerce_merchandise_hint(
             title="Sustainable Data Center",
@@ -52,6 +55,11 @@ def test_dell_landing_page_not_rescued_as_merchandise() -> None:
 
 
 def test_dell_industry_landing_page_not_rescued_as_merchandise() -> None:
+    """Industry landing pages under Dell `/lp/dt/` must stay navigation."""
+    from app.services.extract.listing_candidate_ranking import (
+        _unsupported_non_detail_ecommerce_merchandise_hint,
+    )
+
     assert (
         _unsupported_non_detail_ecommerce_merchandise_hint(
             title="State & Local Government",
@@ -63,6 +71,10 @@ def test_dell_industry_landing_page_not_rescued_as_merchandise() -> None:
 
 def test_short_slug_product_can_still_be_rescued() -> None:
     """The existing 2-token rescue path for `/browse/widget-prime` is preserved."""
+    from app.services.extract.listing_candidate_ranking import (
+        _unsupported_non_detail_ecommerce_merchandise_hint,
+    )
+
     assert (
         _unsupported_non_detail_ecommerce_merchandise_hint(
             title="Widget Prime Ultra",
@@ -100,6 +112,13 @@ def test_looks_like_utility_url_still_rejects_bare_utility_segment() -> None:
 
     assert looks_like_utility_url("https://example.com/accessories/") is True
     assert looks_like_utility_url("https://example.com/help/faq") is True
+
+
+def test_looks_like_utility_url_rejects_hyphenated_policy_pages() -> None:
+    from app.services.extract.listing_candidate_ranking import looks_like_utility_url
+
+    assert looks_like_utility_url("https://content.abfrl.in/shipping-policy") is True
+    assert looks_like_utility_url("https://content.abfrl.in/returns-cancel-policy") is True
 
 
 def test_dell_spd_product_url_is_not_utility() -> None:
@@ -148,15 +167,18 @@ def test_shop_path_is_not_detail_marker() -> None:
     )
 
 
-def test_explicit_detail_markers_still_recognized() -> None:
-    """/p/, /product/, /dp/, /spd/ equivalents remain detail markers."""
-    from app.services.extract.detail_identity import listing_detail_like_path
-
-    for url in (
+@pytest.mark.parametrize(
+    "url",
+    [
         "https://example.com/products/foo",
         "https://example.com/p/abc-123",
         "https://example.com/dp/XYZ",
         "https://example.com/shop/laptops/spd/xps-da16260-laptop/useda16260wcto01",
         "https://example.com/detail/item-42",
-    ):
-        assert listing_detail_like_path(url, is_job=False) is True, url
+    ],
+)
+def test_explicit_detail_markers_still_recognized(url: str) -> None:
+    """/p/, /product/, /dp/, /spd/ equivalents remain detail markers."""
+    from app.services.extract.detail_identity import listing_detail_like_path
+
+    assert listing_detail_like_path(url, is_job=False) is True

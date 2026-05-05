@@ -8,6 +8,7 @@ from app.services.config.extraction_rules import (
     CURRENCY_CODES,
     DEFAULT_DETAIL_MAX_VARIANT_ROWS,
     GENDER_ARTIFACT_PATTERN,
+    GENDER_KEYWORD_TOKENS,
     VARIANT_COLOR_HINT_WORDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_PLACEHOLDER_PREFIXES,
@@ -28,6 +29,7 @@ from app.services.field_value_core import (
 from app.services.extract.shared_variant_logic import (
     collapse_duplicate_size_aliases,
     merge_variant_pair,
+    normalized_variant_axis_key,
     variant_identity,
     variant_row_richness,
     variant_semantic_identity,
@@ -68,14 +70,38 @@ _VARIANT_PLACEHOLDER_PREFIXES_LOWER = tuple(
 )
 _OPTION_FIELD_PATTERN = re.compile(r"option\d+_(?:name|values?)")
 _GENDER_ARTIFACT_PATTERN = str(GENDER_ARTIFACT_PATTERN or "")
+_GENDER_ARTIFACT_RE = re.compile(
+    _GENDER_ARTIFACT_PATTERN.format(candidate=r"[a-z0-9.]+"),
+    re.I,
+) if _GENDER_ARTIFACT_PATTERN else None
+_GENDER_POSSESSIVE_RE = re.compile(r"\b(?:men|women|boys|girls)['’]?s\b", re.I)
 _STANDARD_SIZE_VALUES = frozenset(str(value).lower() for value in tuple(STANDARD_SIZE_VALUES or ()))
 
 _LEGACY_VARIANT_KEYS = ("selected_variant", "variant_axes", "available_sizes")
+_VARIANT_TITLE_STOPWORDS = frozenset(
+    {"and", "for", "the", "with", "size", "color", "colour", "variant"}
+)
+
+
+def _variant_has_axis_value(variant: dict[str, Any]) -> bool:
+    return any(
+        clean_text(variant.get(axis))
+        for axis in ("size", "color", *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS)
+    )
+
+
+def _gender_keyword_tokens() -> frozenset[str]:
+    return frozenset(
+        clean_text(token).lower()
+        for token in tuple(GENDER_KEYWORD_TOKENS or ())
+        if clean_text(token)
+    )
 
 
 def normalize_variant_record(record: dict[str, Any]) -> None:
     _infer_variant_sizes_from_titles(record)
     _infer_single_variant_axes(record)
+    _drop_cross_product_variant_rows(record)
     _flatten_variant_rows(record)
     _clean_variant_rows(record)
     _enforce_variant_axis_contract(record)
@@ -99,6 +125,80 @@ def _flatten_variant_rows(record: dict[str, Any]) -> None:
         return
     record.pop("variants", None)
     record.pop("variant_count", None)
+
+
+def _drop_cross_product_variant_rows(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or not variants:
+        return
+    parent_tokens = _variant_title_tokens(record.get("title"))
+    if not parent_tokens:
+        return
+    kept: list[dict[str, Any]] = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        variant_tokens = _variant_title_tokens(
+            variant.get("title") or variant.get("name")
+        )
+        axis_tokens = _variant_axis_tokens(variant)
+        unmatched_tokens = variant_tokens - axis_tokens
+        if (
+            len(unmatched_tokens) >= 2
+            and parent_tokens.isdisjoint(unmatched_tokens)
+        ):
+            continue
+        kept.append(variant)
+    if kept:
+        if len(kept) == 1 and _single_nonpublic_option_variant_should_drop(kept[0]):
+            record.pop("variants", None)
+            record.pop("variant_count", None)
+            return
+        record["variants"] = kept
+        record["variant_count"] = len(kept)
+        return
+    record.pop("variants", None)
+    record.pop("variant_count", None)
+
+
+def _variant_title_tokens(value: object) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", clean_text(value).casefold())
+        if len(token) >= 3 and token not in _VARIANT_TITLE_STOPWORDS
+    }
+
+
+def _variant_axis_tokens(variant: dict[str, Any]) -> set[str]:
+    values: list[object] = [variant.get("color"), variant.get("size")]
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict):
+        values.extend(option_values.values())
+    tokens: set[str] = set()
+    for value in values:
+        tokens.update(_variant_title_tokens(value))
+    return tokens
+
+
+def _single_nonpublic_option_variant_should_drop(variant: dict[str, Any]) -> bool:
+    if not isinstance(variant, dict):
+        return False
+    if clean_text(variant.get("size")) or clean_text(variant.get("color")):
+        return False
+    if any(
+        text_or_none(variant.get(field_name))
+        for field_name in ("sku", "url", "image_url", "availability")
+    ):
+        return False
+    option_values = variant.get("option_values")
+    if not isinstance(option_values, dict) or not option_values:
+        return False
+    axis_keys = {
+        normalized_variant_axis_key(axis_name)
+        for axis_name in option_values
+        if normalized_variant_axis_key(axis_name)
+    }
+    return bool(axis_keys) and axis_keys.isdisjoint({"size", "color"})
 
 
 def _clean_variant_rows(record: dict[str, Any]) -> None:
@@ -140,7 +240,7 @@ def _enforce_variant_axis_contract(record: dict[str, Any]) -> None:
         variant
         for variant in variants
         if isinstance(variant, dict)
-        and any(clean_text(variant.get(axis)) for axis in ("size", "color", *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS))
+        and _variant_has_axis_value(variant)
     ]
     if axisful_variants:
         record["variants"] = axisful_variants
@@ -283,7 +383,7 @@ def _variant_size_from_title_or_url(
         if (
             extracted
             and extracted.lower() in _STANDARD_SIZE_VALUES
-            and re.search(r"\b(?:men|women|boys|girls)['’]?s\b", text.lower())
+            and _GENDER_POSSESSIVE_RE.search(text)
         ):
             continue
         if extracted:
@@ -398,14 +498,7 @@ def _extract_trailing_color_phrase(value: str) -> str:
         start -= 1
     if start > 0:
         previous = tokens[start - 1].lower()
-        if previous not in _STANDARD_SIZE_VALUES and previous not in {
-            "men",
-            "mens",
-            "women",
-            "womens",
-            "boys",
-            "girls",
-        }:
+        if previous not in _STANDARD_SIZE_VALUES and previous not in _gender_keyword_tokens():
             start -= 1
     end = color_indexes[-1] + 1
     while end < len(tokens) and tokens[end].lower() in _VARIANT_COLOR_HINT_WORDS:
@@ -469,7 +562,7 @@ def _prune_axisless_rows_when_axisful_rows_exist(record: dict[str, Any]) -> None
         variant
         for variant in variants
         if isinstance(variant, dict)
-        and any(clean_text(variant.get(axis)) for axis in ("size", "color", *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS))
+        and _variant_has_axis_value(variant)
     ]
     if not axisful_rows:
         return
@@ -500,7 +593,7 @@ def _drop_axisless_variant_row(
     *,
     semantic_variant_count: int,
 ) -> bool:
-    if any(clean_text(variant.get(axis)) for axis in ("size", "color", *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS)):
+    if _variant_has_axis_value(variant):
         return False
     if semantic_variant_count >= 2:
         return True
@@ -603,7 +696,10 @@ def _enforce_variant_payload_limits(record: dict[str, Any]) -> None:
     try:
         max_rows = max(1, int(crawler_runtime_settings.detail_max_variant_rows))
     except (TypeError, ValueError):
-        max_rows = max(1, int(DEFAULT_DETAIL_MAX_VARIANT_ROWS))
+        try:
+            max_rows = max(1, int(DEFAULT_DETAIL_MAX_VARIANT_ROWS))
+        except (TypeError, ValueError):
+            max_rows = 1
     if len(variants) <= max_rows:
         return
     kept = [
@@ -612,7 +708,7 @@ def _enforce_variant_payload_limits(record: dict[str, Any]) -> None:
         if isinstance(variant, dict)
         and (
             _variant_primary_key(variant)
-            or any(clean_text(variant.get(axis)) for axis in ("size", "color", *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS))
+            or _variant_has_axis_value(variant)
         )
     ]
     truncated = kept[:max_rows] if kept else list(variants[:max_rows])

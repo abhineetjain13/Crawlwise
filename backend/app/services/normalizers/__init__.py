@@ -98,7 +98,11 @@ def normalize_decimal_price(
     text = _normalize_text(value)
     if not text:
         return None
-    if re.match(r"^\s*-\s*(?:[$€£¥₹]|[A-Za-z]{3}\b)?\s*\d", text):
+    if re.match(
+        rf"^-\s*(?:[$€£¥₹]|\b(?:{_CURRENCY_CODE_CONTEXT_PATTERN})\b)?\s*\d",
+        text,
+        re.I,
+    ):
         return None
     if isinstance(value, str):
         stripped = _canonicalize_decimal_candidate(text)

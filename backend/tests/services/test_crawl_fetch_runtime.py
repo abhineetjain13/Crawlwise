@@ -1944,6 +1944,13 @@ async def test_fetch_page_retries_curl_before_httpx_fallback(
     assert http_calls == ["https://example.com/products/widget"]
 
 
+def test_retryable_status_ignores_invalid_config_values(patch_settings) -> None:
+    patch_settings(http_retry_status_codes=[429, "503", "not-a-code"])
+
+    assert crawl_fetch_runtime._retryable_status_for_http_fetch(503) is True
+    assert crawl_fetch_runtime._retryable_status_for_http_fetch(500) is False
+
+
 @pytest.mark.asyncio
 async def test_fetch_page_falls_back_to_browser_after_curl_and_httpx_transport_errors(
     monkeypatch: pytest.MonkeyPatch,

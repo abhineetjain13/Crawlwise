@@ -9,9 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.crawl import CrawlRun
 from app.services.config.selectors import (
     SELECTOR_SYNTHESIS_ALLOWED_ATTRS,
+    SELECTOR_SELF_HEAL_DEFAULT_MIN_CONFIDENCE,
+    SELECTOR_SELF_HEAL_TARGET_LIMIT,
     SELECTOR_SYNTHESIS_DROP_TAGS,
     SELECTOR_SYNTHESIS_KEEP_ATTRS,
     SELECTOR_SYNTHESIS_KEEP_TOKENS,
+    SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS,
     SELECTOR_SYNTHESIS_LOW_VALUE_TAGS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -85,9 +88,8 @@ def _append_reduced_node(
         return len(chunk)
     if not isinstance(node, Tag):
         return 0
-    if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS and not _keep_low_value_node(
-        node
-    ):
+    # Defensive for direct callers that skip reduce_html_for_selector_synthesis().
+    if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS and not _keep_low_value_node(node):
         return 0
     if node.name == "template" and not node.has_attr("shadowrootmode"):
         return 0
@@ -126,7 +128,7 @@ def _remove_low_value_nodes(soup: BeautifulSoup) -> None:
 
 
 def _keep_low_value_node(node: Tag) -> bool:
-    if node.name not in {"button", "input", "select"}:
+    if node.name not in SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS:
         return False
     attrs = dict(node.attrs)
     if (
@@ -171,7 +173,7 @@ def selector_self_heal_enabled(run: CrawlRun) -> tuple[bool, float]:
             if isinstance(selector_self_heal, dict)
             else None
         ),
-        default=0.55,
+        default=float(SELECTOR_SELF_HEAL_DEFAULT_MIN_CONFIDENCE),
     )
     return enabled, threshold
 
@@ -182,6 +184,7 @@ def selector_self_heal_targets(
     record: dict[str, object],
 ) -> list[str]:
     confidence = mapping_or_empty(record.get("_confidence"))
+    target_limit = max(1, _safe_int(SELECTOR_SELF_HEAL_TARGET_LIMIT, default=6) or 6)
     requested_fields = repair_target_fields_for_surface(
         run.surface,
         run.requested_fields or [],
@@ -195,7 +198,7 @@ def selector_self_heal_targets(
         ):
             targets.append(field_name)
     if targets:
-        return targets[:6]
+        return targets[:target_limit]
     for missing_field in _list_or_empty(confidence.get("missing_fields")):
         normalized = str(missing_field or "").strip().lower()
         if (
@@ -204,7 +207,7 @@ def selector_self_heal_targets(
             and normalized not in targets
         ):
             targets.append(normalized)
-    return targets[:6]
+    return targets[:target_limit]
 
 
 async def apply_selector_self_heal(

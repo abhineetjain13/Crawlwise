@@ -9,6 +9,8 @@ from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
     NAVIGATION_URL_FIELDS,
     PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS,
+    PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS,
+    PUBLIC_RECORD_LEGACY_VARIANT_FIELDS,
     PUBLIC_RECORD_URL_BLOCKED_PATH_MARKERS,
     PUBLIC_RECORD_URL_MAX_LENGTH,
     ROUTE_BARCODE_TO_SKU,
@@ -62,6 +64,14 @@ def public_record_data_for_surface(
         )
         if normalize_field_key(field_name)
     }
+    ecommerce_contract_excluded = {
+        normalize_field_key(value)
+        for value in (
+            *tuple(PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS or ()),
+            *tuple(PUBLIC_RECORD_LEGACY_VARIANT_FIELDS or ()),
+        )
+        if normalize_field_key(value)
+    }
     data: dict[str, Any] = {}
     rejected: dict[str, str] = {}
     for raw_field_name, raw_value in dict(record or {}).items():
@@ -69,6 +79,12 @@ def public_record_data_for_surface(
         if not field_name or str(raw_field_name).startswith("_"):
             continue
         if raw_value in (None, "", [], {}):
+            continue
+        if (
+            normalized_surface.startswith("ecommerce_")
+            and field_name in ecommerce_contract_excluded
+        ):
+            rejected[str(raw_field_name)] = "public_contract_excluded"
             continue
         if field_name in default_excluded and field_name not in explicit_fields:
             rejected[str(raw_field_name)] = "default_public_field_excluded"

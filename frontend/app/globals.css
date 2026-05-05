@@ -44,18 +44,18 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   LIGHT THEME — Graphite Machine / Steel Cyan
-   Palette: Cold zinc whites · Graphite hairlines · Steel cyan accent
+   LIGHT THEME — Fiori Navy
+   Palette: Warm neutrals · SAP-style navy accent · Clean surfaces
    ═══════════════════════════════════════════════════════════════════════════ */
 :root {
   color-scheme: light;
 
   /* ── Fonts
-     Primary : IBM Plex Sans — precision geometric, technical authority
-     Mono     : IBM Plex Mono — same DNA, zero cognitive switching cost
+     Primary : Outfit — modern geometric sans
+     Mono     : JetBrains Mono — code clarity
      Override via Next.js font loader through CSS var on <html>            */
   --font-primary-family:
-    var(--font-primary-source, 'IBM Plex Sans'), 'Geist', 'SF Pro Text', system-ui, sans-serif;
+    var(--font-primary-source, 'Outfit'), 'Geist', 'SF Pro Text', system-ui, sans-serif;
   --font-mono-family:
     var(--font-jetbrains-mono, 'JetBrains Mono'), 'JetBrains Mono', ui-monospace, Consolas,
     monospace;
@@ -67,22 +67,22 @@
   --font-mono-line-height: 1.55;
 
   /* ── Surfaces — 3-tier depth */
-  --bg-base: #f4f4f6; /* Level 0 — canvas / app chrome */
-  --bg-alt: #ebebed; /* Level 0b — sunken / inset */
+  --bg-base: #f5f5f5; /* Level 0 — canvas / app chrome */
+  --bg-alt: #edeff0; /* Level 0b — sunken / inset */
   --bg-panel: #ffffff; /* Level 1 — cards, panels */
   --bg-elevated: #ffffff; /* Level 2 — floating, same as panel in light */
   --bg-panel-strong: #fafafa; /* Level 1 variant */
-  --bg-sidebar: #f4f4f6; /* Sidebar matches base */
+  --bg-sidebar: #f5f5f5; /* Sidebar matches base */
 
-  /* ── Borders — VISIBLE hairlines; graphite machine signature trait */
-  --border: #d1d1d6;
-  --border-strong: #aeaeb2;
+  /* ── Borders */
+  --border: #d9d9d9;
+  --border-strong: #cbced4;
   --border-focus: var(--accent);
 
-  /* ── Typography — cold graphite scale */
-  --text-primary: #1c1c1e;
-  --text-secondary: #48484a;
-  --text-muted: #52525b; /* zinc-600 */
+  /* ── Typography */
+  --text-primary: #32363a;
+  --text-secondary: #52596a;
+  --text-muted: #8b9099;
 
   /* ── JSON Syntax Highlighting (Always dark terminal) */
   --syntax-key: #9cdcfe;
@@ -92,24 +92,24 @@
   --syntax-null: #569cd6;
   --syntax-punct: #808080;
 
-  /* ── Accent — Steel Cyan (cyan-600/700 for light-mode contrast) */
-  --accent: #0e7490; /* cyan-700 */
-  --accent-hover: #0891b2; /* cyan-600 */
+  /* ── Accent — Fiori Navy */
+  --accent: #0854a0;
+  --accent-hover: #0a6ed1;
   --accent-foreground: #ffffff;
   --accent-fg: #ffffff;
-  --accent-subtle: #e0f9ff; /* cyan-50 equivalent */
-  --accent-dim: rgba(14, 116, 144, 0.14);
-  --accent-text: #0e7490;
+  --accent-subtle: #e5f4ff;
+  --accent-dim: rgba(8, 84, 160, 0.18);
+  --accent-text: #0854a0;
 
   /* ── Semantic states */
-  --success: #15803d; /* green-700 */
-  --success-bg: rgba(21, 128, 61, 0.1);
-  --warning: #b45309; /* amber-700 */
-  --warning-bg: rgba(180, 83, 9, 0.1);
-  --danger: #b91c1c; /* red-700 */
-  --danger-bg: rgba(185, 28, 28, 0.1);
-  --info: #0e7490; /* cyan-700 */
-  --info-bg: rgba(14, 116, 144, 0.1);
+  --success: #5dc122;
+  --success-bg: rgba(93, 193, 34, 0.12);
+  --warning: #e76500;
+  --warning-bg: rgba(231, 101, 0, 0.12);
+  --danger: #bb0000;
+  --danger-bg: rgba(187, 0, 0, 0.1);
+  --info: #0070f2;
+  --info-bg: rgba(0, 112, 242, 0.12);
 
   --status-active-bg: var(--success-bg);
   --status-running-bg: var(--accent-subtle);
@@ -131,13 +131,13 @@
 
   /* ── Component surface tokens */
   --surface-card: #ffffff;
-  --surface-header: rgba(244, 244, 246, 0.92);
-  --surface-sidebar: #f4f4f6;
+  --surface-header: rgba(245, 245, 245, 0.92);
+  --surface-sidebar: #f5f5f5;
   --surface-card-highlight: rgba(255, 255, 255, 0.8);
   --surface-card-edge: rgba(0, 0, 0, 0.06);
-  --subtle-panel-bg: #f4f4f6;
-  --subtle-panel-border: #d1d1d6;
-  --divider: #d1d1d6;
+  --subtle-panel-bg: #f5f5f5;
+  --subtle-panel-border: #d9d9d9;
+  --divider: #d9d9d9;
 
   /* ── Interactive component tokens */
   --button-filled-fg: #ffffff;
@@ -261,50 +261,50 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   DARK THEME — Graphite Machine / Steel Cyan
-   Palette: macOS graphite darks · Hairline zinc borders · Cyan signal
+   DARK THEME — Fiori Navy
+   Palette: Deep darks · Subtle borders · Navy accent
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme='dark'] {
   color-scheme: dark;
 
-  /* ── Surfaces — merged; cards blend into continuous background */
-  --bg-base: #161618; /* Level 0 — app canvas */
-  --bg-alt: #141416; /* Level 0b — sunken / inset */
-  --bg-panel: #18181a; /* Level 1 — cards, panels (barely off base) */
-  --bg-elevated: #1e1e20; /* Level 2 — popovers, dropdowns */
-  --bg-panel-strong: #1e1e20;
-  --bg-sidebar: #18181a;
+  /* ── Surfaces */
+  --bg-base: #0d0d0d;
+  --bg-alt: rgba(10, 10, 10, 0.9);
+  --bg-panel: rgba(20, 20, 20, 0.75);
+  --bg-elevated: rgba(26, 26, 26, 0.85);
+  --bg-panel-strong: rgba(26, 26, 26, 0.85);
+  --bg-sidebar: rgba(20, 20, 20, 0.75);
 
-  /* ── Borders — hairline graphite; always visible */
-  --border: #2c2c2e;
-  --border-strong: #38383c;
+  /* ── Borders */
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
   --border-focus: var(--accent);
 
   /* ── Typography */
-  --text-primary: #f0f0f2;
-  --text-secondary: #aeaeb2;
-  --text-muted: #8e8e93;
+  --text-primary: #b4b9c4;
+  --text-secondary: #8f97a4;
+  --text-muted: #606874;
 
-  /* ── Accent — Steel Cyan (cyan-400 for dark-mode brightness) */
-  --accent: #22d3ee; /* cyan-400 */
-  --accent-hover: #38e8ff; /* cyan-300 */
-  --accent-foreground: #0a0a0b;
-  --accent-fg: #0a0a0b;
-  --accent-subtle: rgba(34, 211, 238, 0.12);
-  --accent-dim: rgba(34, 211, 238, 0.2);
-  --accent-text: #22d3ee;
+  /* ── Accent — Fiori Navy (lighter for dark mode) */
+  --accent: #5c9ce6;
+  --accent-hover: #7ab8ff;
+  --accent-foreground: #0d0d0d;
+  --accent-fg: #0d0d0d;
+  --accent-subtle: rgba(92, 156, 230, 0.15);
+  --accent-dim: rgba(92, 156, 230, 0.25);
+  --accent-text: #5c9ce6;
   --logo-mark-bg: var(--accent);
-  --logo-mark-fg: #0a0a0b;
+  --logo-mark-fg: #0d0d0d;
 
   /* ── Semantic states */
-  --success: #34d399;
-  --success-bg: rgba(52, 211, 153, 0.12);
-  --warning: #fbbf24;
-  --warning-bg: rgba(251, 191, 36, 0.12);
-  --danger: #f87171;
-  --danger-bg: rgba(248, 113, 113, 0.12);
-  --info: #22d3ee;
-  --info-bg: rgba(34, 211, 238, 0.12);
+  --success: #22c55e;
+  --success-bg: rgba(34, 197, 94, 0.12);
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --info: #3b82f6;
+  --info-bg: rgba(59, 130, 246, 0.12);
 
   --status-active-bg: var(--success-bg);
   --status-running-bg: var(--accent-subtle);
@@ -325,9 +325,9 @@ html[data-theme='dark'] {
   --gradient-card:
     linear-gradient(
       180deg,
-      color-mix(in srgb, #ffffff 6%, var(--bg-panel)) 0%,
-      var(--bg-panel) 35%,
-      color-mix(in srgb, #000000 12%, var(--bg-panel)) 100%
+      color-mix(in srgb, #ffffff 3%, var(--bg-panel)) 0%,
+      var(--bg-panel) 40%,
+      color-mix(in srgb, #000000 4%, var(--bg-panel)) 100%
     );
 
   /* ── Component surface tokens */
@@ -341,10 +341,10 @@ html[data-theme='dark'] {
   --divider: var(--border);
 
   /* ── Interactive component tokens */
-  --button-filled-fg: #0a0a0b;
+  --button-filled-fg: #0d0d0d;
   --segmented-bg: rgba(255, 255, 255, 0.05);
   --segmented-shadow: none;
-  --tab-active-fg: #0a0a0b;
+  --tab-active-fg: #0d0d0d;
   --slider-value-bg: var(--accent-subtle);
   --slider-thumb-border: var(--bg-base);
 
@@ -779,14 +779,14 @@ html:not([data-theme='dark']) .focus-ring:focus-visible {
   box-shadow:
     0 0 0 1.5px var(--bg-base),
     0 0 0 3.5px var(--accent),
-    0 0 24px color-mix(in srgb, var(--accent) 40%, transparent);
+    0 0 14px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 html:not([data-theme='dark']) .ring-glow {
   box-shadow:
     0 0 0 1.5px var(--bg-base),
     0 0 0 3.5px var(--accent),
-    0 0 16px color-mix(in srgb, var(--accent) 25%, transparent);
+    0 0 10px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 /* ── Card surface gradient — merged polished look on dark */
@@ -1435,12 +1435,12 @@ html:not([data-theme='dark']) .compact-data-table {
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--skeleton-base) 25%,
+    var(--skeleton-base) 35%,
     var(--skeleton-highlight) 50%,
-    var(--skeleton-base) 75%
+    var(--skeleton-base) 65%
   );
   background-size: 1200px 100%;
-  animation: shimmer 1.6s ease-in-out infinite;
+  animation: shimmer 2.4s linear infinite;
   border-radius: var(--radius-sm);
   pointer-events: none;
 }

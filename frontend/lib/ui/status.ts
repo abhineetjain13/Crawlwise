@@ -69,6 +69,14 @@ export function dashboardStatusDotColor(status: string): string {
   return 'var(--accent)';
 }
 
+/** Completed / killed / partial verdicts use flat (text-only) badges. */
+export function isFlatStatus(status: string, summary?: RunSummaryLike): boolean {
+  if (status === 'killed') return true;
+  if (status !== 'completed') return false;
+  const verdict = String(summary?.extraction_verdict ?? '').trim().toLowerCase();
+  return verdict === 'partial' || verdict === '';
+}
+
 export function humanizeStatus(status: string): string {
   return String(status || '')
     .replace(/_/g, ' ')

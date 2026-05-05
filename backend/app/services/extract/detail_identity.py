@@ -16,8 +16,11 @@ from app.services.config.extraction_rules import (
     DETAIL_UTILITY_PATH_TOKENS,
     JOB_LISTING_DETAIL_ROOT_MARKERS,
     JOB_LISTING_DETAIL_PATH_MARKERS,
+    LISTING_CATEGORY_PATH_SEGMENTS,
+    LISTING_CATEGORY_PATH_PREFIXES,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_NON_LISTING_PATH_TOKENS,
+    LISTING_PRODUCT_DETAIL_ID_RE,
     PRODUCT_SLUG_MIN_TERMINAL_TOKENS,
     YEAR_SLUG_PATTERN,
 )
@@ -48,6 +51,19 @@ def _path_segment_tokens(value: str) -> set[str]:
     }
 
 
+def _listing_url_has_product_detail_identity(url: str) -> bool:
+    return LISTING_PRODUCT_DETAIL_ID_RE.search(str(url or "")) is not None
+
+
+def _listing_url_has_category_path_segment(path: str) -> bool:
+    segments = [
+        segment.strip().lower()
+        for segment in str(path or "").split("/")
+        if segment.strip()
+    ]
+    return bool(set(segments) & set(LISTING_CATEGORY_PATH_SEGMENTS))
+
+
 def listing_url_is_structural(url: str, page_url: str) -> bool:
     lowered = url.lower()
     if lowered.startswith(("javascript:", "#", "mailto:")):
@@ -61,6 +77,22 @@ def listing_url_is_structural(url: str, page_url: str) -> bool:
             return True
         if parsed.path.rstrip("/").lower() == page_parsed.path.rstrip("/").lower():
             return True
+        if _listing_url_has_product_detail_identity(lowered):
+            return False
+        # Sibling-category rejection.
+        # When both the listing page and the candidate share a known
+        # category path prefix (e.g. both /c/<slug>), the candidate is
+        # a navigation link to another category, not a product.
+        candidate_path = parsed.path.lower()
+        page_path = page_parsed.path.lower()
+        if (
+            _listing_url_has_category_path_segment(page_path)
+            and _listing_url_has_category_path_segment(candidate_path)
+        ):
+            return True
+        for prefix in LISTING_CATEGORY_PATH_PREFIXES:
+            if page_path.startswith(prefix) and candidate_path.startswith(prefix):
+                return True
         raw_segments = [
             segment.strip().lower()
             for segment in parsed.path.split("/")
@@ -105,6 +137,10 @@ def listing_detail_like_path(url: str, *, is_job: bool) -> bool:
     if is_job:
         return _job_detail_like_path(lowered)
     parsed = urlparse(lowered)
+    if _listing_url_has_product_detail_identity(lowered):
+        return True
+    if _listing_url_has_category_path_segment(parsed.path):
+        return False
     segments = [
         segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()
     ]
@@ -597,7 +633,6 @@ def _detail_redirect_identity_is_mismatched(
                 "availability",
                 "category",
                 "product_details",
-                "selected_variant",
                 "variants",
             )
         )

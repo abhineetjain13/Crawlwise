@@ -7,6 +7,7 @@ from urllib.parse import unquote, urlparse
 
 from app.services.config.extraction_rules import (
     AVAILABILITY_IN_STOCK,
+    AVAILABILITY_OUT_OF_STOCK,
     CANDIDATE_PLACEHOLDER_VALUES,
     DETAIL_CATEGORY_LABEL_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
@@ -74,9 +75,11 @@ _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(
         r"^oops!? the page you(?:'|’)re looking for can(?:'|’)t be found\.?$", re.I
     ),
-    re.compile(r"\bpage not found\b", re.I),
-    re.compile(r"\bnot found\b", re.I),
-    re.compile(r"\baccess denied\b", re.I),
+    re.compile(r"^page not found$", re.I),
+    re.compile(r"^not found$", re.I),
+    re.compile(r"^access denied$", re.I),
+)
+_DETAIL_WAF_QUEUE_TITLE_PATTERNS = (
     re.compile(r"\bsorry for the wait\b", re.I),
     re.compile(r"\bplease wait while we verify\b", re.I),
     re.compile(r"\bwe need to verify\b", re.I),
@@ -84,6 +87,10 @@ _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(r"\bqueue-it\b", re.I),
     re.compile(r"^please wait\b", re.I),
     re.compile(r"\byou are in a virtual queue\b", re.I),
+)
+_DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
+    *_DETAIL_PLACEHOLDER_TITLE_PATTERNS,
+    *_DETAIL_WAF_QUEUE_TITLE_PATTERNS,
 )
 
 
@@ -116,6 +123,7 @@ def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
         record["additional_images"] = merged[1:]
         return
     record.pop("additional_images", None)
+
 
 def _sanitize_ecommerce_detail_record(
     record: dict[str, Any],
@@ -184,6 +192,7 @@ def _sanitize_detail_placeholder_scalars(
         else:
             record.pop("product_attributes", None)
 
+
 def _feature_text_is_json_object(value: str) -> bool:
     text = clean_text(value)
     if not (text.startswith("{") and text.endswith("}")):
@@ -192,6 +201,8 @@ def _feature_text_is_json_object(value: str) -> bool:
         return isinstance(json.loads(text), dict)
     except (TypeError, ValueError):
         return False
+
+
 def _sanitize_detail_identity_scalars(
     record: dict[str, Any],
     *,
@@ -1087,8 +1098,8 @@ def _reconcile_detail_availability_from_variants(record: dict[str, Any]) -> None
     }
     if AVAILABILITY_IN_STOCK in availabilities:
         record["availability"] = AVAILABILITY_IN_STOCK
-    elif availabilities == {"out_of_stock"}:
-        record["availability"] = "out_of_stock"
+    elif availabilities == {AVAILABILITY_OUT_OF_STOCK}:
+        record["availability"] = AVAILABILITY_OUT_OF_STOCK
 
 
 dedupe_primary_and_additional_images = _dedupe_primary_and_additional_images

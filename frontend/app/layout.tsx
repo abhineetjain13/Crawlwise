@@ -1,17 +1,16 @@
 import type { Metadata } from 'next';
 import './globals.css';
 
-import { IBM_Plex_Sans, JetBrains_Mono } from 'next/font/google';
+import { JetBrains_Mono, Outfit } from 'next/font/google';
 
 import { AppShell } from '../components/layout/app-shell';
 import { QueryProvider } from '../components/ui/query-provider';
 
-// Primary sans — variable name must match globals.css: var(--font-primary-source, 'IBM Plex Sans')
-const mainFont = IBM_Plex_Sans({
+// Primary sans — Outfit
+const mainFont = Outfit({
   subsets: ['latin'],
   variable: '--font-primary-source',
   weight: ['300', '400', '500', '600', '700'],
-  style: ['normal', 'italic'],
   display: 'swap',
 });
 

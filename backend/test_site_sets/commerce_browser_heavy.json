@@ -1,0 +1,1680 @@
+{
+  "name": "commerce_browser_heavy",
+  "description": "Commerce Extended CE1-CE4 root-cause acceptance set. Soft gate reports tracked issues until refactor slices are verified.",
+  "sites": [
+    {
+      "name": "CE1 1",
+      "group": "CE1",
+      "url": "https://www.goat.com/sneakers/dunk-low-black-white-dd1391-100",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 2",
+      "group": "CE1",
+      "url": "https://stockx.com/nike-dunk-low-retro-white-black-2021",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 3",
+      "group": "CE1",
+      "url": "https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 4",
+      "group": "CE1",
+      "url": "https://www.sneakersnstuff.com/products/dime-soft-rock-crewneck-dime2sp2542blk",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 5",
+      "group": "CE1",
+      "url": "https://www.notre-shop.com/collections/new-arrivals/products/joe-freshgoods-abzorb-1890-sneaker-in-pirate-black-heron-persian-purple",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 6",
+      "group": "CE1",
+      "url": "https://sneakerpolitics.com/collections/hoodies/products/one-of-these-days-follow-the-road-pullover-hoodie-dark-brown",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 7",
+      "group": "CE1",
+      "url": "https://www.shoepalace.com/products/jordan-hj0139-045-40th-anniversary-graphic-womens-short-sleeve-shirt-black-red-1",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 8",
+      "group": "CE1",
+      "url": "https://www.dtlr.com/collections/men/products/jordan-air-jordan-5-retro-white-metallic-mf-white-hq7978-103",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 9",
+      "group": "CE1",
+      "url": "https://www.endclothing.com/us/47-ny-yankees-clean-up-cap-b-rgw17gws-vn.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 10",
+      "group": "CE1",
+      "url": "https://www.size.co.uk/product/purple-adidas-originals-sl-72-pt/19738059/",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 11",
+      "group": "CE1",
+      "url": "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 12",
+      "group": "CE1",
+      "url": "https://www.discogs.com/release/249504",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE1 13",
+      "group": "CE1",
+      "url": "https://www.backmarket.com/en-us/p/iphone-15-plus",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 1",
+      "group": "CE2",
+      "url": "https://www.amazon.com/dp/B08J5F3G18",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 2",
+      "group": "CE2",
+      "url": "https://www.walmart.com/ip/Apple-AirPods-with-Charging-Case-2nd-Generation/604342441",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 3",
+      "group": "CE2",
+      "url": "https://www.target.com/p/tobago-stripe-duvet-cover-set-levtex-home/-/A-1002150739",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 4",
+      "group": "CE2",
+      "url": "https://www.bestbuy.com/product/apple-airpods-pro-2nd-generation-white/JJ8ZH6TPSW",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 5",
+      "group": "CE2",
+      "url": "https://www.costco.com/p/-/sleep-number-ultimate-12-mattress/4201005351",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 6",
+      "group": "CE2",
+      "url": "https://www.lowes.com/pd/Minka-Lavery-Lansdale-Sand-Black-Transitional-Opal-Glass-Lantern-Pendant-Light/1001420790",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 7",
+      "group": "CE2",
+      "url": "https://www.homedepot.com/p/MSI-Yellow-Pebbles-12-in-x-12-in-Polished-Quartzite-Floor-and-Wall-Tile-10-sq-ft-case-LPEBMYEL1212POL/202515091",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 8",
+      "group": "CE2",
+      "url": "https://www.samsclub.com/ip/Scotch-Heavy-Duty-Shipping-Packaging-Tape-Dispensers-1-88-x-27-7-yd-6-Pack/5113185138",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 9",
+      "group": "CE2",
+      "url": "https://www.macys.com/shop/product/tommy-hilfiger-mens-hiday-casualized-hybrid-oxfords",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 10",
+      "group": "CE2",
+      "url": "https://www.nordstrom.com/s/nike-air-force-1-07-basketball-sneaker-men/7507996",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 11",
+      "group": "CE2",
+      "url": "https://www.wayfair.com/furniture/pdp/flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 12",
+      "group": "CE2",
+      "url": "https://www.bhphotovideo.com/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE2 13",
+      "group": "CE2",
+      "url": "https://www.rei.com/product/724687/nikwax-tech-wash-10-fl-oz",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 1",
+      "group": "CE3",
+      "url": "https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 2",
+      "group": "CE3",
+      "url": "https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 3",
+      "group": "CE3",
+      "url": "https://in.puma.com/in/en/pd/speedcat-sneakers/406329",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 4",
+      "group": "CE3",
+      "url": "https://ar.puma.com/pd/zapatillas-mostro-ecstasy-unisex/397328.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 5",
+      "group": "CE3",
+      "url": "https://www.zara.com/us/en/rustic-cotton-t-shirt-p04424306.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 6",
+      "group": "CE3",
+      "url": "https://www.apple.com/shop/buy-iphone/iphone-16",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 7",
+      "group": "CE3",
+      "url": "https://www.farfetch.com/in/shopping/men/philipp-plein-leather-disco-biker-jacket-item-18497263.aspx",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 8",
+      "group": "CE3",
+      "url": "https://www.ssense.com/en-us/men/product/willy-chavarria/brown-ruff-rider-leather-jacket/19072301",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 9",
+      "group": "CE3",
+      "url": "https://www.ulta.com/p/shape-tape-concealer-xlsImpprod14251035",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 10",
+      "group": "CE3",
+      "url": "https://www.sephora.com/product/colorful-eyeshadow-P515026",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 11",
+      "group": "CE3",
+      "url": "https://www.zappos.com/kratos/p/womens-hoka-bondi-9-berry-jam-berry-patch/product/9984296/color/318988",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 12",
+      "group": "CE3",
+      "url": "https://www.asos.com/us/asos-curve/asos-design-curve-lightweight-pull-on-barrel-pants-in-darkwash/prd/210397084",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 13",
+      "group": "CE3",
+      "url": "https://us.frankbody.com/products/original-coffee-scrub",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 14",
+      "group": "CE3",
+      "url": "https://colourpop.com/products/going-coconuts-eyeshadow-palette",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 15",
+      "group": "CE3",
+      "url": "https://www.fashionnova.com/products/just-vibes-strapless-pant-set-yellow",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 16",
+      "group": "CE3",
+      "url": "https://www.puravidabracelets.com/products/black-seascape-stretch-bracelet",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 17",
+      "group": "CE3",
+      "url": "https://www.untuckit.com/collections/shirts/products/cameron-wr-2",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 18",
+      "group": "CE3",
+      "url": "https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 19",
+      "group": "CE3",
+      "url": "https://www.allbirds.com/products/mens-wool-runners-natural-black",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 20",
+      "group": "CE3",
+      "url": "https://bombas.com/products/mens-all-purpose-performance-ankle-socks",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 21",
+      "group": "CE3",
+      "url": "https://www.patagonia.com/product/mens-nano-puff-insulated-jacket/84213.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 22",
+      "group": "CE3",
+      "url": "https://www.vans.com/en-us/p/shoes/icons/old-skool-5205/old-skool-VN000E9TBPG",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 23",
+      "group": "CE3",
+      "url": "https://www.birkenstock.com/us/arizona-birko-flor/arizona-core-birkoflor-0-eva-u_1.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 24",
+      "group": "CE3",
+      "url": "https://www.converse.com/shop/p/chuck-taylor-all-star-retro-embroidery-unisex-high-top-shoe/A16914F.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 25",
+      "group": "CE3",
+      "url": "https://www.urbanoutfitters.com/shop/bdg-cindy-shoulder-bag?color=048",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 26",
+      "group": "CE3",
+      "url": "https://www.anthropologie.com/shop/boho-bangle-bracelets-set-of-3?color=012&type=STANDARD",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 27",
+      "group": "CE3",
+      "url": "https://www.selfridges.com/GB/en/product/creed-aventus-eau-de-parfum_365-83022651-AVENTUS/",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 28",
+      "group": "CE3",
+      "url": "https://www.mytheresa.com/int/en/women/valentino-garavani-loco-small-floral-linen-top-handle-bag-beige-p01155657",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 29",
+      "group": "CE3",
+      "url": "https://www.mrporter.com/en-us/mens/product/cartier-eyewear/accessories/aviator/pasha-aviator-style-silver-tone-sunglasses/46376663163032937",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 30",
+      "group": "CE3",
+      "url": "https://www.net-a-porter.com/en-us/shop/product/eleuteri/jewelry-and-watches/vintage-bracelets/plus-bulgari-vintage-1980s-doppio-cuore-18-karat-gold-coral-and-diamond-bracelet/46376663163120086",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 31",
+      "group": "CE3",
+      "url": "https://www.luisaviaroma.com/en-in/p/barrow/kids-boys/83I-UKD027",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 32",
+      "group": "CE3",
+      "url": "https://www.harrods.com/en-gb/p/brinkhaus-emperor-100percent-arctic-duck-down-duvet-85-tog-000000000004579693",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 33",
+      "group": "CE3",
+      "url": "https://31philliplim.com/collections/the-luna-bag-1/products/luna-1",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 34",
+      "group": "CE3",
+      "url": "https://zadig-et-voltaire.com/eu/uk/p/JMTS01771443/t-shirt-teddyx-blue-sixtine",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 35",
+      "group": "CE3",
+      "url": "https://www.karenmillen.com/eu/product/karen-millen-cotton-utility-button-detail-barrel-leg-trouser_bkk28382?colour=ivory",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 36",
+      "group": "CE3",
+      "url": "https://www.phase-eight.com/product/lucinda-spot-midi-dress-10015500806.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 37",
+      "group": "CE3",
+      "url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-seersucker-sutton-suit-2",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 38",
+      "group": "CE3",
+      "url": "https://savannahs.com/collections/all-boots/products/pavlova-100-lace-up-blush-satin-boots-cl28517s",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 39",
+      "group": "CE3",
+      "url": "https://www.gucci.com/int/en/pr/men/accessories-for-men/scarves-for-men/scarves-for-men/gg-wool-silk-jacquard-stole-p-8705434GAK31360",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 40",
+      "group": "CE3",
+      "url": "https://www.onepeloton.com/shop/tread",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 41",
+      "group": "CE3",
+      "url": "https://www.bose.com/p/earbuds/bose-ultra-open-earbuds/ULT-HEADPHONEOPN.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 42",
+      "group": "CE3",
+      "url": "https://www.glossier.com/en-in/products/balm-dotcom",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 43",
+      "group": "CE3",
+      "url": "https://www.yeti.com/drinkware/tumblers/21071507371.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE3 44",
+      "group": "CE3",
+      "url": "https://www.brooklinen.com/products/plush-bath-towels?variant=42851068870746",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 1",
+      "group": "CE4",
+      "url": "https://www.dickssportinggoods.com/p/birkenstock-womens-arizona-big-buckle-soft-footbed-sandals-25birwcasuwrznbgbcegp",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 2",
+      "group": "CE4",
+      "url": "https://www.jdsports.co.uk/product/pink-adidas-originals-classic-shorts/19741988/",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 3",
+      "group": "CE4",
+      "url": "https://shop.lululemon.com/p/men-joggers/ABC-Jogger/_/prod8530240",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 4",
+      "group": "CE4",
+      "url": "https://www.decathlon.co.uk/p/pressurised-padel-balls-pb-speed-tri-pack/347273/m8804642",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 5",
+      "group": "CE4",
+      "url": "https://www.thomann.de/gb/akg_k702.htm",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 6",
+      "group": "CE4",
+      "url": "https://www.ifixit.com/products/iphone-16-plus-battery",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 7",
+      "group": "CE4",
+      "url": "https://www.vitacost.com/vitacost-vitamin-d3-mini-gels",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 8",
+      "group": "CE4",
+      "url": "https://www.rockler.com/rockler-table-saw-crosscut-sled",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 9",
+      "group": "CE4",
+      "url": "https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 10",
+      "group": "CE4",
+      "url": "https://www.kitchenaid.com/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 11",
+      "group": "CE4",
+      "url": "https://www.desertcart.in/products/808107894-hormone-healthy-eats-100-recipes-to-balance-your-hormones-support",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 12",
+      "group": "CE4",
+      "url": "https://www.sweetwater.com/store/detail/WH1kXM5Blk--sony-wh-1000xm5-wireless-noise-canceling-headphones-black",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 13",
+      "group": "CE4",
+      "url": "https://www.nintendo.com/us/store/products/pragmata-switch-2/",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 14",
+      "group": "CE4",
+      "url": "https://www.usa.canon.com/shop/p/eos-r5",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 15",
+      "group": "CE4",
+      "url": "https://www.lego.com/en-us/product/millennium-falcon-75192",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 16",
+      "group": "CE4",
+      "url": "https://intl.fender.com/products/american-vintage-ii-1972-telecaster-thinline",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 17",
+      "group": "CE4",
+      "url": "https://www.williams-sonoma.com/products/breville-the-bambino-plus/",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 18",
+      "group": "CE4",
+      "url": "https://www.sony.co.in/interchangeable-lens-cameras/products/ilce-9m3",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 19",
+      "group": "CE4",
+      "url": "https://www.therevolverclub.com/products/technics-sl-1200mk7",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 20",
+      "group": "CE4",
+      "url": "https://store.hermanmiller.com/office-chairs-aeron/aeron-chair/2195348.html",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 21",
+      "group": "CE4",
+      "url": "https://fellowproducts.com/products/stagg-ekg-electric-pour-over-kettle",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 22",
+      "group": "CE4",
+      "url": "https://www.bluenile.com/engagement-rings/design-your-own-ring/classic-four-prong-solitaire-engagement-ring-in-platinum-item-194156",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    },
+    {
+      "name": "CE4 23",
+      "group": "CE4",
+      "url": "https://www.roamluggage.com/collections/luggage/products/large-check-in",
+      "surface": "ecommerce_detail",
+      "bucket": "commerce_extended",
+      "gate": "soft",
+      "quality_expectations": {
+        "require_identity": true,
+        "require_clean_category": true,
+        "require_clean_long_text": true,
+        "require_clean_variants": true,
+        "require_clean_system_fields": true,
+        "require_identifier_shapes": true,
+        "require_title_not_internal_token": true,
+        "require_variant_currency_parity": true
+      }
+    }
+  ]
+}

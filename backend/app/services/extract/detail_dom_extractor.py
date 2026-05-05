@@ -1089,7 +1089,11 @@ def _extract_variants_from_dom(
                 "entries": list(merged_entries.values()),
             }
         )
-        if len(deduped_groups) >= max(1, int(DOM_VARIANT_GROUP_LIMIT)):
+        try:
+            group_limit = max(1, int(DOM_VARIANT_GROUP_LIMIT))
+        except (TypeError, ValueError):
+            group_limit = 1
+        if len(deduped_groups) >= group_limit:
             break
 
     if not deduped_groups:
@@ -1277,10 +1281,7 @@ def _backfill_variants_from_dom_if_missing(
                 # keys cannot overwrite earlier rows and merge unrelated variants.
                 existing_by_key.setdefault(row_key, row)
             existing_by_index[index] = row
-        index_fallback_allowed = bool(existing_variants) and (
-            len(dom_variant_rows) == len(existing_variants)
-            or abs(len(dom_variant_rows) - len(existing_variants)) <= 1
-        )
+        index_fallback_allowed = False
         merged_rows: list[dict[str, Any]] = []
         for index, dom_row in enumerate(dom_variant_rows):
             dom_key = text_or_none(dom_row.get("variant_id")) or text_or_none(

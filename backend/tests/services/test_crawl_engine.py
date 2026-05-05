@@ -10,10 +10,12 @@ from app.services.extract.detail_identity import (
     detail_identity_codes_from_url,
     detail_title_from_url,
     detail_url_is_utility,
+    listing_detail_like_path,
 )
 from app.services.extract.detail_price_extractor import backfill_detail_price_from_html
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
+from app.services.listing_extractor import extract_listing_records
 from tests.fixtures.loader import read_optional_artifact_text
 
 
@@ -1626,6 +1628,49 @@ def test_extract_records_drops_rendered_listing_category_hub_rows_without_suppor
     )
 
     assert rows == []
+
+
+def test_extract_records_rejects_footer_policy_links_on_skeleton_plp() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <div class="PLP_placeholderWrap">
+            <div class="ProductCardSkeleton productSkeleton"></div>
+          </div>
+        </main>
+        <footer>
+          <div class="Footer_uspIcons">
+            <a href="https://content.abfrl.in/shipping-policy">
+              <img src="https://imagescdn.reebok.in/uploads/micrositmedia/production/alteration_Copy_2alteration-.png" alt="FREE SHIPPING" />
+              <span>FREE SHIPPING</span>
+            </a>
+          </div>
+          <div class="Footer_uspIcons">
+            <a href="https://content.abfrl.in/returns-cancel-policy">
+              <img src="https://imagescdn.reebok.in/uploads/micrositmedia/production/alteration_Copyreturn-1.png" alt="RETURN WITHIN 15 DAYS" />
+              <span>RETURN WITHIN 15 DAYS</span>
+            </a>
+          </div>
+        </footer>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://reebok.abfrl.in/c/leggings-and-tights",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == []
+    assert extract_listing_records(
+        html,
+        "https://reebok.abfrl.in/c/leggings-and-tights",
+        "ecommerce_listing",
+        max_records=10,
+    ) == []
 
 
 def test_extract_records_recovers_rendered_listing_price_from_fragment_text() -> None:
@@ -3929,6 +3974,64 @@ def test_extract_ecommerce_listing_treats_proddetail_paths_as_detail_links() -> 
     assert len(rows) == 1
     assert rows[0]["url"] == "https://www.indiamart.com/proddetail/widget-prime-123.html"
     assert rows[0]["title"] == "Widget Prime"
+
+
+def test_extract_ecommerce_listing_keeps_id_product_links_over_productlist_facets() -> None:
+    html = """
+    <html>
+      <body>
+        <aside>
+          <article class="product-card">
+            <a href="/store/c/productlist/N=361945">
+              <h2 class="product-title">Acne & Blemish Treatments</h2>
+            </a>
+          </article>
+          <article class="product-card">
+            <a href="/store/c/productlist/N=360500">
+              <h2 class="product-title">Allergy Medications</h2>
+            </a>
+          </article>
+        </aside>
+        <main>
+          <article class="product-card">
+            <a href="/store/c/binaxnow-covid-19-antigen-rapid-self-test-at-home-kit/ID=300414527-product">
+              <img src="/images/binax.jpg" alt="BinaxNOW COVID-19 Antigen Rapid Self-Test at Home Kit" />
+              <h2 class="product-title">BinaxNOW COVID-19 Antigen Rapid Self-Test at Home Kit - 2 ea</h2>
+            </a>
+            <div class="price">$23.99</div>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.walgreens.com/store/c/productlist/N=20007318",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["url"] == (
+        "https://www.walgreens.com/store/c/"
+        "binaxnow-covid-19-antigen-rapid-self-test-at-home-kit/"
+        "ID=300414527-product"
+    )
+    assert rows[0]["title"] == "BinaxNOW COVID-19 Antigen Rapid Self-Test at Home Kit - 2 ea"
+    assert rows[0]["price"] == "23.99"
+
+
+def test_listing_identity_rejects_productlist_as_detail_marker() -> None:
+    listing_url = "https://www.walgreens.com/store/c/productlist/N=20007318"
+    product_url = (
+        "https://www.walgreens.com/store/c/"
+        "binaxnow-covid-19-antigen-rapid-self-test-at-home-kit/"
+        "ID%3D300414527-product"
+    )
+
+    assert listing_detail_like_path(listing_url, is_job=False) is False
+    assert listing_detail_like_path(product_url, is_job=False) is True
 
 
 def test_extract_ecommerce_listing_falls_back_to_original_dom_when_cleaned_dom_strips_card_headers() -> None:

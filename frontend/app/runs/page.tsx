@@ -99,7 +99,10 @@ function RunRow({
 
       {/* Status */}
       <TableCell>
-        <Badge tone={runExecutionTone(run.status, run.result_summary)}>
+        <Badge
+          tone={runExecutionTone(run.status, run.result_summary)}
+          flat={run.status === 'completed' || run.status === 'killed'}
+        >
           {runExecutionLabel(run.status, run.result_summary)}
         </Badge>
       </TableCell>
@@ -285,8 +288,8 @@ export default function RunsPage() {
           }
           return (
             <Table
-              // 320px = page header + filters bar + table chrome + footer padding
-              wrapperClassName="max-h-[calc(100vh-320px)]"
+              // 260px = page header + filters bar + table chrome + footer padding
+              wrapperClassName="max-h-[calc(100vh-260px)]"
               className="compact-data-table table-fixed"
             >
               <TableHeader>

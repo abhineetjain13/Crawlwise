@@ -264,12 +264,27 @@ def test_public_record_firewall_flattens_variants_to_public_shape() -> None:
         "variant_count": 1,
     }
     assert rejected == {
-        "selected_variant": "field_not_allowed_for_surface",
-        "variant_axes": "field_not_allowed_for_surface",
-        "available_sizes": "field_not_allowed_for_surface",
-        "option1_name": "field_not_allowed_for_surface",
-        "option1_values": "field_not_allowed_for_surface",
+        "selected_variant": "public_contract_excluded",
+        "variant_axes": "public_contract_excluded",
+        "available_sizes": "public_contract_excluded",
+        "option1_name": "public_contract_excluded",
+        "option1_values": "public_contract_excluded",
     }
+
+
+def test_public_record_firewall_drops_ecommerce_tags_even_when_allowed() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Widget",
+            "tags": ["size_10", "stock_in-stock", "featured"],
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget",
+        requested_fields=["tags"],
+    )
+
+    assert data == {"title": "Widget"}
+    assert rejected == {"tags": "public_contract_excluded"}
 
 
 def test_persistence_schema_firewall_drops_default_ecommerce_schema_pollution() -> None:
@@ -300,8 +315,8 @@ def test_persistence_schema_firewall_drops_default_ecommerce_schema_pollution() 
     }
     assert rejected == {
         "image_count": "default_public_field_excluded",
-        "option1_name": "field_not_allowed_for_surface",
-        "option1_values": "field_not_allowed_for_surface",
+        "option1_name": "public_contract_excluded",
+        "option1_values": "public_contract_excluded",
         "canonical_url": "default_public_field_excluded",
         "created_at": "default_public_field_excluded",
         "published_at": "default_public_field_excluded",

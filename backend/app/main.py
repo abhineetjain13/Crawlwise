@@ -44,6 +44,7 @@ from app.services.acquisition import (
 )
 from app.services.auth_service import bootstrap_admin_user
 from app.services.crawl_service import recover_stale_local_runs
+from app.services.llm_provider_client import close_llm_provider_clients
 
 logger = logging.getLogger("app")
 configure_logging()
@@ -69,6 +70,7 @@ async def lifespan(_: FastAPI):
     finally:
         await shutdown_browser_runtime()
         await close_shared_http_client()
+        await close_llm_provider_clients()
         await close_redis()
         await dispose_engine()
 

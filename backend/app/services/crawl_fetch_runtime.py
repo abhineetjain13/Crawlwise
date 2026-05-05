@@ -770,7 +770,15 @@ async def _run_http_fetcher_attempts(
     fetcher,
     proxy: str | None,
 ) -> tuple[PageFetchResult | None, bool]:
-    max_attempts = max(1, int(crawler_runtime_settings.http_max_retries) + 1)
+    try:
+        retries = int(crawler_runtime_settings.http_max_retries or 0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid http_max_retries=%r; using no retries",
+            crawler_runtime_settings.http_max_retries,
+        )
+        retries = 0
+    max_attempts = max(1, retries + 1)
     for attempt in range(1, max_attempts + 1):
         result = await _attempt_http_fetch(context, fetcher=fetcher, proxy=proxy, attempt=attempt, max_attempts=max_attempts)
         if not isinstance(result, PageFetchResult):
@@ -1127,12 +1135,26 @@ async def _update_host_result_memory(
 
 def _retryable_status_for_http_fetch(status_code: int) -> bool:
     code = int(status_code or 0)
-    return code in {int(value) for value in list(crawler_runtime_settings.http_retry_status_codes or [])}
+    retryable_codes: set[int] = set()
+    for value in list(crawler_runtime_settings.http_retry_status_codes or []):
+        try:
+            retryable_codes.add(int(value))
+        except (TypeError, ValueError):
+            logger.warning("Ignoring invalid http retry status code: %r", value)
+    return code in retryable_codes
 
 
 async def _sleep_before_retry(attempt: int) -> None:
-    base_ms = max(0, int(crawler_runtime_settings.http_retry_backoff_base_ms))
-    max_ms = max(base_ms, int(crawler_runtime_settings.http_retry_backoff_max_ms))
+    try:
+        raw_base_ms = int(crawler_runtime_settings.http_retry_backoff_base_ms or 0)
+    except (TypeError, ValueError):
+        raw_base_ms = 0
+    try:
+        raw_max_ms = int(crawler_runtime_settings.http_retry_backoff_max_ms or 0)
+    except (TypeError, ValueError):
+        raw_max_ms = 0
+    base_ms = max(0, raw_base_ms)
+    max_ms = max(base_ms, raw_max_ms)
     delay_ms = min(max_ms, base_ms * (2 ** max(0, attempt - 1)))
     if delay_ms <= 0:
         return

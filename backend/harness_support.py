@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -32,6 +33,8 @@ from app.services.config.extraction_rules import (
 )
 from app.services.config.field_mappings import PUBLIC_RECORD_LEGACY_VARIANT_FIELDS
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 HARNESS_MODE_ACQUISITION_ONLY = "acquisition_only"
 HARNESS_MODE_FULL_PIPELINE = "full_pipeline"
@@ -1522,6 +1525,10 @@ async def _ensure_harness_user_id(session) -> int:
         await session.refresh(user)
     elif not verify_password(harness_password, user.hashed_password):
         user.hashed_password = hash_password(harness_password)
+        logger.info(
+            "Synchronized harness user password hash",
+            extra={"user_id": int(user.id), "email": user.email},
+        )
         await session.commit()
         await session.refresh(user)
     return int(user.id)

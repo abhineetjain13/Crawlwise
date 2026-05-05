@@ -12,7 +12,7 @@ from app.services.config.extraction_rules import (
     DETAIL_VARIANT_CONTEXT_NOISE_TOKENS,
     DETAIL_VARIANT_SCOPE_SELECTOR,
     VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH,
-    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT,
+    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK,
     VARIANT_SCOPE_MAX_ROOTS,
     VARIANT_AXIS_LABEL_NOISE_PATTERNS,
     VARIANT_AXIS_LABEL_NOISE_TOKENS,
@@ -166,7 +166,10 @@ def _variant_node_in_noise_context(node: Any) -> bool:
     try:
         depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH))
     except (TypeError, ValueError):
-        depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT))
+        try:
+            depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK))
+        except (TypeError, ValueError):
+            depth = 0
     current = node
     for _ in range(depth):
         if current is None or not hasattr(current, "get"):

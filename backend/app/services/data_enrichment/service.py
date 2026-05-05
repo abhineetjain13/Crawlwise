@@ -755,7 +755,6 @@ def _compiled_material_strip_patterns() -> tuple[re.Pattern[str], ...]:
     return tuple(compiled)
 
 
-@lru_cache(maxsize=1)
 def _material_strip_patterns() -> tuple[re.Pattern[str], ...]:
     return _compiled_material_strip_patterns()
 

@@ -248,8 +248,12 @@ def _collect_structured_payload_candidates(
                 and _structured_payload_is_breadcrumb_list(payload)
             ):
                 candidate_source = "json_ld_breadcrumb"
-            add_candidate(candidates, field_name, value)
-            candidate_sources.setdefault(field_name, []).append(candidate_source)
+            added = add_candidate(candidates, field_name, value)
+            if added <= 0:
+                continue
+            candidate_sources.setdefault(field_name, []).extend(
+                [candidate_source] * added
+            )
             bucket = field_sources.setdefault(field_name, [])
             if candidate_source not in bucket:
                 bucket.append(candidate_source)

@@ -12,6 +12,7 @@ from app.services.config.extraction_rules import (
     DETAIL_IRRELEVANT_JSON_LD_TYPES,
     INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS,
     INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS,
+    PRICE_SOURCE_KEY_FIELDS,
     STRUCTURED_CANDIDATE_LIST_SLICE,
     STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT,
 )
@@ -441,7 +442,9 @@ def _coerce_structured_candidate_value(
 
 def _source_key_is_price_field(value: object) -> bool:
     normalized = normalize_field_key(str(value or ""))
-    return normalized in {"price", "sale_price", "original_price", "compare_at_price"}
+    return normalized in {
+        str(field) for field in tuple(PRICE_SOURCE_KEY_FIELDS or ()) if str(field)
+    }
 
 
 def _is_product_attribute_row(payload: dict[str, object]) -> bool:
@@ -814,11 +817,13 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                     continue
                 seen_rows.add(fingerprint)
                 merged_rows.append(row)
-        rows_with_option_values = [
-            row
-            for row in merged_rows
-            if isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))
-        ]
+        rows_with_option_values: list[dict[str, object]] = []
+        for row in merged_rows:
+            has_option_values = isinstance(row.get("option_values"), dict) and bool(
+                row.get("option_values")
+            )
+            if has_option_values:
+                rows_with_option_values.append(row)
         if field_name == "variants" and rows_with_option_values:
             merged_rows = rows_with_option_values
         return merged_rows or None

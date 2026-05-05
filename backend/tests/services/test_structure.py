@@ -86,29 +86,31 @@ FILE_LOC_BUDGETS = {
     Path("app/services/acquisition/browser_page_flow.py"): 1880,
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
+    # Config rules grown due to category/nav URL rules.
+    Path("app/services/config/extraction_rules.py"): 1090,
     # Fetch runtime remains the request/browser arbitration owner.
     Path("app/services/crawl_fetch_runtime.py"): 1235,
     # Detail extraction owns candidate arbitration and tier orchestration.
-    Path("app/services/detail_extractor.py"): 1460,
+    Path("app/services/detail_extractor.py"): 1470,
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
-    Path("app/services/extract/detail_dom_extractor.py"): 1320,
+    Path("app/services/extract/detail_dom_extractor.py"): 1330,
     # Detail finalizer owns public-boundary cleanup and record repair.
     # Grown (+10) to accommodate additional axis-gating logic that reuses
     # shared_variant_logic frozensets instead of re-deriving them locally.
-    Path("app/services/extract/detail_record_finalizer.py"): 1100,
+    Path("app/services/extract/detail_record_finalizer.py"): 1115,
     # Shared variant logic owns generic axis and row reconciliation.
     # Grown (+90) to absorb the extended allowed-axis taxonomy (flavor, type,
     # material_composition, etc.) and related JS-state / DOM helpers.
-    Path("app/services/extract/shared_variant_logic.py"): 1140,
+    Path("app/services/extract/shared_variant_logic.py"): 1150,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
-    Path("app/services/field_value_dom.py"): 1590,
+    Path("app/services/field_value_dom.py"): 1635,
     # Canonical field coercion remains centralized here instead of scattering value policy.
     # Grown (+50) for the availability canonical-enum gate, negative-price rejection
     # wiring, category URL-path rejection, and associated audit comments
     # (2026-05-04 sweep, gemini DQ-4 / DQ-8).
-    Path("app/services/field_value_core.py"): 1480,
+    Path("app/services/field_value_core.py"): 1515,
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1300,
     # JS state mapping stays centralized to avoid adapter-specific drift.

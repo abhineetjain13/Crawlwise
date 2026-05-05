@@ -41,6 +41,28 @@ _STRUCTURED_OBJECT_LIST_FIELDS_RAW = _STATIC_EXPORTS.get(
     (),
 )
 _URL_FIELDS_RAW = _STATIC_EXPORTS.get("URL_FIELDS", ())
+CDN_IMAGE_QUERY_PARAMS = frozenset(
+    tuple(_STATIC_EXPORTS.get("CDN_IMAGE_QUERY_PARAMS", ()) or ())
+) | frozenset(
+    {
+        "fit",
+        "fmt",
+        "h",
+        "height",
+        "hei",
+        "imwidth",
+        "odnbg",
+        "odnheight",
+        "odnwidth",
+        "op_sharpen",
+        "qlt",
+        "quality",
+        "v",
+        "w",
+        "wid",
+        "width",
+    }
+)
 
 EXPORT_IMAGE_URL_SUFFIXES = tuple(_CANDIDATE_IMAGE_FILE_EXTENSIONS)
 BARE_HOST_URL_RE = re.compile(str(_BARE_HOST_URL_PATTERN), re.I)
@@ -188,6 +210,7 @@ YEAR_SLUG_PATTERN = r"(?:19|20)\d{2}"
 PRODUCT_SLUG_MIN_TERMINAL_TOKENS = 3
 GENDER_ARTIFACT_WORDS = ("men", "mens", "women", "womens", "boys", "girls")
 GENDER_ARTIFACT_PATTERN = r"\b(?:men|mens|women|womens|boys|girls)['’]?\s+{candidate}\b"
+GENDER_KEYWORD_TOKENS = frozenset(GENDER_ARTIFACT_WORDS)
 STANDARD_SIZE_VALUES = frozenset({"xs", "s", "m", "l", "xl", "xxl", "xxxl"})
 DEFAULT_DETAIL_MAX_VARIANT_ROWS = 1
 DOM_VARIANT_GROUP_LIMIT = 4
@@ -204,6 +227,7 @@ DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS = frozenset(
     {"discount", "false", "off", "on", "sale", "true"}
 )
 AVAILABILITY_IN_STOCK = "in_stock"
+AVAILABILITY_OUT_OF_STOCK = "out_of_stock"
 NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
     tuple(_STATIC_EXPORTS.get("NOISY_PRODUCT_ATTRIBUTE_KEYS", ()) or ())
 ) | frozenset({"availability", "available", AVAILABILITY_IN_STOCK, "stock_status"})
@@ -278,6 +302,7 @@ DETAIL_VARIANT_CONTEXT_NOISE_TOKENS = (
     "footer",
     "header",
     "newsletter",
+    "modal",
     "promo",
     "promotion",
     "recommend",
@@ -289,8 +314,11 @@ DETAIL_VARIANT_CONTEXT_NOISE_TOKENS = (
     "sort by",
     "filter by",
     "results",
+    "report",
 )
 VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH = 6
+# Hard cap for DOM ancestor walks; fallback is used only if runtime config is invalid.
+VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK = 3
 DETAIL_VARIANT_SCOPE_SELECTOR = (
     "form[action*='cart' i], "
     "form[id*='product' i], "
@@ -311,6 +339,8 @@ DETAIL_PRICE_MAGNITUDE_EPSILON = 0.01
 DETAIL_PRICE_COMPARISON_TOLERANCE = Decimal("0.01")
 DETAIL_LOW_SIGNAL_PRICE_MAX = Decimal("1")
 DETAIL_LOW_SIGNAL_PARENT_MIN = Decimal("10")
+DETAIL_PARENT_VARIANT_PRICE_RATIO_MIN = Decimal("0.5")
+DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX = Decimal("2")
 VARIANT_OPTION_LABEL_MAX_WORDS = 6
 DETAIL_ORIGINAL_PRICE_SELECTORS = (
     *tuple(_STATIC_EXPORTS.get("DETAIL_ORIGINAL_PRICE_SELECTORS", ())),
@@ -360,6 +390,7 @@ DETAIL_BREADCRUMB_CONTAINER_SELECTORS = (
 )
 DETAIL_BREADCRUMB_SEPARATOR_LABELS = frozenset({">", "/", "\\", "|", "›", "»", "→"})
 DETAIL_BREADCRUMB_LABEL_PREFIXES = ("shop all ",)
+DETAIL_BREADCRUMB_NOISE_ICON_PATTERNS = (r"\barrow-right(?:-[a-z]+)?\b",)
 DETAIL_BREADCRUMB_JSONLD_TYPES = frozenset({"breadcrumblist", "breadcrumb_list"})
 DETAIL_BREADCRUMB_MIN_LABEL_LENGTH = 8
 DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO = 0.92
@@ -416,6 +447,18 @@ ORACLE_HCM_LOCATION_LIST_KEYS = (
 DETAIL_FULFILLMENT_LONG_TEXT_PATTERNS = (
     r"\b(?:shipping|delivery|pickup|pick\s*up)\b.{0,80}\b(?:checkout|options?|available)\b",
     r"\bget\s+it\s+today\b.{0,120}\b(?:shipping|delivery|pickup|pick\s*up)\b",
+)
+DETAIL_NOISE_SECTION_SELECTORS = (
+    "[id*='recently-viewed']",
+    "[class*='recently-viewed']",
+    "[id*='similar-products']",
+    "[class*='similar-products']",
+    "[id*='recommendations']",
+    "[class*='recommendations']",
+    "[id*='people-also-bought']",
+    "[class*='people-also-bought']",
+    ".upsell",
+    ".related-products",
 )
 DETAIL_IDENTITY_FIELDS = frozenset({"title", "image_url"})
 VARIANT_FIELDS = frozenset({"variants"})
@@ -508,7 +551,15 @@ FEATURE_SECTION_SELECTORS = (
     ".product-features",
     "#features",
 )
-VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = 3
+VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = (
+    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK
+)
+DETAIL_MATERIALS_ZERO_PERCENT_PATTERN = r"\b0\s*%"
+DETAIL_BRACKET_PROSE_MIN_WORDS = 5
+PRICE_SOURCE_KEY_FIELDS = frozenset(
+    {"price", "sale_price", "original_price", "compare_at_price"}
+)
+CANONICAL_PRICE_FIELDS = frozenset({"price", "sale_price", "original_price"})
 DETAIL_IDENTITY_STOPWORDS = frozenset(
     {
         "and",
@@ -636,6 +687,27 @@ LISTING_PRICE_NODE_SELECTORS = (
 )
 LISTING_PROMINENT_TITLE_TAGS = frozenset(
     {"strong", "b", "h1", "h2", "h3", "h4", "h5", "h6"}
+)
+LISTING_CHROME_TEXT_LIMIT = 800
+# Path prefixes that indicate a category/collection listing page (not a
+# product detail page).  When both the listing page URL and a candidate URL
+# share one of these prefixes the candidate is a sibling category link and
+# should be treated as structural navigation, not a product record.
+LISTING_CATEGORY_PATH_PREFIXES = (
+    "/c/",
+    "/category/",
+    "/categories/",
+    "/collection/",
+    "/collections/",
+    "/catalog/",
+    "/browse/",
+    "/plp/",
+    "/clp/",
+)
+LISTING_CATEGORY_PATH_SEGMENTS = frozenset({"productlist"})
+LISTING_PRODUCT_DETAIL_ID_RE = re.compile(
+    r"(?:^|[/?#&])(?:id(?:=|%3d))?[a-z0-9_-]*\d{4,}[a-z0-9_-]*-product(?:$|[/?#&])",
+    re.I,
 )
 JSON_RECORD_LIST_KEYS = (
     "data",
@@ -855,12 +927,14 @@ MAX_CANDIDATES_PER_FIELD = crawler_runtime_settings.max_candidates_per_field
 
 _EXTRA_EXPORTS = [
     "AVAILABILITY_IN_STOCK",
+    "AVAILABILITY_OUT_OF_STOCK",
     "AVAILABILITY_URL_MAP",
     "NORMALIZER_AVAILABILITY_TOKENS",
     "BARE_HOST_URL_RE",
     "COLOR_KEYWORD_PATTERN",
     "DEFAULT_DETAIL_MAX_VARIANT_ROWS",
     "DOM_VARIANT_GROUP_LIMIT",
+    "DETAIL_BRACKET_PROSE_MIN_WORDS",
     "DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS",
     "DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS",
     "DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS",
@@ -878,6 +952,8 @@ _EXTRA_EXPORTS = [
     "DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO",
     "DETAIL_PRICE_CENT_MAGNITUDE_RATIO",
     "DETAIL_PRICE_COMPARISON_TOLERANCE",
+    "DETAIL_PARENT_VARIANT_PRICE_RATIO_MIN",
+    "DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX",
     "DETAIL_LOW_SIGNAL_PRICE_MAX",
     "DETAIL_LOW_SIGNAL_PARENT_MIN",
     "DETAIL_PRICE_MAGNITUDE_EPSILON",
@@ -896,7 +972,9 @@ _EXTRA_EXPORTS = [
     "DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS",
     "DETAIL_LONG_TEXT_MAX_SECTION_CHARS",
     "DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS",
+    "DETAIL_MATERIALS_ZERO_PERCENT_PATTERN",
     "DETAIL_NOISE_PREFIXES",
+    "DETAIL_NOISE_SECTION_SELECTORS",
     "DETAIL_MATERIALS_POLLUTION_TOKENS",
     "DETAIL_TEXT_HIDDEN_STYLE_TOKENS",
     "DETAIL_TEXT_SCOPE_EXCLUDE_TOKENS",
@@ -911,6 +989,7 @@ _EXTRA_EXPORTS = [
     "DETAIL_BREADCRUMB_SELECTORS",
     "DETAIL_BREADCRUMB_CONTAINER_SELECTORS",
     "DETAIL_BREADCRUMB_LABEL_PREFIXES",
+    "DETAIL_BREADCRUMB_NOISE_ICON_PATTERNS",
     "DETAIL_BREADCRUMB_JSONLD_TYPES",
     "DETAIL_BREADCRUMB_MIN_LABEL_LENGTH",
     "DETAIL_BREADCRUMB_SEPARATOR_LABELS",
@@ -928,13 +1007,18 @@ _EXTRA_EXPORTS = [
     "EXPORT_IMAGE_URL_SUFFIXES",
     "FEATURE_SECTION_SELECTORS",
     "GIF_BASE64_PREFIX",
+    "GENDER_KEYWORD_TOKENS",
     "GENDER_ARTIFACT_PATTERN",
     "IMAGE_FIELDS",
     "INTEGER_VALUE_FIELDS",
     "JSON_RECORD_LIST_KEYS",
     "JOB_LISTING_DETAIL_ROOT_MARKERS",
+    "LISTING_CHROME_TEXT_LIMIT",
     "LISTING_PRICE_NODE_SELECTORS",
     "LISTING_PROMINENT_TITLE_TAGS",
+    "LISTING_CATEGORY_PATH_PREFIXES",
+    "LISTING_CATEGORY_PATH_SEGMENTS",
+    "LISTING_PRODUCT_DETAIL_ID_RE",
     "LONG_TEXT_FIELDS",
     "MAX_CANDIDATES_PER_FIELD",
     "ORACLE_HCM_CX_CONFIG_RE",
@@ -948,6 +1032,9 @@ _EXTRA_EXPORTS = [
     "REMOTE_BOOLEAN_TRUE_TOKENS",
     "PERCENT_RE",
     "PRICE_VALUE_FIELDS",
+    "PRICE_SOURCE_KEY_FIELDS",
+    "CANONICAL_PRICE_FIELDS",
+    "CDN_IMAGE_QUERY_PARAMS",
     "RATING_RE",
     "REVIEW_COUNT_RE",
     "REVIEW_TITLE_RE",
@@ -981,6 +1068,9 @@ _EXTRA_EXPORTS = [
     "STANDARD_SIZE_VALUES",
     "UNRESOLVED_TEMPLATE_URL_TOKENS",
     "VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT",
+    "VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK",
+    "DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS",
+    "NOISY_PRODUCT_ATTRIBUTE_KEYS",
 ]
 
 

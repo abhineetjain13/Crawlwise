@@ -45,10 +45,10 @@ from app.services.config.extraction_rules import (
     STRUCTURED_OBJECT_FIELDS,
     STRUCTURED_OBJECT_LIST_FIELDS,
     TRACKING_PIXEL_PATTERN,
+    UNRESOLVED_TEMPLATE_URL_TOKENS,
     URL_DETECTION_TOKENS,
     URL_FIELDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
-    VARIANT_AXIS_ALLOWED_SINGLE_TOKENS,
 )
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
@@ -59,6 +59,7 @@ from app.services.config.field_mappings import (
     OPTION_SCALAR_FIELDS,
     PUBLIC_RECORD_BARCODE_LENGTHS,
     PUBLIC_RECORD_BRAND_REGION_SUFFIX_TOKENS,
+    PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS,
     PUBLIC_RECORD_GENDER_REJECT_TOKENS,
     PUBLIC_RECORD_GENDER_TAXONOMY,
     PUBLIC_RECORD_IDENTITY_INTERNAL_TOKENS,
@@ -165,6 +166,22 @@ def _object_list(value: object) -> list:
 
 def _object_dict(value: object) -> dict:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _size_reject_tokens() -> frozenset[str]:
+    return frozenset(
+        str(token).strip().lower()
+        for token in tuple(SIZE_REJECT_TOKENS or ())
+        if str(token).strip()
+    )
+
+
+def _unresolved_template_url_tokens_lower() -> tuple[str, ...]:
+    return tuple(
+        str(token).strip().lower()
+        for token in tuple(UNRESOLVED_TEMPLATE_URL_TOKENS or ())
+        if str(token).strip()
+    )
 
 
 def _safe_int(value: object, *, default: int | None = None) -> int | None:
@@ -413,6 +430,12 @@ def validate_record_for_surface(
             continue
         if normalize_field_key(field_name) in allowed_fields:
             validated_fields[field_name] = value
+    if str(surface or "").strip().lower().startswith("ecommerce_"):
+        for field_name in (
+            *tuple(PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS or ()),
+            *tuple(PUBLIC_RECORD_LEGACY_VARIANT_FIELDS or ()),
+        ):
+            validated_fields.pop(str(field_name), None)
     return {
         **clean_record(validated_fields),
         **internal_fields,
@@ -530,7 +553,7 @@ def _coerce_literal_text_list(value: str) -> list[str]:
     return [
         clean_text(item)
         for item in parsed
-        if not isinstance(item, (dict, list, tuple, set)) and clean_text(item)
+        if not isinstance(item, (bool, dict, list, tuple, set)) and clean_text(item)
     ]
 
 
@@ -545,6 +568,8 @@ def _split_multivalue_text_rows(value: str) -> list[str]:
 
 def _coerce_structured_multi_rows(field_name: str, value: object) -> list[str]:
     if value in (None, "", [], {}):
+        return []
+    if isinstance(value, bool):
         return []
     if isinstance(value, dict):
         rows: list[str] = []
@@ -596,7 +621,8 @@ def _price_text_is_negative(value: object) -> bool:
     text = clean_text(value)
     if not text:
         return False
-    return re.match(r"^\s*-\s*(?:[$€£¥₹]|[A-Z]{3}\b)?\s*\d", text, re.I) is not None
+    marker = rf"(?:{_CURRENCY_SYMBOL_PATTERN}|\b(?:{_CURRENCY_CODE_PATTERN})\b)?"
+    return re.match(rf"^\s*-\s*{marker}\s*\d", text, re.I) is not None
 
 
 def extract_currency_code(value: object) -> str | None:
@@ -702,7 +728,7 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = clean_text(cleaned)
         if re.search(r"\bplease\s+select\b", cleaned, flags=re.I):
             return None
-        if cleaned.strip().lower() in frozenset(SIZE_REJECT_TOKENS or ()):
+        if cleaned.strip().lower() in _size_reject_tokens():
             return None
     if cleaned.strip().casefold() in {"none", "null", "- / null", "n/a", "na"}:
         return None
@@ -879,6 +905,7 @@ def flatten_variants_for_public_output(
         merged: dict[str, object] = {}
         has_option_axis = False
         option_values = raw_variant.get("option_values")
+        compound_size_prefix: str | None = None
         if isinstance(option_values, dict):
             for axis_name, axis_value in option_values.items():
                 axis_text = text_or_none(axis_name)
@@ -886,8 +913,14 @@ def flatten_variants_for_public_output(
                 if not axis_text or not value_text:
                     continue
                 axis_key = axis_text.strip().lower()
-                if axis_key in {"color", "colour"}:
+                if axis_key in {"color", "colour", "flavor", "flavour", "shade"}:
                     axis_key = "color"
+                if axis_key == "style":
+                    compound_size_prefix = value_text
+                    has_option_axis = True
+                    continue
+                if axis_key not in FLAT_VARIANT_KEYS:
+                    continue
                 if axis_key not in merged:
                     merged[axis_key] = value_text
                     has_option_axis = True
@@ -901,12 +934,12 @@ def flatten_variants_for_public_output(
             if coerced in (None, "", [], {}):
                 continue
             merged[key] = coerced
-        for key in raw_variant:
-            if key not in merged and key in VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
-                candidate = raw_variant.get(key)
-                if candidate not in (None, "", [], {}):
-                    merged[key] = coerce_text(candidate)
-                    has_option_axis = True
+        if compound_size_prefix:
+            size_value = text_or_none(merged.get("size"))
+            if size_value:
+                merged["size"] = clean_text(f"{compound_size_prefix} {size_value}")
+            elif "size" not in merged:
+                merged["size"] = compound_size_prefix
         if merged and (
             text_or_none(merged.get("color"))
             or text_or_none(merged.get("size"))
@@ -1468,10 +1501,8 @@ def validate_and_clean(
 
 
 def _is_template_url(url: str) -> bool:
-    from app.services.config.extraction_rules import UNRESOLVED_TEMPLATE_URL_TOKENS
-    lowered = url.lower()
+    lowered = str(url or "").lower()
     return any(
-        token.lower() in lowered
-        for token in tuple(UNRESOLVED_TEMPLATE_URL_TOKENS or ())
-        if token
+        token in lowered
+        for token in _unresolved_template_url_tokens_lower()
     )

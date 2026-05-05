@@ -72,7 +72,7 @@ def test_parse_test_sites_markdown_reads_urls_from_tail(tmp_path: Path) -> None:
 
 
 def test_parse_test_sites_markdown_reads_urls_from_markdown_tables() -> None:
-    fixture = Path("C:/Projects/pre_poc_ai_crawler/TEST_SITES.md")
+    fixture = Path(__file__).resolve().parents[2] / "TEST_SITES.md"
 
     rows = parse_test_sites_markdown(fixture, start_line=1)
 

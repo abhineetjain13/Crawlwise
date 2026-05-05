@@ -21,6 +21,29 @@ from app.services.llm_circuit_breaker import (
 from app.services.llm_config_service import provider_env_key
 
 JSON_CONTENT_TYPE = "application/json"
+_groq_client: httpx.AsyncClient | None = None
+_groq_client_timeout: float | None = None
+
+
+async def close_llm_provider_clients() -> None:
+    global _groq_client, _groq_client_timeout
+    if _groq_client is not None:
+        await _groq_client.aclose()
+    _groq_client = None
+    _groq_client_timeout = None
+
+
+def _shared_groq_client() -> httpx.AsyncClient:
+    global _groq_client, _groq_client_timeout
+    timeout = float(llm_runtime_settings.provider_timeout_seconds)
+    if (
+        _groq_client is None
+        or _groq_client.is_closed
+        or _groq_client_timeout != timeout
+    ):
+        _groq_client = httpx.AsyncClient(timeout=timeout)
+        _groq_client_timeout = timeout
+    return _groq_client
 
 
 async def call_provider(
@@ -146,25 +169,22 @@ async def _call_groq(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(
-        timeout=llm_runtime_settings.provider_timeout_seconds
-    ) as client:
-        response = await client.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": JSON_CONTENT_TYPE,
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "max_tokens": llm_runtime_settings.groq_max_tokens,
-                "temperature": llm_runtime_settings.groq_temperature,
-            },
-        )
+    response = await _shared_groq_client().post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": JSON_CONTENT_TYPE,
+        },
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": llm_runtime_settings.groq_max_tokens,
+            "temperature": llm_runtime_settings.groq_temperature,
+        },
+    )
     if response.status_code != 200:
         return _http_error(response), 0, 0
     return _extract_chat_completion_payload(_safe_json_response(response))

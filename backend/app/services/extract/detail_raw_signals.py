@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+import json
 import re
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
 from app.services.config.extraction_rules import (
     DETAIL_BREADCRUMB_CONTAINER_SELECTORS,
     DETAIL_BREADCRUMB_LABEL_PREFIXES,
     DETAIL_BREADCRUMB_MIN_LABEL_LENGTH,
+    DETAIL_BREADCRUMB_NOISE_ICON_PATTERNS,
     DETAIL_BREADCRUMB_ROOT_LABELS,
     DETAIL_BREADCRUMB_SEPARATOR_LABELS,
     DETAIL_BREADCRUMB_SELECTORS,
@@ -17,6 +19,7 @@ from app.services.config.extraction_rules import (
     DETAIL_CATEGORY_LABEL_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
     DETAIL_GENDER_TERMS,
+    DETAIL_NOISE_SECTION_SELECTORS,
 )
 from app.services.field_value_core import absolute_url, clean_text, text_or_none
 
@@ -115,8 +118,9 @@ def _clean_breadcrumb_label(value: object) -> str:
     text = clean_text(text.strip(strip_chars))
     if not text:
         return ""
-    # Strip CSS icon class names that leak into accessible text (e.g. Herman Miller)
-    text = clean_text(re.sub(r"\barrow-right(?:-[a-z]+)?\b", "", text, flags=re.I))
+    # Strip CSS icon class names that leak into accessible text (e.g. Herman Miller).
+    for pattern in tuple(DETAIL_BREADCRUMB_NOISE_ICON_PATTERNS or ()):
+        text = clean_text(re.sub(str(pattern), "", text, flags=re.I))
     if not text:
         return ""
     lowered = text.casefold()
@@ -210,6 +214,31 @@ def dedupe_adjacent(values: list[str]) -> list[str]:
     return rows
 
 
+def _jsonld_items(payload: object) -> list[object]:
+    if isinstance(payload, list):
+        items: list[object] = []
+        for item in payload:
+            if isinstance(item, dict):
+                graph = item.get("@graph")
+                if isinstance(graph, list):
+                    items.extend(graph)
+                elif isinstance(graph, dict):
+                    items.append(graph)
+                else:
+                    items.append(item)
+            else:
+                items.append(item)
+        return items
+    if isinstance(payload, dict):
+        graph = payload.get("@graph")
+        if isinstance(graph, list):
+            return list(graph)
+        if isinstance(graph, dict):
+            return [graph]
+        return [payload]
+    return []
+
+
 def prune_irrelevant_detail_dom_nodes(
     soup: BeautifulSoup,
     *,
@@ -225,22 +254,9 @@ def prune_irrelevant_detail_dom_nodes(
     pruned_product_names: list[str] = []
     for script in soup.select("script[type='application/ld+json']"):
         try:
-            import json
             payload = json.loads(script.get_text())
-            if isinstance(payload, list):
-                items = [
-                    graph_item
-                    for item in payload
-                    for graph_item in (
-                        item.get("@graph")
-                        if isinstance(item, dict) and isinstance(item.get("@graph"), list)
-                        else [item]
-                    )
-                ]
-            elif isinstance(payload, dict):
-                graph = payload.get("@graph")
-                items = graph if isinstance(graph, list) else [payload]
-            else:
+            items = _jsonld_items(payload)
+            if not items:
                 continue
 
             # If any item in the script matches, we keep the whole script
@@ -281,7 +297,7 @@ def prune_irrelevant_detail_dom_nodes(
                 if script_product_name:
                     pruned_product_names.append(script_product_name)
                 script.decompose()
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
     # When product-level JSON-LD was pruned for identity mismatch AND the DOM
@@ -302,18 +318,6 @@ def prune_irrelevant_detail_dom_nodes(
             h1.decompose()
 
     # 2. Prune common cross-product UI noise sections
-    noise_selectors = (
-        "[id*='recently-viewed']",
-        "[class*='recently-viewed']",
-        "[id*='similar-products']",
-        "[class*='similar-products']",
-        "[id*='recommendations']",
-        "[class*='recommendations']",
-        "[id*='people-also-bought']",
-        "[class*='people-also-bought']",
-        ".upsell",
-        ".related-products",
-    )
-    for selector in noise_selectors:
+    for selector in tuple(DETAIL_NOISE_SECTION_SELECTORS or ()):
         for node in soup.select(selector):
             node.decompose()

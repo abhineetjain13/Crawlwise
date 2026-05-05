@@ -147,7 +147,7 @@ export default function AdminUsersPage() {
                       />
                     </TableCell>
                     <TableCell>
-                      <Badge tone={user.is_active ? 'success' : 'danger'}>
+                      <Badge tone={user.is_active ? 'success' : 'danger'} flat>
                         {user.is_active ? 'active' : 'inactive'}
                       </Badge>
                     </TableCell>

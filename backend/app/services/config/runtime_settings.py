@@ -392,32 +392,37 @@ class CrawlerRuntimeSettings(BaseSettings):
             "browser_accessibility_snapshot_timeout_seconds",
         ):
             _require_non_negative(field_name, getattr(self, field_name))
-        def _clamp_to_non_negative(field_name: str) -> int:
-            value = max(0, int(getattr(self, field_name)))
-            setattr(self, field_name, value)
-            return value
-
-        self.browser_behavior_scroll_steps = _clamp_to_non_negative(
-            "browser_behavior_scroll_steps"
+        _require_non_negative(
+            "browser_behavior_scroll_steps",
+            self.browser_behavior_scroll_steps,
         )
-        self.browser_behavior_scroll_min_px = _clamp_to_non_negative(
-            "browser_behavior_scroll_min_px"
+        _require_non_negative(
+            "browser_behavior_scroll_min_px",
+            self.browser_behavior_scroll_min_px,
         )
         self.browser_behavior_scroll_max_px = max(
             self.browser_behavior_scroll_min_px,
             int(self.browser_behavior_scroll_max_px),
         )
-        self.browser_behavior_pause_min_ms = _clamp_to_non_negative(
-            "browser_behavior_pause_min_ms"
+        _require_non_negative(
+            "browser_behavior_scroll_max_px",
+            self.browser_behavior_scroll_max_px,
         )
-        self.browser_behavior_pause_jitter_ms = _clamp_to_non_negative(
-            "browser_behavior_pause_jitter_ms"
+        _require_non_negative(
+            "browser_behavior_pause_min_ms",
+            self.browser_behavior_pause_min_ms,
         )
-        self.browser_behavior_typing_min_delay_ms = _clamp_to_non_negative(
-            "browser_behavior_typing_min_delay_ms"
+        _require_non_negative(
+            "browser_behavior_pause_jitter_ms",
+            self.browser_behavior_pause_jitter_ms,
         )
-        self.browser_behavior_typing_jitter_ms = _clamp_to_non_negative(
-            "browser_behavior_typing_jitter_ms"
+        _require_non_negative(
+            "browser_behavior_typing_min_delay_ms",
+            self.browser_behavior_typing_min_delay_ms,
+        )
+        _require_non_negative(
+            "browser_behavior_typing_jitter_ms",
+            self.browser_behavior_typing_jitter_ms,
         )
         for field_name in (
             "platform_detection_html_search_limit",

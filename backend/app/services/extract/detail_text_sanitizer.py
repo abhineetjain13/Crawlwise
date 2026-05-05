@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from typing import Any
@@ -9,6 +10,7 @@ from app.services.config.extraction_rules import (
     DETAIL_ARTIFACT_PRICE_VALUES,
     DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES,
     DETAIL_ARTIFACT_SKU_PREFIXES,
+    DETAIL_BRACKET_PROSE_MIN_WORDS,
     DETAIL_CATEGORY_UI_TOKENS,
     DETAIL_COOKIE_DISCLOSURE_TEXT_PATTERNS,
     DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS,
@@ -27,6 +29,7 @@ from app.services.config.extraction_rules import (
     DETAIL_LONG_TEXT_UI_TAIL_PHRASES,
     DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS,
     DETAIL_MATERIALS_POLLUTION_TOKENS,
+    DETAIL_MATERIALS_ZERO_PERCENT_PATTERN,
     DETAIL_NOISE_PREFIXES,
     DETAIL_TITLE_DIMENSION_SIZE_PATTERN,
     DETAIL_TRACKING_TOKEN_PATTERN,
@@ -79,9 +82,8 @@ materials_pollution_tokens = frozenset(
     for token in tuple(DETAIL_MATERIALS_POLLUTION_TOKENS or ())
     if clean_text(token)
 )
-# Matches "0%", "0 %", "0.0%" optionally prefixed by a label like "OUTER:".
 _MATERIALS_ZERO_PERCENT_PATTERN = re.compile(
-    r"\b0(?:\.0+)?\s*%",
+    str(DETAIL_MATERIALS_ZERO_PERCENT_PATTERN), re.I
 )
 low_signal_product_type_values = frozenset(
     clean_text(value).lower()
@@ -394,17 +396,13 @@ def _text_is_structured_object_repr(text: str) -> bool:
     if not (cleaned.startswith("{") and cleaned.endswith("}")):
         return False
     try:
-        parsed = json.loads(
-            cleaned.replace("'", '"')
-            .replace("False", "false")
-            .replace("True", "true")
-            .replace("None", "null")
-        )
-        if isinstance(parsed, dict):
-            return True
-    except (TypeError, ValueError):
-        pass
-    return False
+        parsed = ast.literal_eval(cleaned)
+    except (ValueError, SyntaxError):
+        try:
+            parsed = json.loads(cleaned)
+        except (TypeError, ValueError):
+            return False
+    return isinstance(parsed, dict)
 
 
 def _strip_bracket_artifact_noise(text: str) -> str:
@@ -425,7 +423,7 @@ def _strip_bracket_artifact_noise(text: str) -> str:
             if not cleaned:
                 continue
             word_count = len(cleaned.split())
-            if word_count >= 5:
+            if word_count >= int(DETAIL_BRACKET_PROSE_MIN_WORDS):
                 candidates.append((word_count, index, cleaned))
         if candidates:
             break

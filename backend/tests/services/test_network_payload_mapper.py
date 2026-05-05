@@ -257,6 +257,8 @@ def test_looks_like_product_api_rejects_non_dict() -> None:
 
 def test_looks_like_job_api_rejects_non_dict() -> None:
     assert not _looks_like_job_api(None)
+    assert not _looks_like_job_api("not a dict")
+    assert not _looks_like_job_api([1, 2, 3])
 
 
 def test_infer_surface_prefers_product_when_ambiguous() -> None:
