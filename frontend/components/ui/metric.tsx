@@ -16,7 +16,7 @@ export function Metric({
   loading = false,
 }: Readonly<{ label: string; value: ReactNode; loading?: boolean }>) {
   return (
-    <div className="border-border bg-panel shadow-card hover:border-border-strong hover:shadow-elevated relative space-y-1.5 overflow-hidden rounded-[var(--radius-xl)] border p-4 transition-[border-color,box-shadow,transform] hover:-translate-y-0.5">
+    <div className="border-border card-gradient shadow-card hover:border-border-strong hover:shadow-elevated relative space-y-1.5 overflow-hidden rounded-[var(--radius-xl)] border p-4 transition-[border-color,box-shadow]">
       <p className="text-secondary text-sm font-medium">{label}</p>
       {loading ? (
         <div className="skeleton h-7 w-20" aria-hidden />
@@ -50,7 +50,7 @@ export function StatCard({
   loading?: boolean;
 }>) {
   return (
-    <div className="border-border bg-panel shadow-card hover:border-border-strong hover:shadow-elevated relative overflow-hidden rounded-[var(--radius-xl)] border p-4 transition-[border-color,box-shadow,transform] hover:-translate-y-0.5">
+    <div className="border-border card-gradient shadow-card hover:border-border-strong hover:shadow-elevated relative overflow-hidden rounded-[var(--radius-xl)] border p-4 transition-[border-color,box-shadow]">
       <div
         className="absolute inset-x-0 top-0 h-0.5"
         style={{ background: stripeColor ?? 'var(--accent)' }}

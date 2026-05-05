@@ -1,9 +1,9 @@
 # Active Plan
 
 **Current:** Audit 3 Regression + Persistent Fixes -> `docs/plans/audit3-regression-and-persistent-fixes-plan.md`
-**Status:** DRAFT
+**Status:** COMPLETE
 **Started:** 2026-05-03
-**Current execution focus:** Slice A (field-value validation), Slice B (URL integrity), Slice C (codeant sweep)
+**Current execution focus:** Slices A-C complete; full backend suite and frontend lint passed
 
 **Parallel:** Zyte Delta Architectural Fixes -> `docs/plans/zyte-delta-architectural-fixes-plan.md`
 **Status:** IN PROGRESS (Slices 1-4 done, Slice 6-7 pending)

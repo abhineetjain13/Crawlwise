@@ -75,6 +75,12 @@ SELECTOR_SYNTHESIS_LOW_VALUE_TAGS = frozenset(
         "canvas",
     }
 )
+SELECTOR_SYNTHESIS_KEEP_ATTRS = frozenset(
+    {"data-variant-id", "data-product-id", "data-price", "value"}
+)
+SELECTOR_SYNTHESIS_KEEP_TOKENS = frozenset(
+    {"buy", "cart", "pdp", "product", "variant"}
+)
 LISTING_FIELD_SELECTORS: dict[str, list[str]] = {
     "title": [
         "[itemprop='name']",
@@ -148,6 +154,8 @@ __all__ = sorted(
         "XPATH_FUNCTION_PATTERN",
         "SELECTOR_SYNTHESIS_ALLOWED_ATTRS",
         "SELECTOR_SYNTHESIS_DROP_TAGS",
+        "SELECTOR_SYNTHESIS_KEEP_ATTRS",
+        "SELECTOR_SYNTHESIS_KEEP_TOKENS",
         "SELECTOR_SYNTHESIS_LOW_VALUE_TAGS",
         "LISTING_FIELD_SELECTORS",
     ]

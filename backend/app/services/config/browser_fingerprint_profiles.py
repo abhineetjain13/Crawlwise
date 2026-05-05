@@ -32,6 +32,7 @@ TIMEZONE_ALIASES: dict[str, str] = {
 DEVICE_MEMORY_BUCKETS: tuple[float, ...] = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
 
 NATIVE_REAL_CHROME_CONTEXT_OPTIONS: dict[str, object] = {"no_viewport": True}
+REAL_CHROME_IGNORE_DEFAULT_ARGS: tuple[str, ...] = ("--enable-automation",)
 WARMUP_ELIGIBLE_BROWSER_REASONS: frozenset[str] = frozenset(
     {
         "host-preference",
@@ -42,7 +43,7 @@ WARMUP_ELIGIBLE_BROWSER_REASONS: frozenset[str] = frozenset(
         "thin-listing retry",
     }
 )
-WARMUP_VENDOR_BLOCK_PREFIX = "vendor-block:"
+WARMUP_VENDOR_BLOCK_PREFIX: str = "vendor-block:"
 
 WEBGL_PROFILE_BY_PLATFORM: dict[str, dict[str, object]] = {
     "Windows": {
@@ -305,14 +306,17 @@ FONT_ALLOWLIST_BY_PLATFORM: dict[str, tuple[str, ...]] = {
     ),
 }
 
-
 __all__ = [
     "DEVICE_MEMORY_BUCKETS",
     "FONT_ALLOWLIST_BY_PLATFORM",
     "HOST_OS_PLATFORM_LABELS",
     "HOST_OS_UA_TOKENS",
+    "NATIVE_REAL_CHROME_CONTEXT_OPTIONS",
     "NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL",
+    "REAL_CHROME_IGNORE_DEFAULT_ARGS",
     "TIMEZONE_ALIASES",
     "USER_AGENT_PLATFORM_LABELS",
+    "WARMUP_ELIGIBLE_BROWSER_REASONS",
+    "WARMUP_VENDOR_BLOCK_PREFIX",
     "WEBGL_PROFILE_BY_PLATFORM",
 ]

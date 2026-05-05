@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
+    DOM_VARIANT_GROUP_LIMIT,
     DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
     VARIANT_PROMO_NOISE_TOKENS,
@@ -133,7 +134,12 @@ def apply_dom_fallbacks(
     breadcrumb_soup: BeautifulSoup | None = None,
 ) -> None:
     fields = surface_fields(surface, requested_fields)
-    h1 = dom_parser.css_first("h1")
+    # ``prune_irrelevant_detail_dom_nodes`` may decompose the body H1 on the
+    # BeautifulSoup without touching the selectolax parser cache. Mirror that
+    # decision here so the DOM fallback cannot resurrect a title from a page
+    # whose primary structured evidence pointed to a different product.
+    h1_in_soup = soup.select_one("h1") if soup is not None else None
+    h1 = dom_parser.css_first("h1") if h1_in_soup is not None else None
     page_title = dom_parser.css_first("title")
     h1_title = text_or_none(h1.text(separator=" ", strip=True) if h1 else "")
     page_title_text = text_or_none(
@@ -344,7 +350,7 @@ def _variant_option_value_is_noise(value: str | None) -> bool:
     return (
         compact in _variant_option_value_noise_tokens
         or compact in _variant_artifact_value_tokens
-        or re.fullmatch(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?", compact) is not None
+        or re.fullmatch(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?", compact) is not None
         or (
             "%" in lowered
             and any(token in lowered for token in _variant_promo_noise_tokens)
@@ -1083,7 +1089,7 @@ def _extract_variants_from_dom(
                 "entries": list(merged_entries.values()),
             }
         )
-        if len(deduped_groups) >= 4:
+        if len(deduped_groups) >= max(1, int(DOM_VARIANT_GROUP_LIMIT)):
             break
 
     if not deduped_groups:

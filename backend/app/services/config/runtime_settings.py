@@ -370,9 +370,9 @@ class CrawlerRuntimeSettings(BaseSettings):
                 "proxy_failure_cooldown_max_ms must be >= proxy_failure_cooldown_base_ms"
             )
         if self.min_max_pages < 1:
-            self.min_max_pages = 1
+            raise ValueError("min_max_pages must be >= 1")
         if self.max_max_pages < self.min_max_pages:
-            self.max_max_pages = self.min_max_pages
+            raise ValueError("max_max_pages must be >= min_max_pages")
         for field_name in (
             "url_process_timeout_seconds",
             "max_url_process_timeout_seconds",
@@ -392,27 +392,32 @@ class CrawlerRuntimeSettings(BaseSettings):
             "browser_accessibility_snapshot_timeout_seconds",
         ):
             _require_non_negative(field_name, getattr(self, field_name))
-        self.browser_behavior_scroll_steps = max(
-            0, int(self.browser_behavior_scroll_steps)
+        def _clamp_to_non_negative(field_name: str) -> int:
+            value = max(0, int(getattr(self, field_name)))
+            setattr(self, field_name, value)
+            return value
+
+        self.browser_behavior_scroll_steps = _clamp_to_non_negative(
+            "browser_behavior_scroll_steps"
         )
-        self.browser_behavior_scroll_min_px = max(
-            0, int(self.browser_behavior_scroll_min_px)
+        self.browser_behavior_scroll_min_px = _clamp_to_non_negative(
+            "browser_behavior_scroll_min_px"
         )
         self.browser_behavior_scroll_max_px = max(
             self.browser_behavior_scroll_min_px,
             int(self.browser_behavior_scroll_max_px),
         )
-        self.browser_behavior_pause_min_ms = max(
-            0, int(self.browser_behavior_pause_min_ms)
+        self.browser_behavior_pause_min_ms = _clamp_to_non_negative(
+            "browser_behavior_pause_min_ms"
         )
-        self.browser_behavior_pause_jitter_ms = max(
-            0, int(self.browser_behavior_pause_jitter_ms)
+        self.browser_behavior_pause_jitter_ms = _clamp_to_non_negative(
+            "browser_behavior_pause_jitter_ms"
         )
-        self.browser_behavior_typing_min_delay_ms = max(
-            0, int(self.browser_behavior_typing_min_delay_ms)
+        self.browser_behavior_typing_min_delay_ms = _clamp_to_non_negative(
+            "browser_behavior_typing_min_delay_ms"
         )
-        self.browser_behavior_typing_jitter_ms = max(
-            0, int(self.browser_behavior_typing_jitter_ms)
+        self.browser_behavior_typing_jitter_ms = _clamp_to_non_negative(
+            "browser_behavior_typing_jitter_ms"
         )
         for field_name in (
             "platform_detection_html_search_limit",

@@ -2,464 +2,464 @@
 
 Verify each finding against current code before fixing.
 
----
+## Open Issues
 
-## Adapters
-
-### 5. shopify.py — Unused `_selectable_axes` from `_split_selectable_axes`
-**File:** `backend/app/services/adapters/shopify.py` · **Lines:** ~172–174, ~344
-
-`_selectable_axes` is assigned but never used after `self._split_selectable_axes(axes)`. Either unpack only `single_value_attributes` or create a dedicated method that returns just that value, and remove the unused `_selectable_axes` variable from both call sites.
-
-
----
-
-## Config & Schema
-
-### 18. detail_price_extractor.py — Redundant early-return in `_detail_price_from_html`
-**File:** `backend/app/services/extract/detail_price_extractor.py` · **Lines:** ~579–581
-
-`if jsonld_price: return jsonld_price` is defensive—callers already gate on `jsonld_price or _detail_price_from_html(...)`. Either remove the check or add a comment explaining it's intentional defensive coding.
-
----
-
-## Extraction — DOM & Variants
-
-### 21. detail_record_finalizer.py — `strip_chars` TypeError risk
-**File:** `backend/app/services/extract/detail_record_finalizer.py` · **Line:** ~287
-
-`"".join(tuple(DETAIL_BREADCRUMB_SEPARATOR_LABELS or ()))` will raise `TypeError` if the iterable contains non-string elements. Use `"".join(map(str, DETAIL_BREADCRUMB_SEPARATOR_LABELS or ()))` to coerce each element.
-
-### 22. detail_record_finalizer.py — Hardcoded `"in_stock"` literal
-**File:** `backend/app/services/extract/detail_record_finalizer.py` · **Lines:** ~560, ~1081–1082
-
-`parent_availability == "in_stock"` and `record["availability"] = "in_stock"` use a hardcoded literal. Add `AVAILABILITY_IN_STOCK = "in_stock"` to config and import it.
-
-### 23. detail_record_finalizer.py — Brittle brace check for features placeholder
+### detail_record_finalizer.py — Brittle brace check for features placeholder
 **File:** `backend/app/services/extract/detail_record_finalizer.py` · **Lines:** ~154–155
 
 `feature_text.startswith("{") and feature_text.endswith("}")` is a heuristic that can false-positive on legitimate JSON-like feature text. Replace with `json.loads(feature_text)` in a try/except and only pop when the parsed result is a `dict`.
 
-### 31. field_value_core.py — `_coerce_barcode` rebuilds set on every call
-**File:** `backend/app/services/field_value_core.py` · **Line:** ~1246
-
-`len(digits) not in set(PUBLIC_RECORD_BARCODE_LENGTHS or ())` rebuilds the set each call. Pre-compute `_PUBLIC_RECORD_BARCODE_LENGTHS_SET` at module level.
-
-### 32. field_value_candidates.py — Duplicate `option_values` predicate
+### field_value_candidates.py — Duplicate `option_values` predicate
 **File:** `backend/app/services/field_value_candidates.py` · **Lines:** ~809–818
 
-`isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))` appears twice—once in the `any()` filter and once in the list comprehension. Extract into a local variable (e.g., `has_option_values`) and reuse.
-
-### 34. field_value_dom.py — Hardcoded feature section selectors
-**File:** `backend/app/services/field_value_dom.py` · **Line:** ~1355
-
-`"[data-section='features'], .features, .product-features, #features"` is inline. Move to `FEATURE_SECTION_SELECTORS` in extraction rules config and import it.
-
-### 35. field_value_dom.py — Hardcoded scope weights in `_scope_score`
-**File:** `backend/app/services/field_value_dom.py` · **Lines:** ~377, ~379, ~387
-
-Weights `4000`, `2000`, `1000` and inline tokens `("product", "detail", "pdp")` are hardcoded. Extract into config constants so they can be tuned without changing service code.
-
-### 36. field_value_dom.py — `_node_has_cross_product_cluster` uses empty base URL
-**File:** `backend/app/services/field_value_dom.py` · **Line:** ~345
-
-`absolute_url("", str(link.get("href") or ""))` passes empty string as base, so relative hrefs never resolve correctly. Accept a `page_url`/`base_url` parameter to resolve relative links against a real base.
+`isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))` appears twice — once in the `any()` filter and once in the list comprehension. Extract into a local variable (e.g., `has_option_values`) and reuse.
 
 ---
 
 ## Selector Self-Heal
 
-### 37. selector_self_heal.py — Redundant low-value check in `_append_reduced_node`
+### selector_self_heal.py — Redundant low-value check in `_append_reduced_node`
 **File:** `backend/app/services/selector_self_heal.py` · **Lines:** ~86–89
 
 `if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS and not _keep_low_value_node(node): return 0` is redundant because `_remove_low_value_nodes(soup)` already decomposes such nodes before `_append_reduced_node` runs. Either remove the check or add a comment explaining it's defensive against callers skipping the pre-filter.
 
-### 38. selector_self_heal.py — Hardcoded attrs/tokens in `_keep_low_value_node`
-**File:** `backend/app/services/selector_self_heal.py` · **Lines:** ~133–138, ~155–156
-
-`("data-variant-id", "data-product-id", "data-price", "value")` and `("buy", "cart", "pdp", "product", "variant")` are hardcoded. Extract to `SELECTOR_SYNTHESIS_KEEP_ATTRS` and `SELECTOR_SYNTHESIS_KEEP_TOKENS` in config and import them.
-
 ---
-
-## Service Logic
-
-### 41. harness_support.py — Case-sensitive gender validation
-**File:** `backend/harness_support.py` · **Lines:** ~1188–1189
-
-`gender not in _ALLOWED_GENDERS` is case-sensitive—`"men"` or `"WOMEN"` would fail. Normalize both sides: compare `gender.lower()` against a precomputed `_ALLOWED_GENDERS_LOWER` set.
-
-### 42. harness_support.py — Missing high-denomination currency "CLP"
-**File:** `backend/harness_support.py` · **Line:** ~42
-
-`_HIGH_DENOMINATION_PRICE_CURRENCIES` includes `{"INR", "JPY", "KRW", "VND", "IDR", "HUF"}` but is missing `"CLP"`. Add it so the 10,000 threshold applies correctly.
-
----
-
-## Test Assertions
-
-### 43. test_crawl_engine.py — Missing length assertion before `rows[0]`
-**File:** `backend/tests/services/test_crawl_engine.py` · **Lines:** ~5071, ~5101
-
-Both `test_extract_detail_scopes_text_away_from_customers_also_viewed_products` and `test_extract_detail_rejects_placeholder_and_ui_asset_images` access `rows[0]` without verifying `rows` is non-empty. Add `assert len(rows) == 1` before accessing `rows[0]`.
-
-### 44. test_network_payload_mapper.py — Permissive `>= 1` assertions
-**File:** `backend/tests/services/test_network_payload_mapper.py` · **Lines:** ~310, 337, 361, 396
-
-Change `assert len(rows) >= 1` to `assert len(rows) == 1` to catch unexpected duplicates or extra rows.
-
-### 45. test_harness_support.py — Missing variant-artifact & failure-mode assertions
-**File:** `backend/tests/test_harness_support.py` · **Lines:** ~537–576
-
-`test_evaluate_quality_flags_cross_cutting_detail_invariants` sets `require_clean_variants=True` but omits asserting `quality["quality_checks"]["variant_artifacts_ok"]` and `quality["observed_failure_mode"]`. Add both assertions.
-
-### 46. test_detail_extractor_structured_sources.py — Test name mismatches behavior
-**File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~1608, ~1636–1637
-
-`test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site_hardcoding` asserts `variant_count` and `variants` are **absent**, meaning non-standard axes (Weight/Flavour) are ignored. Rename to `test_extract_ecommerce_detail_ignores_nonstandard_variant_axes` to match actual behavior.
 
 ## Acquisition — Browser Runtime
 
-### 52. browser_runtime.py — `inject_init_script` semantics inverted in native Chrome branch
-**File:** `backend/app/services/acquisition/browser_runtime.py` · **Lines:** ~420–427
-
-The native Chrome branch enters when `not inject_init_script` (i.e., caller says "don't inject"), yet it injects a masking init script anyway. In the non-native branch (line ~442), `if inject_init_script: return spec` means the flag enables the built-in script. The flag has opposite semantics in the two code paths. Either rename the parameter to clarify intent (e.g., `inject_standard_init_script`) or restructure so the native Chrome branch also respects the flag consistently.
-
-### 54. runtime_settings.py — Silent clamp on `min_max_pages`
-**File:** `backend/app/services/config/runtime_settings.py` · **Lines:** ~372–373
-
-`self.min_max_pages = 1` silently clamps instead of raising `ValueError` like other validations. Replace with `raise ValueError(...)` for consistency with `_require_positive` / `_require_non_negative` pattern.
-
-### 55. runtime_settings.py — Repeated browser_behavior clamping should use helper
-**File:** `backend/app/services/config/runtime_settings.py` · **Lines:** ~395–416
-
-Seven `max(0, int(...))` blocks for browser behavior fields. Extract a `_clamp_to_non_negative(field_name)` helper and replace the inline blocks.
-
-### 56. runtime_settings.py — Profile defaults overwrite explicitly-set `None`
-**File:** `backend/app/services/config/runtime_settings.py` · **Lines:** ~346–350
-
-The condition `getattr(self, field_name) is None` overwrites fields the user explicitly set to `None`. Add `field_name not in explicitly_set` guard so only unset fields receive profile defaults.
-
----
-
-## Config — LLM
-
-### 57. llm_runtime.py — `aws_proxy_url` hardcoded localhost default
-**File:** `backend/app/services/config/llm_runtime.py` · **Line:** ~102
-
-`aws_proxy_url: str = "http://localhost:4000/v1/chat/completions"` is a hardcoded local proxy URL. Either make it env-backed (e.g., `os.getenv("AWS_PROXY_URL", "")`) or add an explicit comment explaining the LiteLLM proxy architecture requirement.
-
-### 64. detail_dom_extractor.py — Positional fallback merges mismatched variants
+### detail_dom_extractor.py — Positional fallback merges mismatched variants
 **File:** `backend/app/services/extract/detail_dom_extractor.py` · **Line:** ~1276
 
 When `dom_key` doesn't match any `existing_by_key`, the code falls back to `existing_by_index.get(index)`. If DOM order changes between extractions, this can merge unrelated variant pairs. Consider logging a warning when positional fallback is used, or tightening the `index_fallback_allowed` condition.
-
-### 66. detail_text_sanitizer.py — `DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS` not precomputed
-**File:** `backend/app/services/extract/detail_text_sanitizer.py` · **Line:** ~433
-
-`heading_hits >= DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS` uses the raw config value at runtime. Precompute `_guide_glossary_heading_min_hits = int(DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS)` at module level, matching the pattern of `_long_text_ui_tail_min_product_words`.
-
-### 67. detail_tiers.py — Recomputes normalized JSON-LD type sets every call
-**File:** `backend/app/services/extract/detail_tiers.py` · **Lines:** ~131–143
-
-`_detail_json_ld_payload_is_irrelevant` rebuilds `frozenset(...)` for `DETAIL_BREADCRUMB_JSONLD_TYPES` and `DETAIL_IRRELEVANT_JSON_LD_TYPES` on every call. Precompute as `_NORMALIZED_DETAIL_BREADCRUMB_JSONLD_TYPES` and `_NORMALIZED_DETAIL_IRRELEVANT_JSON_LD_TYPES` at module level.
-
-### 68. shared_variant_logic.py — Missing `or ()` on three config iterables
-**File:** `backend/app/services/extract/shared_variant_logic.py` · **Lines:** ~51–64
-
-`VARIANT_COLOR_HINT_WORDS`, `VARIANT_SIZE_VALUE_PATTERNS`, and `VARIANT_OPTION_VALUE_NOISE_TOKENS` are iterated directly without `or ()` fallback (unlike `VARIANT_GROUP_ATTR_NOISE_PATTERNS` on line 48 which uses `or ()`). Add the defensive fallback to all three.
-
-### 69. shared_variant_logic.py — Silent `continue` drops data on missing semantic key
-**File:** `backend/app/services/extract/shared_variant_logic.py` · **Lines:** ~1021–1023
-
-When `merged_by_semantic.get(semantic_identity)` returns `None`, the row is silently skipped. Log a warning and append the original row as fallback instead of dropping data.
-
-### 70. shared_variant_logic.py — `VARIANT_SCOPE_MAX_ROOTS` unsafe if `None`/non-int
-**File:** `backend/app/services/extract/shared_variant_logic.py` · **Line:** ~201
-
-`len(roots) >= VARIANT_SCOPE_MAX_ROOTS` will raise `TypeError` if the config is `None`. Add defensive coercion (treat `None` as "no limit") matching the pattern used for `VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH`.
 
 ---
 
 ## Field URL Normalization
 
-### 74. field_url_normalization.py — Magic number thresholds
-**File:** `backend/app/services/field_url_normalization.py` · **Lines:** ~23, ~89, ~92
+### field_url_normalization.py — Unreachable and fragile code
+**File:** `backend/app/services/field_url_normalization.py` · **Lines:** ~28–35, ~122–137
 
-`len(lowered) > 3`, `len(normalized_value) > 8`, and `{0,8}` regex quantifier are magic numbers. Extract to `MAX_TRACKING_KEY_LENGTH` and `MAX_TRACKING_VALUE_LENGTH` config constants.
-
----
-
-## Field Value — Core
-
-### 75. field_value_core.py — Hardcoded color keyword regex
-**File:** `backend/app/services/field_value_core.py` · **Lines:** ~662–666
-
-`re.search(r"\b(?:color|colour|black|blue|...)\b", suffix, flags=re.I)` has an inline color keyword list. Move to `COLOR_KEYWORD_PATTERN` in extraction rules config.
-
-### 76. field_value_core.py — Inline numeric/tracking-pixel patterns
-**File:** `backend/app/services/field_value_core.py` · **Lines:** ~651–655
-
-`re.fullmatch(r"\d{1,2}", cleaned)` and `re.fullmatch(r"_[a-z]+", cleaned, flags=re.I)` are inline. Move to config constants `SMALL_NUMERIC_RE` and `TRACKING_PIXEL_RE`. The `len(cleaned) <= 2` check is redundant given `\d{1,2}`.
-
-### 77. field_value_core.py — Hardcoded GIF prefix and Cloudinary tokens
-**File:** `backend/app/services/field_value_core.py` · **Lines:** ~815–817
-
-`"r0lgodlh"` and `("g_auto", "f_auto", "q_auto", "c_fill")` are inline. Move to `GIF_BASE64_PREFIX` and `URL_DETECTION_TOKENS` in extraction rules config.
-
-### 78. field_value_core.py — Repeated inline field-name sets
-**File:** `backend/app/services/field_value_core.py` · **Lines:** ~1015–1026
-
-`{"brand", "company", "dealer_name", "vendor"}` appears twice and `{"color", "condition", "material", "size", "storage", "style"}` is inline. Extract to `BRAND_LIKE_FIELDS` and `OPTION_SCALAR_FIELDS` in field_mappings config.
-
-### 79. field_value_core.py — Hardcoded noisy attribute tokens
-**File:** `backend/app/services/field_value_core.py` · **Line:** ~143
-
-`{"availability", "available", "in_stock", "stock_status"}` is unioned into `_NOISY_PRODUCT_ATTRIBUTE_KEYS` inline. Move these tokens to `NOISY_PRODUCT_ATTRIBUTE_KEYS` in extraction rules config so no hardcoded strings remain in service code.
-
----
-
-## Field Value — DOM Scoring (continued)
-
-### 80. field_value_dom.py — Magic number `12` for selector match cap
-**File:** `backend/app/services/field_value_dom.py` · **Line:** ~706
-
-`safe_select(root, selector)[:12]` uses a magic number. Define `_MAX_SELECTOR_MATCHES = 12` at module level and use it consistently.
-
-### 84. js_state_mapper.py — Dead `flat_variants` assignment
-**File:** `backend/app/services/js_state_mapper.py` · **Line:** ~484
-
-`flat_variants = flatten_variants_for_public_output(variants, page_url=page_url)` is assigned but never used (code uses `variants` directly). Remove the dead assignment and the unused import if applicable.
+`URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS` is double-wrapped in `tuple()`. Remove the redundant `tuple()` wrapper.
 
 ---
 
 ## Data Enrichment
 
-### 85. data_enrichment/service.py — Dead `_bigrams` function
-**File:** `backend/app/services/data_enrichment/service.py` · **Lines:** ~1194–1196
-
-`_bigrams` is defined but never called—`_semantic_bigrams` is used instead. Remove the dead function.
-
-### 86. data_enrichment/service.py — Memoizing regex can freeze config changes
+### data_enrichment/service.py — Memoizing regex can freeze config changes
 **File:** `backend/app/services/data_enrichment/service.py` · **Line:** ~758
 
 Adding `@lru_cache` to `_material_strip_patterns` (flag #39) would freeze pattern compilation until restart. If config can change at runtime, add a `cache_clear()` mechanism or use a module-level variable with explicit invalidation instead.
 
 ---
 
-## Normalizers
+## Low Priority — Test Assertions & Naming
 
-### 88. pipeline/core.py — `count_failure` argument inverted
-**File:** `backend/app/services/pipeline/core.py` · **Line:** ~1301
+### test_crawl_engine.py — Missing length assertion before `rows[0]`
+**File:** `backend/tests/services/test_crawl_engine.py` · **Lines:** ~5071, ~5101
 
-`count_failure=verdict != VERDICT_LISTING_FAILED` yields `False` when the listing actually failed (i.e., when `verdict == VERDICT_LISTING_FAILED`). The semantic intent is "count this as a failure", so it should be `verdict == VERDICT_LISTING_FAILED`.
+`test_extract_detail_scopes_text_away_from_customers_also_viewed_products` accesses `rows[0]` without verifying `rows` is non-empty. Add `assert len(rows) == 1` before accessing `rows[0]`.
 
----
+### test_harness_support.py — Missing variant-artifact & failure-mode assertions
+**File:** `backend/tests/test_harness_support.py` · **Lines:** ~537–576
 
-## Public Record Firewall
+`test_evaluate_quality_flags_cross_cutting_detail_invariants` sets `require_clean_variants=True` but omits asserting `quality["quality_checks"]["variant_artifacts_ok"]` and `quality["observed_failure_mode"]`. Add both assertions.
 
-### 92. harness_support.py — Redundant lower-bound re-check in price sanity
-**File:** `backend/harness_support.py` · **Line:** ~1009
+### test_detail_extractor_structured_sources.py — Test name mismatches behavior
+**File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~1608, ~1636–1637
 
-`return _MIN_SANE_PRICE <= price <= max_price` re-checks the lower bound, but line 1005 already returns `False` if `price < _MIN_SANE_PRICE`. Simplify to `return price <= max_price`.
+`test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site_hardcoding` asserts `variant_count` and `variants` are **absent**, meaning non-standard axes (Weight/Flavour) are ignored. Rename to `test_extract_ecommerce_detail_ignores_nonstandard_variant_axes` to match actual behavior.
 
-### 93. harness_support.py — Redundant third condition in identity mismatch
-**File:** `backend/harness_support.py` · **Line:** ~624
-
-`and sample_path != requested_path` is redundant when `sample_path in {"", "/"}` and `requested_path not in {"", "/"}`. Remove the third condition.
-
-### 94. harness_support.py — Harness user password not synced with env
-**File:** `backend/harness_support.py` · **Lines:** ~1509–1522
-
-When an existing harness user's password differs from the current `HARNESS_PASSWORD` env var, the code returns without updating. Add: if `user.hashed_password != hash_password(harness_password)`, update it.
-
-### 95. harness_support.py — Hex color regex only matches 6-digit
-**File:** `backend/harness_support.py` · **Line:** ~1149
-
-`re.fullmatch(r"#[0-9a-fA-F]{6}", text)` misses 3-digit shorthand, 4-digit RGBA, and 8-digit RGBA. Broaden to `r"#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})"`.
-
----
-
-## Test Assertions (continued)
-
-### 96. test_detail_extractor_structured_sources.py — Missing JS-state-vs-DOM variant precedence assertion
+### test_detail_extractor_structured_sources.py — Missing JS-state-vs-DOM variant precedence assertion
 **File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~2094–2096
 
 Test extracts `record` but doesn't assert that JS state variants take precedence over DOM fallback. Add assertions on variant fields.
 
-### 97. test_detail_extractor_structured_sources.py — Missing promo/hex variant rejection assertions
+### test_detail_extractor_structured_sources.py — Missing promo/hex variant rejection assertions
 **File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~1559–1561
 
 Test only asserts `len(rows) == 1`. Add assertions that promo and hex-only DOM variant values are rejected.
 
-### 98. test_detail_extractor_structured_sources.py — Missing Costco textual variant assertions
+### test_detail_extractor_structured_sources.py — Missing Costco textual variant assertions
 **File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~4265–4268
 
 Test is missing assertions that "Queen" and "King" textual variants are mapped into the size field.
 
-### 99. test_detail_extractor_structured_sources.py — Missing generic selector axis assertion
+### test_detail_extractor_structured_sources.py — Missing generic selector axis assertion
 **File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~2269–2272
 
 Test doesn't assert that generic selector axis names are ignored. Add negative assertions.
 
-### 100. test_detail_extractor_structured_sources.py — Missing plain-button variant assertion
+### test_detail_extractor_structured_sources.py — Missing plain-button variant assertion
 **File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~2409–2412
 
 Test extracts `record` but never asserts the plain-button variant data. Add variant content assertions.
 
-### 101. test_detail_extractor_structured_sources.py — Missing newsletter rejection and content assertions
+### test_detail_extractor_structured_sources.py — Missing newsletter rejection and content assertions
 **File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~1528–1530
 
 Test only checks `len(rows) == 1`. Add assertions that newsletter keys are absent and product fields are correct.
 
-### 102. test_detail_extractor_structured_sources.py — Missing marketing-axis pruning assertion
+### test_detail_extractor_structured_sources.py — Missing marketing-axis pruning assertion
 **File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · **Lines:** ~2178–2181
 
 Test doesn't assert that single-value marketing axes ("Soft Fabric", "High Waisted") are pruned. Add negative assertions.
 
-### 103. test_field_value_core.py — Non-deterministic concatenated-URL rejection reason
+### test_field_value_core.py — Non-deterministic concatenated-URL rejection reason
 **File:** `backend/tests/services/test_field_value_core.py` · **Lines:** ~646–656
 
 Test allows two rejection reasons via set membership. Make deterministic by expecting the exact reason string.
 
-### 104. test_field_value_core.py — `merge_variant_rows` test only asserts sizes
-**File:** `backend/tests/services/test_field_value_core.py` · **Lines:** ~675–683
+---
 
-Test only checks size preservation, not price. Add `assert [row["price"] for row in rows] == ["100", "100"]`.
+## Refactoring — Verified Open (from coderabbit.md)
 
-### 105. test_field_value_core.py — `test_coerce_size_rejects_ui_tab_labels` should use `parametrize`
-**File:** `backend/tests/services/test_field_value_core.py` · **Lines:** ~608–613
-
-Repeated asserts on different labels. Refactor to `@pytest.mark.parametrize("label", [...])`.
-
-### 106. test_selectolax_css_migration.py — No guard for missing artifact
-**File:** `backend/tests/services/test_selectolax_css_migration.py` · **Lines:** ~469–489
-
-`read_optional_artifact_text` can return `None`. Add `pytest.skip()` guard before passing to `extract_listing_records`.
-
-### 107. test_state_mappers.py — Four tests with no assertions
-**File:** `backend/tests/services/test_state_mappers.py` · **Lines:** ~716–734, ~736–754, ~1053–1096, ~1147–1178
-
-Four tests call `map_js_state_to_fields` but have zero assertions. Add assertions for:
-- variant query parameter replacement
-- ambiguous availability neutrality
-- selectedOptions population + marketing axis skip
-- `compare_at_price` / `compareAtPrice` → `original_price` mapping
+### variant_record_normalization.py
+**File:** `backend/app/services/extract/variant_record_normalization.py` (lines 305-312)
+**Issue:** `_size_candidate_is_gender_artifact` builds a regex at call time from `_GENDER_ARTIFACT_PATTERN` instead of using a pre-compiled module-level regex.
+**Fix:** Pre-compile the formatted pattern at module scope or import a compiled `GENDER_ARTIFACT_RE` from config.
 
 ---
 
-## Config — Extraction Rules
+### test_listing_identity_regressions.py
+**File:** `backend/tests/services/test_listing_identity_regressions.py` (lines 12-15)
+**Issue:** Mixed module-level and local imports reduce consistency.
+**Fix:** Move utility imports into each test; avoid direct use of `_unsupported_non_detail_ecommerce_merchandise_hint`.
 
-### 109. extraction_rules.py — Dynamic first selector can misdirect extraction
-**File:** `backend/app/services/config/extraction_rules.py` · **Line:** ~128
+**File:** `backend/tests/services/test_listing_identity_regressions.py` (lines 54-61)
+**Issue:** Missing docstring on `test_dell_industry_landing_page_not_rescued_as_merchandise`.
+**Fix:** Add docstring describing Dell industry landing page regression scenario.
 
-`DETAIL_TEXT_SCOPE_SELECTORS` starts with `_STATIC_EXPORTS.get("DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR", "main")` which is dynamic at import time. If the JSON export changes, the first selector can misdirect detail extraction to the wrong DOM scope. Consider making the fallback order explicit and deterministic.
+**File:** `backend/tests/services/test_listing_identity_regressions.py` (lines 151-162)
+**Issue:** Loop in `test_explicit_detail_markers_still_recognized` should be parametrized.
+**Fix:** Use `@pytest.mark.parametrize("url", [...])` for per-URL failure reporting.
+
+---
+
+## Logic Errors — Open
+
+1. `_detail_redirect_identity_is_mismatched()` skips the equal-URL shell-title rejection.
+   Path: `backend/app/services/extract/detail_identity.py` · Lines: 588-606
+   **Status:** Verified. When `requested == current`, the function always returns `False` regardless of whether the record has product-like signals, so shell pages with matching URLs are no longer rejected.
+
+2. The placeholder-title regexes are too broad and will strip legitimate product titles.
+   Path: `backend/app/services/extract/detail_record_finalizer.py` · Lines: 77-86
+   **Status:** Verified. Patterns such as `\bnot found\b`, `\baccess denied\b`, `\bplease wait while we verify\b`, etc. can match legitimate product titles.
+
+3. Valid object-like text can now be stripped entirely as if it were noise.
+   Path: `backend/app/services/extract/detail_text_sanitizer.py` · Lines: 392-407
+   **Status:** Verified. `_text_is_structured_object_repr` uses blanket `.replace("'", '"')` and similar replacements that corrupt values inside quoted strings before `json.loads`.
+
+---
+
+## Service Refactoring — Verified Open
+
+### detail_extractor.py
+**File:** `backend/app/services/detail_extractor.py` · Lines: 251-255
+**Issue:** `add_candidate(...)` is called directly and source-tracking is appended unconditionally, bypassing `_add_sourced_candidate` validation.
+**Fix:** Route additions through `_add_sourced_candidate(field_name, value, source)` or validate with `detail_candidate_is_valid` before adding and only append source after confirming the candidate was actually added.
+
+### detail_price_extractor.py
+**File:** `backend/app/services/extract/detail_price_extractor.py` · Lines: 350-354
+**Issue:** `detail_price_decimal(variant.get("price"))` is invoked twice per variant in the list comprehension.
+**Fix:** Compute the parsed value once per iteration and filter out `None` results.
+
+**File:** `backend/app/services/extract/detail_price_extractor.py` · Lines: 367-368
+**Issue:** Hard-coded `Decimal("0.5")` and `Decimal("2")` bounds for the parent/variant price ratio check.
+**Fix:** Extract to config constants `DETAIL_PARENT_VARIANT_PRICE_RATIO_MIN` and `DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX` in `extraction_rules.py` and import them.
+
+### detail_raw_signals.py
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Lines: 219-222
+**Issue:** Inline imports of `_detail_url_matches_requested_identity` and `_record_matches_requested_detail_identity` to avoid circular imports.
+**Fix:** Add an explanatory comment above the inline import stating it is intentionally local to avoid a circular dependency.
+
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Lines: 228-229
+**Issue:** `import json` inside a hot loop causes repeated import overhead.
+**Fix:** Move `import json` to the module-level imports and remove the inline import.
+
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Lines: 284-302
+**Issue:** H1 pruning loop removes any H1 not exactly matching a pruned JSON-LD name, which is too aggressive.
+**Fix:** Only prune H1s when there are multiple H1s and the H1 text fuzzily matches a pruned name, or only consider the first/primary H1 for pruning.
+
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Line: 7
+**Issue:** `Tag` is imported from `bs4` but never used in the module.
+**Fix:** Remove `Tag` from the import.
+
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Lines: 116-119
+**Issue:** Hardcoded CSS pattern `r"\barrow-right(?:-[a-z]+)?\b"` in text-cleaning block.
+**Fix:** Move to a config constant `DETAIL_BREADCRUMB_NOISE_ICON_PATTERNS` in `extraction_rules.py` and apply dynamically.
+
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Lines: 305-316
+**Issue:** Hardcoded CSS selectors in `noise_selectors` tuple.
+**Fix:** Move to a config constant `DETAIL_NOISE_SECTION_SELECTORS` in `extraction_rules.py` and import it.
+
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Lines: 284-285
+**Issue:** Bare `except Exception:` silently swallows JSON-LD parsing errors.
+**Fix:** Use targeted `except json.JSONDecodeError` for parse failures and log or re-raise unexpected exceptions.
+
+### detail_record_finalizer.py
+**File:** `backend/app/services/extract/detail_record_finalizer.py` · Lines: 80-86
+**Issue:** WAF/queue regex patterns (`\bplease wait while we verify\b`, `\bqueue-it\b`, etc.) are inline in `_DETAIL_PLACEHOLDER_TITLE_PATTERNS`.
+**Fix:** Extract queue/WAF patterns into a separate configurable constant (e.g., `WAF_QUEUE_PATTERNS`) in `extraction_rules.py`.
+
+**File:** `backend/app/services/extract/detail_record_finalizer.py` · Lines: 57-61
+**Issue:** Imports private symbol `_variant_axis_allowed_single_tokens` from `shared_variant_logic`.
+**Fix:** Either expose a public constant in `shared_variant_logic` or import from `extraction_rules` and update all references.
+
+### detail_text_sanitizer.py
+**File:** `backend/app/services/extract/detail_text_sanitizer.py` · Lines: 82-85
+**Issue:** Hardcoded regex `_MATERIALS_ZERO_PERCENT_PATTERN`.
+**Fix:** Move to `extraction_rules.py` as `DETAIL_MATERIALS_ZERO_PERCENT_PATTERN` and compile from the imported constant.
+
+**File:** `backend/app/services/extract/detail_text_sanitizer.py` · Lines: 392-407
+**Issue:** `_text_is_structured_object_repr` corrupts values via blanket `.replace(...)` before `json.loads`.
+**Fix:** Use `ast.literal_eval` first, fall back to `json.loads`, and catch `ValueError`/`SyntaxError` without destructive string replacements.
+
+### listing_card_fragments.py
+**File:** `backend/app/services/extract/listing_card_fragments.py` · Line: 286
+**Issue:** Hardcoded `800` in `listing_node_text(node)[:800]`.
+**Fix:** Extract to `LISTING_CHROME_TEXT_LIMIT` in `extraction_rules.py` and import it.
+
+### shared_variant_logic.py
+**File:** `backend/app/services/extract/shared_variant_logic.py` · Lines: 668-697
+**Issue:** Repeated literal hint tokens (`"swatch"`, `"variant"`, `"color"`, `"size"`, `"option"`) inline in swatch-detection logic.
+**Fix:** Consolidate into a single tuple constant (e.g., `VARIANT_CLASS_HINT_TOKENS`) in `extraction_rules.py` and import it.
+
+**File:** `backend/app/services/extract/shared_variant_logic.py` · Lines: 631-640
+**Issue:** Hardcoded selector string and numeric cap `20` for swatch button discovery.
+**Fix:** Extract `VARIANT_SWATCH_BUTTON_SELECTOR` and `VARIANT_SWATCH_BUTTON_CAP` to `extraction_rules.py` and import them.
+
+**File:** `backend/app/services/extract/shared_variant_logic.py` · Lines: 683-698
+**Issue:** `resolve_variant_group_name(parent)` is called repeatedly inside the hot loop without caching.
+**Fix:** Add a `_parent_variant_group_cache` (similar to `_parent_swatch_cache`) and use it to avoid redundant DOM traversal.
+
+### variant_record_normalization.py
+**File:** `backend/app/services/extract/variant_record_normalization.py` · Lines: 143, 472, 503, 615
+**Issue:** The expression `any(clean_text(variant.get(axis)) for axis in ("size", "color", *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS))` is duplicated four times.
+**Fix:** Extract into a helper `_variant_has_axis_value(variant)` and replace all occurrences.
+
+### field_value_core.py
+**File:** `backend/app/services/field_value_core.py` · Lines: 904-908
+**Issue:** The loop handling `VARIANT_AXIS_ALLOWED_SINGLE_TOKENS` validates the raw candidate but not the `coerce_text` result, allowing `None` or empty values into `merged`.
+**Fix:** Assign `coerced = coerce_text(candidate)` and only set `merged[key] = coerced` when `coerced not in (None, "", [], {})`.
+
+**File:** `backend/app/services/field_value_core.py` · Lines: 1470-1477
+**Issue:** Function-local import of `UNRESOLVED_TEMPLATE_URL_TOKENS` in `_is_template_url` causes per-call overhead.
+**Fix:** Move import and token normalization to module level, building a precomputed lowercase tuple similar to `_placeholder_image_url_tokens`.
+
+### field_value_dom.py
+**File:** `backend/app/services/field_value_dom.py` · Lines: 360-361
+**Issue:** The list comprehension for `links` and the `product_links` filter are overly long and hard to read.
+**Fix:** Split into clear steps: iterate over `node.select("a[href]")` up to `_max_selector_matches`, compute href/text, skip if empty, append resolved URL, then filter `product_links`.
+
+**File:** `backend/app/services/field_value_dom.py` · Lines: 665-667
+**Issue:** `_clone_visible_only(node) or node` leaks hidden content when cloning returns `None`.
+**Fix:** Check the clone result into a variable; if `None`, return/emit an explicit placeholder instead of falling back to the original node.
+
+### test_detail_extractor_structured_sources.py
+**File:** `backend/tests/services/test_detail_extractor_structured_sources.py` · Lines: 2042-2043
+**Issue:** Test `test_extract_ecommerce_detail_does_not_treat_etsy_report_radios_as_variants` contradicts its assertions (it asserts `variant_count == 3` and `variants[0]["type"]`).
+**Fix:** Rename the test to match behavior (e.g., `test_extract_ecommerce_detail_extracts_etsy_report_radios_as_type_variants`) or revert assertions to match the "does not treat" intent.
 
 
-Fix the following issues. The issues can be from different files or can overlap on same lines in one file.
+---
 
-- Verify each finding against the current code and only fix it if needed.
+## Config & Runtime
 
-In @backend/app/services/acquisition/browser_runtime.py at line 334, The hardcoded ignored args assigned to launch_kwargs["ignore_default_args"] should be moved into configuration and validated against Patchright's API: add a new config entry (e.g. IGNORED_DEFAULT_ARGS) in app/services/config/browser_fingerprint_profiles.py and read it where launch_kwargs is constructed so launch_kwargs["ignore_default_args"] = <config value> instead of the literal ["--enable-automation"]; also confirm that chromium.launch() in Patchright supports ignore_default_args and, if it does not, translate the config into the supported API (or use an alternative call) inside the same function where launch_kwargs is used to avoid runtime errors.
+### extraction_rules.py — Missing exports for DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS and NOISY_PRODUCT_ATTRIBUTE_KEYS
+**File:** `backend/app/services/config/extraction_rules.py` · Lines: 203-209, 856-984
+**Issue:** `DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS` and `NOISY_PRODUCT_ATTRIBUTE_KEYS` are defined at module level but not included in `_EXTRA_EXPORTS`.
+**Fix:** Append `"DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS"` and `"NOISY_PRODUCT_ATTRIBUTE_KEYS"` to `_EXTRA_EXPORTS`.
 
-- Verify each finding against the current code and only fix it if needed.
+### extraction_rules.py — Ambiguous naming for variant context noise depth constants
+**File:** `backend/app/services/config/extraction_rules.py` · Lines: 293, 511
+**Issue:** `VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH` (hard limit = 6) and `VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT` (fallback = 3) have similar names and no inline comments explaining their relationship.
+**Fix:** Rename the fallback constant to `VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK` (or similar) and add a single-line comment next to both constants. Decide whether `MAX_TRACKING_KEY_LENGTH`, `MAX_TRACKING_VALUE_LENGTH`, `SCOPE_SCORE_MAIN_WEIGHT`, `SCOPE_SCORE_PRIORITY_WEIGHT`, `SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT`, and `MAX_SELECTOR_MATCHES` should be public; if so, add them to `_EXTRA_EXPORTS`.
 
-In @backend/app/services/config/browser_fingerprint_profiles.py around lines 34 - 46, Add the three new constants to the module export list and give WARMUP_VENDOR_BLOCK_PREFIX a type annotation: update __all__ to include "NATIVE_REAL_CHROME_CONTEXT_OPTIONS", "WARMUP_ELIGIBLE_BROWSER_REASONS", and "WARMUP_VENDOR_BLOCK_PREFIX", and change the WARMUP_VENDOR_BLOCK_PREFIX declaration to include a type (e.g., str) to match the other constants; verify the same change is applied consistently where these constants appear later in the file (around the other occurrences at lines ~309-318).
+### runtime_settings.py — Inconsistent validation for browser behavior timing fields
+**File:** `backend/app/services/config/runtime_settings.py` · Lines: 395-421
+**Issue:** Browser behavior fields (`browser_behavior_scroll_steps`, `browser_behavior_scroll_min_px`, `browser_behavior_scroll_max_px`, `browser_behavior_pause_min_ms`, `browser_behavior_pause_jitter_ms`, `browser_behavior_typing_min_delay_ms`, `browser_behavior_typing_jitter_ms`) use silent `_clamp_to_non_negative` instead of error-raising `_require_non_negative` like other fields.
+**Fix:** Replace `_clamp_to_non_negative` with `_require_non_negative` for those fields.
 
-- Verify each finding against the current code and only fix it if needed.
+---
 
-In @backend/app/services/config/field_mappings.py around lines 217 - 221, NAVIGATION_URL_FIELDS and PUBLIC_RECORD_CANONICAL_URL_FIELDS are defined as identical frozensets; either deduplicate by having one reference the other (e.g., set PUBLIC_RECORD_CANONICAL_URL_FIELDS = NAVIGATION_URL_FIELDS) or, if they are conceptually different, add a short clarifying comment above the two constants explaining their distinct purposes and why they currently contain the same members so future changes are clear; update references to PUBLIC_RECORD_CANONICAL_URL_FIELDS or NAVIGATION_URL_FIELDS accordingly.
+## Acquisition / Fetch
 
-- Verify each finding against the current code and only fix it if needed.
+### crawl_fetch_runtime.py — http_max_retries can be None
+**File:** `backend/app/services/crawl_fetch_runtime.py` · Line: 773
+**Issue:** `max(1, int(crawler_runtime_settings.http_max_retries) + 1)` raises `TypeError` when `http_max_retries` is `None`.
+**Fix:** Coalesce the raw value before conversion (e.g., `retries = int(crawler_runtime_settings.http_max_retries or 0)` then `max_attempts = max(1, retries + 1)`).
 
-In @backend/app/services/crawl_fetch_runtime.py around lines 788 - 796, The code assumes crawler_runtime_settings.http_timeout_seconds is a number and will raise TypeError if it's None; mirror the handoff-timeout guard used earlier by computing http_timeout only when http_timeout_seconds is not None. Specifically, in the block around http_timeout, check if crawler_runtime_settings.http_timeout_seconds is None and if so set http_timeout = context.resolved_timeout; otherwise set http_timeout = min(float(crawler_runtime_settings.http_timeout_seconds), context.resolved_timeout) before calling wait_for_host_slot and fetcher.
+### crawl_fetch_runtime.py — _sleep_before_retry calls int() on possibly-None backoff values
+**File:** `backend/app/services/crawl_fetch_runtime.py` · Lines: 1133-1136
+**Issue:** `int(crawler_runtime_settings.http_retry_backoff_base_ms)` and `int(crawler_runtime_settings.http_retry_backoff_max_ms)` can raise `TypeError` if the config values are `None`.
+**Fix:** Guard with `or 0` before `int()`, mirroring the `_resolve_http_timeout` defensive pattern.
 
-- Verify each finding against the current code and only fix it if needed.
+### crawl_fetch_runtime.py — _retryable_status_for_http_fetch can raise ValueError
+**File:** `backend/app/services/crawl_fetch_runtime.py` · Lines: 1128-1130
+**Issue:** The set comprehension `{int(value) for value in ...}` raises `ValueError` if any entry in `http_retry_status_codes` is non-numeric.
+**Fix:** Build the set only from successfully parsed integers inside a `try/except`.
 
-In @backend/app/services/crawl_fetch_runtime.py around lines 684 - 690, The handoff_timeout calculation can raise TypeError if crawler_runtime_settings.http_timeout_seconds is None; update the logic around where handoff_timeout is computed (the block that sets handoff_timeout before calling _curl_fetch with context.url and context.resolved_timeout) to guard against None by using a default (e.g., treat None as 0 or another sensible default) or explicitly check for None and handle accordingly so float(...) is never called on None.
+---
 
-- Verify each finding against the current code and only fix it if needed.
+## Extraction
 
-### 108. browser_runtime.py — Hardcoded ignored args
-**File:** `backend/app/services/acquisition/browser_runtime.py` · **Line:** ~334
+### detail_dom_extractor.py — DOM_VARIANT_GROUP_LIMIT not coerced defensively
+**File:** `backend/app/services/extract/detail_dom_extractor.py` · Lines: 1092-1093
+**Issue:** `int(DOM_VARIANT_GROUP_LIMIT)` can raise `ValueError` if the config is `None`/empty/non-numeric.
+**Fix:** Use a safe parse with a fallback to `1` while preserving `max(1, ...)` semantics.
 
-The hardcoded `["--enable-automation"]` assigned to `launch_kwargs["ignore_default_args"]` should be moved into configuration (e.g., `app/services/config/browser_fingerprint_profiles.py`).
+### detail_raw_signals.py — @graph normalization ignores single-dict case
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Lines: 229-244
+**Issue:** When `item.get("@graph")` returns a single `dict`, the code falls back to `[item]` instead of treating it as a single-element list.
+**Fix:** Normalize dict-to-list for both the list-comprehension flattening and the `graph = payload.get("@graph")` branch.
 
-### 109. browser_fingerprint_profiles.py — Missing exports and types
-**File:** `backend/app/services/config/browser_fingerprint_profiles.py` · **Lines:** ~34–46
+### detail_raw_signals.py — import json inside hot loop
+**File:** `backend/app/services/extract/detail_raw_signals.py` · Lines: 228-229
+**Issue:** `import json` is repeated inside the JSON-LD script loop.
+**Fix:** Move `import json` to the module-level imports.
 
-`WARMUP_VENDOR_BLOCK_PREFIX` needs a type annotation. Add `NATIVE_REAL_CHROME_CONTEXT_OPTIONS`, `WARMUP_ELIGIBLE_BROWSER_REASONS`, and `WARMUP_VENDOR_BLOCK_PREFIX` to `__all__`.
+### detail_record_finalizer.py — Literal "out_of_stock" instead of config constant
+**File:** `backend/app/services/extract/detail_record_finalizer.py` · Lines: 1088-1091
+**Issue:** `record["availability"] = "out_of_stock"` uses a hardcoded literal while `AVAILABILITY_IN_STOCK` is already imported from config.
+**Fix:** Define `AVAILABILITY_OUT_OF_STOCK` in `extraction_rules.py` and use it.
 
-### 110. field_mappings.py — Duplicate canonical/navigation url fields
-**File:** `backend/app/services/config/field_mappings.py` · **Lines:** ~217–221
+### detail_record_finalizer.py — PEP8 blank line violations between top-level functions
+**File:** `backend/app/services/extract/detail_record_finalizer.py` · Lines: 187-195
+**Issue:** Only one blank line separates `_feature_text_is_json_object` and `_sanitize_detail_identity_scalars`; PEP8 requires two.
+**Fix:** Add two blank lines before `_feature_text_is_json_object` and two before `_sanitize_detail_identity_scalars`.
 
-`NAVIGATION_URL_FIELDS` and `PUBLIC_RECORD_CANONICAL_URL_FIELDS` are identical. Deduplicate them or add a comment explaining why they must stay separate.
+### detail_text_sanitizer.py — Hardcoded word_count threshold in bracket-prose extraction
+**File:** `backend/app/services/extract/detail_text_sanitizer.py` · Lines: 421-431
+**Issue:** `word_count >= 5` is a magic number in the bracket-prose candidate loop.
+**Fix:** Extract to `DETAIL_BRACKET_PROSE_MIN_WORDS` in `extraction_rules.py` and import it.
 
-### 111. crawl_fetch_runtime.py — TypeError risks on timeouts
-**File:** `backend/app/services/crawl_fetch_runtime.py` · **Lines:** ~684–690, ~788–796
+### listing_card_fragments.py — Broad except Exception in CSS selector parsing
+**File:** `backend/app/services/extract/listing_card_fragments.py` · Lines: 54-56
+**Issue:** `except Exception:` catches `MemoryError`, `KeyboardInterrupt`, etc.
+**Fix:** Narrow to the specific selectolax parsing exception(s) and `ValueError`, keeping `logger.warning(..., exc_info=True)`.
 
-`crawler_runtime_settings.http_timeout_seconds` can be `None`. Calling `float()` on it for `handoff_timeout` or `http_timeout` will raise a TypeError.
+### shared_variant_logic.py — Fallback depth conversion unguarded
+**File:** `backend/app/services/extract/shared_variant_logic.py` · Lines: 165-169
+**Issue:** `int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT)` in the fallback path can itself raise `TypeError`/`ValueError`.
+**Fix:** Wrap that conversion in its own `try/except`; if it fails, set `depth = 0`.
 
-### 112. detail_dom_extractor.py — Overwriting existing variants
-**File:** `backend/app/services/extract/detail_dom_extractor.py` · **Lines:** ~1263–1271
+### variant_record_normalization.py — Hardcoded gender regex in _size_candidate_is_gender_artifact usage
+**File:** `backend/app/services/extract/variant_record_normalization.py` · Lines: 285-286
+**Issue:** `re.search(r"\b(?:men|women|boys|girls)['']?s\b", text.lower())` is inline and duplicates the gender-detection concept already in `_GENDER_ARTIFACT_PATTERN`.
+**Fix:** Replace the inline regex with the config-driven `_GENDER_ARTIFACT_PATTERN` (or a dedicated constant) so gender artifacts are handled consistently.
 
-The loop populating `existing_by_key` overwrites earlier rows when `variant_id` or `url` duplicates. Either preserve the first occurrence or collect them in a list.
+### variant_record_normalization.py — DEFAULT_DETAIL_MAX_VARIANT_ROWS fallback not guarded
+**File:** `backend/app/services/extract/variant_record_normalization.py` · Lines: 603-606
+**Issue:** `int(DEFAULT_DETAIL_MAX_VARIANT_ROWS)` in the fallback can raise if misconfigured.
+**Fix:** Wrap both conversions defensively and ultimately ensure `max_rows = max(1, safe_value)` with a hard-coded safe fallback if both fail.
 
-### 113. detail_dom_extractor.py — Hex color regex uses A-F
-**File:** `backend/app/services/extract/detail_dom_extractor.py` · **Line:** ~347
+### variant_record_normalization.py — Hardcoded gender keyword set in size extraction
+**File:** `backend/app/services/extract/variant_record_normalization.py` · Lines: 399-409
+**Issue:** Inline set `{"men", "mens", "women", "womens", "boys", "girls"}` is duplicated and not centralized.
+**Fix:** Import a centralized `GENDER_KEYWORD_TOKENS` constant from `extraction_rules.py` and replace all inline occurrences.
 
-The regex `r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?"` checks against `compact` which is already lowercased. Simplify the character class to `[0-9a-f]`.
+---
 
-### 114. detail_record_finalizer.py — Rebuilding placeholder pattern tuple
-**File:** `backend/app/services/extract/detail_record_finalizer.py` · **Lines:** ~851–852
+## Field Value & Core
 
-Calling `tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ())` per-call creates unnecessary allocation. Pre-compute a cached lowercased tuple at module load.
+### field_value_candidates.py — Hardcoded price field sets
+**File:** `backend/app/services/field_value_candidates.py` · Lines: 442-444
+**Issue:** `_source_key_is_price_field` uses inline sets `{"price", "sale_price", "original_price", "compare_at_price"}`.
+**Fix:** Move to config constants (`PRICE_SOURCE_KEY_FIELDS`, `CANONICAL_PRICE_FIELDS`) in `extraction_rules.py` and import them.
 
-### 115. detail_text_sanitizer.py — Brittle JSON object check
-**File:** `backend/app/services/extract/detail_text_sanitizer.py` · **Lines:** ~400–402
+### field_value_core.py — _price_text_is_negative hardcodes currency symbols
+**File:** `backend/app/services/field_value_core.py` · Lines: 595-600
+**Issue:** `re.match(r"^\s*-\s*(?:[$€£¥₹]|[A-Z]{3}\b)?\s*\d", ...)` embeds literal symbols.
+**Fix:** Build the character class dynamically from `CURRENCY_SYMBOL_MAP` keys, escaping as needed; fall back to a pattern that only checks for leading `-` and digit if the map is empty.
 
-Treating a leading `{` as sufficient to drop text is brittle. Use `json.loads` or a structural check to verify it's a real JSON object before dropping.
+### field_value_core.py — SIZE_REJECT_TOKENS rebuilt on every call
+**File:** `backend/app/services/field_value_core.py` · Lines: 705-706
+**Issue:** `frozenset(SIZE_REJECT_TOKENS or ())` is constructed inline inside `_sanitize_option_scalar` on every call.
+**Fix:** Pre-compute a module-level `_SIZE_REJECT_TOKENS` frozenset (casefolded) at import time.
 
-### 116. shared_variant_logic.py — Hardcoded noise ancestor depth
-**File:** `backend/app/services/extract/shared_variant_logic.py` · **Lines:** ~162–166
+### field_value_dom.py — _split_feature_text uses aggressive lstrip
+**File:** `backend/app/services/field_value_dom.py` · Lines: 1360-1372
+**Issue:** `cleaned.lstrip("- ")` removes any leading `-` or space characters individually, so `'---note'` becomes `'note'`.
+**Fix:** Use `re.sub(r'^-\s*', '', cleaned)` for targeted single-dash removal before splitting.
 
-The fallback depth `3` is hardcoded. Extract to a config constant like `VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT`.
+---
 
-### 117. variant_record_normalization.py — Hardcoded fallback max_rows
-**File:** `backend/app/services/extract/variant_record_normalization.py` · **Lines:** ~456–459
+## Provider / Pipeline / Misc Services
 
-The fallback `max_rows = 1` is hardcoded. Extract to a config constant like `DEFAULT_DETAIL_MAX_VARIANT_ROWS`.
+### llm_provider_client.py — New AsyncClient per request in _call_groq
+**File:** `backend/app/services/llm_provider_client.py` · Lines: 143-167
+**Issue:** `_call_groq` creates a new `httpx.AsyncClient` per request, preventing connection reuse.
+**Fix:** Use a shared/reused `AsyncClient` (module-level or injected), configured with `llm_runtime_settings.provider_timeout_seconds`, and ensure it is properly started/closed on app startup/shutdown.
 
-### 118. field_url_normalization.py — Unreachable and fragile code
-**File:** `backend/app/services/field_url_normalization.py` · **Lines:** ~28–35, ~122–137
+### normalizers/__init__.py — Hardcoded currency regex in early-return branch
+**File:** `backend/app/services/normalizers/__init__.py` · Lines: 101-102
+**Issue:** `re.match(r"^\s*-\s*(?:[$€£¥₹]|[A-Za-z]{3}\b)?\s*\d", text)` hardcodes symbols and `[A-Za-z]{3}` instead of using `_CURRENCY_CODE_CONTEXT_PATTERN`.
+**Fix:** Replace `[A-Za-z]{3}` with the config-driven `_CURRENCY_CODE_CONTEXT_PATTERN`; drop the redundant `^\s*` since `_normalize_text` already strips whitespace.
 
-`len(scheme_matches) == 1` branch is unreachable because `_URL_SCHEME_RE.finditer` already finds all matches. Also, `URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS` is double-wrapped in `tuple()`.
+### pipeline/core.py — Unused browser_diagnostics assignment
+**File:** `backend/app/services/pipeline/core.py` · Lines: 441-443
+**Issue:** `browser_diagnostics = getattr(acquisition_result, "browser_diagnostics", {})` is assigned but never used in the subsequent condition.
+**Fix:** Remove the unused assignment and keep the condition that uses `_effective_blocked(acquisition_result)` and `_browser_attempted(acquisition_result)`.
 
-### 119. field_value_core.py — Redundant length check
-**File:** `backend/app/services/field_value_core.py` · **Lines:** ~656–661
+### selector_self_heal.py — Hardcoded slice limit [:6]
+**File:** `backend/app/services/selector_self_heal.py` · Lines: 179-207
+**Issue:** `targets[:6]` is a magic number used in two places.
+**Fix:** Extract to a configurable constant (e.g., `SELF_HEAL_TARGET_LIMIT`) with a default of `6`.
 
-`re.fullmatch(r"\d{1,2}", cleaned)` already guarantees 1-2 chars. The trailing `and len(cleaned) <= 2` is redundant.
+### selector_self_heal.py — Hardcoded keep-worthy tag set
+**File:** `backend/app/services/selector_self_heal.py` · Lines: 128-155
+**Issue:** `node.name not in {"button", "input", "select"}` is inline.
+**Fix:** Move to `SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS` in `app/services/config/selectors.py` and import it.
 
-### 120. field_value_dom.py — Bare int() calls on config values
-**File:** `backend/app/services/field_value_dom.py` · **Lines:** ~81, ~387–397
+### selector_self_heal.py — Hardcoded default confidence 0.55
+**File:** `backend/app/services/selector_self_heal.py` · Lines: 168-175
+**Issue:** `default=0.55` is inline in the confidence extraction call.
+**Fix:** Extract to `SELECTOR_SELF_HEAL_DEFAULT_MIN_CONFIDENCE` in the selectors config.
 
-Bare `int()` calls on config values like `MAX_SELECTOR_MATCHES` and `SCOPE_SCORE_MAIN_WEIGHT` will raise TypeError on `None`. Use `_safe_int`.
+### harness_support.py — Missing log on password sync
+**File:** `backend/harness_support.py` · Lines: 1513-1527
+**Issue:** When `verify_password` fails and the harness user password is re-hashed, no log entry is emitted.
+**Fix:** Add an informational log (e.g., `logger.info(...)`) in the sync branch that records the user ID/email and a short context message.
 
-### 121. llm_provider_client.py — Retry loop semantics and unused parameter
-**File:** `backend/app/services/llm_provider_client.py` · **Lines:** ~60–61, ~254
+---
 
-The retry loop treats `max_retries` as total attempts. The `api_key` parameter is deleted using `del api_key` instead of prefixing with `_`.
+## Tests
 
-### 122. pipeline/core.py — Duplicated browser_attempted logic
-**File:** `backend/app/services/pipeline/core.py` · **Lines:** ~441–444
+### test_crawl_engine.py — Duplicate assertion
+**File:** `backend/tests/services/test_crawl_engine.py` · Line: 1009-1010
+**Issue:** Two identical consecutive lines `assert len(rows) == 1`.
+**Fix:** Remove one of the duplicate assertions.
 
-The code duplicates logic to determine if the browser attempted. Use the existing `_browser_attempted(acquisition_result)` helper.
+### test_field_value_dom_regressions.py — Missing null guard after _img()
+**File:** `backend/tests/services/test_field_value_dom_regressions.py` · Lines: 13-18
+**Issue:** `_img()` returns `Tag | None`; test callers access `node.get("src")` without checking for `None`.
+**Fix:** Add `assert node is not None` immediately after each `_img()` call.
 
-### 123. test_state_mappers.py — Missing product-level mappings assertion
-**File:** `backend/tests/services/test_state_mappers.py` · **Lines:** ~97–146
+### test_network_payload_mapper.py — Incomplete job-api non-dict rejection test
+**File:** `backend/tests/services/test_network_payload_mapper.py` · Lines: 253-260
+**Issue:** `test_looks_like_job_api_rejects_non_dict` only asserts `None`; `test_looks_like_product_api_rejects_non_dict` covers both string and list.
+**Fix:** Add string and list assertions to the job-api test, mirroring the product-api test.
 
-The test only asserts variant-level mappings. Extend it to assert product-level fields like `mapped["color"]` and `mapped["size"]`.
+### test_state_mappers.py — Missing size assertion
+**File:** `backend/tests/services/test_state_mappers.py` · Lines: 197-198
+**Issue:** The test asserts `mapped["color"] == "Cool Grey"` but the input includes a size variation that is never checked.
+**Fix:** Add `assert mapped["size"] == "S"` alongside the color assertion.
 
-### 124. crawl-run-screen.tsx — Tone badge logic warns on empty
-**File:** `frontend/components/crawl/crawl-run-screen.tsx` · **Lines:** ~1117–1129
+### test_harness_support.py — Duplicate _FakeSession class
+**File:** `backend/tests/test_harness_support.py` · Lines: 840-846, 904-910
+**Issue:** `_FakeSession` is defined identically in two tests.
+**Fix:** Extract to a shared pytest fixture (e.g., in `conftest.py` or module top) and have both tests use it.
 
-The Badge uses `tone={llmSummary.touchedRecords > 0 ? 'accent' : 'warning'}`, treating "LLM enabled, no repair" as a warning. Change fallback to a neutral tone.
+### test_harness_support.py — Hardcoded Windows path
+**File:** `backend/tests/test_harness_support.py` · Lines: 74-93
+**Issue:** `Path("C:/Projects/pre_poc_ai_crawler/TEST_SITES.md")` is non-portable.
+**Fix:** Build the path from `Path(__file__).parent / "TEST_SITES.md"` (or equivalent relative-to-repo logic).
+
+---
+
+## Skipped / Not Applicable
+
+- `backend/app/services/config/browser_fingerprint_profiles.py` line 35 — `REAL_CHROME_IGNORE_DEFAULT_ARGS` is defined but never referenced anywhere in the codebase; cannot verify the claim about automation flags remaining enabled. Skipping.
+- `backend/app/services/config/field_mappings.py` line 222 — `BRAND_LIKE_FIELDS` is an intentionally-defined frozenset (`{"brand", "company", "dealer_name", "vendor"}`); no specific missing aliases were identified. Skipping.
+- `backend/app/services/config/field_mappings.py` line 223 — `OPTION_SCALAR_FIELDS` is an intentionally-defined frozenset (`{COLOR_FIELD, "condition", "material", SIZE_FIELD, "storage", "style"}`); no specific missing fields were identified. Skipping.
+- `backend/app/services/config/runtime_settings.py` line 372 — `min_max_pages < 1` validation is consistent with the rest of the file's validation style; no evidence that prior clamping was replaced by this raise. Skipping.

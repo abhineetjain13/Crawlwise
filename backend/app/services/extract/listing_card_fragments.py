@@ -6,7 +6,6 @@ from urllib.parse import urlsplit
 from typing import Callable
 
 from selectolax.lexbor import LexborHTMLParser
-from selectolax.lexbor import SelectolaxError
 
 from app.services.config.extraction_rules import (
     LISTING_FALLBACK_CONTAINER_SELECTOR,
@@ -52,8 +51,8 @@ def listing_node_css(node, selector: str) -> list[object]:
         return []
     try:
         return list(node.css(selector))
-    except SelectolaxError:
-        logger.warning("Skipping invalid listing selector: %s", selector)
+    except Exception:
+        logger.warning("Skipping invalid listing selector: %s", selector, exc_info=True)
         return []
 
 
@@ -81,10 +80,7 @@ def base_listing_fragment_score(node) -> int:
     score = 0
     if has_positive_signature:
         score += 6
-    try:
-        links = _node_listing_links(node)
-    except Exception:
-        return -100
+    links = _node_listing_links(node)
     link_count = len(links)
     if link_count == 0:
         return -100
@@ -96,7 +92,7 @@ def base_listing_fragment_score(node) -> int:
         score -= 1
     else:
         score -= 6
-    text = clean_text(str(node.text(strip=True) or ""))
+    text = listing_node_text(node)
     text_len = len(text)
     if text_len < 12:
         score -= 3
@@ -122,7 +118,7 @@ def _node_listing_links(node) -> list[object]:
     links = []
     if listing_node_attr(node, "href"):
         links.append(node)
-    links.extend(node.css("a[href]"))
+    links.extend(listing_node_css(node, "a[href]"))
     return links
 
 
@@ -190,10 +186,7 @@ def _scored_listing_fragment_nodes(
     fragment_limit = max(1, int(crawler_runtime_settings.listing_fallback_fragment_limit))
     selectors = list(CARD_SELECTORS.get(listing_selector_group(surface)) or [])
     for selector in selectors:
-        try:
-            matches = parser.css(selector)
-        except Exception:
-            matches = []
+        matches = listing_node_css(parser, selector)
         for node in matches:
             order += 1
             score = int(scorer(node))
@@ -205,7 +198,7 @@ def _scored_listing_fragment_nodes(
             seen.add(fragment)
             scored.append((score, order, node))
     scanned = 0
-    for node in parser.css(LISTING_FALLBACK_CONTAINER_SELECTOR):
+    for node in listing_node_css(parser, LISTING_FALLBACK_CONTAINER_SELECTOR):
         scanned += 1
         if scanned > fragment_limit * 40:
             break
@@ -254,10 +247,7 @@ def heuristic_listing_card_count_from_html(html: str, *, surface: str) -> int:
     parser = LexborHTMLParser(html)
     seen: set[str] = set()
     count = 0
-    try:
-        nodes = parser.css(LISTING_FALLBACK_CONTAINER_SELECTOR)
-    except Exception:
-        return 0
+    nodes = listing_node_css(parser, LISTING_FALLBACK_CONTAINER_SELECTOR)
     for node in nodes:
         fragment = str(node.html or "").strip()
         if not fragment or fragment in seen:
@@ -293,10 +283,7 @@ def _node_looks_like_listing_chrome(node) -> bool:
     signature = _listing_node_signature(node)
     if any(token in signature for token in LISTING_NON_LISTING_PATH_TOKENS):
         return True
-    try:
-        text = str(node.text(separator=" ", strip=True) or "").strip().lower()[:800]
-    except Exception:
-        return False
+    text = listing_node_text(node)[:800]
     return any(
         token in text
         for token in (
@@ -309,10 +296,7 @@ def _node_looks_like_listing_chrome(node) -> bool:
 
 def _node_contains_nested_listing_candidates(node, *, surface: str) -> bool:
     node_fragment = str(node.html or "").strip()
-    try:
-        descendants = node.css(LISTING_FALLBACK_CONTAINER_SELECTOR)
-    except Exception:
-        return False
+    descendants = listing_node_css(node, LISTING_FALLBACK_CONTAINER_SELECTOR)
     for descendant in descendants:
         if str(descendant.html or "").strip() == node_fragment:
             continue
@@ -336,14 +320,11 @@ def _listing_node_signature(node) -> str:
 
 
 def _node_text_has_price(node) -> bool:
-    return bool(_PRICE_HINT_RE.search(str(node.text(strip=True) or "").strip()))
+    return bool(_PRICE_HINT_RE.search(listing_node_text(node)))
 
 
 def _node_has_listing_media(node) -> bool:
-    try:
-        return bool(node.css("img, picture img, picture source"))
-    except Exception:
-        return False
+    return bool(listing_node_css(node, "img, picture img, picture source"))
 
 
 def _node_has_detail_like_link(node, *, surface: str) -> bool:
@@ -352,10 +333,7 @@ def _node_has_detail_like_link(node, *, surface: str) -> bool:
         if str(surface or "").strip().lower().startswith("job_")
         else ("/products/", "/product/", "/p/", "/dp/", "/item/")
     )
-    try:
-        anchors = node.css("a[href]")
-    except Exception:
-        return False
+    anchors = listing_node_css(node, "a[href]")
     for anchor in anchors[:6]:
         attrs = getattr(anchor, "attributes", {}) or {}
         href = str(attrs.get("href") or "").strip().lower()

@@ -10,12 +10,15 @@ from app.services.extraction_html_helpers import html_to_text
 from app.services.config.extraction_rules import (
     AVAILABILITY_URL_MAP,
     BARE_HOST_URL_RE,
+    CANDIDATE_AVAILABILITY_NOISE_PHRASES,
+    COLOR_KEYWORD_PATTERN,
     CSS_NOISE_PATTERN,
     CURRENCY_ALIAS_PATTERNS,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
     DETAIL_LOW_SIGNAL_TITLE_VALUES,
     DETAIL_TRACKING_TOKEN_PATTERN,
+    GIF_BASE64_PREFIX,
     IMAGE_FIELDS,
     INTEGER_VALUE_FIELDS,
     LISTING_ACTION_NOISE_PATTERNS,
@@ -37,17 +40,23 @@ from app.services.config.extraction_rules import (
     REVIEW_COUNT_RE as _REVIEW_COUNT_RE,
     REVIEW_TITLE_RE,
     SIZE_REJECT_TOKENS,
+    SMALL_NUMERIC_PATTERN,
     STRUCTURED_MULTI_FIELDS,
     STRUCTURED_OBJECT_FIELDS,
     STRUCTURED_OBJECT_LIST_FIELDS,
+    TRACKING_PIXEL_PATTERN,
+    URL_DETECTION_TOKENS,
     URL_FIELDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
+    VARIANT_AXIS_ALLOWED_SINGLE_TOKENS,
 )
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
     ADDITIONAL_IMAGES_FIELD,
+    BRAND_LIKE_FIELDS,
     FIELD_ALIASES,
     FLAT_VARIANT_KEYS,
+    OPTION_SCALAR_FIELDS,
     PUBLIC_RECORD_BARCODE_LENGTHS,
     PUBLIC_RECORD_BRAND_REGION_SUFFIX_TOKENS,
     PUBLIC_RECORD_GENDER_REJECT_TOKENS,
@@ -135,15 +144,19 @@ ALL_CANONICAL_FIELDS = sorted(
         if field_name
     }
 )
-# Price-like fields: string values must contain at least one digit to be valid
 _PRICE_FIELD_NAMES = PRICE_VALUE_FIELDS
-# Integer-only fields: string values like "out_of_stock" should be nulled
 _INTEGER_FIELD_NAMES = INTEGER_VALUE_FIELDS
 _NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
     normalize_field_key(str(key or ""))
     for key in tuple(NOISY_PRODUCT_ATTRIBUTE_KEYS or ())
     if str(key or "").strip()
-) | {"availability", "available", "in_stock", "stock_status"}
+)
+_PUBLIC_RECORD_BARCODE_LENGTHS_SET = frozenset(PUBLIC_RECORD_BARCODE_LENGTHS or ())
+_SMALL_NUMERIC_RE = re.compile(str(SMALL_NUMERIC_PATTERN), re.I)
+_TRACKING_PIXEL_RE = re.compile(str(TRACKING_PIXEL_PATTERN), re.I)
+_COLOR_KEYWORD_RE = re.compile(str(COLOR_KEYWORD_PATTERN), re.I)
+_url_detection_tokens = tuple(URL_DETECTION_TOKENS or ())
+_GIF_BASE64_PREFIX = str(GIF_BASE64_PREFIX or "")
 
 
 def _object_list(value: object) -> list:
@@ -188,6 +201,9 @@ _CSS_NOISE_RE = re.compile(str(CSS_NOISE_PATTERN), re.I)
 _LEADING_CSS_BLOCK_RE = re.compile(r"^(?:\s*\.[a-z0-9_-]+\{[^{}]*\})+", re.I)
 _BARE_HOST_URL_RE = BARE_HOST_URL_RE
 _tracking_token_re = re.compile(str(DETAIL_TRACKING_TOKEN_PATTERN), re.I)
+_AVAILABILITY_CANONICAL_ENUM = frozenset(
+    str(v) for v in dict(AVAILABILITY_URL_MAP or {}).values() if v
+)
 
 
 def clean_text(value: object) -> str:
@@ -576,6 +592,13 @@ def extract_price_text(
     return clean_text(match.group(0))
 
 
+def _price_text_is_negative(value: object) -> bool:
+    text = clean_text(value)
+    if not text:
+        return False
+    return re.match(r"^\s*-\s*(?:[$€£¥₹]|[A-Z]{3}\b)?\s*\d", text, re.I) is not None
+
+
 def extract_currency_code(value: object) -> str | None:
     text = clean_text(value)
     if not text:
@@ -632,7 +655,7 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
     if text.lstrip().startswith(("{", "[")):
         return None
     cleaned = text
-    if field_name in {"color", "condition", "material", "size", "storage", "style"}:
+    if field_name in OPTION_SCALAR_FIELDS:
         for pattern in _OPTION_VALUE_SUFFIX_NOISE_RE:
             cleaned = clean_text(pattern.sub("", cleaned))
         cleaned = re.sub(
@@ -653,11 +676,9 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
             )
         cleaned = clean_text(cleaned)
     if field_name == "color":
-        # Reject single-digit numeric values from quantity inputs (e.g. "1")
-        if re.fullmatch(r"\d{1,2}", cleaned) and len(cleaned) <= 2:
+        if _SMALL_NUMERIC_RE.fullmatch(cleaned):
             return None
-        # Reject tracking pixel classes (e.g. "_clck", "_fbp")
-        if re.fullmatch(r"_[a-z]+", cleaned, flags=re.I):
+        if _TRACKING_PIXEL_RE.fullmatch(cleaned):
             return None
         match = re.fullmatch(r"select\s+(.+?)\s+color", cleaned, flags=re.I)
         if match is not None:
@@ -665,11 +686,7 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = re.split(r"\bstyle\s*:", cleaned, maxsplit=1, flags=re.I)[0]
         if ":" in cleaned:
             prefix, suffix = cleaned.rsplit(":", 1)
-            if len(clean_text(suffix).split()) <= 4 and re.search(
-                r"\b(?:color|colour|black|blue|brown|green|grey|gray|orange|pink|purple|red|white|yellow)\b",
-                suffix,
-                flags=re.I,
-            ):
+            if len(clean_text(suffix).split()) <= 4 and _COLOR_KEYWORD_RE.search(suffix):
                 cleaned = suffix
         cleaned = re.sub(r"^color\s*:\s*", "", cleaned, flags=re.I)
         cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
@@ -685,7 +702,6 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = clean_text(cleaned)
         if re.search(r"\bplease\s+select\b", cleaned, flags=re.I):
             return None
-        # Reject UI navigation tab labels (e.g. "Photos", "Verified Purchases")
         if cleaned.strip().lower() in frozenset(SIZE_REJECT_TOKENS or ()):
             return None
     if cleaned.strip().casefold() in {"none", "null", "- / null", "n/a", "na"}:
@@ -760,7 +776,6 @@ def extract_urls(value: object, page_url: str) -> list[str]:
             return results
         if _looks_like_malformed_relative_url_candidate(text):
             return results
-        # Reject strings that concatenate two distinct product URLs
         if is_concatenated_url(text):
             return results
         embedded_urls = re.findall(r"https?://(?:(?!https?://)[^\s,])+", text)
@@ -791,7 +806,7 @@ def extract_urls(value: object, page_url: str) -> list[str]:
         normalized = candidate.lower()
         if not candidate or normalized in seen:
             continue
-        if _is_placeholder_image_url(candidate):
+        if _is_placeholder_image_url(candidate) or _is_template_url(candidate):
             continue
         if is_concatenated_url(candidate):
             continue
@@ -818,9 +833,9 @@ def _looks_like_malformed_relative_url_candidate(value: str) -> bool:
     if urlparse(text).scheme or text.startswith(("//", "/", "#", "?", "./", "../")):
         return False
     head = text.split("/", 1)[0].lower()
-    if head.startswith("r0lgodlh"):
+    if _GIF_BASE64_PREFIX and head.startswith(_GIF_BASE64_PREFIX):
         return True
-    return any(token in head for token in ("g_auto", "f_auto", "q_auto", "c_fill"))
+    return any(token in head for token in _url_detection_tokens)
 
 
 _placeholder_image_url_tokens = tuple(
@@ -844,10 +859,12 @@ def flatten_variants_for_public_output(
 ) -> list[dict[str, object]] | None:
     """Flatten variants to the Zyte-shaped public schema.
 
-    Each emitted variant carries only ``FLAT_VARIANT_KEYS``. Nested
-    ``option_values`` are merged into top-level ``color`` / ``size`` when those
-    axes are missing, then dropped. Unknown keys (``variant_id``, ``name``,
-    ``title``, ``option_values``, etc.) are removed entirely.
+    Each emitted variant carries only ``FLAT_VARIANT_KEYS`` plus any
+    recognised variant axis keys from ``option_values``.  Nested
+    ``option_values`` are merged into top-level ``color`` / ``size`` /
+    ``weight`` / ``flavor`` / etc. when those axes are missing, then
+    dropped.  Unknown keys (``variant_id``, ``name``, ``title``,
+    ``option_values``, etc.) are removed entirely.
 
     Producers may keep rich rows briefly for source-local matching, but emitted
     records must use this flat shape before persistence/export.
@@ -860,6 +877,7 @@ def flatten_variants_for_public_output(
         if not isinstance(raw_variant, dict):
             continue
         merged: dict[str, object] = {}
+        has_option_axis = False
         option_values = raw_variant.get("option_values")
         if isinstance(option_values, dict):
             for axis_name, axis_value in option_values.items():
@@ -868,10 +886,11 @@ def flatten_variants_for_public_output(
                 if not axis_text or not value_text:
                     continue
                 axis_key = axis_text.strip().lower()
-                if axis_key in {"color", "colour"} and "color" not in merged:
-                    merged["color"] = value_text
-                elif axis_key == "size" and "size" not in merged:
-                    merged["size"] = value_text
+                if axis_key in {"color", "colour"}:
+                    axis_key = "color"
+                if axis_key not in merged:
+                    merged[axis_key] = value_text
+                    has_option_axis = True
         for key in FLAT_VARIANT_KEYS:
             if key in merged and merged[key] not in (None, "", [], {}):
                 continue
@@ -882,8 +901,16 @@ def flatten_variants_for_public_output(
             if coerced in (None, "", [], {}):
                 continue
             merged[key] = coerced
+        for key in raw_variant:
+            if key not in merged and key in VARIANT_AXIS_ALLOWED_SINGLE_TOKENS:
+                candidate = raw_variant.get(key)
+                if candidate not in (None, "", [], {}):
+                    merged[key] = coerce_text(candidate)
+                    has_option_axis = True
         if merged and (
-            text_or_none(merged.get("color")) or text_or_none(merged.get("size"))
+            text_or_none(merged.get("color"))
+            or text_or_none(merged.get("size"))
+            or has_option_axis
         ):
             flattened.append(merged)
     return flattened or None
@@ -975,13 +1002,23 @@ def coerce_availability_value(value: object) -> str | None:
     if isinstance(value, bool):
         return "in_stock" if value else "out_of_stock"
     text = coerce_text(value)
+    if text:
+        for phrase in tuple(CANDIDATE_AVAILABILITY_NOISE_PHRASES or ()):
+            if phrase.lower() in text.lower():
+                text = re.sub(re.escape(phrase), "", text, flags=re.I).strip()
+                if not text:
+                    return None
     if not text:
         return None
     lowered = text.strip().lower().rstrip("/")
     mapped = dict(AVAILABILITY_URL_MAP or {}).get(lowered)
     if mapped:
         return str(mapped)
-    return text
+    # Drop non-canonical residual text so noisy values cannot leak through.
+    normalized_enum = lowered.replace("-", "_").replace(" ", "_")
+    if normalized_enum in _AVAILABILITY_CANONICAL_ENUM:
+        return normalized_enum
+    return None
 
 
 def coerce_rating_value(value: object) -> float | None:
@@ -1018,7 +1055,7 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         if text and re.fullmatch(r"[A-Za-z]{3}", text):
             return text.upper()
         return text
-    if field_name in {"brand", "company", "dealer_name", "vendor"} and isinstance(
+    if field_name in BRAND_LIKE_FIELDS and isinstance(
         value,
         dict,
     ):
@@ -1028,15 +1065,20 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         }:
             explicit_value = list(value.values())[0] if value else None
         return _coerce_brand_text(explicit_value)
-    if field_name in {"brand", "company", "dealer_name", "vendor"}:
+    if field_name in BRAND_LIKE_FIELDS:
         return _coerce_brand_text(value)
-    if field_name == "category" and isinstance(value, dict):
-        return coerce_text(
-            value.get("name")
-            or value.get("title")
-            or value.get("slug")
-            or value.get("value")
-        )
+    if field_name == "category":
+        if isinstance(value, dict):
+            value = (
+                value.get("name")
+                or value.get("title")
+                or value.get("slug")
+                or value.get("value")
+            )
+        category_text = coerce_text(value)
+        if category_text and _category_value_is_url_path(category_text):
+            return None
+        return category_text
     if field_name == "product_type":
         return _coerce_product_type_clean(value)
     if field_name == "product_id":
@@ -1057,13 +1099,13 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
                 keys=(field_name, "name", "title", "label", "value", "text"),
             ),
         )
-    # Reject non-numeric sentinel strings for price fields (e.g. "unavailable", "contact us")
     if field_name in _PRICE_FIELD_NAMES and isinstance(value, str):
         text = coerce_text(value)
         if text and not re.search(r"\d", text):
             return None
+        if _price_text_is_negative(text):
+            return None
         return text or None
-    # Reject non-numeric sentinel strings for integer fields (e.g. "out_of_stock")
     if (
         field_name in _INTEGER_FIELD_NAMES
         and isinstance(value, (int, float))
@@ -1102,7 +1144,8 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             "formattedPrice",
         ):
             if value.get(key) not in (None, "", [], {}):
-                return coerce_text(value.get(key))
+                text = coerce_text(value.get(key))
+                return None if _price_text_is_negative(text) else text
         return None
     if field_name in {"currency", "salary_currency"} and isinstance(value, dict):
         for key in ("currency", "currencyCode", "priceCurrency", "salaryCurrency"):
@@ -1161,9 +1204,6 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             else:
                 normalized_rows.append(normalized)
         return normalized_rows or None
-    # Reject dict/set values for scalar text fields rather than letting them
-    # fall through to `str(value)` and leak Python repr like
-    # "{'useOnlyPreMadeBundles': False}" into description/specifications.
     if isinstance(value, (dict, set, frozenset)):
         return None
     if field_name in LONG_TEXT_FIELDS:
@@ -1191,6 +1231,26 @@ _BRAND_REGION_SUFFIX_RE = (
     if _brand_region_suffix_tokens
     else re.compile(r"$^")
 )
+
+
+_CATEGORY_URL_PATH_PATTERN = re.compile(
+    r"""
+    (?:^|\s)                      # start of string or word boundary
+    (?:https?\s*:|www\.|[a-z0-9-]+\.(?:com|net|org|io|co|shop|store))
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _category_value_is_url_path(value: str) -> bool:
+    if not value:
+        return False
+    lowered = value.lower()
+    if "://" in lowered:
+        return True
+    if "https:" in lowered or "http:" in lowered:
+        return True
+    return _CATEGORY_URL_PATH_PATTERN.search(lowered) is not None
 
 
 def _coerce_brand_text(value: object) -> str | None:
@@ -1254,7 +1314,7 @@ def _coerce_barcode(value: object) -> str | None:
     if not re.fullmatch(r"[\d\s-]+", text):
         return None
     digits = _BARCODE_SEPARATOR_RE.sub("", text)
-    if not digits or len(digits) not in set(PUBLIC_RECORD_BARCODE_LENGTHS or ()):
+    if not digits or len(digits) not in _PUBLIC_RECORD_BARCODE_LENGTHS_SET:
         return None
     return digits
 
@@ -1405,3 +1465,13 @@ def validate_and_clean(
         else:
             cleaned[field_name] = value
     return cleaned, errors
+
+
+def _is_template_url(url: str) -> bool:
+    from app.services.config.extraction_rules import UNRESOLVED_TEMPLATE_URL_TOKENS
+    lowered = url.lower()
+    return any(
+        token.lower() in lowered
+        for token in tuple(UNRESOLVED_TEMPLATE_URL_TOKENS or ())
+        if token
+    )

@@ -79,6 +79,10 @@ materials_pollution_tokens = frozenset(
     for token in tuple(DETAIL_MATERIALS_POLLUTION_TOKENS or ())
     if clean_text(token)
 )
+# Matches "0%", "0 %", "0.0%" optionally prefixed by a label like "OUTER:".
+_MATERIALS_ZERO_PERCENT_PATTERN = re.compile(
+    r"\b0(?:\.0+)?\s*%",
+)
 low_signal_product_type_values = frozenset(
     clean_text(value).lower()
     for value in tuple(DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES or ())
@@ -320,6 +324,8 @@ def sanitize_detail_long_text(text: str, *, title: str) -> str:
     cleaned_text = _strip_long_text_ui_tail(
         _strip_bracket_artifact_noise(clean_text(text))
     )
+    if _text_is_structured_object_repr(cleaned_text) or _text_is_structured_json_array(cleaned_text):
+        return ""
     if cleaned_text.lower() in low_signal_long_text_values:
         return ""
     if detail_long_text_is_numeric_sequence(cleaned_text):
@@ -380,32 +386,53 @@ def sanitize_detail_features(value: object, *, title: str) -> list[str]:
     return cleaned_rows
 
 
-_BRACKET_RUN_RE = re.compile(r"\[{2,}|\]{2,}")
+_BRACKET_RUN_RE = re.compile(r"(?:\[\s*){2,}|(?:\]\s*){2,}")
 _BRACKETS_RE = re.compile(r"[\[\]]+")
+
+def _text_is_structured_object_repr(text: str) -> bool:
+    cleaned = text.strip()
+    if not (cleaned.startswith("{") and cleaned.endswith("}")):
+        return False
+    try:
+        parsed = json.loads(
+            cleaned.replace("'", '"')
+            .replace("False", "false")
+            .replace("True", "true")
+            .replace("None", "null")
+        )
+        if isinstance(parsed, dict):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
 
 
 def _strip_bracket_artifact_noise(text: str) -> str:
-    """Recover prose from Vans-style `[[[Style]] [[SKU]] [prose]` artifacts.
-
-    Triggered only when the text contains runs of 2+ consecutive brackets,
-    a strong signal of JSON/template serialization leakage (audit 2026-05-03
-    1.1). Returns the longest prose chunk between bracket runs, or, as a
-    fallback, the bracket-stripped text.
-    """
+    """Recover prose from Vans/Brinkhaus-style `[[[Style]] [[SKU]] [prose]` artifacts."""
     if not text or not _BRACKET_RUN_RE.search(text):
         return text
+    # Recursive strip for extreme nesting like [ [ [ ... ] ] ]
+    current = text
+    while _BRACKET_RUN_RE.search(current):
+        stripped = _BRACKETS_RE.sub(" ", current)
+        if stripped == current:
+            break
+        current = stripped
     candidates: list[tuple[int, int, str]] = []
-    for index, part in enumerate(_BRACKETS_RE.split(text)):
-        cleaned = clean_text(part)
-        if not cleaned:
-            continue
-        word_count = len(cleaned.split())
-        if word_count >= 5:
-            candidates.append((word_count, index, cleaned))
+    for source in (text, current):
+        for index, part in enumerate(_BRACKETS_RE.split(source)):
+            cleaned = clean_text(part)
+            if not cleaned:
+                continue
+            word_count = len(cleaned.split())
+            if word_count >= 5:
+                candidates.append((word_count, index, cleaned))
+        if candidates:
+            break
     if candidates:
         candidates.sort(key=lambda item: (-item[0], item[1]))
         return candidates[0][2]
-    return clean_text(_BRACKETS_RE.sub(" ", text))
+    return clean_text(current)
 
 
 def _strip_long_text_ui_tail(text: str) -> str:
@@ -443,6 +470,10 @@ def _clean_materials_pollution(value: object) -> str:
         chunk
         for chunk in chunks
         if clean_text(chunk).casefold() not in materials_pollution_tokens
+        # DQ-10 / 2026-05-04 gemini audit: "0% Silk" / "0% Lyocell" segments
+        # are spec-table placeholder rows; drop them so only non-zero
+        # composition entries survive.
+        and not _MATERIALS_ZERO_PERCENT_PATTERN.search(chunk)
     ]
     cleaned = " ".join(kept).strip()
     while True:

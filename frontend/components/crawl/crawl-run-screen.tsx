@@ -1135,7 +1135,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 <div className="flex flex-wrap items-center justify-end gap-2.5">
                   {llmSummary.requested ? (
                     <Badge
-                      tone={llmSummary.touchedRecords > 0 ? 'accent' : 'warning'}
+                      tone={llmSummary.touchedRecords > 0 ? 'accent' : 'neutral'}
                       title={
                         llmSummary.touchedRecords > 0
                           ? `LLM used ${llmSummary.touchedRecords} record(s) / ${llmSummary.touchedFields} field(s)`

@@ -389,6 +389,7 @@ def _structured_variants_from_product_payload(
             item.get("price"),
             page_url=page_url,
             payload=payload,
+            source_key="price",
         )
         if price not in (None, "", [], {}):
             row["price"] = price
@@ -422,12 +423,13 @@ def _coerce_structured_candidate_value(
     *,
     page_url: str,
     payload: object,
+    source_key: str = "",
 ) -> object | None:
     if canonical in {
         "price",
         "sale_price",
         "original_price",
-    } and _uses_integral_price_payload(payload):
+    } and _source_key_is_price_field(source_key) and _uses_integral_price_payload(payload):
         normalized = normalize_decimal_price(
             value,
             interpret_integral_as_cents=True,
@@ -435,6 +437,11 @@ def _coerce_structured_candidate_value(
         if normalized not in (None, ""):
             return normalized
     return coerce_field_value(canonical, value, page_url)
+
+
+def _source_key_is_price_field(value: object) -> bool:
+    normalized = normalize_field_key(str(value or ""))
+    return normalized in {"price", "sale_price", "original_price", "compare_at_price"}
 
 
 def _is_product_attribute_row(payload: dict[str, object]) -> bool:
@@ -620,6 +627,7 @@ def collect_structured_candidates(
                         value,
                         page_url=page_url,
                         payload=payload,
+                        source_key=normalized_key,
                     ),
                 )
             collect_structured_candidates(
@@ -806,17 +814,13 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                     continue
                 seen_rows.add(fingerprint)
                 merged_rows.append(row)
-        if field_name == "variants" and any(
-            isinstance(row.get("option_values"), dict)
-            and bool(row.get("option_values"))
+        rows_with_option_values = [
+            row
             for row in merged_rows
-        ):
-            merged_rows = [
-                row
-                for row in merged_rows
-                if isinstance(row.get("option_values"), dict)
-                and bool(row.get("option_values"))
-            ]
+            if isinstance(row.get("option_values"), dict) and bool(row.get("option_values"))
+        ]
+        if field_name == "variants" and rows_with_option_values:
+            merged_rows = rows_with_option_values
         return merged_rows or None
     if field_name in STRUCTURED_MULTI_FIELDS:
         rows: list[str] = []

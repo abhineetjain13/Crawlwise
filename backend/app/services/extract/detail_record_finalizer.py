@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import re
+import json, re
 from decimal import Decimal
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from app.services.config.extraction_rules import (
+    AVAILABILITY_IN_STOCK,
     CANDIDATE_PLACEHOLDER_VALUES,
     DETAIL_CATEGORY_LABEL_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
@@ -46,6 +47,7 @@ from app.services.extract.detail_price_extractor import (
     detail_price_decimal,
     format_detail_price_decimal,
     reconcile_detail_price_magnitudes,
+    reconcile_parent_price_against_variant_range,
 )
 from app.services.extract.detail_text_sanitizer import (
     detail_product_type_is_low_signal,
@@ -56,15 +58,13 @@ from app.services.extract.detail_text_sanitizer import (
 from app.services.extract.shared_variant_logic import (
     normalized_variant_axis_key,
     variant_axis_name_is_semantic,
+    _variant_axis_allowed_single_tokens,
 )
 
 _UUID_LIKE_PATTERN = re.compile(r"(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _MERCH_CODE_PATTERN = re.compile(r"\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", re.I)
-_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
-    str(token).strip().lower()
-    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
-    if str(token).strip()
-)
+_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(str(token).strip().lower() for token in VARIANT_OPTION_VALUE_NOISE_TOKENS if str(token).strip())
+_PLACEHOLDER_IMAGE_URL_PATTERNS_LOWER = tuple(str(pattern).lower() for pattern in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ()) if str(pattern).strip())
 _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(r"^404$"),
     re.compile(r"^(?:error\s*)?404\b", re.I),
@@ -77,6 +77,13 @@ _DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
     re.compile(r"\bpage not found\b", re.I),
     re.compile(r"\bnot found\b", re.I),
     re.compile(r"\baccess denied\b", re.I),
+    re.compile(r"\bsorry for the wait\b", re.I),
+    re.compile(r"\bplease wait while we verify\b", re.I),
+    re.compile(r"\bwe need to verify\b", re.I),
+    re.compile(r"\bjust a moment while we\b", re.I),
+    re.compile(r"\bqueue-it\b", re.I),
+    re.compile(r"^please wait\b", re.I),
+    re.compile(r"\byou are in a virtual queue\b", re.I),
 )
 
 
@@ -157,7 +164,7 @@ def _sanitize_detail_placeholder_scalars(
             record.pop("features", None)
     else:
         feature_text = text_or_none(features)
-        if feature_text and feature_text.startswith("{") and feature_text.endswith("}"):
+        if feature_text and _feature_text_is_json_object(feature_text):
             record.pop("features", None)
     product_type = text_or_none(record.get("product_type"))
     if detail_product_type_is_low_signal(product_type):
@@ -177,7 +184,14 @@ def _sanitize_detail_placeholder_scalars(
         else:
             record.pop("product_attributes", None)
 
-
+def _feature_text_is_json_object(value: str) -> bool:
+    text = clean_text(value)
+    if not (text.startswith("{") and text.endswith("}")):
+        return False
+    try:
+        return isinstance(json.loads(text), dict)
+    except (TypeError, ValueError):
+        return False
 def _sanitize_detail_identity_scalars(
     record: dict[str, Any],
     *,
@@ -281,7 +295,7 @@ def _clean_detail_category_path(value: object, *, title: object, sku: object, pa
         str(prefix).casefold() for prefix in tuple(DETAIL_CATEGORY_LABEL_PREFIXES or ())
     )
     cleaned_parts: list[str] = []
-    strip_chars = "".join(tuple(DETAIL_BREADCRUMB_SEPARATOR_LABELS or ())) + " \t\n\r"
+    strip_chars = "".join(map(str, DETAIL_BREADCRUMB_SEPARATOR_LABELS or ())) + " \t\n\r"
     for part in parts:
         cleaned = clean_text(part.strip(strip_chars))
         lowered = cleaned.casefold()
@@ -415,7 +429,6 @@ def _sanitize_variant_row(
             if not variant_axis_name_is_semantic(axis_name):
                 continue
             cleaned_options[axis_key] = cleaned_value
-            # Sync existing size/color scalars with cleaned option_values; do not populate missing axes.
             if axis_key in {"size", "color"} and variant.get(axis_key) not in (
                 None,
                 "",
@@ -431,9 +444,6 @@ def _sanitize_variant_row(
         raw_value = variant.get(field_name)
         cleaned_value = clean_text(raw_value)
         if not cleaned_value:
-            # Preserve values from higher-priority sources even if clean_text
-            # returns empty (e.g. structured dict that coerce_field_value handles).
-            # Only drop if the raw value itself is empty/null.
             if raw_value in (None, "", [], {}):
                 variant.pop(field_name, None)
             continue
@@ -478,6 +488,7 @@ def _sanitize_variant_row(
             "option_values",
             "size",
             "color",
+            *_variant_axis_allowed_single_tokens,
         )
     )
 
@@ -497,11 +508,11 @@ def repair_ecommerce_detail_record_quality(
     )
     backfill_detail_price_from_html(record, html=html)
     reconcile_detail_price_magnitudes(record)
+    reconcile_parent_price_against_variant_range(record)
     _normalize_detail_money_precision(record)
     _repair_invalid_original_prices(record)
     _drop_invalid_detail_discounts(record)
     _repair_detail_variant_prices_and_identity(record)
-
 
 def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
     parent_price = text_or_none(record.get("price"))
@@ -557,7 +568,7 @@ def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
         row for row in list(record.get("variants") or []) if isinstance(row, dict)
     ]
     if (
-        parent_availability == "in_stock"
+        parent_availability == AVAILABILITY_IN_STOCK
         and variant_rows
         and all(
             text_or_none(row.get("availability")) == parent_availability
@@ -847,7 +858,7 @@ def _detail_image_candidate_is_usable(url: str, *, identity_url: str) -> bool:
     lowered = url.lower()
     if "base64," in lowered or lowered.startswith("data:"):
         return False
-    if any(pattern in lowered for pattern in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ())):
+    if any(pattern in lowered for pattern in _PLACEHOLDER_IMAGE_URL_PATTERNS_LOWER):
         return False
     if _detail_image_url_is_extensionless_transform(path):
         return False
@@ -1074,8 +1085,8 @@ def _reconcile_detail_availability_from_variants(record: dict[str, Any]) -> None
         for variant in variants
         if isinstance(variant, dict) and clean_text(variant.get("availability"))
     }
-    if "in_stock" in availabilities:
-        record["availability"] = "in_stock"
+    if AVAILABILITY_IN_STOCK in availabilities:
+        record["availability"] = AVAILABILITY_IN_STOCK
     elif availabilities == {"out_of_stock"}:
         record["availability"] = "out_of_stock"
 

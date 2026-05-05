@@ -1919,7 +1919,7 @@ export function ManualFieldEditor({
   showLabels?: boolean;
 }>) {
   return (
-    <div className="border-border bg-panel space-y-1.5 rounded-[var(--radius-md)] border p-2.5">
+    <div className="border-border card-gradient space-y-1.5 rounded-[var(--radius-md)] border p-2.5">
       <div className="grid gap-2 xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
         <div className="text-muted/50 hidden items-center justify-center xl:flex">
           <GripVertical className="size-3.5" />

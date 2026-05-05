@@ -10,6 +10,8 @@ from app.models.crawl import CrawlRun
 from app.services.config.selectors import (
     SELECTOR_SYNTHESIS_ALLOWED_ATTRS,
     SELECTOR_SYNTHESIS_DROP_TAGS,
+    SELECTOR_SYNTHESIS_KEEP_ATTRS,
+    SELECTOR_SYNTHESIS_KEEP_TOKENS,
     SELECTOR_SYNTHESIS_LOW_VALUE_TAGS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -130,12 +132,7 @@ def _keep_low_value_node(node: Tag) -> bool:
     if (
         not any(
             attrs.get(attr_name) not in (None, "", [], {})
-            for attr_name in (
-                "data-variant-id",
-                "data-product-id",
-                "data-price",
-                "value",
-            )
+            for attr_name in SELECTOR_SYNTHESIS_KEEP_ATTRS
         )
         and not str(attrs.get("aria-label") or "").strip()
     ):
@@ -152,9 +149,7 @@ def _keep_low_value_node(node: Tag) -> bool:
             )
             if part
         ).lower()
-        if any(
-            token in probe for token in ("buy", "cart", "pdp", "product", "variant")
-        ):
+        if any(token in probe for token in SELECTOR_SYNTHESIS_KEEP_TOKENS):
             return True
         current = current.parent if isinstance(current.parent, Tag) else None
     return False

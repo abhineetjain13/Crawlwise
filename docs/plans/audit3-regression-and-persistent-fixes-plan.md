@@ -3,7 +3,7 @@
 Addresses all issues from `zyte/output_audit3.md` plus relevant code-review flags from `coderabbit_codeant_flags.md`, layered on top of the in-progress Zyte Delta plan. No per-site hacks.
 
 **Created:** 2026-05-03
-**Status:** DRAFT
+**Status:** COMPLETE
 **Touches buckets:** Bucket 4 (Extraction), Bucket 5 (Firewall), `services/config/*`, tests
 
 ## Issue → Slice Mapping
@@ -24,7 +24,7 @@ Addresses all issues from `zyte/output_audit3.md` plus relevant code-review flag
 
 ### Slice A: Field-value validation + regression guard (R3)
 
-**Status:** TODO
+**Status:** COMPLETE
 **Files:**
 - `backend/app/services/field_value_core.py` (value validation for color/size)
 - `backend/app/services/field_value_dom.py` (quantity-input detection)
@@ -45,12 +45,13 @@ Addresses all issues from `zyte/output_audit3.md` plus relevant code-review flag
 **Verify:**
 - Unit tests: color="1" → rejected; size="Photos" → rejected; placeholder image URL → rejected; field with prior value not overwritten by None.
 - `pytest tests -q -k "field_value or firewall"`
+- Completed with full backend suite: `1283 passed, 4 skipped`.
 
 ---
 
 ### Slice B: URL integrity + record collision guard (P6)
 
-**Status:** TODO
+**Status:** COMPLETE
 **Files:**
 - `backend/app/services/field_url_normalization.py` (multi-URL detection)
 - `backend/app/services/public_record_firewall.py` (URL validation at boundary)
@@ -64,12 +65,13 @@ Addresses all issues from `zyte/output_audit3.md` plus relevant code-review flag
 **Verify:**
 - Unit tests: concatenated URL → rejected; normal URL → passes; CDN URL on different domain → passes.
 - `pytest tests -q -k "url or firewall"`
+- Completed with full backend suite: `1283 passed, 4 skipped`.
 
 ---
 
 ### Slice C: Codeant flags — code quality sweep (non-blocking but should land with these slices)
 
-**Status:** TODO
+**Status:** COMPLETE
 
 These are code-review findings that improve robustness and should be fixed alongside the audit fixes. Grouped by file:
 
@@ -163,6 +165,7 @@ These are code-review findings that improve robustness and should be fixed along
 **Verify:**
 - Each codeant flag fix verified individually with targeted test
 - Full suite: `pytest tests -q`
+- Completed: backend `pytest tests -q` passed; frontend `npm run lint` passed.
 
 ---
 

@@ -12,6 +12,7 @@ from app.services.config.extraction_rules import (
     DETAIL_VARIANT_CONTEXT_NOISE_TOKENS,
     DETAIL_VARIANT_SCOPE_SELECTOR,
     VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH,
+    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT,
     VARIANT_SCOPE_MAX_ROOTS,
     VARIANT_AXIS_LABEL_NOISE_PATTERNS,
     VARIANT_AXIS_LABEL_NOISE_TOKENS,
@@ -53,17 +54,17 @@ _variant_group_attr_noise_patterns = tuple(
 )
 _variant_color_hint_words = frozenset(
     str(token).strip().lower()
-    for token in (VARIANT_COLOR_HINT_WORDS or ())
+    for token in tuple(VARIANT_COLOR_HINT_WORDS or ())
     if str(token).strip()
 )
 _variant_size_value_patterns = tuple(
     re.compile(str(pattern), re.I)
-    for pattern in (VARIANT_SIZE_VALUE_PATTERNS or ())
+    for pattern in tuple(VARIANT_SIZE_VALUE_PATTERNS or ())
     if str(pattern).strip()
 )
 _variant_option_value_noise_tokens = frozenset(
     str(token).strip().lower()
-    for token in (VARIANT_OPTION_VALUE_NOISE_TOKENS or ())
+    for token in tuple(VARIANT_OPTION_VALUE_NOISE_TOKENS or ())
     if str(token).strip()
 )
 _variant_context_noise_tokens = frozenset(
@@ -162,11 +163,10 @@ def variant_dom_cues_present(soup: Any) -> bool:
 
 
 def _variant_node_in_noise_context(node: Any) -> bool:
-    # Validate depth config; fall back to 3 if missing or invalid
     try:
         depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH))
     except (TypeError, ValueError):
-        depth = 3
+        depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT))
     current = node
     for _ in range(depth):
         if current is None or not hasattr(current, "get"):
@@ -247,6 +247,11 @@ def infer_variant_group_name(node: Any) -> str:
         return "color"
     if "size" in probe or "fit" in probe:
         return "size"
+    # Check all allowed variant axis tokens (weight, flavor, scent, etc.)
+    tokens = [token for token in re.split(r"[^a-z0-9]+", probe) if token]
+    for token in tokens:
+        if token in _variant_axis_allowed_single_tokens and token not in {"color", "size", "fit", "colour"}:
+            return token
     return ""
 
 
@@ -608,23 +613,109 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
             break
     if len(groups) >= 8:
         return groups
-    for node in _select_variant_nodes(
-        soup, "input[type='radio'], input[type='checkbox']"
-    ):
-        axis_name = resolve_variant_group_name(node)
-        if not axis_name:
-            continue
-        candidate = _variant_choice_container_for_input(node, axis_name=axis_name)
-        if candidate is None or id(candidate) in seen_ids:
-            continue
-        groups.append(candidate)
-        seen_ids.add(id(candidate))
-        if len(groups) >= 8:
-            break
+    # discovery of variant choice containers for input elements and specific buttons
+    for node in soup.select("select, input[type='radio'], input[type='checkbox']"):
+        candidate = _variant_choice_container_for_input(node)
+        if candidate is not None and id(candidate) not in seen_ids:
+            groups.append(candidate)
+            seen_ids.add(id(candidate))
+            if len(groups) >= 8:
+                break
+    if len(groups) < 8:
+        for node in soup.select("button[data-variant], button.variant-option, button.size-option, button.color-option"):
+            if id(node) not in seen_ids:
+                groups.append(node)
+                seen_ids.add(id(node))
+                if len(groups) >= 8:
+                    break
+    # Fallback: discover containers of button / link / div swatches (e.g. YETI, Shopify visual swatches)
+    if len(groups) < 8:
+        _swatch_button_selectors = (
+            "button[class*='swatch' i], button[class*='color' i], button[class*='size' i],"
+            " button[data-option], button[data-value], a[class*='swatch' i],"
+            " div[class*='swatch' i], div[role='radio']"
+        )
+        all_btns = soup.select(_swatch_button_selectors)
+        # Cap buttons to avoid O(n) blow-up on large rendered pages; variant groups are near top
+        btn_slice = all_btns[:20] if len(all_btns) > 20 else all_btns
+        if btn_slice:
+            # Cache parent sibling counts so we never re-select the same parent
+            _parent_swatch_cache: dict[int, list[Any]] = {}
+            for btn in btn_slice:
+                parent = getattr(btn, "parent", None)
+                depth = 0
+                while parent is not None and depth < 6:
+                    if not hasattr(parent, "select"):
+                        parent = getattr(parent, "parent", None)
+                        depth += 1
+                        continue
+                    pid = id(parent)
+                    if pid in seen_ids:
+                        break
+                    tag_name = str(getattr(parent, "name", "") or "").lower()
+                    role = (
+                        str(parent.get("role") or "").lower()
+                        if hasattr(parent, "get")
+                        else ""
+                    )
+                    class_attr = parent.get("class") if hasattr(parent, "get") else None
+                    class_probe = (
+                        " ".join(str(v) for v in class_attr)
+                        if isinstance(class_attr, list)
+                        else str(class_attr or "")
+                    ).lower()
+                    # Fast path: skip non-container tags unless they have explicit swatch hints
+                    if tag_name not in {"div", "section", "fieldset", "ul", "ol", "nav", "form", "li"} and not (
+                        role == "radiogroup"
+                        or any(
+                            hint in class_probe
+                            for hint in ("swatch", "variant", "color", "size", "option")
+                        )
+                    ):
+                        parent = getattr(parent, "parent", None)
+                        depth += 1
+                        continue
+                    siblings = _parent_swatch_cache.get(pid)
+                    if siblings is None:
+                        siblings = parent.select(_swatch_button_selectors)
+                        _parent_swatch_cache[pid] = siblings
+                    if len(siblings) >= 2:
+                        if (
+                            role == "radiogroup"
+                            or tag_name in {"fieldset", "ul", "ol"}
+                            or any(
+                                hint in class_probe
+                                for hint in (
+                                    "color",
+                                    "size",
+                                    "swatch",
+                                    "variant",
+                                    "option",
+                                    *_variant_axis_allowed_single_tokens,
+                                )
+                            )
+                            or resolve_variant_group_name(parent)
+                        ):
+                            groups.append(parent)
+                            seen_ids.add(pid)
+                            if len(groups) >= 8:
+                                break
+                        # Stop walking up for this button once we found a sibling-rich parent
+                        break
+                    parent = getattr(parent, "parent", None)
+                    depth += 1
+                if len(groups) >= 8:
+                    break
     return groups
 
 
-def _variant_choice_container_for_input(node: Any, *, axis_name: str) -> Any | None:
+def _variant_choice_container_for_input(
+    node: Any, *, axis_name: str | None = None
+) -> Any | None:
+    if axis_name is None:
+        axis_name = resolve_variant_group_name(node)
+    if not axis_name:
+        return None
     parent = getattr(node, "parent", None)
     while parent is not None:
         if not hasattr(parent, "select"):
@@ -632,7 +723,9 @@ def _variant_choice_container_for_input(node: Any, *, axis_name: str) -> Any | N
             continue
         matching_inputs = [
             item
-            for item in parent.select("input[type='radio'], input[type='checkbox']")
+            for item in parent.select(
+                "input[type='radio'], input[type='checkbox'], button"
+            )
             if resolve_variant_group_name(item) == axis_name
         ]
         if len(matching_inputs) < 2:
@@ -650,7 +743,10 @@ def _variant_choice_container_for_input(node: Any, *, axis_name: str) -> Any | N
             role == "radiogroup"
             or tag_name in {"fieldset", "ul", "ol"}
             or any(
-                hint in class_probe for hint in ("color", "size", "swatch", "variant")
+                hint in class_probe for hint in (
+                    "color", "size", "swatch", "variant",
+                    *_variant_axis_allowed_single_tokens,
+                )
             )
             or resolve_variant_group_name(parent)
         ):
@@ -832,7 +928,7 @@ def variant_semantic_identity(variant: dict[str, Any]) -> str | None:
             )
         )
     else:
-        for axis_name in ("size", "color"):
+        for axis_name in ("size", "color", *_variant_axis_allowed_single_tokens):
             canonical_value = _canonical_variant_axis_value(
                 axis_name, variant.get(axis_name)
             )

@@ -4,6 +4,7 @@
 .venv/
 node_modules/
 zyte/
+/test-sites-issues
 
 .hypothesis/
 .scannerwork/

@@ -42,7 +42,7 @@ export function ConfirmDialog({
         <DialogPrimitive.Content
           className={cn(
             'fixed top-1/2 left-1/2 z-[101] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2',
-            'border-border bg-panel rounded-[var(--radius-xl)] border p-5 shadow-xl',
+            'border-border card-gradient rounded-[var(--radius-xl)] border p-5 shadow-xl',
           )}
         >
           <div className="flex items-start justify-between gap-4">

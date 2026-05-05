@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services.field_value_core import (
     absolute_url,
     clean_text,
@@ -605,12 +607,12 @@ def test_coerce_color_rejects_tracking_pixel_classes() -> None:
     assert coerce_field_value("color", "_fbp", "https://example.com/p") is None
 
 
-def test_coerce_size_rejects_ui_tab_labels() -> None:
-    assert coerce_field_value("size", "Photos", "https://example.com/p") is None
-    assert coerce_field_value("size", "Verified Purchases", "https://example.com/p") is None
-    assert coerce_field_value("size", "Reviews", "https://example.com/p") is None
-    assert coerce_field_value("size", "Description", "https://example.com/p") is None
-    assert coerce_field_value("size", "Specifications", "https://example.com/p") is None
+@pytest.mark.parametrize(
+    "label",
+    ["Photos", "Verified Purchases", "Reviews", "Description", "Specifications"],
+)
+def test_coerce_size_rejects_ui_tab_labels(label: str) -> None:
+    assert coerce_field_value("size", label, "https://example.com/p") is None
 
 
 def test_coerce_size_keeps_valid_sizes() -> None:
@@ -652,8 +654,7 @@ def test_public_firewall_rejects_concatenated_url() -> None:
         record, surface="ecommerce_detail", page_url="https://www.selfridges.com/p/123"
     )
     assert "url" not in data
-    # URL is rejected at coercion (extract_urls returns empty for concatenated URLs)
-    assert rejected.get("url") in {"concatenated_url", "empty_after_coercion"}
+    assert rejected.get("url") == "empty_after_coercion"
 
 
 def test_integer_fields_reject_embedded_numeric_junk() -> None:
@@ -681,3 +682,4 @@ def test_merge_variant_rows_keeps_axis_only_rows_without_url_identity() -> None:
     )
 
     assert [row["size"] for row in rows] == ["8", "9"]
+    assert [row["price"] for row in rows] == ["100", "100"]

@@ -439,9 +439,7 @@ async def _run_acquisition_stage(
         )
 
     browser_diagnostics = getattr(acquisition_result, "browser_diagnostics", {})
-    browser_attempted = bool(
-        browser_diagnostics and browser_diagnostics.get("browser_attempted")
-    )
+    browser_attempted = _browser_attempted(acquisition_result)
     if _effective_blocked(acquisition_result) and not browser_attempted:
         await _log_pipeline_event(
             context,
@@ -1298,7 +1296,7 @@ async def _update_acquisition_contract_memory(
             and not _effective_blocked(acquisition_result)
             and verdict not in {VERDICT_BLOCKED, VERDICT_EMPTY}
         ),
-        count_failure=verdict != VERDICT_LISTING_FAILED,
+        count_failure=verdict == VERDICT_LISTING_FAILED,
         stale_threshold=int(
             crawler_runtime_settings.acquisition_contract_stale_failure_threshold
         ),

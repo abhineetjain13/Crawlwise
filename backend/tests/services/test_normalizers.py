@@ -48,6 +48,79 @@ def test_normalize_decimal_price_supports_suffix_currency_and_decimal_comma() ->
     assert normalize_decimal_price("62,99 €") == "62.99"
 
 
+def test_normalize_decimal_price_rejects_negative_values() -> None:
+    # Regression: gemini audit DQ-4 — Gucci/Sony emitted -1 / -9 default
+    # fallbacks that leaked into exports. Negative prices must become None.
+    assert normalize_decimal_price("-1") is None
+    assert normalize_decimal_price("-9.99") is None
+    assert normalize_decimal_price("$-1") is None
+    assert normalize_decimal_price("-$1") is None
+def test_repair_ecommerce_detail_reconciles_parent_price_against_unanimous_variants() -> None:
+    # Regression: gemini audit DQ-7 (Selfridges) — parent price 190 with both
+    # variants reporting 310 is a stale/unrelated DOM scrape. The reconciler
+    # should adopt the unanimous variant price as the parent.
+    record: dict[str, object] = {
+        "price": "190.00",
+        "currency": "GBP",
+        "variants": [
+            {"price": "310.00", "currency": "GBP", "size": "50ml"},
+            {"price": "310.00", "currency": "GBP", "size": "100ml"},
+        ],
+    }
+    repair_ecommerce_detail_record_quality(
+        record,
+        html="<html></html>",
+        page_url="https://www.selfridges.com/GB/en/cat/example/",
+        requested_page_url="https://www.selfridges.com/GB/en/cat/example/",
+    )
+    assert record["price"] == "310.00"
+
+
+def test_repair_ecommerce_detail_skips_variant_range_reconcile_when_magnitudes_differ() -> None:
+    # Guard: when parent and variant prices differ by >~2x, the mismatch is
+    # more likely a cents/units magnitude issue handled by the dedicated
+    # magnitude reconciler. The variant-range reconciler must not overwrite
+    # the parent in that case.
+    record: dict[str, object] = {
+        "price": "282.00",
+        "currency": "USD",
+        "variants": [
+            {"price": "28200", "currency": "USD"},
+        ],
+    }
+    repair_ecommerce_detail_record_quality(
+        record,
+        html="<html></html>",
+        page_url="https://example.com/p",
+        requested_page_url="https://example.com/p",
+    )
+    assert record["price"] == "282.00"
+
+
+def test_coerce_field_value_category_rejects_url_path_strings() -> None:
+    # Regression: gemini audit DQ-8 — Vans exposed a joined URL path
+    # ("https: > www.vans.com > en-us > c > shoes > icons > old-skool-5205")
+    # as the category field. URL-looking strings must be rejected so the
+    # breadcrumb fallback can provide a real category label.
+    assert (
+        coerce_field_value(
+            "category",
+            "https: > www.vans.com > en-us > c > shoes > icons > old-skool-5205",
+            "",
+        )
+        is None
+    )
+    assert (
+        coerce_field_value("category", "https://example.com/c/shoes", "")
+        is None
+    )
+    # But a real breadcrumb path must still pass through.
+    assert (
+        coerce_field_value("category", "Shoes > Icons > Old Skool", "")
+        == "Shoes > Icons > Old Skool"
+    )
+
+
 def test_normalize_value_price_preserves_semantic_integer_price_fields() -> None:
     assert normalize_value("price", "126") == "126"
 

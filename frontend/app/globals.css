@@ -126,6 +126,9 @@
   --shadow-card-value: 0 1px 3px rgba(0, 0, 0, 0.06);
   --shadow-elevated-value: 0 4px 16px rgba(0, 0, 0, 0.1);
 
+  /* ── Surface gradient — light theme is flat solid */
+  --gradient-card: var(--bg-panel);
+
   /* ── Component surface tokens */
   --surface-card: #ffffff;
   --surface-header: rgba(244, 244, 246, 0.92);
@@ -264,13 +267,13 @@
 html[data-theme='dark'] {
   color-scheme: dark;
 
-  /* ── Surfaces — macOS-native graphite hierarchy */
+  /* ── Surfaces — merged; cards blend into continuous background */
   --bg-base: #161618; /* Level 0 — app canvas */
-  --bg-alt: #111113; /* Level 0b — sunken / inset */
-  --bg-panel: #1c1c1e; /* Level 1 — cards, panels */
-  --bg-elevated: #242426; /* Level 2 — popovers, dropdowns */
-  --bg-panel-strong: #242426;
-  --bg-sidebar: #1c1c1e;
+  --bg-alt: #141416; /* Level 0b — sunken / inset */
+  --bg-panel: #18181a; /* Level 1 — cards, panels (barely off base) */
+  --bg-elevated: #1e1e20; /* Level 2 — popovers, dropdowns */
+  --bg-panel-strong: #1e1e20;
+  --bg-sidebar: #18181a;
 
   /* ── Borders — hairline graphite; always visible */
   --border: #2c2c2e;
@@ -309,14 +312,23 @@ html[data-theme='dark'] {
   --status-paused-bg: var(--warning-bg);
   --status-neutral-bg: rgba(255, 255, 255, 0.03);
 
-  /* ── Shadows — more visible in dark; tonal depth via opacity */
-  --shadow-xs-value: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.45);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.5);
-  --shadow-lg-value: 0 12px 32px rgba(0, 0, 0, 0.55);
-  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--border-strong);
-  --shadow-card-value: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --shadow-elevated-value: 0 8px 32px rgba(0, 0, 0, 0.6);
+  /* ── Shadows — ultra-minimal; merged surfaces, no floating */
+  --shadow-xs-value: none;
+  --shadow-sm: none;
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lg-value: 0 12px 32px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-strong);
+  --shadow-card-value: none;
+  --shadow-elevated-value: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  /* ── Surface gradient — merged polished look, not 3D pop */
+  --gradient-card:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, #ffffff 6%, var(--bg-panel)) 0%,
+      var(--bg-panel) 35%,
+      color-mix(in srgb, #000000 12%, var(--bg-panel)) 100%
+    );
 
   /* ── Component surface tokens */
   --surface-card: var(--bg-panel);
@@ -758,6 +770,28 @@ html:not([data-theme='dark']) .focus-ring:focus-visible {
 }
 .bg-danger\/12 {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+/* ── Glowing ring — circular score / status indicators */
+.ring-glow {
+  position: relative;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1.5px var(--bg-base),
+    0 0 0 3.5px var(--accent),
+    0 0 24px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+html:not([data-theme='dark']) .ring-glow {
+  box-shadow:
+    0 0 0 1.5px var(--bg-base),
+    0 0 0 3.5px var(--accent),
+    0 0 16px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* ── Card surface gradient — merged polished look on dark */
+.card-gradient {
+  background: var(--gradient-card);
 }
 
 /* ── Alert variants */
@@ -1383,17 +1417,6 @@ html:not([data-theme='dark']) .compact-data-table {
   100% {
     transform: scale(0.95);
     opacity: 1;
-  }
-}
-
-@media (max-width: 1024px) {
-  .metric-pulse-container {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-@media (max-width: 640px) {
-  .metric-pulse-container {
-    grid-template-columns: 1fr;
   }
 }
 

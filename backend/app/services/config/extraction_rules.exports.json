@@ -268,7 +268,8 @@
       "wishlist",
       "join the waitlist",
       "check availability in store",
-      "check availability in stores"
+      "check availability in stores",
+      "how soon can i get this?"
     ]
   },
   "CANDIDATE_AVAILABILITY_TOKENS": {
@@ -4512,6 +4513,9 @@
       "url"
     ]
   },
+  "UNRESOLVED_TEMPLATE_URL_TOKENS": [
+    "URL_TO_THE_PRODUCT_IMAGE"
+  ],
   "LISTING_WEAK_TITLES": {
     "__type__": "frozenset",
     "items": [
@@ -5441,7 +5445,8 @@
     "target.com/": "USD",
     "/uk/": "GBP",
     "/us/": "USD",
-    "walmart.com/": "USD"
+    "walmart.com/": "USD",
+    "tirerack.com/": "USD"
   },
   "PERCENT_PATTERN": "\\b\\d{1,3}(?:\\.\\d+)?\\s?%",
   "PRICE_FIELDS": {
@@ -6194,7 +6199,8 @@
     "\u0e2a\u0e35\u0e02\u0e2d\u0e07\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32": "color",
     "\u0e2a\u0e35\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32": "color",
     "\u0e44\u0e0b\u0e0b\u0e4c": "size",
-    "\u0e44\u0e0b\u0e2a\u0e4c": "size"
+    "\u0e44\u0e0b\u0e2a\u0e4c": "size",
+    "style_and_size": "size"
   },
   "VARIANT_AXIS_LABEL_NOISE_PATTERNS": {
     "__type__": "tuple",
@@ -6249,35 +6255,63 @@
       "widget"
     ]
   },
-  "VARIANT_CHOICE_GROUP_SELECTOR": "[data-option-name], [class*='swatch' i], [class*='color-selector' i], [class*='size-selector' i], [data-testid*='swatch' i], [role='radiogroup'], [data-qa-action='select-color'], [data-qa-action*='size-selector']",
+  "VARIANT_CHOICE_GROUP_SELECTOR": "[data-option-name], [class*='swatch' i], [class*='color-selector' i], [class*='size-selector' i], [data-testid*='swatch' i], [data-qa-action='select-color'], [data-qa-action*='size-selector'], [class*='product-option' i], fieldset, [role='radiogroup'], [class*='option-group' i], [class*='variant-wrapper' i]",
   "VARIANT_COLOR_HINT_WORDS": {
     "__type__": "tuple",
     "items": [
+      "aluminum",
+      "amber",
       "beige",
+      "birch",
       "black",
       "blue",
+      "bronze",
       "brown",
       "charcoal",
+      "copper",
+      "coral",
       "cream",
+      "ebony",
+      "frosted",
       "gold",
+      "graphite",
       "gray",
       "green",
       "grey",
+      "indigo",
       "ivory",
       "khaki",
+      "lavender",
+      "mahogany",
+      "maple",
       "maroon",
+      "matte",
+      "mineral",
+      "mint",
       "navy",
       "nude",
+      "oak",
       "olive",
       "orange",
       "pearl",
       "pink",
+      "plum",
+      "polished",
       "purple",
       "red",
+      "rosewood",
+      "salmon",
       "sand",
+      "satin",
       "silver",
+      "slate",
+      "stone",
       "tan",
+      "taupe",
       "teal",
+      "transparent",
+      "violet",
+      "walnut",
       "white",
       "yellow"
     ]
@@ -6349,14 +6383,16 @@
     "__type__": "tuple",
     "items": [
       "\\s+(?:variant\\s+)?sold\\s+out(?:\\s+or\\s+unavailable)?\\s*$",
-      "\\s*-\\s*only\\s+\\d+\\s+remaining\\s*$",
+      "\\s*[-–]\\s*only\\s+\\d+\\s+remaining\\s*$",
       "\\s+only\\s+\\d+\\s+remaining\\s*$",
       "\\s+out\\s+of\\s+stock\\s*$",
       "\\s+unavailable\\s*$",
       "\\s+is\\s+currently\\s+unavailable\\.?\\s*$",
       "\\s+customers\\s+say.*$",
       "\\s+-\\s*$",
-      "\\s+find\\s+your\\s+shade\\s*$"
+      "\\s+find\\s+your\\s+shade\\s*$",
+      "\\s+\\bselect\\s+color\\b.*$",
+      "\\s+\\bprice\\s+is\\b.*$"
     ]
   }
 }

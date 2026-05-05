@@ -57,7 +57,7 @@ async def call_provider_with_retry(
 ) -> tuple[str, int, int]:
     normalized_provider = str(provider or "").strip().lower()
     last_error = ""
-    attempts = max(1, max_retries)
+    attempts = max(1, int(max_retries) + 1)
     for _attempt in range(attempts):
         if await circuit_is_open(normalized_provider):
             message = (
@@ -246,12 +246,11 @@ async def _call_nvidia(
 
 
 async def _call_aws(
-    api_key: str,
+    _api_key: str,
     model: str,
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    del api_key
     proxy_url = str(llm_runtime_settings.aws_proxy_url or "").strip()
     parsed_proxy_url = urlparse(proxy_url)
     if parsed_proxy_url.scheme not in {"http", "https"} or not parsed_proxy_url.netloc:

@@ -111,6 +111,7 @@ from app.services.config.extraction_rules import (
 )
 from app.services.config.browser_fingerprint_profiles import (
     NATIVE_REAL_CHROME_CONTEXT_OPTIONS,
+    REAL_CHROME_IGNORE_DEFAULT_ARGS,
     WARMUP_ELIGIBLE_BROWSER_REASONS,
     WARMUP_VENDOR_BLOCK_PREFIX,
 )
@@ -331,7 +332,7 @@ class SharedBrowserRuntime:
                         "Real Chrome executable is not available for browser runtime"
                     )
                 launch_kwargs["executable_path"] = self.executable_path
-                launch_kwargs["ignore_default_args"] = ["--enable-automation"]
+                launch_kwargs["ignore_default_args"] = list(REAL_CHROME_IGNORE_DEFAULT_ARGS)
             launch_proxy_config = await self._launch_proxy_config_for_browser()
             if launch_proxy_config is not None:
                 launch_kwargs["proxy"] = launch_proxy_config

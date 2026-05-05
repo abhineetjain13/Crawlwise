@@ -296,7 +296,7 @@ export function SkeletonRows({
 /* ─── MetricSkeleton ─────────────────────────────────────────────────────── */
 export function MetricSkeleton() {
   return (
-    <div className="border-border bg-panel shadow-card relative space-y-2 overflow-hidden rounded-[var(--radius-xl)] border p-4">
+    <div className="border-border card-gradient shadow-card relative space-y-2 overflow-hidden rounded-[var(--radius-xl)] border p-4">
       <Skeleton className="h-3 w-20" />
       <Skeleton className="mt-2 h-9 w-28" />
       <Skeleton className="h-3 w-16" />
@@ -357,7 +357,7 @@ export function RunWorkspaceShell({
 }>) {
   return (
     <div className="page-stack">
-      <div className="border-border bg-panel shadow-card flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-xl)] border px-4 py-3">
+      <div className="border-border card-gradient shadow-card flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-xl)] border px-4 py-3">
         <div className="min-w-0 flex-1">{header}</div>
         {actions ? (
           <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>

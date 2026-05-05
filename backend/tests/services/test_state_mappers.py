@@ -143,6 +143,8 @@ def test_map_js_state_to_fields_reads_variant_attributes_axes() -> None:
 
     assert mapped["variants"][0]["color"] == "True White"
     assert mapped["variants"][0]["size"] == "M8.5 / W10"
+    assert mapped["color"] == "True White"
+    assert mapped["size"] == "M8.5 / W10"
 
 
 def test_map_js_state_to_fields_uses_variation_attribute_display_names() -> None:
@@ -732,6 +734,10 @@ def test_map_js_state_to_fields_replaces_existing_variant_query_parameter() -> N
         page_url="https://store.example.com/products/commuter-backpack?ref=hero&variant=old",
     )
 
+    assert mapped["variants"][0]["url"] == (
+        "https://store.example.com/products/commuter-backpack?ref=hero&variant=sku-123"
+    )
+
 
 def test_map_js_state_to_fields_keeps_ambiguous_availability_neutral() -> None:
     mapped = map_js_state_to_fields(
@@ -752,6 +758,8 @@ def test_map_js_state_to_fields_keeps_ambiguous_availability_neutral() -> None:
         page_url="https://store.example.com/products/commuter-backpack",
     )
 
+    assert "availability" not in mapped
+    assert "availability" not in mapped["variants"][0]
 
 def test_job_detail_mappers_keep_shared_html_section_behavior() -> None:
     description_html = (
@@ -1093,6 +1101,11 @@ def test_map_js_state_to_fields_uses_selected_options_and_skips_marketing_axis_n
         page_url="https://store.example.com/products/everyday-seamless-leggings?variant=black-s",
     )
 
+    assert mapped["variant_count"] == 2
+    assert mapped["variants"][0]["option_values"] == {"color": "Black", "size": "S"}
+    assert mapped["variants"][1]["option_values"] == {"color": "Black", "size": "M"}
+    assert "soft_fabric" not in mapped["variants"][0]["option_values"]
+    assert "high_waisted" not in mapped["variants"][0]["option_values"]
 
 
 def test_map_js_state_to_fields_reads_nested_variant_price_objects() -> None:
@@ -1175,6 +1188,8 @@ def test_map_js_state_to_fields_reads_nested_variant_original_price_objects() ->
         page_url="https://store.example.com/products/tree-runner?variant=runner-9",
     )
 
+    assert mapped["original_price"] == "130.00"
+    assert [row["original_price"] for row in mapped["variants"]] == ["120.00", "130.00"]
 
 
 def test_map_js_state_to_fields_reads_current_price_style_product_fields() -> None:

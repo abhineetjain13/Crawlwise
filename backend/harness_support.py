@@ -9,7 +9,7 @@ from typing import Sequence
 from urllib.parse import unquote, urlsplit
 
 from app.core.database import SessionLocal
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
 from app.models.crawl import CrawlRun
 from app.models.user import User
 from app.services._batch_runtime import process_run
@@ -125,6 +125,7 @@ _GENERIC_DETAIL_SECTION_TITLES = {
     "you may also like",
 }
 _ALLOWED_GENDERS = {"Men", "Women", "Unisex", "Kids", "Boys", "Girls"}
+_ALLOWED_GENDERS_LOWER = frozenset(g.lower() for g in _ALLOWED_GENDERS)
 _BARCODE_LENGTHS = {8, 12, 13, 14}
 _INTERNAL_IDENTITY_TOKENS = {
     "plp",
@@ -1143,7 +1144,8 @@ def _quality_variant_artifacts_ok(
         if text in {"off", "on", "discount", "sale", "false", "true"}:
             return False
         if re.fullmatch(r"\d+\s*%", text) or re.fullmatch(
-            r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})",
+            # text has already been lowercased above via _normalized_space(...).lower()
+            r"#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})",
             text,
         ):
             return False
@@ -1185,7 +1187,7 @@ def _quality_identifier_shapes_ok(
     if barcode and (not barcode.isdigit() or len(barcode) not in _BARCODE_LENGTHS):
         return False
     gender = str(record.get("gender") or "").strip()
-    if gender and gender not in _ALLOWED_GENDERS:
+    if gender and gender.lower() not in _ALLOWED_GENDERS_LOWER:
         return False
     for field_name in ("product_id", "product_type"):
         text = str(record.get(field_name) or "").strip().lower()
@@ -1516,6 +1518,10 @@ async def _ensure_harness_user_id(session) -> int:
             is_active=True,
         )
         session.add(user)
+        await session.commit()
+        await session.refresh(user)
+    elif not verify_password(harness_password, user.hashed_password):
+        user.hashed_password = hash_password(harness_password)
         await session.commit()
         await session.refresh(user)
     return int(user.id)

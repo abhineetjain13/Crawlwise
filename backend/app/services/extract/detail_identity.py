@@ -481,46 +481,6 @@ def _detail_url_matches_requested_identity(
     return len(overlap) >= min(2, len(requested_tokens))
 
 
-def _same_url_title_only_shell_like(
-    record: dict[str, object],
-    *,
-    page_url: str,
-) -> bool:
-    title = clean_text(record.get("title"))
-    requested_title = clean_text(_detail_title_from_url(page_url))
-    if (
-        not title
-        or not requested_title
-        or title.casefold() != requested_title.casefold()
-    ):
-        return False
-    if any(
-        record.get(field_name) not in (None, "", [], {})
-        for field_name in (
-            "image_url",
-            "additional_images",
-            "description",
-            "product_details",
-            "specifications",
-            "features",
-            "price",
-            "brand",
-            "availability",
-            "variant_axes",
-            "variants",
-            "selected_variant",
-        )
-    ):
-        return False
-    if _detail_identity_codes_from_url(page_url):
-        return False
-    return any(
-        token.endswith("s")
-        for token in re.split(r"[^a-z0-9]+", title.lower())
-        if len(token) >= 3
-    )
-
-
 def _detail_identity_tokens(value: object) -> set[str]:
     cleaned = clean_text(value).lower()
     return {
@@ -626,7 +586,6 @@ def _detail_redirect_identity_is_mismatched(
         return False
 
     if current and requested == current:
-        requested_title = _detail_title_from_url(requested)
         has_product_like_signal = any(
             record.get(field_name) not in (None, "", [], {})
             for field_name in (
@@ -644,10 +603,6 @@ def _detail_redirect_identity_is_mismatched(
         )
         if has_product_like_signal:
             return False
-        if requested_title and _same_url_title_only_shell_like(
-            record, page_url=requested
-        ):
-            return True
         return False
 
     requested_codes = _detail_identity_codes_from_url(requested)

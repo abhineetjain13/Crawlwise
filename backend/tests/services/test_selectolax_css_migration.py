@@ -473,6 +473,8 @@ def test_listing_extractor_filters_acceptance_artifact_noise(
     blocked_terms: tuple[str, ...],
 ) -> None:
     html = read_optional_artifact_text(artifact_path)
+    if html is None:
+        pytest.skip(f"artifact fixture missing: {artifact_path}")
 
     rows = extract_listing_records(
         html,

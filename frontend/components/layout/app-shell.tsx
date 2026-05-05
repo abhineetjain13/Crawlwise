@@ -15,13 +15,11 @@ import {
   Globe,
   History,
   LayoutDashboard,
-  Menu,
   Search,
   Settings2,
   Sparkles,
   ShieldCheck,
   Trash2,
-  X,
   Zap,
 } from 'lucide-react';
 
@@ -94,7 +92,6 @@ const resetForbiddenMessage =
 export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
   const pathname = usePathname();
   const router = useRouter();
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const authRoute = isAuthRoute(pathname);
 
   const authQuery = useQuery(getAuthSessionQueryOptions(pathname));
@@ -129,11 +126,11 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
             </div>
             <main className="app-page-frame">
               <div className="app-page-inner page-stack-lg">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 grid-cols-4">
                   {Array.from({ length: 4 }, (_, index) => (
                     <div
                       key={index}
-                      className="border-border bg-panel shadow-card space-y-3 rounded-[var(--radius-xl)] border p-4"
+                      className="border-border card-gradient shadow-card space-y-3 rounded-[var(--radius-xl)] border p-4"
                     >
                       <div className="skeleton h-3 w-20" />
                       <div className="skeleton h-8 w-28" />
@@ -152,7 +149,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
   if (authQuery.error && httpErrorStatus(authQuery.error) === 401) {
     return (
       <div className="app-shell-feedback">
-        <div className="border-border bg-panel shadow-card max-w-sm rounded-[var(--radius-xl)] border p-6 text-center">
+        <div className="border-border card-gradient shadow-card max-w-sm rounded-[var(--radius-xl)] border p-6 text-center">
           <p className="text-foreground type-heading text-base leading-snug font-semibold">
             Session expired
           </p>
@@ -167,7 +164,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
   if (authQuery.error) {
     return (
       <div className="app-shell-feedback">
-        <div className="border-border bg-panel shadow-card max-w-sm rounded-[var(--radius-xl)] border p-6 text-center">
+        <div className="border-border card-gradient shadow-card max-w-sm rounded-[var(--radius-xl)] border p-6 text-center">
           <p className="text-foreground type-heading text-base leading-snug font-semibold">
             Unable to load session
           </p>
@@ -193,15 +190,10 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
         </a>
         <div className="app-shell-grid">
           <Sidebar pathname={pathname} />
-          <ShellContent pathname={pathname} onOpenMobileNav={() => setMobileNavOpen(true)}>
+          <ShellContent pathname={pathname}>
             {children}
           </ShellContent>
         </div>
-        <MobileNav
-          pathname={pathname}
-          open={mobileNavOpen}
-          onClose={() => setMobileNavOpen(false)}
-        />
       </div>
     </TopBarProvider>
   );
@@ -337,8 +329,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
 function ShellContent({
   children,
   pathname,
-  onOpenMobileNav,
-}: Readonly<{ children: ReactNode; pathname: string; onOpenMobileNav: () => void }>) {
+}: Readonly<{ children: ReactNode; pathname: string }>) {
   const header = useTopBarHeader();
   const topBar = header ?? getFallbackHeader(pathname);
   const router = useRouter();
@@ -379,15 +370,6 @@ function ShellContent({
     <div className="app-main-col">
       <header className="app-topbar">
         <div className="app-topbar-main">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={onOpenMobileNav}
-            className="app-mobile-toggle lg:hidden"
-            aria-label="Open navigation"
-          >
-            <Menu className="size-4" />
-          </Button>
           <h1 className="app-topbar-title">{topBar.title}</h1>
         </div>
         <div className="app-topbar-actions">
@@ -424,64 +406,6 @@ function ShellContent({
         error={resetError}
         onConfirm={() => void executeReset()}
       />
-    </div>
-  );
-}
-
-function MobileNav({
-  pathname,
-  open,
-  onClose,
-}: Readonly<{ pathname: string; open: boolean; onClose: () => void }>) {
-  return (
-    <div className={cn('app-mobile-nav', open ? 'is-open' : '')}>
-      <button
-        type="button"
-        aria-label="Close navigation"
-        onClick={onClose}
-        className="app-mobile-nav-scrim"
-      />
-      <aside className="app-mobile-nav-sheet">
-        <div className="app-sidebar-header">
-          <LogoMark auth />
-          <Button type="button" variant="ghost" onClick={onClose} size="icon" aria-label="Close">
-            <X className="size-4" />
-          </Button>
-        </div>
-        <nav className="app-sidebar-nav">
-          {navGroups.map((group) => (
-            <div key={group.label} className="app-sidebar-group">
-              <p className="app-sidebar-group-label">{group.label}</p>
-              <div className="space-y-1">
-                {group.items.map((item) => {
-                  const active = isNavItemActive(pathname, item);
-                  const Icon = item.icon;
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href as Route}
-                      onClick={onClose}
-                      className={cn('app-nav-item', active && 'is-active')}
-                    >
-                      <Icon className="app-nav-icon" />
-                      <span className="truncate">{item.label}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </nav>
-        <div className="app-sidebar-footer">
-          <div className="app-sidebar-footer-row">
-            <div>
-              <div className="app-sidebar-footer-title">Display</div>
-              <div className="app-sidebar-footer-subtitle">Theme preference</div>
-            </div>
-            <ThemeToggle compact />
-          </div>
-        </div>
-      </aside>
     </div>
   );
 }

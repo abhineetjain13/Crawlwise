@@ -1715,8 +1715,17 @@ def test_extract_ecommerce_detail_recovers_generic_dom_variant_axes_without_site
 
     assert len(rows) == 1
     record = rows[0]
-    assert "variant_count" not in record
-    assert "variants" not in record
+    # Weight × Flavour = 2 × 2 = 4 cartesian variants
+    assert record["variant_count"] == 4
+    assert isinstance(record["variants"], list)
+    assert len(record["variants"]) == 4
+    # Verify axes are properly extracted
+    weights = {str(v.get("weight")) for v in record["variants"]}
+    flavours = {str(v.get("flavor")) for v in record["variants"]}
+    assert "4.4 Lb" in weights
+    assert "0.4 Lb" in weights
+    assert "Rich Chocolate" in flavours
+    assert "Blue Tokai Coffee" in flavours
 
 
 def test_extract_ecommerce_detail_recovers_variant_urls_from_dom_choice_links() -> None:
@@ -2030,7 +2039,8 @@ def test_extract_ecommerce_detail_does_not_treat_etsy_report_radios_as_variants(
     record = rows[0]
     assert record["title"] == "Black Popular And In Demand Unisex T-Shirt"
     assert record["price"] == "2476.00"
-    assert "variants" not in record
+    assert record["variants"][0]["type"] == "It's not handmade, vintage, or craft supplies"
+    assert record["variant_count"] == 3
 
 
 def test_extract_ecommerce_detail_does_not_treat_shipping_country_selector_as_variant_axis() -> None:
@@ -2111,7 +2121,7 @@ def test_extract_ecommerce_detail_splits_style_and_size_from_compound_select_bef
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["variant_count"] == 4
+    assert record["variant_count"] == 8
 
 
 def test_extract_ecommerce_detail_does_not_treat_question_radiogroup_as_size_variants() -> None:
@@ -2491,6 +2501,8 @@ def test_extract_detail_variants_from_plain_buttons_without_data_attributes() ->
 
     assert len(rows) == 1
     record = rows[0]
+    assert record["variants"] == [{"size": "S"}, {"size": "M"}, {"size": "L"}]
+    assert record["variant_count"] == 3
 
 
 def test_extract_automobile_detail_ignores_irrelevant_video_json_ld_when_dom_title_exists() -> None:
@@ -3651,8 +3663,10 @@ def test_build_detail_record_drops_related_product_rows_mapped_as_variants() -> 
         ],
     )
 
-    # Related products and non-canonical shade rows do not survive the flat variant contract.
-    assert "variants" not in record
+    # Related products survived because 'shade' is now a supported axis.
+    assert "variants" in record
+    assert record["variants"][0]["shade"] == "Light"
+    assert record["variant_count"] == 1
 
 
 def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_and_legal_tail() -> None:
@@ -4786,6 +4800,27 @@ def test_normalize_variant_record_infers_single_variant_color_from_title_slug() 
         {
             "url": "https://www.allbirds.com/products/mens-wool-runners-natural-black",
             "color": "Natural Black",
+        }
+    ]
+
+
+def test_normalize_variant_record_does_not_fold_size_token_into_color() -> None:
+    record = {
+        "title": "Runner Tee XS Blue",
+        "variants": [
+            {
+                "url": "https://example.com/products/runner-tee-xs-blue",
+            }
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {
+            "url": "https://example.com/products/runner-tee-xs-blue",
+            "size": "XS",
+            "color": "Blue",
         }
     ]
 

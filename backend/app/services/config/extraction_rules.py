@@ -15,8 +15,10 @@ _STATIC_EXPORTS = {
     if not name.startswith("_")
 }
 
-for _name, _value in _STATIC_EXPORTS.items():
-    globals()[_name] = _value
+_EXTRACTION_RULES_RAW = _STATIC_EXPORTS.get("EXTRACTION_RULES", {})
+EXTRACTION_RULES = (
+    dict(_EXTRACTION_RULES_RAW) if isinstance(_EXTRACTION_RULES_RAW, dict) else {}
+)
 
 _CANDIDATE_IMAGE_FILE_EXTENSIONS = _STATIC_EXPORTS.get(
     "CANDIDATE_IMAGE_FILE_EXTENSIONS",
@@ -51,6 +53,13 @@ DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES = frozenset(
         "product label",
         "product summary",
         "specifications",
+        # Tab/nav strip text concatenated into features/description when the
+        # DOM extractor targeted the tabbed container instead of the content
+        # panel (Canon — DQ-6 / 2026-05-04 gemini audit). Deeper DOM-scope
+        # fix tracked under Zyte-delta Slice 6.
+        "overview specs specifications compatibility resources support software",
+        "overview specs compatibility resources support software",
+        "overview specifications compatibility resources support software",
     }
 )
 DETAIL_LOW_SIGNAL_TITLE_VALUES = frozenset(
@@ -63,6 +72,14 @@ DETAIL_LOW_SIGNAL_TITLE_VALUES = frozenset(
         "womens shoes",
         "women's shoes",
         "shoes",
+        # Generic gender-plus-category titles that leak in when the real
+        # product title selector fails (LUISAVIAROMA / DQ-9).
+        "kids boys",
+        "kids girls",
+        "kids boy",
+        "kids girl",
+        "boys kids",
+        "girls kids",
     }
 )
 DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES = frozenset({"criteoproductrail"})
@@ -88,6 +105,8 @@ DETAIL_CATEGORY_UI_TOKENS = frozenset(
         "view all",
         "···",
         "…",
+        "shop by material",
+        "shop by brand",
     }
 )
 DETAIL_CATEGORY_LABEL_PREFIXES = ("shop by ",)
@@ -96,7 +115,14 @@ DETAIL_LONG_TEXT_UI_TAIL_PHRASES = (
     "more details",
     "learn more",
 )
-DETAIL_NOISE_PREFIXES = ("check the details", "product summary")
+DETAIL_NOISE_PREFIXES = (
+    "buy ",
+    "check the details",
+    "discover ",
+    "product summary",
+    "shop for ",
+    "shop the ",
+)
 DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS = 4
 DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS = 24
 DETAIL_LONG_TEXT_MAX_SECTION_CHARS = 12000
@@ -105,6 +131,7 @@ DETAIL_GUIDE_GLOSSARY_TEXT_PATTERNS = (
     r"\b(?:regular|slim|relaxed)\s+fit\b.{0,240}\b(?:regular|slim|relaxed)\s+fit\b",
     r"\b(?:fabric|material)\s+glossary\b",
     r"\bthe\s+word\s+['\"][a-z -]+['\"]\s+originates\b",
+    r"\b(?:find|select)\s+your\s+(?:shade|size|color)\b",
 )
 DETAIL_GUIDE_GLOSSARY_HEADING_TOKENS = (
     "fabric",
@@ -128,12 +155,16 @@ DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS = (
     r"\btracking\s+status\s+reads\b",
     r"\border\s+is\s+shipped\b.{0,120}\b(?:tracking|email)\b",
     r"\blabel\s+created\b.{0,80}\b(?:tracking|carrier|status|shipping|hours)\b",
+    r"\bshipping\s+statuses?\s+can\s+remain\b",
     # Audit 2026-05-03 3.3: Marketing banner openers like "(US) - only $35. Fast shipping..."
     r"\([A-Z]{2,4}\)\s*[-\u2013\u2014]\s*only\s+\$\d",
+    r"\bfast\s+shipping\s+on\s+latest\b",
     # Audit 2026-05-03 3.4: SEO meta blurbs ("Shop the X at Brand today",
     # "Read customer reviews ... and discover more").
     r"\bshop\s+the\b.{0,160}\bat\s+\S+\s+today\b",
     r"\bread\s+customer\s+reviews?\b.{0,160}\b(?:discover|learn|and\s+more)\b",
+    r"\bwas\s+this\s+product\s+information\s+helpful\b",
+    r"\bwrite\s+a\s+review\b",
 )
 DETAIL_COOKIE_DISCLOSURE_TEXT_PATTERNS = (
     r"\bcookie\s+name\s+is\s+associated\s+with\b",
@@ -148,16 +179,18 @@ DETAIL_COOKIE_DISCLOSURE_TEXT_PATTERNS = (
     r"\breal\s+time\s+bidding\b",
 )
 DETAIL_TRACKING_TOKEN_PATTERN = r"_[a-z][a-z0-9_]{2,}"
-# Year-led editorial slugs like 2025-ceo-letter / 2024-annual-report must not
-# be treated as product slugs. Centralized so tuning and tests stay in one place.
+SMALL_NUMERIC_PATTERN = r"\d{1,2}"
+TRACKING_PIXEL_PATTERN = r"_[a-z]+"
+COLOR_KEYWORD_PATTERN = r"\b(?:color|colour|black|blue|brown|green|grey|gray|orange|pink|purple|red|white|yellow)\b"
+GIF_BASE64_PREFIX = "r0lgodlh"
+URL_DETECTION_TOKENS = ("g_auto", "f_auto", "q_auto", "c_fill")
 YEAR_SLUG_PATTERN = r"(?:19|20)\d{2}"
 PRODUCT_SLUG_MIN_TERMINAL_TOKENS = 3
-# Gender artifact words reused by size-candidate rejection (variant_record_normalization).
 GENDER_ARTIFACT_WORDS = ("men", "mens", "women", "womens", "boys", "girls")
-# Common alpha size tokens used to tag a variant option as a size rather than
-# a color modifier.
+GENDER_ARTIFACT_PATTERN = r"\b(?:men|mens|women|womens|boys|girls)['’]?\s+{candidate}\b"
 STANDARD_SIZE_VALUES = frozenset({"xs", "s", "m", "l", "xl", "xxl", "xxxl"})
-# Unresolved server-side template placeholders commonly left in image srcs.
+DEFAULT_DETAIL_MAX_VARIANT_ROWS = 1
+DOM_VARIANT_GROUP_LIMIT = 4
 UNRESOLVED_TEMPLATE_URL_TOKENS = (
     "url_to_",
     "{{",
@@ -170,6 +203,10 @@ UNRESOLVED_TEMPLATE_URL_TOKENS = (
 DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS = frozenset(
     {"discount", "false", "off", "on", "sale", "true"}
 )
+AVAILABILITY_IN_STOCK = "in_stock"
+NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
+    tuple(_STATIC_EXPORTS.get("NOISY_PRODUCT_ATTRIBUTE_KEYS", ()) or ())
+) | frozenset({"availability", "available", AVAILABILITY_IN_STOCK, "stock_status"})
 DETAIL_TEXT_SCOPE_SELECTORS = (
     _STATIC_EXPORTS.get("DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR", "main"),
     "main",
@@ -212,7 +249,11 @@ DETAIL_TEXT_SCOPE_EXCLUDE_TOKENS = (
 DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS = (
     "also-viewed",
     "also viewed",
+    "complete-the-look",
+    "complete the look",
     "customers",
+    "people-also-bought",
+    "people also bought",
     "recommend",
     "related",
     "similar",
@@ -245,6 +286,9 @@ DETAIL_VARIANT_CONTEXT_NOISE_TOKENS = (
     "signup",
     "upsell",
     "you may also like",
+    "sort by",
+    "filter by",
+    "results",
 )
 VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH = 6
 DETAIL_VARIANT_SCOPE_SELECTOR = (
@@ -379,6 +423,26 @@ VARIANT_SIZE_ALIAS_SUFFIXES = (" us",)
 VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "sign up",
     "updates and promotions",
+    # Add-to-cart / add-to-bag call-to-action captured as a variant option
+    # (LEGO, REI, Sweetwater — DQ-2 / 2026-05-04 gemini audit).
+    "add to cart",
+    "add to bag",
+    "add to basket",
+    "add a lifetime membership to cart",
+    # Wishlist / account plumbing strings leaking in as variant labels.
+    "account.wishlist",
+    "notinlist",
+    # Cart/quantity controls picked up as size values.
+    "increment quantity",
+    "decrement quantity",
+    # Fulfillment / shipping banners leaking into variants.
+    "pickup unavailable",
+    "pickup not available",
+    # Marketing / guarantee badges mis-classified as variant axes
+    # (ROAM Luggage — DQ-2).
+    "lifetime warranty",
+    "free trial",
+    "day free trial",
 )
 VARIANT_PLACEHOLDER_VALUES = frozenset(
     {"default title", "choose", "option", "select", "swatch"}
@@ -398,6 +462,10 @@ SIZE_REJECT_TOKENS = frozenset(
         "shipping",
         "specifications",
         "verified purchases",
+        "sort by",
+        "filter by",
+        "price",
+        "quantity",
     }
 )
 PLACEHOLDER_IMAGE_URL_PATTERNS = (
@@ -434,6 +502,13 @@ SCOPE_SCORE_MAIN_WEIGHT = 4000
 SCOPE_SCORE_PRIORITY_WEIGHT = 2000
 SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT = 1000
 MAX_SELECTOR_MATCHES = 12
+FEATURE_SECTION_SELECTORS = (
+    "[data-section='features']",
+    ".features",
+    ".product-features",
+    "#features",
+)
+VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = 3
 DETAIL_IDENTITY_STOPWORDS = frozenset(
     {
         "and",
@@ -625,6 +700,10 @@ PAGE_URL_CURRENCY_HINTS_RAW = {
     **dict(_STATIC_EXPORTS.get("PAGE_URL_CURRENCY_HINTS_RAW", {})),
     "firstcry.com/": "INR",
 }
+VARIANT_AXIS_ALIASES = {
+    **dict(_STATIC_EXPORTS.get("VARIANT_AXIS_ALIASES", {})),
+    "style_and_size": "size",
+}
 AVAILABILITY_URL_MAP = {
     "https://schema.org/instock": "in_stock",
     "http://schema.org/instock": "in_stock",
@@ -669,21 +748,67 @@ VARIANT_OPTION_TEXT_FIELDS = frozenset(
 VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
     {
         *VARIANT_OPTION_TEXT_FIELDS,
+        "arms",
+        "back",
+        "band",
+        "base",
+        "bundle_type",
+        "carat",
+        "clarity",
         "colour",
+        "commitment_period",
+        "configuration",
+        "connectivity",
+        "count",
         "cup",
+        "cut",
+        "dimensions",
         "edition",
+        "engraving",
+        "fabric_grade",
         "finish",
+        "fit",
         "flavor",
         "flavour",
         "format",
-        "fit",
+        "frame",
+        "frequency",
+        "gemstone",
+        "height",
+        "leg_finish",
+        "length",
+        "load_rating",
+        "material",
+        "material_composition",
         "memory",
+        "metal",
         "model",
         "pack",
+        "pattern",
+        "personalization",
+        "plug_type",
         "scent",
+        "seat_count",
+        "setting",
         "shade",
+        "shape",
+        "skin_type",
+        "spf_rating",
+        "state",
+        "stone",
+        "storage",
+        "storage_capacity",
+        "support",
+        "thread_size",
+        "tier",
+        "tilt",
+        "tolerance_level",
         "type",
+        "usage_limit",
+        "voltage",
+        "volume",
         "weight",
+        "width",
     }
 )
 VARIANT_AXIS_GENERIC_TOKENS = frozenset(
@@ -729,9 +854,13 @@ DYNAMIC_FIELD_NAME_MAX_TOKENS = crawler_runtime_settings.dynamic_field_name_max_
 MAX_CANDIDATES_PER_FIELD = crawler_runtime_settings.max_candidates_per_field
 
 _EXTRA_EXPORTS = [
+    "AVAILABILITY_IN_STOCK",
     "AVAILABILITY_URL_MAP",
     "NORMALIZER_AVAILABILITY_TOKENS",
     "BARE_HOST_URL_RE",
+    "COLOR_KEYWORD_PATTERN",
+    "DEFAULT_DETAIL_MAX_VARIANT_ROWS",
+    "DOM_VARIANT_GROUP_LIMIT",
     "DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS",
     "DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS",
     "DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS",
@@ -797,6 +926,9 @@ _EXTRA_EXPORTS = [
     "DETAIL_IDENTITY_STOPWORDS",
     "DYNAMIC_FIELD_NAME_MAX_TOKENS",
     "EXPORT_IMAGE_URL_SUFFIXES",
+    "FEATURE_SECTION_SELECTORS",
+    "GIF_BASE64_PREFIX",
+    "GENDER_ARTIFACT_PATTERN",
     "IMAGE_FIELDS",
     "INTEGER_VALUE_FIELDS",
     "JSON_RECORD_LIST_KEYS",
@@ -825,6 +957,7 @@ _EXTRA_EXPORTS = [
     "STRUCTURED_OBJECT_LIST_FIELDS",
     "URL_FIELDS",
     "VARIANT_FIELDS",
+    "VARIANT_AXIS_ALIASES",
     "VARIANT_AXIS_ALLOWED_SINGLE_TOKENS",
     "VARIANT_AXIS_GENERIC_TOKENS",
     "VARIANT_AXIS_TECHNICAL_PATTERNS",
@@ -837,13 +970,17 @@ _EXTRA_EXPORTS = [
     "VARIANT_SIZE_ALIAS_SUFFIXES",
     "SIZE_REJECT_TOKENS",
     "PLACEHOLDER_IMAGE_URL_PATTERNS",
+    "SMALL_NUMERIC_PATTERN",
+    "TRACKING_PIXEL_PATTERN",
     "URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS",
     "URL_CONCATENATION_SCHEME_PATTERN",
+    "URL_DETECTION_TOKENS",
     "YEAR_SLUG_PATTERN",
     "PRODUCT_SLUG_MIN_TERMINAL_TOKENS",
     "GENDER_ARTIFACT_WORDS",
     "STANDARD_SIZE_VALUES",
     "UNRESOLVED_TEMPLATE_URL_TOKENS",
+    "VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT",
 ]
 
 

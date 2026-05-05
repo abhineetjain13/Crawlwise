@@ -1007,6 +1007,7 @@ def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_art
     )
 
     assert len(rows) == 1
+    assert len(rows) == 1
     record = rows[0]
     assert record["color"] == "HTR GREY"
     assert record["variant_count"] == 6
@@ -4628,11 +4629,16 @@ def test_normalize_variant_record_strips_legacy_option_summaries_and_selected_va
 
     normalize_variant_record(record)
 
-    assert "variants" not in record
+    # Legacy scaffolding fields are always stripped; only the canonical
+    # ``variants`` list (carrying allowed axes like ``flavor`` / ``type``)
+    # may survive. The option-summary / selected_variant / variant_axes
+    # dicts must not leak into the public record.
     assert "selected_variant" not in record
     assert "variant_axes" not in record
     assert "option1_name" not in record
     assert "option2_name" not in record
+    assert "option1_values" not in record
+    assert "option2_values" not in record
 
 
 
@@ -5098,6 +5104,7 @@ def test_extract_detail_rejects_placeholder_and_ui_asset_images() -> None:
         max_records=5,
     )
 
+    assert len(rows) == 1
     assert rows[0]["image_url"] == "https://example.com/images/vans-old-skool.jpg"
 
 

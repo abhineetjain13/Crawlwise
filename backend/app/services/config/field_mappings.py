@@ -215,8 +215,13 @@ BARCODE_FIELD = "barcode"
 SKU_FIELD = "sku"
 ROUTE_BARCODE_TO_SKU = True
 NAVIGATION_URL_FIELDS = frozenset({URL_FIELD, APPLY_URL_FIELD, CANONICAL_URL_FIELD})
+# Kept distinct because navigation cleanup and public canonicalization can diverge.
 PUBLIC_RECORD_CANONICAL_URL_FIELDS = frozenset(
     {APPLY_URL_FIELD, CANONICAL_URL_FIELD, URL_FIELD}
+)
+BRAND_LIKE_FIELDS = frozenset({"brand", "company", "dealer_name", "vendor"})
+OPTION_SCALAR_FIELDS = frozenset(
+    {COLOR_FIELD, "condition", "material", SIZE_FIELD, "storage", "style"}
 )
 PUBLIC_RECORD_CANONICAL_SURFACE = "ecommerce_detail"
 FLAT_VARIANT_KEYS: tuple[str, ...] = (
@@ -329,12 +334,14 @@ _EXTRA_EXPORTS = [
     "APPLY_URL_FIELD",
     "AVAILABILITY_FIELD",
     "BARCODE_FIELD",
+    "BRAND_LIKE_FIELDS",
     "CANONICAL_URL_FIELD",
     "COLOR_FIELD",
     "CURRENCY_FIELD",
     "FLAT_VARIANT_KEYS",
     "IMAGE_URL_FIELD",
     "NORMALIZER_LIST_TEXT_FIELDS",
+    "OPTION_SCALAR_FIELDS",
     "PRICE_FIELD",
     "PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS",
     "PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS",

@@ -65,7 +65,10 @@ from app.services.extract.detail_dom_extractor import (
     primary_dom_context,
     variant_option_availability,  # noqa: F401
 )
-from app.services.extract.detail_raw_signals import breadcrumb_category_from_dom
+from app.services.extract.detail_raw_signals import (
+    breadcrumb_category_from_dom,
+    prune_irrelevant_detail_dom_nodes,
+)
 from app.services.extract.detail_identity import (
     detail_identity_codes_match,  # noqa: F401
     detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
@@ -245,15 +248,11 @@ def _collect_structured_payload_candidates(
                 and _structured_payload_is_breadcrumb_list(payload)
             ):
                 candidate_source = "json_ld_breadcrumb"
-            _add_sourced_candidate(
-                candidates,
-                candidate_sources,
-                field_sources,
-                selector_trace_candidates,
-                field_name,
-                value,
-                source=candidate_source,
-            )
+            add_candidate(candidates, field_name, value)
+            candidate_sources.setdefault(field_name, []).append(candidate_source)
+            bucket = field_sources.setdefault(field_name, [])
+            if candidate_source not in bucket:
+                bucket.append(candidate_source)
 
 
 def _structured_payload_is_breadcrumb_list(payload: object) -> bool:
@@ -1127,6 +1126,13 @@ def _prepare_detail_extraction(
     context = prepare_extraction_context(html)
     dom_parser, soup = primary_dom_context(context, page_url=page_url)
     raw_soup = BeautifulSoup(context.original_html, "html.parser")
+    if str(surface or "").strip().lower() == "ecommerce_detail":
+        soup = BeautifulSoup(str(soup), "html.parser")
+        prune_irrelevant_detail_dom_nodes(
+            soup,
+            page_url=page_url,
+            requested_page_url=text_or_none(requested_page_url) or page_url,
+        )
     candidates: dict[str, list[object]] = {}
     candidate_sources: dict[str, list[str]] = {}
     field_sources: dict[str, list[str]] = {}

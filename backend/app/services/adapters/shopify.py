@@ -169,9 +169,9 @@ class ShopifyAdapter(BaseAdapter):
                         base_url=url,
                     )
                     axes = self._variant_axes(normalized_variants)
-                    _selectable_axes, single_value_attributes = (
-                        self._split_selectable_axes(axes)
-                    )
+                    # Only the single-value attributes are needed on this
+                    # branch; discard the selectable-axes half of the tuple.
+                    _, single_value_attributes = self._split_selectable_axes(axes)
                     selected_price = (
                         active_variant.get("price")
                         if isinstance(active_variant, dict)
@@ -341,7 +341,9 @@ class ShopifyAdapter(BaseAdapter):
             base_url=page_url,
         )
         axes = self._variant_axes(normalized_variants)
-        _selectable_axes, single_value_attributes = self._split_selectable_axes(axes)
+        # Only the single-value attributes are needed here; discard the
+        # selectable-axes half of the tuple.
+        _, single_value_attributes = self._split_selectable_axes(axes)
         flat_variants = flatten_variants_for_public_output(
             normalized_variants,
             page_url=page_url,

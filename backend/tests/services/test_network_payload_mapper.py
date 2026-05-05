@@ -307,7 +307,7 @@ def test_ghost_route_captures_unconfigured_product_payload() -> None:
         surface="ecommerce_detail",
         page_url="https://custom-spa.example.com/item/42",
     )
-    assert len(rows) >= 1
+    assert len(rows) == 1
     record = rows[0]
     assert record.get("title") == "Artisan Candle"
     assert record.get("price") == "18.00"
@@ -334,7 +334,7 @@ def test_ghost_route_captures_unconfigured_job_payload() -> None:
         surface="job_detail",
         page_url="https://react-spa.example.com/careers/55",
     )
-    assert len(rows) >= 1
+    assert len(rows) == 1
     record = rows[0]
     assert record.get("title") == "Frontend Engineer"
     assert record.get("company") == "StartupCo"
@@ -358,7 +358,7 @@ def test_ghost_route_fallback_when_spec_fails_to_match() -> None:
         surface="ecommerce_detail",
         page_url="https://weird-spa.example.com/item/gp-01",
     )
-    assert len(rows) >= 1
+    assert len(rows) == 1
     assert rows[0].get("title") == "Ghost Product"
 
 
@@ -393,7 +393,7 @@ def test_ghost_route_works_on_surface_with_no_specs() -> None:
         surface="automobile_detail",
         page_url="https://example.com/car/xyz",
     )
-    assert len(rows) >= 1
+    assert len(rows) == 1
     assert rows[0].get("title") == "Unconfigured Surface Product"
 
 

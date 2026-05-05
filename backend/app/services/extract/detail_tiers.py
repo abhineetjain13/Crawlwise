@@ -119,6 +119,18 @@ def collect_structured_data_tier(
             )
 
 
+_NORMALIZED_DETAIL_BREADCRUMB_JSONLD_TYPES = frozenset(
+    str(item).strip().lower()
+    for item in tuple(DETAIL_BREADCRUMB_JSONLD_TYPES or ())
+    if str(item).strip()
+)
+_NORMALIZED_DETAIL_IRRELEVANT_JSON_LD_TYPES = frozenset(
+    str(value).strip().lower()
+    for value in tuple(DETAIL_IRRELEVANT_JSON_LD_TYPES or ())
+    if str(value).strip()
+)
+
+
 def _detail_json_ld_payload_is_irrelevant(payload: object) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -128,20 +140,11 @@ def _detail_json_ld_payload_is_irrelevant(payload: object) -> bool:
         for item in (raw_types if isinstance(raw_types, list) else [raw_types])
         if str(item or "").strip()
     }
-    if normalized_types & frozenset(
-        str(item).strip().lower()
-        for item in tuple(DETAIL_BREADCRUMB_JSONLD_TYPES or ())
-        if str(item).strip()
-    ):
+    if normalized_types & _NORMALIZED_DETAIL_BREADCRUMB_JSONLD_TYPES:
         return False
     if not normalized_types:
         return False
-    irrelevant_types = {
-        str(value).strip().lower()
-        for value in tuple(DETAIL_IRRELEVANT_JSON_LD_TYPES or ())
-        if str(value).strip()
-    }
-    return normalized_types <= irrelevant_types
+    return normalized_types <= _NORMALIZED_DETAIL_IRRELEVANT_JSON_LD_TYPES
 
 
 def collect_js_state_tier(

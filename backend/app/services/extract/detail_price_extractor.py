@@ -319,6 +319,59 @@ def reconcile_detail_price_magnitudes(record: dict[str, Any]) -> None:
             )
 
 
+def reconcile_parent_price_against_variant_range(record: dict[str, Any]) -> None:
+    """Repair parent ``price`` when every variant reports a single, different price.
+
+    DQ-7 / 2026-05-04 gemini audit (Selfridges): parent price 190 while both
+    variants (50ml, 100ml) report 310. The parent value was scraped from an
+    unrelated DOM element. When all variant rows agree on a single positive
+    price and the parent price falls within the same order of magnitude as
+    that variant price (i.e. not a cents/units magnitude copy), adopt the
+    unanimous variant price as the parent.
+
+    Conservative by design:
+      * only acts when ``_single_decimal_value`` yields a unique variant price;
+      * only acts when parent and variant are within 0.5x..2x of each other,
+        so cents-magnitude mismatches (100x) are left to
+        :func:`reconcile_detail_price_magnitudes`;
+      * skips when the parent price came from an authoritative / strict
+        source such as ``network_payload``;
+      * skips when the parent equals the variant price.
+    """
+    parent_price = detail_price_decimal(record.get("price"))
+    if parent_price is None or parent_price <= 0:
+        return
+    variants = record.get("variants")
+    if not isinstance(variants, list) or not variants:
+        return
+    variant_dicts = [variant for variant in variants if isinstance(variant, dict)]
+    if not variant_dicts:
+        return
+    variant_prices = [
+        detail_price_decimal(variant.get("price"))
+        for variant in variant_dicts
+        if detail_price_decimal(variant.get("price")) is not None
+    ]
+    if len(variant_prices) < len(variant_dicts):
+        # At least one variant lacks a price; skip to avoid misjudging the
+        # distribution.
+        return
+    unanimous_variant_price = _single_decimal_value(variant_prices)
+    if unanimous_variant_price is None or unanimous_variant_price <= 0:
+        return
+    if parent_price == unanimous_variant_price:
+        return
+    # Same-order-of-magnitude guard: skip cents/units magnitude gaps so the
+    # dedicated magnitude reconciler can handle them.
+    ratio = parent_price / unanimous_variant_price
+    if ratio < Decimal("0.5") or ratio > Decimal("2"):
+        return
+    if record_field_sources(record, "price") & _STRICT_PARENT_PRICE_SOURCES:
+        return
+    record["price"] = _format_price_decimal(unanimous_variant_price)
+    append_record_field_source(record, "price", "variant_price_range")
+
+
 def record_field_sources(record: dict[str, Any], field_name: str) -> set[str]:
     field_sources = record.get("_field_sources")
     if not isinstance(field_sources, dict):
@@ -577,6 +630,8 @@ def _detail_price_from_html(
     jsonld_price_bundle: tuple[str | None, str | None, str | None],
 ) -> str | None:
     jsonld_price, _jsonld_original_price, _jsonld_currency = jsonld_price_bundle
+    # Defensive: callers typically gate on ``jsonld_price or _detail_price_from_html(...)``,
+    # but keep this fast-path so direct callers also short-circuit without re-scanning the DOM.
     if jsonld_price:
         return jsonld_price
 

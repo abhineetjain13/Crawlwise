@@ -572,8 +572,10 @@ def test_evaluate_quality_flags_cross_cutting_detail_invariants() -> None:
     assert quality["quality_checks"]["category_clean_ok"] is False
     assert quality["quality_checks"]["long_text_clean_ok"] is False
     assert quality["quality_checks"]["variant_currency_parity_ok"] is False
+    assert quality["quality_checks"]["variant_artifacts_ok"] is True
     assert quality["quality_checks"]["identifier_shapes_ok"] is False
     assert quality["quality_checks"]["title_token_ok"] is False
+    assert quality["observed_failure_mode"] == "category_pollution"
 
 
 def test_evaluate_quality_flags_missing_repair_diagnostics() -> None:

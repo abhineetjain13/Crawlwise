@@ -38,6 +38,15 @@ ALLOWED_PRIVATE_SERVICE_IMPORTS = {
     "config/product_intelligence.py -> app.services.config.runtime_settings:_settings_config",
     "crawl_service.py -> app.services.pipeline.core:_mark_run_failed",
     "publish/__init__.py -> app.services.publish.verdict:_aggregate_verdict",
+    # Shared detail-identity helpers used by detail_raw_signals.prune_irrelevant_detail_dom_nodes.
+    # Kept private because the implementation is an implementation detail of detail_identity;
+    # these call-sites import via an aliased local-scope import to minimise coupling.
+    "extract/detail_raw_signals.py -> app.services.extract.detail_identity:_detail_url_matches_requested_identity",
+    "extract/detail_raw_signals.py -> app.services.extract.detail_identity:_record_matches_requested_detail_identity",
+    # Lowercased frozenset derived from VARIANT_AXIS_ALLOWED_SINGLE_TOKENS; finalizer
+    # consumes the already-normalised form to keep axis-gating semantics consistent
+    # with shared_variant_logic.
+    "extract/detail_record_finalizer.py -> app.services.extract.shared_variant_logic:_variant_axis_allowed_single_tokens",
 }
 CONFIG_CONSTANT_NAME_MARKERS = (
     "SELECTOR",
@@ -84,15 +93,22 @@ FILE_LOC_BUDGETS = {
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
     Path("app/services/extract/detail_dom_extractor.py"): 1320,
     # Detail finalizer owns public-boundary cleanup and record repair.
-    Path("app/services/extract/detail_record_finalizer.py"): 1090,
+    # Grown (+10) to accommodate additional axis-gating logic that reuses
+    # shared_variant_logic frozensets instead of re-deriving them locally.
+    Path("app/services/extract/detail_record_finalizer.py"): 1100,
     # Shared variant logic owns generic axis and row reconciliation.
-    Path("app/services/extract/shared_variant_logic.py"): 1050,
+    # Grown (+90) to absorb the extended allowed-axis taxonomy (flavor, type,
+    # material_composition, etc.) and related JS-state / DOM helpers.
+    Path("app/services/extract/shared_variant_logic.py"): 1140,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
     Path("app/services/field_value_dom.py"): 1590,
     # Canonical field coercion remains centralized here instead of scattering value policy.
-    Path("app/services/field_value_core.py"): 1430,
+    # Grown (+50) for the availability canonical-enum gate, negative-price rejection
+    # wiring, category URL-path rejection, and associated audit comments
+    # (2026-05-04 sweep, gemini DQ-4 / DQ-8).
+    Path("app/services/field_value_core.py"): 1480,
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1300,
     # JS state mapping stays centralized to avoid adapter-specific drift.

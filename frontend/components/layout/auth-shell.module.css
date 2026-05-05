@@ -35,14 +35,3 @@
   letter-spacing: var(--tracking-tight);
 }
 
-@media (max-width: 480px) {
-  :global(.auth-shell) {
-    padding: 16px;
-    align-items: flex-start;
-    padding-top: 10vh;
-  }
-
-  :global(.auth-shell-card) {
-    padding: 28px 24px;
-  }
-}

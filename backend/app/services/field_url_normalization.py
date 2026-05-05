@@ -31,7 +31,7 @@ _SHORT_TRACKING_VALUE_RE = re.compile(
 )
 _URL_SCHEME_RE = re.compile(str(URL_CONCATENATION_SCHEME_PATTERN), re.I)
 _URL_CONCAT_ALLOWED_PREFIX_SEPARATORS = tuple(
-    str(value) for value in tuple(URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS or ())
+    str(value) for value in (URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS or ())
 )
 
 
@@ -130,9 +130,6 @@ def is_concatenated_url(value: object) -> bool:
             and text[match.start() - 1] not in _URL_CONCAT_ALLOWED_PREFIX_SEPARATORS
             for match in scheme_matches[1:]
         )
-    if len(scheme_matches) == 1:
-        tail = text[scheme_matches[0].end():]
-        return _URL_SCHEME_RE.search(tail) is not None
     return False
 
 

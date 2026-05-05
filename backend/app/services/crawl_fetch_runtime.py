@@ -681,12 +681,7 @@ async def _try_browser_http_handoff(
             )
             if not cookie_header:
                 continue
-            _raw_handoff_timeout = crawler_runtime_settings.http_timeout_seconds
-            handoff_timeout = (
-                context.resolved_timeout
-                if _raw_handoff_timeout is None
-                else min(float(_raw_handoff_timeout), context.resolved_timeout)
-            )
+            handoff_timeout = _resolve_http_timeout(context)
             try:
                 result = await _curl_fetch(
                     context.url,
@@ -755,6 +750,20 @@ def _select_http_fetcher(context: _FetchRuntimeContext):
     return _curl_fetch
 
 
+def _resolve_http_timeout(context: _FetchRuntimeContext) -> float:
+    raw_timeout = crawler_runtime_settings.http_timeout_seconds
+    if raw_timeout is None:
+        return context.resolved_timeout
+    try:
+        return min(float(raw_timeout), context.resolved_timeout)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid http_timeout_seconds=%r; using resolved timeout",
+            raw_timeout,
+        )
+        return context.resolved_timeout
+
+
 async def _run_http_fetcher_attempts(
     context: _FetchRuntimeContext,
     *,
@@ -795,12 +804,7 @@ async def _attempt_http_fetch(
     attempt: int,
     max_attempts: int,
 ) -> PageFetchResult | object:
-    _raw_http_timeout = crawler_runtime_settings.http_timeout_seconds
-    http_timeout = (
-        context.resolved_timeout
-        if _raw_http_timeout is None
-        else min(float(_raw_http_timeout), context.resolved_timeout)
-    )
+    http_timeout = _resolve_http_timeout(context)
     try:
         await wait_for_host_slot(context.url)
         if proxy is not None:

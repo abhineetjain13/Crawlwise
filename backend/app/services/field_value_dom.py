@@ -25,6 +25,7 @@ from app.services.config.extraction_rules import (
     DETAIL_TEXT_SCOPE_SELECTORS,
     EXTRACTION_RULES,
     FEATURE_SECTION_ALIASES,
+    FEATURE_SECTION_SELECTORS,
     NON_PRODUCT_IMAGE_HINTS,
     NON_PRODUCT_PROVIDER_HINTS,
     PRODUCT_GALLERY_CONTEXT_HINTS,
@@ -37,6 +38,7 @@ from app.services.config.extraction_rules import (
     SCOPE_SCORE_MAIN_WEIGHT,
     SCOPE_SCORE_PRIORITY_WEIGHT,
     SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT,
+    UNRESOLVED_TEMPLATE_URL_TOKENS,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -78,7 +80,10 @@ _cross_product_container_tokens = tuple(
 _scope_product_context_tokens = tuple(
     clean_text(token).lower() for token in tuple(SCOPE_PRODUCT_CONTEXT_TOKENS or ()) if clean_text(token)
 )
-_max_selector_matches = int(MAX_SELECTOR_MATCHES)
+_max_selector_matches = _safe_int(MAX_SELECTOR_MATCHES, 12)
+_scope_score_main_weight = _safe_int(SCOPE_SCORE_MAIN_WEIGHT, 4000)
+_scope_score_priority_weight = _safe_int(SCOPE_SCORE_PRIORITY_WEIGHT, 2000)
+_scope_score_product_context_weight = _safe_int(SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT, 1000)
 
 def _compile_variant_option_child_drop_patterns() -> tuple[re.Pattern[str], ...]:
     compiled: list[re.Pattern[str]] = []
@@ -151,6 +156,7 @@ _FEATURE_SECTION_ALIASES = frozenset(
     for value in tuple(FEATURE_SECTION_ALIASES or ())
     if str(value).strip()
 )
+_feature_section_selector = ", ".join(str(s) for s in tuple(FEATURE_SECTION_SELECTORS or ()) if str(s).strip())
 
 
 def _srcset_urls(value: object) -> list[str]:
@@ -348,19 +354,11 @@ def _node_is_hidden_or_auxiliary(node: Tag) -> bool:
         depth += 1
     return False
 
-def _node_has_cross_product_cluster(node: Tag) -> bool:
+def _node_has_cross_product_cluster(node: Tag, *, page_url: str = "") -> bool:
     if not isinstance(getattr(node, "attrs", None), dict):
         return False
-    links = [
-        absolute_url("", str(link.get("href") or ""))
-        for link in node.select("a[href]")[:_max_selector_matches]
-        if clean_text(link.get_text(" ", strip=True) or link.get("aria-label"))
-    ]
-    product_links = [
-        link
-        for link in links
-        if link and any(marker in urlparse(link).path.lower() for marker in detail_path_hints("ecommerce_detail"))
-    ]
+    links = [absolute_url(page_url, str(link.get("href") or "")) for link in node.select("a[href]")[:_max_selector_matches] if clean_text(link.get_text(" ", strip=True) or link.get("aria-label"))]
+    product_links = [l for l in links if l and any(m in urlparse(l).path.lower() for m in detail_path_hints("ecommerce_detail"))]
     if len(set(product_links)) >= 2:
         return True
     context = _node_attr_text(node, max_depth=1)
@@ -384,9 +382,9 @@ def _scope_score(node: Tag) -> tuple[int, int]:
     text_len = len(clean_text(node.get_text(" ", strip=True)))
     score = text_len
     if node.name in {"main", "article"} or str(node.get("role") or "").strip().lower() == "main":
-        score += int(SCOPE_SCORE_MAIN_WEIGHT)
+        score += _scope_score_main_weight
     if any(token in context for token in _detail_text_scope_priority_tokens):
-        score += int(SCOPE_SCORE_PRIORITY_WEIGHT)
+        score += _scope_score_priority_weight
     if DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR and (
         node.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR) is not None
         or any(
@@ -394,7 +392,7 @@ def _scope_score(node: Tag) -> tuple[int, int]:
             for token in _scope_product_context_tokens
         )
     ):
-        score += int(SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT)
+        score += _scope_score_product_context_weight
     return score, text_len
 
 
@@ -416,33 +414,31 @@ def _best_text_scope(root: BeautifulSoup | Tag) -> Tag | None:
     return best if _scope_is_product_like(best) else None
 
 
+def _clone_visible_only(
+    node: Tag | NavigableString,
+    *,
+    remaining_depth: int = 50,
+    _soup: BeautifulSoup | None = None,
+) -> Tag | NavigableString | None:
+    if remaining_depth <= 0:
+        return None
+    if not isinstance(node, Tag):
+        return NavigableString(str(node)) if isinstance(node, NavigableString) else None
+    if _node_is_hidden_or_auxiliary(node):
+        return None
+    _soup = _soup or BeautifulSoup("", "html.parser")
+    clone = _soup.new_tag(node.name, attrs=dict(getattr(node, "attrs", {}) or {}))
+    for child in node.children:
+        if (child_clone := _clone_visible_only(child, remaining_depth=remaining_depth - 1, _soup=_soup)) is not None:
+            clone.append(child_clone)
+    return clone
+
+
 def _pruned_text_scope_root(root: BeautifulSoup | Tag) -> BeautifulSoup | Tag:
     scope = _best_text_scope(root)
     if scope is None:
         return root
-    soup = BeautifulSoup("", "html.parser")
-    def clone_visible(
-        node: Tag | NavigableString,
-        *,
-        remaining_depth: int = 50,
-    ) -> Tag | NavigableString | None:
-        if remaining_depth <= 0:
-            return None
-        if not isinstance(node, Tag):
-            return NavigableString(str(node)) if isinstance(node, NavigableString) else None
-        if _node_is_hidden_or_auxiliary(node) or _node_has_cross_product_cluster(node):
-            return None
-        clone = soup.new_tag(node.name, attrs=dict(getattr(node, "attrs", {}) or {}))
-        for child in node.children:
-            if (
-                child_clone := clone_visible(
-                    child,
-                    remaining_depth=remaining_depth - 1,
-                )
-            ) is not None:
-                clone.append(child_clone)
-        return clone
-    return clone_visible(scope) or root
+    return _clone_visible_only(scope) or root
 
 
 def _is_non_primary_image_context(node: Tag) -> bool:
@@ -483,7 +479,7 @@ def _is_in_product_gallery_context(node: Tag, *, max_depth: int = 6) -> bool:
 
 
 _UNRESOLVED_TEMPLATE_URL_RE = re.compile(
-    r"(url_to_|\{\{|\}\}|\{\$|%%|\[\[|\]\])",
+    "|".join(re.escape(str(token)) for token in tuple(UNRESOLVED_TEMPLATE_URL_TOKENS or ()) if str(token).strip()) or r"(?!)",
     re.IGNORECASE,
 )
 
@@ -493,8 +489,6 @@ def _is_garbage_image_candidate(node: Tag, candidate_url: str) -> bool:
     context = _image_node_context(node)
     if lowered.endswith(".svg") and not _is_in_product_gallery_context(node):
         return True
-    # Reject unresolved server-side template placeholders such as
-    # "URL_TO_THE_PRODUCT_IMAGE", "{{image}}", "{$src}", "[[IMG]]".
     if _UNRESOLVED_TEMPLATE_URL_RE.search(candidate_url or ""):
         return True
     if any(token in lowered for token in NON_PRODUCT_IMAGE_HINTS):
@@ -668,9 +662,9 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
         _variant_option_node_text(node, field_name)
         if _looks_like_variant_option_node(node, field_name)
         else (
-            html_to_text(str(node), preserve_block_breaks=True)
+            html_to_text(str(_clone_visible_only(node) or node), preserve_block_breaks=True)
             if _field_uses_scoped_text(field_name)
-            else node.get_text(" ", strip=True)
+            else (_clone_visible_only(node) or node).get_text(" ", strip=True)
         )
     )
     text_value = coerce_field_value(field_name, raw_text, page_url)
@@ -1043,7 +1037,11 @@ def _is_section_label(label: str) -> bool:
 
 
 def _section_text(node: Tag, *, label: str = "") -> str:
-    text = html_to_text(str(node), preserve_block_breaks=True)
+    # Audit 2026-05-03: Use visibility-filtered clone to avoid hidden content leakage
+    cloned = _clone_visible_only(node)
+    if cloned is None:
+        return ""
+    text = html_to_text(str(cloned), preserve_block_breaks=True)
     text = clean_text(text)
     if not text:
         return ""
@@ -1057,6 +1055,8 @@ def _extract_sibling_content(node: Tag, *, label: str = "") -> str:
     for sibling in node.next_siblings:
         if isinstance(sibling, Tag) and sibling.name in _SECTION_STOP_TAGS:
             break
+        if isinstance(sibling, Tag) and _node_is_hidden_or_auxiliary(sibling):
+            continue
         text = clean_text(
             sibling.get_text(" ", strip=True)
             if isinstance(sibling, Tag)
@@ -1358,11 +1358,18 @@ def _feature_rows_from_node(node: Tag) -> list[str]:
 
 
 def _split_feature_text(text: str) -> list[str]:
-    return [
-        clean_text(part)
-        for part in str(text or "").splitlines()
-        if clean_text(part)
-    ]
+    rows: list[str] = []
+    for line in str(text or "").splitlines():
+        cleaned = clean_text(line)
+        if not cleaned:
+            continue
+        if re.search(r"(?:^|\s)-\s+\S", cleaned):
+            parts = [part for part in re.split(r"\s+-\s+", cleaned.lstrip("- ")) if part]
+            if len(parts) > 1:
+                rows.extend(clean_text(part) for part in parts if clean_text(part))
+                continue
+        rows.append(cleaned)
+    return rows
 
 
 def extract_feature_rows(root: BeautifulSoup | Tag) -> list[str]:
@@ -1381,10 +1388,7 @@ def extract_feature_rows(root: BeautifulSoup | Tag) -> list[str]:
             seen.add(lowered)
             rows.append(cleaned)
 
-    for node in safe_select(
-        scoped_root,
-        "[data-section='features'], .features, .product-features, #features",
-    ):
+    for node in safe_select(scoped_root, _feature_section_selector):
         if _node_is_hidden_or_auxiliary(node):
             continue
         _add(_feature_rows_from_node(node))

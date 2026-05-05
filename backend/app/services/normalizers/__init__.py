@@ -98,6 +98,8 @@ def normalize_decimal_price(
     text = _normalize_text(value)
     if not text:
         return None
+    if re.match(r"^\s*-\s*(?:[$€£¥₹]|[A-Za-z]{3}\b)?\s*\d", text):
+        return None
     if isinstance(value, str):
         stripped = _canonicalize_decimal_candidate(text)
         if stripped is None:
@@ -118,6 +120,8 @@ def normalize_decimal_price(
     try:
         decimal = Decimal(candidate)
     except (InvalidOperation, ValueError):
+        return None
+    if decimal < 0:
         return None
     digit_count = sum(1 for char in candidate if char.isdigit())
     if interpret_integral_as_cents and "." not in candidate and digit_count >= 3:
