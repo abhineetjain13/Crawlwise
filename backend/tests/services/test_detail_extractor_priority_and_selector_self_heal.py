@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from app.services.config._export_data import load_export_data
 from app.services.extraction_runtime import extract_records
 from app.services.selector_self_heal import (
     _validated_xpath_rules,
@@ -340,6 +343,24 @@ def test_reduce_html_for_selector_synthesis_preserves_price_and_buy_box_controls
     assert 'value="sku-1"' in reduced
 
 
+def test_selector_synthesis_keep_worthy_tags_round_trip_through_export() -> None:
+    from app.services.config.selectors import SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS
+
+    exports = load_export_data(
+        str(
+            Path(__file__).parents[2]
+            / "app"
+            / "services"
+            / "config"
+            / "selectors.exports.json"
+        )
+    )
+
+    assert exports["SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS"] == (
+        SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS
+    )
+
+
 def test_extract_records_deep_merges_structured_variant_fields_across_tiers() -> None:
     html = """
     <html>
@@ -357,7 +378,7 @@ def test_extract_records_deep_merges_structured_variant_fields_across_tiers() ->
     </html>
     """
 
-    record = extract_records(
+    extract_records(
         html,
         "https://example.com/products/trail-runner",
         "ecommerce_detail",

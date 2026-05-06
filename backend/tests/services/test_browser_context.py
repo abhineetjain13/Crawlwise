@@ -1866,6 +1866,11 @@ async def test_shared_browser_runtime_launches_real_chrome_headful_for_fallback(
         True,
     )
     monkeypatch.setattr(
+        acquisition_browser_runtime,
+        "REAL_CHROME_IGNORE_DEFAULT_ARGS",
+        ("--enable-automation", "--remote-debugging-pipe"),
+    )
+    monkeypatch.setattr(
         "patchright.async_api.async_playwright",
         lambda: FakePlaywrightManager(),
     )
@@ -1889,7 +1894,10 @@ async def test_shared_browser_runtime_launches_real_chrome_headful_for_fallback(
                 "--disable-search-engine-choice-screen",
             ],
             "executable_path": "C:/Chrome/chrome.exe",
-            "ignore_default_args": ["--enable-automation"],
+            "ignore_default_args": [
+                "--enable-automation",
+                "--remote-debugging-pipe",
+            ],
         }
     ]
 

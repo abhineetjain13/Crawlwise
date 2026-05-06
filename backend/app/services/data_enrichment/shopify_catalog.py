@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from app.services.config.data_enrichment import (
     DATA_ENRICHMENT_AVAILABILITY_TERMS,
@@ -57,6 +59,16 @@ def normalize_taxonomy_token(value: object) -> str:
     if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
         return token[:-1]
     return token
+
+
+def object_iterable(value: object) -> list[object]:
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict)):
+        return list(value)
+    return []
+
+
+def string_iterable(value: object) -> list[str]:
+    return [str(item).strip() for item in object_iterable(value) if str(item).strip()]
 
 
 def repository_terms(repository: dict[str, object]) -> dict[str, object]:
@@ -146,11 +158,10 @@ def top_taxonomy_candidates(
     scored: list[dict[str, object]] = []
     for item in taxonomy_index.categories:
         category_tokens = set(
-            item.get("path_match_tokens") or tokenize_text(item.get("category_path"))
+            string_iterable(item.get("path_match_tokens"))
+            or tokenize_text(item.get("category_path"))
         )
-        attribute_tokens = (
-            set(item.get("attribute_match_tokens") or ()) - category_tokens
-        )
+        attribute_tokens = set(string_iterable(item.get("attribute_match_tokens"))) - category_tokens
         if not category_tokens:
             continue
         if taxonomy_context_conflicts(
@@ -184,7 +195,7 @@ def top_taxonomy_candidates(
         )
     scored.sort(
         key=lambda item: (
-            -float(item.get("score") or 0.0),
+            -float(str(item.get("score") or 0.0)),
             len(str(item.get("category_path") or "")),
             str(item.get("category_path") or ""),
         )
@@ -313,7 +324,7 @@ def load_taxonomy_index(path: Path) -> TaxonomyIndex:
             leaf = normalize_category_path(category.get("name"))
             if not category_id or not category_path or not normalized_path:
                 continue
-            row = {
+            row: dict[str, Any] = {
                 "category_id": category_id,
                 "category_path": category_path,
                 "normalized_path": normalized_path,
@@ -424,7 +435,7 @@ def taxonomy_reference_payload(item: dict[str, object]) -> dict[str, object] | N
     return {
         "category_id": item.get("category_id") or "",
         "category_path": item.get("category_path") or "",
-        "attribute_handles": list(item.get("attribute_handles") or []),
+        "attribute_handles": string_iterable(item.get("attribute_handles")),
         "taxonomy_version": DATA_ENRICHMENT_TAXONOMY_VERSION,
     }
 
@@ -439,10 +450,14 @@ def pool_tokens(
     return tokens
 
 
-def category_attribute_match_tokens(item: dict[str, object]) -> set[str]:
+def category_attribute_match_tokens(item: dict[str, Any]) -> set[str]:
     return set(
         tokenize_text(
-            " ".join(str(handle) for handle in item.get("attribute_handles") or [])
+            " ".join(
+                str(handle)
+                for handle in object_iterable(item.get("attribute_handles"))
+                if str(handle).strip()
+            )
         )
     )
 

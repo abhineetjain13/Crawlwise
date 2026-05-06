@@ -226,6 +226,7 @@ OPTION_SCALAR_FIELDS = frozenset(
 PUBLIC_RECORD_CANONICAL_SURFACE = "ecommerce_detail"
 FLAT_VARIANT_KEYS: tuple[str, ...] = (
     COLOR_FIELD,
+    "flavor",
     SIZE_FIELD,
     SKU_FIELD,
     PRICE_FIELD,

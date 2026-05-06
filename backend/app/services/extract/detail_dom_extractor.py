@@ -401,6 +401,17 @@ def _variant_input_label(container: Any, input_node: Any) -> Any | None:
     return None
 
 
+def _visible_node_text(node: Any | None) -> str:
+    if node is None or not hasattr(node, "get_text"):
+        return ""
+    parsed = BeautifulSoup(str(node), "html.parser")
+    for hidden in parsed.select(
+        ".sr-only, .visually-hidden, [aria-hidden='true'], svg, title, use"
+    ):
+        hidden.decompose()
+    return clean_text(parsed.get_text(" ", strip=True))
+
+
 def _node_state_matches(node: Any, *tokens: str) -> bool:
     if not hasattr(node, "get"):
         return False
@@ -632,18 +643,19 @@ def _variant_choice_entry_value(
     label_node: Any | None = None,
 ) -> str:
     resolved_label = label_node or _variant_input_label(container, node)
-    label_text = (
-        resolved_label.get_text(" ", strip=True)
-        if resolved_label is not None and hasattr(resolved_label, "get_text")
-        else ""
-    )
+    label_text = _visible_node_text(resolved_label)
+    node_text = _visible_node_text(node)
     return clean_text(
-        label_text
+        node.get("data-attr-displayvalue")
+        or node.get("data-displayvalue")
+        or node.get("data-display-value")
+        or node.get("data-swatch-sr")
+        or label_text
         or node.get("data-value")
         or node.get("data-option-value")
         or node.get("aria-label")
         or node.get("value")
-        or (node.get_text(" ", strip=True) if hasattr(node, "get_text") else "")
+        or node_text
     )
 
 
@@ -1073,6 +1085,10 @@ def _extract_variants_from_dom(
             ) in (None, "", [], {}):
                 existing["variant_id"] = group_entry.get("variant_id")
             merged_entries[value] = existing
+    try:
+        group_limit = max(1, int(DOM_VARIANT_GROUP_LIMIT))
+    except (TypeError, ValueError):
+        group_limit = 1
     for group in merged_groups.values():
         values = [
             clean_text(value)
@@ -1089,10 +1105,6 @@ def _extract_variants_from_dom(
                 "entries": list(merged_entries.values()),
             }
         )
-        try:
-            group_limit = max(1, int(DOM_VARIANT_GROUP_LIMIT))
-        except (TypeError, ValueError):
-            group_limit = 1
         if len(deduped_groups) >= group_limit:
             break
 
@@ -1267,7 +1279,7 @@ def _backfill_variants_from_dom_if_missing(
         js_state_objects=js_state_objects,
     )
     dom_variant_rows = [
-        row for row in list(dom_variants.get("variants") or []) if isinstance(row, dict)
+        row for row in _object_list(dom_variants.get("variants")) if isinstance(row, dict)
     ]
     if dom_variant_rows:
         existing_by_key: dict[str, dict[str, Any]] = {}

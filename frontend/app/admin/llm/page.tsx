@@ -308,78 +308,78 @@ export default function AdminLlmPage() {
                       yesterdayDate.setDate(now.getDate() - 1);
                       const yesterdayStr = yesterdayDate.toDateString();
                       return costLog.slice(0, 40).map((entry) => {
-                      const totalTokens = entry.input_tokens + entry.output_tokens;
-                      const cost = parseFloat(entry.cost_usd) || 0;
-                      return (
-                        <TableRow key={entry.id} className="group transition-colors">
-                          <TableCell className="px-0 py-4">
-                            <div className="flex flex-col">
-                              <div className="flex items-baseline gap-1.5">
-                                <span className="text-foreground type-caption-mono font-medium tabular-nums">
-                                  {totalTokens.toLocaleString()}
+                        const totalTokens = entry.input_tokens + entry.output_tokens;
+                        const cost = parseFloat(entry.cost_usd) || 0;
+                        return (
+                          <TableRow key={entry.id} className="group transition-colors">
+                            <TableCell className="px-0 py-4">
+                              <div className="flex flex-col">
+                                <div className="flex items-baseline gap-1.5">
+                                  <span className="text-foreground type-caption-mono font-medium tabular-nums">
+                                    {totalTokens.toLocaleString()}
+                                  </span>
+                                  <span className="text-muted type-caption">tokens</span>
+                                </div>
+                                <span className="text-accent type-label-mono mt-1 font-medium">
+                                  ${cost > 0 && cost < 0.0001 ? cost.toFixed(6) : cost.toFixed(4)}
                                 </span>
-                                <span className="text-muted type-caption">tokens</span>
                               </div>
-                              <span className="text-accent type-label-mono mt-1 font-medium">
-                                ${cost > 0 && cost < 0.0001 ? cost.toFixed(6) : cost.toFixed(4)}
+                            </TableCell>
+
+                            {/* Task type */}
+                            <TableCell className="px-4 py-4">
+                              <span className="type-control text-foreground">
+                                {entry.task_type.replace(/_/g, ' ')}
                               </span>
-                            </div>
-                          </TableCell>
+                            </TableCell>
 
-                          {/* Task type */}
-                          <TableCell className="px-4 py-4">
-                            <span className="type-control text-foreground">
-                              {entry.task_type.replace(/_/g, ' ')}
-                            </span>
-                          </TableCell>
-
-                          {/* Domain / run target */}
-                          <TableCell
-                            className="px-4 py-4"
-                            title={entry.domain || `Run #${entry.run_id}`}
-                          >
-                            <span className="text-foreground/80 block truncate">
-                              {entry.domain || (entry.run_id ? `Run #${entry.run_id}` : 'system')}
-                            </span>
-                          </TableCell>
-
-                          {/* Provider + model stacked */}
-                          <TableCell className="px-4 py-4">
-                            <div className="flex flex-col overflow-hidden">
-                              <span className="type-control text-foreground truncate">
-                                {entry.provider}
+                            {/* Domain / run target */}
+                            <TableCell
+                              className="px-4 py-4"
+                              title={entry.domain || `Run #${entry.run_id}`}
+                            >
+                              <span className="text-foreground/80 block truncate">
+                                {entry.domain || (entry.run_id ? `Run #${entry.run_id}` : 'system')}
                               </span>
-                              <span
-                                className="type-caption text-muted truncate"
-                                title={entry.model}
-                              >
-                                {entry.model}
+                            </TableCell>
+
+                            {/* Provider + model stacked */}
+                            <TableCell className="px-4 py-4">
+                              <div className="flex flex-col overflow-hidden">
+                                <span className="type-control text-foreground truncate">
+                                  {entry.provider}
+                                </span>
+                                <span
+                                  className="type-caption text-muted truncate"
+                                  title={entry.model}
+                                >
+                                  {entry.model}
+                                </span>
+                              </div>
+                            </TableCell>
+
+                            <TableCell className="px-0 py-4 text-right">
+                              <span className="type-caption-mono text-muted group-hover:text-foreground transition-colors">
+                                {(() => {
+                                  const d = new Date(entry.created_at);
+                                  const dStr = d.toDateString();
+                                  const isToday = dStr === todayStr;
+                                  const isYesterday = dStr === yesterdayStr;
+
+                                  const timeStr = d.toLocaleTimeString([], {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: false,
+                                  });
+
+                                  if (isToday) return timeStr;
+                                  if (isYesterday) return `Yesterday ${timeStr}`;
+                                  return `${d.toLocaleDateString([], { month: '2-digit', day: '2-digit' })} ${timeStr}`;
+                                })()}
                               </span>
-                            </div>
-                          </TableCell>
-
-                          <TableCell className="px-0 py-4 text-right">
-                            <span className="type-caption-mono text-muted group-hover:text-foreground transition-colors">
-                              {(() => {
-                                const d = new Date(entry.created_at);
-                                const dStr = d.toDateString();
-                                const isToday = dStr === todayStr;
-                                const isYesterday = dStr === yesterdayStr;
-
-                                const timeStr = d.toLocaleTimeString([], {
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                  hour12: false,
-                                });
-
-                                if (isToday) return timeStr;
-                                if (isYesterday) return `Yesterday ${timeStr}`;
-                                return `${d.toLocaleDateString([], { month: '2-digit', day: '2-digit' })} ${timeStr}`;
-                              })()}
-                            </span>
-                          </TableCell>
-                        </TableRow>
-                      );
+                            </TableCell>
+                          </TableRow>
+                        );
                       });
                     })()}
                   </TableBody>

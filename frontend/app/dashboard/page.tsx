@@ -24,6 +24,7 @@ import {
   dashboardStatusBarColor,
   dashboardStatusLabel as statusLabel,
   dashboardStatusTone as statusTone,
+  isSubduedStatus,
   runExecutionLabel,
   runExecutionTone,
 } from '../../lib/ui/status';
@@ -92,7 +93,7 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       <div className="flex w-32 justify-start">
         <Badge
           tone={runExecutionTone(run.status, run.result_summary)}
-          flat={run.status === 'completed' || run.status === 'killed'}
+          flat={isSubduedStatus(run.status)}
         >
           {runExecutionLabel(run.status, run.result_summary)}
         </Badge>
@@ -203,7 +204,9 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
             {sortedStatusEntries.map(([status, count]) => (
               <div key={status} className="type-caption flex items-center gap-1.5">
-                <Badge tone={statusTone(status)} flat={status === 'completed' || status === 'killed'}>{statusLabel(status)}</Badge>
+                <Badge tone={statusTone(status)} flat={isSubduedStatus(status)}>
+                  {statusLabel(status)}
+                </Badge>
                 <span className="font-mono text-[13px] font-medium tabular-nums">{count}</span>
               </div>
             ))}

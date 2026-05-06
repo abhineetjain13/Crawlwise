@@ -27,6 +27,7 @@ from app.services.field_value_core import (
     STRUCTURED_OBJECT_LIST_FIELDS,
     URL_FIELDS,
     coerce_field_value,
+    enforce_flat_variant_public_contract,
     finalize_record,
     flatten_variants_for_public_output,
     text_or_none,
@@ -84,6 +85,7 @@ def public_record_data_for_surface(
             normalized_surface.startswith("ecommerce_")
             and field_name in ecommerce_contract_excluded
         ):
+            # Contract-excluded ecommerce fields stay internal even when requested.
             rejected[str(raw_field_name)] = "public_contract_excluded"
             continue
         if field_name in default_excluded and field_name not in explicit_fields:
@@ -128,6 +130,8 @@ def public_record_data_for_surface(
                 rejected[str(raw_field_name)] = "empty_after_canonical_url"
                 continue
         data[field_name] = coerced
+    if normalized_surface.startswith("ecommerce_") and VARIANTS_FIELD in data:
+        enforce_flat_variant_public_contract(data, page_url=page_url)
     return finalize_record(data, surface=surface), rejected
 
 

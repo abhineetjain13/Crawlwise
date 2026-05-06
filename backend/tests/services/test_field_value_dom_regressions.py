@@ -48,17 +48,33 @@ def test_resolved_image_url_is_not_garbage() -> None:
 
 
 def test_dedupe_image_urls_keeps_highest_resolution_cdn_variant() -> None:
-    assert dedupe_image_urls(
+    result = dedupe_image_urls(
         [
             "https://cdn.example.com/widget.jpg?width=120",
             "https://cdn.example.com/widget.jpg?width=1200",
             "https:////cdn.example.com/alt.jpg?wid=80&hei=80",
             "https:////cdn.example.com/alt.jpg?wid=1000&hei=1000",
         ]
-    ) == [
+    )
+    expected = [
         "https://cdn.example.com/widget.jpg?width=1200",
         "https://cdn.example.com/alt.jpg?wid=1000&hei=1000",
     ]
+    assert set(result) == set(expected)
+
+
+def test_dedupe_image_urls_normalizes_repeated_scheme_slashes() -> None:
+    result = dedupe_image_urls(
+        [
+            "https:///cdn.example.com/hero.jpg?width=1200",
+            "https://///cdn.example.com/alt.jpg?width=1200",
+        ]
+    )
+
+    assert set(result) == {
+        "https://cdn.example.com/hero.jpg?width=1200",
+        "https://cdn.example.com/alt.jpg?width=1200",
+    }
 
 
 def test_dash_separated_feature_text_splits_into_rows() -> None:

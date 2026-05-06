@@ -3,27 +3,34 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 from pathlib import Path
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app.services.config._export_data import load_export_data
 from app.services.config.runtime_settings import crawler_runtime_settings
 
 _EXPORTS_PATH = Path(__file__).with_name("extraction_rules.exports.json")
-_STATIC_EXPORTS = {
-    name: value
-    for name, value in load_export_data(str(_EXPORTS_PATH)).items()
-    if not name.startswith("_")
-}
+_STATIC_EXPORTS = {name: value for name, value in load_export_data(str(_EXPORTS_PATH)).items() if not name.startswith("_")}
+for _name, _value in _STATIC_EXPORTS.items():
+    if _name.isidentifier() and _name not in globals():
+        globals()[_name] = _value
+
+HYDRATED_STATE_PATTERNS = tuple(
+    dict.fromkeys(
+        (
+            *(
+                value
+                for value in tuple(_STATIC_EXPORTS.get("HYDRATED_STATE_PATTERNS", ()))
+                if str(value).strip()
+            ),
+        )
+    )
+)
 
 _EXTRACTION_RULES_RAW = _STATIC_EXPORTS.get("EXTRACTION_RULES", {})
-EXTRACTION_RULES = (
-    dict(_EXTRACTION_RULES_RAW) if isinstance(_EXTRACTION_RULES_RAW, dict) else {}
-)
+EXTRACTION_RULES = dict(_EXTRACTION_RULES_RAW) if isinstance(_EXTRACTION_RULES_RAW, dict) else {}
 
-_CANDIDATE_IMAGE_FILE_EXTENSIONS = _STATIC_EXPORTS.get(
-    "CANDIDATE_IMAGE_FILE_EXTENSIONS",
-    (),
-)
+_CANDIDATE_IMAGE_FILE_EXTENSIONS = _STATIC_EXPORTS.get("CANDIDATE_IMAGE_FILE_EXTENSIONS", ())
 _BARE_HOST_URL_PATTERN = _STATIC_EXPORTS.get("BARE_HOST_URL_PATTERN", "")
 _IMAGE_FIELDS_RAW = _STATIC_EXPORTS.get("IMAGE_FIELDS", ())
 _INTEGER_VALUE_FIELDS_RAW = _STATIC_EXPORTS.get("INTEGER_VALUE_FIELDS", ())
@@ -36,13 +43,25 @@ _REVIEW_COUNT_PATTERN = _STATIC_EXPORTS.get("REVIEW_COUNT_PATTERN", "")
 _REVIEW_TITLE_PATTERN = _STATIC_EXPORTS.get("REVIEW_TITLE_PATTERN", "")
 _STRUCTURED_MULTI_FIELDS_RAW = _STATIC_EXPORTS.get("STRUCTURED_MULTI_FIELDS", ())
 _STRUCTURED_OBJECT_FIELDS_RAW = _STATIC_EXPORTS.get("STRUCTURED_OBJECT_FIELDS", ())
-_STRUCTURED_OBJECT_LIST_FIELDS_RAW = _STATIC_EXPORTS.get(
-    "STRUCTURED_OBJECT_LIST_FIELDS",
-    (),
-)
+_STRUCTURED_OBJECT_LIST_FIELDS_RAW = _STATIC_EXPORTS.get("STRUCTURED_OBJECT_LIST_FIELDS", ())
 _URL_FIELDS_RAW = _STATIC_EXPORTS.get("URL_FIELDS", ())
-CDN_IMAGE_QUERY_PARAMS = frozenset(
-    tuple(_STATIC_EXPORTS.get("CDN_IMAGE_QUERY_PARAMS", ()) or ())
+
+
+def _string_frozenset(value: object) -> frozenset[str]:
+    values: Iterable[object]
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, Mapping):
+        values = value.keys()
+    elif isinstance(value, Iterable):
+        values = value
+    else:
+        return frozenset()
+    return frozenset(str(item).strip() for item in values if str(item).strip())
+
+
+CDN_IMAGE_QUERY_PARAMS = _string_frozenset(
+    _STATIC_EXPORTS.get("CDN_IMAGE_QUERY_PARAMS", ())
 ) | frozenset(
     {
         "fit",
@@ -75,10 +94,7 @@ DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES = frozenset(
         "product label",
         "product summary",
         "specifications",
-        # Tab/nav strip text concatenated into features/description when the
-        # DOM extractor targeted the tabbed container instead of the content
-        # panel (Canon — DQ-6 / 2026-05-04 gemini audit). Deeper DOM-scope
-        # fix tracked under Zyte-delta Slice 6.
+        # Tab/nav strip text leak when extractor hits the tab shell, not content (Canon DQ-6).
         "overview specs specifications compatibility resources support software",
         "overview specs compatibility resources support software",
         "overview specifications compatibility resources support software",
@@ -94,8 +110,7 @@ DETAIL_LOW_SIGNAL_TITLE_VALUES = frozenset(
         "womens shoes",
         "women's shoes",
         "shoes",
-        # Generic gender-plus-category titles that leak in when the real
-        # product title selector fails (LUISAVIAROMA / DQ-9).
+        # Generic gender-plus-category title leak when real title selector fails (LUISAVIAROMA DQ-9).
         "kids boys",
         "kids girls",
         "kids boy",
@@ -211,8 +226,13 @@ PRODUCT_SLUG_MIN_TERMINAL_TOKENS = 3
 GENDER_ARTIFACT_WORDS = ("men", "mens", "women", "womens", "boys", "girls")
 GENDER_ARTIFACT_PATTERN = r"\b(?:men|mens|women|womens|boys|girls)['’]?\s+{candidate}\b"
 GENDER_KEYWORD_TOKENS = frozenset(GENDER_ARTIFACT_WORDS)
+GENDER_POSSESSIVE_PATTERN = r"\b(?:men|women|boys|girls)['’]?s\b"
 STANDARD_SIZE_VALUES = frozenset({"xs", "s", "m", "l", "xl", "xxl", "xxxl"})
+VARIANT_TITLE_STOPWORDS = frozenset(
+    {"and", "for", "the", "with", "size", "color", "colour", "variant"}
+)
 DEFAULT_DETAIL_MAX_VARIANT_ROWS = 1
+FALLBACK_MAX_VARIANT_ROWS = 100
 DOM_VARIANT_GROUP_LIMIT = 4
 UNRESOLVED_TEMPLATE_URL_TOKENS = (
     "url_to_",
@@ -230,14 +250,18 @@ AVAILABILITY_IN_STOCK = "in_stock"
 AVAILABILITY_OUT_OF_STOCK = "out_of_stock"
 NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
     tuple(_STATIC_EXPORTS.get("NOISY_PRODUCT_ATTRIBUTE_KEYS", ()) or ())
-) | frozenset({"availability", "available", AVAILABILITY_IN_STOCK, "stock_status"})
-DETAIL_TEXT_SCOPE_SELECTORS = (
-    _STATIC_EXPORTS.get("DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR", "main"),
-    "main",
-    "article",
-    "[role='main']",
-    "[class*='product-main' i]",
-    "[class*='product-content' i]",
+) | frozenset({"availability", "available", AVAILABILITY_IN_STOCK, AVAILABILITY_OUT_OF_STOCK, "stock_status"})
+DETAIL_TEXT_SCOPE_SELECTORS = tuple(
+    dict.fromkeys(
+        (
+            _STATIC_EXPORTS.get("DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR", "main"),
+            "main",
+            "article",
+            "[role='main']",
+            "[class*='product-main' i]",
+            "[class*='product-content' i]",
+        )
+    )
 )
 DETAIL_TEXT_SCOPE_PRIORITY_TOKENS = (
     "description",
@@ -317,8 +341,10 @@ DETAIL_VARIANT_CONTEXT_NOISE_TOKENS = (
     "report",
 )
 VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH = 6
-# Hard cap for DOM ancestor walks; fallback is used only if runtime config is invalid.
+# Used when runtime config is invalid; 3 keeps noise pruning local to variant UI.
 VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK = 3
+# Last-resort parse default after configured depth and fallback both fail.
+VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK
 DETAIL_VARIANT_SCOPE_SELECTOR = (
     "form[action*='cart' i], "
     "form[id*='product' i], "
@@ -550,9 +576,6 @@ FEATURE_SECTION_SELECTORS = (
     ".features",
     ".product-features",
     "#features",
-)
-VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = (
-    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK
 )
 DETAIL_MATERIALS_ZERO_PERCENT_PATTERN = r"\b0\s*%"
 DETAIL_BRACKET_PROSE_MIN_WORDS = 5
@@ -933,6 +956,7 @@ _EXTRA_EXPORTS = [
     "BARE_HOST_URL_RE",
     "COLOR_KEYWORD_PATTERN",
     "DEFAULT_DETAIL_MAX_VARIANT_ROWS",
+    "FALLBACK_MAX_VARIANT_ROWS",
     "DOM_VARIANT_GROUP_LIMIT",
     "DETAIL_BRACKET_PROSE_MIN_WORDS",
     "DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS",
@@ -958,6 +982,7 @@ _EXTRA_EXPORTS = [
     "DETAIL_LOW_SIGNAL_PARENT_MIN",
     "DETAIL_PRICE_MAGNITUDE_EPSILON",
     "VARIANT_OPTION_LABEL_MAX_WORDS",
+    "VARIANT_TITLE_STOPWORDS",
     "DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS",
     "DETAIL_JSONLD_CURRENCY_FIELDS",
     "DETAIL_JSONLD_GRAPH_FIELDS",
@@ -1009,6 +1034,7 @@ _EXTRA_EXPORTS = [
     "GIF_BASE64_PREFIX",
     "GENDER_KEYWORD_TOKENS",
     "GENDER_ARTIFACT_PATTERN",
+    "GENDER_POSSESSIVE_PATTERN",
     "IMAGE_FIELDS",
     "INTEGER_VALUE_FIELDS",
     "JSON_RECORD_LIST_KEYS",

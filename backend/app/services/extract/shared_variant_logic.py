@@ -6,12 +6,11 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from app.services.config.extraction_rules import (
     DETAIL_VARIANT_CONTEXT_NOISE_TOKENS,
     DETAIL_VARIANT_SCOPE_SELECTOR,
     VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH,
+    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT,
     VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK,
     VARIANT_SCOPE_MAX_ROOTS,
     VARIANT_AXIS_LABEL_NOISE_PATTERNS,
@@ -31,6 +30,8 @@ from app.services.config.extraction_rules import (
     VARIANT_AXIS_TECHNICAL_PATTERNS,
 )
 from app.services.field_value_core import clean_text, text_or_none
+
+logger = logging.getLogger(__name__)
 
 _variant_axis_label_noise_tokens = frozenset(
     str(token).strip().lower()
@@ -169,7 +170,7 @@ def _variant_node_in_noise_context(node: Any) -> bool:
         try:
             depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK))
         except (TypeError, ValueError):
-            depth = 0
+            depth = VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT
     current = node
     for _ in range(depth):
         if current is None or not hasattr(current, "get"):
@@ -891,7 +892,6 @@ def variant_identity(variant: dict[str, Any]) -> str | None:
             return "options:" + "|".join(
                 f"{axis}={value}" for axis, value in normalized_pairs
             )
-    variant_url = text_or_none(variant.get("url"))
     # URL-based identity causes duplicate rows; unidentifiable variants
     # are handled by merge_variant_rows instead.
     return None

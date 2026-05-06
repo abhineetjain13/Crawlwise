@@ -272,6 +272,61 @@ def test_public_record_firewall_flattens_variants_to_public_shape() -> None:
     }
 
 
+def test_public_record_firewall_drops_parent_shared_variant_fields() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Widget",
+            "price": "19.99",
+            "currency": "USD",
+            "url": "https://example.com/products/widget",
+            "image_url": "https://cdn.example.com/widget.jpg",
+            "variants": [
+                {
+                    "option_values": {"Colour": "Red", "Size": "S"},
+                    "price": "$19.99",
+                    "currency": "USD",
+                    "url": "https://example.com/products/widget",
+                    "image_url": "https://cdn.example.com/widget.jpg",
+                },
+                {
+                    "option_values": {"Colour": "Blue", "Size": "M"},
+                    "price": "$24.99",
+                    "currency": "USD",
+                    "url": "https://example.com/products/widget?variant=blue-m",
+                    "image_url": "https://cdn.example.com/widget.jpg",
+                },
+            ],
+            "variant_count": 2,
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget",
+    )
+
+    assert data == {
+        "title": "Widget",
+        "price": "19.99",
+        "currency": "USD",
+        "url": "https://example.com/products/widget",
+        "image_url": "https://cdn.example.com/widget.jpg",
+        "variants": [
+            {
+                "color": "Red",
+                "size": "S",
+                "price": "19.99",
+                "url": "https://example.com/products/widget",
+            },
+            {
+                "color": "Blue",
+                "size": "M",
+                "price": "24.99",
+                "url": "https://example.com/products/widget?variant=blue-m",
+            },
+        ],
+        "variant_count": 2,
+    }
+    assert rejected == {}
+
+
 def test_public_record_firewall_drops_ecommerce_tags_even_when_allowed() -> None:
     data, rejected = public_record_data_for_surface(
         {

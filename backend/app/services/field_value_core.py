@@ -1,9 +1,16 @@
+"""Shared field coercion, normalization, and public-record shaping helpers.
+
+TODO(chore): split canonical coercion, field recovery, availability canonical-enum
+gate, negative-price rejection, category URL-path rejection, and audit comment
+wiring into narrower owners once LOC budgets are reduced.
+"""
+
 from __future__ import annotations
 
 import ast
 import re
 from html import unescape
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urljoin, urlparse
 
 from app.services.extraction_html_helpers import html_to_text
@@ -158,6 +165,16 @@ _TRACKING_PIXEL_RE = re.compile(str(TRACKING_PIXEL_PATTERN), re.I)
 _COLOR_KEYWORD_RE = re.compile(str(COLOR_KEYWORD_PATTERN), re.I)
 _url_detection_tokens = tuple(URL_DETECTION_TOKENS or ())
 _GIF_BASE64_PREFIX = str(GIF_BASE64_PREFIX or "")
+_SIZE_REJECT_TOKENS_NORMALIZED: frozenset[str] = frozenset(
+    str(token).strip().lower()
+    for token in tuple(SIZE_REJECT_TOKENS or ())
+    if str(token).strip()
+)
+_UNRESOLVED_TEMPLATE_URL_TOKENS_LOWER: tuple[str, ...] = tuple(
+    str(token).strip().lower()
+    for token in tuple(UNRESOLVED_TEMPLATE_URL_TOKENS or ())
+    if str(token).strip()
+)
 
 
 def _object_list(value: object) -> list:
@@ -166,22 +183,6 @@ def _object_list(value: object) -> list:
 
 def _object_dict(value: object) -> dict:
     return dict(value) if isinstance(value, dict) else {}
-
-
-def _size_reject_tokens() -> frozenset[str]:
-    return frozenset(
-        str(token).strip().lower()
-        for token in tuple(SIZE_REJECT_TOKENS or ())
-        if str(token).strip()
-    )
-
-
-def _unresolved_template_url_tokens_lower() -> tuple[str, ...]:
-    return tuple(
-        str(token).strip().lower()
-        for token in tuple(UNRESOLVED_TEMPLATE_URL_TOKENS or ())
-        if str(token).strip()
-    )
 
 
 def _safe_int(value: object, *, default: int | None = None) -> int | None:
@@ -593,8 +594,8 @@ def _coerce_structured_multi_rows(field_name: str, value: object) -> list[str]:
         rows = _split_multivalue_text_rows(text)
         if rows:
             return rows
-    text = coerce_text(value)
-    return [text] if text else []
+    coerced_text = coerce_text(value)
+    return [coerced_text] if coerced_text is not None else []
 
 
 def extract_price_text(
@@ -728,7 +729,7 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = clean_text(cleaned)
         if re.search(r"\bplease\s+select\b", cleaned, flags=re.I):
             return None
-        if cleaned.strip().lower() in _size_reject_tokens():
+        if cleaned.strip().lower() in _SIZE_REJECT_TOKENS_NORMALIZED:
             return None
     if cleaned.strip().casefold() in {"none", "null", "- / null", "n/a", "na"}:
         return None
@@ -913,8 +914,10 @@ def flatten_variants_for_public_output(
                 if not axis_text or not value_text:
                     continue
                 axis_key = axis_text.strip().lower()
-                if axis_key in {"color", "colour", "flavor", "flavour", "shade"}:
+                if axis_key in {"color", "colour"}:
                     axis_key = "color"
+                if axis_key in {"flavor", "flavour"}:
+                    axis_key = "flavor"
                 if axis_key == "style":
                     compound_size_prefix = value_text
                     has_option_axis = True
@@ -940,13 +943,40 @@ def flatten_variants_for_public_output(
                 merged["size"] = clean_text(f"{compound_size_prefix} {size_value}")
             elif "size" not in merged:
                 merged["size"] = compound_size_prefix
+        if text_or_none(merged.get("flavor")) and not text_or_none(merged.get("color")):
+            merged["color"] = merged["flavor"]
+            merged.pop("flavor", None)
         if merged and (
-            text_or_none(merged.get("color"))
-            or text_or_none(merged.get("size"))
-            or has_option_axis
+            has_option_axis
+            or any(
+                text_or_none(merged.get(field_name))
+                for field_name in ("color", "flavor", "size")
+            )
         ):
             flattened.append(merged)
     return flattened or None
+
+
+def _drop_parent_shared_variant_fields(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    variant_rows = [variant for variant in variants if isinstance(variant, dict)]
+    if len(variant_rows) < 2:
+        return
+    parent_shared_fields = ("price", "currency", "url", "image_url")
+    for field_name in parent_shared_fields:
+        parent_value = text_or_none(record.get(field_name))
+        if parent_value is None:
+            continue
+        if not all(
+            text_or_none(variant.get(field_name)) == parent_value
+            for variant in variant_rows
+        ):
+            continue
+        for variant in variant_rows:
+            if text_or_none(variant.get(field_name)) == parent_value:
+                variant.pop(field_name, None)
 
 
 def enforce_flat_variant_public_contract(
@@ -960,6 +990,7 @@ def enforce_flat_variant_public_contract(
     if variants:
         record["variants"] = variants
         record["variant_count"] = len(variants)
+        _drop_parent_shared_variant_fields(record)
     else:
         record.pop("variants", None)
         record.pop("variant_count", None)
@@ -1229,13 +1260,15 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
     if isinstance(value, list):
         normalized_rows: list[object] = []
         for item in value:
-            normalized = coerce_field_value(field_name, item, page_url)
-            if normalized in (None, "", [], {}):
+            normalized_value = cast(
+                object, coerce_field_value(field_name, item, page_url)
+            )
+            if normalized_value in (None, "", [], {}):
                 continue
-            if isinstance(normalized, list):
-                normalized_rows.extend(normalized)
+            if isinstance(normalized_value, list):
+                normalized_rows.extend(normalized_value)
             else:
-                normalized_rows.append(normalized)
+                normalized_rows.append(normalized_value)
         return normalized_rows or None
     if isinstance(value, (dict, set, frozenset)):
         return None
@@ -1504,5 +1537,5 @@ def _is_template_url(url: str) -> bool:
     lowered = str(url or "").lower()
     return any(
         token in lowered
-        for token in _unresolved_template_url_tokens_lower()
+        for token in _UNRESOLVED_TEMPLATE_URL_TOKENS_LOWER
     )

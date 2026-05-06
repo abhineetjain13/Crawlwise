@@ -126,7 +126,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
             </div>
             <main className="app-page-frame">
               <div className="app-page-inner page-stack-lg">
-                <div className="grid gap-3 grid-cols-4">
+                <div className="grid grid-cols-4 gap-3">
                   {Array.from({ length: 4 }, (_, index) => (
                     <div
                       key={index}
@@ -190,9 +190,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
         </a>
         <div className="app-shell-grid">
           <Sidebar pathname={pathname} />
-          <ShellContent pathname={pathname}>
-            {children}
-          </ShellContent>
+          <ShellContent pathname={pathname}>{children}</ShellContent>
         </div>
       </div>
     </TopBarProvider>
@@ -326,10 +324,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
   );
 }
 
-function ShellContent({
-  children,
-  pathname,
-}: Readonly<{ children: ReactNode; pathname: string }>) {
+function ShellContent({ children, pathname }: Readonly<{ children: ReactNode; pathname: string }>) {
   const header = useTopBarHeader();
   const topBar = header ?? getFallbackHeader(pathname);
   const router = useRouter();

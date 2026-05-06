@@ -46,6 +46,8 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    LIGHT THEME — Fiori Navy
    Palette: Warm neutrals · SAP-style navy accent · Clean surfaces
+   Note: glass dark-surface variants depend on backdrop-filter support; enable
+   vendor support/polyfill or provide a non-blurred fallback where needed.
    ═══════════════════════════════════════════════════════════════════════════ */
 :root {
   color-scheme: light;
@@ -263,6 +265,8 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    DARK THEME — Fiori Navy
    Palette: Deep darks · Subtle borders · Navy accent
+   Note: semi-transparent surfaces depend on backdrop-filter support; enable
+   vendor support/polyfill or provide a non-blurred fallback where needed.
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme='dark'] {
   color-scheme: dark;
@@ -322,13 +326,12 @@ html[data-theme='dark'] {
   --shadow-elevated-value: 0 8px 24px rgba(0, 0, 0, 0.35);
 
   /* ── Surface gradient — merged polished look, not 3D pop */
-  --gradient-card:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, #ffffff 3%, var(--bg-panel)) 0%,
-      var(--bg-panel) 40%,
-      color-mix(in srgb, #000000 4%, var(--bg-panel)) 100%
-    );
+  --gradient-card: linear-gradient(
+    180deg,
+    color-mix(in srgb, #ffffff 3%, var(--bg-panel)) 0%,
+    var(--bg-panel) 40%,
+    color-mix(in srgb, #000000 4%, var(--bg-panel)) 100%
+  );
 
   /* ── Component surface tokens */
   --surface-card: var(--bg-panel);

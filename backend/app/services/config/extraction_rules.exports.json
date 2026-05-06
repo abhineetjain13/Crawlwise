@@ -3479,7 +3479,8 @@
       "__myx",
       "__STORE__",
       "__APP_STATE__",
-      "CurrentProductDetailJSON"
+      "CurrentProductDetailJSON",
+      "BspdCurrentProduct"
     ]
   },
   "NON_STATE_ASSIGNMENT_PATTERNS": {

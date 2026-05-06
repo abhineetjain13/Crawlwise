@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.extract.detail_identity import listing_url_is_structural
+from app.services.extract.detail_identity import (
+    listing_detail_like_path,
+    listing_url_is_structural,
+)
 
 
 def test_tirerack_product_url_is_not_structural() -> None:
@@ -26,6 +29,13 @@ def test_tirerack_category_root_url_still_structural() -> None:
     page = "https://www.tirerack.com/accessories/category.jsp?category=Batteries"
     root = "https://www.tirerack.com/accessories/"
     assert listing_url_is_structural(root, page) is True
+
+
+def test_embedded_category_marker_segment_stays_structural() -> None:
+    page = "https://example.com/shop/womens-productlist-sale"
+    candidate = "https://example.com/shop/mens-productlist-sale"
+
+    assert listing_url_is_structural(candidate, page) is True
 
 
 def test_product_slug_in_utility_prefix_path_is_not_structural() -> None:
@@ -149,8 +159,6 @@ def test_shop_path_is_not_detail_marker() -> None:
     Regression for Dell (/en-us/shop/computer-monitors/ar/...) and Ulta
     (/shop/makeup/makeup-palettes) which both use /shop/ for listings.
     """
-    from app.services.extract.detail_identity import listing_detail_like_path
-
     assert (
         listing_detail_like_path(
             "https://www.dell.com/en-us/shop/computer-monitors/ar/8605/ultrawide",
@@ -179,6 +187,4 @@ def test_shop_path_is_not_detail_marker() -> None:
 )
 def test_explicit_detail_markers_still_recognized(url: str) -> None:
     """/p/, /product/, /dp/, /spd/ equivalents remain detail markers."""
-    from app.services.extract.detail_identity import listing_detail_like_path
-
     assert listing_detail_like_path(url, is_job=False) is True

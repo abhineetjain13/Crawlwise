@@ -250,7 +250,7 @@ def heuristic_listing_card_count_from_html(html: str, *, surface: str) -> int:
     count = 0
     nodes = listing_node_css(parser, LISTING_FALLBACK_CONTAINER_SELECTOR)
     for node in nodes:
-        fragment = str(node.html or "").strip()
+        fragment = str(getattr(node, "html", "") or "").strip()
         if not fragment or fragment in seen:
             continue
         seen.add(fragment)
@@ -296,10 +296,10 @@ def _node_looks_like_listing_chrome(node) -> bool:
 
 
 def _node_contains_nested_listing_candidates(node, *, surface: str) -> bool:
-    node_fragment = str(node.html or "").strip()
+    node_fragment = str(getattr(node, "html", "") or "").strip()
     descendants = listing_node_css(node, LISTING_FALLBACK_CONTAINER_SELECTOR)
     for descendant in descendants:
-        if str(descendant.html or "").strip() == node_fragment:
+        if str(getattr(descendant, "html", "") or "").strip() == node_fragment:
             continue
         if base_listing_fragment_score(descendant) <= 0:
             continue

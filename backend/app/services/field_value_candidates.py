@@ -38,6 +38,11 @@ from app.services.normalizers import normalize_decimal_price
 logger = logging.getLogger(__name__)
 _structured_candidate_list_slice = int(STRUCTURED_CANDIDATE_LIST_SLICE)
 _structured_candidate_traversal_limit = int(STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT)
+_price_source_key_fields = frozenset(
+    normalize_field_key(str(field))
+    for field in tuple(PRICE_SOURCE_KEY_FIELDS or ())
+    if normalize_field_key(str(field))
+)
 
 
 def candidate_fingerprint(value: object) -> str:
@@ -442,9 +447,7 @@ def _coerce_structured_candidate_value(
 
 def _source_key_is_price_field(value: object) -> bool:
     normalized = normalize_field_key(str(value or ""))
-    return normalized in {
-        str(field) for field in tuple(PRICE_SOURCE_KEY_FIELDS or ()) if str(field)
-    }
+    return normalized in _price_source_key_fields
 
 
 def _is_product_attribute_row(payload: dict[str, object]) -> bool:
@@ -479,6 +482,31 @@ def _structured_alias_allowed(
     if canonical == "brand" and "person" in payload_types:
         return False
     return True
+
+
+def _structured_alias_value_allowed(
+    *,
+    canonical: str,
+    normalized_key: str,
+    payload: dict[str, object],
+    value: object,
+) -> bool:
+    if canonical == "features" and isinstance(value, (dict, list, tuple, set)):
+        return False
+    if canonical != "size" or normalized_key != "size":
+        return True
+    if not isinstance(value, (int, float, str)):
+        return True
+    payload_keys = {normalize_field_key(str(key or "")) for key in payload}
+    return not (
+        "shipping_date" in payload_keys
+        and "special_days" in payload_keys
+        and (
+            "is_available" in payload_keys
+            or "isinventoryonly" in payload_keys
+            or "is_inventory_only" in payload_keys
+        )
+    )
 
 
 def _structured_payload_types(payload: dict[str, object]) -> set[str]:
@@ -620,6 +648,12 @@ def collect_structured_candidates(
                     canonical=canonical,
                     normalized_key=normalized_key,
                     payload=payload,
+                )
+                and _structured_alias_value_allowed(
+                    canonical=canonical,
+                    normalized_key=normalized_key,
+                    payload=payload,
+                    value=value,
                 )
             ):
                 add_candidate(
@@ -819,9 +853,8 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                 merged_rows.append(row)
         rows_with_option_values: list[dict[str, object]] = []
         for row in merged_rows:
-            has_option_values = isinstance(row.get("option_values"), dict) and bool(
-                row.get("option_values")
-            )
+            option_values = row.get("option_values")
+            has_option_values = isinstance(option_values, dict) and bool(option_values)
             if has_option_values:
                 rows_with_option_values.append(row)
         if field_name == "variants" and rows_with_option_values:

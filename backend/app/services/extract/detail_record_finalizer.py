@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import json, re
+import json
+import re
 from decimal import Decimal
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -11,7 +12,6 @@ from app.services.config.extraction_rules import (
     CANDIDATE_PLACEHOLDER_VALUES,
     DETAIL_CATEGORY_LABEL_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
-    DETAIL_BREADCRUMB_ROOT_LABELS,
     DETAIL_BREADCRUMB_SEPARATOR_LABELS,
     DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO,
     DETAIL_LOW_SIGNAL_PARENT_MIN,
@@ -28,9 +28,7 @@ from app.services.field_value_core import (
     text_or_none,
 )
 from app.services.field_value_dom import dedupe_image_urls
-from app.services.extract.detail_dom_extractor import (
-    variant_option_value_is_noise as _variant_option_value_is_noise,
-)
+from app.services.extract.detail_dom_extractor import variant_option_value_is_noise as _variant_option_value_is_noise
 from app.services.extract.detail_identity import (
     detail_identity_codes_match,
     detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
@@ -66,7 +64,7 @@ _UUID_LIKE_PATTERN = re.compile(r"(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{1
 _MERCH_CODE_PATTERN = re.compile(r"\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", re.I)
 _VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(str(token).strip().lower() for token in VARIANT_OPTION_VALUE_NOISE_TOKENS if str(token).strip())
 _PLACEHOLDER_IMAGE_URL_PATTERNS_LOWER = tuple(str(pattern).lower() for pattern in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ()) if str(pattern).strip())
-_DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
+_DETAIL_BASE_PLACEHOLDER_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^404$"),
     re.compile(r"^(?:error\s*)?404\b", re.I),
     re.compile(r"^error\s+page$", re.I),
@@ -88,10 +86,7 @@ _DETAIL_WAF_QUEUE_TITLE_PATTERNS = (
     re.compile(r"^please wait\b", re.I),
     re.compile(r"\byou are in a virtual queue\b", re.I),
 )
-_DETAIL_PLACEHOLDER_TITLE_PATTERNS = (
-    *_DETAIL_PLACEHOLDER_TITLE_PATTERNS,
-    *_DETAIL_WAF_QUEUE_TITLE_PATTERNS,
-)
+_DETAIL_PLACEHOLDER_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (*_DETAIL_BASE_PLACEHOLDER_TITLE_PATTERNS, *_DETAIL_WAF_QUEUE_TITLE_PATTERNS)
 
 
 def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
@@ -106,10 +101,7 @@ def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
         )
     )
     values: list[str] = []
-    for raw_value in (
-        record.get("image_url"),
-        *additional_images,
-    ):
+    for raw_value in (record.get("image_url"), *additional_images):
         image = text_or_none(raw_value)
         if image:
             values.append(image)
@@ -293,8 +285,18 @@ def _detail_scalar_value_is_placeholder(value: object) -> bool:
     return cleaned in {"category", "default title", "uncategorized"}
 
 
-def _clean_detail_category_path(value: object, *, title: object, sku: object, page_url: str = "") -> str:
-    parts = [clean_text(p) for p in re.split(r"\s*(?:>|/|›|»|→|\|)\s*", clean_text(value)) if clean_text(p)]
+def _clean_detail_category_path(
+    value: object,
+    *,
+    title: object,
+    sku: object,
+    page_url: str = "",
+) -> str:
+    parts = [
+        clean_text(part)
+        for part in re.split(r"\s*(?:>|/|›|»|→|\|)\s*", clean_text(value))
+        if clean_text(part)
+    ]
     if not parts:
         return ""
     ui_tokens = {
@@ -317,7 +319,9 @@ def _clean_detail_category_path(value: object, *, title: object, sku: object, pa
         ):
             continue
         cleaned_parts.append(cleaned)
-    while cleaned_parts and detail_breadcrumb_is_root_label(cleaned_parts[0], page_url=page_url):
+    while cleaned_parts and detail_breadcrumb_is_root_label(
+        cleaned_parts[0], page_url=page_url
+    ):
         cleaned_parts.pop(0)
 
     identity_values = [clean_text(title), clean_text(sku)]
@@ -351,7 +355,7 @@ def _detail_title_looks_like_placeholder(title: str) -> bool:
     if not normalized:
         return False
     lowered = normalized.lower()
-    if lowered in {"404", "not found"}:
+    if lowered in {"404"}:
         return True
     return any(
         pattern.search(normalized) for pattern in _DETAIL_PLACEHOLDER_TITLE_PATTERNS
@@ -651,10 +655,10 @@ def _drop_invalid_detail_discounts(record: dict[str, Any]) -> None:
     if discount_amount <= 0:
         record.pop("discount_amount", None)
         return
-    if price is not None and discount_amount > max(price, 0):
+    if price is not None and discount_amount > price:
         record.pop("discount_amount", None)
         return
-    if original_price is not None and discount_amount > max(original_price, 0):
+    if original_price is not None and discount_amount > original_price:
         record.pop("discount_amount", None)
 
 

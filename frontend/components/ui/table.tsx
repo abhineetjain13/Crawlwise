@@ -61,7 +61,7 @@ export function TableHead({
   return (
     <th
       className={cn(
-        'text-secondary h-8 px-4 text-left align-middle text-xs font-semibold tracking-wide uppercase [font-family:var(--font-primary-family)]',
+        'text-secondary h-8 px-4 text-left align-middle [font-family:var(--font-primary-family)] text-xs font-semibold tracking-wide uppercase',
         className,
       )}
     >
@@ -78,7 +78,7 @@ export function TableCell({
   return (
     <td
       className={cn(
-        'text-primary px-4 py-2 align-middle leading-normal font-normal [font-family:var(--font-primary-family)] text-[length:var(--text-sm)]',
+        'text-primary px-4 py-2 align-middle [font-family:var(--font-primary-family)] text-[length:var(--text-sm)] leading-normal font-normal',
         className,
       )}
       colSpan={colSpan}

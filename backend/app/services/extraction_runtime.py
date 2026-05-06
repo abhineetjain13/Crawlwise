@@ -42,6 +42,7 @@ from app.services.field_value_core import (
     clean_text,
     coerce_text,
     direct_record_to_surface_fields,
+    enforce_flat_variant_public_contract,
     finalize_record,
     is_title_noise,
     surface_alias_lookup,
@@ -231,6 +232,7 @@ def _postprocess_detail_records(
             page_url=page_url,
             requested_page_url=requested_page_url,
         )
+        enforce_flat_variant_public_contract(record, page_url=page_url)
         backfill_detail_price_from_html(record, html=html)
         drop_low_signal_zero_detail_price(record)
         rows.append(record)

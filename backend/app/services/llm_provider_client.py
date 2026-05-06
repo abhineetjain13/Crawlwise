@@ -23,27 +23,88 @@ from app.services.llm_config_service import provider_env_key
 JSON_CONTENT_TYPE = "application/json"
 _groq_client: httpx.AsyncClient | None = None
 _groq_client_timeout: float | None = None
+_groq_client_lock = asyncio.Lock()
+_anthropic_client: httpx.AsyncClient | None = None
+_anthropic_client_timeout: float | None = None
+_nvidia_client: httpx.AsyncClient | None = None
+_nvidia_client_timeout: float | None = None
+_aws_client: httpx.AsyncClient | None = None
+_aws_client_timeout: float | None = None
 
 
 async def close_llm_provider_clients() -> None:
+    """Close shared provider clients on shutdown after all request handlers finish."""
     global _groq_client, _groq_client_timeout
-    if _groq_client is not None:
-        await _groq_client.aclose()
+    global _anthropic_client, _anthropic_client_timeout
+    global _nvidia_client, _nvidia_client_timeout
+    global _aws_client, _aws_client_timeout
+    for client in (_groq_client, _anthropic_client, _nvidia_client, _aws_client):
+        if client is not None and not client.is_closed:
+            await client.aclose()
     _groq_client = None
     _groq_client_timeout = None
+    _anthropic_client = None
+    _anthropic_client_timeout = None
+    _nvidia_client = None
+    _nvidia_client_timeout = None
+    _aws_client = None
+    _aws_client_timeout = None
 
 
-def _shared_groq_client() -> httpx.AsyncClient:
+async def _refresh_shared_client(
+    client: httpx.AsyncClient | None,
+    client_timeout: float | None,
+) -> tuple[httpx.AsyncClient, float]:
+    timeout = float(llm_runtime_settings.provider_timeout_seconds)
+    if client is None or client.is_closed or client_timeout != timeout:
+        if client is not None and not client.is_closed:
+            await client.aclose()
+        client = httpx.AsyncClient(timeout=timeout)
+        client_timeout = timeout
+    return client, client_timeout
+
+
+async def _shared_groq_client() -> httpx.AsyncClient:
     global _groq_client, _groq_client_timeout
     timeout = float(llm_runtime_settings.provider_timeout_seconds)
-    if (
-        _groq_client is None
-        or _groq_client.is_closed
-        or _groq_client_timeout != timeout
-    ):
-        _groq_client = httpx.AsyncClient(timeout=timeout)
-        _groq_client_timeout = timeout
-    return _groq_client
+    async with _groq_client_lock:
+        if (
+            _groq_client is None
+            or _groq_client.is_closed
+            or _groq_client_timeout != timeout
+        ):
+            if _groq_client is not None and not _groq_client.is_closed:
+                await _groq_client.aclose()
+            _groq_client = httpx.AsyncClient(timeout=timeout)
+            _groq_client_timeout = timeout
+        return _groq_client
+
+
+async def _shared_anthropic_client() -> httpx.AsyncClient:
+    global _anthropic_client, _anthropic_client_timeout
+    _anthropic_client, _anthropic_client_timeout = await _refresh_shared_client(
+        _anthropic_client,
+        _anthropic_client_timeout,
+    )
+    return _anthropic_client
+
+
+async def _shared_nvidia_client() -> httpx.AsyncClient:
+    global _nvidia_client, _nvidia_client_timeout
+    _nvidia_client, _nvidia_client_timeout = await _refresh_shared_client(
+        _nvidia_client,
+        _nvidia_client_timeout,
+    )
+    return _nvidia_client
+
+
+async def _shared_aws_client() -> httpx.AsyncClient:
+    global _aws_client, _aws_client_timeout
+    _aws_client, _aws_client_timeout = await _refresh_shared_client(
+        _aws_client,
+        _aws_client_timeout,
+    )
+    return _aws_client
 
 
 async def call_provider(
@@ -169,7 +230,8 @@ async def _call_groq(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    response = await _shared_groq_client().post(
+    client = await _shared_groq_client()
+    response = await client.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -196,24 +258,22 @@ async def _call_anthropic(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(
-        timeout=llm_runtime_settings.provider_timeout_seconds
-    ) as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": JSON_CONTENT_TYPE,
-            },
-            json={
-                "model": model,
-                "max_tokens": llm_runtime_settings.anthropic_max_tokens,
-                "temperature": llm_runtime_settings.anthropic_temperature,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_prompt}],
-            },
-        )
+    client = await _shared_anthropic_client()
+    response = await client.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": JSON_CONTENT_TYPE,
+        },
+        json={
+            "model": model,
+            "max_tokens": llm_runtime_settings.anthropic_max_tokens,
+            "temperature": llm_runtime_settings.anthropic_temperature,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        },
+    )
     if response.status_code != 200:
         return _http_error(response), 0, 0
     data = _safe_json_response(response)
@@ -240,25 +300,23 @@ async def _call_nvidia(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(
-        timeout=llm_runtime_settings.provider_timeout_seconds
-    ) as client:
-        response = await client.post(
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": JSON_CONTENT_TYPE,
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "max_tokens": llm_runtime_settings.nvidia_max_tokens,
-                "temperature": llm_runtime_settings.nvidia_temperature,
-            },
-        )
+    client = await _shared_nvidia_client()
+    response = await client.post(
+        "https://integrate.api.nvidia.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": JSON_CONTENT_TYPE,
+        },
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": llm_runtime_settings.nvidia_max_tokens,
+            "temperature": llm_runtime_settings.nvidia_temperature,
+        },
+    )
     if response.status_code != 200:
         return _http_error(response), 0, 0
     return _extract_chat_completion_payload(_safe_json_response(response))
@@ -275,22 +333,20 @@ async def _call_aws(
     parsed_proxy_url = urlparse(proxy_url)
     if parsed_proxy_url.scheme not in {"http", "https"} or not parsed_proxy_url.netloc:
         return f"{ERROR_PREFIX} Invalid AWS proxy URL", 0, 0
-    async with httpx.AsyncClient(
-        timeout=llm_runtime_settings.provider_timeout_seconds
-    ) as client:
-        response = await client.post(
-            proxy_url,
-            headers={"Content-Type": JSON_CONTENT_TYPE},
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "max_tokens": llm_runtime_settings.aws_max_tokens,
-                "temperature": llm_runtime_settings.aws_temperature,
-            },
-        )
+    client = await _shared_aws_client()
+    response = await client.post(
+        proxy_url,
+        headers={"Content-Type": JSON_CONTENT_TYPE},
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": llm_runtime_settings.aws_max_tokens,
+            "temperature": llm_runtime_settings.aws_temperature,
+        },
+    )
     if response.status_code != 200:
         return _http_error(response), 0, 0
     return _extract_chat_completion_payload(_safe_json_response(response))

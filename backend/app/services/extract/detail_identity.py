@@ -41,6 +41,13 @@ _DETAIL_URL_PLACEHOLDER_SEGMENTS = frozenset(
         if str(value).strip()
     }
 )
+_LISTING_CATEGORY_PATH_SEGMENTS = frozenset(
+    {
+        str(value).strip().lower()
+        for value in tuple(LISTING_CATEGORY_PATH_SEGMENTS or ())
+        if str(value).strip()
+    }
+)
 
 
 def _path_segment_tokens(value: str) -> set[str]:
@@ -61,7 +68,15 @@ def _listing_url_has_category_path_segment(path: str) -> bool:
         for segment in str(path or "").split("/")
         if segment.strip()
     ]
-    return bool(set(segments) & set(LISTING_CATEGORY_PATH_SEGMENTS))
+    for segment in segments:
+        segment_tokens = {
+            token for token in re.split(r"[^a-z0-9]+", segment) if token
+        }
+        if segment in _LISTING_CATEGORY_PATH_SEGMENTS:
+            return True
+        if _LISTING_CATEGORY_PATH_SEGMENTS.intersection(segment_tokens):
+            return True
+    return False
 
 
 def listing_url_is_structural(url: str, page_url: str) -> bool:

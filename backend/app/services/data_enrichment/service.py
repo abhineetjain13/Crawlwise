@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import re
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -278,7 +279,10 @@ async def _enrich_product(
     data = dict(record.data or {})
     deterministic = _build_deterministic_enrichment(data, source_url=record.source_url)
     category_match = deterministic.pop("_taxonomy_match", None)
-    category_candidates = deterministic.pop("_taxonomy_candidates", None)
+    raw_category_candidates = deterministic.pop("_taxonomy_candidates", None)
+    category_candidates = [
+        item for item in _object_list(raw_category_candidates) if isinstance(item, dict)
+    ]
     product_attributes = deterministic.pop("_product_attributes", None)
     for key, value in deterministic.items():
         setattr(product, key, value)
@@ -422,10 +426,12 @@ async def _run_llm_enrichment(
         }
     if isinstance(result.payload, dict):
         payload = result.payload
-    elif hasattr(result.payload, "model_dump"):
-        payload = dict(result.payload.model_dump(exclude_none=True))
     else:
-        payload = {}
+        model_dump = getattr(result.payload, "model_dump", None)
+        if callable(model_dump):
+            payload = dict(model_dump(exclude_none=True))
+        else:
+            payload = {}
     applied_fields = _apply_llm_payload(product, payload)
     return {
         "applied": bool(applied_fields),
@@ -766,7 +772,9 @@ def _strip_material_context_noise(value: str) -> str:
     return clean_text(cleaned)
 
 
-def _normalize_from_terms(values: list[object], terms: dict[str, object]) -> str | None:
+def _normalize_from_terms(
+    values: Sequence[object], terms: dict[str, object]
+) -> str | None:
     for value in values:
         lowered = clean_text(value).casefold()
         if not lowered:
@@ -1090,7 +1098,7 @@ def _candidate_values(data: dict[str, object], *keys: str) -> list[object]:
 
 
 def _targeted_candidate_values(
-    data: dict[str, object], target_keys: set[str], *keys: str
+    data: dict[str, object], target_keys: Collection[str], *keys: str
 ) -> list[object]:
     # Source and target keys come from config data-enrichment candidate maps.
     normalized_targets = {str(key).casefold() for key in target_keys}

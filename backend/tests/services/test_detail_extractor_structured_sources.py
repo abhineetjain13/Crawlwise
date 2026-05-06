@@ -14,8 +14,10 @@ from app.services.detail_extractor import (
 )
 from app.services.extract.detail_price_extractor import (
     detail_currency_hint_is_host_level,
+    reconcile_parent_price_against_variant_range,
     reconcile_detail_currency_with_url,
 )
+from app.services.extract import detail_raw_signals
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
 from tests.fixtures.loader import read_optional_artifact_text
@@ -620,6 +622,50 @@ def test_extract_ecommerce_detail_dom_breadcrumb_drops_ui_tokens_and_title_suffi
     assert rows[0]["category"] == "Men > Shoes"
 
 
+def test_breadcrumb_noise_icon_regex_logs_once_when_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(detail_raw_signals, "_BREADCRUMB_NOISE_ICON_PATTERNS", (r"[",))
+    detail_raw_signals._compiled_breadcrumb_noise_icon_patterns.cache_clear()
+    caplog.set_level("WARNING")
+    soup = BeautifulSoup(
+        """
+        <nav class="breadcrumbs">
+          <a>Home</a>
+          <a>Women</a>
+          <a>Dresses</a>
+          <span>Trail Dress</span>
+        </nav>
+        """,
+        "html.parser",
+    )
+
+    try:
+        labels = detail_raw_signals.breadcrumb_labels_from_dom(
+            soup,
+            current_title="Trail Dress",
+        )
+        detail_raw_signals.breadcrumb_labels_from_dom(
+            soup,
+            current_title="Trail Dress",
+        )
+    finally:
+        detail_raw_signals._compiled_breadcrumb_noise_icon_patterns.cache_clear()
+
+    assert labels == ["Women", "Dresses"]
+    assert (
+        len(
+            [
+                record
+                for record in caplog.records
+                if record.message == "Invalid breadcrumb noise icon regex"
+            ]
+        )
+        == 1
+    )
+
+
 def test_extract_ecommerce_detail_json_ld_breadcrumb_beats_noisy_dom() -> None:
     html = """
     <html>
@@ -658,6 +704,22 @@ def test_extract_ecommerce_detail_json_ld_breadcrumb_beats_noisy_dom() -> None:
 
     assert len(rows) == 1
     assert rows[0]["category"] == "Women > Dresses"
+
+
+def test_reconcile_parent_price_against_variant_range_repairs_lower_parent_price() -> None:
+    record = {
+        "price": "89.00",
+        "variants": [
+            {"price": "310.00", "currency": "USD"},
+            {"price": "310.00", "currency": "USD"},
+        ],
+        "_field_sources": {"price": ["dom_text"]},
+    }
+
+    reconcile_parent_price_against_variant_range(record)
+
+    assert record["price"] == "310.00"
+    assert "variant_price_range" in record["_field_sources"]["price"]
 
 
 def test_extract_ecommerce_detail_category_drops_terminal_sku() -> None:
@@ -2182,7 +2244,6 @@ def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fall
     )
 
     assert len(rows) == 1
-    record = rows[0]
 
 
 def test_extract_ecommerce_detail_backfills_selected_variant_price_from_record_when_dom_variants_are_sparse() -> None:
@@ -2267,7 +2328,6 @@ def test_extract_ecommerce_detail_prunes_single_value_marketing_axes_from_final_
     )
 
     assert len(rows) == 1
-    record = rows[0]
 
 
 def test_extract_ecommerce_detail_backfills_missing_variant_price_from_ld_json_price() -> None:
@@ -2358,7 +2418,6 @@ def test_extract_ecommerce_detail_ignores_generic_selector_axis_names_without_se
     )
 
     assert len(rows) == 1
-    record = rows[0]
 
 
 def test_extract_ecommerce_detail_infers_unlabeled_select_variants_and_ignores_translate_widget() -> None:
@@ -4322,7 +4381,7 @@ def test_raw_json_detail_postprocess_drops_costco_shell_long_text_labels() -> No
 
 
 def test_extract_detail_infers_costco_textual_variant_sizes_from_titles() -> None:
-    record = build_detail_record(
+    build_detail_record(
         "<html><body><main><h1>Sleep Number Ultimate 12&quot; Mattress</h1></main></body></html>",
         "https://www.costco.com/p/-/sleep-number-ultimate-12-mattress/4201005351?langId=-1",
         "ecommerce_detail",
@@ -4422,10 +4481,7 @@ def test_build_detail_record_backfills_shared_variant_image_and_availability() -
         ],
     )
 
-    assert (
-        record["variants"][0]["image_url"]
-        == "https://res.cloudinary.com/ssenseweb/image/upload/item.jpg"
-    )
+    assert "image_url" not in record["variants"][0]
     assert record["variants"][1]["availability"] == "out_of_stock"
 
 
@@ -4680,7 +4736,8 @@ def test_extract_detail_backfills_current_price_variants_and_strips_unavailable_
     )[0]
 
     assert record["price"] == "100.00"
-    assert record["variants"][0]["price"] == "100.00"
+    assert record["variants"][0]["size"] == "12.5"
+    assert "price" not in record["variants"][0]
 
 
 def test_extract_detail_rejects_asos_mixed_product_identity_record() -> None:
@@ -4777,6 +4834,209 @@ def test_build_detail_record_prefers_dom_description_over_truncated_og_copy() ->
 
     assert record["description"].endswith("restore deeply discharged batteries.")
     assert record["description"].endswith(("...", "…")) is False
+
+
+def test_build_detail_record_prefers_js_state_html_description_over_truncated_json_ld() -> (
+    None
+):
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Technics SL-1200MK7",
+          "description": "Item ships out in 15 working days.The SL-1200 – A New Chapter BeginsAs the go-to choice o...",
+          "brand": "Technics",
+          "image": "https://example.com/images/turntable.jpg",
+          "offers": {
+            "@type": "Offer",
+            "price": "175000",
+            "priceCurrency": "INR"
+          }
+        }
+        </script>
+        <script>
+          var BspdCurrentProduct = {
+            "id": 6569597796470,
+            "title": "Technics SL-1200MK7",
+            "handle": "technics-sl-1200mk7",
+            "description": "<h3><em><span>Item ships out in 15 working days.</span></em></h3><h2>The SL-1200 – A New Chapter Begins</h2><p>As the go-to choice of DJs the world over, the SL-1200 Series has long been a dominant presence on the global music scene. Today the brand continues to set the industry standard as the direct drive turntable par excellence.</p><h2>Features</h2><p>Coreless Direct-Drive Motor</p>",
+            "vendor": "Technics",
+            "price": "175000",
+            "available": true,
+            "variants": [
+              {
+                "id": 42982754549878,
+                "sku": "TT-TS-SL1200MK7-SILVER-N",
+                "available": true,
+                "price": "175000"
+              }
+            ],
+            "images": ["https://example.com/images/turntable.jpg"]
+          };
+        </script>
+      </head>
+      <body>
+        <main><h1>Technics SL-1200MK7</h1></main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://www.therevolverclub.com/products/technics-sl-1200mk7",
+        "ecommerce_detail",
+        None,
+    )
+
+    assert record["description"] == (
+        "Item ships out in 15 working days. The SL-1200 – A New Chapter Begins "
+        "As the go-to choice of DJs the world over, the SL-1200 Series has long "
+        "been a dominant presence on the global music scene. Today the brand "
+        "continues to set the industry standard as the direct drive turntable par excellence."
+    )
+    assert record["_field_sources"]["description"] == ["json_ld", "js_state"]
+    assert record["features"] == ["Coreless Direct-Drive Motor"]
+
+
+def test_extract_ecommerce_detail_prefers_displayvalue_for_variant_sizes() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Aeron Chair</h1>
+          <fieldset class="attr-group-items">
+            <input
+              type="radio"
+              id="size-size_a_small"
+              name="size"
+              data-attr-displayvalue="Size A - Small"
+              value="https://store.hermanmiller.com/variation?dwvar_size=size_a_small"
+            />
+            <label for="size-size_a_small">
+              <span class="sr-only">View this product in: Size</span>
+              <span class="size-value swatch-text swatch-value">
+                Size A - Small
+                <svg aria-labelledby="disable-danger" role="img">
+                  <title id="disable-danger">disable-danger</title>
+                  <use xlink:href="#disable-danger"></use>
+                </svg>
+              </span>
+            </label>
+            <input
+              type="radio"
+              id="size-size_b_medium"
+              name="size"
+              data-attr-displayvalue="Size B - Medium"
+              value="https://store.hermanmiller.com/variation?dwvar_size=size_b_medium"
+              checked
+            />
+            <label for="size-size_b_medium">
+              <span class="sr-only">View this product in: Size</span>
+              <span class="size-value swatch-text swatch-value">
+                Size B - Medium
+                <svg aria-labelledby="disable-danger" role="img">
+                  <title id="disable-danger-2">disable-danger</title>
+                  <use xlink:href="#disable-danger"></use>
+                </svg>
+              </span>
+            </label>
+          </fieldset>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://store.hermanmiller.com/office-chairs-aeron/aeron-chair/100073872.html?lang=en_US",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["size"],
+    )
+
+    assert rows
+    assert [variant["size"] for variant in rows[0]["variants"]] == [
+        "Size A - Small",
+        "Size B - Medium",
+    ]
+    assert "View this product in" not in json.dumps(rows[0]["variants"])
+    assert "disable-danger" not in json.dumps(rows[0]["variants"])
+
+
+def test_extract_ecommerce_detail_ignores_embedded_json_feature_flags_and_size_rows() -> (
+    None
+):
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Classic Four Prong Solitaire Engagement Ring in Platinum",
+          "description": "Let your diamond shine brilliantly in this classic platinum four-prong solitaire engagement ring.",
+          "image": "https://example.com/images/ring.jpg",
+          "offers": {
+            "@type": "Offer",
+            "price": "1025",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+        <script type="application/json">
+        {
+          "env": "green",
+          "appData": {
+            "jaData": {
+              "features": {
+                "activeCampaign": "Mday26FR",
+                "essentialGridCampaign": "QualityNValue",
+                "payPalEnvironment": "prod",
+                "topMesseg": "Happy New Year!"
+              }
+            }
+          },
+          "ssrPageData": {
+            "ringSize": {
+              "sizesInfo": [
+                {
+                  "size": 3,
+                  "isAvailable": true,
+                  "shippingDate": "2026-05-21",
+                  "specialDays": {"byValentines": true}
+                },
+                {
+                  "size": 3.5,
+                  "isAvailable": true,
+                  "shippingDate": "2026-05-21",
+                  "specialDays": {"byValentines": true}
+                }
+              ]
+            }
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main><h1>Classic Four Prong Solitaire Engagement Ring in Platinum</h1></main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.bluenile.com/engagement-rings/design-your-own-ring/classic-four-prong-solitaire-engagement-ring-in-platinum-item-194156",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert rows
+    record = rows[0]
+    assert "features" not in record
+    assert "size" not in record
 
 
 def test_normalize_variant_record_infers_single_variant_color_from_title_slug() -> None:

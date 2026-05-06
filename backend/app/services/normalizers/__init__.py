@@ -99,7 +99,7 @@ def normalize_decimal_price(
     if not text:
         return None
     if re.match(
-        rf"^-\s*(?:[$€£¥₹]|\b(?:{_CURRENCY_CODE_CONTEXT_PATTERN})\b)?\s*\d",
+        rf"^-\s*(?:[$€£¥₹]|rs\.?|\b(?:{_CURRENCY_CODE_CONTEXT_PATTERN}))?\s*\d",
         text,
         re.I,
     ):

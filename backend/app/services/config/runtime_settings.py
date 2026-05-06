@@ -369,6 +369,8 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError(
                 "proxy_failure_cooldown_max_ms must be >= proxy_failure_cooldown_base_ms"
             )
+        self.min_max_pages = int(self.min_max_pages)
+        self.max_max_pages = int(self.max_max_pages)
         if self.min_max_pages < 1:
             raise ValueError("min_max_pages must be >= 1")
         if self.max_max_pages < self.min_max_pages:
@@ -400,13 +402,16 @@ class CrawlerRuntimeSettings(BaseSettings):
             "browser_behavior_scroll_min_px",
             self.browser_behavior_scroll_min_px,
         )
-        self.browser_behavior_scroll_max_px = max(
-            self.browser_behavior_scroll_min_px,
-            int(self.browser_behavior_scroll_max_px),
-        )
+        browser_behavior_scroll_min_px = int(self.browser_behavior_scroll_min_px)
+        self.browser_behavior_scroll_min_px = browser_behavior_scroll_min_px
+        browser_behavior_scroll_max_px = int(self.browser_behavior_scroll_max_px)
         _require_non_negative(
             "browser_behavior_scroll_max_px",
-            self.browser_behavior_scroll_max_px,
+            browser_behavior_scroll_max_px,
+        )
+        self.browser_behavior_scroll_max_px = max(
+            browser_behavior_scroll_min_px,
+            browser_behavior_scroll_max_px,
         )
         _require_non_negative(
             "browser_behavior_pause_min_ms",

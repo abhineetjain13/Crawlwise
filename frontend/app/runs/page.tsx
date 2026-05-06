@@ -21,7 +21,7 @@ import { api } from '../../lib/api';
 import type { CrawlRun, RunStatus } from '../../lib/api/types';
 import { formatRunsDate as formatDate } from '../../lib/format/date';
 import { getDomain } from '../../lib/format/domain';
-import { runExecutionLabel, runExecutionTone } from '../../lib/ui/status';
+import { isSubduedStatus, runExecutionLabel, runExecutionTone } from '../../lib/ui/status';
 import {
   Table,
   TableBody,
@@ -101,7 +101,7 @@ function RunRow({
       <TableCell>
         <Badge
           tone={runExecutionTone(run.status, run.result_summary)}
-          flat={run.status === 'completed' || run.status === 'killed'}
+          flat={isSubduedStatus(run.status)}
         >
           {runExecutionLabel(run.status, run.result_summary)}
         </Badge>
@@ -288,8 +288,7 @@ export default function RunsPage() {
           }
           return (
             <Table
-              // 260px = page header + filters bar + table chrome + footer padding
-              wrapperClassName="max-h-[calc(100vh-260px)]"
+              wrapperClassName="[--runs-table-offset:260px] max-h-[calc(100vh_-_var(--runs-table-offset))]"
               className="compact-data-table table-fixed"
             >
               <TableHeader>

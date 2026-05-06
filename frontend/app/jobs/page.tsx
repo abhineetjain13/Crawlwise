@@ -92,7 +92,8 @@ export default function JobsPage() {
         ) : jobs.length ? (
           <div className="surface-muted overflow-x-auto rounded-[var(--radius-md)] border">
             <Table
-              wrapperClassName="max-h-[calc(100vh-260px)]"
+              // 260px accounts for page header, navigation, filters, and padding.
+              wrapperClassName="max-h-[max(200px,calc(100vh-260px))]"
               className="compact-data-table min-w-[960px] table-fixed"
             >
               <colgroup>
@@ -167,7 +168,11 @@ export default function JobsPage() {
 
 function StatusPill({ status }: Readonly<{ status: ActiveJob['status'] }>) {
   const tone = statusTone(status);
-  return <Badge tone={tone} flat={status === 'killed'}>{humanizeStatus(status)}</Badge>;
+  return (
+    <Badge tone={tone} flat={status === 'killed'}>
+      {humanizeStatus(status)}
+    </Badge>
+  );
 }
 
 function ActionButton({

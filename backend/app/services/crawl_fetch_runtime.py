@@ -1148,10 +1148,18 @@ async def _sleep_before_retry(attempt: int) -> None:
     try:
         raw_base_ms = int(crawler_runtime_settings.http_retry_backoff_base_ms or 0)
     except (TypeError, ValueError):
+        logger.warning(
+            "Invalid http_retry_backoff_base_ms %r, defaulting to 0",
+            crawler_runtime_settings.http_retry_backoff_base_ms,
+        )
         raw_base_ms = 0
     try:
         raw_max_ms = int(crawler_runtime_settings.http_retry_backoff_max_ms or 0)
     except (TypeError, ValueError):
+        logger.warning(
+            "Invalid http_retry_backoff_max_ms %r, defaulting to 0",
+            crawler_runtime_settings.http_retry_backoff_max_ms,
+        )
         raw_max_ms = 0
     base_ms = max(0, raw_base_ms)
     max_ms = max(base_ms, raw_max_ms)

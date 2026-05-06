@@ -115,6 +115,7 @@ _detail_noise_prefixes = tuple(
 )
 _long_text_ui_tail_min_product_words = int(DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS)
 _guide_glossary_heading_min_hits = int(DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS)
+_bracket_prose_min_words = int(DETAIL_BRACKET_PROSE_MIN_WORDS)
 artifact_price_values = frozenset(
     clean_text(v).lower()
     for v in tuple(DETAIL_ARTIFACT_PRICE_VALUES or ())
@@ -423,7 +424,7 @@ def _strip_bracket_artifact_noise(text: str) -> str:
             if not cleaned:
                 continue
             word_count = len(cleaned.split())
-            if word_count >= int(DETAIL_BRACKET_PROSE_MIN_WORDS):
+            if word_count >= _bracket_prose_min_words:
                 candidates.append((word_count, index, cleaned))
         if candidates:
             break

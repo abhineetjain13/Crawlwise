@@ -31,7 +31,6 @@ from app.services.extraction_context import (
 )
 from app.services.structured_sources import harvest_js_state_objects
 from app.services.field_value_core import (
-    LONG_TEXT_FIELDS,
     STRUCTURED_OBJECT_FIELDS,
     STRUCTURED_OBJECT_LIST_FIELDS,
     absolute_url,
@@ -319,6 +318,18 @@ def _ordered_candidates_for_field(
     return [(source, value) for _, _, source, value in indexed_entries]
 
 
+def _group_ordered_candidates_by_source(
+    ordered_candidates: list[tuple[str | None, object]],
+) -> list[tuple[str | None, list[object]]]:
+    grouped: list[tuple[str | None, list[object]]] = []
+    for source, value in ordered_candidates:
+        if grouped and grouped[-1][0] == source:
+            grouped[-1][1].append(value)
+            continue
+        grouped.append((source, [value]))
+    return grouped
+
+
 def _selector_self_heal_config(
     extraction_runtime_snapshot: dict[str, object] | None,
 ) -> dict[str, object]:
@@ -405,10 +416,25 @@ def _materialize_record(
             candidates,
             candidate_sources,
         )
-        selected_source = ordered_candidates[0][0] if ordered_candidates else None
-        winning_values = [
-            value for source, value in ordered_candidates if source == selected_source
-        ]
+        grouped_candidates = _group_ordered_candidates_by_source(ordered_candidates)
+        selected_source = grouped_candidates[0][0] if grouped_candidates else None
+        winning_values = grouped_candidates[0][1] if grouped_candidates else []
+        if field_name in DETAIL_LONG_TEXT_RANK_FIELDS and grouped_candidates:
+            selected_long_text = finalize_candidate_value(field_name, winning_values)
+            if _detail_long_text_value_looks_truncated(selected_long_text):
+                for candidate_source, candidate_values in grouped_candidates[1:]:
+                    candidate_long_text = finalize_candidate_value(
+                        field_name, candidate_values
+                    )
+                    if (
+                        candidate_long_text not in (None, "", [], {})
+                        and not _detail_long_text_value_looks_truncated(
+                            candidate_long_text
+                        )
+                    ):
+                        selected_source = candidate_source
+                        winning_values = candidate_values
+                        break
         finalized = (
             finalize_candidate_value(
                 field_name, [value for _, value in ordered_candidates]

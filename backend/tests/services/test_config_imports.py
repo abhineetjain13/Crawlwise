@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib
 import json
+from collections import Counter
 from pathlib import Path
 
-from app.models.crawl_settings import CrawlRunSettings
+import pytest
+
 from app.core import migrations
+from app.models.crawl_settings import CrawlRunSettings
 from app.schemas.crawl import DomainRunAcquisitionContractSuccess
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.config._export_data import (
@@ -18,8 +21,6 @@ from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.runtime_settings import CrawlerRuntimeSettings
 from app.services.exceptions import CrawlerConfigurationError
 from app.services.platform_policy import resolve_platform_runtime_policy
-from collections import Counter
-import pytest
 
 
 def test_static_config_exports_remain_import_stable() -> None:
@@ -97,6 +98,8 @@ def test_extraction_rules_export_keys_cover_module_references() -> None:
     assert "LISTING_EDITORIAL_URL_TOKENS" in extraction_rules.__all__
     assert "LISTING_EDITORIAL_PATH_SEGMENTS" in extraction_rules.__all__
     assert set(exports) <= set(extraction_rules.__all__)
+    assert "SOURCE_TIERS" in vars(extraction_rules)
+    assert extraction_rules.AVAILABILITY_OUT_OF_STOCK in extraction_rules.NOISY_PRODUCT_ATTRIBUTE_KEYS
 
 
 def test_extraction_rules_exports_document_link_patterns_via___all__() -> None:
@@ -145,6 +148,41 @@ def test_runtime_settings_allow_zero_accessibility_snapshot_timeout() -> None:
     settings = CrawlerRuntimeSettings(browser_accessibility_snapshot_timeout_seconds=0)
 
     assert settings.browser_accessibility_snapshot_timeout_seconds == 0
+
+
+def test_runtime_settings_reject_invalid_page_bounds() -> None:
+    with pytest.raises(ValueError, match="min_max_pages must be >= 1"):
+        CrawlerRuntimeSettings(min_max_pages=-3)
+
+    with pytest.raises(ValueError, match="max_max_pages must be >= min_max_pages"):
+        CrawlerRuntimeSettings(min_max_pages=5, max_max_pages=4)
+
+
+def test_runtime_settings_normalizes_scroll_bounds() -> None:
+    settings = CrawlerRuntimeSettings(
+        browser_behavior_scroll_min_px=200,
+        browser_behavior_scroll_max_px=100,
+    )
+
+    assert settings.browser_behavior_scroll_min_px == 200
+    assert settings.browser_behavior_scroll_max_px == 200
+
+
+def test_selectors_export_keeps_keep_worthy_tags_in_static_payload() -> None:
+    selectors = importlib.import_module("app.services.config.selectors")
+    exports = load_export_data(
+        str(
+            Path(__file__).parents[2]
+            / "app"
+            / "services"
+            / "config"
+            / "selectors.exports.json"
+        )
+    )
+
+    assert exports["SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS"] == (
+        selectors.SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS
+    )
 
 
 def test_crawl_run_settings_preserves_modeled_acquisition_contract_success() -> None:

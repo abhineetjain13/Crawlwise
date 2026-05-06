@@ -55,6 +55,9 @@ def test_normalize_decimal_price_rejects_negative_values() -> None:
     assert normalize_decimal_price("-9.99") is None
     assert normalize_decimal_price("$-1") is None
     assert normalize_decimal_price("-$1") is None
+    assert normalize_decimal_price("-USD100") is None
+
+
 def test_repair_ecommerce_detail_reconciles_parent_price_against_unanimous_variants() -> None:
     # Regression: gemini audit DQ-7 (Selfridges) — parent price 190 with both
     # variants reporting 310 is a stale/unrelated DOM scrape. The reconciler

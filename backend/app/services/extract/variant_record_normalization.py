@@ -7,8 +7,10 @@ from urllib.parse import unquote, urlparse
 from app.services.config.extraction_rules import (
     CURRENCY_CODES,
     DEFAULT_DETAIL_MAX_VARIANT_ROWS,
+    FALLBACK_MAX_VARIANT_ROWS,
     GENDER_ARTIFACT_PATTERN,
     GENDER_KEYWORD_TOKENS,
+    GENDER_POSSESSIVE_PATTERN,
     VARIANT_COLOR_HINT_WORDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_PLACEHOLDER_PREFIXES,
@@ -17,11 +19,13 @@ from app.services.config.extraction_rules import (
     VARIANT_SIZE_VALUE_EXTRACT_PATTERNS,
     VARIANT_AXIS_ALLOWED_SINGLE_TOKENS,
     STANDARD_SIZE_VALUES,
+    VARIANT_TITLE_STOPWORDS,
 )
 from app.services.config.field_mappings import FLAT_VARIANT_KEYS
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import (
     clean_text,
+    enforce_flat_variant_public_contract,
     extract_currency_code,
     flatten_variants_for_public_output,
     text_or_none,
@@ -74,27 +78,25 @@ _GENDER_ARTIFACT_RE = re.compile(
     _GENDER_ARTIFACT_PATTERN.format(candidate=r"[a-z0-9.]+"),
     re.I,
 ) if _GENDER_ARTIFACT_PATTERN else None
-_GENDER_POSSESSIVE_RE = re.compile(r"\b(?:men|women|boys|girls)['’]?s\b", re.I)
+_GENDER_POSSESSIVE_RE = re.compile(str(GENDER_POSSESSIVE_PATTERN or ""), re.I)
 _STANDARD_SIZE_VALUES = frozenset(str(value).lower() for value in tuple(STANDARD_SIZE_VALUES or ()))
-
-_LEGACY_VARIANT_KEYS = ("selected_variant", "variant_axes", "available_sizes")
 _VARIANT_TITLE_STOPWORDS = frozenset(
-    {"and", "for", "the", "with", "size", "color", "colour", "variant"}
+    clean_text(token).lower()
+    for token in tuple(VARIANT_TITLE_STOPWORDS or ())
+    if clean_text(token)
 )
+_GENDER_KEYWORD_TOKENS_SET = frozenset(
+    clean_text(token).lower()
+    for token in tuple(GENDER_KEYWORD_TOKENS or ())
+    if clean_text(token)
+)
+_LEGACY_VARIANT_KEYS = ("selected_variant", "variant_axes", "available_sizes")
 
 
 def _variant_has_axis_value(variant: dict[str, Any]) -> bool:
     return any(
         clean_text(variant.get(axis))
         for axis in ("size", "color", *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS)
-    )
-
-
-def _gender_keyword_tokens() -> frozenset[str]:
-    return frozenset(
-        clean_text(token).lower()
-        for token in tuple(GENDER_KEYWORD_TOKENS or ())
-        if clean_text(token)
     )
 
 
@@ -498,7 +500,10 @@ def _extract_trailing_color_phrase(value: str) -> str:
         start -= 1
     if start > 0:
         previous = tokens[start - 1].lower()
-        if previous not in _STANDARD_SIZE_VALUES and previous not in _gender_keyword_tokens():
+        if (
+            previous not in _STANDARD_SIZE_VALUES
+            and previous not in _GENDER_KEYWORD_TOKENS_SET
+        ):
             start -= 1
     end = color_indexes[-1] + 1
     while end < len(tokens) and tokens[end].lower() in _VARIANT_COLOR_HINT_WORDS:
@@ -699,7 +704,7 @@ def _enforce_variant_payload_limits(record: dict[str, Any]) -> None:
         try:
             max_rows = max(1, int(DEFAULT_DETAIL_MAX_VARIANT_ROWS))
         except (TypeError, ValueError):
-            max_rows = 1
+            max_rows = max(1, int(FALLBACK_MAX_VARIANT_ROWS))
     if len(variants) <= max_rows:
         return
     kept = [
@@ -772,13 +777,7 @@ def _backfill_variant_shared_fields_from_record(record: dict[str, Any]) -> None:
 
 
 def _enforce_flat_variant_contract(record: dict[str, Any]) -> None:
-    variants = flatten_variants_for_public_output(record.get("variants"))
-    if variants:
-        record["variants"] = variants
-        record["variant_count"] = len(variants)
-    else:
-        record.pop("variants", None)
-        record.pop("variant_count", None)
+    enforce_flat_variant_public_contract(record)
     for field_name in _LEGACY_VARIANT_KEYS:
         record.pop(field_name, None)
     for field_name in list(record):

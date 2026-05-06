@@ -1009,8 +1009,8 @@ def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_art
     )
 
     assert len(rows) == 1
-    assert len(rows) == 1
     record = rows[0]
+    assert len(rows) == 1
     assert record["color"] == "HTR GREY"
     assert record["variant_count"] == 6
 
@@ -1037,8 +1037,8 @@ def test_extract_records_normalizes_belk_run_26_detail_variants_without_duplicat
     assert record["title"] == "Women's Denim Capri Pants"
     assert record["availability"] == "in_stock"
     assert len(record["variants"]) == 21
-    assert all(variant.get("price") == "26.99" for variant in record["variants"])
-    assert all(variant.get("currency") == "USD" for variant in record["variants"])
+    assert all("price" not in variant for variant in record["variants"])
+    assert all("currency" not in variant for variant in record["variants"])
     assert all("availability" not in variant for variant in record["variants"])
     def _has_axis(variant: dict) -> bool:
         if variant.get("color") or variant.get("size"):
@@ -4686,9 +4686,6 @@ def test_extract_detail_keeps_valid_variant_axes_from_structured_options_alias()
     )
 
     assert len(rows) == 1
-    record = rows[0]
-
-
 def test_normalize_variant_record_drops_scalar_legacy_variant_axes() -> None:
     record = {
         "variant_axes": {

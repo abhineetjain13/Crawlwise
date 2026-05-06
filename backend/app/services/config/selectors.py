@@ -18,7 +18,13 @@ for _name, _value in _STATIC_EXPORTS.items():
 
 SELECTOR_SELF_HEAL_TARGET_LIMIT = 6
 SELECTOR_SELF_HEAL_DEFAULT_MIN_CONFIDENCE = 0.55
-SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS = frozenset({"button", "input", "select"})
+# Final retention allow-list for interactive tags with useful selector attributes.
+SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS = frozenset(
+    _STATIC_EXPORTS.get(
+        "SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS",
+        ("button", "input", "select"),
+    )
+)
 
 XPATH_ALLOWED_FUNCTIONS = frozenset(
     {
@@ -66,6 +72,8 @@ SELECTOR_SYNTHESIS_ALLOWED_ATTRS = frozenset(
     }
 )
 SELECTOR_SYNTHESIS_DROP_TAGS = frozenset({"script", "style", "noscript", "svg"})
+# Preliminary low-value filter; overlap is intentional because keep-worthy tags
+# survive only when _keep_low_value_node sees useful attrs/tokens.
 SELECTOR_SYNTHESIS_LOW_VALUE_TAGS = frozenset(
     {
         "nav",

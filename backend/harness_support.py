@@ -239,10 +239,12 @@ def build_explicit_sites(
 
 def load_site_set(path: Path, *, site_set_name: str) -> list[dict[str, object]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    defaults: dict[str, object] = {}
     if isinstance(payload, dict) and isinstance(payload.get("site_sets"), dict):
         site_set = payload["site_sets"].get(site_set_name)
         if not isinstance(site_set, dict):
             raise ValueError(f"Unknown site set: {site_set_name}")
+        defaults = _object_dict(site_set.get("defaults"))
         sites = site_set.get("sites")
         if not isinstance(sites, list):
             raise ValueError(f"Site set {site_set_name} has no sites list")
@@ -250,6 +252,7 @@ def load_site_set(path: Path, *, site_set_name: str) -> list[dict[str, object]]:
         manifest_name = str(payload.get("name") or path.stem).strip()
         if site_set_name not in {"", manifest_name, path.stem}:
             raise ValueError(f"Unknown site set: {site_set_name}")
+        defaults = _object_dict(payload.get("defaults"))
         sites = payload["sites"]
     else:
         raise ValueError(f"Invalid site-set payload in {path}")
@@ -257,32 +260,36 @@ def load_site_set(path: Path, *, site_set_name: str) -> list[dict[str, object]]:
     for item in sites:
         if not isinstance(item, dict):
             continue
+        default_quality = _object_dict(defaults.get("quality_expectations"))
+        item_quality = _object_dict(item.get("quality_expectations"))
+        site = {**defaults, **item}
+        quality_expectations = {**default_quality, **item_quality}
         url = str(item.get("url") or "").strip()
         if not url:
             continue
         row: dict[str, object] = {
-            "name": str(item.get("name") or url).strip(),
+            "name": str(site.get("name") or url).strip(),
             "url": url,
             "surface": infer_surface(
                 url,
-                explicit_surface=item.get("surface"),
+                explicit_surface=site.get("surface"),
             ),
-            "bucket": str(item.get("bucket") or "").strip().lower() or None,
+            "bucket": str(site.get("bucket") or "").strip().lower() or None,
             "expected_failure_modes": [
                 str(value).strip()
-                for value in _object_list(item.get("expected_failure_modes"))
+                for value in _object_list(site.get("expected_failure_modes"))
                 if str(value).strip()
             ],
-            "artifact_run_id": _safe_int(item.get("artifact_run_id")) or None,
-            "seed_failure_mode": str(item.get("seed_failure_mode") or "")
+            "artifact_run_id": _safe_int(site.get("artifact_run_id")) or None,
+            "seed_failure_mode": str(site.get("seed_failure_mode") or "")
             .strip()
             .lower()
             or None,
-            "quality_expectations": _object_dict(item.get("quality_expectations")),
+            "quality_expectations": quality_expectations,
         }
-        gate = str(item.get("gate") or "").strip().lower() or None
-        expected = _object_dict(item.get("expected"))
-        known_failure_mode = str(item.get("known_failure_mode") or "").strip() or None
+        gate = str(site.get("gate") or "").strip().lower() or None
+        expected = _object_dict(site.get("expected"))
+        known_failure_mode = str(site.get("known_failure_mode") or "").strip() or None
         if gate:
             row["gate"] = gate
         if expected:
@@ -1527,7 +1534,7 @@ async def _ensure_harness_user_id(session) -> int:
         user.hashed_password = hash_password(harness_password)
         logger.info(
             "Synchronized harness user password hash",
-            extra={"user_id": int(user.id), "email": user.email},
+            extra={"user_id": int(user.id)},
         )
         await session.commit()
         await session.refresh(user)

@@ -73,6 +73,7 @@ def test_parse_test_sites_markdown_reads_urls_from_tail(tmp_path: Path) -> None:
 
 def test_parse_test_sites_markdown_reads_urls_from_markdown_tables() -> None:
     fixture = Path(__file__).resolve().parents[2] / "TEST_SITES.md"
+    assert fixture.exists(), f"Missing TEST_SITES.md fixture at derived path: {fixture}"
 
     rows = parse_test_sites_markdown(fixture, start_line=1)
 
@@ -162,6 +163,50 @@ def test_load_site_set_preserves_curated_surface_and_bucket(tmp_path: Path) -> N
             "artifact_run_id": 77,
             "seed_failure_mode": "listing_chrome_noise",
             "quality_expectations": {"require_price": True},
+        }
+    ]
+
+
+def test_load_site_set_merges_defaults(tmp_path: Path) -> None:
+    manifest = tmp_path / "sites.json"
+    manifest.write_text(
+        """
+        {
+          "name": "commerce",
+          "defaults": {
+            "surface": "ecommerce_detail",
+            "bucket": "commerce_extended",
+            "gate": "soft",
+            "quality_expectations": {"require_identity": true, "require_price": true}
+          },
+          "sites": [
+            {
+              "name": "Product",
+              "url": "https://example.com/products/widget",
+              "quality_expectations": {"require_price": false}
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    rows = load_site_set(manifest, site_set_name="commerce")
+
+    assert rows == [
+        {
+            "name": "Product",
+            "url": "https://example.com/products/widget",
+            "surface": "ecommerce_detail",
+            "bucket": "commerce_extended",
+            "expected_failure_modes": [],
+            "artifact_run_id": None,
+            "seed_failure_mode": None,
+            "quality_expectations": {
+                "require_identity": True,
+                "require_price": False,
+            },
+            "gate": "soft",
         }
     ]
 

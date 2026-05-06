@@ -4,6 +4,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
 import jmespath
+from bs4 import BeautifulSoup
 from glom import glom  # type: ignore[import-untyped]
 
 from app.services.config.field_mappings import (
@@ -11,14 +12,15 @@ from app.services.config.field_mappings import (
     JS_STATE_VARIANT_FIELD_SPEC,
 )
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
+from app.services.field_policy import normalize_field_key
+from app.services.field_value_dom import dedupe_image_urls, extract_feature_rows
 from app.services.extract.shared_variant_logic import (
     merge_variant_rows,
     normalized_variant_axis_key,
     resolve_variants,
     variant_axis_name_is_semantic,
 )
-from app.services.field_value_dom import dedupe_image_urls
-from app.services.field_value_core import extract_urls, text_or_none
+from app.services.field_value_core import clean_text, extract_urls, surface_alias_lookup, text_or_none
 from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
@@ -428,6 +430,7 @@ def _map_product_payload(
 ) -> dict[str, Any]:
     base = _product_base_fields(product, field_jmespaths=field_jmespaths)
     images = _extract_product_images(product, page_url=page_url)
+    description_fields = _extract_ecommerce_description_fields(base.get("description"))
     shopify_like = _looks_like_shopify_product(product)
     option_names = _option_names(product.get("options"))
     option_value_labels = _option_value_labels(product)
@@ -502,7 +505,7 @@ def _map_product_payload(
             "brand": brand,
             "vendor": vendor,
             "handle": base.get("handle"),
-            "description": base.get("description"),
+            "description": description_fields.get("description"),
             "product_id": base.get("product_id"),
             "category": category,
             "product_type": base.get("product_type"),
@@ -521,6 +524,7 @@ def _map_product_payload(
             ),
             "additional_images": images[1:] if len(images) > 1 else None,
             "image_count": len(images) or None,
+            "features": description_fields.get("features"),
             "variants": variants or None,
             "variant_count": len(variants) if variants else None,
             "tags": base.get("tags") if isinstance(base.get("tags"), list) else None,
@@ -530,6 +534,51 @@ def _map_product_payload(
         }
     )
     return record
+
+
+def _extract_ecommerce_description_fields(value: object) -> dict[str, object]:
+    description_html = str(value or "").strip()
+    if not description_html:
+        return {}
+    if "<" not in description_html and "&" not in description_html:
+        text = text_or_none(description_html)
+        return {"description": text} if text else {}
+
+    soup = BeautifulSoup(description_html, "html.parser")
+    for node in soup.select("script, style, iframe, svg, img, picture, source, video"):
+        node.decompose()
+
+    features = extract_feature_rows(soup)
+    blocks: list[tuple[str, str]] = []
+    alias_lookup = surface_alias_lookup("ecommerce_detail", None)
+    for node in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p"], limit=40):
+        text = text_or_none(node.get_text(" ", strip=True))
+        if text:
+            blocks.append((str(node.name).lower(), text))
+
+    lead_parts: list[str] = []
+    seen: set[str] = set()
+    for tag_name, text in blocks:
+        normalized_text = normalize_field_key(text)
+        canonical = alias_lookup.get(normalized_text)
+        if lead_parts and canonical and canonical != "description":
+            break
+        lowered = text.casefold()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        lead_parts.append(text)
+
+    lead_description = clean_text(" ".join(lead_parts))
+    description = text_or_none(lead_description) or text_or_none(
+        html_to_text(description_html)
+    )
+    result: dict[str, object] = {}
+    if description:
+        result["description"] = description
+    if features:
+        result["features"] = features
+    return result
 
 
 def _raw_current_price_value(product: dict[str, Any]) -> str | None:

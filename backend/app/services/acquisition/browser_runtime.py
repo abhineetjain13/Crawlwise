@@ -332,7 +332,13 @@ class SharedBrowserRuntime:
                         "Real Chrome executable is not available for browser runtime"
                     )
                 launch_kwargs["executable_path"] = self.executable_path
-                launch_kwargs["ignore_default_args"] = list(REAL_CHROME_IGNORE_DEFAULT_ARGS)
+                ignore_default_args = [
+                    str(arg).strip()
+                    for arg in (REAL_CHROME_IGNORE_DEFAULT_ARGS or ())
+                    if str(arg).strip()
+                ]
+                if ignore_default_args:
+                    launch_kwargs["ignore_default_args"] = ignore_default_args
             launch_proxy_config = await self._launch_proxy_config_for_browser()
             if launch_proxy_config is not None:
                 launch_kwargs["proxy"] = launch_proxy_config

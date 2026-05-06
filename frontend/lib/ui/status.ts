@@ -69,11 +69,21 @@ export function dashboardStatusDotColor(status: string): string {
   return 'var(--accent)';
 }
 
+export function isSubduedStatus(status: string): boolean {
+  return status === 'completed' || status === 'killed';
+}
+
+export function isStatusFlat(status: string): boolean {
+  return isSubduedStatus(status);
+}
+
 /** Completed / killed / partial verdicts use flat (text-only) badges. */
 export function isFlatStatus(status: string, summary?: RunSummaryLike): boolean {
   if (status === 'killed') return true;
   if (status !== 'completed') return false;
-  const verdict = String(summary?.extraction_verdict ?? '').trim().toLowerCase();
+  const verdict = String(summary?.extraction_verdict ?? '')
+    .trim()
+    .toLowerCase();
   return verdict === 'partial' || verdict === '';
 }
 

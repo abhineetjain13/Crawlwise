@@ -1,9 +1,16 @@
+"""Shared DOM field recovery, DOM text cleanup, and image/section normalization.
+
+TODO(chore): split field recovery, section-image cleanup, and audit comment
+wiring into narrower owners once LOC budgets are reduced.
+"""
+
 from __future__ import annotations
 
 import logging
 import re
 from copy import deepcopy
 import regex as regex_lib
+from typing import cast
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse, unquote
 
 from bs4 import BeautifulSoup, NavigableString, Tag
@@ -231,10 +238,12 @@ def _effective_image_url(url: str) -> str:
 
 def _normalize_image_url_text(url: object) -> str:
     text = str(url or "").strip()
-    if text.startswith("https:////"):
-        text = "https://" + text[len("https:////") :]
-    if text.startswith("http:////"):
-        text = "http://" + text[len("http:////") :]
+    for scheme in ("https", "http"):
+        prefix = f"{scheme}:"
+        if text.lower().startswith(prefix):
+            remainder = text[len(prefix) :]
+            if remainder.startswith("/"):
+                return f"{scheme}://{remainder.lstrip('/')}"
     return text
 
 
@@ -465,7 +474,13 @@ def _clone_visible_only(
     _soup = _soup or BeautifulSoup("", "html.parser")
     clone = _soup.new_tag(node.name, attrs=dict(getattr(node, "attrs", {}) or {}))
     for child in node.children:
-        if (child_clone := _clone_visible_only(child, remaining_depth=remaining_depth - 1, _soup=_soup)) is not None:
+        if (
+            child_clone := _clone_visible_only(
+                cast(Tag | NavigableString, child),
+                remaining_depth=remaining_depth - 1,
+                _soup=_soup,
+            )
+        ) is not None:
             clone.append(child_clone)
     return clone
 
@@ -474,7 +489,8 @@ def _pruned_text_scope_root(root: BeautifulSoup | Tag) -> BeautifulSoup | Tag:
     scope = _best_text_scope(root)
     if scope is None:
         return root
-    return _clone_visible_only(scope) or root
+    cloned_scope = _clone_visible_only(scope)
+    return cloned_scope if isinstance(cloned_scope, Tag) else root
 
 
 def _is_non_primary_image_context(node: Tag) -> bool:

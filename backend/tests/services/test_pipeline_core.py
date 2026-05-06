@@ -27,7 +27,6 @@ from app.services.pipeline.extraction_retry_decision import (
 )
 from app.services.pipeline.persistence import persist_acquisition_artifacts
 from app.services.pipeline.types import URLProcessingConfig
-from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.robots_policy import RobotsPolicyResult
 from sqlalchemy.ext.asyncio import AsyncSession
 

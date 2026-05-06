@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+from functools import lru_cache
 import json
+import logging
 import re
+from typing import Any
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from app.services.config.extraction_rules import (
     DETAIL_BREADCRUMB_CONTAINER_SELECTORS,
@@ -21,7 +24,24 @@ from app.services.config.extraction_rules import (
     DETAIL_GENDER_TERMS,
     DETAIL_NOISE_SECTION_SELECTORS,
 )
-from app.services.field_value_core import absolute_url, clean_text, text_or_none
+from app.services.field_value_core import absolute_url, clean_text
+
+logger = logging.getLogger(__name__)
+_BREADCRUMB_NOISE_ICON_PATTERNS = tuple(DETAIL_BREADCRUMB_NOISE_ICON_PATTERNS or ())
+
+
+@lru_cache(maxsize=1)
+def _compiled_breadcrumb_noise_icon_patterns() -> tuple[re.Pattern[str], ...]:
+    compiled: list[re.Pattern[str]] = []
+    for pattern in _BREADCRUMB_NOISE_ICON_PATTERNS:
+        try:
+            compiled.append(re.compile(str(pattern), re.I))
+        except re.error as exc:
+            logger.warning(
+                "Invalid breadcrumb noise icon regex",
+                extra={"pattern": str(pattern), "error": str(exc)},
+            )
+    return tuple(compiled)
 
 
 def gender_from_text(value: object) -> str | None:
@@ -64,7 +84,7 @@ def breadcrumb_labels_from_dom(
         if not nodes:
             continue
         # Group by closest nav, ul, ol, or generic div parent to avoid flattening multiple breadcrumbs
-        groups = {}
+        groups: dict[int, list[Tag]] = {}
         for node in nodes:
             parent = node.parent
             while parent and parent.name not in ("nav", "ul", "ol", "div", "section"):
@@ -104,7 +124,7 @@ def _breadcrumb_labels_from_container(container) -> list[str]:
     return _clean_breadcrumb_labels(str(container.get_text(" ", strip=True)).split(">"))
 
 
-def _clean_breadcrumb_labels(values) -> list[str]:
+def _clean_breadcrumb_labels(values: Any) -> list[str]:
     return dedupe_adjacent(
         [cleaned for value in values if (cleaned := _clean_breadcrumb_label(value))]
     )
@@ -119,8 +139,8 @@ def _clean_breadcrumb_label(value: object) -> str:
     if not text:
         return ""
     # Strip CSS icon class names that leak into accessible text (e.g. Herman Miller).
-    for pattern in tuple(DETAIL_BREADCRUMB_NOISE_ICON_PATTERNS or ()):
-        text = clean_text(re.sub(str(pattern), "", text, flags=re.I))
+    for pattern in _compiled_breadcrumb_noise_icon_patterns():
+        text = clean_text(pattern.sub("", text))
     if not text:
         return ""
     lowered = text.casefold()
@@ -319,5 +339,5 @@ def prune_irrelevant_detail_dom_nodes(
 
     # 2. Prune common cross-product UI noise sections
     for selector in tuple(DETAIL_NOISE_SECTION_SELECTORS or ()):
-        for node in soup.select(selector):
+        for node in soup.select(str(selector)):
             node.decompose()
