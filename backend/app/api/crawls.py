@@ -30,7 +30,7 @@ from app.schemas.crawl import (
 from app.services.acquisition.cookie_store import list_domain_cookie_memory
 from app.services.crawl_access_service import (
     RUN_NOT_FOUND_DETAIL,
-    user_can_access_run,
+    require_accessible_run,
 )
 from app.services.crawl_crud import (
     commit_llm_suggestions,
@@ -156,7 +156,7 @@ async def _get_accessible_run_or_404(
     user: User,
 ) -> CrawlRun:
     try:
-        return await _require_accessible_run(session, run_id=run_id, user=user)
+        return await require_accessible_run(session, run_id=run_id, user=user)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -234,18 +234,6 @@ async def _mark_run_failed_with_retry(
             extraction_verdict="error",
         )
         await error_session.commit()
-
-
-async def _require_accessible_run(
-    session: AsyncSession,
-    *,
-    run_id: int,
-    user: User,
-) -> CrawlRun:
-    run = await get_run(session, run_id)
-    if run is None or not user_can_access_run(user=user, run=run):
-        raise ValueError(RUN_NOT_FOUND_DETAIL)
-    return run
 
 
 async def _load_log_stream_snapshot(
@@ -433,7 +421,7 @@ async def crawls_detail(
     user: Annotated[User, Depends(get_current_user)],
 ) -> CrawlRunResponse:
     try:
-        run = await _require_accessible_run(session, run_id=run_id, user=user)
+        run = await require_accessible_run(session, run_id=run_id, user=user)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -450,7 +438,7 @@ async def crawls_delete(
     user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     try:
-        run = await _require_accessible_run(session, run_id=run_id, user=user)
+        run = await require_accessible_run(session, run_id=run_id, user=user)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -637,7 +625,7 @@ async def crawls_logs(
     limit: int = 500,
 ) -> list[LogEntryResponse]:
     try:
-        await _require_accessible_run(session, run_id=run_id, user=user)
+        await require_accessible_run(session, run_id=run_id, user=user)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
@@ -658,7 +646,7 @@ async def crawls_logs_ws(
 
     async with SessionLocal() as session:
         try:
-            run = await _require_accessible_run(session, run_id=run_id, user=user)
+            run = await require_accessible_run(session, run_id=run_id, user=user)
         except ValueError:
             await _close_websocket_safely(
                 websocket, code=1008, reason=RUN_NOT_FOUND_DETAIL
