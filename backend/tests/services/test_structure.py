@@ -26,7 +26,6 @@ FIELD_POLICY_CONSUMERS = [
     SERVICES_ROOT / "review" / "__init__.py",
 ]
 ALLOWED_PRIVATE_SERVICE_IMPORTS = {
-    "_batch_runtime.py -> app.services.pipeline.core:_mark_run_failed",
     "_batch_runtime.py -> app.services.publish:_aggregate_verdict",
     "acquisition/browser_identity.py -> app.services.network_resolution:_accept_language_for_locale",
     "acquisition/browser_runtime.py -> app.services.acquisition.browser_capture:_MAX_CAPTURED_NETWORK_PAYLOADS",
@@ -36,7 +35,6 @@ ALLOWED_PRIVATE_SERVICE_IMPORTS = {
     "config/adapter_runtime_settings.py -> app.services.config.runtime_settings:_settings_config",
     "config/llm_runtime.py -> app.services.config.runtime_settings:_settings_config",
     "config/product_intelligence.py -> app.services.config.runtime_settings:_settings_config",
-    "crawl_service.py -> app.services.pipeline.core:_mark_run_failed",
     "publish/__init__.py -> app.services.publish.verdict:_aggregate_verdict",
     # Shared detail-identity helpers used by detail_raw_signals.prune_irrelevant_detail_dom_nodes.
     # Kept private because the implementation is an implementation detail of detail_identity;

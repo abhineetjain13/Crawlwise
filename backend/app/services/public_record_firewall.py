@@ -8,15 +8,17 @@ from app.services.config.field_mappings import (
     BARCODE_FIELD,
     CANONICAL_SCHEMAS,
     NAVIGATION_URL_FIELDS,
+    ROUTE_BARCODE_TO_SKU,
+    SKU_FIELD,
+    URL_FIELD,
+    VARIANTS_FIELD,
+)
+from app.services.config.public_record_policy import (
     PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS,
     PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS,
     PUBLIC_RECORD_LEGACY_VARIANT_FIELDS,
     PUBLIC_RECORD_URL_BLOCKED_PATH_MARKERS,
     PUBLIC_RECORD_URL_MAX_LENGTH,
-    ROUTE_BARCODE_TO_SKU,
-    SKU_FIELD,
-    URL_FIELD,
-    VARIANTS_FIELD,
 )
 from app.services.field_policy import canonical_requested_fields, normalize_field_key
 from app.services.field_value_core import (

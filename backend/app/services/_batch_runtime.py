@@ -19,8 +19,13 @@ from app.services.crawl_state import (
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls_async
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
-from app.services.pipeline.core import _mark_run_failed, process_single_url
-from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE, log_event, set_stage
+from app.services.pipeline.core import process_single_url
+from app.services.pipeline.runtime_helpers import (
+    STAGE_ACQUIRE,
+    log_event,
+    mark_run_failed,
+    set_stage,
+)
 from app.services.pipeline.types import URLProcessingConfig, URLProcessingResult
 from app.services.publish import VERDICT_ERROR, _aggregate_verdict
 from app.services.run_summary import as_int
@@ -30,28 +35,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 
-def _record_list(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        return []
-    return [dict(item) for item in value if isinstance(item, dict)]
-
-
-def _metrics_map(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, dict) else {}
-
-
-def _ensure_url_processing_result(
-    url_result: URLProcessingResult | tuple[object, object, object],
-) -> URLProcessingResult:
+def _require_url_processing_result(url_result: object) -> URLProcessingResult:
     if isinstance(url_result, URLProcessingResult):
         return url_result
-    if isinstance(url_result, tuple) and len(url_result) == 3:
-        records, verdict, metrics = url_result
-        return URLProcessingResult(
-            records=_record_list(records),
-            verdict=str(verdict or ""),
-            url_metrics=_metrics_map(metrics),
-        )
     raise TypeError(f"Unexpected URL result type: {type(url_result)!r}")
 
 
@@ -290,7 +276,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 persist_logs=True,
             )
             try:
-                url_result = _ensure_url_processing_result(
+                url_result = _require_url_processing_result(
                     await asyncio.wait_for(
                         process_single_url(
                             session=session,
@@ -395,4 +381,4 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
     except (RuntimeError, ValueError, TypeError, SQLAlchemyError) as exc:
         logger.exception("Run-level failure for run=%s", run_id)
         await _rollback_url_session(session, context="run failure marking")
-        await _mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")
+        await mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")

@@ -23,6 +23,7 @@ from app.services.acquisition import browser_page_flow, browser_readiness, brows
 from app.services.acquisition.traversal import TraversalResult
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
+from app.services.extraction_runtime import extract_records
 
 
 def test_select_primary_browser_html_prefers_full_rendered_when_traversal_fragment_is_capped() -> None:
@@ -377,6 +378,8 @@ class _FakeLocator:
             return role == "button" and bool(aria_controls)
         if selector == "[role='tab'][aria-controls]":
             return role == "tab" and bool(aria_controls)
+        if selector == "a[href^='#']":
+            return lowered_tag == "a" and str(attributes.get("href") or "").startswith("#")
         if selector == "button":
             return lowered_tag == "button"
         if selector == "[role='button']":
@@ -1887,6 +1890,85 @@ async def test_browser_fetch_does_not_skip_requested_dom_pattern_when_selector_i
 
     assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 1
     assert "Weight: 2kg" in result.html
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_extracts_requested_features_from_dell_like_tab() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html><body>
+          <main>
+            <h1>Dell 27 All-in-One</h1>
+            <section>
+              <h2>Description</h2>
+              <p>27-inch all-in-one desktop.</p>
+            </section>
+            <a href="#tech">Tech Specs</a>
+            <a href="#features_section">Features &amp; Design</a>
+          </main>
+        </body></html>
+        """,
+        expanded_html="""
+        <html><body>
+          <main>
+            <h1>Dell 27 All-in-One</h1>
+            <section>
+              <h2>Description</h2>
+              <p>27-inch all-in-one desktop.</p>
+            </section>
+            <a href="#tech">Tech Specs</a>
+            <div id="tech">
+              <p>Memory: 16 GB DDR5</p>
+            </div>
+            <a href="#features_section">Features &amp; Design</a>
+            <div id="features_section">
+              <p>13th Generation Intel® Core™ i5-1334U</p>
+              <p>27-inch FHD Infinity display</p>
+            </div>
+          </main>
+        </body></html>
+        """,
+        labels=[
+            {
+                "label": "tech specs",
+                "attributes": {"href": "#tech"},
+                "tag_name": "a",
+            },
+            {
+                "label": "features & design",
+                "attributes": {"href": "#features_section"},
+                "tag_name": "a",
+            },
+        ],
+    )
+
+    async def _fake_runtime(**_kwargs):
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        requested_fields=["features"],
+        runtime_provider=_fake_runtime,
+    )
+
+    rows = extract_records(
+        result.html,
+        "https://example.com/products/widget",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["features"],
+    )
+
+    assert result.browser_diagnostics["detail_expansion"]["clicked_count"] >= 1
+    assert result.browser_diagnostics["detail_expansion"]["expanded_elements"][0] == (
+        "features & design"
+    )
+    assert rows[0]["features"] == [
+        "13th Generation Intel® Core™ i5-1334U",
+        "27-inch FHD Infinity display",
+    ]
 
 
 @pytest.mark.asyncio

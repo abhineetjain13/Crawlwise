@@ -150,9 +150,7 @@ def _rendered_listing_fragment(
     """
 
 
-def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts() -> (
-    None
-):
+def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts() -> None:
     html = """
     <html>
       <body>
@@ -225,9 +223,7 @@ def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts(
     ]
 
 
-def test_extract_records_visual_listing_backfills_brand_from_brand_node_and_url() -> (
-    None
-):
+def test_extract_records_visual_listing_backfills_brand_from_brand_node_and_url() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.belk.com/shoes/womens-shoes/sandals/flat/",
@@ -302,9 +298,7 @@ def test_extract_records_visual_listing_backfills_brand_from_brand_node_and_url(
     assert rows[1]["brand"] == "Dv Dolce Vita"
 
 
-def test_extract_records_visual_listing_rejects_numeric_product_id_brand_prefix() -> (
-    None
-):
+def test_extract_records_visual_listing_rejects_numeric_product_id_brand_prefix() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.desertcart.in/category/fashion/men/accessories",
@@ -396,9 +390,7 @@ def test_extract_records_honors_listing_max_records_above_fragment_default() -> 
     assert len(rows) == 205
 
 
-def test_extract_records_visual_listing_orders_top_grid_before_lower_recommendations() -> (
-    None
-):
+def test_extract_records_visual_listing_orders_top_grid_before_lower_recommendations() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
@@ -594,9 +586,7 @@ def test_extract_records_rejects_visual_artifact_cta_and_footer_clusters() -> No
     assert rows == []
 
 
-def test_extract_records_keeps_visual_artifact_product_without_price_when_title_matches_url() -> (
-    None
-):
+def test_extract_records_keeps_visual_artifact_product_without_price_when_title_matches_url() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.dyson.in/hair-care/hair-stylers",
@@ -760,9 +750,7 @@ def test_extract_records_keeps_adjacent_visual_product_cards_separate() -> None:
     ]
 
 
-def test_extract_records_rejects_visual_artifact_auth_links_without_dropping_product() -> (
-    None
-):
+def test_extract_records_rejects_visual_artifact_auth_links_without_dropping_product() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.customink.com/products/sweatshirts/hoodies/71",
@@ -919,9 +907,7 @@ def test_extract_records_cleans_titles_from_belk_listing_artifact() -> None:
     assert "Dooney & Bourke" not in titles
 
 
-def test_extract_records_belk_listing_artifact_does_not_emit_currency_without_price() -> (
-    None
-):
+def test_extract_records_belk_listing_artifact_does_not_emit_currency_without_price() -> None:
     html = read_optional_artifact_text(
         "artifacts/runs/22/pages/5e2f27bc09df481d.html",
         fixture_subdir="artifact_html",
@@ -935,7 +921,7 @@ def test_extract_records_belk_listing_artifact_does_not_emit_currency_without_pr
     )
 
     assert rows
-    assert all(not (row.get("currency") and not row.get("price")) for row in rows)
+    assert all(row.get("price") or not row.get("currency") for row in rows)
 
 
 def test_extract_records_drops_orphan_listing_currency_without_price() -> None:
@@ -989,9 +975,7 @@ def test_extract_records_drops_orphan_listing_currency_without_price() -> None:
     ]
 
 
-def test_extract_records_rejects_redirected_belk_detail_artifact_identity_mismatch() -> (
-    None
-):
+def test_extract_records_rejects_redirected_belk_detail_artifact_identity_mismatch() -> None:
     html = read_optional_artifact_text(
         "artifacts/runs/23/pages/ee049a2bdeed124a.html",
         fixture_subdir="artifact_html",
@@ -1013,9 +997,7 @@ def test_extract_records_rejects_redirected_belk_detail_artifact_identity_mismat
     assert rows == []
 
 
-def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_artifact() -> (
-    None
-):
+def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_artifact() -> None:
     html = read_optional_artifact_text(
         "artifacts/runs/23/pages/ee049a2bdeed124a.html",
         fixture_subdir="artifact_html",
@@ -1035,9 +1017,7 @@ def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_art
     assert record["variant_count"] == 6
 
 
-def test_extract_records_normalizes_belk_run_26_detail_variants_without_duplicate_axes() -> (
-    None
-):
+def test_extract_records_normalizes_belk_run_26_detail_variants_without_duplicate_axes() -> None:
     html = read_optional_artifact_text(
         "artifacts/runs/26/pages/612cf7570cdbf8e1.html",
         fixture_subdir="artifact_html",
@@ -1074,9 +1054,7 @@ def test_extract_records_normalizes_belk_run_26_detail_variants_without_duplicat
     assert all(_has_axis(variant) for variant in record["variants"])
 
 
-def test_extract_records_normalizes_boolean_availability_and_shared_variant_price_from_json() -> (
-    None
-):
+def test_extract_records_normalizes_boolean_availability_and_shared_variant_price_from_json() -> None:
     html = """
     {
       "title": "Trail Runner",
@@ -1112,9 +1090,7 @@ def test_extract_records_normalizes_boolean_availability_and_shared_variant_pric
     assert record["currency"] == "USD"
 
 
-def test_extract_records_prefers_rendered_listing_fragments_over_thin_structured_records() -> (
-    None
-):
+def test_extract_records_prefers_rendered_listing_fragments_over_thin_structured_records() -> None:
     html = """
     <html>
       <head>
@@ -1256,9 +1232,7 @@ def test_extract_records_prefers_browser_visual_rows_over_weak_promo_dom_rows() 
     }
 
 
-def test_extract_records_enriches_generic_listing_rows_from_matching_adapter_rows() -> (
-    None
-):
+def test_extract_records_enriches_generic_listing_rows_from_matching_adapter_rows() -> None:
     html = """
     <html><body>
       <article class="product-card">
@@ -1407,9 +1381,7 @@ def test_listing_extractor_extracts_brand_from_product_tile() -> None:
     assert rows[0]["brand"] == "Polo Ralph Lauren"
 
 
-def test_listing_extractor_does_not_infer_belk_brand_from_pdp_slug_when_fragment_lacks_brand() -> (
-    None
-):
+def test_listing_extractor_does_not_infer_belk_brand_from_pdp_slug_when_fragment_lacks_brand() -> None:
     rows = extract_records(
         """
         <html><body>
@@ -1471,9 +1443,7 @@ def test_extract_records_prefers_generic_listing_rows_over_thin_adapter_rows() -
     ]
 
 
-def test_extract_records_drops_rendered_listing_utility_rows_when_real_products_exist() -> (
-    None
-):
+def test_extract_records_drops_rendered_listing_utility_rows_when_real_products_exist() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://example.com/collections/widgets",
@@ -1505,9 +1475,7 @@ def test_extract_records_drops_rendered_listing_utility_rows_when_real_products_
     assert all("/products/" in row["url"] for row in rows)
 
 
-def test_extract_records_drops_detail_like_category_links_without_product_signals() -> (
-    None
-):
+def test_extract_records_drops_detail_like_category_links_without_product_signals() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.customink.com/products/sweatshirts/hoodies/71",
@@ -1572,9 +1540,7 @@ def test_extract_records_rejects_concatenated_resource_menu_listing_titles() -> 
     ]
 
 
-def test_extract_records_drops_shallow_editorial_listing_links_without_product_signals() -> (
-    None
-):
+def test_extract_records_drops_shallow_editorial_listing_links_without_product_signals() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.customink.com/products/sweatshirts/hoodies/71",
@@ -1648,9 +1614,7 @@ def test_extract_records_drops_rendered_listing_download_app_cta_rows() -> None:
     assert rows == []
 
 
-def test_extract_records_drops_rendered_listing_category_hub_rows_without_supporting_signals() -> (
-    None
-):
+def test_extract_records_drops_rendered_listing_category_hub_rows_without_supporting_signals() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.karenmillen.com/eu/categories/womens-trousers",
@@ -1746,9 +1710,7 @@ def test_extract_records_recovers_rendered_listing_price_from_fragment_text() ->
     ]
 
 
-def test_extract_records_backfills_listing_price_from_network_payload_candidates() -> (
-    None
-):
+def test_extract_records_backfills_listing_price_from_network_payload_candidates() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.uniqlo.com/in/en/men/shirts-and-polo-shirts",
@@ -1798,9 +1760,7 @@ def test_extract_records_backfills_listing_price_from_network_payload_candidates
     ]
 
 
-def test_extract_records_backfills_listing_brand_and_range_price_from_network_payload_candidates() -> (
-    None
-):
+def test_extract_records_backfills_listing_brand_and_range_price_from_network_payload_candidates() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.belk.com/home/",
@@ -1851,9 +1811,7 @@ def test_extract_records_backfills_listing_brand_and_range_price_from_network_pa
     ]
 
 
-def test_extract_records_backfills_listing_brand_from_network_when_dom_price_exists() -> (
-    None
-):
+def test_extract_records_backfills_listing_brand_from_network_when_dom_price_exists() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.belk.com/home/",
@@ -1903,9 +1861,7 @@ def test_extract_records_backfills_listing_brand_from_network_when_dom_price_exi
     ]
 
 
-def test_extract_records_backfills_listing_brand_from_network_candidate_without_price() -> (
-    None
-):
+def test_extract_records_backfills_listing_brand_from_network_candidate_without_price() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.belk.com/home/",
@@ -1950,9 +1906,7 @@ def test_extract_records_backfills_listing_brand_from_network_candidate_without_
     ]
 
 
-def test_extract_records_backfills_listing_from_network_by_belk_product_id_when_title_differs() -> (
-    None
-):
+def test_extract_records_backfills_listing_from_network_by_belk_product_id_when_title_differs() -> None:
     rows = extract_records(
         "<html><body></body></html>",
         "https://www.belk.com/home/",
@@ -2002,9 +1956,7 @@ def test_extract_records_backfills_listing_from_network_by_belk_product_id_when_
     ]
 
 
-def test_extract_records_backfills_adapter_brand_by_belk_product_identity_when_urls_differ() -> (
-    None
-):
+def test_extract_records_backfills_adapter_brand_by_belk_product_identity_when_urls_differ() -> None:
     rows = extract_records(
         """
         <html><body>
@@ -2085,9 +2037,7 @@ def test_extract_records_rejects_external_rendered_listing_utility_links() -> No
     ]
 
 
-def test_extract_records_prefers_rich_dom_listing_rows_when_structured_rows_fill_limit() -> (
-    None
-):
+def test_extract_records_prefers_rich_dom_listing_rows_when_structured_rows_fill_limit() -> None:
     html = """
     <html>
       <head>
@@ -2215,9 +2165,7 @@ def test_extract_records_prefers_firstcry_style_dom_cards_over_menu_chrome() -> 
     ]
 
 
-def test_extract_records_prefers_sigma_style_product_rows_over_editorial_links() -> (
-    None
-):
+def test_extract_records_prefers_sigma_style_product_rows_over_editorial_links() -> None:
     html = """
     <html>
       <body>
@@ -2273,9 +2221,7 @@ def test_extract_records_prefers_sigma_style_product_rows_over_editorial_links()
     ]
 
 
-def test_extract_records_recovers_listing_price_when_card_uses_currency_code_text() -> (
-    None
-):
+def test_extract_records_recovers_listing_price_when_card_uses_currency_code_text() -> None:
     html = """
     <html>
       <body>
@@ -2312,9 +2258,7 @@ def test_extract_records_recovers_listing_price_when_card_uses_currency_code_tex
     ]
 
 
-def test_extract_records_replaces_generic_item_listing_title_with_product_text() -> (
-    None
-):
+def test_extract_records_replaces_generic_item_listing_title_with_product_text() -> None:
     html = """
     <html>
       <body>
@@ -2341,9 +2285,7 @@ def test_extract_records_replaces_generic_item_listing_title_with_product_text()
     assert rows[0]["title"] == "Lenovo ThinkPad X1 Carbon"
 
 
-def test_extract_records_infers_listing_currency_from_locale_path_for_bare_price() -> (
-    None
-):
+def test_extract_records_infers_listing_currency_from_locale_path_for_bare_price() -> None:
     html = """
     <html>
       <body>
@@ -2413,9 +2355,7 @@ def test_extract_records_ignores_discount_badge_images_inside_listing_cards() ->
     ]
 
 
-def test_extract_records_replaces_review_only_listing_titles_with_product_image_title() -> (
-    None
-):
+def test_extract_records_replaces_review_only_listing_titles_with_product_image_title() -> None:
     html = """
     <html>
       <body>
@@ -2460,9 +2400,7 @@ def test_extract_records_replaces_review_only_listing_titles_with_product_image_
     ]
 
 
-def test_extract_records_replaces_review_only_titles_from_lazy_loaded_product_images() -> (
-    None
-):
+def test_extract_records_replaces_review_only_titles_from_lazy_loaded_product_images() -> None:
     html = """
     <html>
       <body>
@@ -2508,9 +2446,7 @@ def test_extract_records_replaces_review_only_titles_from_lazy_loaded_product_im
     ]
 
 
-def test_extract_records_rejects_dom_listing_rows_that_only_have_doc_titles_and_urls() -> (
-    None
-):
+def test_extract_records_rejects_dom_listing_rows_that_only_have_doc_titles_and_urls() -> None:
     html = """
     <html>
       <body>
@@ -2618,9 +2554,7 @@ def test_extract_records_rejects_rendered_listing_cta_only_titles() -> None:
     ]
 
 
-def test_extract_records_rejects_job_listing_hub_links_when_structured_job_rows_exist() -> (
-    None
-):
+def test_extract_records_rejects_job_listing_hub_links_when_structured_job_rows_exist() -> None:
     html = """
     <html>
       <head>
@@ -2679,9 +2613,7 @@ def test_extract_records_rejects_job_listing_hub_links_when_structured_job_rows_
     )
 
 
-def test_extract_records_keeps_job_detail_like_titles_even_when_they_start_with_hub_text() -> (
-    None
-):
+def test_extract_records_keeps_job_detail_like_titles_even_when_they_start_with_hub_text() -> None:
     html = """
     <html>
       <body>
@@ -2709,9 +2641,7 @@ def test_extract_records_keeps_job_detail_like_titles_even_when_they_start_with_
     ]
 
 
-def test_extract_records_keeps_job_listing_slug_records_with_numeric_terminal_ids() -> (
-    None
-):
+def test_extract_records_keeps_job_listing_slug_records_with_numeric_terminal_ids() -> None:
     html = """
     <html>
       <body>
@@ -2774,9 +2704,7 @@ def test_extract_records_rejects_numeric_non_job_links_on_careers_hosts() -> Non
     assert rows == []
 
 
-def test_extract_records_ignores_single_page_level_product_payload_on_listing_pages() -> (
-    None
-):
+def test_extract_records_ignores_single_page_level_product_payload_on_listing_pages() -> None:
     html = """
     <html>
       <head>
@@ -2831,9 +2759,7 @@ def test_extract_records_ignores_single_page_level_product_payload_on_listing_pa
     assert rows[1]["price"] == "8399"
 
 
-def test_extract_records_does_not_leak_standalone_product_payloads_when_itemlist_exists() -> (
-    None
-):
+def test_extract_records_does_not_leak_standalone_product_payloads_when_itemlist_exists() -> None:
     html = """
     <html>
       <head>
@@ -3129,9 +3055,7 @@ def test_extract_ecommerce_detail_returns_normalized_record() -> None:
     assert record["_confidence"]["level"] in {"medium", "high"}
 
 
-def test_extract_ecommerce_detail_rejects_site_shell_with_listing_payload_pollution() -> (
-    None
-):
+def test_extract_ecommerce_detail_rejects_site_shell_with_listing_payload_pollution() -> None:
     html = """
     <html>
       <head>
@@ -3233,9 +3157,7 @@ def test_extract_ecommerce_detail_rejects_brand_shell_with_app_prompt_copy() -> 
     assert rows == []
 
 
-def test_extract_ecommerce_detail_prefers_requested_identity_on_same_site_utility_redirect() -> (
-    None
-):
+def test_extract_ecommerce_detail_prefers_requested_identity_on_same_site_utility_redirect() -> None:
     html = """
     <html>
       <head>
@@ -3297,9 +3219,7 @@ def test_extract_ecommerce_detail_prefers_requested_identity_on_same_site_utilit
     assert record["sku"] == "305537"
 
 
-def test_extract_ecommerce_detail_rejects_same_site_utility_redirect_with_mismatched_product_payload() -> (
-    None
-):
+def test_extract_ecommerce_detail_rejects_same_site_utility_redirect_with_mismatched_product_payload() -> None:
     html = """
     <html>
       <head>
@@ -3343,9 +3263,7 @@ def test_extract_ecommerce_detail_rejects_same_site_utility_redirect_with_mismat
     assert rows == []
 
 
-def test_extract_ecommerce_detail_rejects_same_site_wrong_product_payload_without_utility_redirect() -> (
-    None
-):
+def test_extract_ecommerce_detail_rejects_same_site_wrong_product_payload_without_utility_redirect() -> None:
     html = """
     <html>
       <head>
@@ -3428,9 +3346,7 @@ def test_extract_ecommerce_detail_keeps_same_url_color_variant_product_path() ->
     assert rows[0]["title"] == "Bondi 9"
 
 
-def test_extract_ecommerce_detail_rejects_fragment_backed_shell_payload_from_spa_root() -> (
-    None
-):
+def test_extract_ecommerce_detail_rejects_fragment_backed_shell_payload_from_spa_root() -> None:
     html = """
     <html>
       <head>
@@ -3462,9 +3378,7 @@ def test_extract_ecommerce_detail_rejects_fragment_backed_shell_payload_from_spa
     assert rows == []
 
 
-def test_detail_rejection_does_not_claim_identity_mismatch_when_same_url_never_redirected() -> (
-    None
-):
+def test_detail_rejection_does_not_claim_identity_mismatch_when_same_url_never_redirected() -> None:
     requested_url = (
         "https://www.zara.com/us/en/rustic-cotton-t-shirt-p04424306.html?v1=527078510"
     )
@@ -3483,9 +3397,7 @@ def test_detail_rejection_does_not_claim_identity_mismatch_when_same_url_never_r
     )
 
 
-def test_extract_ecommerce_detail_rejects_search_results_shell_with_sort_filter_controls() -> (
-    None
-):
+def test_extract_ecommerce_detail_rejects_search_results_shell_with_sort_filter_controls() -> None:
     html = """
     <html>
       <head>
@@ -3526,9 +3438,7 @@ def test_extract_ecommerce_detail_rejects_search_results_shell_with_sort_filter_
     assert rows == []
 
 
-def test_extract_ecommerce_detail_rejects_placeholder_not_found_title_without_product_signals() -> (
-    None
-):
+def test_extract_ecommerce_detail_rejects_placeholder_not_found_title_without_product_signals() -> None:
     html = """
     <html>
       <body>
@@ -3597,9 +3507,7 @@ def test_extract_ecommerce_detail_recovers_firstcry_static_js_state_price() -> N
     )
 
 
-def test_extract_ecommerce_detail_rejects_brand_shell_with_tracking_pixel_image() -> (
-    None
-):
+def test_extract_ecommerce_detail_rejects_brand_shell_with_tracking_pixel_image() -> None:
     html = """
     <html>
       <head>
@@ -3625,9 +3533,7 @@ def test_extract_ecommerce_detail_rejects_brand_shell_with_tracking_pixel_image(
     assert rows == []
 
 
-def test_extract_ecommerce_detail_keeps_structured_product_when_title_still_needs_promotion() -> (
-    None
-):
+def test_extract_ecommerce_detail_keeps_structured_product_when_title_still_needs_promotion() -> None:
     html = """
     <html>
       <head>
@@ -4020,9 +3926,7 @@ def test_extract_ecommerce_listing_preserves_functional_query_params() -> None:
     )
 
 
-def test_extract_ecommerce_listing_keeps_title_only_detail_candidates_without_detail_markers() -> (
-    None
-):
+def test_extract_ecommerce_listing_keeps_title_only_detail_candidates_without_detail_markers() -> None:
     html = """
     <html>
       <body>
@@ -4052,9 +3956,7 @@ def test_extract_ecommerce_listing_keeps_title_only_detail_candidates_without_de
     ]
 
 
-def test_extract_ecommerce_listing_does_not_treat_supportive_product_paths_as_utility_urls() -> (
-    None
-):
+def test_extract_ecommerce_listing_does_not_treat_supportive_product_paths_as_utility_urls() -> None:
     html = """
     <html>
       <body>
@@ -4084,9 +3986,7 @@ def test_extract_ecommerce_listing_does_not_treat_supportive_product_paths_as_ut
     ]
 
 
-def test_extract_ecommerce_listing_keeps_same_site_cross_subdomain_detail_links() -> (
-    None
-):
+def test_extract_ecommerce_listing_keeps_same_site_cross_subdomain_detail_links() -> None:
     html = """
     <html>
       <body>
@@ -4143,9 +4043,7 @@ def test_extract_ecommerce_listing_treats_proddetail_paths_as_detail_links() -> 
     assert rows[0]["title"] == "Widget Prime"
 
 
-def test_extract_ecommerce_listing_keeps_id_product_links_over_productlist_facets() -> (
-    None
-):
+def test_extract_ecommerce_listing_keeps_id_product_links_over_productlist_facets() -> None:
     html = """
     <html>
       <body>
@@ -4206,9 +4104,7 @@ def test_listing_identity_rejects_productlist_as_detail_marker() -> None:
     assert listing_detail_like_path(product_url, is_job=False) is True
 
 
-def test_extract_ecommerce_listing_falls_back_to_original_dom_when_cleaned_dom_strips_card_headers() -> (
-    None
-):
+def test_extract_ecommerce_listing_falls_back_to_original_dom_when_cleaned_dom_strips_card_headers() -> None:
     html = """
     <html>
       <body>
@@ -4247,9 +4143,7 @@ def test_extract_ecommerce_listing_falls_back_to_original_dom_when_cleaned_dom_s
     assert rows[0]["image_url"] == "https://img.indiamart.com/widget-prime.jpg"
 
 
-def test_extract_ecommerce_listing_does_not_treat_repeated_testimonials_as_products() -> (
-    None
-):
+def test_extract_ecommerce_listing_does_not_treat_repeated_testimonials_as_products() -> None:
     html = """
     <html>
       <body>
@@ -4402,9 +4296,7 @@ def test_extract_records_emits_nested_graphql_listing_items() -> None:
     assert rows[1]["url"] == "https://store.example.com/products/commuter-backpack"
 
 
-def test_extract_records_does_not_synthesize_listing_from_nested_json_without_items() -> (
-    None
-):
+def test_extract_records_does_not_synthesize_listing_from_nested_json_without_items() -> None:
     raw_json = """
     {
       "data": {
@@ -4516,9 +4408,7 @@ def test_extract_records_emits_atom_listing_records_from_link_href() -> None:
     assert rows[1]["title"] == "widget pro"
 
 
-def test_extract_detail_keeps_dom_stage_for_high_scoring_js_state_when_long_text_missing() -> (
-    None
-):
+def test_extract_detail_keeps_dom_stage_for_high_scoring_js_state_when_long_text_missing() -> None:
     html = """
     <html>
       <body>
@@ -4663,9 +4553,7 @@ def test_extract_detail_keeps_long_product_titles_that_include_star_ratings() ->
     assert rows[0]["title"] == "Vitamagic Pro 192L 3 Star Radiant Steel Refrigerator"
 
 
-def test_extract_detail_allows_safe_early_exit_before_dom_when_pre_dom_record_is_complete() -> (
-    None
-):
+def test_extract_detail_allows_safe_early_exit_before_dom_when_pre_dom_record_is_complete() -> None:
     html = """
     <html>
       <head>
@@ -4802,9 +4690,7 @@ def test_extract_listing_records_preserves_selector_trace_for_selected_rule() ->
     }
 
 
-def test_extract_detail_rejects_non_variant_options_object_from_structured_payload() -> (
-    None
-):
+def test_extract_detail_rejects_non_variant_options_object_from_structured_payload() -> None:
     html = """
     <html>
       <head>
@@ -4849,9 +4735,7 @@ def test_extract_detail_rejects_non_variant_options_object_from_structured_paylo
     assert "availability" not in record
 
 
-def test_extract_detail_keeps_valid_variant_axes_from_structured_options_alias() -> (
-    None
-):
+def test_extract_detail_keeps_valid_variant_axes_from_structured_options_alias() -> None:
     html = """
     <html>
       <head>
@@ -4897,9 +4781,7 @@ def test_normalize_variant_record_drops_scalar_legacy_variant_axes() -> None:
     assert "variant_axes" not in record
 
 
-def test_normalize_variant_record_strips_legacy_option_summaries_and_selected_variant() -> (
-    None
-):
+def test_normalize_variant_record_strips_legacy_option_summaries_and_selected_variant() -> None:
     record = {
         "option1_name": "Flavour",
         "option1_values": "Rich Chocolate, Blue Tokai Coffee",
@@ -5154,9 +5036,7 @@ def test_extract_ecommerce_detail_reads_books_table_price_currency() -> None:
     assert record["currency"] == "GBP"
 
 
-def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents() -> (
-    None
-):
+def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents() -> None:
     html = """
     <html>
       <head>
@@ -5213,9 +5093,7 @@ def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents(
     assert record["original_price"] == "1565.00"
 
 
-def test_extract_detail_keeps_shopify_variant_record_when_requested_url_has_product_code_prefix() -> (
-    None
-):
+def test_extract_detail_keeps_shopify_variant_record_when_requested_url_has_product_code_prefix() -> None:
     html = """
     <html>
       <head>

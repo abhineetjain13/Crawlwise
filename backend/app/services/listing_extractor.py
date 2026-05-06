@@ -9,13 +9,11 @@ from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
     EXTRACTION_RULES,
-    JOB_UTILITY_URL_TOKENS,
     LISTING_BRAND_MAX_WORDS,
     LISTING_BRAND_SELECTORS,
     LISTING_CARD_URL_ATTRS,
     LISTING_LABEL_NOISE_TOKENS,
     LISTING_NAVIGATION_TITLE_HINTS,
-    LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_PRICE_NODE_SELECTORS,
     LISTING_PROMINENT_TITLE_TAGS,
     LISTING_STRUCTURE_NEGATIVE_HINTS,
@@ -30,6 +28,7 @@ from app.services.extraction_context import (
 )
 from app.services.extract.listing_candidate_ranking import (
     best_listing_candidate_set,
+    listing_record_supported,
     looks_like_utility_record,
 )
 from app.services.extract.detail_identity import (
@@ -72,12 +71,6 @@ from app.services.field_value_dom import apply_selector_fallbacks
 
 logger = logging.getLogger(__name__)
 _LISTING_STRUCTURE_NEGATIVE_HINTS = frozenset(LISTING_STRUCTURE_NEGATIVE_HINTS)
-def _path_segment_tokens(value: str) -> set[str]:
-    return {
-        token
-        for token in re.split(r"[\-\.]+", str(value or "").strip().lower())
-        if token
-    }
 
 
 def _structured_listing_record(
@@ -290,148 +283,6 @@ def _title_from_url(url: str) -> str | None:
     if not title or title.isdigit():
         return None
     return title
-
-
-def _record_has_supporting_listing_signals(record: dict[str, Any], *, surface: str) -> bool:
-    if any(
-        record.get(field_name) not in (None, "", [], {})
-        for field_name in ("image_url", "price", "rating", "review_count")
-    ):
-        return True
-    if surface.startswith("job_"):
-        return any(
-            record.get(field_name) not in (None, "", [], {})
-            for field_name in ("company", "location", "salary", "job_type")
-        )
-    return record.get("brand") not in (None, "", [], {})
-
-
-def _job_listing_url_looks_like_posting(url: str) -> bool:
-    parsed = urlsplit(url.lower())
-    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
-    if not segments:
-        return False
-    terminal = segments[-1]
-    leading_tokens = [_path_segment_tokens(segment) for segment in segments[:-1]]
-    if any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens):
-        return False
-    terminal_tokens = _path_segment_tokens(terminal)
-    if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
-        return False
-    if re.fullmatch(r"(?:19|20)\d{2}", terminal):
-        return False
-    if not re.search(r"\d{4,}", terminal):
-        return False
-    if any(
-        marker in parsed.path
-        for marker in (
-            "/job/",
-            "/jobs/",
-            "/opening/",
-            "/openings/",
-            "/position/",
-            "/positions/",
-            "/posting/",
-            "/postings/",
-            "/career/",
-            "/careers/",
-            "/requisition/",
-            "/requisitions/",
-            "/role/",
-            "/roles/",
-            "/vacancy/",
-            "/vacancies/",
-        )
-    ):
-        return True
-    terminal_words = [
-        token
-        for token in re.split(r"[^a-z0-9]+", terminal)
-        if len(token) >= 3 and not token.isdigit()
-    ]
-    return len(terminal_words) >= 2
-
-
-def _job_listing_title_is_hub(title: str) -> bool:
-    lowered = clean_text(title).lower()
-    if not lowered:
-        return False
-    if lowered in {"jobs", "careers", "openings"}:
-        return True
-    return lowered.startswith(
-        (
-            "jobs in ",
-            "jobs near ",
-            "careers in ",
-            "roles in ",
-            "openings in ",
-        )
-    )
-
-
-def _job_listing_url_is_hub(url: str) -> bool:
-    parsed = urlsplit(url.lower())
-    segments = [segment for segment in parsed.path.split("/") if segment]
-    terminal = segments[-1] if segments else ""
-    if terminal in {
-        "careers",
-        "jobs",
-        "openings",
-        "search",
-        "search-jobs",
-        "search-results",
-    }:
-        return True
-    if terminal.startswith(
-        (
-            "jobs-in-",
-            "careers-in-",
-            "openings-in-",
-            "search-jobs",
-            "job-search",
-        )
-    ):
-        return True
-    return False
-
-
-def _job_listing_url_is_utility(url: str) -> bool:
-    lowered = url.lower()
-    return any(
-        token in lowered
-        for token in JOB_UTILITY_URL_TOKENS
-    )
-
-
-def _record_is_supported_listing_candidate(
-    record: dict[str, Any],
-    *,
-    page_url: str,
-    surface: str,
-) -> bool:
-    title = clean_text(record.get("title"))
-    url = str(record.get("url") or "").strip()
-    source_kind = str(record.get("_source") or "").strip().lower()
-    if not title or not url or is_title_noise(title) or listing_url_is_structural(url, page_url):
-        return False
-    if looks_like_utility_record(title=title, url=url):
-        return False
-    is_job_surface = surface.startswith("job_")
-    detail_like = listing_detail_like_path(url, is_job=is_job_surface)
-    if is_job_surface and (
-        _job_listing_url_is_utility(url)
-        or _job_listing_url_is_hub(url)
-    ):
-        return False
-    if is_job_surface and _job_listing_title_is_hub(title) and not detail_like:
-        return False
-    if detail_like:
-        return True
-    if _record_has_supporting_listing_signals(record, surface=surface):
-        return True
-    if is_job_surface and _job_listing_url_looks_like_posting(url):
-        return True
-    return not is_job_surface and source_kind == "structured_listing" and len(title) >= 12
 
 
 def _listing_card_html_fragments(
@@ -1119,10 +970,18 @@ def _listing_record_from_card(
         )
         and _title_token_overlap(cleaned_title, _title_from_url(cleaned_url) or "") >= 2
     )
-    if not _record_is_supported_listing_candidate(
+    if not listing_record_supported(
         cleaned,
         page_url=page_url,
         surface=surface,
+        title_is_noise=is_title_noise,
+        url_is_structural=listing_url_is_structural,
+        detail_like_url=(
+            lambda url: listing_detail_like_path(
+                url,
+                is_job=surface.startswith("job_"),
+            )
+        ),
     ):
         if not allow_title_only_dom_candidate:
             return None
@@ -1286,10 +1145,18 @@ def extract_listing_records(
     visual_records = [
         record
         for record in visual_records
-        if _record_is_supported_listing_candidate(
+        if listing_record_supported(
             record,
             page_url=page_url,
             surface=surface,
+            title_is_noise=is_title_noise,
+            url_is_structural=listing_url_is_structural,
+            detail_like_url=(
+                lambda url: listing_detail_like_path(
+                    url,
+                    is_job=surface.startswith("job_"),
+                )
+            ),
         )
     ]
     candidate_sets: list[tuple[str, list[dict[str, Any]]]] = [

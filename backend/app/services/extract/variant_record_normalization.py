@@ -20,7 +20,10 @@ from app.services.config.extraction_rules import (
     STANDARD_SIZE_VALUES,
     VARIANT_TITLE_STOPWORDS,
 )
-from app.services.config.field_mappings import FLAT_VARIANT_KEYS, PUBLIC_VARIANT_AXIS_FIELDS
+from app.services.config.variant_policy import (
+    FLAT_VARIANT_KEYS,
+    PUBLIC_VARIANT_AXIS_FIELDS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import (
     clean_text,

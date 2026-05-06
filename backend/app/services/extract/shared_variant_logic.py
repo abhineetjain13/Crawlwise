@@ -19,6 +19,12 @@ from app.services.config.extraction_rules import (
     VARIANT_AXIS_ALLOWED_SINGLE_TOKENS,
     VARIANT_AXIS_GENERIC_TOKENS,
     VARIANT_CHOICE_GROUP_SELECTOR,
+    VARIANT_CHOICE_CONTAINER_GROUP_LIMIT,
+    VARIANT_CHOICE_CONTAINER_MIN_DISTINCT_NAMES,
+    VARIANT_CHOICE_CONTAINER_OPTION_LIMIT,
+    VARIANT_CHOICE_CONTAINER_SELECT_LIMIT,
+    VARIANT_CHOICE_OPTION_LIMIT,
+    VARIANT_CHOICE_OPTION_SELECTOR,
     VARIANT_COLOR_HINT_WORDS,
     VARIANT_GROUP_ATTR_NOISE_PATTERNS,
     VARIANT_GROUP_ATTR_NOISE_TOKENS,
@@ -32,6 +38,10 @@ from app.services.config.extraction_rules import (
 from app.services.field_value_core import clean_text, text_or_none
 
 logger = logging.getLogger(__name__)
+
+_VARIANT_AXIS_EXCLUDED_SINGLE_TOKENS = frozenset({"color", "colour", "fit", "size"})
+_VARIANT_COLOR_AXIS_TOKENS = frozenset({"color", "colour"})
+_VARIANT_SIZE_AXIS_TOKENS = frozenset({"fit", "size"})
 
 _variant_axis_label_noise_tokens = frozenset(
     str(token).strip().lower()
@@ -251,19 +261,17 @@ def infer_variant_group_name(node: Any) -> str:
         elif value not in (None, "", [], {}):
             parts.append(str(value))
     probe = " ".join(parts).replace("_", " ").replace("-", " ").lower()
-    if "color" in probe or "colour" in probe:
+    probe_tokens = frozenset(token for token in re.split(r"[^a-z0-9]+", probe) if token)
+    if _VARIANT_COLOR_AXIS_TOKENS & probe_tokens:
         return "color"
-    if "size" in probe or "fit" in probe:
+    if _VARIANT_SIZE_AXIS_TOKENS & probe_tokens:
         return "size"
     # Check all allowed variant axis tokens (weight, flavor, scent, etc.)
-    tokens = [token for token in re.split(r"[^a-z0-9]+", probe) if token]
-    for token in tokens:
-        if token in _variant_axis_allowed_single_tokens and token not in {
-            "color",
-            "size",
-            "fit",
-            "colour",
-        }:
+    for token in probe_tokens:
+        if (
+            token in _variant_axis_allowed_single_tokens
+            and token not in _VARIANT_AXIS_EXCLUDED_SINGLE_TOKENS
+        ):
             return token
     return ""
 
@@ -358,9 +366,9 @@ def _choice_option_texts(node: Any) -> list[str]:
     if not hasattr(node, "select"):
         return []
     values: list[str] = []
-    for option in node.select(
-        "option, [role='radio'], [role='option'], button, input[type='radio'], input[type='checkbox']"
-    )[:24]:
+    for option in node.select(VARIANT_CHOICE_OPTION_SELECTOR)[
+        : int(VARIANT_CHOICE_OPTION_LIMIT)
+    ]:
         value = _choice_option_text(option, parent=node)
         if value:
             values.append(value)
@@ -419,7 +427,7 @@ def _variant_choice_container_is_overbroad(node: Any) -> bool:
             or child.get("data-testid")
         )
         for child in node.select("input[type='radio'], input[type='checkbox'], button")[
-            :24
+            : int(VARIANT_CHOICE_CONTAINER_OPTION_LIMIT)
         ]
     }
     distinct_names = {
@@ -427,7 +435,7 @@ def _variant_choice_container_is_overbroad(node: Any) -> bool:
         for raw_name in raw_names
         if raw_name
     }
-    for select in node.select("select")[:8]:
+    for select in node.select("select")[: int(VARIANT_CHOICE_CONTAINER_SELECT_LIMIT)]:
         raw_name = text_or_none(
             select.get("name")
             or select.get("aria-label")
@@ -437,7 +445,9 @@ def _variant_choice_container_is_overbroad(node: Any) -> bool:
             distinct_names.add(
                 normalized_variant_axis_key(raw_name) or clean_text(raw_name).casefold()
             )
-    for group_node in node.select("[role='radiogroup'], [aria-label]")[:12]:
+    for group_node in node.select("[role='radiogroup'], [aria-label]")[
+        : int(VARIANT_CHOICE_CONTAINER_GROUP_LIMIT)
+    ]:
         if str(getattr(group_node, "name", "") or "").strip().lower() in {
             "button",
             "input",
@@ -449,7 +459,7 @@ def _variant_choice_container_is_overbroad(node: Any) -> bool:
             distinct_names.add(
                 normalized_variant_axis_key(raw_name) or clean_text(raw_name).casefold()
             )
-    return len(distinct_names) >= 2
+    return len(distinct_names) >= int(VARIANT_CHOICE_CONTAINER_MIN_DISTINCT_NAMES)
 
 
 def resolve_variant_group_name(node: Any) -> str:
@@ -716,9 +726,12 @@ def _semantic_group_label_from_text(value: object) -> str:
     if not cleaned:
         return ""
     lowered = cleaned.lower()
-    if "color" in lowered or "colour" in lowered:
+    lowered_tokens = frozenset(
+        token for token in re.split(r"[^a-z0-9]+", lowered) if token
+    )
+    if _VARIANT_COLOR_AXIS_TOKENS & lowered_tokens:
         return "color"
-    if "size" in lowered or "fit" in lowered:
+    if _VARIANT_SIZE_AXIS_TOKENS & lowered_tokens:
         return "size"
     candidates = [
         cleaned,

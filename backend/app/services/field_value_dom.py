@@ -1,8 +1,4 @@
-"""Shared DOM field recovery, DOM text cleanup, and image/section normalization.
-
-TODO(chore): split field recovery, section-image cleanup, and audit comment
-wiring into narrower owners once LOC budgets are reduced.
-"""
+"""Shared DOM field recovery, DOM text cleanup, and image/section normalization."""
 
 from __future__ import annotations
 
@@ -1169,6 +1165,9 @@ def _section_text_is_meaningful(
     if any(pattern in lowered_text for pattern in _SECTION_SKIP_PATTERNS):
         return False
     if isinstance(node, Tag):
+        role = str(node.get("role") or "").strip().lower()
+        if node.name in {"button", "summary"} or role in {"button", "tab"}:
+            return False
         interactive_count = len(
             node.select("a[href], button, [role='button'], [role='tab'], summary")
         )

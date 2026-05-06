@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app.services.config._export_data import load_export_data
-from app.services.config.field_mappings import (
+from app.services.config.variant_policy import (
     AXIS_NAME_ALIASES,
     PUBLIC_VARIANT_AXIS_FIELDS,
 )
@@ -30,10 +30,42 @@ HYDRATED_STATE_PATTERNS = tuple(
         if str(value).strip()
     )
 )
+SHIPPING_DATE_FIELD = "shipping_date"
+SPECIAL_DAYS_FIELD = "special_days"
+IS_AVAILABLE_FIELD = "is_available"
+IS_INVENTORY_ONLY_FIELD = "is_inventory_only"
 SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS = frozenset(
-    {"shipping_date", "special_days", "is_available", "is_inventory_only"}
+    {
+        SHIPPING_DATE_FIELD,
+        SPECIAL_DAYS_FIELD,
+        IS_AVAILABLE_FIELD,
+        IS_INVENTORY_ONLY_FIELD,
+    }
 )
 ECOMMERCE_DESCRIPTION_BLOCK_LIMIT = 40
+BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY = (
+    "a[href^='#']",
+    "[role='tab'][aria-controls]",
+    "button[aria-controls]",
+    "[role='button'][aria-controls]",
+    "[aria-expanded='false']",
+    "summary",
+    "details > summary",
+    "button",
+    "[role='button']",
+    "a",
+)
+BROWSER_REQUESTED_DETAIL_GENERIC_TOGGLE_LABELS = frozenset(
+    {
+        "details",
+        "description",
+        "product details",
+        "specification",
+        "specifications",
+        "materials",
+        "materials and care",
+    }
+)
 
 _EXTRACTION_RULES_RAW = _STATIC_EXPORTS.get("EXTRACTION_RULES", {})
 EXTRACTION_RULES = (
@@ -679,13 +711,27 @@ SCOPE_SCORE_MAIN_WEIGHT = 4000
 SCOPE_SCORE_PRIORITY_WEIGHT = 2000
 SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT = 1000
 MAX_SELECTOR_MATCHES = 12
+VARIANT_CHOICE_OPTION_SELECTOR = (
+    "option, [role='radio'], [role='option'], button, "
+    "input[type='radio'], input[type='checkbox']"
+)
+VARIANT_CHOICE_OPTION_LIMIT = 24
+VARIANT_CHOICE_CONTAINER_OPTION_LIMIT = 24
+VARIANT_CHOICE_CONTAINER_SELECT_LIMIT = 8
+VARIANT_CHOICE_CONTAINER_GROUP_LIMIT = 12
+VARIANT_CHOICE_CONTAINER_MIN_DISTINCT_NAMES = 2
 FEATURE_SECTION_SELECTORS = (
     "[data-section='features']",
     ".features",
     ".product-features",
     "#features",
+    "#features_section",
 )
 DETAIL_MATERIALS_ZERO_PERCENT_PATTERN = r"\b0\s*%"
+FEATURE_ROW_NOISE_PATTERNS = (
+    r"^(?:key\s+)?features?(?:\s*&\s*benefits?)?$",
+    r"^(?:see|show)\s+more\s+(?:key\s+)?features?(?:\s*&\s*benefits?)?$",
+)
 DETAIL_BRACKET_PROSE_MIN_WORDS = 5
 PRICE_SOURCE_KEY_FIELDS = frozenset(
     {"price", "sale_price", "original_price", "compare_at_price"}
@@ -900,6 +946,17 @@ REVIEW_TITLE_RE = re.compile(str(_REVIEW_TITLE_PATTERN), re.I)
 STRUCTURED_MULTI_FIELDS = frozenset(
     {*tuple(_STRUCTURED_MULTI_FIELDS_RAW or ()), "features"}
 )
+_detail_expand_selectors_base = tuple(_STATIC_EXPORTS.get("DETAIL_EXPAND_SELECTORS", ()) or ())
+_detail_expand_selectors_ordered: list[str] = []
+_detail_expand_anchor_inserted = False
+for _selector in _detail_expand_selectors_base:
+    if _selector == "button" and not _detail_expand_anchor_inserted:
+        _detail_expand_selectors_ordered.append("a[href^='#']")
+        _detail_expand_anchor_inserted = True
+    _detail_expand_selectors_ordered.append(str(_selector))
+if not _detail_expand_anchor_inserted:
+    _detail_expand_selectors_ordered.append("a[href^='#']")
+DETAIL_EXPAND_SELECTORS = tuple(dict.fromkeys(_detail_expand_selectors_ordered))
 STRUCTURED_OBJECT_FIELDS = frozenset(_STRUCTURED_OBJECT_FIELDS_RAW)
 STRUCTURED_OBJECT_LIST_FIELDS = frozenset(_STRUCTURED_OBJECT_LIST_FIELDS_RAW)
 URL_FIELDS = frozenset(_URL_FIELDS_RAW)
@@ -1201,6 +1258,7 @@ _EXTRA_EXPORTS = [
     "DYNAMIC_FIELD_NAME_MAX_TOKENS",
     "EXPORT_IMAGE_URL_SUFFIXES",
     "FEATURE_SECTION_SELECTORS",
+    "FEATURE_ROW_NOISE_PATTERNS",
     "GIF_BASE64_PREFIX",
     "GENDER_KEYWORD_TOKENS",
     "GENDER_ARTIFACT_PATTERN",
@@ -1240,6 +1298,10 @@ _EXTRA_EXPORTS = [
     "REVIEW_COUNT_RE",
     "REVIEW_TITLE_RE",
     "SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS",
+    "SHIPPING_DATE_FIELD",
+    "SPECIAL_DAYS_FIELD",
+    "IS_AVAILABLE_FIELD",
+    "IS_INVENTORY_ONLY_FIELD",
     "SEMANTIC_SECTION_LABEL_SKIP_TOKENS",
     "STRUCTURED_MULTI_FIELDS",
     "STRUCTURED_OBJECT_FIELDS",
@@ -1247,6 +1309,12 @@ _EXTRA_EXPORTS = [
     "ECOMMERCE_DESCRIPTION_BLOCK_LIMIT",
     "URL_FIELDS",
     "VARIANT_FIELDS",
+    "VARIANT_CHOICE_OPTION_SELECTOR",
+    "VARIANT_CHOICE_OPTION_LIMIT",
+    "VARIANT_CHOICE_CONTAINER_OPTION_LIMIT",
+    "VARIANT_CHOICE_CONTAINER_SELECT_LIMIT",
+    "VARIANT_CHOICE_CONTAINER_GROUP_LIMIT",
+    "VARIANT_CHOICE_CONTAINER_MIN_DISTINCT_NAMES",
     "VARIANT_AXIS_ALIASES",
     "VARIANT_AXIS_ALLOWED_SINGLE_TOKENS",
     "VARIANT_AXIS_GENERIC_TOKENS",

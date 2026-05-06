@@ -7,6 +7,8 @@ from typing import Any
 
 from app.services.config.extraction_rules import (
     BROWSER_DETAIL_EXPAND_KEYWORDS,
+    BROWSER_REQUESTED_DETAIL_GENERIC_TOGGLE_LABELS,
+    BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY,
     DETAIL_BLOCKED_TOKENS,
     DETAIL_EXPAND_KEYWORD_EXTENSIONS,
     DETAIL_EXPAND_SELECTORS,
@@ -42,6 +44,42 @@ def detail_expansion_skip(reason: str) -> dict[str, object]:
         "dom": {},
         "aom": {},
     }
+
+
+def _ordered_detail_expand_selectors(
+    selectors: list[str],
+    *,
+    requested_keywords: tuple[str, ...],
+) -> list[str]:
+    if not requested_keywords:
+        return selectors
+    priority_order = {
+        selector: index
+        for index, selector in enumerate(BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY)
+    }
+    return sorted(
+        selectors,
+        key=lambda selector: priority_order.get(selector, len(priority_order)),
+    )
+
+
+def _requested_match_priority(
+    snapshot: dict[str, object],
+    *,
+    requested_keywords: tuple[str, ...],
+) -> tuple[int, str]:
+    label = str(snapshot.get("label") or "").strip().lower()
+    aria_controls = str(snapshot.get("aria_controls") or "").strip().lower()
+    data_qa_action = str(snapshot.get("data_qa_action") or "").strip().lower()
+    href = str(snapshot.get("href") or "").strip().lower()
+    requested_keyword_probe = " ".join(
+        part for part in (label, aria_controls, data_qa_action, href) if part
+    ).strip()
+    matches_requested_keywords = bool(
+        requested_keywords
+        and any(keyword in requested_keyword_probe for keyword in requested_keywords)
+    )
+    return (0 if matches_requested_keywords else 1, label)
 
 
 async def expand_detail_content_if_needed_impl(
@@ -149,6 +187,10 @@ async def expand_all_interactive_elements_impl(
         for selector in list(detail_expand_selectors or [])
         if str(selector).strip()
     ]
+    selectors = _ordered_detail_expand_selectors(
+        selectors,
+        requested_keywords=requested_keywords,
+    )
     for selector in selectors:
         if clicked_count >= max_interactions:
             diagnostics["status"] = "interaction_limit_reached"
@@ -162,8 +204,39 @@ async def expand_all_interactive_elements_impl(
             interaction_failures.append(f"locator_failed:{selector}:{exc}")
             continue
         diagnostics["buttons_found"] = _coerce_int(diagnostics["buttons_found"]) + len(candidates)
+        candidate_rows: list[tuple[Any, dict[str, object] | None]] = [
+            (handle, None) for handle in candidates
+        ]
+        if requested_keywords:
+            prioritized_rows: list[tuple[tuple[int, str], Any, dict[str, object]]] = []
+            for handle in candidates:
+                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
+                    diagnostics["status"] = "time_budget_reached"
+                    break
+                try:
+                    snapshot = await interactive_candidate_snapshot(handle)
+                except Exception as exc:
+                    interaction_failures.append(str(exc))
+                    continue
+                prioritized_rows.append(
+                    (
+                        _requested_match_priority(
+                            snapshot,
+                            requested_keywords=requested_keywords,
+                        ),
+                        handle,
+                        snapshot,
+                    )
+                )
+            candidate_rows = [
+                (handle, snapshot)
+                for _priority, handle, snapshot in sorted(
+                    prioritized_rows,
+                    key=lambda row: row[0],
+                )
+            ]
         selector_clicks = 0
-        for handle in candidates:
+        for handle, prefetched_snapshot in candidate_rows:
             if clicked_count >= max_interactions:
                 diagnostics["status"] = "interaction_limit_reached"
                 break
@@ -173,7 +246,7 @@ async def expand_all_interactive_elements_impl(
             if selector_clicks >= max_per_selector:
                 break
             try:
-                snapshot = await interactive_candidate_snapshot(handle)
+                snapshot = prefetched_snapshot or await interactive_candidate_snapshot(handle)
                 probe = str(snapshot.get("probe") or "").strip().lower()
                 label = str(snapshot.get("label") or "").strip().lower()
                 aria_expanded = str(snapshot.get("aria_expanded") or "").strip().lower()
@@ -237,8 +310,13 @@ async def expand_all_interactive_elements_impl(
                         for keyword in requested_keywords
                     )
                 )
-                matches_generic_requested_keywords = any(
+                fallback_requested_match = any(
                     keyword in requested_keyword_probe for keyword in keywords
+                )
+                generic_requested_detail_toggle = bool(
+                    list(requested_fields or [])
+                    and aria_controls
+                    and label in BROWSER_REQUESTED_DETAIL_GENERIC_TOGGLE_LABELS
                 )
                 matches_generic_keywords = any(
                     keyword in keyword_probe for keyword in keywords
@@ -247,7 +325,8 @@ async def expand_all_interactive_elements_impl(
                     list(requested_fields or [])
                     and not (
                         matches_requested_keywords
-                        or matches_generic_requested_keywords
+                        or fallback_requested_match
+                        or generic_requested_detail_toggle
                         or size_toggle_hint
                     )
                 ):
@@ -283,7 +362,7 @@ async def expand_all_interactive_elements_impl(
                     aria_controls
                     or aria_expanded == "false"
                     or matches_requested_keywords
-                    or matches_generic_requested_keywords
+                    or fallback_requested_match
                     or matches_generic_keywords
                     or size_toggle_hint
                 ):
@@ -435,7 +514,12 @@ def accessibility_expand_candidates_impl(
     aom_expand_roles: set[str],
     detail_expansion_keywords,
 ) -> list[tuple[str, str]]:
-    keywords = detail_expansion_keywords(surface, requested_fields=requested_fields)
+    requested_keywords = requested_field_tokens(requested_fields)
+    keywords = (
+        requested_keywords
+        if requested_keywords
+        else detail_expansion_keywords(surface, requested_fields=requested_fields)
+    )
     if not snapshot:
         return []
     results: list[tuple[str, str]] = []

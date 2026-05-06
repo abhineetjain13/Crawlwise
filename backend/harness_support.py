@@ -31,10 +31,8 @@ from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
 )
-from app.services.config.field_mappings import (
-    PUBLIC_RECORD_LEGACY_VARIANT_FIELDS,
-    PUBLIC_VARIANT_AXIS_FIELDS,
-)
+from app.services.config.public_record_policy import PUBLIC_RECORD_LEGACY_VARIANT_FIELDS
+from app.services.config.variant_policy import PUBLIC_VARIANT_AXIS_FIELDS
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -51,6 +49,12 @@ _VARIANT_AXIS_FIELDS = tuple(
         if str(token).strip()
     )
 )
+if not _VARIANT_AXIS_FIELDS:
+    logger.warning(
+        "PUBLIC_VARIANT_AXIS_FIELDS is empty; using default axis fields for "
+        "_quality_variant_artifacts_ok and _variant_row_has_axis"
+    )
+    _VARIANT_AXIS_FIELDS = ("color", "size")
 _HIGH_DENOMINATION_PRICE_CURRENCIES = {"INR", "JPY", "KRW", "VND", "IDR", "HUF", "CLP"}
 _MIN_SANE_PRICE = 0.01
 

@@ -92,7 +92,8 @@ Flow:
 
 | File | Purpose |
 |---|---|
-| `acquisition/acquirer.py` | Main acquisition entry and policy |
+| `acquisition/acquirer.py` | Main acquisition entry and fetch-runtime translation |
+| `acquisition/policy.py` | Public acquisition plan/policy interfaces |
 | `acquisition/runtime.py` | Shared HTTP client pool |
 | `acquisition/http_client.py` | Thin shared-client wrapper |
 | `acquisition/browser_runtime.py` | Shared Playwright runtime and limits |
@@ -127,7 +128,7 @@ Canonical config owner:
 | File | Purpose |
 |---|---|
 | `crawl_engine.py` | Extraction facade and routing |
-| `detail_extractor.py` | Detail-page tier orchestration and field candidate arbitration |
+| `detail_extractor.py` | Detail-page preparation and field candidate arbitration |
 | `listing_extractor.py` | Listing-page extraction |
 | `structured_sources.py` | JSON-LD, microdata, OG, Nuxt, harvested JS state |
 | `js_state_mapper.py` | JS state to field mapping |
@@ -140,7 +141,8 @@ Canonical config owner:
 | `adapters/registry.py` | Adapter resolution |
 | `adapters/[platform].py` | Platform-specific extraction |
 | `extract/listing_card_fragments.py` | Canonical listing-fragment discovery, scoring, and listing-card heuristics shared by traversal, browser artifact capture, and listing extraction |
-| `extract/listing_candidate_ranking.py` | Shared candidate-set ranking and canonical utility-record filtering for listing rows |
+| `extract/listing_candidate_ranking.py` | Listing candidate admission, support signals, utility rejection, dedupe, and set ranking |
+| `extract/detail_tiers.py` | Detail tier execution order, DOM skip decision, and finalization transitions |
 | `extract/detail_dom_extractor.py` | Detail DOM context selection, DOM fallback fields, and DOM variant recovery |
 | `extract/detail_raw_signals.py` | Raw detail breadcrumb category and deterministic gender signal helpers |
 | `extract/detail_price_extractor.py` | Detail price, currency reconciliation, and visible PDP price backfill |
@@ -155,7 +157,10 @@ Canonical config owners:
 
 | File | Purpose |
 |---|---|
-| `config/field_mappings.py` | field aliases |
+| `config/field_mappings.py` | canonical schemas, field aliases, and primitive field-name constants |
+| `config/js_state_field_specs.py` | JS-state product and variant field mapping specs |
+| `config/public_record_policy.py` | Public persisted/exported record exclusions, URL safety, and identity value policy |
+| `config/variant_policy.py` | Public variant axes, flat variant transport fields, and variant axis aliases |
 | `config/extraction_rules.py` | extraction/runtime selector tokens, structured-source key maps, detail selectors, shell/utility path rules |
 | `config/selectors.py` | DOM selectors |
 | `config/platforms.json` | adapter metadata, signatures, JS mappings, readiness selectors |

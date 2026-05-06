@@ -8,6 +8,7 @@ from app.services._batch_runtime import process_run
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.crawl_crud import create_crawl_run, get_run_records
 from app.models.crawl import CrawlRecord
+from app.services.pipeline.types import URLProcessingResult
 from app.services.robots_policy import (
     ROBOTS_ALLOWED,
     ROBOTS_FETCH_FAILURE,
@@ -142,15 +143,15 @@ async def test_process_run_tracks_failure_reason_counts(
     async def _fake_process_single_url(*args, **kwargs):
         url = str(kwargs.get("url") or "")
         if "search" in url:
-            return (
-                [],
-                "empty",
-                {"record_count": 0, "failure_reason": "non_detail_seed"},
+            return URLProcessingResult(
+                records=[],
+                verdict="empty",
+                url_metrics={"record_count": 0, "failure_reason": "non_detail_seed"},
             )
-        return (
-            [],
-            "blocked",
-            {"record_count": 0, "failure_reason": "challenge_shell"},
+        return URLProcessingResult(
+            records=[],
+            verdict="blocked",
+            url_metrics={"record_count": 0, "failure_reason": "challenge_shell"},
         )
 
     monkeypatch.setattr(
@@ -191,10 +192,10 @@ async def test_process_run_aggregates_quality_summary_from_url_metrics(
     async def _fake_process_single_url(*args, **kwargs):
         url = str(kwargs.get("url") or "")
         if "lite" in url:
-            return (
-                [],
-                "partial",
-                {
+            return URLProcessingResult(
+                records=[],
+                verdict="partial",
+                url_metrics={
                     "record_count": 0,
                     "quality_summary": {
                         "score": 0.4,
@@ -208,10 +209,10 @@ async def test_process_run_aggregates_quality_summary_from_url_metrics(
                     },
                 },
             )
-        return (
-            [],
-            "success",
-            {
+        return URLProcessingResult(
+            records=[],
+            verdict="success",
+            url_metrics={
                 "record_count": 0,
                 "quality_summary": {
                     "score": 0.9,
@@ -454,7 +455,11 @@ async def test_process_run_default_timeout_includes_acquisition_slack(
     async def _slow_process_single_url(*args, **kwargs):
         del args, kwargs
         await asyncio.sleep(0.025)
-        return [], "success", {"record_count": 0}
+        return URLProcessingResult(
+            records=[],
+            verdict="success",
+            url_metrics={"record_count": 0},
+        )
 
     monkeypatch.setattr(
         "app.services._batch_runtime.process_single_url",
@@ -634,10 +639,10 @@ async def test_process_run_continues_after_sqlalchemy_url_error(
             )
         )
         await session.flush()
-        return (
-            [{"title": "Widget Prime", "url": url}],
-            "success",
-            {"record_count": 1},
+        return URLProcessingResult(
+            records=[{"title": "Widget Prime", "url": url}],
+            verdict="success",
+            url_metrics={"record_count": 1},
         )
 
     monkeypatch.setattr(
@@ -682,7 +687,11 @@ async def test_process_run_continues_when_failure_log_persistence_fails(
         url = str(kwargs.get("url") or "")
         if "bad-widget" in url:
             raise RuntimeError("extractor failed")
-        return [], "success", {"record_count": 0}
+        return URLProcessingResult(
+            records=[],
+            verdict="success",
+            url_metrics={"record_count": 0},
+        )
 
     async def _failing_failure_log(*args, **kwargs):
         del args, kwargs
@@ -737,7 +746,11 @@ async def test_process_run_records_browser_exception_diagnostics_and_continues(
                 "failure_reason": "location_required",
             }
             raise exc
-        return [], "success", {"record_count": 0}
+        return URLProcessingResult(
+            records=[],
+            verdict="success",
+            url_metrics={"record_count": 0},
+        )
 
     monkeypatch.setattr(
         "app.services._batch_runtime.process_single_url",
@@ -792,7 +805,11 @@ async def test_process_run_continues_after_generic_browser_driver_error(
                 "failure_reason": "browser_driver_closed",
             }
             raise exc
-        return [], "success", {"record_count": 0}
+        return URLProcessingResult(
+            records=[],
+            verdict="success",
+            url_metrics={"record_count": 0},
+        )
 
     monkeypatch.setattr(
         "app.services._batch_runtime.process_single_url",

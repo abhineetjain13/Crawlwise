@@ -21,10 +21,7 @@ from app.services.crawl_state import (
     set_control_request,
     update_run_status,
 )
-from app.services.pipeline.core import (
-    _mark_run_failed,
-)
-from app.services.pipeline.runtime_helpers import log_event
+from app.services.pipeline.runtime_helpers import log_event, mark_run_failed
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -197,7 +194,7 @@ async def _run_with_local_session(run_id: int) -> None:
                 exc_info=(type(exc), exc, exc.__traceback__),
             )
             try:
-                await _mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")
+                await mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")
             except Exception:
                 logger.exception(
                     "Failed to persist failed status for run %s after process_run error",

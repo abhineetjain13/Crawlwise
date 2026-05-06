@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+import logging
 from app.services.config.llm_runtime import (
     SUPPORTED_LLM_PROVIDERS,
     llm_runtime_settings,
@@ -20,6 +21,7 @@ from app.services.llm_circuit_breaker import (
 )
 from app.services.llm_config_service import provider_env_key
 
+logger = logging.getLogger(__name__)
 JSON_CONTENT_TYPE = "application/json"
 _groq_client: httpx.AsyncClient | None = None
 _groq_client_timeout: float | None = None
@@ -45,14 +47,21 @@ async def close_llm_provider_clients() -> None:
         async with _anthropic_client_lock:
             async with _nvidia_client_lock:
                 async with _aws_client_lock:
-                    for client in (
-                        _groq_client,
-                        _anthropic_client,
-                        _nvidia_client,
-                        _aws_client,
+                    for client_name, client in (
+                        ("groq", _groq_client),
+                        ("anthropic", _anthropic_client),
+                        ("nvidia", _nvidia_client),
+                        ("aws", _aws_client),
                     ):
                         if client is not None and not client.is_closed:
-                            await client.aclose()
+                            try:
+                                await client.aclose()
+                            except Exception:
+                                logger.warning(
+                                    "Failed to close shared %s LLM client",
+                                    client_name,
+                                    exc_info=True,
+                                )
                     _groq_client = None
                     _groq_client_timeout = None
                     _anthropic_client = None
@@ -78,17 +87,11 @@ async def _refresh_shared_client(
 
 async def _shared_groq_client() -> httpx.AsyncClient:
     global _groq_client, _groq_client_timeout
-    timeout = float(llm_runtime_settings.provider_timeout_seconds)
     async with _groq_client_lock:
-        if (
-            _groq_client is None
-            or _groq_client.is_closed
-            or _groq_client_timeout != timeout
-        ):
-            if _groq_client is not None and not _groq_client.is_closed:
-                await _groq_client.aclose()
-            _groq_client = httpx.AsyncClient(timeout=timeout)
-            _groq_client_timeout = timeout
+        _groq_client, _groq_client_timeout = await _refresh_shared_client(
+            _groq_client,
+            _groq_client_timeout,
+        )
         return _groq_client
 
 

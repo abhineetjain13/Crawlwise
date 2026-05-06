@@ -786,7 +786,7 @@ async def test_run_with_local_session_preserves_original_process_run_error(
 
     monkeypatch.setattr(crawl_service, "SessionLocal", _FakeSessionLocal)
     monkeypatch.setattr(crawl_service, "_batch_process_run", _failing_process_run)
-    monkeypatch.setattr(crawl_service, "_mark_run_failed", _failing_mark_run_failed)
+    monkeypatch.setattr(crawl_service, "mark_run_failed", _failing_mark_run_failed)
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError, match="process exploded") as exc_info:

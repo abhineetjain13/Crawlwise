@@ -23,7 +23,7 @@ from app.services.config.extraction_rules import (
     EXPORT_IMAGE_URL_SUFFIXES,
     MARKDOWN_VIEW,
 )
-from app.services.config.field_mappings import (
+from app.services.config.public_record_policy import (
     PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS,
     PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS,
 )

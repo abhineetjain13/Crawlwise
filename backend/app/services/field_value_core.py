@@ -60,12 +60,11 @@ from app.services.config.extraction_rules import (
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
     ADDITIONAL_IMAGES_FIELD,
-    AXIS_NAME_ALIASES,
     BRAND_LIKE_FIELDS,
     FIELD_ALIASES,
-    FLAT_VARIANT_KEYS,
-    OPTION_SCALAR_FIELDS,
-    PUBLIC_VARIANT_AXIS_FIELDS,
+    URL_FIELD,
+)
+from app.services.config.public_record_policy import (
     PUBLIC_RECORD_BARCODE_LENGTHS,
     PUBLIC_RECORD_BRAND_REGION_SUFFIX_TOKENS,
     PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS,
@@ -75,7 +74,12 @@ from app.services.config.field_mappings import (
     PUBLIC_RECORD_LEGACY_VARIANT_FIELDS,
     PUBLIC_RECORD_PRODUCT_TYPE_NOISE_TOKENS,
     PUBLIC_RECORD_SKU_DRAFT_PREFIX_PATTERN,
-    URL_FIELD,
+)
+from app.services.config.variant_policy import (
+    AXIS_NAME_ALIASES,
+    FLAT_VARIANT_KEYS,
+    OPTION_SCALAR_FIELDS,
+    PUBLIC_VARIANT_AXIS_FIELDS,
     VARIANT_PARENT_SHARED_FIELDS,
 )
 from app.services.config.surface_hints import detail_path_hints

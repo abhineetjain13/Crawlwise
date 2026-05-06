@@ -11,6 +11,7 @@ from app.services.acquisition.acquirer import AcquisitionRequest
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.acquirer import PageEvidence
 from app.services.acquisition.acquirer import acquire as _acquire
+from app.services.acquisition.policy import AcquisitionPolicy
 from app.services.acquisition.host_protection_memory import note_host_hard_block
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.base import AdapterResult
@@ -79,7 +80,7 @@ from .runtime_helpers import (
     browser_outcome as _browser_outcome,
     browser_result_is_extractable as _browser_result_is_extractable,
     effective_blocked as _effective_blocked,
-    mark_run_failed as _mark_run_failed,
+    mark_run_failed,
     merge_browser_diagnostics as _merge_browser_diagnostics,
     record_detail_expansion_extraction_outcome as _record_detail_expansion_extraction_outcome,
     screenshot_required as _screenshot_required,
@@ -95,11 +96,11 @@ __all__ = [
     "STAGE_EXTRACT",
     "STAGE_NORMALIZE",
     "STAGE_PERSIST",
+    "mark_run_failed",
     "process_single_url",
 ]
 
 acquire = _acquire
-mark_run_failed = _mark_run_failed
 
 
 @dataclass(slots=True)
@@ -385,13 +386,15 @@ async def _build_acquisition_request(
         "capture_page_markdown",
         bool(context.run.settings_view.llm_enabled()),
     )
+    acquisition_policy = AcquisitionPolicy.from_profile(acquisition_profile)
     return AcquisitionRequest(
         run_id=context.run.id,
         url=context.url,
         plan=plan,
         requested_fields=list(context.requested_fields),
         requested_field_selectors={},
-        acquisition_profile=acquisition_profile,
+        acquisition_profile=acquisition_policy.to_profile(),
+        policy=acquisition_policy,
         on_event=_pipeline_acquisition_event_logger(context),
     )
 

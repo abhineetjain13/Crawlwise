@@ -46,7 +46,6 @@ import type {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { formatTimeHms, parseApiDate } from '../../lib/format/date';
 import { cn } from '../../lib/utils';
-import { syntaxHighlightJson } from '../../lib/ui/syntax';
 
 export type CrawlTab = 'category' | 'pdp';
 export type CategoryMode = 'single' | 'sitemap' | 'bulk';
@@ -94,7 +93,9 @@ export function uniqueFields(values: string[]) {
 }
 
 export function cleanRequestedField(value: string) {
-  return String(value || '').replace(/\s+/g, '');
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 export function uniqueRequestedFields(values: string[]) {
@@ -1669,19 +1670,15 @@ export const LogTerminal = memo(function LogTerminal({
                 </div>
                 <pre
                   className="crawl-terminal crawl-terminal-json h-full max-h-full overflow-auto"
-                  dangerouslySetInnerHTML={{
-                    __html:
-                      peekedGroup && peekedGroup.records[safePeekedRecordIndex]
-                        ? syntaxHighlightJson(
-                            JSON.stringify(
-                              cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
-                              null,
-                              2,
-                            ),
-                          )
-                        : TERMINAL_STRINGS.NO_PAYLOAD,
-                  }}
-                />
+                >
+                  {peekedGroup && peekedGroup.records[safePeekedRecordIndex]
+                    ? JSON.stringify(
+                        cleanRecordForDisplay(peekedGroup.records[safePeekedRecordIndex]),
+                        null,
+                        2,
+                      )
+                    : TERMINAL_STRINGS.NO_PAYLOAD}
+                </pre>
               </div>
             </div>
           </div>

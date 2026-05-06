@@ -108,12 +108,10 @@ from app.services.extract.variant_record_normalization import (
 )
 from app.services.field_policy import exact_requested_field_key
 from app.services.extract.detail_tiers import (
+    DetailTierExecutor,
+    DetailTierInputs,
+    DetailTierRuntime,
     DetailTierState,
-    collect_authoritative_tier,
-    collect_dom_tier,
-    collect_js_state_tier,
-    collect_structured_data_tier,
-    materialize_detail_tier,
 )
 
 logger = logging.getLogger(__name__)
@@ -1201,132 +1199,38 @@ def _prepare_detail_extraction(
     )
 
 
-def _collect_pre_dom_detail_tiers(
-    prepared: PreparedDetailExtraction,
-    *,
-    adapter_records: list[dict[str, Any]] | None,
-    network_payloads: list[dict[str, object]] | None,
-    alias_lookup: dict[str, str],
-) -> dict[str, Any]:
-    collect_authoritative_tier(
-        prepared.state,
-        adapter_records=adapter_records,
-        network_payloads=network_payloads,
-        collect_record_candidates=_collect_record_candidates,
-        map_network_payloads_to_fields=map_network_payloads_to_fields,
-    )
-    materialize_detail_tier(
-        prepared.state,
-        tier_name="authoritative",
-        materialize_record=_materialize_record,
-    )
-    collect_structured_data_tier(
-        prepared.state,
-        context=prepared.context,
-        alias_lookup=alias_lookup,
-        collect_structured_source_payloads=collect_structured_source_payloads,
-        collect_structured_payload_candidates=_collect_structured_payload_candidates,
-    )
-    materialize_detail_tier(
-        prepared.state,
-        tier_name="structured_data",
-        materialize_record=_materialize_record,
-    )
-    collect_js_state_tier(
-        prepared.state,
-        js_state_record=prepared.js_state_record,
-        collect_record_candidates=_collect_record_candidates,
-    )
-    return materialize_detail_tier(
-        prepared.state,
-        tier_name="js_state",
-        materialize_record=_materialize_record,
-    )
-
-
-def _collect_dom_detail_tier(
+def _apply_prepared_dom_fallbacks(
     prepared: PreparedDetailExtraction,
     *,
     selector_rules: list[dict[str, object]] | None,
-) -> dict[str, Any]:
-    collect_dom_tier(
-        prepared.state,
-        dom_parser=prepared.dom_parser,
-        soup=prepared.soup,
+) -> None:
+    apply_dom_fallbacks(
+        prepared.dom_parser,
+        prepared.soup,
+        page_url=prepared.state.page_url,
+        surface=prepared.state.surface,
+        requested_fields=prepared.state.requested_fields,
+        candidates=prepared.state.candidates,
+        candidate_sources=prepared.state.candidate_sources,
+        field_sources=prepared.state.field_sources,
+        selector_trace_candidates=prepared.state.selector_trace_candidates,
         selector_rules=selector_rules,
-        apply_dom_fallbacks=(
-            lambda dom_parser, soup, page_url, surface, requested_fields, candidates, candidate_sources, field_sources, selector_trace_candidates, *, selector_rules=None: (
-                apply_dom_fallbacks(
-                    dom_parser,
-                    soup,
-                    page_url=page_url,
-                    surface=surface,
-                    requested_fields=requested_fields,
-                    candidates=candidates,
-                    candidate_sources=candidate_sources,
-                    field_sources=field_sources,
-                    selector_trace_candidates=selector_trace_candidates,
-                    selector_rules=selector_rules,
-                    add_sourced_candidate=_add_sourced_candidate,
-                    breadcrumb_soup=prepared.raw_soup,
-                )
-            )
-        ),
-        extract_variants_from_dom=(
-            lambda dom_soup, *, page_url: _extract_variants_from_dom(
-                dom_soup,
-                page_url=page_url,
-                js_state_objects=prepared.js_state_objects,
-            )
-        ),
-        should_collect_dom_variants=_should_collect_dom_variants,
         add_sourced_candidate=_add_sourced_candidate,
-    )
-    return materialize_detail_tier(
-        prepared.state,
-        tier_name="dom",
-        materialize_record=_materialize_record,
-    )
-
-
-def _can_skip_dom_tier(
-    record: dict[str, Any],
-    prepared: PreparedDetailExtraction,
-    *,
-    surface: str,
-    requested_fields: list[str] | None,
-    selector_rules: list[dict[str, object]] | None,
-) -> bool:
-    confidence_score = _coerce_float(
-        _object_dict(record.get("_confidence")).get("score")
-    )
-    threshold = _coerce_float(prepared.selector_self_heal.get("threshold"))
-    return confidence_score >= threshold and not _requires_dom_completion(
-        record=record,
-        surface=surface,
-        requested_fields=requested_fields,
-        selector_rules=selector_rules,
-        soup=prepared.soup,
         breadcrumb_soup=prepared.raw_soup,
     )
 
 
-def _build_dom_tier_record(
-    prepared: PreparedDetailExtraction,
+def _extract_prepared_dom_variants(
+    soup: BeautifulSoup,
     *,
-    selector_rules: list[dict[str, object]] | None,
-    surface: str,
     page_url: str,
-) -> dict[str, Any]:
-    record = _collect_dom_detail_tier(prepared, selector_rules=selector_rules)
-    if surface == "ecommerce_detail":
-        _promote_dom_detail_title(
-            record,
-            js_state_record=prepared.js_state_record,
-            page_url=page_url,
-        )
-        _fill_missing_dom_detail_title(record, page_url=page_url)
-    return record
+    prepared: PreparedDetailExtraction,
+) -> dict[str, object]:
+    return _extract_variants_from_dom(
+        soup,
+        page_url=page_url,
+        js_state_objects=prepared.js_state_objects,
+    )
 
 
 def build_detail_record(
@@ -1350,50 +1254,43 @@ def build_detail_record(
         extraction_runtime_snapshot=extraction_runtime_snapshot,
     )
     alias_lookup = surface_alias_lookup(surface, requested_fields)
-    record = _collect_pre_dom_detail_tiers(
-        prepared,
-        adapter_records=adapter_records,
-        network_payloads=network_payloads,
-        alias_lookup=alias_lookup,
+    tier_executor = DetailTierExecutor(
+        DetailTierRuntime(
+            materialize_record=_materialize_record,
+            collect_record_candidates=_collect_record_candidates,
+            map_network_payloads_to_fields=map_network_payloads_to_fields,
+            collect_structured_source_payloads=collect_structured_source_payloads,
+            collect_structured_payload_candidates=_collect_structured_payload_candidates,
+            apply_dom_fallbacks=_apply_prepared_dom_fallbacks,
+            extract_variants_from_dom=(
+                lambda soup, *, page_url: _extract_prepared_dom_variants(
+                    soup,
+                    page_url=page_url,
+                    prepared=prepared,
+                )
+            ),
+            should_collect_dom_variants=_should_collect_dom_variants,
+            add_sourced_candidate=_add_sourced_candidate,
+            coerce_float=_coerce_float,
+            requires_dom_completion=_requires_dom_completion,
+            promote_dom_detail_title=_promote_dom_detail_title,
+            fill_missing_dom_detail_title=_fill_missing_dom_detail_title,
+            finalize_early_detail_record=_finalize_early_detail_record,
+            finalize_dom_detail_record=_finalize_dom_detail_record,
+        )
     )
-    if _can_skip_dom_tier(
-        record,
+    return tier_executor.build_record(
         prepared,
-        surface=surface,
-        requested_fields=requested_fields,
-        selector_rules=selector_rules,
-    ):
-        if surface == "ecommerce_detail":
-            _promote_dom_detail_title(
-                record,
-                js_state_record=prepared.js_state_record,
-                page_url=page_url,
-            )
-            _fill_missing_dom_detail_title(record, page_url=page_url)
-        return _finalize_early_detail_record(
-            record,
+        DetailTierInputs(
+            adapter_records=adapter_records,
+            network_payloads=network_payloads,
+            alias_lookup=alias_lookup,
+            selector_rules=selector_rules,
             html=html,
             page_url=page_url,
             surface=surface,
             requested_fields=requested_fields,
-            soup=prepared.soup,
-            js_state_objects=prepared.js_state_objects,
-        )
-
-    record = _build_dom_tier_record(
-        prepared,
-        selector_rules=selector_rules,
-        surface=surface,
-        page_url=page_url,
-    )
-    return _finalize_dom_detail_record(
-        record,
-        html=html,
-        page_url=page_url,
-        surface=surface,
-        requested_fields=requested_fields,
-        soup=prepared.soup,
-        js_state_objects=prepared.js_state_objects,
+        ),
     )
 
 

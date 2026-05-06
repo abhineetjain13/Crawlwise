@@ -18,7 +18,7 @@ from app.services.config.extraction_rules import (
     URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS,
     URL_CONCATENATION_SCHEME_PATTERN,
 )
-from app.services.config.field_mappings import (
+from app.services.config.public_record_policy import (
     PUBLIC_RECORD_CANONICAL_SURFACE,
     PUBLIC_RECORD_CANONICAL_URL_FIELDS,
     PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_KEYS,

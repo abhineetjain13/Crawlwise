@@ -7,7 +7,7 @@ import jmespath
 from bs4 import BeautifulSoup
 from glom import glom  # type: ignore[import-untyped]
 
-from app.services.config.field_mappings import (
+from app.services.config.js_state_field_specs import (
     JS_STATE_PRODUCT_FIELD_SPEC,
     JS_STATE_VARIANT_FIELD_SPEC,
 )

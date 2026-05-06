@@ -12,8 +12,12 @@ from app.services.config.extraction_rules import (
     DETAIL_IRRELEVANT_JSON_LD_TYPES,
     INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS,
     INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS,
+    IS_AVAILABLE_FIELD,
+    IS_INVENTORY_ONLY_FIELD,
     PRICE_SOURCE_KEY_FIELDS,
     SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS,
+    SHIPPING_DATE_FIELD,
+    SPECIAL_DAYS_FIELD,
     STRUCTURED_CANDIDATE_LIST_SLICE,
     STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT,
 )
@@ -499,10 +503,11 @@ def _structured_alias_value_allowed(
     if not isinstance(value, (int, float, str)):
         return True
     payload_keys = {normalize_field_key(str(key or "")) for key in payload}
-    inventory_payload_keys = payload_keys & SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS
+    inventory_payload_hint_fields = frozenset(SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS or ())
+    inventory_payload_keys = payload_keys & inventory_payload_hint_fields
     return not (
-        {"shipping_date", "special_days"} <= inventory_payload_keys
-        and bool(inventory_payload_keys & {"is_available", "is_inventory_only"})
+        {SHIPPING_DATE_FIELD, SPECIAL_DAYS_FIELD} <= inventory_payload_keys
+        and bool(inventory_payload_keys & {IS_AVAILABLE_FIELD, IS_INVENTORY_ONLY_FIELD})
     )
 
 

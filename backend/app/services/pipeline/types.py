@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
 
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -12,12 +12,6 @@ class URLProcessingResult:
     records: list[dict] = field(default_factory=list)
     verdict: str = ""
     url_metrics: dict[str, Any] = field(default_factory=dict)
-
-    def __iter__(self) -> Iterator:
-        return iter((self.records, self.verdict, self.url_metrics))
-
-    def __len__(self) -> int:
-        return 3
 
 
 @dataclass(slots=True)

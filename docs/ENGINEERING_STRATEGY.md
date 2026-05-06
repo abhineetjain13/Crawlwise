@@ -155,7 +155,7 @@ Importing underscore-prefixed names from another service module because "the hel
 
 **Violation looks like:** `extraction_runtime.py` imports `_finalize_listing_price_fields` from `listing_extractor.py`. `crawl_fetch_runtime.py` imports `_display_proxy` from `browser_runtime.py`. A facade or runtime module reaches into another module's internals instead of promoting a real owner API.
 
-**Fix:** Either keep the logic inside the owner and call a public function, or promote the helper into the canonical owner file for that concern. Private imports that already exist must be treated as explicit debt with a shrinking allowlist in `backend/tests/services/test_structure.py`. No new private cross-module imports.
+**Fix:** Either keep the logic inside the owner and call a public function, or promote the helper into the canonical owner file for that concern. If callers need the behavior, expose a non-underscore API from the owner. Private imports that already exist must be treated as explicit debt with a shrinking allowlist in `backend/tests/services/test_structure.py`. No new private cross-module imports.
 
 ### AP-18: Product taxonomy bloat
 Adding local product-universe dictionaries for enrichment categories, materials, colors, sizes, or category synonyms instead of using Shopify's taxonomy and attribute files.

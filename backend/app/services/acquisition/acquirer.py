@@ -6,9 +6,8 @@ import logging
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
-
 from app.services.acquisition_plan import AcquisitionPlan
+from app.services.acquisition.policy import AcquisitionPolicy
 from app.services.adapters.registry import normalize_adapter_acquisition_url
 from app.services.crawl_fetch_runtime import fetch_page
 from app.services.exceptions import ProxyPoolExhaustedError
@@ -27,13 +26,22 @@ class AcquisitionRequest:
         default_factory=dict
     )
     acquisition_profile: dict[str, object] = field(default_factory=dict)
+    policy: AcquisitionPolicy | None = None
     checkpoint: Any = None
     on_event: Any = None
 
+    def __post_init__(self) -> None:
+        policy = self.policy or AcquisitionPolicy.from_profile(self.acquisition_profile)
+        self.policy = policy
+        if not self.acquisition_profile:
+            self.acquisition_profile = policy.to_profile()
+
     def with_profile_updates(self, **updates: object) -> "AcquisitionRequest":
-        profile = dict(self.acquisition_profile)
-        profile.update(updates)
-        return replace(self, acquisition_profile=profile)
+        policy = (
+            self.policy or AcquisitionPolicy.from_profile(self.acquisition_profile)
+        ).with_updates(**updates)
+        profile = policy.to_profile()
+        return replace(self, acquisition_profile=profile, policy=policy)
 
     @property
     def surface(self) -> str:
@@ -184,68 +192,41 @@ async def _emit_event(on_event: Any, level: str, message: str) -> None:
 
 
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
-    acquisition_profile = _coerce_acquisition_profile(request.acquisition_profile)
     requested_url = str(request.url or "")
     effective_url = await normalize_adapter_acquisition_url(requested_url) or requested_url
     runtime_policy = resolve_platform_runtime_policy(
         effective_url,
         surface=request.surface,
     )
-    fetch_mode = _resolve_fetch_mode(request, acquisition_profile=acquisition_profile)
-    prefer_browser = bool(acquisition_profile.get("prefer_browser")) or bool(
-        runtime_policy.get("requires_browser")
-    )
-    browser_reason = _resolve_browser_reason(
-        request=request,
-        acquisition_profile=acquisition_profile,
+    acquisition_policy = _resolve_acquisition_policy(request).with_platform_requirements(
         requires_browser=bool(runtime_policy.get("requires_browser")),
     )
+    browser_reason = acquisition_policy.browser_reason
+    if browser_reason is None and bool(runtime_policy.get("requires_browser")):
+        browser_reason = "platform-required"
     try:
-        raw_proxy_profile = acquisition_profile.get("proxy_profile")
-        proxy_profile = (
-            dict(raw_proxy_profile) if isinstance(raw_proxy_profile, Mapping) else None
-        )
-        raw_locality_profile = acquisition_profile.get("locality_profile")
-        locality_profile = (
-            dict(raw_locality_profile)
-            if isinstance(raw_locality_profile, Mapping)
-            else None
-        )
         await _emit_event(request.on_event, "info", f"Acquiring {effective_url}")
         result = await fetch_page(
             effective_url,
             run_id=request.run_id,
             proxy_list=request.proxy_list,
-            proxy_profile=proxy_profile,
-            locality_profile=locality_profile,
-            fetch_mode=fetch_mode,
-            prefer_browser=prefer_browser,
+            proxy_profile=acquisition_policy.proxy_profile or None,
+            locality_profile=acquisition_policy.locality_profile or None,
+            fetch_mode=acquisition_policy.fetch_mode,
+            prefer_browser=acquisition_policy.prefer_browser,
             surface=request.surface,
             traversal_mode=request.traversal_mode,
             requested_fields=list(request.requested_fields),
-            listing_recovery_mode=_resolve_listing_recovery_mode(
-                request,
-                acquisition_profile=acquisition_profile,
-            ),
+            listing_recovery_mode=acquisition_policy.listing_recovery_mode,
             max_pages=request.max_pages,
             max_scrolls=request.max_scrolls,
             max_records=request.max_records,
             browser_reason=browser_reason,
-            capture_page_markdown=bool(
-                acquisition_profile.get("capture_page_markdown", False)
-            ),
-            capture_screenshot=bool(
-                acquisition_profile.get("capture_screenshot", False)
-            ),
-            prefer_curl_handoff=bool(
-                acquisition_profile.get("prefer_curl_handoff", False)
-            ),
-            handoff_cookie_engine=str(
-                acquisition_profile.get("handoff_cookie_engine") or ""
-            ).strip() or None,
-            forced_browser_engine=str(
-                acquisition_profile.get("forced_browser_engine") or ""
-            ).strip() or None,
+            capture_page_markdown=acquisition_policy.capture_page_markdown,
+            capture_screenshot=acquisition_policy.capture_screenshot,
+            prefer_curl_handoff=acquisition_policy.prefer_curl_handoff,
+            handoff_cookie_engine=acquisition_policy.handoff_cookie_engine,
+            forced_browser_engine=acquisition_policy.forced_browser_engine,
             on_event=request.on_event,
         )
     except ProxyPoolExhausted:
@@ -274,17 +255,20 @@ def _resolve_fetch_mode(
     *,
     acquisition_profile: Mapping[str, object] | None = None,
 ) -> str:
-    profile = _coerce_acquisition_profile(
-        acquisition_profile
-        if acquisition_profile is not None
-        else request.acquisition_profile
-    )
-    normalized = str(profile.get("fetch_mode") or "").strip().lower()
-    if normalized in {"auto", "http_only", "browser_only", "http_then_browser"}:
-        return normalized
-    if bool(profile.get("prefer_browser")):
-        return "browser_only"
-    return "auto"
+    return _resolve_acquisition_policy(
+        request,
+        acquisition_profile=acquisition_profile,
+    ).fetch_mode
+
+
+def _resolve_acquisition_policy(
+    request: AcquisitionRequest,
+    *,
+    acquisition_profile: Mapping[str, object] | None = None,
+) -> AcquisitionPolicy:
+    if acquisition_profile is not None:
+        return AcquisitionPolicy.from_profile(acquisition_profile)
+    return request.policy or AcquisitionPolicy.from_profile(request.acquisition_profile)
 
 
 def _headers_to_dict(headers: Mapping[str, object] | Any) -> dict[str, str]:
@@ -304,18 +288,13 @@ def _resolve_browser_reason(
     acquisition_profile: Mapping[str, object] | None = None,
     requires_browser: bool,
 ) -> str | None:
-    profile = _coerce_acquisition_profile(
-        acquisition_profile
-        if acquisition_profile is not None
-        else request.acquisition_profile
+    policy = _resolve_acquisition_policy(
+        request,
+        acquisition_profile=acquisition_profile,
     )
-    retry_reason = _normalized_retry_reason(
-        profile.get("retry_reason")
-    )
-    if retry_reason == "empty_extraction":
-        return "empty-extraction retry"
-    if retry_reason == "thin_listing":
-        return "thin-listing retry"
+    retry_reason = policy.browser_reason
+    if retry_reason:
+        return retry_reason
     if requires_browser:
         return "platform-required"
     return None
@@ -326,36 +305,7 @@ def _resolve_listing_recovery_mode(
     *,
     acquisition_profile: Mapping[str, object] | None = None,
 ) -> str | None:
-    profile = _coerce_acquisition_profile(
-        acquisition_profile
-        if acquisition_profile is not None
-        else request.acquisition_profile
-    )
-    retry_reason = _normalized_retry_reason(
-        profile.get("retry_reason")
-    )
-    if retry_reason == "thin_listing":
-        return retry_reason
-    return None
-
-
-def _normalized_retry_reason(value: object) -> str:
-    normalized = (
-        str(value or "")
-        .strip()
-        .lower()
-        .replace("-", "_")
-        .replace(" ", "_")
-    )
-    if normalized.endswith("_retry"):
-        normalized = normalized[: -len("_retry")]
-    return normalized
-
-
-def _coerce_acquisition_profile(value: object) -> dict[str, object]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if isinstance(value, BaseModel):
-        payload = value.model_dump()
-        return payload if isinstance(payload, dict) else {}
-    return {}
+    return _resolve_acquisition_policy(
+        request,
+        acquisition_profile=acquisition_profile,
+    ).listing_recovery_mode

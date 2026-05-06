@@ -139,3 +139,71 @@ def test_resolve_fetch_mode_honors_explicit_empty_profile() -> None:
         request,
         acquisition_profile={},
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_acquire_translates_policy_to_fetch_runtime_knobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_fetch_page(url: str, *args, **kwargs):
+        del args
+        captured["url"] = url
+        captured.update(kwargs)
+        return type(
+            "FetchResult",
+            (),
+            {
+                "final_url": url,
+                "html": "<html></html>",
+                "method": "browser",
+                "status_code": 200,
+                "content_type": "text/html",
+                "blocked": False,
+                "headers": {},
+                "network_payloads": [],
+                "browser_diagnostics": {},
+                "artifacts": {},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.acquisition.acquirer.fetch_page",
+        _fake_fetch_page,
+    )
+
+    await acquire(
+        AcquisitionRequest(
+            run_id=9,
+            url="https://example.com/products/widget",
+            plan=AcquisitionPlan(
+                surface="ecommerce_detail",
+                proxy_list=("http://proxy.example",),
+            ),
+            acquisition_profile={
+                "fetch_mode": "browser_only",
+                "prefer_browser": True,
+                "retry_reason": "thin-listing retry",
+                "proxy_profile": {"rotation": "session"},
+                "locality_profile": {"country": "US"},
+                "capture_page_markdown": True,
+                "capture_screenshot": True,
+                "prefer_curl_handoff": True,
+                "handoff_cookie_engine": "real_chrome",
+                "forced_browser_engine": "real_chrome",
+            },
+        )
+    )
+
+    assert captured["fetch_mode"] == "browser_only"
+    assert captured["prefer_browser"] is True
+    assert captured["browser_reason"] == "thin-listing retry"
+    assert captured["listing_recovery_mode"] == "thin_listing"
+    assert captured["proxy_profile"] == {"rotation": "session"}
+    assert captured["locality_profile"] == {"country": "US"}
+    assert captured["capture_page_markdown"] is True
+    assert captured["capture_screenshot"] is True
+    assert captured["prefer_curl_handoff"] is True
+    assert captured["handoff_cookie_engine"] == "real_chrome"
+    assert captured["forced_browser_engine"] == "real_chrome"

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 import re
 from typing import Any
 
 from app.services.config._export_data import load_export_data
 
+logger = logging.getLogger(__name__)
 _EXPORTS_PATH = Path(__file__).with_name("selectors.exports.json")
 _STATIC_EXPORTS = {
     name: value
@@ -18,7 +20,11 @@ for _name, _value in _STATIC_EXPORTS.items():
 
 SELECTOR_SELF_HEAL_TARGET_LIMIT = 6
 SELECTOR_SELF_HEAL_DEFAULT_MIN_CONFIDENCE = 0.55
-# Final retention allow-list for interactive tags with useful selector attributes.
+if "SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS" in _STATIC_EXPORTS:
+    logger.warning(
+        "Ignoring exported SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS; value is code-owned"
+    )
+# Code-owned final retention allow-list for interactive selector synthesis tags.
 SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS = frozenset({"button", "input", "select"})
 
 XPATH_ALLOWED_FUNCTIONS = frozenset(

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.extract.detail_text_sanitizer import sanitize_detail_long_text
+from app.services.extract.detail_text_sanitizer import (
+    sanitize_detail_features,
+    sanitize_detail_long_text,
+)
 
 
 class TestBracketArtifactNoise:
@@ -91,3 +94,17 @@ class TestMarketingBannerAndSeoDescriptions:
 )
 def test_existing_disclaimer_patterns_still_work(value: str) -> None:
     assert sanitize_detail_long_text(value, title="Generic") == ""
+
+
+def test_sanitize_detail_features_drops_accordion_button_labels() -> None:
+    value = [
+        "Features",
+        "AMD Ryzen 3 Processor",
+        "See more Features",
+        "Full HD display",
+    ]
+
+    assert sanitize_detail_features(value, title="HP Laptop 15") == [
+        "AMD Ryzen 3 Processor",
+        "Full HD display",
+    ]

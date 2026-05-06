@@ -35,7 +35,7 @@ from app.services.field_value_core import (
     surface_fields,
     text_or_none,
 )
-from app.services.config.field_mappings import (
+from app.services.config.variant_policy import (
     OPTION_SCALAR_FIELDS,
     PUBLIC_VARIANT_AXIS_FIELDS,
 )
@@ -96,7 +96,6 @@ _variant_artifact_value_tokens = frozenset(
     for token in tuple(DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or ())
     if str(token).strip()
 )
-_visible_node_text_cache: dict[int, str] = {}
 _public_variant_axis_fields = frozenset(
     str(token).strip().lower()
     for token in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
@@ -462,20 +461,26 @@ def _variant_input_label(container: Any, input_node: Any) -> Any | None:
     return None
 
 
-def _visible_node_text(node: Any | None) -> str:
+def _visible_node_text(
+    node: Any | None,
+    *,
+    cache: dict[int, str] | None = None,
+) -> str:
     if node is None or not hasattr(node, "get_text"):
         return ""
     cache_key = id(node)
-    cached = _visible_node_text_cache.get(cache_key)
-    if cached is not None:
-        return cached
+    if cache is not None:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
     parsed = BeautifulSoup(str(node), "html.parser")
     for hidden in parsed.select(
         ".sr-only, .visually-hidden, [aria-hidden='true'], svg, title, use"
     ):
         hidden.decompose()
     visible_text = clean_text(parsed.get_text(" ", strip=True))
-    _visible_node_text_cache[cache_key] = visible_text
+    if cache is not None:
+        cache[cache_key] = visible_text
     return visible_text
 
 
@@ -650,6 +655,7 @@ def _collect_variant_choice_entries(
         else "style"
     )
     entries_by_value: dict[str, dict[str, object]] = {}
+    visible_text_cache: dict[int, str] = {}
     for node in container.select(
         "[role='radio'], "
         "[role='option'], "
@@ -659,7 +665,11 @@ def _collect_variant_choice_entries(
     )[:24]:
         cleaned = _coerce_variant_option_value(
             coercion_axis,
-            _variant_choice_entry_value(container, node),
+            _variant_choice_entry_value(
+                container,
+                node,
+                visible_text_cache=visible_text_cache,
+            ),
             page_url=page_url,
         )
         cleaned = _strip_variant_option_value_suffix_noise(cleaned)
@@ -685,7 +695,12 @@ def _collect_variant_choice_entries(
         label_node = _variant_input_label(container, input_node)
         cleaned = _coerce_variant_option_value(
             coercion_axis,
-            _variant_choice_entry_value(container, input_node, label_node=label_node),
+            _variant_choice_entry_value(
+                container,
+                input_node,
+                label_node=label_node,
+                visible_text_cache=visible_text_cache,
+            ),
             page_url=page_url,
         )
         cleaned = _strip_variant_option_value_suffix_noise(cleaned)
@@ -707,10 +722,11 @@ def _variant_choice_entry_value(
     node: Any,
     *,
     label_node: Any | None = None,
+    visible_text_cache: dict[int, str] | None = None,
 ) -> str:
     resolved_label = label_node or _variant_input_label(container, node)
-    label_text = _visible_node_text(resolved_label)
-    node_text = _visible_node_text(node)
+    label_text = _visible_node_text(resolved_label, cache=visible_text_cache)
+    node_text = _visible_node_text(node, cache=visible_text_cache)
     return clean_text(
         node.get("data-attr-displayvalue")
         or node.get("data-displayvalue")

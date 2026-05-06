@@ -5,6 +5,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from app.services.config.extraction_rules import (
+    JOB_UTILITY_URL_TOKENS,
     LISTING_EDITORIAL_PATH_SEGMENTS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_EDITORIAL_URL_TOKENS,
@@ -272,6 +273,167 @@ def _record_has_supporting_signals(
             "review_count",
         )
     )
+
+
+def listing_record_supported(
+    record: dict[str, Any],
+    *,
+    page_url: str,
+    surface: str,
+    title_is_noise: Callable[[str], bool],
+    url_is_structural: Callable[[str, str], bool],
+    detail_like_url: Callable[[str], bool],
+) -> bool:
+    title = clean_text(record.get("title"))
+    url = str(record.get("url") or "").strip()
+    source_kind = str(record.get("_source") or "").strip().lower()
+    if not title or not url or title_is_noise(title) or url_is_structural(url, page_url):
+        return False
+    if looks_like_utility_record(title=title, url=url):
+        return False
+    is_job_surface = surface.startswith("job_")
+    detail_like = detail_like_url(url)
+    if is_job_surface and (
+        job_listing_url_is_utility(url)
+        or job_listing_url_is_hub(url)
+    ):
+        return False
+    if is_job_surface and job_listing_title_is_hub(title) and not detail_like:
+        return False
+    if detail_like:
+        return True
+    if _record_has_supporting_listing_signals(record, surface=surface):
+        return True
+    if is_job_surface and job_listing_url_looks_like_posting(url):
+        return True
+    return (
+        not is_job_surface
+        and source_kind == "structured_listing"
+        and len(title) >= 12
+    )
+
+
+def _record_has_supporting_listing_signals(
+    record: dict[str, Any],
+    *,
+    surface: str,
+) -> bool:
+    if any(
+        record.get(field_name) not in (None, "", [], {})
+        for field_name in ("image_url", "price", "rating", "review_count")
+    ):
+        return True
+    if surface.startswith("job_"):
+        return any(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in ("company", "location", "salary", "job_type")
+        )
+    return record.get("brand") not in (None, "", [], {})
+
+
+def job_listing_url_looks_like_posting(url: str) -> bool:
+    parsed = urlsplit(url.lower())
+    segments = [segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()]
+    if not segments:
+        return False
+    terminal = segments[-1]
+    leading_tokens = [_path_segment_tokens(segment) for segment in segments[:-1]]
+    if any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens):
+        return False
+    terminal_tokens = _path_segment_tokens(terminal)
+    if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
+        return False
+    if re.fullmatch(r"(?:19|20)\d{2}", terminal):
+        return False
+    if not re.search(r"\d{4,}", terminal):
+        return False
+    if any(
+        marker in parsed.path
+        for marker in (
+            "/job/",
+            "/jobs/",
+            "/opening/",
+            "/openings/",
+            "/position/",
+            "/positions/",
+            "/posting/",
+            "/postings/",
+            "/career/",
+            "/careers/",
+            "/requisition/",
+            "/requisitions/",
+            "/role/",
+            "/roles/",
+            "/vacancy/",
+            "/vacancies/",
+        )
+    ):
+        return True
+    terminal_words = [
+        token
+        for token in re.split(r"[^a-z0-9]+", terminal)
+        if len(token) >= 3 and not token.isdigit()
+    ]
+    return len(terminal_words) >= 2
+
+
+def job_listing_title_is_hub(title: str) -> bool:
+    lowered = clean_text(title).lower()
+    if not lowered:
+        return False
+    if lowered in {"jobs", "careers", "openings"}:
+        return True
+    return lowered.startswith(
+        (
+            "jobs in ",
+            "jobs near ",
+            "careers in ",
+            "roles in ",
+            "openings in ",
+        )
+    )
+
+
+def job_listing_url_is_hub(url: str) -> bool:
+    parsed = urlsplit(url.lower())
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    terminal = segments[-1] if segments else ""
+    if terminal in {
+        "careers",
+        "jobs",
+        "openings",
+        "search",
+        "search-jobs",
+        "search-results",
+    }:
+        return True
+    if terminal.startswith(
+        (
+            "jobs-in-",
+            "careers-in-",
+            "openings-in-",
+            "search-jobs",
+            "job-search",
+        )
+    ):
+        return True
+    return False
+
+
+def job_listing_url_is_utility(url: str) -> bool:
+    lowered = url.lower()
+    return any(
+        token in lowered
+        for token in JOB_UTILITY_URL_TOKENS
+    )
+
+
+def _path_segment_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[\-\.]+", str(value or "").strip().lower())
+        if token
+    }
 
 
 def _should_drop_record(metrics: dict[str, object], *, surface: str) -> bool:

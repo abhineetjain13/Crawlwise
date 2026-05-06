@@ -724,7 +724,11 @@ async def settle_browser_page_impl(
             surface=surface or "",
             requested_fields=requested_fields,
         )
-        if initial_extractability.get("verified"):
+        if _detail_expansion_can_skip(
+            initial_extractability,
+            surface=surface,
+            requested_fields=requested_fields,
+        ):
             expansion_diagnostics = {
                 "status": "skipped",
                 "reason": "requested_content_already_extractable",
@@ -1544,6 +1548,21 @@ def _detail_expansion_extractability(
         }
     soup = BeautifulSoup(str(html or ""), "html.parser")
     return requested_content_extractability(soup, surface=surface, requested_fields=requested_fields)
+
+
+def _detail_expansion_can_skip(
+    extractability: dict[str, object],
+    *,
+    surface: str | None,
+    requested_fields: list[str] | None,
+) -> bool:
+    if not bool(extractability.get("verified")):
+        return False
+    if list(requested_fields or []):
+        return bool(extractability.get("matched_requested_fields"))
+    return "ecommerce" not in str(surface or "").strip().lower()
+
+
 async def _capture_listing_visual_elements(
     page: Any,
     *,

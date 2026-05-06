@@ -176,10 +176,11 @@ Current live behavior:
 - local startup recovery only reclaims stale active runs: fresh `pending` rows without a local task id are left alone, while stale `running` rows are forced into `failed` and stale local-dispatch `pending` rows are forced into `killed` so interrupted work does not stay orphaned forever
 - batch execution now refreshes `last_heartbeat_at` as runs advance so startup recovery can distinguish live external workers from truly stale local work
 - per-URL failures now roll back and reload the active DB session, persist URL-level error metrics/diagnostics, and continue the batch; mixed success/error runs finish `completed` with aggregate verdict `partial`, and persisted records remain exportable
+- per-URL pipeline calls return `URLProcessingResult`; tuple result compatibility is removed so batch orchestration depends on the typed public result interface
 - acceptance harness runs now support curated manifest-driven site sets with bucketed expectations, explicit acceptance surfaces remain authoritative instead of being silently re-inferred from URLs, and curated commerce rows can reuse artifact-backed run ids before falling back to live execution
 - acceptance reports now distinguish transport verdicts from output quality through `quality_verdict`, `observed_failure_mode`, and `quality_checks`, so runs that technically succeed but return shell pages, promo pages, chrome-heavy listings, or broken variant semantics no longer look healthy
 - reusable domain execution defaults are persisted separately from selector memory in `DomainRunProfile`, then merged into single-URL run creation before `CrawlRun.settings` is snapshotted
-- `pipeline/core.py` stays the per-URL orchestrator; direct-record LLM fallback, empty-extraction browser retry decisions, browser diagnostics merge, and failure-state persistence live in dedicated pipeline helper modules
+- `pipeline/core.py` stays the per-URL orchestrator; direct-record LLM fallback, empty-extraction browser retry decisions, browser diagnostics merge, typed result objects, and public failure-state persistence live in dedicated pipeline helper modules
 - Data Enrichment is separate from the crawl pipeline: it reads persisted ecommerce detail `CrawlRecord` rows, writes `EnrichedProduct` rows, and only updates source-record enrichment status metadata.
 
 ### 6.3 Acquisition and browser runtime
@@ -187,6 +188,7 @@ Current live behavior:
 Primary files:
 
 - `acquisition/acquirer.py`
+- `acquisition/policy.py`
 - `acquisition/runtime.py`
 - `acquisition/browser_capture.py`
 - `acquisition/browser_runtime.py`
@@ -218,6 +220,7 @@ Responsibilities:
 Current live behavior:
 
 - fetch results carry headers, blocked state, browser diagnostics, transient browser artifacts, and network payload metadata
+- callers pass an explicit `AcquisitionPolicy`; `acquirer.py` translates that policy to `crawl_fetch_runtime.fetch_page` knobs so raw fetch-runtime controls stay inside acquisition
 - browser runtime is pooled and exposes runtime snapshots
 - `browserforge`-backed context identity is active
 - browser fetch uses `patchright` as the primary acquisition engine. There is no legacy `playwright-stealth` stack and no silent generic Chromium fallback. Explicit `real_chrome` remains an escalation lane for protected ecommerce detail pages and Product Intelligence native Google discovery when `C:\Program Files\Google\Chrome\Application\chrome.exe` (or `CRAWLER_RUNTIME_BROWSER_REAL_CHROME_EXECUTABLE_PATH`) is available.
@@ -282,6 +285,7 @@ Primary files:
 
 - `crawl_engine.py`
 - `detail_extractor.py`
+- `extract/detail_tiers.py`
 - `listing_extractor.py`
 - `structured_sources.py`
 - `js_state_mapper.py`
@@ -315,7 +319,10 @@ Important implemented features:
 - ecommerce detail title selection now ranks structured sources ahead of raw DOM headings, rejects noisy DOM `<h1>/<title>` values such as promo or generic-results text, and only promotes fallback titles when the replacement source is materially stronger
 - ecommerce detail extraction now drops low-signal site-shell records when the surviving title still resolves to site-brand chrome and no real product anchors survive, preventing stale SPA/detail misses from being persisted as false product successes
 - ecommerce-detail extraction now threads the originally requested PDP URL through materialization so same-site utility redirects can either preserve the requested product identity when the product metadata still matches or drop the row entirely when the utility page is carrying mismatched stale product data
+- detail tier execution lives in `extract/detail_tiers.py`; `detail_extractor.py` prepares state and owns candidate arbitration, while the tier executor owns authoritative -> structured -> JS state -> DOM sequencing, DOM skip decisions, and early/DOM finalization transitions
 - detail extraction now has a DOM variant fallback for `ecommerce_detail` pages when structured data and JS state leave variant axes empty
+- listing candidate quality lives in `extract/listing_candidate_ranking.py`; listing extraction now delegates candidate admission, support-signal checks, utility rejection, dedupe, and set ranking to that owner
+- extraction config is split by concept: `field_mappings.py` owns schemas/aliases/field-name primitives, `js_state_field_specs.py` owns glom specs, `variant_policy.py` owns variant axes and flat transport fields, and `public_record_policy.py` owns public persisted/exported record policy
 - variant record normalization has its own owner in `extract/variant_record_normalization.py`; `detail_extractor.py` extracts candidates and delegates final variant axis/value cleanup
 - DOM variant recovery now recognizes radio/checkbox-based size and color groups, associates labels via `for`/parent label structure, and carries stock-derived availability (`0 Left`, `17 Left`, etc.) into `variants` and `selected_variant`
 - JS-state ecommerce-detail mapping now scores candidate product payloads so richer nested PDP nodes beat shallow landing/navigation shells, and generic direct-axis variant keys such as `condition`, `grade`, `storage`, and `memory` are normalized without adapter-specific branches

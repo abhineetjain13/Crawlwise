@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from decimal import Decimal
 from typing import Any
@@ -68,6 +69,8 @@ from app.services.extract.shared_variant_logic import (
     _variant_axis_allowed_single_tokens,
 )
 
+logger = logging.getLogger(__name__)
+
 _UUID_LIKE_PATTERN = re.compile(r"(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _MERCH_CODE_PATTERN = re.compile(r"\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", re.I)
 _VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
@@ -93,10 +96,23 @@ _DETAIL_BASE_PLACEHOLDER_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^not found$", re.I),
     re.compile(r"^access denied$", re.I),
 )
-_DETAIL_WAF_QUEUE_TITLE_PATTERNS = tuple(
-    re.compile(str(pattern), re.I)
-    for pattern in tuple(WAF_QUEUE_PATTERNS or ())
-    if str(pattern).strip()
+def _compile_detail_waf_queue_title_patterns() -> tuple[re.Pattern[str], ...]:
+    patterns: list[re.Pattern[str]] = []
+    for pattern in tuple(WAF_QUEUE_PATTERNS or ()):
+        if not str(pattern).strip():
+            continue
+        try:
+            patterns.append(re.compile(str(pattern), re.I))
+        except re.error:
+            logger.warning("Skipping invalid WAF queue title pattern: %r", pattern)
+    return tuple(patterns)
+
+
+_DETAIL_WAF_QUEUE_TITLE_PATTERNS = _compile_detail_waf_queue_title_patterns()
+_MATERIAL_KEYWORD_TOKENS = frozenset(
+    str(token).strip().lower()
+    for token in tuple(MATERIAL_KEYWORDS or ())
+    if str(token).strip()
 )
 _DETAIL_PLACEHOLDER_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     *_DETAIL_BASE_PLACEHOLDER_TITLE_PATTERNS,
@@ -391,7 +407,7 @@ def _detail_title_looks_like_placeholder(title: str) -> bool:
 
 def _materials_value_looks_like_org_name(value: str) -> bool:
     lowered = value.lower()
-    if any(token in lowered for token in MATERIAL_KEYWORDS):
+    if any(token in lowered for token in _MATERIAL_KEYWORD_TOKENS):
         return False
     return bool(
         (_ORG_SUFFIX_PATTERN is not None and _ORG_SUFFIX_PATTERN.search(lowered))

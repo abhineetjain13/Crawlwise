@@ -35,6 +35,7 @@ from app.services.config.extraction_rules import (
     DETAIL_TITLE_DIMENSION_SIZE_PATTERN,
     DETAIL_TRACKING_TOKEN_PATTERN,
     DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
+    FEATURE_ROW_NOISE_PATTERNS,
     LONG_TEXT_MAX_WORDS,
     LONG_TEXT_MIN_WORDS,
     LONG_TEXT_PREFIXES,
@@ -119,7 +120,7 @@ _detail_noise_prefixes = tuple(
     for prefix in tuple(DETAIL_NOISE_PREFIXES or ())
     if clean_text(prefix)
 )
-long_text_ui_tail_phrases = tuple(
+_long_text_ui_tail_phrases = tuple(
     clean_text(phrase).lower()
     for phrase in tuple(DETAIL_LONG_TEXT_UI_TAIL_PHRASES or ())
     if clean_text(phrase)
@@ -136,14 +137,20 @@ _long_text_prefixes = tuple(
     for prefix in tuple(LONG_TEXT_PREFIXES or ())
     if clean_text(prefix)
 )
-_legal_tail_contains = tuple(DETAIL_LEGAL_TAIL_PATTERNS.get("contains", ()))
-_legal_tail_digit_contains = tuple(DETAIL_LEGAL_TAIL_PATTERNS.get("digit_contains", ()))
-_legal_tail_all_contains = tuple(DETAIL_LEGAL_TAIL_PATTERNS.get("all_contains", ()))
-_legal_tail_exact = frozenset(DETAIL_LEGAL_TAIL_PATTERNS.get("exact", ()))
+_legal_tail_patterns = DETAIL_LEGAL_TAIL_PATTERNS or {}
+_legal_tail_contains = tuple(_legal_tail_patterns.get("contains", ()))
+_legal_tail_digit_contains = tuple(_legal_tail_patterns.get("digit_contains", ()))
+_legal_tail_all_contains = tuple(_legal_tail_patterns.get("all_contains", ()))
+_legal_tail_exact = frozenset(_legal_tail_patterns.get("exact", ()))
 artifact_price_values = frozenset(
     clean_text(v).lower()
     for v in tuple(DETAIL_ARTIFACT_PRICE_VALUES or ())
     if clean_text(v)
+)
+feature_row_noise_patterns = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(FEATURE_ROW_NOISE_PATTERNS or ())
+    if str(pattern).strip()
 )
 
 
@@ -407,6 +414,8 @@ def sanitize_detail_features(value: object, *, title: str) -> list[str]:
             pattern.search(cleaned) for pattern in long_text_disclaimer_patterns
         ):
             continue
+        if any(pattern.fullmatch(cleaned) for pattern in feature_row_noise_patterns):
+            continue
         if lowered in seen:
             continue
         seen.add(lowered)
@@ -463,7 +472,7 @@ def _strip_bracket_artifact_noise(text: str) -> str:
 def _strip_long_text_ui_tail(text: str) -> str:
     cleaned = clean_text(text)
     lowered = cleaned.lower()
-    for phrase in long_text_ui_tail_phrases:
+    for phrase in _long_text_ui_tail_phrases:
         if lowered == phrase:
             return ""
         suffix = f" {phrase}"
