@@ -371,7 +371,7 @@ export default function AdminLlmPage() {
                                     minute: '2-digit',
                                     hour12: false,
                                   });
-                                  const dateStr = d.toLocaleDateString([], {
+                                  const dateStr = d.toLocaleDateString('en-US', {
                                     month: '2-digit',
                                     day: '2-digit',
                                   });

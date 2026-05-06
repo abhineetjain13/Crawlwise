@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -12,6 +12,10 @@ class URLProcessingResult:
     records: list[dict] = field(default_factory=list)
     verdict: str = ""
     url_metrics: dict[str, Any] = field(default_factory=dict)
+
+
+class RecordWriter(Protocol):
+    def write_record(self, record: dict[str, Any]) -> Any: ...
 
 
 @dataclass(slots=True)
@@ -26,7 +30,7 @@ class URLProcessingConfig:
     update_run_state: bool = True
     persist_logs: bool = True
     prefetch_only: bool = False
-    record_writer: object | None = None
+    record_writer: RecordWriter | None = None
 
     def __post_init__(self) -> None:
         if self.acquisition_plan is None:
@@ -49,7 +53,7 @@ class URLProcessingConfig:
         update_run_state: bool = True,
         persist_logs: bool = True,
         prefetch_only: bool = False,
-        record_writer: object | None = None,
+        record_writer: RecordWriter | None = None,
     ) -> "URLProcessingConfig":
         return cls(
             acquisition_plan=plan,
@@ -61,6 +65,7 @@ class URLProcessingConfig:
 
     def resolved_acquisition_plan(self, *, surface: str) -> AcquisitionPlan:
         if self.acquisition_plan is None:
+            # Defensive for unusual construction paths; __post_init__ normally sets this.
             self.acquisition_plan = AcquisitionPlan(surface=str(surface or "").strip())
         if self.acquisition_plan.surface == str(surface or "").strip():
             return self.acquisition_plan

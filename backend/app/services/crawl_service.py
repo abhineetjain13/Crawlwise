@@ -12,7 +12,10 @@ from app.core.database import SessionLocal
 from app.models.crawl import CrawlRun
 from app.tasks import process_run_task
 from app.services._batch_runtime import process_run as _batch_process_run
-from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.runtime_settings import (
+    CELERY_TASK_ID_KEY,
+    crawler_runtime_settings,
+)
 from app.services.crawl_state import (
     CONTROL_REQUEST_KILL,
     CONTROL_REQUEST_PAUSE,
@@ -22,17 +25,13 @@ from app.services.crawl_state import (
     update_run_status,
 )
 from app.services.pipeline.runtime_helpers import log_event, mark_run_failed
+from app.services.publish import (
+    VERDICT_BLOCKED,
+    VERDICT_ERROR,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-VERDICT_SUCCESS, VERDICT_PARTIAL, VERDICT_BLOCKED = "success", "partial", "blocked"
-VERDICT_ERROR, VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = (
-    "error",
-    "schema_miss",
-    "listing_detection_failed",
-    "empty",
-)
-CELERY_TASK_ID_KEY = "celery_task_id"
 logger = logging.getLogger(__name__)
 _local_run_tasks: weakref.WeakValueDictionary[int, asyncio.Task[None]] = (
     weakref.WeakValueDictionary()
@@ -219,7 +218,9 @@ def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
             )
             exc = None
         if exc is not None:
-            logger.debug("Local crawl task failure already persisted for run %s", run_id)
+            logger.debug(
+                "Local crawl task failure already persisted for run %s", run_id
+            )
         _clear_local_run_task(run_id, expected_task=completed_task)
 
     task.add_done_callback(_cleanup)

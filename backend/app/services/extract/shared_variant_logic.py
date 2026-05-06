@@ -17,7 +17,9 @@ from app.services.config.extraction_rules import (
     VARIANT_AXIS_LABEL_NOISE_TOKENS,
     VARIANT_AXIS_ALIASES,
     VARIANT_AXIS_ALLOWED_SINGLE_TOKENS,
+    VARIANT_AXIS_EXCLUDED_SINGLE_TOKENS,
     VARIANT_AXIS_GENERIC_TOKENS,
+    VARIANT_CHOICE_GROUP_MAX,
     VARIANT_CHOICE_GROUP_SELECTOR,
     VARIANT_CHOICE_CONTAINER_GROUP_LIMIT,
     VARIANT_CHOICE_CONTAINER_MIN_DISTINCT_NAMES,
@@ -26,22 +28,29 @@ from app.services.config.extraction_rules import (
     VARIANT_CHOICE_OPTION_LIMIT,
     VARIANT_CHOICE_OPTION_SELECTOR,
     VARIANT_COLOR_HINT_WORDS,
+    VARIANT_COLOR_AXIS_TOKENS,
+    VARIANT_DESCENDANT_SCAN_LIMIT,
     VARIANT_GROUP_ATTR_NOISE_PATTERNS,
     VARIANT_GROUP_ATTR_NOISE_TOKENS,
+    VARIANT_MATCHING_INPUT_LIMIT,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
     VARIANT_QUANTITY_ATTR_TOKENS,
+    VARIANT_SELECT_GROUP_MAX,
     VARIANT_SIZE_ALIAS_SUFFIXES,
+    VARIANT_SIZE_AXIS_TOKENS,
     VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SELECT_GROUP_SELECTOR,
+    VARIANT_SELECT_OPTION_SCAN_LIMIT,
+    VARIANT_SEQUENTIAL_INTEGER_MIN_RUN,
+    VARIANT_SIBLING_SEARCH_DEPTH,
+    VARIANT_SWATCH_BUTTON_LIMIT,
+    VARIANT_SWATCH_BUTTON_SELECTOR,
+    VARIANT_SWATCH_PARENT_DEPTH,
     VARIANT_AXIS_TECHNICAL_PATTERNS,
 )
 from app.services.field_value_core import clean_text, text_or_none
 
 logger = logging.getLogger(__name__)
-
-_VARIANT_AXIS_EXCLUDED_SINGLE_TOKENS = frozenset({"color", "colour", "fit", "size"})
-_VARIANT_COLOR_AXIS_TOKENS = frozenset({"color", "colour"})
-_VARIANT_SIZE_AXIS_TOKENS = frozenset({"fit", "size"})
 
 _variant_axis_label_noise_tokens = frozenset(
     str(token).strip().lower()
@@ -262,15 +271,15 @@ def infer_variant_group_name(node: Any) -> str:
             parts.append(str(value))
     probe = " ".join(parts).replace("_", " ").replace("-", " ").lower()
     probe_tokens = frozenset(token for token in re.split(r"[^a-z0-9]+", probe) if token)
-    if _VARIANT_COLOR_AXIS_TOKENS & probe_tokens:
+    if VARIANT_COLOR_AXIS_TOKENS & probe_tokens:
         return "color"
-    if _VARIANT_SIZE_AXIS_TOKENS & probe_tokens:
+    if VARIANT_SIZE_AXIS_TOKENS & probe_tokens:
         return "size"
     # Check all allowed variant axis tokens (weight, flavor, scent, etc.)
     for token in probe_tokens:
         if (
             token in _variant_axis_allowed_single_tokens
-            and token not in _VARIANT_AXIS_EXCLUDED_SINGLE_TOKENS
+            and token not in VARIANT_AXIS_EXCLUDED_SINGLE_TOKENS
         ):
             return token
     return ""
@@ -378,7 +387,7 @@ def _choice_option_texts(node: Any) -> list[str]:
 def _descendant_variant_group_name(node: Any) -> str:
     if not hasattr(node, "select"):
         return ""
-    for child in node.select("label")[:24]:
+    for child in node.select("label")[: int(VARIANT_DESCENDANT_SCAN_LIMIT)]:
         sr_only = child.select_one(".sr-only, .visually-hidden")
         raw_value = (
             sr_only.get_text(" ", strip=True)
@@ -389,7 +398,7 @@ def _descendant_variant_group_name(node: Any) -> str:
             return resolved_name
     for child in node.select(
         "[data-option-name], input[type='radio'], input[type='checkbox'], button"
-    )[:24]:
+    )[: int(VARIANT_DESCENDANT_SCAN_LIMIT)]:
         for attr_name in (
             "data-option-name",
             "name",
@@ -538,7 +547,7 @@ def resolve_variant_group_name(node: Any) -> str:
     if hasattr(node, "select"):
         for child in node.select(
             "[data-option-name], [aria-label], [data-testid], [data-qa-action], [role='radio'], input, button"
-        )[:24]:
+        )[: int(VARIANT_DESCENDANT_SCAN_LIMIT)]:
             inferred_child = infer_variant_group_name(child)
             if inferred_child:
                 return inferred_child
@@ -634,7 +643,7 @@ def _node_attr_can_hold_group_label(node: Any) -> bool:
 
 def _nearby_variant_group_name(node: Any) -> str:
     current = node
-    for _ in range(4):
+    for _ in range(int(VARIANT_SIBLING_SEARCH_DEPTH)):
         sibling = getattr(current, "previous_sibling", None)
         while sibling is not None:
             if hasattr(sibling, "get_text"):
@@ -655,7 +664,7 @@ def _select_option_texts(node: Any) -> list[str]:
     if not hasattr(node, "select"):
         return []
     values: list[str] = []
-    for option in node.select("option")[:24]:
+    for option in node.select("option")[: int(VARIANT_SELECT_OPTION_SCAN_LIMIT)]:
         text = (
             clean_text(option.get_text(" ", strip=True))
             if hasattr(option, "get_text")
@@ -666,11 +675,17 @@ def _select_option_texts(node: Any) -> list[str]:
     return values
 
 
-def _is_sequential_integer_run(values: list[str]) -> bool:
+def _is_sequential_integer_run(
+    values: list[str],
+    *,
+    min_length: int = int(VARIANT_SEQUENTIAL_INTEGER_MIN_RUN),
+) -> bool:
     """Return True when every value is a bare integer and the set forms a
-    contiguous run of >= 5 values.  This is the signature of a quantity
+    contiguous run of >= min_length values.  This is the signature of a quantity
     selector (1, 2, 3 … N), not a product variant axis."""
-    if len(values) < 5:
+    if min_length <= 0:
+        raise ValueError("min_length must be positive")
+    if len(values) < min_length:
         return False
     ints: list[int] = []
     for value in values:
@@ -678,8 +693,6 @@ def _is_sequential_integer_run(values: list[str]) -> bool:
         if not stripped.isdigit():
             return False
         ints.append(int(stripped))
-    if not ints:
-        return False
     ints.sort()
     return ints[-1] - ints[0] == len(ints) - 1
 
@@ -729,9 +742,9 @@ def _semantic_group_label_from_text(value: object) -> str:
     lowered_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", lowered) if token
     )
-    if _VARIANT_COLOR_AXIS_TOKENS & lowered_tokens:
+    if VARIANT_COLOR_AXIS_TOKENS & lowered_tokens:
         return "color"
-    if _VARIANT_SIZE_AXIS_TOKENS & lowered_tokens:
+    if VARIANT_SIZE_AXIS_TOKENS & lowered_tokens:
         return "size"
     candidates = [
         cleaned,
@@ -810,9 +823,9 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
         if resolve_variant_group_name(select):
             groups.append(select)
             seen_ids.add(id(select))
-        if len(groups) >= 4:
+        if len(groups) >= int(VARIANT_SELECT_GROUP_MAX):
             break
-    if len(groups) >= 4:
+    if len(groups) >= int(VARIANT_SELECT_GROUP_MAX):
         return groups
     for select in _select_variant_nodes(soup, "select"):
         if id(select) in seen_ids:
@@ -824,12 +837,18 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
         if resolve_variant_group_name(select):
             groups.append(select)
             seen_ids.add(id(select))
-        if len(groups) >= 4:
+        if len(groups) >= int(VARIANT_SELECT_GROUP_MAX):
             break
     return groups
 
 
 def iter_variant_choice_groups(soup: Any) -> list[Any]:
+    """Find variant groups with selector, input inference, button heuristics, then swatch parent walking.
+
+    Safeguards: VARIANT_SWATCH_BUTTON_SELECTOR is sliced by VARIANT_SWATCH_BUTTON_LIMIT,
+    parent walking is capped by VARIANT_SWATCH_PARENT_DEPTH, and _parent_swatch_cache
+    avoids repeated parent selector scans.
+    """
     groups: list[Any] = []
     seen_ids: set[int] = set()
     for container in _select_variant_nodes(soup, VARIANT_CHOICE_GROUP_SELECTOR):
@@ -847,9 +866,9 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
         ):
             groups.append(container)
             seen_ids.add(id(container))
-        if len(groups) >= 8:
+        if len(groups) >= int(VARIANT_CHOICE_GROUP_MAX):
             break
-    if len(groups) >= 8:
+    if len(groups) >= int(VARIANT_CHOICE_GROUP_MAX):
         return groups
     # discovery of variant choice containers for input elements and specific buttons
     for node in soup.select("select, input[type='radio'], input[type='checkbox']"):
@@ -857,37 +876,32 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
         if candidate is not None and id(candidate) not in seen_ids:
             groups.append(candidate)
             seen_ids.add(id(candidate))
-            if len(groups) >= 8:
+            if len(groups) >= int(VARIANT_CHOICE_GROUP_MAX):
                 break
-    if len(groups) < 8:
+    if len(groups) < int(VARIANT_CHOICE_GROUP_MAX):
         for node in soup.select(
             "button[data-variant], button.variant-option, button.size-option, button.color-option"
         ):
             if id(node) not in seen_ids:
                 groups.append(node)
                 seen_ids.add(id(node))
-                if len(groups) >= 8:
+                if len(groups) >= int(VARIANT_CHOICE_GROUP_MAX):
                     break
     # Fallback: discover containers of button / link / div swatches (e.g. YETI, Shopify visual swatches)
-    if len(groups) < 8:
-        _swatch_button_selectors = (
-            "button[class*='swatch' i], button[class*='color-option' i],"
-            " button[class*='color-selector' i], button[class*='size-option' i],"
-            " button[class*='size-selector' i], button[class*='variant' i],"
-            " button[data-option], button[data-value], a[class*='swatch' i],"
-            " div[class*='swatch' i], div[role='radio'],"
-            " [data-testid*='variants-selector' i]"
-        )
-        all_btns = soup.select(_swatch_button_selectors)
+    if len(groups) < int(VARIANT_CHOICE_GROUP_MAX):
+        all_btns = soup.select(VARIANT_SWATCH_BUTTON_SELECTOR)
         # Cap buttons to avoid O(n) blow-up on large rendered pages; variant groups are near top
-        btn_slice = all_btns[:20] if len(all_btns) > 20 else all_btns
+        button_limit = int(VARIANT_SWATCH_BUTTON_LIMIT)
+        btn_slice = (
+            all_btns[:button_limit] if len(all_btns) > button_limit else all_btns
+        )
         if btn_slice:
             # Cache parent sibling counts so we never re-select the same parent
             _parent_swatch_cache: dict[int, list[Any]] = {}
             for btn in btn_slice:
                 parent = getattr(btn, "parent", None)
                 depth = 0
-                while parent is not None and depth < 6:
+                while parent is not None and depth < int(VARIANT_SWATCH_PARENT_DEPTH):
                     if not hasattr(parent, "select"):
                         parent = getattr(parent, "parent", None)
                         depth += 1
@@ -929,7 +943,7 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
                         continue
                     siblings = _parent_swatch_cache.get(pid)
                     if siblings is None:
-                        siblings = parent.select(_swatch_button_selectors)
+                        siblings = parent.select(VARIANT_SWATCH_BUTTON_SELECTOR)
                         _parent_swatch_cache[pid] = siblings
                     if len(siblings) >= 2:
                         if (
@@ -950,13 +964,13 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
                         ) and _variant_group_has_multiple_options(parent):
                             groups.append(parent)
                             seen_ids.add(pid)
-                            if len(groups) >= 8:
+                            if len(groups) >= int(VARIANT_CHOICE_GROUP_MAX):
                                 break
                         # Stop walking up for this button once we found a sibling-rich parent
                         break
                     parent = getattr(parent, "parent", None)
                     depth += 1
-                if len(groups) >= 8:
+                if len(groups) >= int(VARIANT_CHOICE_GROUP_MAX):
                     break
     return groups
 
@@ -1018,7 +1032,10 @@ def _variant_choice_container_for_input(
             or inferred_from_values
         ):
             return parent
-        if len(matching_inputs) <= 12 and tag_name in {"div", "section"}:
+        if len(matching_inputs) <= int(VARIANT_MATCHING_INPUT_LIMIT) and tag_name in {
+            "div",
+            "section",
+        }:
             return parent
         parent = getattr(parent, "parent", None)
     return None

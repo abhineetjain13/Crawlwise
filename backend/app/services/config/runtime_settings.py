@@ -46,6 +46,10 @@ _PROFILE_CONTROLLED_FIELDS = (
     "origin_warm_pause_ms",
     "surface_readiness_max_wait_ms",
 )
+VALID_FETCH_MODES = frozenset(
+    {"auto", "http_only", "browser_only", "http_then_browser"}
+)
+CELERY_TASK_ID_KEY = "celery_task_id"
 
 
 def _coerce_float(value: object) -> float:
@@ -276,6 +280,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     traversal_scroll_into_view_timeout_ms: int = 2000
     traversal_cookie_consent_visible_timeout_ms: int = 200
     traversal_cookie_consent_click_timeout_ms: int = 1000
+    traversal_location_interstitial_visible_timeout_ms: int | None = None
+    traversal_location_interstitial_click_timeout_ms: int | None = None
+    traversal_location_interstitial_postclick_wait_ms: int | None = None
     pagination_navigation_timeout_ms: int = 20000
     pagination_page_size_anomaly_ratio: int = 5
     pagination_post_click_timeout_ms: int = 1500

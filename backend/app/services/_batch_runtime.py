@@ -189,7 +189,9 @@ async def _persist_url_failure_log(
     run = await session.get(CrawlRun, run_id, populate_existing=True)
     if run is None:
         raise RuntimeError(f"Run {run_id} disappeared after URL failure") from exc
-    logger.warning("URL processing failed for run=%s url=%s", run_id, url, exc_info=True)
+    logger.warning(
+        "URL processing failed for run=%s url=%s", run_id, url, exc_info=True
+    )
     await log_event(session, run.id, "warning", log_message)
     await session.commit()
     return run
@@ -253,10 +255,22 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 return
 
             if idx == 1:
-                await log_event(session, run.id, "info", f"Starting crawl run for {url}")
-                await log_event(session, run.id, "info", f"Resolved {total_urls} seed URL(s), domain policy: standard")
+                await log_event(
+                    session, run.id, "info", f"Starting crawl run for {url}"
+                )
+                await log_event(
+                    session,
+                    run.id,
+                    "info",
+                    f"Resolved {total_urls} seed URL(s), domain policy: standard",
+                )
             else:
-                await log_event(session, run.id, "info", f"Starting crawl run for {url} ({idx}/{total_urls})")
+                await log_event(
+                    session,
+                    run.id,
+                    "info",
+                    f"Starting crawl run for {url} ({idx}/{total_urls})",
+                )
             await set_stage(
                 session,
                 run,
@@ -288,7 +302,9 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                     )
                 )
             except TimeoutError as exc:
-                logger.warning("URL processing timed out for run=%s url=%s", run.id, url)
+                logger.warning(
+                    "URL processing timed out for run=%s url=%s", run.id, url
+                )
                 run, url_result = await _recover_url_failure(
                     session,
                     run=run,
@@ -303,18 +319,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 url_result.url_metrics["error"] = (
                     f"TimeoutError: url exceeded timeout_seconds={url_timeout_seconds}"
                 )
-            except SQLAlchemyError as exc:
-                run, url_result = await _recover_url_failure(
-                    session,
-                    run=run,
-                    run_id=run.id,
-                    url=url,
-                    exc=exc,
-                    log_message=(
-                        f"URL processing failed for {url}: "
-                        f"{type(exc).__name__}: {exc}"
-                    ),
-                )
             except Exception as exc:
                 run, url_result = await _recover_url_failure(
                     session,
@@ -323,8 +327,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                     url=url,
                     exc=exc,
                     log_message=(
-                        f"URL processing failed for {url}: "
-                        f"{type(exc).__name__}: {exc}"
+                        f"URL processing failed for {url}: {type(exc).__name__}: {exc}"
                     ),
                 )
 

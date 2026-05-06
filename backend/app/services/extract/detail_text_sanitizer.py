@@ -140,8 +140,32 @@ _long_text_prefixes = tuple(
 _legal_tail_patterns = DETAIL_LEGAL_TAIL_PATTERNS or {}
 _legal_tail_contains = tuple(_legal_tail_patterns.get("contains", ()))
 _legal_tail_digit_contains = tuple(_legal_tail_patterns.get("digit_contains", ()))
-_legal_tail_all_contains = tuple(_legal_tail_patterns.get("all_contains", ()))
 _legal_tail_exact = frozenset(_legal_tail_patterns.get("exact", ()))
+
+
+def _normalize_legal_tail_all_contains(value: object) -> tuple[tuple[str, ...], ...]:
+    if isinstance(value, str):
+        return ((value,),)
+    groups: list[tuple[str, ...]] = []
+    for group in tuple(value or ()):
+        if isinstance(group, str):
+            items = (group,)
+        else:
+            try:
+                items = tuple(group)
+            except TypeError as exc:
+                raise ValueError(
+                    "DETAIL_LEGAL_TAIL_PATTERNS all_contains must be strings"
+                ) from exc
+        if not all(isinstance(item, str) for item in items):
+            raise ValueError("DETAIL_LEGAL_TAIL_PATTERNS all_contains must be strings")
+        groups.append(items)
+    return tuple(groups)
+
+
+_legal_tail_all_contains = _normalize_legal_tail_all_contains(
+    _legal_tail_patterns.get("all_contains", ())
+)
 artifact_price_values = frozenset(
     clean_text(v).lower()
     for v in tuple(DETAIL_ARTIFACT_PRICE_VALUES or ())

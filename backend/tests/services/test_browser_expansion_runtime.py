@@ -19,14 +19,20 @@ from app.services.acquisition import (
     dom_runtime,
 )
 from app.services.acquisition.browser_capture import BrowserNetworkCapture
-from app.services.acquisition import browser_page_flow, browser_readiness, browser_runtime
+from app.services.acquisition import (
+    browser_page_flow,
+    browser_readiness,
+    browser_runtime,
+)
 from app.services.acquisition.traversal import TraversalResult
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
 from app.services.extraction_runtime import extract_records
 
 
-def test_select_primary_browser_html_prefers_full_rendered_when_traversal_fragment_is_capped() -> None:
+def test_select_primary_browser_html_prefers_full_rendered_when_traversal_fragment_is_capped() -> (
+    None
+):
     traversal_result = SimpleNamespace(
         activated=True,
         progress_events=1,
@@ -111,47 +117,56 @@ def test_location_interstitial_detects_text_only_fallback() -> None:
 
 
 def test_ready_probe_supports_fast_finalize_for_strong_detail_page() -> None:
-    assert browser_page_flow._ready_probe_supports_fast_finalize(
-        [
-            {
-                "is_ready": True,
-                "visible_text_length": 5000,
-                "structured_data_present": True,
-                "detail_hint_count": 4,
-            }
-        ],
-        surface="ecommerce_detail",
-        status_code=200,
-    ) is True
+    assert (
+        browser_page_flow._ready_probe_supports_fast_finalize(
+            [
+                {
+                    "is_ready": True,
+                    "visible_text_length": 5000,
+                    "structured_data_present": True,
+                    "detail_hint_count": 4,
+                }
+            ],
+            surface="ecommerce_detail",
+            status_code=200,
+        )
+        is True
+    )
 
 
 def test_ready_probe_fast_finalize_rejects_for_forced_block_status() -> None:
-    assert browser_page_flow._ready_probe_supports_fast_finalize(
-        [
-            {
-                "is_ready": True,
-                "visible_text_length": 5000,
-                "structured_data_present": True,
-                "detail_hint_count": 4,
-            }
-        ],
-        surface="ecommerce_detail",
-        status_code=403,
-    ) is False
+    assert (
+        browser_page_flow._ready_probe_supports_fast_finalize(
+            [
+                {
+                    "is_ready": True,
+                    "visible_text_length": 5000,
+                    "structured_data_present": True,
+                    "detail_hint_count": 4,
+                }
+            ],
+            surface="ecommerce_detail",
+            status_code=403,
+        )
+        is False
+    )
 
 
 def test_fast_finalize_accepts_verified_extractability_without_probe_payload() -> None:
-    assert browser_page_flow._ready_probe_supports_fast_finalize(
-        [],
-        surface="ecommerce_detail",
-        status_code=200,
-        expansion_diagnostics={
-            "extractability": {
-                "verified": True,
-                "matched_requested_fields": ["title", "image_url"],
-            }
-        },
-    ) is True
+    assert (
+        browser_page_flow._ready_probe_supports_fast_finalize(
+            [],
+            surface="ecommerce_detail",
+            status_code=200,
+            expansion_diagnostics={
+                "extractability": {
+                    "verified": True,
+                    "matched_requested_fields": ["title", "image_url"],
+                }
+            },
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -272,7 +287,9 @@ async def test_location_interstitial_dismissal_requires_modal_to_clear() -> None
     result = await browser_page_flow.dismiss_safe_location_interstitial(_Page())
 
     assert result["status"] == "still_present"
-    assert str(result.get("selector") or "")
+    assert "selector" in result
+    assert isinstance(result["selector"], str)
+    assert result["selector"].strip()
 
 
 @dataclass
@@ -379,7 +396,9 @@ class _FakeLocator:
         if selector == "[role='tab'][aria-controls]":
             return role == "tab" and bool(aria_controls)
         if selector == "a[href^='#']":
-            return lowered_tag == "a" and str(attributes.get("href") or "").startswith("#")
+            return lowered_tag == "a" and str(attributes.get("href") or "").startswith(
+                "#"
+            )
         if selector == "button":
             return lowered_tag == "button"
         if selector == "[role='button']":
@@ -465,7 +484,7 @@ class _WaitingRoleLocator(_FakeRoleLocator):
     ) -> None:
         self.wait_for_calls.append((state, timeout))
         if await self.count() == 0:
-            raise TimeoutError("not visible")
+            raise PlaywrightTimeoutError("not visible")
 
 
 class _FakePageContext:
@@ -608,10 +627,7 @@ class _FakeExpansionPage:
         if "querySelectorAll(selector).length" in script:
             selectors = list(arg or [])
             return max(
-                (
-                    int(self.selector_counts.get(selector, 0))
-                    for selector in selectors
-                ),
+                (int(self.selector_counts.get(selector, 0)) for selector in selectors),
                 default=0,
             )
         if "MutationObserver" in script:
@@ -649,7 +665,9 @@ class _FakeExpansionPage:
     def locator(self, selector: str) -> _FakeLocator:
         return _FakeLocator(self, selector)
 
-    def get_by_role(self, role: str, *, name: str, exact: bool = True) -> _FakeRoleLocator:
+    def get_by_role(
+        self, role: str, *, name: str, exact: bool = True
+    ) -> _FakeRoleLocator:
         del exact
         return _FakeRoleLocator(self, role, name)
 
@@ -746,7 +764,10 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
     assert result.browser_diagnostics["phase_timings_ms"]["networkidle_wait"] == 0
     assert result.browser_diagnostics["phase_timings_ms"]["readiness_wait"] == 0
     assert result.browser_diagnostics["networkidle_skip_reason"] == "fast_path_ready"
-    assert result.browser_diagnostics["detail_expansion"]["reason"] == "missing_detail_content"
+    assert (
+        result.browser_diagnostics["detail_expansion"]["reason"]
+        == "missing_detail_content"
+    )
     assert result.browser_diagnostics["detail_expansion"]["status"] == "attempted"
     assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 0
     assert page.goto_calls == ["domcontentloaded"]
@@ -802,7 +823,9 @@ async def test_browser_fetch_closes_unexpected_popup_pages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_fast_paths_ready_listing_cards_without_networkidle() -> None:
+async def test_browser_fetch_fast_paths_ready_listing_cards_without_networkidle() -> (
+    None
+):
     selectors = list(CARD_SELECTORS.get("ecommerce") or [])
     page = _FakeExpansionPage(
         base_html="<html><body><article class='product-card'>A</article></body></html>",
@@ -822,13 +845,17 @@ async def test_browser_fetch_fast_paths_ready_listing_cards_without_networkidle(
     )
 
     assert result.browser_diagnostics["phase_timings_ms"]["networkidle_wait"] == 0
-    assert result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
+    assert (
+        result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
+    )
     assert page.wait_timeout_calls == []
     assert page.load_state_calls == []
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_listing_does_not_treat_product_titles_as_extractable_fields() -> None:
+async def test_browser_fetch_listing_does_not_treat_product_titles_as_extractable_fields() -> (
+    None
+):
     selectors = list(CARD_SELECTORS.get("ecommerce") or [])
     page = _FakeExpansionPage(
         base_html="""
@@ -862,7 +889,9 @@ async def test_browser_fetch_listing_does_not_treat_product_titles_as_extractabl
         runtime_provider=_fake_runtime,
     )
 
-    assert result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
+    assert (
+        result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
+    )
 
 
 @pytest.mark.asyncio
@@ -896,7 +925,9 @@ async def test_browser_fetch_listing_skips_detail_extractability_probe(
         runtime_provider=_fake_runtime,
     )
 
-    assert result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
+    assert (
+        result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
+    )
 
 
 @pytest.mark.asyncio
@@ -948,10 +979,13 @@ async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_lis
             },
         ]
     )
+
     async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
+
     original_probe_browser_readiness = browser_runtime.probe_browser_readiness
     try:
+
         async def _fake_probe_browser_readiness(*args, **kwargs):
             del args, kwargs
             return next(probe_results)
@@ -974,7 +1008,9 @@ async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_lis
 
 
 @pytest.mark.asyncio
-async def test_probe_browser_readiness_does_not_fast_path_listing_on_visible_text_alone() -> None:
+async def test_probe_browser_readiness_does_not_fast_path_listing_on_visible_text_alone() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body>" + ("Catalog entry " * 40) + "</body></html>",
     )
@@ -1054,7 +1090,9 @@ async def test_browser_fetch_bounds_response_capture_workers_under_burst_load(
     )
 
     assert create_task_calls == browser_runtime._NETWORK_CAPTURE_WORKERS
-    assert len(result.network_payloads) == browser_runtime._MAX_CAPTURED_NETWORK_PAYLOADS
+    assert (
+        len(result.network_payloads) == browser_runtime._MAX_CAPTURED_NETWORK_PAYLOADS
+    )
     assert (
         result.browser_diagnostics["dropped_network_payload_events"]
         >= 200 - browser_runtime._NETWORK_CAPTURE_QUEUE_SIZE
@@ -1093,7 +1131,9 @@ async def test_browser_fetch_expands_detail_accordions_before_collecting_html() 
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_expands_requested_field_sections_even_when_probe_is_ready() -> None:
+async def test_browser_fetch_expands_requested_field_sections_even_when_probe_is_ready() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body><h1>Widget Prime</h1><button>Materials</button></body></html>",
         expanded_html="""
@@ -1127,7 +1167,9 @@ async def test_browser_fetch_expands_requested_field_sections_even_when_probe_is
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_skips_detail_expansion_when_requested_section_is_already_extractable() -> None:
+async def test_browser_fetch_skips_detail_expansion_when_requested_section_is_already_extractable() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="""
         <html><body>
@@ -1166,7 +1208,9 @@ async def test_browser_fetch_skips_detail_expansion_when_requested_section_is_al
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_expands_requested_dom_pattern_content_without_heading_sections() -> None:
+async def test_browser_fetch_expands_requested_dom_pattern_content_without_heading_sections() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="""
         <html><body>
@@ -1197,9 +1241,9 @@ async def test_browser_fetch_expands_requested_dom_pattern_content_without_headi
         result.browser_diagnostics["detail_expansion"]["reason"]
         == "requested_content_already_extractable"
     )
-    assert result.browser_diagnostics["detail_expansion"]["extractability"]["matched_requested_fields"] == [
-        "materials"
-    ]
+    assert result.browser_diagnostics["detail_expansion"]["extractability"][
+        "matched_requested_fields"
+    ] == ["materials"]
 
 
 @pytest.mark.asyncio
@@ -1252,7 +1296,9 @@ async def test_expand_all_interactive_elements_skips_blocked_commerce_actions() 
 
 
 @pytest.mark.asyncio
-async def test_expand_all_interactive_elements_scans_past_non_expandable_early_candidates() -> None:
+async def test_expand_all_interactive_elements_scans_past_non_expandable_early_candidates() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         labels=[
@@ -1301,7 +1347,9 @@ async def test_browser_fetch_flattens_shadow_dom_before_serializing_html() -> No
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view() -> None:
+async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="""
         <html>
@@ -1404,7 +1452,9 @@ async def test_browser_fetch_ignores_non_string_rendered_listing_fragments(
         del args, kwargs
         return [123, {"html": "<article>bad</article>"}, " <article>good</article> "]
 
-    monkeypatch.setattr(browser_page_flow, "capture_rendered_listing_fragments", _bad_fragments)
+    monkeypatch.setattr(
+        browser_page_flow, "capture_rendered_listing_fragments", _bad_fragments
+    )
 
     result = await browser_runtime.browser_fetch(
         "https://example.com/collections/widgets",
@@ -1438,8 +1488,12 @@ async def test_browser_fetch_keeps_empty_successful_listing_artifacts(
         del args, kwargs
         return []
 
-    monkeypatch.setattr(browser_page_flow, "capture_rendered_listing_fragments", _empty_fragments)
-    monkeypatch.setattr(browser_page_flow, "_capture_listing_visual_elements", _empty_visuals)
+    monkeypatch.setattr(
+        browser_page_flow, "capture_rendered_listing_fragments", _empty_fragments
+    )
+    monkeypatch.setattr(
+        browser_page_flow, "_capture_listing_visual_elements", _empty_visuals
+    )
 
     result = await browser_runtime.browser_fetch(
         "https://example.com/collections/widgets",
@@ -1624,7 +1678,9 @@ async def test_browser_fetch_page_markdown_contract(
 
 
 @pytest.mark.asyncio
-async def test_detail_expansion_keywords_include_ecommerce_fallbacks_without_requested_fields() -> None:
+async def test_detail_expansion_keywords_include_ecommerce_fallbacks_without_requested_fields() -> (
+    None
+):
     default_keywords = browser_runtime.detail_expansion_keywords("ecommerce_detail")
     requested_keywords = browser_runtime.detail_expansion_keywords(
         "ecommerce_detail",
@@ -1657,11 +1713,16 @@ async def test_interactive_candidate_snapshot_excludes_class_names_from_probe() 
 def test_acquisition_package_exports_interactive_candidate_snapshot() -> None:
     from app.services import acquisition
 
-    assert acquisition.interactive_candidate_snapshot is browser_runtime.interactive_candidate_snapshot
+    assert (
+        acquisition.interactive_candidate_snapshot
+        is browser_runtime.interactive_candidate_snapshot
+    )
 
 
 @pytest.mark.asyncio
-async def test_expand_all_interactive_elements_matches_keywords_from_class_names() -> None:
+async def test_expand_all_interactive_elements_matches_keywords_from_class_names() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         labels=[
@@ -1681,7 +1742,9 @@ async def test_expand_all_interactive_elements_matches_keywords_from_class_names
 
 
 @pytest.mark.asyncio
-async def test_expand_all_interactive_elements_allows_relevant_footer_controls() -> None:
+async def test_expand_all_interactive_elements_allows_relevant_footer_controls() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         labels=[
@@ -1709,7 +1772,9 @@ async def test_expand_all_interactive_elements_allows_relevant_footer_controls()
 
 
 @pytest.mark.asyncio
-async def test_expand_all_interactive_elements_prioritizes_requested_measurements_over_media_zoom() -> None:
+async def test_expand_all_interactive_elements_prioritizes_requested_measurements_over_media_zoom() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         labels=[
@@ -1744,7 +1809,9 @@ async def test_expand_all_interactive_elements_prioritizes_requested_measurement
 
 
 @pytest.mark.asyncio
-async def test_expand_all_interactive_elements_allows_visible_generic_detail_toggle_for_requested_fields() -> None:
+async def test_expand_all_interactive_elements_allows_visible_generic_detail_toggle_for_requested_fields() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         labels=[
@@ -1767,7 +1834,9 @@ async def test_expand_all_interactive_elements_allows_visible_generic_detail_tog
 
 
 @pytest.mark.asyncio
-async def test_expand_detail_content_if_needed_attempts_generic_ecommerce_expansion_when_ready() -> None:
+async def test_expand_detail_content_if_needed_attempts_generic_ecommerce_expansion_when_ready() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         labels=[
@@ -1790,7 +1859,9 @@ async def test_expand_detail_content_if_needed_attempts_generic_ecommerce_expans
 
 
 @pytest.mark.asyncio
-async def test_expand_detail_content_if_needed_attempts_ready_job_detail_without_requested_fields() -> None:
+async def test_expand_detail_content_if_needed_attempts_ready_job_detail_without_requested_fields() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         labels=[
@@ -1813,7 +1884,9 @@ async def test_expand_detail_content_if_needed_attempts_ready_job_detail_without
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_records_extractable_sections_after_detail_expansion() -> None:
+async def test_browser_fetch_records_extractable_sections_after_detail_expansion() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body><h1>Widget Prime</h1><button>Materials</button></body></html>",
         expanded_html="""
@@ -1848,7 +1921,9 @@ async def test_browser_fetch_records_extractable_sections_after_detail_expansion
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_does_not_skip_requested_dom_pattern_when_selector_is_empty() -> None:
+async def test_browser_fetch_does_not_skip_requested_dom_pattern_when_selector_is_empty() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="""
         <html><body>
@@ -1972,7 +2047,9 @@ async def test_browser_fetch_extracts_requested_features_from_dell_like_tab() ->
 
 
 @pytest.mark.asyncio
-async def test_expand_detail_content_uses_data_qa_action_to_open_size_selector() -> None:
+async def test_expand_detail_content_uses_data_qa_action_to_open_size_selector() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body><button aria-label='Add to bag'>Add</button></body></html>",
         labels=[
@@ -2023,7 +2100,9 @@ async def test_expand_detail_content_skips_menu_toggles() -> None:
 
 
 @pytest.mark.asyncio
-async def test_expand_detail_content_prefers_requested_section_labels_over_unrelated_nav() -> None:
+async def test_expand_detail_content_prefers_requested_section_labels_over_unrelated_nav() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="""
         <html><body>
@@ -2063,7 +2142,9 @@ async def test_expand_detail_content_prefers_requested_section_labels_over_unrel
 
 
 @pytest.mark.asyncio
-async def test_expand_detail_content_skips_navigation_anchors_that_match_generic_keywords() -> None:
+async def test_expand_detail_content_skips_navigation_anchors_that_match_generic_keywords() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="""
         <html><body>
@@ -2102,7 +2183,9 @@ async def test_expand_detail_content_skips_navigation_anchors_that_match_generic
 
 
 @pytest.mark.asyncio
-async def test_expand_detail_content_skips_header_controls_outside_main_content() -> None:
+async def test_expand_detail_content_skips_header_controls_outside_main_content() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="""
         <html><body>
@@ -2138,7 +2221,9 @@ async def test_expand_detail_content_skips_header_controls_outside_main_content(
 
 
 @pytest.mark.asyncio
-async def test_expand_detail_content_does_not_match_requested_keywords_from_hidden_probe_only() -> None:
+async def test_expand_detail_content_does_not_match_requested_keywords_from_hidden_probe_only() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body><button aria-controls='lifestyle-panel'>Lifestyle</button></body></html>",
         labels=[
@@ -2254,7 +2339,9 @@ async def test_finalize_browser_fetch_keeps_blocked_html_checker_fallback(
         surface="ecommerce_detail",
         browser_reason=None,
         on_event=None,
-        response=SimpleNamespace(status=200, headers=httpx.Headers({"content-type": "text/html"})),
+        response=SimpleNamespace(
+            status=200, headers=httpx.Headers({"content-type": "text/html"})
+        ),
         navigation_strategy="goto",
         readiness_probes=[],
         networkidle_timed_out=False,
@@ -2277,7 +2364,9 @@ async def test_finalize_browser_fetch_keeps_blocked_html_checker_fallback(
         blocked_html_checker=lambda *_args, **_kwargs: True,
         classify_blocked_page_async=_fake_classify_blocked_page_async,
         classify_low_content_reason=lambda *_args, **_kwargs: None,
-        classify_browser_outcome=lambda **kwargs: "challenge_page" if kwargs["blocked"] else "usable_content",
+        classify_browser_outcome=lambda **kwargs: (
+            "challenge_page" if kwargs["blocked"] else "usable_content"
+        ),
         capture_browser_screenshot=_fake_emit_browser_event,
         emit_browser_event=_fake_emit_browser_event,
         elapsed_ms=lambda _started_at: 0,
@@ -2323,7 +2412,10 @@ async def test_browser_fetch_uses_aom_expansion_when_dom_keyword_scan_misses() -
     assert "Rubber outsole" in result.html
     assert result.browser_diagnostics["detail_expansion"]["dom"]["clicked_count"] == 0
     assert result.browser_diagnostics["detail_expansion"]["aom"]["clicked_count"] == 1
-    assert result.browser_diagnostics["detail_expansion"]["reason"] == "missing_detail_content"
+    assert (
+        result.browser_diagnostics["detail_expansion"]["reason"]
+        == "missing_detail_content"
+    )
 
 
 @pytest.mark.asyncio
@@ -2367,7 +2459,9 @@ async def test_dom_detail_expansion_stops_after_click_exceeds_time_budget() -> N
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_aom_expansion_respects_interaction_cap(patch_settings) -> None:
+async def test_browser_fetch_aom_expansion_respects_interaction_cap(
+    patch_settings,
+) -> None:
     patch_settings(detail_aom_expand_max_interactions=1)
     page = _FakeExpansionPage(
         base_html="<html><body><h1>Widget Prime</h1><div>Overview</div></body></html>",
@@ -2406,7 +2500,9 @@ async def test_browser_fetch_aom_expansion_respects_interaction_cap(patch_settin
 
 
 @pytest.mark.asyncio
-async def test_expand_interactive_elements_via_accessibility_supports_locators_without_visibility_timeout() -> None:
+async def test_expand_interactive_elements_via_accessibility_supports_locators_without_visibility_timeout() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body><h1>Widget Prime</h1></body></html>",
         accessibility_snapshot={
@@ -2416,7 +2512,9 @@ async def test_expand_interactive_elements_via_accessibility_supports_locators_w
         role_targets={("tab", "product specifications")},
     )
 
-    def _get_by_role(role: str, *, name: str, exact: bool = True) -> _NoTimeoutRoleLocator:
+    def _get_by_role(
+        role: str, *, name: str, exact: bool = True
+    ) -> _NoTimeoutRoleLocator:
         del exact
         return _NoTimeoutRoleLocator(page, role, name)
 
@@ -2450,7 +2548,9 @@ async def test_expand_interactive_elements_via_accessibility_waits_for_visibilit
     locator = _WaitingRoleLocator(page, "tab", "product specifications")
     patch_settings(detail_expand_visibility_timeout_ms=375)
 
-    def _get_by_role(role: str, *, name: str, exact: bool = True) -> _WaitingRoleLocator:
+    def _get_by_role(
+        role: str, *, name: str, exact: bool = True
+    ) -> _WaitingRoleLocator:
         del role, name, exact
         return locator
 
@@ -2497,12 +2597,16 @@ async def test_listing_card_signal_count_uses_heuristic_card_fallback_after_sele
 ) -> None:
     calls: list[bool] = []
 
-    async def _fake_count_listing_cards(page, *, surface: str, allow_heuristic: bool = True) -> int:
+    async def _fake_count_listing_cards(
+        page, *, surface: str, allow_heuristic: bool = True
+    ) -> int:
         del page, surface
         calls.append(bool(allow_heuristic))
         return 9 if allow_heuristic else 0
 
-    monkeypatch.setattr(browser_runtime, "count_listing_cards", _fake_count_listing_cards)
+    monkeypatch.setattr(
+        browser_runtime, "count_listing_cards", _fake_count_listing_cards
+    )
     monkeypatch.setattr(
         browser_runtime,
         "CARD_SELECTORS",
@@ -2524,7 +2628,9 @@ async def test_probe_browser_readiness_uses_heuristic_listing_card_fallback(
 ) -> None:
     calls: list[bool] = []
 
-    async def _fake_count_listing_cards(page, *, surface: str, allow_heuristic: bool = True) -> int:
+    async def _fake_count_listing_cards(
+        page, *, surface: str, allow_heuristic: bool = True
+    ) -> int:
         del page, surface
         calls.append(bool(allow_heuristic))
         return 12 if allow_heuristic else 0
@@ -2624,8 +2730,7 @@ async def test_browser_capture_decodes_react_server_component_payloads() -> None
 
 
 @pytest.mark.asyncio
-async def test_browser_capture_offloads_payload_decoding_to_thread(
-) -> None:
+async def test_browser_capture_offloads_payload_decoding_to_thread() -> None:
     class _JsonResponse:
         def __init__(self) -> None:
             self.url = "https://example.com/api/product"
@@ -2651,15 +2756,19 @@ async def test_browser_capture_offloads_payload_decoding_to_thread(
 
 
 @pytest.mark.asyncio
-async def test_browser_capture_close_uses_bounded_queue_join_timeout(patch_settings) -> None:
+async def test_browser_capture_close_uses_bounded_queue_join_timeout(
+    patch_settings,
+) -> None:
     patch_settings(browser_capture_queue_join_timeout_ms=50)
     capture = BrowserNetworkCapture(
         surface="ecommerce_detail",
         should_capture_payload=lambda **_kwargs: True,
         classify_endpoint=lambda **_kwargs: {"type": "api", "family": "generic"},
-        read_payload_body=lambda *_args, **_kwargs: browser_runtime.NetworkPayloadReadResult(
-            body=b'{"id":"captured"}',
-            outcome="ok",
+        read_payload_body=lambda *_args, **_kwargs: (
+            browser_runtime.NetworkPayloadReadResult(
+                body=b'{"id":"captured"}',
+                outcome="ok",
+            )
         ),
     )
     page = _FakeExpansionPage(base_html="<html><body></body></html>")
@@ -2679,7 +2788,9 @@ async def test_browser_capture_close_uses_bounded_queue_join_timeout(patch_setti
 
 
 @pytest.mark.asyncio
-async def test_browser_capture_close_awaits_sentinel_enqueue_when_queue_put_blocks() -> None:
+async def test_browser_capture_close_awaits_sentinel_enqueue_when_queue_put_blocks() -> (
+    None
+):
     capture = BrowserNetworkCapture(surface="ecommerce_detail")
 
     class _Queue:
@@ -2697,7 +2808,9 @@ async def test_browser_capture_close_awaits_sentinel_enqueue_when_queue_put_bloc
     capture._queue = fake_queue  # type: ignore[assignment]
     capture._workers = {asyncio.create_task(asyncio.sleep(0))}
 
-    summary = await capture.close(_FakeExpansionPage(base_html="<html><body></body></html>"))
+    summary = await capture.close(
+        _FakeExpansionPage(base_html="<html><body></body></html>")
+    )
 
     assert summary.network_payload_count == 0
     assert fake_queue.put_calls == [None]
@@ -2722,7 +2835,9 @@ async def test_browser_capture_close_cancels_workers_when_sentinel_enqueue_times
     capture._queue = _Queue()  # type: ignore[assignment]
     capture._workers = {worker}
 
-    summary = await capture.close(_FakeExpansionPage(base_html="<html><body></body></html>"))
+    summary = await capture.close(
+        _FakeExpansionPage(base_html="<html><body></body></html>")
+    )
 
     assert summary.network_payload_count == 0
     assert worker.cancelled() or worker.done()
@@ -2834,7 +2949,9 @@ async def test_expand_all_interactive_elements_respects_small_interaction_cap(
 
 
 @pytest.mark.asyncio
-async def test_expand_all_interactive_elements_skips_non_actionable_candidates() -> None:
+async def test_expand_all_interactive_elements_skips_non_actionable_candidates() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         labels=[
@@ -2862,10 +2979,13 @@ def test_classify_browser_outcome_marks_empty_category_as_low_content_shell() ->
     )
 
     assert outcome == "low_content_shell"
-    assert browser_runtime.classify_low_content_reason(
-        html,
-        html_bytes=len(html.encode("utf-8")),
-    ) == "empty_terminal_page"
+    assert (
+        browser_runtime.classify_low_content_reason(
+            html,
+            html_bytes=len(html.encode("utf-8")),
+        )
+        == "empty_terminal_page"
+    )
 
 
 def test_classify_low_content_reason_ignores_empty_phrase_on_contentful_page() -> None:
@@ -2880,13 +3000,18 @@ def test_classify_low_content_reason_ignores_empty_phrase_on_contentful_page() -
     </body></html>
     """
 
-    assert browser_runtime.classify_low_content_reason(
-        html,
-        html_bytes=len(html.encode("utf-8")),
-    ) is None
+    assert (
+        browser_runtime.classify_low_content_reason(
+            html,
+            html_bytes=len(html.encode("utf-8")),
+        )
+        is None
+    )
 
 
-def test_classify_browser_outcome_keeps_ready_listing_with_no_pagination_progress_usable() -> None:
+def test_classify_browser_outcome_keeps_ready_listing_with_no_pagination_progress_usable() -> (
+    None
+):
     html = """
     <html><body>
       <article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article>
@@ -2912,7 +3037,9 @@ def test_classify_browser_outcome_keeps_ready_listing_with_no_pagination_progres
     assert outcome == "usable_content"
 
 
-def test_classify_browser_outcome_keeps_extractable_listing_usable_below_threshold() -> None:
+def test_classify_browser_outcome_keeps_extractable_listing_usable_below_threshold() -> (
+    None
+):
     html = """
     <html><body>
       <article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article>
@@ -3018,8 +3145,12 @@ def test_build_failed_browser_diagnostics_uses_exception_proxy_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_logs_non_usable_outcomes(caplog: pytest.LogCaptureFixture) -> None:
-    page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
+async def test_browser_fetch_logs_non_usable_outcomes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Empty category</h1></body></html>"
+    )
 
     async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
@@ -3045,7 +3176,9 @@ async def test_browser_fetch_logs_non_usable_outcomes(caplog: pytest.LogCaptureF
 async def test_browser_fetch_respects_disabled_screenshot_capture(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Empty category</h1></body></html>"
+    )
 
     async def _fake_runtime(**_kwargs):
         return _FakeRuntime(page)
@@ -3097,7 +3230,12 @@ async def test_browser_fetch_surfaces_rendered_listing_evidence_counts() -> None
 
     assert result.browser_diagnostics["rendered_listing_fragment_count"] == 1
     assert result.browser_diagnostics["listing_visual_element_count"] >= 0
-    assert result.browser_diagnostics["extractable_listing_evidence"]["rendered_listing_fragments"] == 1
+    assert (
+        result.browser_diagnostics["extractable_listing_evidence"][
+            "rendered_listing_fragments"
+        ]
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -3152,12 +3290,12 @@ async def test_browser_fetch_bounds_listing_artifact_capture_time(
     assert result.browser_diagnostics["rendered_listing_fragment_count"] == 0
     assert result.browser_diagnostics["listing_visual_element_count"] == 0
     assert (
-        result.browser_diagnostics["phase_timings_ms"]["rendered_listing_fragment_capture"]
+        result.browser_diagnostics["phase_timings_ms"][
+            "rendered_listing_fragment_capture"
+        ]
         >= 0
     )
-    assert (
-        result.browser_diagnostics["phase_timings_ms"]["listing_visual_capture"] >= 0
-    )
+    assert result.browser_diagnostics["phase_timings_ms"]["listing_visual_capture"] >= 0
     assert result.browser_diagnostics["listing_artifact_capture"] == {
         "rendered_listing_fragment_capture": {"status": "timeout"},
         "listing_visual_capture": {"status": "timeout"},
@@ -3176,7 +3314,10 @@ async def test_capture_listing_artifact_with_timeout_reports_playwright_error(
         raise PlaywrightError("Target page, context or browser has been closed")
 
     with caplog.at_level("DEBUG", logger=browser_page_flow.logger.name):
-        artifacts, diagnostics = await browser_page_flow._capture_listing_artifact_with_timeout(
+        (
+            artifacts,
+            diagnostics,
+        ) = await browser_page_flow._capture_listing_artifact_with_timeout(
             _boom(),
             stage="listing_visual_capture",
             url="https://example.com/collections/widgets",
@@ -3214,7 +3355,9 @@ async def test_capture_rendered_listing_fragments_returns_fragment_html() -> Non
 
 
 @pytest.mark.asyncio
-async def test_capture_rendered_listing_fragments_ignores_non_listing_surfaces() -> None:
+async def test_capture_rendered_listing_fragments_ignores_non_listing_surfaces() -> (
+    None
+):
     class _RegressionPage:
         async def evaluate(self, script: str, arg: Any | None = None) -> list[str]:
             raise AssertionError("evaluate should not be called")
@@ -3384,7 +3527,9 @@ async def test_type_text_like_human_types_one_character_at_a_time(
 
 
 @pytest.mark.asyncio
-async def test_recover_browser_challenge_keeps_original_response_when_retry_stays_blocked() -> None:
+async def test_recover_browser_challenge_keeps_original_response_when_retry_stays_blocked() -> (
+    None
+):
     original_response = SimpleNamespace(status=403, name="original")
     retried_response = SimpleNamespace(status=200, name="retried")
 
@@ -3427,8 +3572,12 @@ async def test_recover_browser_challenge_keeps_original_response_when_retry_stay
 
 
 @pytest.mark.asyncio
-async def test_recover_browser_challenge_drops_stale_block_status_after_wait_clear() -> None:
-    original_response = SimpleNamespace(status=403, headers={"content-type": "text/html"})
+async def test_recover_browser_challenge_drops_stale_block_status_after_wait_clear() -> (
+    None
+):
+    original_response = SimpleNamespace(
+        status=403, headers={"content-type": "text/html"}
+    )
     status_codes: list[int] = []
 
     class _Page:
@@ -3468,7 +3617,9 @@ async def test_recover_browser_challenge_drops_stale_block_status_after_wait_cle
 
 
 @pytest.mark.asyncio
-async def test_recover_browser_challenge_marks_retry_response_without_wrapping() -> None:
+async def test_recover_browser_challenge_marks_retry_response_without_wrapping() -> (
+    None
+):
     retried_response = SimpleNamespace(
         status=403,
         headers={"content-type": "text/html"},
@@ -3535,7 +3686,9 @@ async def test_get_page_html_falls_back_to_outer_html_after_driver_close(
 
         async def content(self) -> str:
             self.content_calls += 1
-            raise RuntimeError("Page.content: Connection closed while reading from the driver")
+            raise RuntimeError(
+                "Page.content: Connection closed while reading from the driver"
+            )
 
         async def evaluate(self, script: str):
             if "flattenedRoots" in script:
@@ -3555,7 +3708,9 @@ async def test_get_page_html_outer_html_fallback_preserves_doctype(
 
     class _Page:
         async def content(self) -> str:
-            raise RuntimeError("Page.content: Connection closed while reading from the driver")
+            raise RuntimeError(
+                "Page.content: Connection closed while reading from the driver"
+            )
 
         async def evaluate(self, script: str):
             if "flattenedRoots" in script:
@@ -3577,7 +3732,9 @@ async def test_page_has_location_interstitial_uses_resilient_html_fetch(
         url = "https://example.com/product"
 
         async def content(self) -> str:
-            raise RuntimeError("Page.content: Connection closed while reading from the driver")
+            raise RuntimeError(
+                "Page.content: Connection closed while reading from the driver"
+            )
 
         async def evaluate(self, script: str):
             if "flattenedRoots" in script:
@@ -3628,7 +3785,9 @@ def test_browser_diagnostics_contract_clears_stale_nested_outcome_fields() -> No
 
 
 @pytest.mark.asyncio
-async def test_wait_for_listing_readiness_treats_only_playwright_timeout_as_recoverable() -> None:
+async def test_wait_for_listing_readiness_treats_only_playwright_timeout_as_recoverable() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
         wait_for_selector_error=PlaywrightTimeoutError("listing readiness timeout"),
@@ -3668,7 +3827,9 @@ async def test_wait_for_listing_readiness_propagates_browser_closure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_records_navigation_timing_when_fallback_navigation_fails() -> None:
+async def test_browser_fetch_records_navigation_timing_when_fallback_navigation_fails() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body>Widget</body></html>",
         goto_failures={
@@ -3775,11 +3936,8 @@ async def test_origin_warmup_skips_for_rotating_proxy_profile() -> None:
 
 
 @pytest.mark.asyncio
-async def test_origin_warmup_runs_without_stealth_layer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_origin_warmup_runs_without_stealth_layer() -> None:
     page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
-    del monkeypatch
 
     await browser_runtime._maybe_warm_origin_before_navigation(
         page,
@@ -3811,8 +3969,12 @@ def test_browser_runtime_snapshot_uses_capacity_fallback_for_pooled_runtimes(
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(browser_runtime, "_DIRECT_BROWSER_RUNTIMES", {"direct": _FakeRuntime()})
-    monkeypatch.setattr(browser_runtime, "_PROXIED_BROWSER_RUNTIMES", {"proxy": _FakeRuntime()})
+    monkeypatch.setattr(
+        browser_runtime, "_DIRECT_BROWSER_RUNTIMES", {"direct": _FakeRuntime()}
+    )
+    monkeypatch.setattr(
+        browser_runtime, "_PROXIED_BROWSER_RUNTIMES", {"proxy": _FakeRuntime()}
+    )
 
     snapshot = browser_runtime.browser_runtime_snapshot()
 
@@ -3859,7 +4021,9 @@ async def test_browser_fetch_disables_storage_reuse_for_rotating_proxy_profile(
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_recovers_when_commit_navigation_is_interrupted_by_same_url_reload() -> None:
+async def test_browser_fetch_recovers_when_commit_navigation_is_interrupted_by_same_url_reload() -> (
+    None
+):
     page = _FakeExpansionPage(
         base_html="<html><body><h1>Widget</h1></body></html>",
         goto_failures={
@@ -3936,7 +4100,7 @@ async def test_browser_fetch_force_closes_context_when_stage_times_out(
     monkeypatch.setattr(
         browser_runtime,
         "remaining_timeout_factory",
-        lambda _deadline: (lambda: next(remaining_timeouts, 0.05)),
+        lambda _deadline: lambda: next(remaining_timeouts, 0.05),
     )
 
     with pytest.raises(TimeoutError, match="Browser settle stage exceeded") as excinfo:
@@ -3989,8 +4153,14 @@ async def test_browser_fetch_surfaces_traversal_fragment_metrics(
             pages_advanced=1,
             card_count=2,
             html_fragments=[
-                ("<div data-traversal-cards='true'><article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article></div>", False),
-                ("<div data-traversal-cards='true'><article class='product-card'><a href='/products/widget-2'>Widget Two</a><span>$20</span></article></div>", False),
+                (
+                    "<div data-traversal-cards='true'><article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article></div>",
+                    False,
+                ),
+                (
+                    "<div data-traversal-cards='true'><article class='product-card'><a href='/products/widget-2'>Widget Two</a><span>$20</span></article></div>",
+                    False,
+                ),
             ],
         )
 
@@ -4051,7 +4221,10 @@ async def test_browser_fetch_keeps_full_rendered_html_when_traversal_makes_no_pr
             progress_events=0,
             card_count=5,
             html_fragments=[
-                ("<div data-traversal-cards='true'><a href='/privacy'>Privacy notice</a></div>", False),
+                (
+                    "<div data-traversal-cards='true'><a href='/privacy'>Privacy notice</a></div>",
+                    False,
+                ),
             ],
         )
 
@@ -4107,7 +4280,10 @@ async def test_browser_fetch_prefers_rendered_html_when_progress_traversal_fragm
             progress_events=1,
             card_count=0,
             html_fragments=[
-                ("<div data-traversal-cards='true'><a href='/products/widget-1'>Widget One</a></div>", False),
+                (
+                    "<div data-traversal-cards='true'><a href='/products/widget-1'>Widget One</a></div>",
+                    False,
+                ),
             ],
         )
 
@@ -4174,4 +4350,7 @@ async def test_browser_fetch_runs_listing_recovery_when_thin_listing_retry_reque
 
     assert calls["count"] == 1
     assert result.browser_diagnostics["listing_recovery"]["status"] == "recovered"
-    assert result.browser_diagnostics["listing_recovery"]["requested_mode"] == "thin_listing"
+    assert (
+        result.browser_diagnostics["listing_recovery"]["requested_mode"]
+        == "thin_listing"
+    )

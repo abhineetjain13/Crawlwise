@@ -395,7 +395,7 @@ def test_extract_records_visual_listing_orders_top_grid_before_lower_recommendat
         "<html><body></body></html>",
         "https://www.belk.com/men/mens-clothing/sport-coats-blazers/",
         "ecommerce_listing",
-        max_records=1,
+        max_records=2,
         artifacts={
             "listing_visual_elements": [
                 {

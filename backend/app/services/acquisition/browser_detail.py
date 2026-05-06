@@ -53,10 +53,16 @@ def _ordered_detail_expand_selectors(
 ) -> list[str]:
     if not requested_keywords:
         return selectors
-    priority_order = {
-        selector: index
-        for index, selector in enumerate(BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY)
-    }
+    priority_order: dict[str, int] = {}
+    for keyword in requested_keywords:
+        normalized_keyword = str(keyword or "").strip().lower()
+        if not normalized_keyword:
+            continue
+        for selector in selectors:
+            if normalized_keyword in selector.lower():
+                priority_order.setdefault(selector, len(priority_order))
+    for selector in BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY:
+        priority_order.setdefault(selector, len(priority_order))
     return sorted(
         selectors,
         key=lambda selector: priority_order.get(selector, len(priority_order)),
@@ -116,7 +122,9 @@ async def expand_detail_content_if_needed_impl(
         "expanded_elements": [],
         "interaction_failures": [],
         "limit": int(crawler_runtime_settings.detail_aom_expand_max_interactions),
-        "max_elapsed_ms": int(crawler_runtime_settings.detail_aom_expand_max_elapsed_ms),
+        "max_elapsed_ms": int(
+            crawler_runtime_settings.detail_aom_expand_max_elapsed_ms
+        ),
         "attempted": False,
     }
     if not current_probe.get("is_ready"):
@@ -124,7 +132,9 @@ async def expand_detail_content_if_needed_impl(
             page,
             surface=surface,
             requested_fields=requested_fields,
-            max_elapsed_ms=int(crawler_runtime_settings.detail_aom_expand_max_elapsed_ms),
+            max_elapsed_ms=int(
+                crawler_runtime_settings.detail_aom_expand_max_elapsed_ms
+            ),
         )
     return {
         "status": "expanded"
@@ -179,7 +189,9 @@ async def expand_all_interactive_elements_impl(
             int(crawler_runtime_settings.accordion_expand_max),
         ),
     )
-    max_per_selector = max(1, int(crawler_runtime_settings.detail_expand_max_per_selector))
+    max_per_selector = max(
+        1, int(crawler_runtime_settings.detail_expand_max_per_selector)
+    )
     clicked_count = 0
     seen_candidates: set[tuple[str, str, str]] = set()
     selectors = [
@@ -203,14 +215,18 @@ async def expand_all_interactive_elements_impl(
         except Exception as exc:
             interaction_failures.append(f"locator_failed:{selector}:{exc}")
             continue
-        diagnostics["buttons_found"] = _coerce_int(diagnostics["buttons_found"]) + len(candidates)
+        diagnostics["buttons_found"] = _coerce_int(diagnostics["buttons_found"]) + len(
+            candidates
+        )
         candidate_rows: list[tuple[Any, dict[str, object] | None]] = [
             (handle, None) for handle in candidates
         ]
         if requested_keywords:
             prioritized_rows: list[tuple[tuple[int, str], Any, dict[str, object]]] = []
             for handle in candidates:
-                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
+                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(
+                    max_elapsed_ms
+                ):
                     diagnostics["status"] = "time_budget_reached"
                     break
                 try:
@@ -240,19 +256,29 @@ async def expand_all_interactive_elements_impl(
             if clicked_count >= max_interactions:
                 diagnostics["status"] = "interaction_limit_reached"
                 break
-            if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
+            if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(
+                max_elapsed_ms
+            ):
                 diagnostics["status"] = "time_budget_reached"
                 break
             if selector_clicks >= max_per_selector:
                 break
             try:
-                snapshot = prefetched_snapshot or await interactive_candidate_snapshot(handle)
+                snapshot = prefetched_snapshot or await interactive_candidate_snapshot(
+                    handle
+                )
+                if not bool(snapshot.get("visible")) or not bool(
+                    snapshot.get("actionable")
+                ):
+                    continue
                 probe = str(snapshot.get("probe") or "").strip().lower()
                 label = str(snapshot.get("label") or "").strip().lower()
                 aria_expanded = str(snapshot.get("aria_expanded") or "").strip().lower()
                 href = str(snapshot.get("href") or "").strip().lower()
                 aria_controls = str(snapshot.get("aria_controls") or "").strip()
-                data_qa_action = str(snapshot.get("data_qa_action") or "").strip().lower()
+                data_qa_action = (
+                    str(snapshot.get("data_qa_action") or "").strip().lower()
+                )
                 class_name = str(snapshot.get("class_name") or "").strip().lower()
                 tag_name = str(snapshot.get("tag_name") or "").strip().lower()
                 inside_main = bool(snapshot.get("inside_main"))
@@ -266,16 +292,17 @@ async def expand_all_interactive_elements_impl(
                 keyword_probe = " ".join(
                     part for part in (label, probe, data_qa_action, class_name) if part
                 ).strip()
-                non_content_probe = " ".join(
-                    part for part in (label, probe, data_qa_action, class_name) if part
-                ).strip()
                 candidate_key = (label or probe, aria_controls, tag_name)
                 if candidate_key in seen_candidates:
                     continue
                 seen_candidates.add(candidate_key)
                 size_toggle_hint = any(
                     token in f"{data_qa_action} {class_name}"
-                    for token in ("size selector", "size-selector", "open-size-selector")
+                    for token in (
+                        "size selector",
+                        "size-selector",
+                        "open-size-selector",
+                    )
                 )
                 navigational_anchor = bool(
                     tag_name == "a"
@@ -285,7 +312,7 @@ async def expand_all_interactive_elements_impl(
                     and not size_toggle_hint
                 )
                 if any(
-                    token in non_content_probe
+                    token in keyword_probe
                     for token in (
                         "add-to-wishlist",
                         "gallery",
@@ -321,14 +348,11 @@ async def expand_all_interactive_elements_impl(
                 matches_generic_keywords = any(
                     keyword in keyword_probe for keyword in keywords
                 )
-                if (
-                    list(requested_fields or [])
-                    and not (
-                        matches_requested_keywords
-                        or fallback_requested_match
-                        or generic_requested_detail_toggle
-                        or size_toggle_hint
-                    )
+                if list(requested_fields or []) and not (
+                    matches_requested_keywords
+                    or fallback_requested_match
+                    or generic_requested_detail_toggle
+                    or size_toggle_hint
                 ):
                     continue
                 looks_expandable = bool(
@@ -352,10 +376,7 @@ async def expand_all_interactive_elements_impl(
                 if (
                     not inside_main
                     and (inside_header or inside_nav or inside_footer)
-                    and not (
-                        matches_requested_keywords
-                        or size_toggle_hint
-                    )
+                    and not (matches_requested_keywords or size_toggle_hint)
                 ):
                     continue
                 if inside_aside and not (
@@ -367,9 +388,9 @@ async def expand_all_interactive_elements_impl(
                     or size_toggle_hint
                 ):
                     continue
-                if not bool(snapshot.get("visible")) or not bool(snapshot.get("actionable")):
-                    continue
-                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
+                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(
+                    max_elapsed_ms
+                ):
                     diagnostics["status"] = "time_budget_reached"
                     break
                 await handle.scroll_into_view_if_needed()
@@ -388,7 +409,9 @@ async def expand_all_interactive_elements_impl(
                 expanded_label = label or probe
                 if expanded_label:
                     expanded_elements.append(expanded_label)
-                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
+                if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(
+                    max_elapsed_ms
+                ):
                     diagnostics["status"] = "time_budget_reached"
                     break
             except Exception as exc:
@@ -451,12 +474,16 @@ async def expand_interactive_elements_via_accessibility_impl(
         requested_fields=requested_fields,
     )
     diagnostics["buttons_found"] = len(candidates)
-    max_interactions = max(0, int(crawler_runtime_settings.detail_aom_expand_max_interactions))
+    max_interactions = max(
+        0, int(crawler_runtime_settings.detail_aom_expand_max_interactions)
+    )
     if len(candidates) > max_interactions:
         keywords = detail_expansion_keywords(surface, requested_fields=requested_fields)
         if keywords:
             prioritized = [
-                item for item in candidates if any(keyword in item[1] for keyword in keywords)
+                item
+                for item in candidates
+                if any(keyword in item[1] for keyword in keywords)
             ]
             prioritized_set = set(prioritized)
             candidates = prioritized + [
@@ -497,14 +524,13 @@ async def expand_interactive_elements_via_accessibility_impl(
         except Exception as exc:
             interaction_failures.append(str(exc))
     if diagnostics["status"] == "attempted":
-        diagnostics["status"] = (
-            "expanded" if clicked_count > 0 else "no_matches"
-        )
+        diagnostics["status"] = "expanded" if clicked_count > 0 else "no_matches"
     diagnostics["clicked_count"] = clicked_count
     diagnostics["expanded_elements"] = expanded_elements
     diagnostics["interaction_failures"] = interaction_failures
     diagnostics["elapsed_ms"] = elapsed_ms(started_at)
     return diagnostics
+
 
 def accessibility_expand_candidates_impl(
     snapshot: dict[str, object] | None,
@@ -738,11 +764,15 @@ async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
     class_name = await _interactive_handle_attr(handle, "class")
     tag_name = await _interactive_handle_tag_name(handle)
     context_flags = await _interactive_handle_context_flags(handle)
-    probe = " ".join(
-        part
-        for part in (label, aria_label, title, data_qa_action, data_testid)
-        if str(part or "").strip()
-    ).strip().lower()
+    probe = (
+        " ".join(
+            part
+            for part in (label, aria_label, title, data_qa_action, data_testid)
+            if str(part or "").strip()
+        )
+        .strip()
+        .lower()
+    )
     return {
         "label": label,
         "probe": probe,
@@ -773,6 +803,7 @@ async def expand_all_interactive_elements(
     checkpoint: Any = None,
     max_elapsed_ms: int | None = None,
 ) -> dict[str, object]:
+    # checkpoint is deprecated API compatibility only; callers should use max_elapsed_ms.
     del checkpoint
     return await expand_all_interactive_elements_impl(
         page,

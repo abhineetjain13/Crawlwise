@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -39,6 +40,7 @@ from app.services.field_url_normalization import (
     is_concatenated_url,
 )
 
+
 def public_record_data_for_surface(
     record: dict[str, Any],
     *,
@@ -58,15 +60,7 @@ def public_record_data_for_surface(
         for field_name in canonical_requested_fields(requested_fields or [])
         if normalize_field_key(field_name)
     }
-    default_excluded = {
-        normalize_field_key(field_name)
-        for field_name in list(
-            PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS.get(normalized_surface, [])
-            if isinstance(PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS, dict)
-            else []
-        )
-        if normalize_field_key(field_name)
-    }
+    default_excluded = _default_excluded_fields_for_surface(normalized_surface)
     ecommerce_contract_excluded = {
         normalize_field_key(value)
         for value in (
@@ -116,10 +110,16 @@ def public_record_data_for_surface(
         if not _public_record_field_shape_valid(field_name, coerced):
             rejected[str(raw_field_name)] = "invalid_field_shape"
             continue
-        if field_name in URL_FIELDS and isinstance(coerced, str) and is_concatenated_url(coerced):
+        if (
+            field_name in URL_FIELDS
+            and isinstance(coerced, str)
+            and is_concatenated_url(coerced)
+        ):
             rejected[str(raw_field_name)] = "concatenated_url"
             continue
-        if field_name in NAVIGATION_URL_FIELDS and not public_navigation_url_safe(coerced):
+        if field_name in NAVIGATION_URL_FIELDS and not public_navigation_url_safe(
+            coerced
+        ):
             rejected[str(raw_field_name)] = "unsafe_navigation_url"
             continue
         if field_name in NAVIGATION_URL_FIELDS:
@@ -135,6 +135,23 @@ def public_record_data_for_surface(
     if normalized_surface.startswith("ecommerce_") and VARIANTS_FIELD in data:
         enforce_flat_variant_public_contract(data, page_url=page_url)
     return finalize_record(data, surface=surface), rejected
+
+
+def _default_excluded_fields_for_surface(normalized_surface: str) -> set[str]:
+    if not isinstance(PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS, Mapping):
+        raise TypeError(
+            "PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS must be a mapping; "
+            f"got {type(PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS).__name__} "
+            f"for surface {normalized_surface!r}"
+        )
+    return {
+        normalize_field_key(field_name)
+        for field_name in PUBLIC_RECORD_DEFAULT_EXCLUDED_FIELDS.get(
+            normalized_surface,
+            [],
+        )
+        if normalize_field_key(field_name)
+    }
 
 
 def _public_record_field_shape_valid(field_name: str, value: object) -> bool:

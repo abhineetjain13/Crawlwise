@@ -84,7 +84,8 @@ FILE_LOC_BUDGETS = {
     # Browser runtime owns pooled browser lifecycle and context management.
     Path("app/services/acquisition/browser_runtime.py"): 2275,
     # Page flow owns navigation, readiness, artifact capture, and final browser shaping.
-    Path("app/services/acquisition/browser_page_flow.py"): 1880,
+    # Grown (+38) for dedicated location-interstitial timings and config-owned visual price regex.
+    Path("app/services/acquisition/browser_page_flow.py"): 1920,
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
     # Config owners.
@@ -101,7 +102,7 @@ FILE_LOC_BUDGETS = {
     # shared_variant_logic frozensets instead of re-deriving them locally.
     Path("app/services/extract/detail_record_finalizer.py"): 1115,
     # Shared variant logic owns generic axis and row reconciliation.
-    # Grown (+90) to absorb the extended allowed-axis taxonomy (flavor, type,
+    # Grown (+380) to absorb the extended allowed-axis taxonomy (flavor, type,
     # material_composition, etc.) and related JS-state / DOM helpers.
     Path("app/services/extract/shared_variant_logic.py"): 1530,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
@@ -111,7 +112,7 @@ FILE_LOC_BUDGETS = {
     # section-image cleanup / audit wiring owners when scheduled.
     Path("app/services/field_value_dom.py"): 1640,
     # Canonical field coercion remains centralized here instead of scattering value policy.
-    # Grown (+50) for the availability canonical-enum gate, negative-price rejection
+    # Grown (+225) for the availability canonical-enum gate, negative-price rejection
     # wiring, category URL-path rejection, and associated audit comments
     # (2026-05-04 sweep, gemini DQ-4 / DQ-8).
     # TODO(chore): baseline LOC drift here, then extract canonical_coercion /

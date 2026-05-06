@@ -186,7 +186,9 @@ def test_export_image_dedupe_handles_legacy_string_values() -> None:
         }
     )
 
-    assert sanitized["additional_images"] == "https://cdn.example.com/images/widget-2.jpg"
+    assert (
+        sanitized["additional_images"] == "https://cdn.example.com/images/widget-2.jpg"
+    )
 
 
 def test_export_image_dedupe_preserves_falsy_non_null_values() -> None:
@@ -200,7 +202,9 @@ def test_record_to_markdown_includes_page_context_from_raw_data() -> None:
         run_id=7,
         source_url="https://example.com/products/widget",
         data={"title": "Widget Prime", "price": "19.99"},
-        raw_data={"page_markdown": "Widget Prime\n\nVisible links:\n- View specs -> /specs"},
+        raw_data={
+            "page_markdown": "Widget Prime\n\nVisible links:\n- View specs -> /specs"
+        },
         discovered_data={},
         source_trace={},
     )
@@ -231,6 +235,34 @@ def test_record_to_markdown_keeps_listing_source_and_record_url_distinct() -> No
 
     assert "Source: <https://example.com/collections/widgets>" in markdown
     assert "Record URL: <https://example.com/products/widget-prime>" in markdown
+
+
+def test_record_artifact_bundle_uses_markdown_excerpt_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(record_export_service, "MARKDOWN_EXCERPT_MAX_LENGTH", 7)
+    row = CrawlRecord(
+        id=3,
+        run_id=7,
+        source_url="https://example.com/products/widget",
+        data={"title": "Widget Prime"},
+        raw_data={"page_markdown": "1234567890"},
+        discovered_data={},
+        source_trace={},
+    )
+
+    bundle = record_export_service.record_artifact_bundle(row)
+
+    assert bundle["page_summary"]["markdown_excerpt"] == "1234567"
+
+
+def test_is_markdown_long_form_uses_config_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(record_export_service, "MARKDOWN_LONG_FORM_THRESHOLD", 5)
+
+    assert record_export_service.is_markdown_long_form("short_note", "123456")
+    assert not record_export_service.is_markdown_long_form("short_note", "12345")
 
 
 def test_clean_export_data_keeps_variant_payloads_but_hides_internal_markdown() -> None:
@@ -296,7 +328,9 @@ def test_listing_adapter_records_use_shared_surface_normalization() -> None:
     assert len(rows) == 1
     record = rows[0]
     assert record["title"] == "Boy Brow"
-    assert record["description"] == "Inspired by the flexible formula of mustache pomade."
+    assert (
+        record["description"] == "Inspired by the flexible formula of mustache pomade."
+    )
     assert record["_source"] == "shopify_adapter"
     assert "additional_images" not in record
     assert "variants" not in record

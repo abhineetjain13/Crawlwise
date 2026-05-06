@@ -92,15 +92,15 @@ class BlockPageClassification:
 
 
 _BOT_VENDOR_HEADER_MARKERS: tuple[tuple[str, str, str], ...] = (
-    ("x-datadome",           "",          "datadome"),
-    ("x-datadome-cid",       "",          "datadome"),
-    ("server",               "datadome",  "datadome"),
-    ("cf-mitigated",         "challenge", "cloudflare"),  # only when value = "challenge"
-    ("x-sucuri-id",          "",          "sucuri"),
-    ("x-sucuri-cache",       "",          "sucuri"),
-    ("x-akamai-transformed", "",          "akamai"),
-    ("akamai-grn",           "",          "akamai"),
-    ("x-px-block",           "",          "perimeterx"),
+    ("x-datadome", "", "datadome"),
+    ("x-datadome-cid", "", "datadome"),
+    ("server", "datadome", "datadome"),
+    ("cf-mitigated", "challenge", "cloudflare"),  # only when value = "challenge"
+    ("x-sucuri-id", "", "sucuri"),
+    ("x-sucuri-cache", "", "sucuri"),
+    ("x-akamai-transformed", "", "akamai"),
+    ("akamai-grn", "", "akamai"),
+    ("x-px-block", "", "perimeterx"),
 )
 
 
@@ -217,7 +217,9 @@ def classify_blocked_page(
     ]
     content_tolerant_strong_markers = {
         str(marker or "").strip().lower()
-        for marker in _string_sequence(BLOCK_SIGNATURES.get("content_tolerant_strong_markers"))
+        for marker in _string_sequence(
+            BLOCK_SIGNATURES.get("content_tolerant_strong_markers")
+        )
         if str(marker or "").strip()
     }
     provider_markers = [
@@ -227,10 +229,14 @@ def classify_blocked_page(
     ]
 
     strong_hits = {
-        marker for marker in strong_markers if marker in visible_text or marker in title_text
+        marker
+        for marker in strong_markers
+        if marker in visible_text or marker in title_text
     }
     weak_hits = {
-        marker for marker in weak_markers if marker in visible_text or marker in title_text
+        marker
+        for marker in weak_markers
+        if marker in visible_text or marker in title_text
     }
     provider_hits = {marker for marker in provider_markers if marker in lowered}
     active_provider_hits = {
@@ -274,11 +280,7 @@ def classify_blocked_page(
         blocked = True
     elif hard_strong_hits and weak_hits and provider_hits:
         blocked = True
-    elif (
-        "captcha" in strong_hits
-        and provider_hits
-        and not has_extractable_content
-    ):
+    elif "captcha" in strong_hits and provider_hits and not has_extractable_content:
         blocked = True
     elif "captcha" in strong_hits and provider_hits and title_matches:
         blocked = True
@@ -287,10 +289,7 @@ def classify_blocked_page(
         and has_extractable_content
         and not title_matches
         and "captcha" not in strong_hits
-        and (
-            not hard_strong_hits
-            or hard_strong_hits <= {"captcha"}
-        )
+        and (not hard_strong_hits or hard_strong_hits <= {"captcha"})
     ):
         blocked = False
     return BlockPageClassification(
@@ -298,7 +297,9 @@ def classify_blocked_page(
         outcome=(
             forced_outcome
             if blocked and forced_blocked
-            else "challenge_page" if blocked else "ok"
+            else "challenge_page"
+            if blocked
+            else "ok"
         ),
         evidence=evidence,
         provider_hits=sorted(provider_hits),
@@ -369,7 +370,9 @@ def should_escalate_to_browser(
         escalation_policy = {}
     analysis = analyze_html(result.html)
     has_detail_signals = _has_extractable_detail_signals(result.html, analysis=analysis)
-    has_listing_signals = _has_extractable_listing_signals(result.html, analysis=analysis)
+    has_listing_signals = _has_extractable_listing_signals(
+        result.html, analysis=analysis
+    )
     if (
         bool(escalation_policy.get("js_shell_without_detail_signals", True))
         and _looks_like_js_shell(result.html, analysis=analysis)
@@ -446,6 +449,10 @@ async def close_shared_http_client() -> None:
     for client in clients:
         if client is not None and not client.is_closed:
             await client.aclose()
+
+
+def _clear_shared_clients_for_testing() -> None:
+    _SHARED_HTTP_CLIENTS.clear()
 
 
 async def http_fetch(
@@ -585,7 +592,10 @@ def _has_extractable_detail_signals(
         normalized_type = (
             " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
         ).lower()
-        if any(token in normalized_type for token in ("product", "productgroup", "jobposting")):
+        if any(
+            token in normalized_type
+            for token in ("product", "productgroup", "jobposting")
+        ):
             return True
     js_states = harvest_js_state_objects(parsed.soup, parsed.html)
     if any(_state_payload_has_content(payload) for payload in js_states.values()):
@@ -595,9 +605,9 @@ def _has_extractable_detail_signals(
     lowered_html = parsed.lowered_html
     if any(token in lowered_html for token in DETAIL_SHELL_STATE_TOKENS):
         return True
-    return any(token in lowered_html for token in DETAIL_SHELL_FRAMEWORK_TOKENS) and any(
-        token in lowered_html for token in DETAIL_SHELL_PRODUCT_DATA_TOKENS
-    )
+    return any(
+        token in lowered_html for token in DETAIL_SHELL_FRAMEWORK_TOKENS
+    ) and any(token in lowered_html for token in DETAIL_SHELL_PRODUCT_DATA_TOKENS)
 
 
 def _has_extractable_dom_detail_signals(analysis: HtmlAnalysis) -> bool:
@@ -631,8 +641,7 @@ def _has_extractable_dom_detail_signals(analysis: HtmlAnalysis) -> bool:
         or re.search(r"(?:[$€£₹]\s*)\d+(?:[.,]\d{2})?", analysis.normalized_text)
     )
     if (
-        "load in the app" in lowered_text
-        or "loads in the app" in lowered_text
+        "load in the app" in lowered_text or "loads in the app" in lowered_text
     ) and not (has_product_anchor or has_price_anchor):
         return False
     if detail_hint_hits >= int(crawler_runtime_settings.detail_field_signal_min_count):
@@ -691,7 +700,9 @@ def _looks_like_listing_shell(
     root = parsed.soup.find(id=re.compile(r"root|app|__next", re.I))
     script_count = len(parsed.soup.find_all("script"))
     if len(parsed.visible_text) > 400:
-        return any(token in lowered_html for token in LISTING_CLIENT_RENDERED_SHELL_HINTS)
+        return any(
+            token in lowered_html for token in LISTING_CLIENT_RENDERED_SHELL_HINTS
+        )
     if root is None and script_count < 3:
         return False
     return any(token in lowered_html for token in LISTING_SHELL_FRAMEWORK_TOKENS)
@@ -738,12 +749,16 @@ def _string_sequence(value: object) -> list[str]:
 
 def _challenge_element_hits(soup: BeautifulSoup, lowered_html: str) -> list[str]:
     challenge_elements = mapping_or_empty(BLOCK_SIGNATURES.get("challenge_elements"))
-    iframe_src_markers = _marker_map_from_config(challenge_elements, "iframe_src_markers")
+    iframe_src_markers = _marker_map_from_config(
+        challenge_elements, "iframe_src_markers"
+    )
     iframe_title_markers = _marker_map_from_config(
         challenge_elements,
         "iframe_title_markers",
     )
-    script_src_markers = _marker_map_from_config(challenge_elements, "script_src_markers")
+    script_src_markers = _marker_map_from_config(
+        challenge_elements, "script_src_markers"
+    )
     html_markers = _marker_map_from_config(challenge_elements, "html_markers")
     hits: list[str] = []
     for iframe in list(soup.find_all("iframe")):

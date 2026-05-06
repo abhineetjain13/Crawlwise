@@ -18,11 +18,13 @@ from app.services.config.field_mappings import (
 from app.services.config.extraction_rules import (
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
+    DETAIL_PAYLOAD_LIST_LIMIT,
     DETAIL_CATEGORY_SOURCE_RANKS,
     DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_LONG_TEXT_SOURCE_RANKS,
     DETAIL_TITLE_SOURCE_RANKS,
     SOURCE_PRIORITY,
+    TRACKING_PIXEL_PATTERNS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extraction_context import (
@@ -177,6 +179,7 @@ def _add_sourced_candidate(
     if source not in bucket:
         bucket.append(source)
 
+
 def _collect_record_candidates(
     record: dict[str, Any],
     *,
@@ -267,11 +270,7 @@ def _structured_payload_is_breadcrumb_list(payload: object) -> bool:
     )
 
 
-def _primary_source_for_record(
-    record: dict[str, Any],
-    selected_field_sources: dict[str, str],
-) -> str:
-    del record
+def _primary_source_for_record(selected_field_sources: dict[str, str]) -> str:
     selected_sources = [
         str(source or "").strip()
         for source in selected_field_sources.values()
@@ -424,11 +423,13 @@ def _materialize_record(
                     candidate_long_text = finalize_candidate_value(
                         field_name, candidate_values
                     )
-                    if (
-                        candidate_long_text not in (None, "", [], {})
-                        and not _detail_long_text_value_looks_truncated(
-                            candidate_long_text
-                        )
+                    if candidate_long_text not in (
+                        None,
+                        "",
+                        [],
+                        {},
+                    ) and not _detail_long_text_value_looks_truncated(
+                        candidate_long_text
                     ):
                         selected_source = candidate_source
                         winning_values = candidate_values
@@ -481,7 +482,7 @@ def _materialize_record(
     }
     if selected_selector_traces:
         record["_selector_traces"] = selected_selector_traces
-    record["_source"] = _primary_source_for_record(record, selected_field_sources)
+    record["_source"] = _primary_source_for_record(selected_field_sources)
     if str(surface or "").strip().lower() == "ecommerce_detail":
         _reconcile_detail_currency_with_url(record, page_url=page_url)
     normalize_variant_record(record)
@@ -527,7 +528,7 @@ def _prune_irrelevant_detail_structured_payload(
                 page_url=page_url,
                 requested_page_url=requested_page_url,
             )
-            for item in payload[:50]
+            for item in payload[: int(DETAIL_PAYLOAD_LIST_LIMIT or 50)]
         ]
         return [item for item in cleaned_items if item not in (None, "", [], {})]
     if not isinstance(payload, dict):
@@ -716,18 +717,6 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
             "sku",
             "part_number",
             "barcode",
-        )
-    ):
-        return True
-    if _detail_title_looks_like_placeholder(title) and not any(
-        record.get(field_name) not in (None, "", [], {})
-        for field_name in (
-            "price",
-            "original_price",
-            "image_url",
-            "sku",
-            "part_number",
-            "barcode",
             "brand",
         )
     ):
@@ -802,18 +791,7 @@ def _detail_image_looks_like_tracking_or_shell(value: object) -> bool:
     if not image_url:
         return False
     lowered = image_url.lower()
-    return any(
-        token in lowered
-        for token in (
-            "facebook.com/tr?",
-            "facebook.com/tr&id=",
-            "/tr?id=",
-            "doubleclick",
-            "googletagmanager",
-            "google-analytics",
-            "pixel",
-        )
-    )
+    return any(token in lowered for token in tuple(TRACKING_PIXEL_PATTERNS or ()))
 
 
 def _title_looks_like_brand_shell(title: str, *, page_url: str) -> bool:
@@ -946,9 +924,8 @@ def _requires_dom_long_text_completion(
             for source in _object_list(field_sources.get(field_name))
         ]
         best_rank = min(source_ranks) if source_ranks else 20
-        if (
-            best_rank >= weak_source_rank
-            or _detail_long_text_value_looks_truncated(value)
+        if best_rank >= weak_source_rank or _detail_long_text_value_looks_truncated(
+            value
         ):
             return True
     return False
@@ -1011,12 +988,9 @@ def _requires_dom_completion(
         return True
     if missing_high_value_fields or requested_missing_fields & high_value_fields:
         return True
-    if (
-        normalized_surface == "ecommerce_detail"
-        and _requires_dom_long_text_completion(
-            record,
-            extractable_fields=extractable_fields,
-        )
+    if normalized_surface == "ecommerce_detail" and _requires_dom_long_text_completion(
+        record,
+        extractable_fields=extractable_fields,
     ):
         return True
     optional_cue_fields = {
@@ -1042,9 +1016,7 @@ def _requires_dom_completion(
 def _normalized_category_path(value: object) -> str:
     text = clean_text(value).casefold()
     return " > ".join(
-        part
-        for part in re.split(r"\s*(?:>|/|›|»|→|\|)\s*", text)
-        if part
+        part for part in re.split(r"\s*(?:>|/|›|»|→|\|)\s*", text) if part
     )
 
 

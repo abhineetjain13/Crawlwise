@@ -158,8 +158,8 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = sorted(
-    list(_STATIC_EXPORTS.keys())
-    + [
+    set(_STATIC_EXPORTS.keys())
+    | {
         "XPATH_ALLOWED_FUNCTIONS",
         "XPATH_DISALLOWED_PATTERNS",
         "XPATH_FUNCTION_PATTERN",
@@ -172,5 +172,5 @@ __all__ = sorted(
         "SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS",
         "SELECTOR_SYNTHESIS_LOW_VALUE_TAGS",
         "LISTING_FIELD_SELECTORS",
-    ]
+    }
 )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -41,6 +42,8 @@ from app.services.extract.shared_variant_logic import (
     variant_semantic_identity,
 )
 
+logger = logging.getLogger(__name__)
+
 _VARIANT_SIZE_VALUE_EXTRACT_PATTERNS = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(VARIANT_SIZE_VALUE_EXTRACT_PATTERNS or ())
@@ -76,16 +79,22 @@ _VARIANT_PLACEHOLDER_PREFIXES_LOWER = tuple(
 )
 _OPTION_FIELD_PATTERN = re.compile(r"option\d+_(?:name|values?)")
 _GENDER_ARTIFACT_PATTERN = str(GENDER_ARTIFACT_PATTERN or "")
-_GENDER_ARTIFACT_RE = re.compile(
-    _GENDER_ARTIFACT_PATTERN.format(candidate=r"[a-z0-9.]+"),
-    re.I,
-) if _GENDER_ARTIFACT_PATTERN else None
+_GENDER_ARTIFACT_RE = (
+    re.compile(
+        _GENDER_ARTIFACT_PATTERN.format(candidate=r"[a-z0-9.]+"),
+        re.I,
+    )
+    if _GENDER_ARTIFACT_PATTERN
+    else None
+)
 _GENDER_POSSESSIVE_RE = (
     re.compile(str(GENDER_POSSESSIVE_PATTERN), re.I)
     if GENDER_POSSESSIVE_PATTERN
     else None
 )
-_STANDARD_SIZE_VALUES = frozenset(str(value).lower() for value in tuple(STANDARD_SIZE_VALUES or ()))
+_STANDARD_SIZE_VALUES = frozenset(
+    str(value).lower() for value in tuple(STANDARD_SIZE_VALUES or ())
+)
 _VARIANT_TITLE_STOPWORDS = frozenset(
     clean_text(token).lower()
     for token in tuple(VARIANT_TITLE_STOPWORDS or ())
@@ -153,10 +162,7 @@ def _drop_cross_product_variant_rows(record: dict[str, Any]) -> None:
         )
         axis_tokens = _variant_axis_tokens(variant)
         unmatched_tokens = variant_tokens - axis_tokens
-        if (
-            len(unmatched_tokens) >= 2
-            and parent_tokens.isdisjoint(unmatched_tokens)
-        ):
+        if len(unmatched_tokens) >= 2 and parent_tokens.isdisjoint(unmatched_tokens):
             continue
         kept.append(variant)
     if kept:
@@ -249,8 +255,7 @@ def _enforce_variant_axis_contract(record: dict[str, Any]) -> None:
     axisful_variants = [
         variant
         for variant in variants
-        if isinstance(variant, dict)
-        and _variant_has_axis_value(variant)
+        if isinstance(variant, dict) and _variant_has_axis_value(variant)
     ]
     if axisful_variants:
         record["variants"] = axisful_variants
@@ -268,14 +273,30 @@ def _enforce_variant_currency_context(record: dict[str, Any]) -> None:
     if not parent_currency:
         return
     kept: list[dict[str, Any]] = []
+    mismatched: list[dict[str, Any]] = []
     for variant in variants:
         if not isinstance(variant, dict):
             continue
         variant_currency = _currency_code(variant.get("currency"))
         if variant_currency and variant_currency != parent_currency:
+            logger.warning(
+                "Dropping variant with mismatched currency",
+                extra={
+                    "variant_id": variant.get("id") or variant.get("sku"),
+                    "variant_currency": variant_currency,
+                    "parent_currency": parent_currency,
+                },
+            )
+            mismatch = dict(variant)
+            mismatch["currency_mismatch"] = True
+            mismatch["parent_currency"] = parent_currency
+            mismatch["variant_currency"] = variant_currency
+            mismatched.append(mismatch)
             continue
         variant["currency"] = parent_currency
         kept.append(variant)
+    if mismatched:
+        record["variants_currency_mismatch"] = mismatched
     if kept:
         record["variants"] = kept
         record["variant_count"] = len(kept)
@@ -431,17 +452,12 @@ def _extract_size_value(value: object) -> str:
         match = pattern.search(text)
         if match is not None:
             candidate = clean_text(match.group(0))
-            if (
-                len(candidate) == 1
-                and (
-                    (
-                        match.start() > 0
-                        and text[match.start() - 1] in {"'", "’"}
-                    )
-                    or _size_candidate_is_gender_artifact(candidate)
-                )
+            if len(candidate) == 1 and (
+                (match.start() > 0 and text[match.start() - 1] in {"'", "’"})
+                or _size_candidate_is_gender_artifact(candidate)
             ):
                 continue
+            # Numeric values <4 are usually counts like 2-pack, not child sizes.
             if candidate.isdigit() and int(candidate) < 4:
                 continue
             return candidate
@@ -453,9 +469,12 @@ def _extract_size_value(value: object) -> str:
                 continue
             if _size_candidate_is_gender_artifact(candidate):
                 continue
+            # Numeric values <4 are usually counts like 2-pack, not child sizes.
             if candidate.isdigit() and int(candidate) < 4:
                 continue
-            if any(pattern.fullmatch(candidate) for pattern in _VARIANT_SIZE_VALUE_PATTERNS):
+            if any(
+                pattern.fullmatch(candidate) for pattern in _VARIANT_SIZE_VALUE_PATTERNS
+            ):
                 return candidate
     return ""
 
@@ -482,7 +501,11 @@ def _extract_color_value(value: object) -> str:
     if not text:
         return ""
     for chunk in reversed(
-        [part for part in re.split(r"\s+[|/]\s+|\s+[–—-]\s+|\(", text) if clean_text(part)]
+        [
+            part
+            for part in re.split(r"\s+[|/]\s+|\s+[–—-]\s+|\(", text)
+            if clean_text(part)
+        ]
     ):
         if color_value := _extract_trailing_color_phrase(chunk):
             return color_value
@@ -520,7 +543,13 @@ def _extract_trailing_color_phrase(value: str) -> str:
     phrase = clean_text(" ".join(tokens[start:end]))
     if not phrase or len(phrase.split()) > 4:
         return ""
-    return phrase.title()
+    return _title_preserving_acronyms(phrase)
+
+
+def _title_preserving_acronyms(phrase: str) -> str:
+    return " ".join(
+        token if token.isupper() else token.capitalize() for token in phrase.split()
+    )
 
 
 def _dedupe_variant_rows(record: dict[str, Any]) -> None:
@@ -575,8 +604,7 @@ def _prune_axisless_rows_when_axisful_rows_exist(record: dict[str, Any]) -> None
     axisful_rows = [
         variant
         for variant in variants
-        if isinstance(variant, dict)
-        and _variant_has_axis_value(variant)
+        if isinstance(variant, dict) and _variant_has_axis_value(variant)
     ]
     if not axisful_rows:
         return
@@ -720,10 +748,7 @@ def _enforce_variant_payload_limits(record: dict[str, Any]) -> None:
         variant
         for variant in variants
         if isinstance(variant, dict)
-        and (
-            _variant_primary_key(variant)
-            or _variant_has_axis_value(variant)
-        )
+        and (_variant_primary_key(variant) or _variant_has_axis_value(variant))
     ]
     truncated = kept[:max_rows] if kept else list(variants[:max_rows])
     if truncated:

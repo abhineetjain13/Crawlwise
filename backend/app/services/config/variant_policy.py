@@ -123,8 +123,7 @@ AXIS_NAME_ALIASES = {
     for group, canonical in VARIANT_AXIS_CANONICAL_MAPPING.items()
     for normalized_canonical in [_normalized_variant_axis_alias_key(canonical)]
     for normalized_alias in (
-        _normalized_variant_axis_alias_key(str(raw_alias))
-        for raw_alias in (*tuple(group), canonical)
+        _normalized_variant_axis_alias_key(str(raw_alias)) for raw_alias in group
     )
     if normalized_alias and normalized_canonical
 }

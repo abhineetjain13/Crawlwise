@@ -20,6 +20,7 @@ from app.services.acquisition.browser_recovery import (
 from app.services.config.extraction_rules import (
     DETAIL_MARKDOWN_LINE_NOISE,
     DETAIL_MARKDOWN_SECTION_NOISE_TOKENS,
+    LISTING_VISUAL_PRICE_REGEX_PATTERN,
     LISTING_BRAND_SELECTORS,
     LISTING_UTILITY_URL_TOKENS,
     MARKDOWN_NOISE_SELECTORS,
@@ -47,8 +48,14 @@ from app.services.acquisition.runtime import (
     classify_blocked_page_async,
     copy_headers,
 )
-from app.services.platform_policy import resolve_browser_readiness_policy, resolve_platform_runtime_policy
+from app.services.platform_policy import (
+    resolve_browser_readiness_policy,
+    resolve_platform_runtime_policy,
+)
+
 logger = logging.getLogger(__name__)
+
+
 @dataclass(slots=True)
 class BrowserFinalizeInput:
     page: Any
@@ -74,6 +81,8 @@ class BrowserFinalizeInput:
     started_at: float
     interstitial_diagnostics: dict[str, object] | None = None
     capture_screenshot: bool = False
+
+
 class BrowserAcquisitionResultBuilder:
     def __init__(
         self,
@@ -95,6 +104,7 @@ class BrowserAcquisitionResultBuilder:
         self.capture_browser_screenshot = capture_browser_screenshot
         self.emit_browser_event = emit_browser_event
         self.elapsed_ms = elapsed_ms
+
     async def build(self) -> dict[str, object]:
         payload = self.payload
         response_missing = payload.response is None
@@ -112,7 +122,9 @@ class BrowserAcquisitionResultBuilder:
         )
         payload_capture_started_at = time.perf_counter()
         capture_summary = await payload.payload_capture.close(payload.page)
-        payload.phase_timings_ms["payload_capture"] = self.elapsed_ms(payload_capture_started_at)
+        payload.phase_timings_ms["payload_capture"] = self.elapsed_ms(
+            payload_capture_started_at
+        )
         html_bytes = len(payload.html.encode("utf-8"))
         fast_finalize = _ready_probe_supports_fast_finalize(
             payload.readiness_probes,
@@ -130,7 +142,9 @@ class BrowserAcquisitionResultBuilder:
             low_content_reason = None
             location_interstitial_present = False
         else:
-            blocked_classification = await self.classify_blocked_page_async(payload.html, status_code)
+            blocked_classification = await self.classify_blocked_page_async(
+                payload.html, status_code
+            )
             blocked_result = self.blocked_html_checker(payload.html, status_code)
             if inspect.isawaitable(blocked_result):
                 blocked_result = await blocked_result
@@ -157,7 +171,9 @@ class BrowserAcquisitionResultBuilder:
         if location_interstitial_present:
             browser_outcome = "location_required"
         await self._emit_events(browser_outcome=browser_outcome, blocked=blocked)
-        screenshot_path = await self._capture_screenshot(browser_outcome=browser_outcome)
+        screenshot_path = await self._capture_screenshot(
+            browser_outcome=browser_outcome
+        )
         (
             rendered_listing_fragments,
             listing_visual_elements,
@@ -246,6 +262,7 @@ class BrowserAcquisitionResultBuilder:
                 surface=payload.surface,
             ).get("family"),
         }
+
     async def _emit_events(self, *, browser_outcome: str, blocked: bool) -> None:
         payload = self.payload
         if payload.traversal_result is not None and payload.traversal_result.activated:
@@ -269,6 +286,7 @@ class BrowserAcquisitionResultBuilder:
             )
         if browser_outcome == "usable_content":
             payload.phase_timings_ms["screenshot_capture"] = 0
+
     async def _capture_screenshot(self, *, browser_outcome: str) -> str:
         payload = self.payload
         if browser_outcome == "usable_content":
@@ -276,7 +294,15 @@ class BrowserAcquisitionResultBuilder:
         if not payload.capture_screenshot:
             payload.phase_timings_ms["screenshot_capture"] = 0
             return ""
-        probes_summary = [{"stage": probe.get("stage"), "is_ready": probe.get("is_ready"), "visible_text": probe.get("visible_text_length"), "cards": probe.get("listing_card_count")} for probe in payload.readiness_probes]
+        probes_summary = [
+            {
+                "stage": probe.get("stage"),
+                "is_ready": probe.get("is_ready"),
+                "visible_text": probe.get("visible_text_length"),
+                "cards": probe.get("listing_card_count"),
+            }
+            for probe in payload.readiness_probes
+        ]
         html_bytes = len(payload.html.encode("utf-8"))
         low_content_reason = self.classify_low_content_reason(
             payload.html,
@@ -294,7 +320,9 @@ class BrowserAcquisitionResultBuilder:
         try:
             return await self.capture_browser_screenshot(payload.page)
         finally:
-            payload.phase_timings_ms["screenshot_capture"] = self.elapsed_ms(screenshot_started_at)
+            payload.phase_timings_ms["screenshot_capture"] = self.elapsed_ms(
+                screenshot_started_at
+            )
 
     async def _capture_listing_artifacts(
         self,
@@ -304,7 +332,10 @@ class BrowserAcquisitionResultBuilder:
         dict[str, object],
     ]:
         payload = self.payload
-        rendered_listing_fragments, rendered_listing_fragment_capture = await self._capture_timed_listing_artifact(
+        (
+            rendered_listing_fragments,
+            rendered_listing_fragment_capture,
+        ) = await self._capture_timed_listing_artifact(
             capture_rendered_listing_fragments(
                 payload.page,
                 surface=payload.surface,
@@ -313,7 +344,10 @@ class BrowserAcquisitionResultBuilder:
             stage="rendered_listing_fragment_capture",
             item_kind="text",
         )
-        listing_visual_elements, listing_visual_capture = await self._capture_timed_listing_artifact(
+        (
+            listing_visual_elements,
+            listing_visual_capture,
+        ) = await self._capture_timed_listing_artifact(
             _capture_listing_visual_elements(
                 payload.page,
                 surface=payload.surface,
@@ -404,9 +438,12 @@ async def _capture_listing_artifact_with_timeout(
             if text:
                 rows.append(text)
     return (rows, {"status": "ok"})
+
+
 def remaining_timeout_factory(deadline: float):
     def _remaining() -> float:
         return max(2.0, deadline - time.perf_counter())
+
     return _remaining
 
 
@@ -507,13 +544,17 @@ async def navigate_browser_page_impl(
     crawler_runtime_settings,
     elapsed_ms,
 ):
-    navigation_wait_until = str(
-        (readiness_policy or {}).get("navigation_wait_until") or "domcontentloaded"
-    ).strip().lower()
+    navigation_wait_until = (
+        str((readiness_policy or {}).get("navigation_wait_until") or "domcontentloaded")
+        .strip()
+        .lower()
+    )
     primary_timeout_cap_ms = (
         int(crawler_runtime_settings.browser_navigation_networkidle_timeout_ms)
         if navigation_wait_until == "networkidle"
-        else int(crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms)
+        else int(
+            crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms
+        )
     )
     goto_timeout_ms = min(int(timeout_seconds * 1000), primary_timeout_cap_ms)
     fallback_timeout_ms = min(
@@ -540,7 +581,9 @@ async def navigate_browser_page_impl(
             fallback_timeout = (
                 min(
                     int(timeout_seconds * 1000),
-                    int(crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms),
+                    int(
+                        crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms
+                    ),
                 )
                 if fallback_strategy == "domcontentloaded"
                 else fallback_timeout_ms
@@ -567,8 +610,12 @@ async def navigate_browser_page_impl(
                     raise
                 except Exception as final_exc:
                     phase_timings_ms["navigation"] = elapsed_ms(navigation_started_at)
-                    setattr(final_exc, "browser_phase_timings_ms", dict(phase_timings_ms))
-                    setattr(final_exc, "browser_navigation_strategy", navigation_strategy)
+                    setattr(
+                        final_exc, "browser_phase_timings_ms", dict(phase_timings_ms)
+                    )
+                    setattr(
+                        final_exc, "browser_navigation_strategy", navigation_strategy
+                    )
                     raise
             else:
                 phase_timings_ms["navigation"] = elapsed_ms(navigation_started_at)
@@ -601,6 +648,8 @@ async def navigate_browser_page_impl(
         if recovered_strategy is not None:
             navigation_strategy = str(recovered_strategy) or navigation_strategy
     return response, navigation_strategy
+
+
 async def settle_browser_page_impl(
     page: Any,
     *,
@@ -621,6 +670,7 @@ async def settle_browser_page_impl(
 ):
     readiness_probes: list[dict[str, object]] = []
     cached_html: str | None = None
+
     async def _cached_probe(*, refresh_html: bool = False) -> dict[str, object]:
         nonlocal cached_html
         if refresh_html or cached_html is None:
@@ -632,8 +682,11 @@ async def settle_browser_page_impl(
             listing_override=readiness_override,
             html=cached_html,
         )
+
     current_probe = await _cached_probe(refresh_html=True)
-    append_readiness_probe(readiness_probes, stage="after_navigation", probe=current_probe)
+    append_readiness_probe(
+        readiness_probes, stage="after_navigation", probe=current_probe
+    )
     wait_ms = min(
         int(timeout_seconds * 1000),
         int(crawler_runtime_settings.browser_navigation_optimistic_wait_ms),
@@ -643,7 +696,9 @@ async def settle_browser_page_impl(
         await page.wait_for_timeout(wait_ms)
         phase_timings_ms["optimistic_wait"] = elapsed_ms(optimistic_wait_started_at)
         current_probe = await _cached_probe(refresh_html=True)
-        append_readiness_probe(readiness_probes, stage="after_optimistic_wait", probe=current_probe)
+        append_readiness_probe(
+            readiness_probes, stage="after_optimistic_wait", probe=current_probe
+        )
     else:
         phase_timings_ms["optimistic_wait"] = 0
     networkidle_timed_out = False
@@ -653,10 +708,7 @@ async def settle_browser_page_impl(
     implicit_networkidle_attempt = bool(
         not current_probe["is_ready"]
         and not explicit_require_networkidle
-        and (
-            is_listing_surface
-            or not current_probe.get("structured_data_present")
-        )
+        and (is_listing_surface or not current_probe.get("structured_data_present"))
     )
     if not current_probe["is_ready"] and (
         explicit_require_networkidle or implicit_networkidle_attempt
@@ -665,7 +717,9 @@ async def settle_browser_page_impl(
         networkidle_timeout_cap_ms = (
             int(crawler_runtime_settings.browser_navigation_networkidle_timeout_ms)
             if explicit_require_networkidle
-            else int(crawler_runtime_settings.browser_spa_implicit_networkidle_timeout_ms)
+            else int(
+                crawler_runtime_settings.browser_spa_implicit_networkidle_timeout_ms
+            )
         )
         try:
             await page.wait_for_load_state(
@@ -679,7 +733,9 @@ async def settle_browser_page_impl(
             networkidle_timed_out = True
         phase_timings_ms["networkidle_wait"] = elapsed_ms(networkidle_wait_started_at)
         current_probe = await _cached_probe(refresh_html=True)
-        append_readiness_probe(readiness_probes, stage="after_networkidle", probe=current_probe)
+        append_readiness_probe(
+            readiness_probes, stage="after_networkidle", probe=current_probe
+        )
     else:
         phase_timings_ms["networkidle_wait"] = 0
         networkidle_skip_reason = (
@@ -698,13 +754,17 @@ async def settle_browser_page_impl(
         )
         phase_timings_ms["readiness_wait"] = elapsed_ms(readiness_started_at)
         current_probe = await _cached_probe(refresh_html=True)
-        append_readiness_probe(readiness_probes, stage="after_platform_readiness", probe=current_probe)
+        append_readiness_probe(
+            readiness_probes, stage="after_platform_readiness", probe=current_probe
+        )
     else:
         phase_timings_ms["readiness_wait"] = 0
         readiness_diagnostics = {
             "status": "skipped",
             "reason": (
-                "fast_path_ready" if current_probe["is_ready"] else "no_platform_override"
+                "fast_path_ready"
+                if current_probe["is_ready"]
+                else "no_platform_override"
             ),
         }
     if "detail" not in str(surface or "").lower():
@@ -769,6 +829,8 @@ async def settle_browser_page_impl(
         readiness_diagnostics,
         expansion_diagnostics,
     )
+
+
 async def serialize_browser_page_content_impl(
     page: Any,
     *,
@@ -802,13 +864,17 @@ async def serialize_browser_page_content_impl(
         listing_recovery_mode
     )
     if normalized_listing_recovery_mode is not None:
-        listing_recovery_diagnostics["requested_mode"] = normalized_listing_recovery_mode
+        listing_recovery_diagnostics["requested_mode"] = (
+            normalized_listing_recovery_mode
+        )
     if traversal_active and normalized_listing_recovery_mode == "thin_listing":
         listing_recovery_diagnostics = await recover_listing_page_content(
             page,
             on_event=on_event,
         )
-        listing_recovery_diagnostics["requested_mode"] = normalized_listing_recovery_mode
+        listing_recovery_diagnostics["requested_mode"] = (
+            normalized_listing_recovery_mode
+        )
     elif normalized_listing_recovery_mode is not None:
         listing_recovery_diagnostics["reason"] = (
             "traversal_inactive" if not traversal_active else "unsupported_mode"
@@ -861,7 +927,15 @@ async def serialize_browser_page_content_impl(
     else:
         page_markdown = ""
         phase_timings_ms["page_markdown"] = 0
-    return html, traversal_result, rendered_html, listing_recovery_diagnostics, page_markdown
+    return (
+        html,
+        traversal_result,
+        rendered_html,
+        listing_recovery_diagnostics,
+        page_markdown,
+    )
+
+
 def resolve_browser_fetch_policy(
     *,
     url: str,
@@ -877,6 +951,8 @@ def resolve_browser_fetch_policy(
     )
     readiness_override = readiness_policy.get("listing_override")
     return traversal_active, readiness_policy, readiness_override
+
+
 def build_browser_diagnostics(
     *,
     browser_reason: str | None,
@@ -937,6 +1013,8 @@ def build_browser_diagnostics(
     if traversal_result is not None:
         diagnostics.update(traversal_result.diagnostics())
     return diagnostics
+
+
 def build_browser_artifacts(
     *,
     screenshot_path: str,
@@ -977,9 +1055,7 @@ def location_interstitial_detected(html: str) -> bool:
     text = analysis.normalized_text.lower()
     tokens = _string_config_list(LOCATION_INTERSTITIAL_TEXT_TOKENS)
     matched_tokens = [
-        token.lower()
-        for token in tokens
-        if token and token.lower() in text
+        token.lower() for token in tokens if token and token.lower() in text
     ]
     if not text or not matched_tokens:
         return False
@@ -989,8 +1065,12 @@ def location_interstitial_detected(html: str) -> bool:
             if soup.select_one(selector) is not None:
                 return True
         except Exception:
-            logger.debug("Invalid location interstitial selector=%s", selector, exc_info=True)
-    for node in soup.select("[aria-modal='true'], [role='dialog'], .modal, .popup, .overlay"):
+            logger.debug(
+                "Invalid location interstitial selector=%s", selector, exc_info=True
+            )
+    for node in soup.select(
+        "[aria-modal='true'], [role='dialog'], .modal, .popup, .overlay"
+    ):
         node_text = " ".join(node.get_text(" ", strip=True).lower().split())
         if any(token in node_text for token in matched_tokens):
             return True
@@ -1058,6 +1138,24 @@ def _object_int(value: object, default: int = 0) -> int:
 async def dismiss_safe_location_interstitial(page: Any) -> dict[str, object]:
     selectors = _string_config_list(LOCATION_INTERSTITIAL_DISMISS_SELECTORS)
     still_present_result: dict[str, object] | None = None
+    visible_timeout_ms = int(
+        crawler_runtime_settings.traversal_location_interstitial_visible_timeout_ms
+        if crawler_runtime_settings.traversal_location_interstitial_visible_timeout_ms
+        is not None
+        else crawler_runtime_settings.traversal_cookie_consent_visible_timeout_ms
+    )
+    click_timeout_ms = int(
+        crawler_runtime_settings.traversal_location_interstitial_click_timeout_ms
+        if crawler_runtime_settings.traversal_location_interstitial_click_timeout_ms
+        is not None
+        else crawler_runtime_settings.traversal_cookie_consent_click_timeout_ms
+    )
+    postclick_wait_ms = int(
+        crawler_runtime_settings.traversal_location_interstitial_postclick_wait_ms
+        if crawler_runtime_settings.traversal_location_interstitial_postclick_wait_ms
+        is not None
+        else crawler_runtime_settings.cookie_consent_postclick_wait_ms
+    )
     for selector in selectors:
         try:
             matches = page.locator(selector)
@@ -1066,15 +1164,13 @@ async def dismiss_safe_location_interstitial(page: Any) -> dict[str, object]:
             locator = matches.first
             await locator.wait_for(
                 state="visible",
-                timeout=int(crawler_runtime_settings.traversal_cookie_consent_visible_timeout_ms),
+                timeout=visible_timeout_ms,
             )
             await locator.click(
-                timeout=int(crawler_runtime_settings.traversal_cookie_consent_click_timeout_ms),
+                timeout=click_timeout_ms,
                 force=True,
             )
-            await page.wait_for_timeout(
-                int(crawler_runtime_settings.cookie_consent_postclick_wait_ms)
-            )
+            await page.wait_for_timeout(postclick_wait_ms)
             if not await _page_has_location_interstitial(page):
                 return {"status": "dismissed", "selector": selector}
             still_present_result = {"status": "still_present", "selector": selector}
@@ -1222,9 +1318,13 @@ def _select_primary_browser_html(
         int(listing_min_items),
     ):
         return traversal_html
-    if stop_reason.endswith(("_not_found", "_no_progress", "_click_failed", "_blocked")):
+    if stop_reason.endswith(
+        ("_not_found", "_no_progress", "_click_failed", "_blocked")
+    ):
         return rendered_html
     return traversal_html
+
+
 async def _generate_page_markdown(
     page: Any,
     *,
@@ -1289,9 +1389,8 @@ def _choose_markdown_payload(
     markdown, link_lines = _serialize_markdown_root(content_root)
     if content_root is not body_or_soup:
         full_markdown, full_link_lines = _serialize_markdown_root(body_or_soup)
-        if (
-            len(full_markdown) >= len(markdown) + 120
-            or len(full_link_lines) > len(link_lines)
+        if len(full_markdown) >= len(markdown) + 120 or len(full_link_lines) > len(
+            link_lines
         ):
             markdown, link_lines = full_markdown, full_link_lines
     if detail_surface:
@@ -1352,6 +1451,8 @@ def _serialize_markdown_root(root: BeautifulSoup | Any) -> tuple[str, list[str]]
         if href and label and len(label) >= 3:
             link_lines.append(f"- {label} -> {href}")
     return "\n".join(lines), link_lines
+
+
 def _node_markdown_probe(node: Tag) -> str:
     attrs = getattr(node, "attrs", None)
     attr_text = ""
@@ -1370,6 +1471,8 @@ def _node_markdown_probe(node: Tag) -> str:
     for candidate in node.select(DETAIL_MARKDOWN_HEADING_SELECTOR)[:4]:
         headings.append(candidate.get_text(" ", strip=True))
     return " ".join([attr_text, *headings]).lower()
+
+
 def _prune_detail_markdown_noise(soup: BeautifulSoup) -> None:
     for node in list(soup.find_all(["section", "div", "aside", "article", "details"])):
         if not isinstance(node, Tag):
@@ -1379,6 +1482,8 @@ def _prune_detail_markdown_noise(soup: BeautifulSoup) -> None:
         if not _detail_markdown_probe_is_noise(node):
             continue
         node.decompose()
+
+
 def _detail_markdown_line_is_noise(line: str) -> bool:
     compact = " ".join(str(line or "").split()).strip()
     lowered = compact.lower()
@@ -1386,7 +1491,10 @@ def _detail_markdown_line_is_noise(line: str) -> bool:
         return True
     if lowered == ">":
         return True
-    if any(_detail_markdown_line_matches_noise_token(lowered, token) for token in DETAIL_MARKDOWN_LINE_NOISE):
+    if any(
+        _detail_markdown_line_matches_noise_token(lowered, token)
+        for token in DETAIL_MARKDOWN_LINE_NOISE
+    ):
         return True
     if compact.isupper() and len(compact) <= 24:
         return True
@@ -1411,6 +1519,8 @@ def _normalize_detail_markdown_line(line: str) -> str | None:
     if _detail_markdown_line_is_noise(compact):
         return None
     return compact
+
+
 def _detail_markdown_probe_is_noise(node: Tag) -> bool:
     attr_probe = _node_markdown_attr_text(node)
     heading_probe = _node_markdown_heading_text(node)
@@ -1429,25 +1539,43 @@ def _detail_markdown_probe_is_noise(node: Tag) -> bool:
     if any(" " in token or "&" in token for token in attr_hits | heading_hits):
         return True
     return bool(attr_hits and heading_hits)
+
+
 def _detail_markdown_contains_token(text: str, token: str) -> bool:
     normalized_token = str(token or "").strip().lower()
     if not normalized_token:
         return False
     pattern = r"\b" + re.escape(normalized_token).replace(r"\ ", r"[\s_-]+") + r"\b"
     return bool(re.search(pattern, text))
+
+
 def _detail_markdown_token_key(token: str) -> str:
     normalized_token = str(token or "").strip().lower()
     if normalized_token.endswith("s") and " " not in normalized_token:
         return normalized_token[:-1]
     return normalized_token
+
+
 def _listing_html_detail_anchor_count(html: str) -> int:
     soup = BeautifulSoup(str(html or ""), "html.parser")
     count = 0
     for anchor in soup.find_all("a", href=True):
         href = str(anchor.get("href") or "").strip().lower()
-        if any(marker in href for marker in ("/products/", "/product/", "/p/", "/item/", "/jobs/", "/job/")):
+        if any(
+            marker in href
+            for marker in (
+                "/products/",
+                "/product/",
+                "/p/",
+                "/item/",
+                "/jobs/",
+                "/job/",
+            )
+        ):
             count += 1
     return count
+
+
 def _node_markdown_attr_text(node: Tag) -> str:
     attrs = getattr(node, "attrs", None)
     if not isinstance(attrs, dict):
@@ -1462,11 +1590,15 @@ def _node_markdown_attr_text(node: Tag) -> str:
             str(attrs.get("aria-label") or ""),
         ]
     ).lower()
+
+
 def _node_markdown_heading_text(node: Tag) -> str:
     headings: list[str] = []
     for candidate in node.select(DETAIL_MARKDOWN_HEADING_SELECTOR)[:4]:
         headings.append(candidate.get_text(" ", strip=True))
     return " ".join(headings).lower()
+
+
 def _filter_detail_markdown_payload(
     markdown: str,
     link_lines: list[str],
@@ -1476,8 +1608,12 @@ def _filter_detail_markdown_payload(
         normalized = _normalize_detail_markdown_line(line)
         if normalized:
             filtered_lines.append(normalized)
-    filtered_links = [line for line in link_lines if not _detail_markdown_link_is_noise(line)]
+    filtered_links = [
+        line for line in link_lines if not _detail_markdown_link_is_noise(line)
+    ]
     return "\n".join(filtered_lines), filtered_links
+
+
 def _detail_markdown_link_is_noise(line: str) -> bool:
     lowered = " ".join(str(line or "").split()).strip().lower()
     if not lowered:
@@ -1487,6 +1623,8 @@ def _detail_markdown_link_is_noise(line: str) -> bool:
     if any(token in lowered for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS):
         return True
     return any(token in lowered for token in DETAIL_MARKDOWN_LINE_NOISE)
+
+
 def _select_markdown_root(soup: BeautifulSoup) -> BeautifulSoup | Any:
     body = soup.body
     body_text = ""
@@ -1503,6 +1641,8 @@ def _select_markdown_root(soup: BeautifulSoup) -> BeautifulSoup | Any:
                     continue
             return candidate
     return body if body is not None else soup
+
+
 def _serialize_accessibility_snapshot(
     node: dict[str, object] | None,
     *,
@@ -1533,6 +1673,8 @@ def _normalize_listing_recovery_mode(value: object) -> str | None:
     if normalized.endswith("_retry"):
         normalized = normalized[: -len("_retry")]
     return normalized or None
+
+
 def _detail_expansion_extractability(
     *,
     html: str,
@@ -1547,7 +1689,9 @@ def _detail_expansion_extractability(
             "section_fields": [],
         }
     soup = BeautifulSoup(str(html or ""), "html.parser")
-    return requested_content_extractability(soup, surface=surface, requested_fields=requested_fields)
+    return requested_content_extractability(
+        soup, surface=surface, requested_fields=requested_fields
+    )
 
 
 def _detail_expansion_can_skip(
@@ -1582,7 +1726,8 @@ async def _capture_listing_visual_elements(
                 const candidateContainerSelectors = Array.isArray(args?.candidateContainerSelectors) ? args.candidateContainerSelectors : [];
                 const seenNodes = new Set();
                 const rows = [];
-                const priceRegex = /(?:₹|Rs\\.?|INR|\\$|€|£)\\s?[\\d,.]+/i;
+                // Extend currencies in LISTING_VISUAL_PRICE_REGEX_PATTERN.
+                const priceRegex = new RegExp(String(args?.priceRegexPattern || ''), 'i');
                 const isDataImage = (value) => /^data:/i.test(String(value || ''));
                 for (const selector of selectors) {
                     for (const node of document.querySelectorAll(selector)) {
@@ -1712,6 +1857,7 @@ async def _capture_listing_visual_elements(
                 "structuralAncestorSelectors": list(
                     LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS
                 ),
+                "priceRegexPattern": LISTING_VISUAL_PRICE_REGEX_PATTERN,
             },
         )
     except asyncio.CancelledError:
@@ -1737,6 +1883,8 @@ async def _capture_listing_visual_elements(
             continue
         rows.append(dict(item))
     return rows
+
+
 async def finalize_browser_fetch(
     payload: BrowserFinalizeInput,
     *,
@@ -1748,8 +1896,19 @@ async def finalize_browser_fetch(
     emit_browser_event,
     elapsed_ms,
 ) -> dict[str, object]:
-    builder = BrowserAcquisitionResultBuilder(payload, blocked_html_checker=blocked_html_checker, classify_blocked_page_async=classify_blocked_page_async, classify_low_content_reason=classify_low_content_reason, classify_browser_outcome=classify_browser_outcome, capture_browser_screenshot=capture_browser_screenshot, emit_browser_event=emit_browser_event, elapsed_ms=elapsed_ms)
+    builder = BrowserAcquisitionResultBuilder(
+        payload,
+        blocked_html_checker=blocked_html_checker,
+        classify_blocked_page_async=classify_blocked_page_async,
+        classify_low_content_reason=classify_low_content_reason,
+        classify_browser_outcome=classify_browser_outcome,
+        capture_browser_screenshot=capture_browser_screenshot,
+        emit_browser_event=emit_browser_event,
+        elapsed_ms=elapsed_ms,
+    )
     return await builder.build()
+
+
 def append_readiness_probe(
     readiness_probes: list[dict[str, object]],
     *,

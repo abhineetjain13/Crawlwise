@@ -5,8 +5,8 @@ import json
 import logging
 import os
 import re
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Sequence
 from urllib.parse import unquote, urlsplit
 
 from app.core.database import SessionLocal
@@ -48,6 +48,21 @@ _VARIANT_AXIS_FIELDS = tuple(
         for token in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
         if str(token).strip()
     )
+)
+
+
+def _field_name_tuple(value: object, config_name: str) -> tuple[str, ...]:
+    if isinstance(value, str) or not isinstance(value, Iterable):
+        raise TypeError(f"{config_name} must be an iterable of field names")
+    fields = tuple(str(token).strip() for token in value if str(token).strip())
+    if not fields:
+        raise TypeError(f"{config_name} must contain at least one field name")
+    return fields
+
+
+_PUBLIC_RECORD_LEGACY_VARIANT_FIELDS = _field_name_tuple(
+    PUBLIC_RECORD_LEGACY_VARIANT_FIELDS,
+    "PUBLIC_RECORD_LEGACY_VARIANT_FIELDS",
 )
 if not _VARIANT_AXIS_FIELDS:
     logger.warning(
@@ -812,7 +827,7 @@ def _sample_semantics(record: dict[str, object]) -> dict[str, object]:
         "variants_with_price_count": variant_rows_with_price,
         "legacy_variant_keys_present": any(
             record.get(field_name) not in (None, "", [], {})
-            for field_name in PUBLIC_RECORD_LEGACY_VARIANT_FIELDS
+            for field_name in _PUBLIC_RECORD_LEGACY_VARIANT_FIELDS
         ),
     }
 

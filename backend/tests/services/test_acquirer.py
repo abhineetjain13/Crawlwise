@@ -5,6 +5,7 @@ import pytest
 
 from app.services.acquisition import acquirer
 from app.services.acquisition.acquirer import AcquisitionRequest, acquire
+from app.services.acquisition.policy import AcquisitionPolicy
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.crawl_utils import normalize_target_url
 
@@ -22,7 +23,9 @@ async def test_acquire_returns_public_headers_as_plain_dict(
         del args
         on_event = kwargs.get("on_event")
         if on_event is not None:
-            await on_event("info", "Launched headless browser (chromium, proxy: direct)")
+            await on_event(
+                "info", "Launched headless browser (chromium, proxy: direct)"
+            )
         return type(
             "FetchResult",
             (),
@@ -69,7 +72,7 @@ async def test_acquire_normalizes_url_via_adapter_registry(
     observed_urls: list[str] = []
 
     async def _fake_normalize(url: str | None) -> str | None:
-        return f"{url}&normalized=1"
+        return f"{url}?normalized=1"
 
     async def _fake_fetch_page(url: str, *args, **kwargs):
         del args, kwargs
@@ -108,8 +111,8 @@ async def test_acquire_normalizes_url_via_adapter_registry(
         )
     )
 
-    assert observed_urls == ["https://example.com/jobs/123&normalized=1"]
-    assert result.final_url == "https://example.com/jobs/123&normalized=1"
+    assert observed_urls == ["https://example.com/jobs/123?normalized=1"]
+    assert result.final_url == "https://example.com/jobs/123?normalized=1"
 
 
 def test_normalize_target_url_strips_signed_detail_context_query_params() -> None:
@@ -130,15 +133,39 @@ def test_resolve_fetch_mode_honors_explicit_empty_profile() -> None:
     )
 
     assert acquirer._resolve_fetch_mode(request, acquisition_profile={}) == "auto"
-    assert acquirer._resolve_browser_reason(
-        request=request,
-        acquisition_profile={},
-        requires_browser=False,
-    ) is None
-    assert acquirer._resolve_listing_recovery_mode(
-        request,
-        acquisition_profile={},
-    ) is None
+    assert (
+        acquirer._resolve_browser_reason(
+            request=request,
+            acquisition_profile={},
+            requires_browser=False,
+        )
+        is None
+    )
+    assert (
+        acquirer._resolve_listing_recovery_mode(
+            request,
+            acquisition_profile={},
+        )
+        is None
+    )
+
+
+def test_acquisition_policy_rejects_invalid_profile_shapes() -> None:
+    with pytest.raises(ValueError, match="proxy_profile"):
+        AcquisitionPolicy.from_profile({"proxy_profile": ["not", "a", "mapping"]})
+
+    with pytest.raises(ValueError, match="fetch_mode"):
+        AcquisitionPolicy.from_profile({"fetch_mode": "surprise"})
+
+
+def test_acquisition_policy_profile_maps_are_read_only() -> None:
+    source_proxy_profile = {"rotation": "session"}
+    policy = AcquisitionPolicy.from_profile({"proxy_profile": source_proxy_profile})
+    source_proxy_profile["rotation"] = "rotating"
+
+    assert policy.proxy_profile["rotation"] == "session"
+    with pytest.raises(TypeError):
+        policy.proxy_profile["rotation"] = "rotating"  # type: ignore[index]
 
 
 @pytest.mark.asyncio

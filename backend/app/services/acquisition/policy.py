@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any, TypedDict, Unpack
+from types import MappingProxyType
+from typing import TypedDict, Unpack
 
 from app.services.acquisition_plan import AcquisitionPlan
+from app.services.config.runtime_settings import VALID_FETCH_MODES
 
 
 class AcquisitionPolicyUpdates(TypedDict, total=False):
@@ -25,8 +27,8 @@ class AcquisitionPolicy:
     fetch_mode: str = "auto"
     prefer_browser: bool = False
     retry_reason: str | None = None
-    proxy_profile: dict[str, object] = field(default_factory=dict)
-    locality_profile: dict[str, object] = field(default_factory=dict)
+    proxy_profile: Mapping[str, object] = field(default_factory=dict)
+    locality_profile: Mapping[str, object] = field(default_factory=dict)
     capture_page_markdown: bool = False
     capture_screenshot: bool = False
     prefer_curl_handoff: bool = False
@@ -34,7 +36,9 @@ class AcquisitionPolicy:
     forced_browser_engine: str | None = None
 
     @classmethod
-    def from_profile(cls, profile: Mapping[str, object] | object | None) -> "AcquisitionPolicy":
+    def from_profile(
+        cls, profile: Mapping[str, object] | object | None
+    ) -> "AcquisitionPolicy":
         payload = _coerce_profile(profile)
         prefer_browser = bool(payload.get("prefer_browser"))
         return cls(
@@ -44,8 +48,14 @@ class AcquisitionPolicy:
             ),
             prefer_browser=prefer_browser,
             retry_reason=_normalized_retry_reason(payload.get("retry_reason")),
-            proxy_profile=_mapping_value(payload.get("proxy_profile")),
-            locality_profile=_mapping_value(payload.get("locality_profile")),
+            proxy_profile=_mapping_value(
+                payload.get("proxy_profile"),
+                field_name="proxy_profile",
+            ),
+            locality_profile=_mapping_value(
+                payload.get("locality_profile"),
+                field_name="locality_profile",
+            ),
             capture_page_markdown=bool(payload.get("capture_page_markdown", False)),
             capture_screenshot=bool(payload.get("capture_screenshot", False)),
             prefer_curl_handoff=bool(payload.get("prefer_curl_handoff", False)),
@@ -53,9 +63,12 @@ class AcquisitionPolicy:
             forced_browser_engine=_optional_text(payload.get("forced_browser_engine")),
         )
 
-    def with_updates(self, **updates: Unpack[AcquisitionPolicyUpdates]) -> "AcquisitionPolicy":
+    def with_updates(
+        self, **updates: Unpack[AcquisitionPolicyUpdates]
+    ) -> "AcquisitionPolicy":
         if not updates:
             return self
+        # Keep the profile round-trip so updates still use from_profile validation.
         profile = self.to_profile()
         profile.update(updates)
         return type(self).from_profile(profile)
@@ -106,6 +119,18 @@ class AcquisitionPolicy:
             profile["forced_browser_engine"] = self.forced_browser_engine
         return profile
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "proxy_profile",
+            MappingProxyType(dict(self.proxy_profile)),
+        )
+        object.__setattr__(
+            self,
+            "locality_profile",
+            MappingProxyType(dict(self.locality_profile)),
+        )
+
 
 def _coerce_profile(value: Mapping[str, object] | object | None) -> dict[str, object]:
     if isinstance(value, Mapping):
@@ -118,8 +143,17 @@ def _coerce_profile(value: Mapping[str, object] | object | None) -> dict[str, ob
     return {}
 
 
-def _mapping_value(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, Mapping) else {}
+def _mapping_value(value: object, *, field_name: str) -> dict[str, object]:
+    if value in (None, ""):
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump()
+        if isinstance(payload, Mapping):
+            return dict(payload)
+    raise ValueError(f"{field_name} must be a mapping")
 
 
 def _optional_text(value: object) -> str | None:
@@ -129,21 +163,17 @@ def _optional_text(value: object) -> str | None:
 
 def _normalize_fetch_mode(value: object, *, prefer_browser: bool) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"auto", "http_only", "browser_only", "http_then_browser"}:
+    if not normalized:
+        if prefer_browser:
+            return "browser_only"
+        return "auto"
+    if normalized in VALID_FETCH_MODES:
         return normalized
-    if prefer_browser:
-        return "browser_only"
-    return "auto"
+    raise ValueError(f"fetch_mode must be one of {sorted(VALID_FETCH_MODES)}")
 
 
 def _normalized_retry_reason(value: object) -> str | None:
-    normalized = (
-        str(value or "")
-        .strip()
-        .lower()
-        .replace("-", "_")
-        .replace(" ", "_")
-    )
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     if normalized.endswith("_retry"):
         normalized = normalized[: -len("_retry")]
     return normalized or None

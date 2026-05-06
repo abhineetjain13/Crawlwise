@@ -23,6 +23,14 @@ from app.services.config.extraction_rules import (
     EXPORT_IMAGE_URL_SUFFIXES,
     MARKDOWN_VIEW,
 )
+from app.services.config.export_settings import (
+    EXPORT_PAGING_HEADER,
+    EXPORT_PARTIAL_HEADER,
+    EXPORT_TOTAL_HEADER,
+    MARKDOWN_EXCERPT_MAX_LENGTH,
+    MARKDOWN_LONG_FORM_THRESHOLD,
+    MAX_RECORD_PAGE_SIZE,
+)
 from app.services.config.public_record_policy import (
     PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS,
     PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS,
@@ -35,10 +43,6 @@ from app.schemas.crawl import CrawlRecordProvenanceResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-MAX_RECORD_PAGE_SIZE = 1000
-EXPORT_PAGING_HEADER = "X-Export-Paging"
-EXPORT_TOTAL_HEADER = "X-Export-Total"
-EXPORT_PARTIAL_HEADER = "X-Export-Partial"
 RUN_NOT_FOUND_RESPONSE = {
     404: {"description": RUN_NOT_FOUND_DETAIL},
 }
@@ -237,15 +241,13 @@ async def stream_export_json(session: AsyncSession, run_id: int):
 
 
 async def stream_export_csv(session: AsyncSession, run_id: int):
-    structured_rows: list[dict] = []
     fieldnames: set[str] = set()
     async for row in _stream_export_rows(session, run_id):
         cleaned = clean_export_data(row.data if isinstance(row.data, dict) else {})
         if not cleaned:
             continue
-        structured_rows.append(cleaned)
         fieldnames.update(cleaned.keys())
-    if not structured_rows:
+    if not fieldnames:
         return
     ordered_fieldnames = sorted(fieldnames)
     buffer = StringIO()
@@ -256,8 +258,11 @@ async def stream_export_csv(session: AsyncSession, run_id: int):
     yield buffer.getvalue()
     buffer.seek(0)
     buffer.truncate(0)
-    for row in structured_rows:
-        writer.writerow(row)
+    async for row in _stream_export_rows(session, run_id):
+        cleaned = clean_export_data(row.data if isinstance(row.data, dict) else {})
+        if not cleaned:
+            continue
+        writer.writerow(cleaned)
         yield buffer.getvalue()
         buffer.seek(0)
         buffer.truncate(0)
@@ -407,7 +412,7 @@ def record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
         "title": cleaned.get("title") or raw_data.get("title"),
         "fallback_type": source_trace.get("type"),
         "markdown_excerpt": stringify_markdown_value(raw_data.get("page_markdown"))[
-            :500
+            :MARKDOWN_EXCERPT_MAX_LENGTH
         ]
         or None,
     }
@@ -622,7 +627,7 @@ def is_markdown_long_form(field_name: object, value: str) -> bool:
     normalized = str(field_name or "").strip().lower()
     if normalized in markdown_long_form_fields():
         return True
-    return "\n" in value or len(value) > 180
+    return "\n" in value or len(value) > MARKDOWN_LONG_FORM_THRESHOLD
 
 
 def render_markdown_inline(value: object) -> str:

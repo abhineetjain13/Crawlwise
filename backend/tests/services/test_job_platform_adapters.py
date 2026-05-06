@@ -35,7 +35,7 @@ class _DummyAdapter(BaseAdapter):
         return HttpFetchResult(
             url=url,
             final_url=url,
-            text="<html><body><pre>{\"ok\": true}</pre></body></html>",
+            text='<html><body><pre>{"ok": true}</pre></body></html>',
             status_code=200,
             headers=httpx.Headers({"content-type": "text/html"}),
             json_data={"ok": True},
@@ -127,7 +127,9 @@ async def test_run_adapter_fails_open_when_adapter_raises(
 
 
 @pytest.mark.asyncio
-async def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_generic() -> None:
+async def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_generic() -> (
+    None
+):
     normalized = await normalize_adapter_acquisition_url(
         "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?jobId= 12345 &lang=en_US"
     )
@@ -138,7 +140,9 @@ async def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_g
 
 
 @pytest.mark.asyncio
-async def test_platform_owned_adp_acquisition_normalization_uses_configured_domains() -> None:
+async def test_platform_owned_adp_acquisition_normalization_uses_configured_domains() -> (
+    None
+):
     normalized = await normalize_adapter_acquisition_url(
         "https://acme.wd5.myworkforcenow.com/recruitment/recruitment.html?jobId= 12345 "
     )
@@ -293,7 +297,7 @@ async def test_request_result_applies_per_request_timeout_with_shared_client(
         "app.services.acquisition.runtime.build_async_http_client",
         lambda **kwargs: _FakeClient(),
     )
-    runtime_module._SHARED_HTTP_CLIENTS.clear()
+    runtime_module._clear_shared_clients_for_testing()
 
     await request_result(
         "https://example.com/api/jobs",
@@ -456,7 +460,10 @@ async def test_workday_adapter_extracts_listing_from_cxs_api(
         "job_listing",
     )
 
-    assert calls[0][0] == "https://smithnephew.wd5.myworkdayjobs.com/wday/cxs/smithnephew/External/jobs"
+    assert (
+        calls[0][0]
+        == "https://smithnephew.wd5.myworkdayjobs.com/wday/cxs/smithnephew/External/jobs"
+    )
     assert calls[0][1]["method"] == "POST"
     assert result.records == [
         {
@@ -646,7 +653,10 @@ async def test_ultipro_adapter_extracts_listing_from_jobboard_api(
         "1e739e24-c237-44f3-9f7a-310b0cec4162/JobBoardView/LoadSearchResults"
     )
     assert calls[0][1]["method"] == "POST"
-    assert calls[0][1]["json_body"]["opportunitySearch"]["OrderBy"][0]["Value"] == "postedDateDesc"
+    assert (
+        calls[0][1]["json_body"]["opportunitySearch"]["OrderBy"][0]["Value"]
+        == "postedDateDesc"
+    )
     assert result.records == [
         {
             "title": "Assembler",
@@ -822,7 +832,9 @@ async def test_oracle_hcm_adapter_uses_shared_request_json_contract(
     monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
     monkeypatch.setattr(adapter, "_extract_site_number", lambda *_args, **_kwargs: "42")
     monkeypatch.setattr(adapter, "_extract_site_lang", lambda *_args, **_kwargs: "en")
-    monkeypatch.setattr(adapter, "_extract_site_name", lambda *_args, **_kwargs: "Example Co")
+    monkeypatch.setattr(
+        adapter, "_extract_site_name", lambda *_args, **_kwargs: "Example Co"
+    )
     monkeypatch.setattr(
         adapter,
         "_normalize_requisition",
@@ -861,7 +873,9 @@ async def test_oracle_hcm_adapter_accepts_list_payloads_from_shared_json_contrac
     monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
     monkeypatch.setattr(adapter, "_extract_site_number", lambda *_args, **_kwargs: "42")
     monkeypatch.setattr(adapter, "_extract_site_lang", lambda *_args, **_kwargs: "en")
-    monkeypatch.setattr(adapter, "_extract_site_name", lambda *_args, **_kwargs: "Example Co")
+    monkeypatch.setattr(
+        adapter, "_extract_site_name", lambda *_args, **_kwargs: "Example Co"
+    )
     monkeypatch.setattr(
         adapter,
         "_normalize_requisition",
@@ -880,7 +894,9 @@ async def test_oracle_hcm_adapter_accepts_list_payloads_from_shared_json_contrac
     assert len(records) == 1
 
 
-def test_extract_listing_records_preserves_job_cards_inside_filtered_container() -> None:
+def test_extract_listing_records_preserves_job_cards_inside_filtered_container() -> (
+    None
+):
     html = """
     <html>
       <body>
@@ -918,7 +934,9 @@ def test_extract_listing_records_preserves_job_cards_inside_filtered_container()
     ]
 
 
-def test_oracle_hcm_adapter_extracts_site_number_and_job_id_from_candidate_experience_paths() -> None:
+def test_oracle_hcm_adapter_extracts_site_number_and_job_id_from_candidate_experience_paths() -> (
+    None
+):
     adapter = OracleHCMAdapter()
     url = "https://example.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/R89546/"
 
@@ -1019,7 +1037,9 @@ def test_shopify_adapter_recovers_locale_prefix_without_products_marker() -> Non
     assert record["url"] == "https://example.com/en-lb/products/widget"
 
 
-def test_job_listing_url_looks_like_posting_uses_segment_tokenization_for_non_listing_hubs() -> None:
+def test_job_listing_url_looks_like_posting_uses_segment_tokenization_for_non_listing_hubs() -> (
+    None
+):
     assert not job_listing_url_looks_like_posting(
         "https://jobs.example.com/jobs/search-results/role-12345-senior-engineer"
     )

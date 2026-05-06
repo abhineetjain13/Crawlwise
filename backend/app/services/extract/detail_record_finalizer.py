@@ -109,7 +109,7 @@ def _compile_detail_waf_queue_title_patterns() -> tuple[re.Pattern[str], ...]:
 
 
 _DETAIL_WAF_QUEUE_TITLE_PATTERNS = _compile_detail_waf_queue_title_patterns()
-_MATERIAL_KEYWORD_TOKENS = frozenset(
+_material_keyword_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(MATERIAL_KEYWORDS or ())
     if str(token).strip()
@@ -407,7 +407,7 @@ def _detail_title_looks_like_placeholder(title: str) -> bool:
 
 def _materials_value_looks_like_org_name(value: str) -> bool:
     lowered = value.lower()
-    if any(token in lowered for token in _MATERIAL_KEYWORD_TOKENS):
+    if any(token in lowered for token in _material_keyword_tokens):
         return False
     return bool(
         (_ORG_SUFFIX_PATTERN is not None and _ORG_SUFFIX_PATTERN.search(lowered))

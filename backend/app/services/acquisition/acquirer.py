@@ -10,7 +10,6 @@ from app.services.acquisition_plan import AcquisitionPlan
 from app.services.acquisition.policy import AcquisitionPolicy
 from app.services.adapters.registry import normalize_adapter_acquisition_url
 from app.services.crawl_fetch_runtime import fetch_page
-from app.services.exceptions import ProxyPoolExhaustedError
 from app.services.platform_policy import resolve_platform_runtime_policy
 
 logger = logging.getLogger(__name__)
@@ -67,6 +66,7 @@ class AcquisitionRequest:
     def max_records(self) -> int:
         return self.plan.max_records
 
+
 @dataclass(slots=True)
 class AcquisitionResult:
     request: AcquisitionRequest
@@ -95,22 +95,30 @@ class PageEvidence:
     diagnostics: dict[str, object]
 
     @classmethod
-    def from_acquisition_result(cls, acquisition_result) -> "PageEvidence":
+    def from_acquisition_result(
+        cls, acquisition_result: AcquisitionResult
+    ) -> "PageEvidence":
         diagnostics = getattr(acquisition_result, "browser_diagnostics", {})
         return cls(
             blocked=bool(getattr(acquisition_result, "blocked", False)),
             method=str(getattr(acquisition_result, "method", "") or ""),
-            diagnostics=dict(diagnostics or {}) if isinstance(diagnostics, dict) else {},
+            diagnostics=dict(diagnostics or {})
+            if isinstance(diagnostics, dict)
+            else {},
         )
 
     @classmethod
-    def from_browser_diagnostics(cls, diagnostics: dict[str, object] | object) -> "PageEvidence":
+    def from_browser_diagnostics(
+        cls, diagnostics: dict[str, object] | object
+    ) -> "PageEvidence":
         payload = dict(diagnostics or {}) if isinstance(diagnostics, dict) else {}
         return cls(blocked=False, method="", diagnostics=payload)
 
     @property
     def browser_attempted(self) -> bool:
-        return bool(self.diagnostics.get("browser_attempted")) or self.method == "browser"
+        return (
+            bool(self.diagnostics.get("browser_attempted")) or self.method == "browser"
+        )
 
     @property
     def browser_outcome(self) -> str:
@@ -140,8 +148,7 @@ class PageEvidence:
         if self.blocked or self.browser_outcome == "challenge_page":
             return True
         if any(
-            item.startswith(("title:", "strong:"))
-            for item in self.challenge_evidence
+            item.startswith(("title:", "strong:")) for item in self.challenge_evidence
         ):
             return True
         if self.browser_outcome == "usable_content" and self.has_ready_readiness_probe:
@@ -175,9 +182,6 @@ def _list_or_empty(value: object) -> list[object]:
     return list(value) if isinstance(value, list) else []
 
 
-ProxyPoolExhausted = ProxyPoolExhaustedError
-
-
 async def _emit_event(on_event: Any, level: str, message: str) -> None:
     if on_event is None:
         return
@@ -193,46 +197,45 @@ async def _emit_event(on_event: Any, level: str, message: str) -> None:
 
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     requested_url = str(request.url or "")
-    effective_url = await normalize_adapter_acquisition_url(requested_url) or requested_url
+    effective_url = (
+        await normalize_adapter_acquisition_url(requested_url) or requested_url
+    )
     runtime_policy = resolve_platform_runtime_policy(
         effective_url,
         surface=request.surface,
     )
-    acquisition_policy = _resolve_acquisition_policy(request).with_platform_requirements(
+    acquisition_policy = _resolve_acquisition_policy(
+        request
+    ).with_platform_requirements(
         requires_browser=bool(runtime_policy.get("requires_browser")),
     )
     browser_reason = acquisition_policy.browser_reason
     if browser_reason is None and bool(runtime_policy.get("requires_browser")):
         browser_reason = "platform-required"
-    try:
-        await _emit_event(request.on_event, "info", f"Acquiring {effective_url}")
-        result = await fetch_page(
-            effective_url,
-            run_id=request.run_id,
-            proxy_list=request.proxy_list,
-            proxy_profile=acquisition_policy.proxy_profile or None,
-            locality_profile=acquisition_policy.locality_profile or None,
-            fetch_mode=acquisition_policy.fetch_mode,
-            prefer_browser=acquisition_policy.prefer_browser,
-            surface=request.surface,
-            traversal_mode=request.traversal_mode,
-            requested_fields=list(request.requested_fields),
-            listing_recovery_mode=acquisition_policy.listing_recovery_mode,
-            max_pages=request.max_pages,
-            max_scrolls=request.max_scrolls,
-            max_records=request.max_records,
-            browser_reason=browser_reason,
-            capture_page_markdown=acquisition_policy.capture_page_markdown,
-            capture_screenshot=acquisition_policy.capture_screenshot,
-            prefer_curl_handoff=acquisition_policy.prefer_curl_handoff,
-            handoff_cookie_engine=acquisition_policy.handoff_cookie_engine,
-            forced_browser_engine=acquisition_policy.forced_browser_engine,
-            on_event=request.on_event,
-        )
-    except ProxyPoolExhausted:
-        raise
-    except (httpx.HTTPError, TimeoutError, OSError):
-        raise
+    await _emit_event(request.on_event, "info", f"Acquiring {effective_url}")
+    result = await fetch_page(
+        effective_url,
+        run_id=request.run_id,
+        proxy_list=request.proxy_list,
+        proxy_profile=acquisition_policy.proxy_profile or None,
+        locality_profile=acquisition_policy.locality_profile or None,
+        fetch_mode=acquisition_policy.fetch_mode,
+        prefer_browser=acquisition_policy.prefer_browser,
+        surface=request.surface,
+        traversal_mode=request.traversal_mode,
+        requested_fields=list(request.requested_fields),
+        listing_recovery_mode=acquisition_policy.listing_recovery_mode,
+        max_pages=request.max_pages,
+        max_scrolls=request.max_scrolls,
+        max_records=request.max_records,
+        browser_reason=browser_reason,
+        capture_page_markdown=acquisition_policy.capture_page_markdown,
+        capture_screenshot=acquisition_policy.capture_screenshot,
+        prefer_curl_handoff=acquisition_policy.prefer_curl_handoff,
+        handoff_cookie_engine=acquisition_policy.handoff_cookie_engine,
+        forced_browser_engine=acquisition_policy.forced_browser_engine,
+        on_event=request.on_event,
+    )
     return AcquisitionResult(
         request=request,
         final_url=result.final_url,
@@ -277,8 +280,7 @@ def _headers_to_dict(headers: Mapping[str, object] | Any) -> dict[str, str]:
     if isinstance(headers, Mapping):
         return {str(key): str(value) for key, value in headers.items()}
     return {
-        str(key): str(value)
-        for key, value in getattr(headers, "items", lambda: [])()
+        str(key): str(value) for key, value in getattr(headers, "items", lambda: [])()
     }
 
 

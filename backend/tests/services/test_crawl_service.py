@@ -9,7 +9,7 @@ import pytest
 
 from app.core import database as database_module
 from app.core.config import settings
-from app.models.crawl import CrawlRecord, ReviewPromotion
+from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.crawl_domain import CONTROL_REQUEST_KILL, CONTROL_REQUEST_PAUSE
 from app.services import crawl_service
 from app.services.crawl_crud import (
@@ -34,7 +34,7 @@ async def _create_running_run(
     *,
     user_id: int,
     url: str = "https://example.com/jobs/1",
-) -> object:
+) -> CrawlRun:
     run = await create_crawl_run(
         db_session,
         user_id,
@@ -201,7 +201,10 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
     assert run.settings["fetch_profile"]["request_delay_ms"] == 900
     assert run.settings["locality_profile"]["geo_country"] == "IN"
     assert run.settings["diagnostics_profile"]["capture_network"] == "matched_only"
-    assert run.settings["acquisition_contract"]["preferred_browser_engine"] == "real_chrome"
+    assert (
+        run.settings["acquisition_contract"]["preferred_browser_engine"]
+        == "real_chrome"
+    )
     assert run.settings["acquisition_contract"]["prefer_curl_handoff"] is True
     assert run.settings["proxy_enabled"] is False
     assert run.settings["proxy_list"] == []
@@ -300,7 +303,11 @@ async def test_contract_marks_stale_after_repeated_quality_failures(
                     "method": "browser",
                     "browser_engine": "real_chrome",
                     "record_count": 1,
-                    "field_coverage": {"requested": ["title"], "found": ["title"], "missing": []},
+                    "field_coverage": {
+                        "requested": ["title"],
+                        "found": ["title"],
+                        "missing": [],
+                    },
                     "source_run_id": 12,
                     "timestamp": "2026-04-30T00:00:00+00:00",
                 },
@@ -351,7 +358,11 @@ async def test_contract_outcome_can_skip_non_acquisition_failures(
                     "method": "browser",
                     "browser_engine": "real_chrome",
                     "record_count": 1,
-                    "field_coverage": {"requested": ["title"], "found": ["title"], "missing": []},
+                    "field_coverage": {
+                        "requested": ["title"],
+                        "found": ["title"],
+                        "missing": [],
+                    },
                     "source_run_id": 12,
                     "timestamp": "2026-04-30T00:00:00+00:00",
                 },
@@ -517,7 +528,11 @@ async def test_commit_selected_fields_updates_requested_field_metadata(
         db_session,
         run=run,
         items=[
-            {"record_id": record.id, "field_name": "description", "value": "Clean text"},
+            {
+                "record_id": record.id,
+                "field_name": "description",
+                "value": "Clean text",
+            },
             {"record_id": record.id, "field_name": "number_of_keys", "value": 61},
         ],
     )
@@ -778,7 +793,9 @@ async def test_run_with_local_session_preserves_original_process_run_error(
         assert run_id == 17
         raise RuntimeError("process exploded")
 
-    async def _failing_mark_run_failed(active_session, run_id: int, message: str) -> None:
+    async def _failing_mark_run_failed(
+        active_session, run_id: int, message: str
+    ) -> None:
         assert active_session is session
         assert run_id == 17
         assert "RuntimeError: process exploded" in message
@@ -794,7 +811,10 @@ async def test_run_with_local_session_preserves_original_process_run_error(
 
     assert str(exc_info.value) == "process exploded"
     assert "Local crawl task failed for run 17" in caplog.text
-    assert "Failed to persist failed status for run 17 after process_run error" in caplog.text
+    assert (
+        "Failed to persist failed status for run 17 after process_run error"
+        in caplog.text
+    )
 
 
 @pytest.mark.asyncio

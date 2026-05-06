@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
-from typing import Any
+from typing import Any, Callable, Protocol
 
 from app.services.config.extraction_rules import (
     DETAIL_BREADCRUMB_JSONLD_TYPES,
     DETAIL_IRRELEVANT_JSON_LD_TYPES,
+    DETAIL_SURFACE_KEYWORD,
+    ECOMMERCE_DETAIL_SURFACE,
 )
 
 
@@ -56,6 +57,16 @@ class DetailTierInputs:
     requested_fields: list[str] | None
 
 
+class PreparedDetailPage(Protocol):
+    state: DetailTierState
+    context: Any
+    js_state_record: dict[str, Any]
+    soup: Any
+    raw_soup: Any
+    js_state_objects: list[object]
+    selector_self_heal: dict[str, object]
+
+
 _NORMALIZED_DETAIL_BREADCRUMB_JSONLD_TYPES = frozenset(
     str(item).strip().lower()
     for item in tuple(DETAIL_BREADCRUMB_JSONLD_TYPES or ())
@@ -88,10 +99,14 @@ class DetailTierExecutor:
     def __init__(self, runtime: DetailTierRuntime) -> None:
         self._runtime = runtime
 
-    def build_record(self, prepared, inputs: DetailTierInputs) -> dict[str, Any]:
+    def build_record(
+        self,
+        prepared: PreparedDetailPage,
+        inputs: DetailTierInputs,
+    ) -> dict[str, Any]:
         record = self._collect_pre_dom_tiers(prepared, inputs)
         if self._can_skip_dom_tier(record, prepared, inputs):
-            if inputs.surface == "ecommerce_detail":
+            if inputs.surface == ECOMMERCE_DETAIL_SURFACE:
                 self._promote_dom_title(record, prepared, inputs.page_url)
             return self._runtime.finalize_early_detail_record(
                 record,
@@ -116,7 +131,7 @@ class DetailTierExecutor:
 
     def _collect_pre_dom_tiers(
         self,
-        prepared,
+        prepared: PreparedDetailPage,
         inputs: DetailTierInputs,
     ) -> dict[str, Any]:
         self._collect_authoritative_tier(
@@ -189,7 +204,8 @@ class DetailTierExecutor:
             for payload in payloads:
                 if (
                     source_name == "json_ld"
-                    and "detail" in str(state.surface or "").strip().lower()
+                    and DETAIL_SURFACE_KEYWORD
+                    in str(state.surface or "").strip().lower()
                     and _detail_json_ld_payload_is_irrelevant(payload)
                 ):
                     continue
@@ -224,7 +240,7 @@ class DetailTierExecutor:
 
     def _build_dom_tier_record(
         self,
-        prepared,
+        prepared: PreparedDetailPage,
         inputs: DetailTierInputs,
     ) -> dict[str, Any]:
         self._collect_dom_tier(
@@ -234,7 +250,7 @@ class DetailTierExecutor:
             selector_rules=inputs.selector_rules,
         )
         record = self._materialize(prepared.state, "dom")
-        if inputs.surface == "ecommerce_detail":
+        if inputs.surface == ECOMMERCE_DETAIL_SURFACE:
             self._promote_dom_title(record, prepared, inputs.page_url)
         return record
 
@@ -242,7 +258,7 @@ class DetailTierExecutor:
         self,
         state: DetailTierState,
         *,
-        prepared,
+        prepared: PreparedDetailPage,
         soup,
         selector_rules: list[dict[str, object]] | None,
     ) -> None:
@@ -250,16 +266,19 @@ class DetailTierExecutor:
             prepared,
             selector_rules=selector_rules,
         )
-        if state.surface == "ecommerce_detail":
+        if state.surface == ECOMMERCE_DETAIL_SURFACE:
             dom_variants = self._runtime.extract_variants_from_dom(
                 soup,
                 page_url=state.page_url,
             )
         else:
             dom_variants = {}
-        if state.surface == "ecommerce_detail" and self._runtime.should_collect_dom_variants(
-            state.candidates,
-            dom_variants,
+        if (
+            state.surface == ECOMMERCE_DETAIL_SURFACE
+            and self._runtime.should_collect_dom_variants(
+                state.candidates,
+                dom_variants,
+            )
         ):
             for field_name, value in dom_variants.items():
                 self._runtime.add_sourced_candidate(
@@ -275,7 +294,7 @@ class DetailTierExecutor:
     def _can_skip_dom_tier(
         self,
         record: dict[str, Any],
-        prepared,
+        prepared: PreparedDetailPage,
         inputs: DetailTierInputs,
     ) -> bool:
         confidence_score = self._runtime.coerce_float(
@@ -284,13 +303,16 @@ class DetailTierExecutor:
         threshold = self._runtime.coerce_float(
             prepared.selector_self_heal.get("threshold")
         )
-        return confidence_score >= threshold and not self._runtime.requires_dom_completion(
-            record=record,
-            surface=inputs.surface,
-            requested_fields=inputs.requested_fields,
-            selector_rules=inputs.selector_rules,
-            soup=prepared.soup,
-            breadcrumb_soup=prepared.raw_soup,
+        return (
+            confidence_score >= threshold
+            and not self._runtime.requires_dom_completion(
+                record=record,
+                surface=inputs.surface,
+                requested_fields=inputs.requested_fields,
+                selector_rules=inputs.selector_rules,
+                soup=prepared.soup,
+                breadcrumb_soup=prepared.raw_soup,
+            )
         )
 
     def _materialize(
@@ -298,6 +320,7 @@ class DetailTierExecutor:
         state: DetailTierState,
         tier_name: str,
     ) -> dict[str, Any]:
+        # DetailTierState is intentionally mutable; _materialize updates state.completed_tiers in-place.
         state.completed_tiers.append(tier_name)
         return self._runtime.materialize_record(
             page_url=state.page_url,

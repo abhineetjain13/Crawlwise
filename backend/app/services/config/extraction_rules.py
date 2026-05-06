@@ -43,6 +43,39 @@ SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS = frozenset(
     }
 )
 ECOMMERCE_DESCRIPTION_BLOCK_LIMIT = 40
+DETAIL_PAYLOAD_LIST_LIMIT = 50
+LISTING_VISUAL_PRICE_REGEX_PATTERN = r"(?:₹|Rs\.?|INR|\$|€|£)\s?[\d,.]+"
+TRACKING_PIXEL_PATTERNS = (
+    "facebook.com/tr?",
+    "facebook.com/tr&id=",
+    "/tr?id=",
+    "doubleclick",
+    "googletagmanager",
+    "google-analytics",
+    "pixel",
+)
+DETAIL_SURFACE_KEYWORD = "detail"
+ECOMMERCE_DETAIL_SURFACE = "ecommerce_detail"
+VARIANT_AXIS_EXCLUDED_SINGLE_TOKENS = frozenset({"color", "colour", "fit", "size"})
+VARIANT_COLOR_AXIS_TOKENS = frozenset({"color", "colour"})
+VARIANT_SIZE_AXIS_TOKENS = frozenset({"fit", "size"})
+VARIANT_DESCENDANT_SCAN_LIMIT = 24
+VARIANT_SIBLING_SEARCH_DEPTH = 4
+VARIANT_SELECT_OPTION_SCAN_LIMIT = 24
+VARIANT_SEQUENTIAL_INTEGER_MIN_RUN = 5
+VARIANT_SELECT_GROUP_MAX = 4
+VARIANT_CHOICE_GROUP_MAX = 8
+VARIANT_SWATCH_BUTTON_SELECTOR = (
+    "button[class*='swatch' i], button[class*='color-option' i],"
+    " button[class*='color-selector' i], button[class*='size-option' i],"
+    " button[class*='size-selector' i], button[class*='variant' i],"
+    " button[data-option], button[data-value], a[class*='swatch' i],"
+    " div[class*='swatch' i], div[role='radio'],"
+    " [data-testid*='variants-selector' i]"
+)
+VARIANT_SWATCH_BUTTON_LIMIT = 20
+VARIANT_SWATCH_PARENT_DEPTH = 6
+VARIANT_MATCHING_INPUT_LIMIT = 12
 BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY = (
     "a[href^='#']",
     "[role='tab'][aria-controls]",
@@ -946,7 +979,9 @@ REVIEW_TITLE_RE = re.compile(str(_REVIEW_TITLE_PATTERN), re.I)
 STRUCTURED_MULTI_FIELDS = frozenset(
     {*tuple(_STRUCTURED_MULTI_FIELDS_RAW or ()), "features"}
 )
-_detail_expand_selectors_base = tuple(_STATIC_EXPORTS.get("DETAIL_EXPAND_SELECTORS", ()) or ())
+_detail_expand_selectors_base = tuple(
+    _STATIC_EXPORTS.get("DETAIL_EXPAND_SELECTORS", ()) or ()
+)
 _detail_expand_selectors_ordered: list[str] = []
 _detail_expand_anchor_inserted = False
 for _selector in _detail_expand_selectors_base:
