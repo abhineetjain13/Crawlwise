@@ -21,7 +21,13 @@ from app.services.extract.shared_variant_logic import (
     resolve_variants,
     variant_axis_name_is_semantic,
 )
-from app.services.field_value_core import clean_text, extract_urls, surface_alias_lookup, text_or_none
+from app.services.field_value_core import (
+    clean_text,
+    coerce_field_value,
+    extract_urls,
+    surface_alias_lookup,
+    text_or_none,
+)
 from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
@@ -840,6 +846,12 @@ def _normalize_variant(
     )
     if image_url:
         row["image_url"] = image_url
+    selection_values = _variant_selection_values(
+        variant,
+        option_names=option_names,
+    )
+    if selection_values:
+        row["_selection_values"] = selection_values
     option_values = _variant_option_values(
         variant,
         option_names=option_names,
@@ -852,10 +864,82 @@ def _normalize_variant(
         if option_values.get("size"):
             row["size"] = option_values["size"]
     for field_name in ("title", "name", "color", "size"):
-        value = text_or_none(variant.get(field_name))
+        raw_value = variant.get(field_name)
+        value = (
+            _variant_axis_value(field_name, raw_value, page_url=page_url)
+            if field_name in {"color", "size"}
+            else text_or_none(raw_value)
+        )
         if value and field_name not in row:
             row["title" if field_name == "name" else field_name] = value
     return row or None
+
+
+def _variant_axis_value(
+    axis_name: str,
+    value: object,
+    *,
+    page_url: str,
+) -> str | None:
+    axis_key = normalized_variant_axis_key(axis_name) or str(axis_name or "")
+    coerced = coerce_field_value(axis_key, value, page_url)
+    return text_or_none(coerced)
+
+
+def _variant_selection_values(
+    variant: dict[str, Any],
+    *,
+    option_names: list[str],
+) -> dict[str, str]:
+    selection_values: dict[str, str] = {}
+    selected_options = (
+        variant.get("selectedOptions")
+        if isinstance(variant.get("selectedOptions"), list)
+        else variant.get("selected_options")
+    )
+    if isinstance(selected_options, list):
+        for item in selected_options:
+            if not isinstance(item, dict):
+                continue
+            axis_name = text_or_none(item.get("name") or item.get("label"))
+            axis_key = normalized_variant_axis_key(axis_name)
+            axis_value = _variant_axis_value(
+                axis_key,
+                item.get("value") or item.get("title") or item.get("label"),
+                page_url="",
+            )
+            if axis_key and axis_value and variant_axis_name_is_semantic(axis_name):
+                selection_values[axis_key] = axis_value
+    if selection_values:
+        return selection_values
+    variation_values = variant.get("variationValues")
+    if not isinstance(variation_values, dict):
+        variation_values = variant.get("variation_values")
+    if isinstance(variation_values, dict):
+        for axis_name, raw_value in variation_values.items():
+            axis_key = normalized_variant_axis_key(axis_name)
+            cleaned = _variant_axis_value(axis_key, raw_value, page_url="")
+            if axis_key and cleaned and variant_axis_name_is_semantic(axis_name):
+                selection_values[axis_key] = cleaned
+    if selection_values:
+        return selection_values
+    raw_options = _as_list(variant.get("options"))
+    for index in range(1, 4):
+        axis_name = (
+            option_names[index - 1]
+            if index - 1 < len(option_names)
+            else f"option_{index}"
+        )
+        axis_key = normalized_variant_axis_key(axis_name)
+        if not axis_key or not variant_axis_name_is_semantic(axis_name):
+            continue
+        value = variant.get(f"option{index}")
+        if value in (None, "", [], {}) and index - 1 < len(raw_options):
+            value = raw_options[index - 1]
+        cleaned = _variant_axis_value(axis_key, value, page_url="")
+        if cleaned:
+            selection_values[axis_key] = cleaned
+    return selection_values
 
 def _variant_option_values(
     variant: dict[str, Any],
@@ -874,7 +958,11 @@ def _variant_option_values(
             if not isinstance(item, dict):
                 continue
             axis_name = text_or_none(item.get("name") or item.get("label"))
-            axis_value = text_or_none(item.get("value") or item.get("title") or item.get("label"))
+            axis_value = _variant_axis_value(
+                normalized_variant_axis_key(axis_name or ""),
+                item.get("value") or item.get("title") or item.get("label"),
+                page_url="",
+            )
             if not axis_name or not axis_value or not variant_axis_name_is_semantic(axis_name):
                 continue
             axis_key = normalized_variant_axis_key(axis_name)
@@ -898,7 +986,7 @@ def _variant_option_values(
         }
         for axis_name, raw_value in variation_values.items():
             axis_key = normalized_variant_axis_key(axis_name)
-            cleaned = text_or_none(raw_value)
+            cleaned = _variant_axis_value(axis_key, raw_value, page_url="")
             if not axis_key or not cleaned or not variant_axis_name_is_semantic(axis_name):
                 continue
             if axis_key in direct_axis_keys and axis_key != str(axis_name).strip().lower():
@@ -916,7 +1004,7 @@ def _variant_option_values(
     if isinstance(attributes, dict):
         for axis_name, raw_value in attributes.items():
             axis_key = normalized_variant_axis_key(axis_name)
-            cleaned = text_or_none(raw_value)
+            cleaned = _variant_axis_value(axis_key, raw_value, page_url="")
             if not axis_key or not cleaned or not variant_axis_name_is_semantic(axis_name):
                 continue
             option_values[axis_key] = _display_option_value(
@@ -939,7 +1027,7 @@ def _variant_option_values(
         value = variant.get(f"option{index}")
         if value in (None, "", [], {}) and index - 1 < len(raw_options):
             value = raw_options[index - 1]
-        cleaned = text_or_none(value)
+        cleaned = _variant_axis_value(axis_key, value, page_url="")
         if cleaned:
             option_values[axis_key] = _display_option_value(
                 axis_key,
@@ -956,10 +1044,11 @@ def _variant_option_values(
             "finish", "model",
         ):
             val = variant.get(possible_axis)
-            if val and isinstance(val, (str, int, float)):
+            cleaned = _variant_axis_value(possible_axis, val, page_url="")
+            if cleaned:
                 option_values[possible_axis] = _display_option_value(
                     possible_axis,
-                    str(val).strip(),
+                    cleaned,
                     option_value_labels=option_value_labels,
                 )
 

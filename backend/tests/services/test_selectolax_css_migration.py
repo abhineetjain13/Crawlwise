@@ -1253,7 +1253,7 @@ async def test_nike_adapter_maps_preloaded_state_product() -> None:
     assert record["price"] == "1996"
     assert record["original_price"] == "2495"
     assert record["color"] == "Green"
-    assert record["size"] == "S"
+    assert "size" not in record
 
 
 @pytest.mark.asyncio
@@ -1318,7 +1318,7 @@ async def test_nike_detail_extraction_uses_adapter_and_rejects_shell_json_ld() -
     assert record["title"] == "Nike Pro Men's Dri-FIT Tight Sleeveless Fitness Top"
     assert record["brand"] == "Nike"
     assert record["variant_count"] == 2
-    assert record["size"] == "S"
+    assert "size" not in record
     assert "Bill Bowerman" not in record.values()
 
 

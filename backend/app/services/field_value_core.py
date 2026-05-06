@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import re
+from decimal import Decimal, InvalidOperation
 from html import unescape
 from typing import Any, cast
 from urllib.parse import urljoin, urlparse
@@ -664,6 +665,15 @@ def coerce_structured_scalar(
     *,
     keys: tuple[str, ...],
 ) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed = ast.literal_eval(stripped)
+            except (RecursionError, SyntaxError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                return coerce_structured_scalar(parsed, keys=keys)
     if isinstance(value, dict):
         for key in keys:
             candidate = value.get(key)
@@ -740,6 +750,8 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
             return None
         if cleaned.strip().lower() in _SIZE_REJECT_TOKENS_NORMALIZED:
             return None
+    elif field_name == "weight" and re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
+        return None
     if cleaned.strip().casefold() in {"none", "null", "- / null", "n/a", "na"}:
         return None
     return cleaned or None
@@ -914,7 +926,7 @@ def _coerce_variant_axis_value(
     text = text_or_none(coerced)
     if text:
         return text
-    return clean_text(value) or None
+    return None
 
 
 def flatten_variants_for_public_output(
@@ -1025,13 +1037,80 @@ def _drop_parent_shared_variant_fields(record: dict[str, Any]) -> None:
         if parent_value is None:
             continue
         if not all(
-            text_or_none(variant.get(field_name)) == parent_value
+            _variant_shared_value_matches_parent(
+                field_name,
+                variant.get(field_name),
+                parent_value,
+            )
             for variant in variant_rows
         ):
             continue
         for variant in variant_rows:
-            if text_or_none(variant.get(field_name)) == parent_value:
+            if _variant_shared_value_matches_parent(
+                field_name,
+                variant.get(field_name),
+                parent_value,
+            ):
                 variant.pop(field_name, None)
+    _drop_unanimous_variant_transport_fields(variant_rows)
+
+
+def _drop_unanimous_variant_transport_fields(
+    variant_rows: list[dict[str, Any]],
+) -> None:
+    if len(variant_rows) < 2:
+        return
+    if not any(
+        text_or_none(variant.get(axis_name))
+        for variant in variant_rows
+        for axis_name in _PUBLIC_VARIANT_AXIS_KEYS
+    ):
+        return
+    for field_name in ("price", "currency"):
+        values = [variant.get(field_name) for variant in variant_rows]
+        if any(value in (None, "", [], {}) for value in values):
+            continue
+        first_value = values[0]
+        if not all(
+            _variant_shared_value_matches_parent(field_name, value, first_value)
+            for value in values[1:]
+        ):
+            continue
+        for variant in variant_rows:
+            variant.pop(field_name, None)
+
+
+def _variant_shared_value_matches_parent(
+    field_name: str,
+    variant_value: object,
+    parent_value: object,
+) -> bool:
+    variant_text = text_or_none(variant_value)
+    parent_text = text_or_none(parent_value)
+    if variant_text is None or parent_text is None:
+        return False
+    if field_name == "price":
+        variant_price = _decimal_for_shared_price(variant_text)
+        parent_price = _decimal_for_shared_price(parent_text)
+        return (
+            variant_price is not None
+            and parent_price is not None
+            and variant_price == parent_price
+        )
+    return variant_text == parent_text
+
+
+def _decimal_for_shared_price(value: object) -> Decimal | None:
+    text = text_or_none(value)
+    if not text:
+        return None
+    normalized = re.sub(r"[^\d.\-]+", "", text.replace(",", ""))
+    if not normalized:
+        return None
+    try:
+        return Decimal(normalized).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def enforce_flat_variant_public_contract(

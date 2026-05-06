@@ -14,6 +14,7 @@ from app.services.config.extraction_rules import (
     GENDER_POSSESSIVE_PATTERN,
     VARIANT_COLOR_HINT_WORDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
+    VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
     VARIANT_PLACEHOLDER_PREFIXES,
     VARIANT_PLACEHOLDER_VALUES,
     VARIANT_SIZE_VALUE_PATTERNS,
@@ -66,6 +67,11 @@ _VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS or ())
     if str(pattern).strip()
+)
+_VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = tuple(
+    clean_text(token).casefold()
+    for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
+    if clean_text(token)
 )
 _VARIANT_PLACEHOLDER_VALUES_SET = frozenset(
     clean_text(value).lower()
@@ -123,6 +129,7 @@ def normalize_variant_record(record: dict[str, Any]) -> None:
     _drop_cross_product_variant_rows(record)
     _flatten_variant_rows(record)
     _clean_variant_rows(record)
+    _drop_parent_shared_variant_axes(record)
     _enforce_variant_axis_contract(record)
     _enforce_variant_currency_context(record)
     collapse_duplicate_size_aliases(record)
@@ -265,6 +272,46 @@ def _enforce_variant_axis_contract(record: dict[str, Any]) -> None:
     record.pop("variant_count", None)
 
 
+def _drop_parent_shared_variant_axes(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    variant_rows = [variant for variant in variants if isinstance(variant, dict)]
+    if len(variant_rows) < 2:
+        return
+    varying_axes = {
+        axis
+        for axis in _PUBLIC_VARIANT_AXIS_FIELDS
+        if len(
+            {
+                clean_text(variant.get(axis)).casefold()
+                for variant in variant_rows
+                if clean_text(variant.get(axis))
+            }
+        )
+        >= 2
+    }
+    if not varying_axes:
+        return
+    for axis in _PUBLIC_VARIANT_AXIS_FIELDS:
+        parent_value = clean_text(record.get(axis))
+        if not parent_value:
+            continue
+        variant_values = [
+            clean_text(variant.get(axis))
+            for variant in variant_rows
+            if clean_text(variant.get(axis))
+        ]
+        if len(variant_values) != len(variant_rows):
+            continue
+        if any(value.casefold() != parent_value.casefold() for value in variant_values):
+            continue
+        if not any(other_axis != axis for other_axis in varying_axes):
+            continue
+        for variant in variant_rows:
+            variant.pop(axis, None)
+
+
 def _enforce_variant_currency_context(record: dict[str, Any]) -> None:
     variants = record.get("variants")
     if not isinstance(variants, list) or not variants:
@@ -322,6 +369,7 @@ def _normalize_variant_axis_value(field_name: str, value: object) -> str:
     if (
         not cleaned
         or _value_is_placeholder(cleaned)
+        or _value_is_ui_noise(cleaned)
         or _variant_axis_value_is_header(field_name, cleaned)
     ):
         return ""
@@ -345,6 +393,11 @@ def _value_is_placeholder(value: str) -> bool:
     return lowered in _VARIANT_PLACEHOLDER_VALUES_SET or any(
         lowered.startswith(prefix) for prefix in _VARIANT_PLACEHOLDER_PREFIXES_LOWER
     )
+
+
+def _value_is_ui_noise(value: str) -> bool:
+    lowered = clean_text(value).casefold()
+    return any(phrase in lowered for phrase in _VARIANT_OPTION_VALUE_UI_NOISE_PHRASES)
 
 
 def _infer_variant_sizes_from_titles(record: dict[str, Any]) -> None:

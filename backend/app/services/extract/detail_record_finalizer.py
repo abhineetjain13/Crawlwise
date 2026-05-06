@@ -241,6 +241,10 @@ def _sanitize_detail_identity_scalars(
     *,
     identity_url: str,
 ) -> None:
+    brand = text_or_none(record.get("brand"))
+    vendor = text_or_none(record.get("vendor"))
+    if brand and vendor and brand.casefold() == vendor.casefold():
+        record.pop("vendor", None)
     sku = text_or_none(record.get("sku"))
     preferred_code = _preferred_detail_merch_code(record, identity_url=identity_url)
     if preferred_code and (not sku or _looks_like_uuid(sku)):

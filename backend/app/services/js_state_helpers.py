@@ -16,12 +16,13 @@ def select_variant(
     if not variants:
         return None
     parsed = urlsplit(str(page_url or "").strip())
+    query_pairs = [
+        (str(key).strip(), str(value).strip())
+        for key, value in parse_qsl(parsed.query, keep_blank_values=False)
+        if str(key).strip() and str(value).strip()
+    ]
     requested_variant_id = next(
-        (
-            str(value).strip()
-            for key, value in parse_qsl(parsed.query, keep_blank_values=False)
-            if key == "variant" and str(value).strip()
-        ),
+        (value for key, value in query_pairs if key == "variant"),
         "",
     )
     if requested_variant_id:
@@ -35,10 +36,69 @@ def select_variant(
         )
         if matched is not None:
             return matched
-    return next(
-        (variant for variant in variants if variant.get("availability") == "in_stock"),
-        variants[0],
-    )
+    requested_axes = {
+        axis_key: value
+        for key, value in query_pairs
+        if (axis_key := normalized_variant_axis_key(key))
+    }
+    if requested_axes:
+        matches = [
+            variant
+            for variant in variants
+            if _variant_matches_requested_axes(variant, requested_axes)
+        ]
+        if matches:
+            return next(
+                (variant for variant in matches if variant.get("availability") == "in_stock"),
+                matches[0],
+            )
+    if len(variants) == 1:
+        return variants[0]
+    return None
+
+
+def _variant_matches_requested_axes(
+    variant: dict[str, Any],
+    requested_axes: dict[str, str],
+) -> bool:
+    for axis_key, requested_value in requested_axes.items():
+        if not _variant_axis_matches(
+            variant,
+            axis_key=axis_key,
+            requested_value=requested_value,
+        ):
+            return False
+    return True
+
+
+def _variant_axis_matches(
+    variant: dict[str, Any],
+    *,
+    axis_key: str,
+    requested_value: str,
+) -> bool:
+    expected = _normalized_variant_selection_value(requested_value)
+    if not expected:
+        return False
+    raw_selection_values = variant.get("_selection_values")
+    if isinstance(raw_selection_values, dict):
+        candidate = _normalized_variant_selection_value(
+            raw_selection_values.get(axis_key)
+        )
+        if candidate and candidate == expected:
+            return True
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict):
+        candidate = _normalized_variant_selection_value(option_values.get(axis_key))
+        if candidate and candidate == expected:
+            return True
+    candidate = _normalized_variant_selection_value(variant.get(axis_key))
+    return bool(candidate and candidate == expected)
+
+
+def _normalized_variant_selection_value(value: object) -> str:
+    cleaned = text_or_none(value)
+    return cleaned.casefold() if cleaned else ""
 
 
 def variant_axes(variants: list[dict[str, Any]]) -> dict[str, list[str]]:

@@ -22,6 +22,7 @@ from app.services.config.extraction_rules import (
     DETAIL_CATEGORY_SOURCE_RANKS,
     DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_LONG_TEXT_SOURCE_RANKS,
+    DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS,
     DETAIL_TITLE_SOURCE_RANKS,
     SOURCE_PRIORITY,
     TRACKING_PIXEL_PATTERNS,
@@ -903,7 +904,14 @@ def _missing_requested_fields(
 
 def _detail_long_text_value_looks_truncated(value: object) -> bool:
     text = clean_text(value).rstrip()
-    return bool(text) and text.endswith(("...", "…"))
+    if not text:
+        return False
+    if text.endswith(("...", "…")):
+        return True
+    if text[-1] in ".!?":
+        return False
+    tokens = re.findall(r"[A-Za-z0-9']+", text.casefold())
+    return bool(tokens) and tokens[-1] in DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS
 
 
 def _requires_dom_long_text_completion(
@@ -1040,6 +1048,7 @@ def _finalize_early_detail_record(
     )
     _reconcile_detail_currency_with_url(record, page_url=page_url)
     drop_low_signal_zero_detail_price(record)
+    enforce_flat_variant_public_contract(record, page_url=page_url)
     record["_confidence"] = score_record_confidence(
         record,
         surface=surface,
@@ -1105,6 +1114,7 @@ def _finalize_dom_detail_record(
         js_state_objects=js_state_objects,
     )
     _reconcile_detail_currency_with_url(record, page_url=page_url)
+    enforce_flat_variant_public_contract(record, page_url=page_url)
     record["_confidence"] = score_record_confidence(
         record,
         surface=surface,
@@ -1343,6 +1353,7 @@ def extract_detail_records(
         backfill_detail_price_from_html(record, html=html)
         reconcile_detail_price_magnitudes(record)
         _reconcile_detail_currency_with_url(record, page_url=page_url)
+        enforce_flat_variant_public_contract(record, page_url=page_url)
     if surface == "ecommerce_detail" and _looks_like_site_shell_record(
         record,
         page_url=page_url,

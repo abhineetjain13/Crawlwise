@@ -232,9 +232,9 @@ def _postprocess_detail_records(
             page_url=page_url,
             requested_page_url=requested_page_url,
         )
-        enforce_flat_variant_public_contract(record, page_url=page_url)
         backfill_detail_price_from_html(record, html=html)
         drop_low_signal_zero_detail_price(record)
+        enforce_flat_variant_public_contract(record, page_url=page_url)
         rows.append(record)
     return rows
 

@@ -27,6 +27,7 @@ from app.services.config.extraction_rules import (
     DETAIL_LOW_SIGNAL_TITLE_VALUES,
     DETAIL_LEGAL_TAIL_PATTERNS,
     DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS,
+    DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS,
     DETAIL_LONG_TEXT_UI_TAIL_PHRASES,
     DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS,
     DETAIL_MATERIALS_POLLUTION_TOKENS,
@@ -417,6 +418,10 @@ def sanitize_detail_long_text(text: str, *, title: str) -> str:
             continue
         if detail_long_text_chunk_is_other_product(chunk, title=title):
             continue
+        if detail_long_text_chunk_is_variant_size_sequence(chunk):
+            continue
+        if detail_long_text_chunk_looks_truncated(chunk):
+            continue
         seen.add(lowered)
         kept.append(chunk)
     if kept and all(detail_long_text_chunk_is_document_label(chunk) for chunk in kept):
@@ -445,6 +450,30 @@ def sanitize_detail_features(value: object, *, title: str) -> list[str]:
         seen.add(lowered)
         cleaned_rows.append(cleaned)
     return cleaned_rows
+
+
+def detail_long_text_chunk_looks_truncated(text: str) -> bool:
+    cleaned = clean_text(text).rstrip()
+    if not cleaned:
+        return False
+    if cleaned.endswith(("...", "…")):
+        return True
+    if cleaned[-1] in ".!?":
+        return False
+    tokens = re.findall(r"[A-Za-z0-9']+", cleaned.casefold())
+    return bool(tokens) and tokens[-1] in DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS
+
+
+def detail_long_text_chunk_is_variant_size_sequence(text: str) -> bool:
+    tokens = clean_text(text).split()
+    if len(tokens) < 5:
+        return False
+    values: list[float] = []
+    for token in tokens:
+        if not re.fullmatch(r"\d+(?:\.5)?", token):
+            return False
+        values.append(float(token))
+    return values == sorted(values) and len(set(values)) >= 5
 
 
 _BRACKET_RUN_RE = re.compile(r"(?:\[\s*){2,}|(?:\]\s*){2,}")

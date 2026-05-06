@@ -114,7 +114,6 @@ https://www.size.co.uk/product/purple-adidas-originals-sl-72-pt/19738059/
 https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000
 https://www.discogs.com/release/249504
 https://www.backmarket.com/en-us/p/iphone-15-plus
-https://www.kohls.com/product/prd-7443340/womens-cupshe-square-neck-twist-front-one-piece-swimsuit.jsp
 
 ### Group CE2 — Major Retailers & Big Box (Standard Patterns)
 https://www.amazon.com/dp/B08J5F3G18

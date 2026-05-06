@@ -485,7 +485,7 @@ def test_extract_ecommerce_detail_from_array_style_nuxt_payload() -> None:
     record = rows[0]
     assert record["title"] == "Nuxt Payload Widget"
     assert record["brand"] == "Acme"
-    assert record["vendor"] == "Acme"
+    assert "vendor" not in record
     assert record["product_id"] == "4242"
     assert record["category"] == "Gadgets"
     assert record["_source"] == "js_state"
@@ -2528,7 +2528,7 @@ def test_extract_ecommerce_detail_backfills_missing_variant_price_from_ld_json_p
     assert len(rows) == 1
     record = rows[0]
     assert record["price"] == "100.00"
-    assert record["variants"][0]["price"] == "100.00"
+    assert "price" not in record["variants"][0]
 
 
 def test_extract_ecommerce_detail_ignores_generic_selector_axis_names_without_semantic_labels() -> None:
@@ -4476,6 +4476,61 @@ def test_build_detail_record_replaces_uuid_sku_with_merch_code() -> None:
     assert record["part_number"] == "DD1391-100"
 
 
+def test_build_detail_record_drops_stockx_market_cta_variant_labels() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Nike Dunk Low Retro White Black Panda</h1></main></body></html>",
+        "https://stockx.com/nike-dunk-low-retro-white-black-2021",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Nike Dunk Low Retro White Black Panda",
+                "variants": [
+                    {
+                        "url": "https://stockx.com/buy/nike-dunk-low-retro-white-black-2021?defaultBid=true",
+                        "color": "See All",
+                    },
+                    {
+                        "url": "https://stockx.com/buy/nike-dunk-low-retro-white-black-2021?defaultBid=true",
+                        "color": "View Market Data",
+                    },
+                    {
+                        "url": "https://stockx.com/buy/nike-dunk-low-retro-white-black-2021?defaultBid=true",
+                        "color": "Sell Now for",
+                    },
+                ],
+            }
+        ],
+    )
+
+    assert "variants" not in record
+    assert "variant_count" not in record
+
+
+def test_build_detail_record_strips_numeric_size_tail_from_stockx_description() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Nike Dunk Low Retro White Black Panda</h1></main></body></html>",
+        "https://stockx.com/nike-dunk-low-retro-white-black-2021",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Nike Dunk Low Retro White Black Panda",
+                "description": (
+                    "Nike put its timeless color-blocking to work with the Nike Dunk "
+                    "Low Retro White Black. The Nike Dunk Low Retro White Black "
+                    "released in January of 2021 and retailed for $100. To shop "
+                    "all Nike Dunks, click here. 5 6 6.5 7 7.5 8 8.5 9 9.5 "
+                    "10 10.5 11 11.5 12 12.5 13 14 15"
+                ),
+            }
+        ],
+    )
+
+    assert record["description"].endswith("To shop all Nike Dunks, click here.")
+    assert " 5 6 6.5" not in record["description"]
+
+
 def test_build_detail_record_drops_costco_shell_long_text_labels() -> None:
     record = build_detail_record(
         "<html><body><main><h1>Sleep Number Ultimate 12&quot; Mattress</h1></main></body></html>",
@@ -4700,6 +4755,39 @@ def test_build_detail_record_repairs_shopify_cent_variant_prices_and_numeric_tit
     )
 
     assert record["variants"][0]["price"] == "282.00"
+
+
+def test_build_detail_record_drops_shopify_internal_numeric_variant_weight() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>SATISFY TheROCKER - Jet Black</h1></main></body></html>",
+        "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "SATISFY TheROCKER - Jet Black",
+                "price": "285.00",
+                "currency": "USD",
+                "variants": [
+                    {
+                        "sku": "13875993",
+                        "size": "3",
+                        "weight": "1361",
+                        "availability": "out_of_stock",
+                    },
+                    {
+                        "sku": "13875994",
+                        "size": "3.5",
+                        "weight": 1361,
+                        "availability": "out_of_stock",
+                    },
+                ],
+            }
+        ],
+    )
+
+    assert len(record["variants"]) == 2
+    assert all("weight" not in variant for variant in record["variants"])
 
 
 def test_build_detail_record_replaces_ai_outfit_title_from_url() -> None:
@@ -4983,6 +5071,64 @@ def test_build_detail_record_prefers_dom_description_over_truncated_og_copy() ->
 
     assert record["description"].endswith("restore deeply discharged batteries.")
     assert record["description"].endswith(("...", "…")) is False
+
+
+def test_build_detail_record_prefers_dom_description_over_cut_off_meta_copy() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="Dime Soft Rock Crewneck">
+        <meta property="og:description" content="Arriving as part of the second drop from its Spring '25 collection, Montreal-based streetwear and skatewear brand Dime pays homage to one of its favorite music subgenres with this Soft Rock Crewneck. Crafted from heavyweight cotton for a comfortable, durable feel, this crewneck features an eye-catching Dime logo on the">
+      </head>
+      <body>
+        <main>
+          <h1>Dime Soft Rock Crewneck</h1>
+          <section>
+            <h2>Description</h2>
+            <p>
+              Arriving as part of the second drop from its Spring '25 collection,
+              Montreal-based streetwear and skatewear brand Dime pays homage to
+              one of its favorite music subgenres with this Soft Rock Crewneck.
+              Crafted from heavyweight cotton for a comfortable, durable feel,
+              this crewneck features an eye-catching Dime logo on the chest.
+            </p>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://www.sneakersnstuff.com/products/dime-soft-rock-crewneck-dime2sp2542blk",
+        "ecommerce_detail",
+        None,
+    )
+
+    assert record["description"].endswith("logo on the chest.")
+
+
+def test_build_detail_record_drops_cut_off_description_without_complete_source() -> None:
+    record = build_detail_record(
+        """
+        <html>
+          <head>
+            <meta property="og:title" content="Dime Soft Rock Crewneck">
+            <meta property="og:description" content="Arriving as part of the second drop from its Spring '25 collection, Montreal-based streetwear and skatewear brand Dime pays homage to one of its favorite music subgenres with this Soft Rock Crewneck. Crafted from heavyweight cotton for a comfortable, durable feel, this crewneck features an eye-catching Dime logo on the">
+          </head>
+          <body><main><h1>Dime Soft Rock Crewneck</h1></main></body>
+        </html>
+        """,
+        "https://www.sneakersnstuff.com/products/dime-soft-rock-crewneck-dime2sp2542blk",
+        "ecommerce_detail",
+        None,
+    )
+
+    assert record.get("description") == (
+        "Arriving as part of the second drop from its Spring '25 collection, "
+        "Montreal-based streetwear and skatewear brand Dime pays homage to one "
+        "of its favorite music subgenres with this Soft Rock Crewneck."
+    )
 
 
 def test_build_detail_record_prefers_js_state_html_description_over_truncated_json_ld() -> None:

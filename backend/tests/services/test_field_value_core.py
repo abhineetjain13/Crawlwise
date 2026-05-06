@@ -578,12 +578,12 @@ def test_literal_list_text_uses_readable_delimiters() -> None:
     ) == "Digital max resolution; Real boost clock: 1800 MHz"
 
 
-def test_option_scalars_reject_raw_objects_and_null_tokens() -> None:
+def test_option_scalars_coerce_dict_like_labels_and_reject_null_tokens() -> None:
     assert coerce_field_value(
         "color",
         "{'id': 'black-onyx', 'title': 'black onyx'}",
         "https://example.com/p/socks",
-    ) is None
+    ) == "black onyx"
     assert coerce_field_value("color", "None", "https://example.com/p/wash") is None
     assert coerce_field_value("size", "- / null", "https://example.com/p/bag") is None
     assert coerce_field_value(

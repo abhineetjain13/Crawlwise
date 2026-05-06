@@ -15,6 +15,7 @@ from app.services.extract.detail_identity import (
 from app.services.extract.detail_price_extractor import backfill_detail_price_from_html
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
+from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.listing_extractor import extract_listing_records
 from tests.fixtures.loader import read_optional_artifact_text
 
@@ -82,6 +83,30 @@ def test_detail_price_backfill_replaces_visible_outlier_price() -> None:
 
     assert record["price"] == "154"
     assert "dom_text" in record["_field_sources"]["price"]
+
+
+def test_detail_price_backfill_uses_visible_local_price_when_jsonld_currency_conflicts() -> None:
+    record = {
+        "url": "https://www.glossier.com/en-in/products/balm-dotcom",
+        "price": "16.00",
+        "currency": "INR",
+        "_field_sources": {"price": ["js_state"]},
+    }
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {"@type":"Product","offers":{"@type":"Offer","price":"16","priceCurrency":"USD"}}
+        </script>
+      </head>
+      <body><main><div class="product-price">₹1,800</div></main></body>
+    </html>
+    """
+
+    backfill_detail_price_from_html(record, html=html)
+
+    assert record["price"] == "1800"
+    assert record["currency"] == "INR"
 
 
 def test_extract_detail_keeps_encoded_cdn_image_url() -> None:
@@ -1013,7 +1038,8 @@ def test_extract_records_recovers_variants_and_cleans_color_from_belk_detail_art
 
     assert len(rows) == 1
     record = rows[0]
-    assert record["color"] == "HTR GREY"
+    assert "color" not in record
+    assert record["variants"][0]["color"] == "HTR GREY"
     assert record["variant_count"] == 6
 
 
@@ -4820,6 +4846,100 @@ def test_normalize_variant_record_strips_legacy_option_summaries_and_selected_va
     assert "option1_values" not in record
     assert "option2_values" not in record
     assert record["variants"] == [{"flavor": "Rich Chocolate"}]
+
+
+def test_normalize_variant_record_drops_parent_shared_variant_prices_and_axes() -> None:
+    record = {
+        "price": "115.00",
+        "currency": "USD",
+        "color": "Blue",
+        "variants": [
+            {"size": "S", "color": "Blue", "price": "115.0", "currency": "USD"},
+            {"size": "M", "color": "Blue", "price": "115", "currency": "USD"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [{"size": "S"}, {"size": "M"}]
+
+
+def test_map_js_state_variant_axes_coerces_dict_values_to_labels() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "name": "Performance Socks",
+                            "handle": "performance-socks",
+                            "variants": [
+                                {
+                                    "id": "v1",
+                                    "sku": "SOCK-BLK",
+                                    "price": "1500",
+                                    "color": {
+                                        "id": "black-onyx",
+                                        "title": "black onyx",
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/performance-socks",
+    )
+
+    assert mapped["variants"][0]["color"] == "black onyx"
+    assert not mapped["variants"][0]["color"].startswith("{")
+
+
+def test_normalize_variant_record_coerces_dict_like_axis_strings_to_labels() -> None:
+    record = {
+        "variants": [
+            {
+                "sku": "SOCK-BLK",
+                "color": "{'id': 'black-onyx', 'title': 'black onyx'}",
+            }
+        ]
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [{"sku": "SOCK-BLK", "color": "black onyx"}]
+
+
+def test_extract_dom_variants_rejects_payment_button_text_as_size() -> None:
+    rows = extract_records(
+        """
+        <html>
+          <head>
+            <script type="application/ld+json">
+            {"@context":"https://schema.org","@type":"Product","name":"Cotton Tee",
+             "offers":{"@type":"Offer","price":"14.90","priceCurrency":"USD"}}
+            </script>
+          </head>
+          <body>
+            <main>
+              <h1>Cotton Tee</h1>
+              <select name="Size">
+                <option>S</option>
+                <option>Apple Pay</option>
+                <option>M</option>
+              </select>
+            </main>
+          </body>
+        </html>
+        """,
+        "https://example.com/products/cotton-tee",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert rows[0]["variants"] == [{"size": "S"}, {"size": "M"}]
 
 
 def test_variant_axis_headers_do_not_pollute_size_or_available_sizes() -> None:

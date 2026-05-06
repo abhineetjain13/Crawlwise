@@ -96,14 +96,31 @@ def backfill_detail_price_from_html(
     )
     record_url = text_or_none(record.get("url")) or ""
     expected_currency = text_or_none(infer_currency_from_page_url(record_url))
-    if _html_currency_conflicts_with_strong_host_hint(
+    preliminary_currency = text_or_none(record.get("currency")) or expected_currency or html_currency
+    visible_price = _detail_price_from_selector_text(
+        soup,
+        selectors=DETAIL_CURRENT_PRICE_SELECTORS,
+        currency=preliminary_currency,
+    )
+    html_currency_conflicts_with_host = _html_currency_conflicts_with_strong_host_hint(
         html_currency=html_currency,
         expected_currency=expected_currency,
         page_url=record_url,
-    ):
-        return
+    )
+    if html_currency_conflicts_with_host:
+        if not visible_price:
+            return
+        # JSON-LD/meta may stay on default-market currency while the rendered
+        # PDP shows localized price. Ignore conflicting structured price, but
+        # still allow visible DOM price to repair the record.
+        html_currency = None
+        jsonld_price_bundle = (None, None, None)
 
-    currency = text_or_none(record.get("currency")) or html_currency
+    currency = (
+        text_or_none(record.get("currency"))
+        or (expected_currency if html_currency_conflicts_with_host else None)
+        or html_currency
+    )
     if currency and record.get("currency") in (None, "", [], {}):
         record["currency"] = currency
         append_record_field_source(record, "currency", "dom_text")
@@ -117,11 +134,6 @@ def backfill_detail_price_from_html(
         jsonld_price_bundle=jsonld_price_bundle,
     )
     price_source = "json_ld" if jsonld_price else "dom_text"
-    visible_price = _detail_price_from_selector_text(
-        soup,
-        selectors=DETAIL_CURRENT_PRICE_SELECTORS,
-        currency=currency,
-    )
     if visible_price and (
         _detail_price_is_cent_magnitude_copy(price, visible_price)
         or _should_override_record_price_from_dom(

@@ -201,6 +201,53 @@ def test_map_js_state_to_fields_uses_variation_attribute_display_names() -> None
     assert mapped["size"] == "S"
 
 
+def test_map_js_state_to_fields_does_not_pick_arbitrary_parent_size_without_explicit_selection() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "id": "af1-1",
+                            "title": "Air Force 1",
+                            "brand": "Nike",
+                            "prices": {
+                                "currency": "USD",
+                                "currentPrice": 115,
+                                "initialPrice": 130,
+                            },
+                            "options": [{"name": "Size"}],
+                            "variants": [
+                                {
+                                    "id": "size-6",
+                                    "available": True,
+                                    "sku": "AF1-6",
+                                    "selectedOptions": [{"name": "Size", "value": "6"}],
+                                },
+                                {
+                                    "id": "size-7",
+                                    "available": True,
+                                    "sku": "AF1-7",
+                                    "selectedOptions": [{"name": "Size", "value": "7"}],
+                                },
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/air-force-1",
+    )
+
+    assert mapped["price"] == "USD 115"
+    assert mapped["original_price"] == "USD 130"
+    assert mapped["currency"] == "USD"
+    assert mapped["variant_count"] == 2
+    assert "size" not in mapped
+    assert "sku" not in mapped
+
+
 def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None:
     js_state_objects = {
         "__INITIAL_STATE__": {

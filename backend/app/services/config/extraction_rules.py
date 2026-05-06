@@ -232,6 +232,25 @@ DETAIL_LONG_TEXT_UI_TAIL_PHRASES = (
     "more details",
     "learn more",
 )
+DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "at",
+        "by",
+        "for",
+        "from",
+        "in",
+        "into",
+        "of",
+        "on",
+        "or",
+        "the",
+        "to",
+        "with",
+    }
+)
 DETAIL_LEGAL_TAIL_PATTERNS = {
     "contains": (
         "product safety",
@@ -631,6 +650,11 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     # Cart/quantity controls picked up as size values.
     "increment quantity",
     "decrement quantity",
+    # Payment buttons/badges misclassified as dropdown/radio choices.
+    "apple pay",
+    "google pay",
+    "paypal",
+    "shop pay",
     # Fulfillment / shipping banners leaking into variants.
     "pickup unavailable",
     "pickup not available",
@@ -642,6 +666,9 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "free trial",
     "day free trial",
     "size and weight",
+    "see all",
+    "view market data",
+    "sell now for",
 )
 VARIANT_PLACEHOLDER_VALUES = frozenset(
     {"default title", "choose", "option", "select", "swatch"}
@@ -1223,6 +1250,7 @@ _EXTRA_EXPORTS = [
     "DETAIL_IDENTITY_FIELDS",
     "DETAIL_LONG_TEXT_RANK_FIELDS",
     "DETAIL_LONG_TEXT_SOURCE_RANKS",
+    "DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS",
     "DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES",
     "DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX",
     "DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES",
