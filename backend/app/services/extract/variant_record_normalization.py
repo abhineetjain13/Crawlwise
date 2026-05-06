@@ -306,7 +306,7 @@ def _drop_parent_shared_variant_axes(record: dict[str, Any]) -> None:
             continue
         if any(value.casefold() != parent_value.casefold() for value in variant_values):
             continue
-        if not any(other_axis != axis for other_axis in varying_axes):
+        if varying_axes == {axis}:
             continue
         for variant in variant_rows:
             variant.pop(axis, None)

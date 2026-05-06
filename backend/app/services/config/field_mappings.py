@@ -27,6 +27,7 @@ NORMALIZER_LIST_TEXT_FIELDS = frozenset(
 COLOR_FIELD = "color"
 SIZE_FIELD = "size"
 WIDTH_FIELD = "width"
+WEIGHT_FIELD = "weight"
 PRICE_FIELD = "price"
 CURRENCY_FIELD = "currency"
 URL_FIELD = "url"
@@ -65,6 +66,7 @@ _EXTRA_EXPORTS = [
     "URL_FIELD",
     "VARIANTS_FIELD",
     "VARIANT_AXES_FIELD",
+    "WEIGHT_FIELD",
     "WIDTH_FIELD",
 ]
 

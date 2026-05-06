@@ -40,12 +40,13 @@ _NON_STATE_ASSIGNMENT_REGEXES = tuple(
     if str(pattern).strip()
 )
 logger = logging.getLogger(__name__)
+JSON_LD_GRAPH_KEY = "@graph"
 
 
 def json_candidates(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, dict):
-        if "@graph" in value and isinstance(value["@graph"], list):
-            return _resolve_json_ld_graph(value["@graph"])
+        if JSON_LD_GRAPH_KEY in value and isinstance(value[JSON_LD_GRAPH_KEY], list):
+            return _resolve_json_ld_graph(value[JSON_LD_GRAPH_KEY])
         return [value]
     if isinstance(value, list):
         rows: list[dict[str, Any]] = []
@@ -70,8 +71,8 @@ def parse_json_ld(soup: BeautifulSoup) -> list[dict[str, Any]]:
 
 def json_ld_candidates(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, dict):
-        if "@graph" in value and isinstance(value["@graph"], list):
-            return _resolve_json_ld_graph(value["@graph"])
+        if JSON_LD_GRAPH_KEY in value and isinstance(value[JSON_LD_GRAPH_KEY], list):
+            return _resolve_json_ld_graph(value[JSON_LD_GRAPH_KEY])
         return [value]
     if isinstance(value, list):
         nodes = [item for item in value if isinstance(item, dict)]
@@ -129,7 +130,7 @@ def _resolve_json_ld_value(
 
     next_path = path + ((node_id,) if node_id else ())
     for key, item in value.items():
-        if key == "@graph":
+        if key == JSON_LD_GRAPH_KEY:
             continue
         if key == "@id" and node_id:
             resolved[key] = node_id
@@ -163,7 +164,7 @@ def _json_ld_node_id(node: dict[str, Any]) -> str:
 
 
 def _looks_like_json_ld_node(node: dict[str, Any]) -> bool:
-    return any(key in node for key in ("@context", "@graph", "@id", "@type"))
+    return any(key in node for key in ("@context", JSON_LD_GRAPH_KEY, "@id", "@type"))
 
 
 def parse_microdata(

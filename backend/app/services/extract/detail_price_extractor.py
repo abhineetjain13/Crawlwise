@@ -108,11 +108,10 @@ def backfill_detail_price_from_html(
         page_url=record_url,
     )
     if html_currency_conflicts_with_host:
-        if not visible_price:
-            return
         # JSON-LD/meta may stay on default-market currency while the rendered
         # PDP shows localized price. Ignore conflicting structured price, but
-        # still allow visible DOM price to repair the record.
+        # still allow visible DOM price or an existing parent price to repair
+        # the record and nested variants.
         html_currency = None
         jsonld_price_bundle = (None, None, None)
 
@@ -125,14 +124,19 @@ def backfill_detail_price_from_html(
         record["currency"] = currency
         append_record_field_source(record, "currency", "dom_text")
 
-    if currency != jsonld_price_bundle[2]:
+    if not html_currency_conflicts_with_host and currency != jsonld_price_bundle[2]:
         jsonld_price_bundle = _detail_jsonld_price_bundle(soup, currency=currency)
     jsonld_price, jsonld_original_price, _jsonld_currency = jsonld_price_bundle
-    price = jsonld_price or _detail_price_from_html(
-        soup,
-        currency=currency,
-        jsonld_price_bundle=jsonld_price_bundle,
-    )
+    if html_currency_conflicts_with_host:
+        price = visible_price or text_or_none(record.get("price"))
+    else:
+        price = jsonld_price or _detail_price_from_html(
+            soup,
+            currency=currency,
+            jsonld_price_bundle=jsonld_price_bundle,
+        )
+        if price in (None, "", [], {}):
+            price = text_or_none(record.get("price"))
     price_source = "json_ld" if jsonld_price else "dom_text"
     if visible_price and (
         _detail_price_is_cent_magnitude_copy(price, visible_price)

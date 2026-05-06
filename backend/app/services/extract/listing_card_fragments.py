@@ -61,15 +61,7 @@ def base_listing_fragment_score(node) -> int:
     tag_name = str(getattr(node, "tag", "") or "").strip().lower()
     if tag_name in {"header", "nav", "footer"}:
         return -100
-    attrs = getattr(node, "attributes", {}) or {}
-    signature = " ".join(
-        [
-            str(attrs.get("class") or ""),
-            str(attrs.get("id") or ""),
-            str(attrs.get("role") or ""),
-            str(attrs.get("aria-label") or ""),
-        ]
-    ).lower()
+    signature = _listing_node_signature(node)
     has_positive_signature = any(
         token in signature for token in LISTING_STRUCTURE_POSITIVE_HINTS
     )

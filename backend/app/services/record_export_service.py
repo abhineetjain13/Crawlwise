@@ -53,6 +53,7 @@ RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
     404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
 }
 _HTML_FRAGMENT_RE = re.compile(r"<[a-zA-Z][^>]*>")
+CSV_MEDIA_TYPE = "text/csv"
 
 ExportStreamer = Callable[[AsyncSession, int], AsyncIterator[str]]
 
@@ -140,7 +141,7 @@ async def build_csv_export_response(
         session,
         run_id=run_id,
         filename=f"run-{run_id}.csv",
-        media_type="text/csv",
+        media_type=CSV_MEDIA_TYPE,
         streamer=stream_export_csv,
     )
 
@@ -154,7 +155,7 @@ async def build_tables_csv_export_response(
         session,
         run_id=run_id,
         filename=f"run-{run_id}-tables.csv",
-        media_type="text/csv",
+        media_type=CSV_MEDIA_TYPE,
         streamer=stream_export_tables_csv,
     )
 
@@ -196,7 +197,7 @@ async def build_discoverist_export_response(
         session,
         run_id=run_id,
         filename=f"run-{run_id}-discoverist.csv",
-        media_type="text/csv",
+        media_type=CSV_MEDIA_TYPE,
         streamer=stream_export_discoverist,
     )
 

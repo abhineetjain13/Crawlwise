@@ -38,6 +38,8 @@ from app.services.config.selectors import (
     LISTING_VISUAL_CANDIDATE_CONTAINER_SELECTORS,
     LISTING_VISUAL_CAPTURE_SELECTORS,
 )
+
+HTML_PARSER = "html.parser"
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.dom_runtime import get_page_html
 from app.services.acquisition.browser_readiness import HtmlAnalysis, analyze_html
@@ -1352,7 +1354,7 @@ def _prepare_markdown_soup(
     detail_surface: bool,
     soup: BeautifulSoup | None = None,
 ) -> BeautifulSoup:
-    soup = soup if soup is not None else BeautifulSoup(str(html or ""), "html.parser")
+    soup = soup if soup is not None else BeautifulSoup(str(html or ""), HTML_PARSER)
     for node in list(soup.find_all(True)):
         if not isinstance(getattr(node, "attrs", None), dict):
             node.attrs = {}
@@ -1557,7 +1559,7 @@ def _detail_markdown_token_key(token: str) -> str:
 
 
 def _listing_html_detail_anchor_count(html: str) -> int:
-    soup = BeautifulSoup(str(html or ""), "html.parser")
+    soup = BeautifulSoup(str(html or ""), HTML_PARSER)
     count = 0
     for anchor in soup.find_all("a", href=True):
         href = str(anchor.get("href") or "").strip().lower()
@@ -1688,7 +1690,7 @@ def _detail_expansion_extractability(
             "extractable_fields": [],
             "section_fields": [],
         }
-    soup = BeautifulSoup(str(html or ""), "html.parser")
+    soup = BeautifulSoup(str(html or ""), HTML_PARSER)
     return requested_content_extractability(
         soup, surface=surface, requested_fields=requested_fields
     )

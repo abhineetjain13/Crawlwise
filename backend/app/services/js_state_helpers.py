@@ -52,6 +52,27 @@ def select_variant(
                 (variant for variant in matches if variant.get("availability") == "in_stock"),
                 matches[0],
             )
+        partial_matches = [
+            variant
+            for variant in variants
+            if any(
+                _variant_axis_matches(
+                    variant,
+                    axis_key=axis_key,
+                    requested_value=requested_value,
+                )
+                for axis_key, requested_value in requested_axes.items()
+            )
+        ]
+        if partial_matches:
+            return next(
+                (
+                    variant
+                    for variant in partial_matches
+                    if variant.get("availability") == "in_stock"
+                ),
+                partial_matches[0],
+            )
     if len(variants) == 1:
         return variants[0]
     return None
@@ -61,14 +82,14 @@ def _variant_matches_requested_axes(
     variant: dict[str, Any],
     requested_axes: dict[str, str],
 ) -> bool:
-    for axis_key, requested_value in requested_axes.items():
-        if not _variant_axis_matches(
+    return all(
+        _variant_axis_matches(
             variant,
             axis_key=axis_key,
             requested_value=requested_value,
-        ):
-            return False
-    return True
+        )
+        for axis_key, requested_value in requested_axes.items()
+    )
 
 
 def _variant_axis_matches(
@@ -93,7 +114,7 @@ def _variant_axis_matches(
         if candidate and candidate == expected:
             return True
     candidate = _normalized_variant_selection_value(variant.get(axis_key))
-    return bool(candidate and candidate == expected)
+    return candidate == expected if candidate else False
 
 
 def _normalized_variant_selection_value(value: object) -> str:

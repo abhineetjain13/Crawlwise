@@ -63,7 +63,9 @@ from app.services.config.field_mappings import (
     ADDITIONAL_IMAGES_FIELD,
     BRAND_LIKE_FIELDS,
     FIELD_ALIASES,
+    PRICE_FIELD,
     URL_FIELD,
+    WEIGHT_FIELD,
 )
 from app.services.config.public_record_policy import (
     PUBLIC_RECORD_BARCODE_LENGTHS,
@@ -82,6 +84,7 @@ from app.services.config.variant_policy import (
     OPTION_SCALAR_FIELDS,
     PUBLIC_VARIANT_AXIS_FIELDS,
     VARIANT_PARENT_SHARED_FIELDS,
+    VARIANT_TRANSPORT_FIELDS,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_url_normalization import (
@@ -555,7 +558,7 @@ def _coerce_literal_text_list(value: str) -> list[str]:
         return []
     try:
         parsed = ast.literal_eval(text)
-    except (RecursionError, SyntaxError, ValueError):
+    except (MemoryError, RecursionError, SyntaxError, TypeError, ValueError):
         return []
     if not isinstance(parsed, (list, tuple)):
         return []
@@ -670,7 +673,7 @@ def coerce_structured_scalar(
         if stripped.startswith("{") and stripped.endswith("}"):
             try:
                 parsed = ast.literal_eval(stripped)
-            except (RecursionError, SyntaxError, ValueError):
+            except (MemoryError, RecursionError, SyntaxError, TypeError, ValueError):
                 parsed = None
             if isinstance(parsed, dict):
                 return coerce_structured_scalar(parsed, keys=keys)
@@ -750,7 +753,7 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
             return None
         if cleaned.strip().lower() in _SIZE_REJECT_TOKENS_NORMALIZED:
             return None
-    elif field_name == "weight" and re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
+    elif field_name == WEIGHT_FIELD and re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
         return None
     if cleaned.strip().casefold() in {"none", "null", "- / null", "n/a", "na"}:
         return None
@@ -1066,7 +1069,7 @@ def _drop_unanimous_variant_transport_fields(
         for axis_name in _PUBLIC_VARIANT_AXIS_KEYS
     ):
         return
-    for field_name in ("price", "currency"):
+    for field_name in VARIANT_TRANSPORT_FIELDS:
         values = [variant.get(field_name) for variant in variant_rows]
         if any(value in (None, "", [], {}) for value in values):
             continue
@@ -1089,7 +1092,7 @@ def _variant_shared_value_matches_parent(
     parent_text = text_or_none(parent_value)
     if variant_text is None or parent_text is None:
         return False
-    if field_name == "price":
+    if field_name == PRICE_FIELD:
         variant_price = _decimal_for_shared_price(variant_text)
         parent_price = _decimal_for_shared_price(parent_text)
         return (
@@ -1104,13 +1107,34 @@ def _decimal_for_shared_price(value: object) -> Decimal | None:
     text = text_or_none(value)
     if not text:
         return None
-    normalized = re.sub(r"[^\d.\-]+", "", text.replace(",", ""))
+    normalized = _normalize_shared_price_decimal_text(text)
     if not normalized:
         return None
     try:
         return Decimal(normalized).quantize(Decimal("0.01"))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _normalize_shared_price_decimal_text(value: str) -> str:
+    stripped = re.sub(r"[^\d,.\-]+", "", str(value or "").strip())
+    if not stripped:
+        return ""
+    if "." in stripped and "," in stripped:
+        if stripped.rfind(",") > stripped.rfind("."):
+            return stripped.replace(".", "").replace(",", ".")
+        return stripped.replace(",", "")
+    if "," in stripped:
+        head, _, tail = stripped.rpartition(",")
+        if head and tail.isdigit() and len(tail) == 3 and "," not in head:
+            return f"{head}{tail}"
+        return stripped.replace(",", ".")
+    if "." not in stripped:
+        return stripped
+    parts = stripped.split(".")
+    if len(parts) == 2:
+        return stripped
+    return "".join(parts[:-1]) + f".{parts[-1]}"
 
 
 def enforce_flat_variant_public_contract(

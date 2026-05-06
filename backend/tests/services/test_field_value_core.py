@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from app.services.field_value_core import (
+    _decimal_for_shared_price,
     absolute_url,
     clean_text,
     coerce_field_value,
@@ -156,6 +159,10 @@ def test_ecommerce_price_original_aliases_to_original_price() -> None:
     aliases = surface_alias_lookup("ecommerce_detail", None)
 
     assert aliases["price_original"] == "original_price"
+
+
+def test_decimal_for_shared_price_supports_european_decimal_format() -> None:
+    assert _decimal_for_shared_price("1.234,56") == Decimal("1234.56")
 
 
 def test_persistence_schema_firewall_drops_unknown_and_internal_fields() -> None:

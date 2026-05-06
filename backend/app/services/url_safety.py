@@ -68,45 +68,13 @@ async def validate_public_target(url: str) -> ValidatedTarget:
     hostname = str(parsed.hostname or "").strip().lower()
     if not hostname:
         raise ValueError("Target URL must include a hostname")
-    if hostname in BLOCKED_HOSTNAMES or any(
-        hostname.endswith(suffix) for suffix in BLOCKED_HOST_SUFFIXES
-    ):
-        raise SecurityError(f"Target host is not allowed: {hostname}")
-
-    literal_ip = _parse_ip(hostname)
-    if literal_ip is not None:
-        _raise_if_non_public_ip(literal_ip, hostname)
-        return ValidatedTarget(
-            hostname=hostname,
-            scheme=scheme,
-            port=_target_port(parsed),
-            resolved_ips=(hostname,),
-            dns_resolved=False,
-        )
-
-    port = _target_port(parsed)
-    try:
-        resolved_ips = await _resolve_host_ips(hostname, port)
-    except ValueError as exc:
-        raise ValueError(
-            f"Target host could not be resolved to a valid IP address: {hostname}"
-        ) from exc
-    validated_ips: list[str] = []
-    for ip_text in resolved_ips:
-        ip_value = _parse_ip(ip_text)
-        if ip_value is None:
-            continue
-        _raise_if_non_public_ip(ip_value, hostname)
-        validated_ips.append(ip_text)
-    if not validated_ips:
-        raise ValueError(
-            f"Target host could not be resolved to a valid IP address: {hostname}"
-        )
-    return ValidatedTarget(
+    return await _validate_endpoint_host(
         hostname=hostname,
         scheme=scheme,
-        port=port,
-        resolved_ips=tuple(validated_ips),
+        port=_target_port(parsed),
+        label="Target",
+        unresolved_detail="Target host could not be resolved to a valid IP address",
+        wrap_resolution_error=True,
     )
 
 
@@ -120,24 +88,43 @@ async def validate_proxy_endpoint(proxy_url: str) -> ValidatedTarget:
     hostname = str(parsed.hostname or "").strip().lower()
     if not hostname:
         raise ValueError("Proxy URL must include a hostname")
-    if hostname in BLOCKED_HOSTNAMES or any(
-        hostname.endswith(suffix) for suffix in BLOCKED_HOST_SUFFIXES
-    ):
-        raise SecurityError(f"Proxy host is not allowed: {hostname}")
+    return await _validate_endpoint_host(
+        hostname=hostname,
+        scheme=scheme,
+        port=_target_port(parsed),
+        label="Proxy",
+        unresolved_detail="Proxy host could not be resolved to a valid IP address",
+        wrap_resolution_error=False,
+    )
 
+
+async def _validate_endpoint_host(
+    *,
+    hostname: str,
+    scheme: str,
+    port: int,
+    label: str,
+    unresolved_detail: str,
+    wrap_resolution_error: bool,
+) -> ValidatedTarget:
+    _raise_if_blocked_hostname(hostname, label)
     literal_ip = _parse_ip(hostname)
     if literal_ip is not None:
         _raise_if_non_public_ip(literal_ip, hostname)
         return ValidatedTarget(
             hostname=hostname,
             scheme=scheme,
-            port=_target_port(parsed),
+            port=port,
             resolved_ips=(hostname,),
             dns_resolved=False,
         )
 
-    port = _target_port(parsed)
-    resolved_ips = await _resolve_host_ips(hostname, port)
+    try:
+        resolved_ips = await _resolve_host_ips(hostname, port)
+    except ValueError as exc:
+        if not wrap_resolution_error:
+            raise
+        raise ValueError(f"{unresolved_detail}: {hostname}") from exc
     validated_ips: list[str] = []
     for ip_text in resolved_ips:
         ip_value = _parse_ip(ip_text)
@@ -146,9 +133,7 @@ async def validate_proxy_endpoint(proxy_url: str) -> ValidatedTarget:
         _raise_if_non_public_ip(ip_value, hostname)
         validated_ips.append(ip_text)
     if not validated_ips:
-        raise ValueError(
-            f"Proxy host could not be resolved to a valid IP address: {hostname}"
-        )
+        raise ValueError(f"{unresolved_detail}: {hostname}")
     return ValidatedTarget(
         hostname=hostname,
         scheme=scheme,
@@ -224,6 +209,13 @@ def _parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | Non
         return ipaddress.ip_address(value)
     except ValueError:
         return None
+
+
+def _raise_if_blocked_hostname(hostname: str, label: str) -> None:
+    if hostname in BLOCKED_HOSTNAMES or any(
+        hostname.endswith(suffix) for suffix in BLOCKED_HOST_SUFFIXES
+    ):
+        raise SecurityError(f"{label} host is not allowed: {hostname}")
 
 
 def _raise_if_non_public_ip(

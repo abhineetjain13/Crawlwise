@@ -95,11 +95,7 @@ def extract_records(
     )
     if json_records:
         if "listing" in surface:
-            return [
-                finalize_listing_price_fields(dict(row))
-                for row in json_records
-                if isinstance(row, dict)
-            ]
+            return _finalize_listing_rows(json_records)
         return _postprocess_detail_records(
             json_records[:max_records],
             html=html,
@@ -143,16 +139,8 @@ def extract_records(
             listing_rows,
             network_payloads=network_payloads,
         )
-        adapter_rows = [
-            finalize_listing_price_fields(dict(row))
-            for row in adapter_rows
-            if isinstance(row, dict)
-        ]
-        listing_rows = [
-            finalize_listing_price_fields(dict(row))
-            for row in listing_rows
-            if isinstance(row, dict)
-        ]
+        adapter_rows = _finalize_listing_rows(adapter_rows)
+        listing_rows = _finalize_listing_rows(listing_rows)
         listing_rows = _backfill_listing_rows_from_adapter(
             listing_rows,
             adapter_rows=adapter_rows,
@@ -212,6 +200,14 @@ def _html_is_blocked_extraction_shell(html: str) -> bool:
             or classification.title_matches
         )
     )
+
+
+def _finalize_listing_rows(rows: list[dict]) -> list[dict[str, Any]]:
+    return [
+        finalize_listing_price_fields(dict(row))
+        for row in rows
+        if isinstance(row, dict)
+    ]
 
 
 def _postprocess_detail_records(

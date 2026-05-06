@@ -64,6 +64,37 @@ def browser_profile_diagnostics(engine: str) -> dict[str, object]:
     }
 
 
+def _normalized_optional_lower(value: str | None) -> str | None:
+    return str(value or "").strip().lower() or None
+
+
+def _merge_phase_timings(
+    payload: dict[str, object],
+    phase_timings_ms: dict[str, int] | None,
+) -> dict[str, object]:
+    phase_timings_payload = payload.get("phase_timings_ms")
+    existing_timings: dict[str, object] = (
+        dict(phase_timings_payload)
+        if isinstance(phase_timings_payload, dict)
+        else {}
+    )
+    if phase_timings_ms is not None:
+        existing_timings.update(dict(phase_timings_ms))
+    return existing_timings
+
+
+def _apply_retry_reason(
+    payload: dict[str, object],
+    retry_reason: str | None,
+) -> None:
+    if retry_reason is None:
+        payload.setdefault("retry_reason", None)
+        return
+    normalized_retry = _normalized_optional_lower(retry_reason)
+    if normalized_retry or "retry_reason" not in payload:
+        payload["retry_reason"] = normalized_retry
+
+
 def build_browser_diagnostics_contract(
     *,
     diagnostics: dict[str, object] | None = None,
@@ -78,27 +109,14 @@ def build_browser_diagnostics_contract(
     normalized_engine = normalize_browser_engine(browser_engine)
     payload = dict(diagnostics or {})
     payload["browser_attempted"] = True
-    payload["browser_reason"] = str(browser_reason or "").strip().lower() or None
-    payload["browser_outcome"] = str(browser_outcome or "").strip().lower() or None
-    payload["failure_reason"] = str(failure_reason or "").strip().lower() or None
-    if retry_reason is not None:
-        normalized_retry = str(retry_reason or "").strip().lower() or None
-        if normalized_retry or "retry_reason" not in payload:
-            payload["retry_reason"] = normalized_retry
-    else:
-        payload.setdefault("retry_reason", None)
+    payload["browser_reason"] = _normalized_optional_lower(browser_reason)
+    payload["browser_outcome"] = _normalized_optional_lower(browser_outcome)
+    payload["failure_reason"] = _normalized_optional_lower(failure_reason)
+    _apply_retry_reason(payload, retry_reason)
     payload["browser_engine"] = normalized_engine
     payload["browser_binary"] = str(browser_binary or normalized_engine)
     payload.update(browser_profile_diagnostics(normalized_engine))
-    phase_timings_payload = payload.get("phase_timings_ms")
-    existing_timings: dict[str, object] = (
-        dict(phase_timings_payload)
-        if isinstance(phase_timings_payload, dict)
-        else {}
-    )
-    incoming_timings = dict(phase_timings_ms or {}) if phase_timings_ms is not None else {}
-    existing_timings.update(incoming_timings)
-    payload["phase_timings_ms"] = existing_timings
+    payload["phase_timings_ms"] = _merge_phase_timings(payload, phase_timings_ms)
     payload.setdefault("artifact_paths", {})
     return payload
 

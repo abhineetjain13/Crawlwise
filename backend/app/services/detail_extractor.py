@@ -795,23 +795,28 @@ def _detail_image_looks_like_tracking_or_shell(value: object) -> bool:
     return any(token in lowered for token in tuple(TRACKING_PIXEL_PATTERNS or ()))
 
 
+_ALNUM_SPLIT_PATTERN = r"[^a-z0-9]+"
+
+
 def _title_looks_like_brand_shell(title: str, *, page_url: str) -> bool:
     normalized_title = str(title or "").strip().lower()
     if not normalized_title:
         return False
     host = str(urlparse(page_url).hostname or "").strip().lower()
     host_label = host.removeprefix("www.").split(".", 1)[0]
-    compact_title = re.sub(r"[^a-z0-9]+", "", normalized_title)
-    compact_host = re.sub(r"[^a-z0-9]+", "", host_label)
+    compact_title = re.sub(_ALNUM_SPLIT_PATTERN, "", normalized_title)
+    compact_host = re.sub(_ALNUM_SPLIT_PATTERN, "", host_label)
     if compact_title and compact_host and compact_title == compact_host:
         return True
     host_tokens = {
-        token for token in re.split(r"[^a-z0-9]+", host_label) if len(token) >= 3
+        token for token in re.split(_ALNUM_SPLIT_PATTERN, host_label) if len(token) >= 3
     }
     if not host_tokens:
         return False
     title_tokens = {
-        token for token in re.split(r"[^a-z0-9]+", normalized_title) if len(token) >= 3
+        token
+        for token in re.split(_ALNUM_SPLIT_PATTERN, normalized_title)
+        if len(token) >= 3
     }
     if not title_tokens or not (title_tokens & host_tokens):
         return False

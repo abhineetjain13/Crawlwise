@@ -51,6 +51,7 @@ from app.services.config.extraction_rules import (
 from app.services.field_value_core import clean_text, text_or_none
 
 logger = logging.getLogger(__name__)
+_ALNUM_SPLIT_PATTERN = r"[^a-z0-9]+"
 
 _variant_axis_label_noise_tokens = frozenset(
     str(token).strip().lower()
@@ -124,7 +125,7 @@ def _variant_axis_label_is_noise(value: object) -> bool:
     lowered = clean_text(value).lower()
     if not lowered:
         return False
-    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    tokens = [token for token in re.split(_ALNUM_SPLIT_PATTERN, lowered) if token]
     if any(token in _variant_axis_label_noise_tokens for token in tokens):
         return True
     return any(
@@ -136,7 +137,7 @@ def normalized_variant_axis_key(value: object) -> str:
     text = str(value or "").strip().lower().replace("&", " ")
     if not text:
         return ""
-    text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    text = re.sub(_ALNUM_SPLIT_PATTERN, "_", text).strip("_")
     aliases = VARIANT_AXIS_ALIASES if isinstance(VARIANT_AXIS_ALIASES, dict) else {}
     normalized = str(aliases.get(text) or text)
     tokens = [token for token in normalized.split("_") if token]
@@ -162,7 +163,7 @@ def normalized_variant_axis_display_name(value: object) -> str:
     if not axis_key:
         return cleaned
     lowered = cleaned.lower().replace("&", " ")
-    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    tokens = [token for token in re.split(_ALNUM_SPLIT_PATTERN, lowered) if token]
     if not tokens:
         return cleaned
     if len(tokens) == 1 and tokens[0] == axis_key:
@@ -270,7 +271,9 @@ def infer_variant_group_name(node: Any) -> str:
         elif value not in (None, "", [], {}):
             parts.append(str(value))
     probe = " ".join(parts).replace("_", " ").replace("-", " ").lower()
-    probe_tokens = frozenset(token for token in re.split(r"[^a-z0-9]+", probe) if token)
+    probe_tokens = frozenset(
+        token for token in re.split(_ALNUM_SPLIT_PATTERN, probe) if token
+    )
     if VARIANT_COLOR_AXIS_TOKENS & probe_tokens:
         return "color"
     if VARIANT_SIZE_AXIS_TOKENS & probe_tokens:
@@ -312,7 +315,9 @@ def _resolve_visible_variant_group_name(value: object) -> str:
         if variant_axis_name_is_semantic(candidate):
             normalized_name = normalized_variant_axis_key(candidate)
             tokens = [
-                token for token in re.split(r"[^a-z0-9]+", candidate.lower()) if token
+                token
+                for token in re.split(_ALNUM_SPLIT_PATTERN, candidate.lower())
+                if token
             ]
             if normalized_name in _variant_axis_allowed_single_tokens and any(
                 token.isdigit() or token in _variant_axis_generic_tokens
@@ -704,7 +709,7 @@ def _select_option_values_are_noise(node: Any) -> bool:
     if _is_sequential_integer_run(values):
         return True
     normalized = {
-        re.sub(r"[^a-z0-9]+", "", value.lower()) for value in values if value.strip()
+        re.sub(_ALNUM_SPLIT_PATTERN, "", value.lower()) for value in values if value.strip()
     }
     return bool(normalized) and normalized <= _variant_option_value_noise_tokens
 
@@ -726,7 +731,7 @@ def _variant_group_has_multiple_options(node: Any) -> bool:
 def _value_looks_like_color(value: object) -> bool:
     tokens = [
         token
-        for token in re.split(r"[^a-z0-9]+", clean_text(value).lower())
+        for token in re.split(_ALNUM_SPLIT_PATTERN, clean_text(value).lower())
         if token and not token.isdigit()
     ]
     if not tokens:
@@ -740,7 +745,7 @@ def _semantic_group_label_from_text(value: object) -> str:
         return ""
     lowered = cleaned.lower()
     lowered_tokens = frozenset(
-        token for token in re.split(r"[^a-z0-9]+", lowered) if token
+        token for token in re.split(_ALNUM_SPLIT_PATTERN, lowered) if token
     )
     if VARIANT_COLOR_AXIS_TOKENS & lowered_tokens:
         return "color"
@@ -772,7 +777,7 @@ def variant_axis_name_is_semantic(value: object) -> bool:
         and lowered in _variant_axis_allowed_single_tokens
     ):
         return True
-    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    tokens = [token for token in re.split(_ALNUM_SPLIT_PATTERN, lowered) if token]
     if not tokens or len(tokens) > 4:
         return False
     if any(token in _variant_axis_label_noise_tokens for token in tokens):
@@ -806,7 +811,7 @@ def _select_is_quantity_node(node: Any) -> bool:
         value = str(node.get(attr_name) or "").strip().lower()
         if not value:
             continue
-        tokens = re.split(r"[^a-z0-9]+", value)
+        tokens = re.split(_ALNUM_SPLIT_PATTERN, value)
         if any(t in _variant_quantity_attr_tokens for t in tokens):
             return True
     return False

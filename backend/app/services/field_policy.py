@@ -231,12 +231,9 @@ def normalize_requested_field(value: str | None) -> str:
     text = normalize_field_key(value)
     if not text:
         return ""
-    if text.startswith("sections."):
-        text = text.split(".", 1)[1]
-    for candidate in _requested_field_candidates(text):
-        canonical = _ALIAS_TO_CANONICAL.get(candidate)
-        if canonical:
-            return canonical
+    text, canonical = _requested_field_exact_match(text)
+    if canonical:
+        return canonical
 
     best_match = ""
     best_score = (0, 0)
@@ -257,13 +254,18 @@ def exact_requested_field_key(value: str | None) -> str:
     text = normalize_field_key(value)
     if not text:
         return ""
+    text, canonical = _requested_field_exact_match(text)
+    return canonical or text
+
+
+def _requested_field_exact_match(text: str) -> tuple[str, str]:
     if text.startswith("sections."):
         text = text.split(".", 1)[1]
     for candidate in _requested_field_candidates(text):
         canonical = _ALIAS_TO_CANONICAL.get(candidate)
         if canonical:
-            return canonical
-    return text
+            return text, canonical
+    return text, ""
 
 
 def _requested_field_candidates(text: str) -> list[str]:
@@ -294,21 +296,11 @@ def repair_target_fields_for_surface(
     requested_fields: Iterable[str] | None,
 ) -> list[str]:
     normalized = str(surface or "").strip().lower()
-    requested = [
-        field_name
-        for field_name in canonical_requested_fields(requested_fields)
-        if field_allowed_for_surface(normalized, field_name)
-    ]
-    defaults = [
-        field_name
-        for field_name in list(SURFACE_FIELD_REPAIR_TARGETS.get(normalized) or [])
-        if field_allowed_for_surface(normalized, field_name)
-    ]
-    # Union: user-requested fields + surface canonical defaults.
-    # A setup crawl must discover selectors for both so domain memory is
-    # maximally useful on subsequent cheaper runs.
-    seen: set[str] = set(requested)
-    return requested + [f for f in defaults if f not in seen]
+    return _surface_requested_defaults_union(
+        normalized,
+        requested_fields,
+        SURFACE_FIELD_REPAIR_TARGETS.get(normalized),
+    )
 
 
 def browser_retry_target_fields_for_surface(
@@ -316,18 +308,28 @@ def browser_retry_target_fields_for_surface(
     requested_fields: Iterable[str] | None,
 ) -> list[str]:
     normalized = str(surface or "").strip().lower()
+    return _surface_requested_defaults_union(
+        normalized,
+        requested_fields,
+        SURFACE_BROWSER_RETRY_TARGETS.get(normalized),
+    )
+
+
+def _surface_requested_defaults_union(
+    surface: str,
+    requested_fields: Iterable[str] | None,
+    default_fields: Iterable[str] | None,
+) -> list[str]:
     requested = [
         field_name
         for field_name in canonical_requested_fields(requested_fields)
-        if field_allowed_for_surface(normalized, field_name)
+        if field_allowed_for_surface(surface, field_name)
     ]
     defaults = [
         field_name
-        for field_name in list(SURFACE_BROWSER_RETRY_TARGETS.get(normalized) or [])
-        if field_allowed_for_surface(normalized, field_name)
+        for field_name in list(default_fields or [])
+        if field_allowed_for_surface(surface, field_name)
     ]
-    # Union: if user asked for price+title but canonical retry targets include
-    # currency, we still upgrade to browser when currency is missing.
     seen: set[str] = set(requested)
     return requested + [f for f in defaults if f not in seen]
 

@@ -243,46 +243,41 @@ async def persist_storage_state_for_domain(
     )
     if session is None:
         async with SessionLocal() as owned_session:
-            result = await owned_session.execute(
-                select(DomainCookieMemory)
-                .where(DomainCookieMemory.domain == storage_key)
-                .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
+            changed = await _upsert_domain_storage_state(
+                owned_session,
+                storage_key=storage_key,
+                normalized_state=normalized_state,
+                fingerprint=fingerprint,
             )
-            rows = list(result.scalars().all())
-            row = next(
-                (
-                    candidate
-                    for candidate in rows
-                ),
-                None,
-            )
-            if row is not None and str(row.state_fingerprint or "") == fingerprint:
+            if not changed:
                 return False
-            if row is None:
-                row = DomainCookieMemory(
-                    domain=storage_key,
-                    storage_state=normalized_state,
-                    state_fingerprint=fingerprint,
-                )
-                owned_session.add(row)
-            else:
-                row.storage_state = normalized_state
-                row.state_fingerprint = fingerprint
             await owned_session.commit()
             return True
+    changed = await _upsert_domain_storage_state(
+        session,
+        storage_key=storage_key,
+        normalized_state=normalized_state,
+        fingerprint=fingerprint,
+    )
+    if not changed:
+        return False
+    await session.flush()
+    return True
+
+
+async def _upsert_domain_storage_state(
+    session: AsyncSession,
+    *,
+    storage_key: str,
+    normalized_state: dict[str, object],
+    fingerprint: str,
+) -> bool:
     result = await session.execute(
-            select(DomainCookieMemory)
-            .where(DomainCookieMemory.domain == storage_key)
-            .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
+        select(DomainCookieMemory)
+        .where(DomainCookieMemory.domain == storage_key)
+        .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
     )
-    rows = list(result.scalars().all())
-    row = next(
-        (
-            candidate
-            for candidate in rows
-        ),
-        None,
-    )
+    row = next(iter(result.scalars().all()), None)
     if row is not None and str(row.state_fingerprint or "") == fingerprint:
         return False
     if row is None:
@@ -295,7 +290,6 @@ async def persist_storage_state_for_domain(
     else:
         row.storage_state = normalized_state
         row.state_fingerprint = fingerprint
-    await session.flush()
     return True
 
 

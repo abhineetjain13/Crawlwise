@@ -114,17 +114,7 @@ async def list_selector_records(
         records: list[dict[str, object]] = []
         for memory in await _all_domain_memories(session):
             for row in selector_rules_from_memory(memory):
-                records.append(
-                    {
-                        **dict(row),
-                        "id": _coerce_int(row.get("id"), default=0),
-                        "domain": memory.domain,
-                        "surface": memory.surface,
-                        "source_run_id": row.get("source_run_id"),
-                        "created_at": memory.created_at,
-                        "updated_at": memory.updated_at,
-                    }
-                )
+                records.append(_selector_record_from_memory(row, memory=memory))
         return records
     if not normalized_surface:
         domain_records: list[dict[str, object]] = []
@@ -132,17 +122,7 @@ async def list_selector_records(
             if memory.domain != normalized_domain:
                 continue
             for row in selector_rules_from_memory(memory):
-                domain_records.append(
-                    {
-                        **dict(row),
-                        "id": _coerce_int(row.get("id"), default=0),
-                        "domain": memory.domain,
-                        "surface": memory.surface,
-                        "source_run_id": row.get("source_run_id"),
-                        "created_at": memory.created_at,
-                        "updated_at": memory.updated_at,
-                    }
-                )
+                domain_records.append(_selector_record_from_memory(row, memory=memory))
         return domain_records
     memory = await load_domain_memory(
         session,
@@ -150,17 +130,32 @@ async def list_selector_records(
         surface=normalized_surface,
     )
     return [
-        {
-            **dict(row),
-            "id": _coerce_int(row.get("id"), default=0),
-            "domain": normalized_domain,
-            "surface": normalized_surface,
-            "source_run_id": row.get("source_run_id"),
-            "created_at": memory.created_at if memory is not None else None,
-            "updated_at": memory.updated_at if memory is not None else None,
-        }
+        _selector_record_from_memory(
+            row,
+            memory=memory,
+            domain=normalized_domain,
+            surface=normalized_surface,
+        )
         for row in selector_rules_from_memory(memory)
     ]
+
+
+def _selector_record_from_memory(
+    row: dict[str, object],
+    *,
+    memory,
+    domain: str | None = None,
+    surface: str | None = None,
+) -> dict[str, object]:
+    return {
+        **dict(row),
+        "id": _coerce_int(row.get("id"), default=0),
+        "domain": domain if domain is not None else memory.domain,
+        "surface": surface if surface is not None else memory.surface,
+        "source_run_id": row.get("source_run_id"),
+        "created_at": memory.created_at if memory is not None else None,
+        "updated_at": memory.updated_at if memory is not None else None,
+    }
 
 
 async def list_selector_domain_summaries(

@@ -65,6 +65,7 @@ VARIANT_SELECT_OPTION_SCAN_LIMIT = 24
 VARIANT_SEQUENTIAL_INTEGER_MIN_RUN = 5
 VARIANT_SELECT_GROUP_MAX = 4
 VARIANT_CHOICE_GROUP_MAX = 8
+HASH_LINK_SELECTOR = "a[href^='#']"
 VARIANT_SWATCH_BUTTON_SELECTOR = (
     "button[class*='swatch' i], button[class*='color-option' i],"
     " button[class*='color-selector' i], button[class*='size-option' i],"
@@ -77,7 +78,7 @@ VARIANT_SWATCH_BUTTON_LIMIT = 20
 VARIANT_SWATCH_PARENT_DEPTH = 6
 VARIANT_MATCHING_INPUT_LIMIT = 12
 BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY = (
-    "a[href^='#']",
+    HASH_LINK_SELECTOR,
     "[role='tab'][aria-controls]",
     "button[aria-controls]",
     "[role='button'][aria-controls]",
@@ -251,6 +252,7 @@ DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS = frozenset(
         "with",
     }
 )
+DETAIL_VARIANT_SIZE_SEQUENCE_MIN_COUNT = 5
 DETAIL_LEGAL_TAIL_PATTERNS = {
     "contains": (
         "product safety",
@@ -1013,11 +1015,11 @@ _detail_expand_selectors_ordered: list[str] = []
 _detail_expand_anchor_inserted = False
 for _selector in _detail_expand_selectors_base:
     if _selector == "button" and not _detail_expand_anchor_inserted:
-        _detail_expand_selectors_ordered.append("a[href^='#']")
+        _detail_expand_selectors_ordered.append(HASH_LINK_SELECTOR)
         _detail_expand_anchor_inserted = True
     _detail_expand_selectors_ordered.append(str(_selector))
 if not _detail_expand_anchor_inserted:
-    _detail_expand_selectors_ordered.append("a[href^='#']")
+    _detail_expand_selectors_ordered.append(HASH_LINK_SELECTOR)
 DETAIL_EXPAND_SELECTORS = tuple(dict.fromkeys(_detail_expand_selectors_ordered))
 STRUCTURED_OBJECT_FIELDS = frozenset(_STRUCTURED_OBJECT_FIELDS_RAW)
 STRUCTURED_OBJECT_LIST_FIELDS = frozenset(_STRUCTURED_OBJECT_LIST_FIELDS_RAW)
@@ -1251,6 +1253,7 @@ _EXTRA_EXPORTS = [
     "DETAIL_LONG_TEXT_RANK_FIELDS",
     "DETAIL_LONG_TEXT_SOURCE_RANKS",
     "DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS",
+    "DETAIL_VARIANT_SIZE_SEQUENCE_MIN_COUNT",
     "DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES",
     "DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX",
     "DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES",

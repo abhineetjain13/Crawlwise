@@ -31,6 +31,10 @@ from app.services.config.data_enrichment import (
 from app.services.run_summary import as_int, merge_run_summary_patch
 
 CRAWL_RUN_FK = "crawl_runs.id"
+USERS_FK = "users.id"
+SET_NULL = "SET NULL"
+PRODUCT_INTELLIGENCE_JOB_FK = "product_intelligence_jobs.id"
+CRAWL_RECORD_FK = "crawl_records.id"
 
 
 def _string_list(value: object) -> list[str]:
@@ -43,7 +47,7 @@ class CrawlRun(Base):
     __tablename__ = "crawl_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey(USERS_FK), index=True)
     run_type: Mapped[str] = mapped_column(String(20))
     url: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
@@ -599,9 +603,9 @@ class ProductIntelligenceJob(Base):
     __tablename__ = "product_intelligence_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey(USERS_FK), index=True)
     source_run_id: Mapped[int | None] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        ForeignKey(CRAWL_RUN_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )
@@ -630,16 +634,16 @@ class ProductIntelligenceSourceProduct(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(
-        ForeignKey("product_intelligence_jobs.id", ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete="CASCADE"),
         index=True,
     )
     source_run_id: Mapped[int | None] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        ForeignKey(CRAWL_RUN_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )
     source_record_id: Mapped[int | None] = mapped_column(
-        ForeignKey("crawl_records.id", ondelete="SET NULL"),
+        ForeignKey(CRAWL_RECORD_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )
@@ -665,7 +669,7 @@ class ProductIntelligenceCandidate(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(
-        ForeignKey("product_intelligence_jobs.id", ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete="CASCADE"),
         index=True,
     )
     source_product_id: Mapped[int] = mapped_column(
@@ -673,7 +677,7 @@ class ProductIntelligenceCandidate(Base):
         index=True,
     )
     candidate_crawl_run_id: Mapped[int | None] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        ForeignKey(CRAWL_RUN_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )
@@ -710,7 +714,7 @@ class ProductIntelligenceMatch(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(
-        ForeignKey("product_intelligence_jobs.id", ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete="CASCADE"),
         index=True,
     )
     source_product_id: Mapped[int] = mapped_column(
@@ -722,7 +726,7 @@ class ProductIntelligenceMatch(Base):
         index=True,
     )
     candidate_record_id: Mapped[int | None] = mapped_column(
-        ForeignKey("crawl_records.id", ondelete="SET NULL"),
+        ForeignKey(CRAWL_RECORD_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )
@@ -755,9 +759,9 @@ class DataEnrichmentJob(Base):
     __tablename__ = "data_enrichment_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey(USERS_FK), index=True)
     source_run_id: Mapped[int | None] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        ForeignKey(CRAWL_RUN_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )
@@ -798,12 +802,12 @@ class EnrichedProduct(Base):
         index=True,
     )
     source_run_id: Mapped[int | None] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        ForeignKey(CRAWL_RUN_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )
     source_record_id: Mapped[int | None] = mapped_column(
-        ForeignKey("crawl_records.id", ondelete="SET NULL"),
+        ForeignKey(CRAWL_RECORD_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )
@@ -908,7 +912,7 @@ class DomainFieldFeedback(Base):
     source_kind: Mapped[str] = mapped_column(String(32))
     source_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_run_id: Mapped[int | None] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="SET NULL"),
+        ForeignKey(CRAWL_RUN_FK, ondelete=SET_NULL),
         nullable=True,
         index=True,
     )

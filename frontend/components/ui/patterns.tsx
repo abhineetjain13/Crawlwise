@@ -30,7 +30,7 @@ function stableNodeSignature(value: ReactNode): string {
     const propEntries = Object.entries(props)
       .filter(([key, propValue]) => key !== 'children' && typeof propValue !== 'function')
       .map(([key, propValue]) => `${key}:${stableNodeSignature(propValue as ReactNode)}`)
-      .sort();
+      .sort((left, right) => left.localeCompare(right));
     return `<${typeName}${propEntries.length ? ` ${propEntries.join(',')}` : ''}>${stableNodeSignature(props.children as ReactNode)}</${typeName}>`;
   }
   return Children.toArray(value)

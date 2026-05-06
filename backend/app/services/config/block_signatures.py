@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+ACCESS_DENIED_MARKER = "access denied"
+SHAPE_SECURITY_MARKER = "shape security"
+
 BLOCK_SIGNATURES = {
     "phrases": [
-        "access denied",
+        ACCESS_DENIED_MARKER,
         "access to this page has been denied",
         "robot or human",
         "are you a robot",
@@ -35,7 +38,7 @@ BLOCK_SIGNATURES = {
         {"marker": "window.kpsdk", "provider": "kasada"},
         {"marker": "incapsula", "provider": "incapsula"},
         {"marker": "distil", "provider": "distil"},
-        {"marker": "shape security", "provider": "shape security"},
+        {"marker": SHAPE_SECURITY_MARKER, "provider": SHAPE_SECURITY_MARKER},
         {"marker": "arkose", "provider": "arkose"},
     ],
     "cdn_provider_markers": [
@@ -60,7 +63,7 @@ BLOCK_SIGNATURES = {
         "kpsdk",
         "incapsula",
         "distil",
-        "shape security",
+        SHAPE_SECURITY_MARKER,
         "hcaptcha",
         "recaptcha",
         "g-recaptcha",
@@ -74,7 +77,7 @@ BLOCK_SIGNATURES = {
         "cf-browser-verification": "cloudflare_verification",
         "challenge-platform": "challenge_platform",
         "just a moment": "interstitial_text",
-        "access denied": "access_denied",
+        ACCESS_DENIED_MARKER: "access_denied",
         "powered and protected by akamai": "akamai_banner",
         "datadome": "datadome_marker",
         "unusual traffic from your computer network": "google_unusual_traffic",
@@ -127,7 +130,7 @@ BLOCK_SIGNATURES = {
                 "datadome",
             ],
             "cookie_value_tokens": [
-                "access denied",
+                ACCESS_DENIED_MARKER,
                 "bot_management",
                 "captcha",
                 "datadome",
@@ -137,7 +140,7 @@ BLOCK_SIGNATURES = {
                 "datadome",
             ],
             "local_storage_value_tokens": [
-                "access denied",
+                ACCESS_DENIED_MARKER,
                 "bot_management",
                 "captcha",
                 "datadome",

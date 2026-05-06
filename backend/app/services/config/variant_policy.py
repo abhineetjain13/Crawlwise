@@ -14,6 +14,7 @@ from app.services.config.field_mappings import (
     SKU_FIELD,
     STOCK_QUANTITY_FIELD,
     URL_FIELD,
+    WEIGHT_FIELD,
 )
 
 
@@ -76,7 +77,7 @@ VARIANT_AXIS_CANONICAL_MAPPING: dict[frozenset[str], str] = {
             "part_or_kit",
         }
     ): "bundle_type",
-    frozenset({"weight", "weights"}): "weight",
+    frozenset({WEIGHT_FIELD, "weights"}): WEIGHT_FIELD,
     frozenset({"storage capacity", "storage_capacity"}): "storage_capacity",
     frozenset({"material composition", "material_composition", "composition"}): (
         "material_composition"
@@ -91,7 +92,7 @@ PUBLIC_VARIANT_AXIS_FIELDS: tuple[str, ...] = (
     "finish",
     "count",
     "bundle_type",
-    "weight",
+    WEIGHT_FIELD,
     "dimensions",
     "style",
     "condition",
@@ -138,6 +139,10 @@ FLAT_VARIANT_KEYS: tuple[str, ...] = (
     IMAGE_URL_FIELD,
     AVAILABILITY_FIELD,
     STOCK_QUANTITY_FIELD,
+)
+VARIANT_TRANSPORT_FIELDS: tuple[str, ...] = (
+    PRICE_FIELD,
+    CURRENCY_FIELD,
 )
 VARIANT_PARENT_SHARED_FIELDS: tuple[str, ...] = (
     PRICE_FIELD,

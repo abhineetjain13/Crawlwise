@@ -2468,7 +2468,7 @@ def test_extract_ecommerce_detail_prunes_single_value_marketing_axes_from_final_
     assert len(rows) == 1
 
 
-def test_extract_ecommerce_detail_backfills_missing_variant_price_from_ld_json_price() -> None:
+def test_extract_ecommerce_detail_does_not_duplicate_parent_price_into_variants_when_uniform() -> None:
     html = """
     <html>
       <head>

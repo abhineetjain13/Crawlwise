@@ -43,6 +43,14 @@ from app.services.config.runtime_settings import (
 )
 from app.services.network_resolution import _accept_language_for_locale
 
+_INIT_WRAPPER_START = "(() => {"
+_TRY_LINE = "  try {"
+_ENUMERABLE_FALSE_LINE = "      enumerable: false,"
+_CONFIGURABLE_TRUE_LINE = "      configurable: true,"
+_DEFINE_PROPERTY_CLOSE_LINE = "    });"
+_CATCH_IGNORE_LINE = "  } catch (_) {}"
+_INIT_WRAPPER_END = "})();"
+
 try:
     from browserforge.fingerprints import Fingerprint as _BrowserforgeFingerprintType
 except Exception:  # pragma: no cover - optional dependency contract
@@ -1161,7 +1169,7 @@ def playwright_masking_init_script() -> str:
         if str(value or "").strip()
     ]
     lines = [
-        "(() => {",
+        _INIT_WRAPPER_START,
         "  const roots = [globalThis];",
         "  if (typeof window !== 'undefined' && window !== globalThis) {",
         "    roots.push(window);",
@@ -1188,17 +1196,17 @@ def playwright_masking_init_script() -> str:
             [
                 "  maskGlobal('Worker');",
                 "  maskGlobal('SharedWorker');",
-                "  try {",
+                _TRY_LINE,
                 "    Object.defineProperty(Navigator.prototype, 'serviceWorker', {",
                 "      get: () => undefined,",
                 "      set: () => true,",
-                "      enumerable: false,",
-                "      configurable: true,",
-                "    });",
-                "  } catch (_) {}",
+                _ENUMERABLE_FALSE_LINE,
+                _CONFIGURABLE_TRUE_LINE,
+                _DEFINE_PROPERTY_CLOSE_LINE,
+                _CATCH_IGNORE_LINE,
             ]
         )
-    lines.append("})();")
+    lines.append(_INIT_WRAPPER_END)
     return "\n".join(lines)
 
 
@@ -1271,7 +1279,7 @@ def _playwright_init_script_from_identity(
     )
     runtime_hardware_script = "\n".join(
         [
-            "(() => {",
+            _INIT_WRAPPER_START,
             f"  const hardwareConcurrency = {_json.dumps(_resolved_hardware_concurrency(getattr(getattr(raw_fingerprint, 'navigator', None), 'hardwareConcurrency', None)))};",
             f"  const deviceMemory = {_json.dumps(_resolved_device_memory_gb(getattr(getattr(raw_fingerprint, 'navigator', None), 'deviceMemory', None)))};",
             "  const installNavigatorValue = (key, value) => {",
@@ -1288,7 +1296,7 @@ def _playwright_init_script_from_identity(
             "  };",
             "  installNavigatorValue('hardwareConcurrency', hardwareConcurrency);",
             "  installNavigatorValue('deviceMemory', deviceMemory);",
-            "})();",
+            _INIT_WRAPPER_END,
         ]
     )
     chrome_runtime_script = build_chrome_runtime_init_script(
@@ -1324,7 +1332,7 @@ def _playwright_init_script_from_identity(
     )
     color_scheme_script = "\n".join(
         [
-            "(() => {",
+            _INIT_WRAPPER_START,
             f"  const preferredColorScheme = {_json.dumps(color_scheme)};",
             "  if (!preferredColorScheme || typeof window.matchMedia !== 'function') {",
             "    return;",
@@ -1468,7 +1476,7 @@ def _playwright_init_script_from_identity(
             "  }",
             "  MaskedRTCPeerConnection.prototype.createDTMFSender = noop;",
             "  MaskedRTCPeerConnection.generateCertificate = () => Promise.resolve({});",
-            "  try {",
+            _TRY_LINE,
             "    Object.defineProperty(MaskedRTCPeerConnection, 'name', { value: 'RTCPeerConnection' });",
             "  } catch (_) {}",
             "  globalThis.RTCPeerConnection = MaskedRTCPeerConnection;",
@@ -1491,25 +1499,25 @@ def _playwright_init_script_from_identity(
             "  try {",
             "    Object.defineProperty(Navigator.prototype, 'language', {",
             "      get: () => locale,",
-            "      enumerable: false,",
-            "      configurable: true,",
-            "    });",
-            "  } catch (_) {}",
-            "  try {",
+            _ENUMERABLE_FALSE_LINE,
+            _CONFIGURABLE_TRUE_LINE,
+            _DEFINE_PROPERTY_CLOSE_LINE,
+            _CATCH_IGNORE_LINE,
+            _TRY_LINE,
             "    Object.defineProperty(Navigator.prototype, 'languages', {",
             "      get: () => Array.from(languages),",
-            "      enumerable: false,",
-            "      configurable: true,",
-            "    });",
-            "  } catch (_) {}",
-            "  try {",
+            _ENUMERABLE_FALSE_LINE,
+            _CONFIGURABLE_TRUE_LINE,
+            _DEFINE_PROPERTY_CLOSE_LINE,
+            _CATCH_IGNORE_LINE,
+            _TRY_LINE,
             "    Object.defineProperty(Navigator.prototype, 'platform', {",
             "      get: () => navigatorPlatform,",
-            "      enumerable: false,",
-            "      configurable: true,",
-            "    });",
-            "  } catch (_) {}",
-            "  try {",
+            _ENUMERABLE_FALSE_LINE,
+            _CONFIGURABLE_TRUE_LINE,
+            _DEFINE_PROPERTY_CLOSE_LINE,
+            _CATCH_IGNORE_LINE,
+            _TRY_LINE,
             "    const nativeUaData = Navigator.prototype.userAgentData || navigator.userAgentData;",
             "    if (nativeUaData) {",
             "      const patchedUaData = new Proxy(nativeUaData, {",
@@ -1532,7 +1540,7 @@ def _playwright_init_script_from_identity(
             "        configurable: true,",
             "      });",
             "    }",
-            "  } catch (_) {}",
+            _CATCH_IGNORE_LINE,
             "})();",
         ]
     )

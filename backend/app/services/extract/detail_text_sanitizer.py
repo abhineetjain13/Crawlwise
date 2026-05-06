@@ -35,6 +35,7 @@ from app.services.config.extraction_rules import (
     DETAIL_NOISE_PREFIXES,
     DETAIL_TITLE_DIMENSION_SIZE_PATTERN,
     DETAIL_TRACKING_TOKEN_PATTERN,
+    DETAIL_VARIANT_SIZE_SEQUENCE_MIN_COUNT,
     DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
     FEATURE_ROW_NOISE_PATTERNS,
     LONG_TEXT_MAX_WORDS,
@@ -466,14 +467,17 @@ def detail_long_text_chunk_looks_truncated(text: str) -> bool:
 
 def detail_long_text_chunk_is_variant_size_sequence(text: str) -> bool:
     tokens = clean_text(text).split()
-    if len(tokens) < 5:
+    if len(tokens) < DETAIL_VARIANT_SIZE_SEQUENCE_MIN_COUNT:
         return False
     values: list[float] = []
     for token in tokens:
         if not re.fullmatch(r"\d+(?:\.5)?", token):
             return False
         values.append(float(token))
-    return values == sorted(values) and len(set(values)) >= 5
+    return (
+        values == sorted(values)
+        and len(set(values)) >= DETAIL_VARIANT_SIZE_SEQUENCE_MIN_COUNT
+    )
 
 
 _BRACKET_RUN_RE = re.compile(r"(?:\[\s*){2,}|(?:\]\s*){2,}")

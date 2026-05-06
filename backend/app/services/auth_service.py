@@ -60,6 +60,10 @@ async def ensure_default_admin(session: AsyncSession) -> User:
     user = result.scalar_one_or_none()
     if user is None:
         return await create_user(session, email, password, role="admin")
+    return await _ensure_admin_user_state(session, user)
+
+
+async def _ensure_admin_user_state(session: AsyncSession, user: User) -> User:
     changed = False
     if user.role != "admin":
         user.role = "admin"
@@ -78,29 +82,12 @@ async def bootstrap_admin_user(session: AsyncSession) -> User | None:
     if not admin_settings.bootstrap_admin_once:
         return None
 
-    email = str(admin_settings.default_admin_email or "").strip().lower()
-    password = str(admin_settings.default_admin_password or "").strip()
-    if not email:
-        raise RuntimeError(f"{DEFAULT_ADMIN_EMAIL} is required for admin bootstrap.")
-    if not password:
-        raise RuntimeError(f"{DEFAULT_ADMIN_PASSWORD} is required for admin bootstrap.")
-    _validate_default_admin_password(password)
+    email, password = _load_default_admin_credentials()
     result = await session.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if user is None:
         return await create_user(session, email, password, role="admin")
-
-    changed = False
-    if user.role != "admin":
-        user.role = "admin"
-        changed = True
-    if not user.is_active:
-        user.is_active = True
-        changed = True
-    if changed:
-        await session.commit()
-        await session.refresh(user)
-    return user
+    return await _ensure_admin_user_state(session, user)
 
 
 async def authenticate_user(

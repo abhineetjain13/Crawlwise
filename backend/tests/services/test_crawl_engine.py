@@ -15,6 +15,7 @@ from app.services.extract.detail_identity import (
 from app.services.extract.detail_price_extractor import backfill_detail_price_from_html
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
+from app.services.js_state_helpers import select_variant
 from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.listing_extractor import extract_listing_records
 from tests.fixtures.loader import read_optional_artifact_text
@@ -107,6 +108,47 @@ def test_detail_price_backfill_uses_visible_local_price_when_jsonld_currency_con
 
     assert record["price"] == "1800"
     assert record["currency"] == "INR"
+
+
+def test_detail_price_backfill_keeps_existing_parent_price_for_variants_when_host_currency_conflicts() -> None:
+    record = {
+        "url": "https://www.firstcry.com/p/balm-dotcom/12345/product-detail",
+        "price": "1800",
+        "currency": "INR",
+        "variants": [{"size": "One Size"}],
+        "_field_sources": {"price": ["js_state"]},
+    }
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {"@type":"Product","offers":{"@type":"Offer","price":"16","priceCurrency":"USD"}}
+        </script>
+      </head>
+      <body><main><h1>Balm Dotcom</h1></main></body>
+    </html>
+    """
+
+    backfill_detail_price_from_html(record, html=html)
+
+    assert record["price"] == "1800"
+    assert record["variants"][0]["price"] == "1800"
+    assert record["variants"][0]["currency"] == "INR"
+
+
+def test_select_variant_falls_back_to_partial_axis_match() -> None:
+    variants = [
+        {"size": "M", "availability": "out_of_stock"},
+        {"size": "M", "availability": "in_stock"},
+        {"size": "L", "availability": "in_stock"},
+    ]
+
+    selected = select_variant(
+        variants,
+        page_url="https://example.com/products/widget?size=M&color=Blue",
+    )
+
+    assert selected == variants[1]
 
 
 def test_extract_detail_keeps_encoded_cdn_image_url() -> None:

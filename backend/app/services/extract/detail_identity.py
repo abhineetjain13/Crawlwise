@@ -355,13 +355,7 @@ def _detail_url_looks_like_product(url: str) -> bool:
 
 
 def _detail_url_is_utility(url: str) -> bool:
-    path_tokens = {
-        token
-        for token in re.split(
-            r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower()
-        )
-        if token
-    }
+    path_tokens = _detail_url_path_tokens(url)
     if any(token in path_tokens for token in DETAIL_PRODUCT_PATH_TOKENS):
         return False
     if any(token in path_tokens for token in DETAIL_UTILITY_PATH_TOKENS):
@@ -381,16 +375,20 @@ def _detail_url_is_utility(url: str) -> bool:
 
 
 def _detail_url_is_collection_like(url: str) -> bool:
-    path_tokens = {
+    path_tokens = _detail_url_path_tokens(url)
+    if any(token in path_tokens for token in DETAIL_PRODUCT_PATH_TOKENS):
+        return False
+    return any(token in path_tokens for token in DETAIL_COLLECTION_PATH_TOKENS)
+
+
+def _detail_url_path_tokens(url: str) -> set[str]:
+    return {
         token
         for token in re.split(
             r"[^a-z0-9]+", "/".join(_detail_url_path_segments(url)).lower()
         )
         if token
     }
-    if any(token in path_tokens for token in DETAIL_PRODUCT_PATH_TOKENS):
-        return False
-    return any(token in path_tokens for token in DETAIL_COLLECTION_PATH_TOKENS)
 
 
 def _record_matches_requested_detail_identity(

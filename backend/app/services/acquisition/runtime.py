@@ -37,6 +37,7 @@ from app.services.platform_policy import resolve_platform_runtime_policy
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 
 logger = logging.getLogger(__name__)
+HTML_CONTENT_TYPE = "text/html"
 
 _SHARED_HTTP_CLIENTS: dict[tuple[str | None, str], httpx.AsyncClient] = {}
 _SHARED_HTTP_CLIENT_LOCK = asyncio.Lock()
@@ -61,7 +62,7 @@ class PageFetchResult:
     html: str
     status_code: int
     method: str
-    content_type: str = "text/html"
+    content_type: str = HTML_CONTENT_TYPE
     blocked: bool = False
     platform_family: str | None = None
     headers: httpx.Headers = field(default_factory=httpx.Headers)
@@ -485,7 +486,7 @@ async def http_fetch(
         html=html,
         status_code=response.status_code,
         method="httpx",
-        content_type=response.headers.get("content-type", "text/html"),
+        content_type=response.headers.get("content-type", HTML_CONTENT_TYPE),
         blocked=blocked,
         platform_family=runtime_policy.get("family"),
         headers=headers,
@@ -559,7 +560,7 @@ def _curl_fetch_sync(
         html=html,
         status_code=response.status_code,
         method="curl_cffi",
-        content_type=response.headers.get("content-type", "text/html"),
+        content_type=response.headers.get("content-type", HTML_CONTENT_TYPE),
         blocked=blocked,
         platform_family=runtime_policy.get("family"),
         headers=response_headers,

@@ -11,6 +11,9 @@ from app.models.crawl import HostProtectionMemory
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_host
 
+PATCHRIGHT_METHOD = "browser:patchright"
+REAL_CHROME_METHOD = "browser:real_chrome"
+
 
 @dataclass(slots=True)
 class HostProtectionPolicy:
@@ -115,15 +118,15 @@ async def load_host_protection_policy(
                 None,
                 "browser",
                 "browser:chromium",
-                "browser:patchright",
-                "browser:real_chrome",
+                PATCHRIGHT_METHOD,
+                REAL_CHROME_METHOD,
             }
         ),
         chromium_blocked=last_block_method == "browser:chromium",
-        patchright_blocked=last_block_method == "browser:patchright",
-        real_chrome_blocked=last_block_method == "browser:real_chrome",
-        patchright_success=last_success_method == "browser:patchright",
-        real_chrome_success=last_success_method == "browser:real_chrome",
+        patchright_blocked=last_block_method == PATCHRIGHT_METHOD,
+        real_chrome_blocked=last_block_method == REAL_CHROME_METHOD,
+        patchright_success=last_success_method == PATCHRIGHT_METHOD,
+        real_chrome_success=last_success_method == REAL_CHROME_METHOD,
         last_block_method=last_block_method,
     )
 
