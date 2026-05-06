@@ -10,16 +10,22 @@ from app.services.config.extraction_rules import (
     AVAILABILITY_IN_STOCK,
     AVAILABILITY_OUT_OF_STOCK,
     CANDIDATE_PLACEHOLDER_VALUES,
+    CATEGORY_PLACEHOLDER_VALUES,
     DETAIL_CATEGORY_LABEL_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
     DETAIL_BREADCRUMB_SEPARATOR_LABELS,
     DETAIL_BREADCRUMB_TITLE_DUPLICATE_RATIO,
+    IMAGE_FAMILY_NOISE_TOKENS,
+    IMAGE_PATH_TOKENS,
+    MATERIAL_KEYWORDS,
+    ORG_SUFFIXES,
     DETAIL_LOW_SIGNAL_PARENT_MIN,
     DETAIL_LOW_SIGNAL_PRICE_MAX,
     DETAIL_PRICE_COMPARISON_TOLERANCE,
     PLACEHOLDER_IMAGE_URL_PATTERNS,
     VARIANT_OPTION_LABEL_MAX_WORDS,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
+    WAF_QUEUE_PATTERNS,
 )
 from app.services.field_value_core import (
     clean_text,
@@ -28,7 +34,9 @@ from app.services.field_value_core import (
     text_or_none,
 )
 from app.services.field_value_dom import dedupe_image_urls
-from app.services.extract.detail_dom_extractor import variant_option_value_is_noise as _variant_option_value_is_noise
+from app.services.extract.detail_dom_extractor import (
+    variant_option_value_is_noise as _variant_option_value_is_noise,
+)
 from app.services.extract.detail_identity import (
     detail_identity_codes_match,
     detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
@@ -62,8 +70,16 @@ from app.services.extract.shared_variant_logic import (
 
 _UUID_LIKE_PATTERN = re.compile(r"(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _MERCH_CODE_PATTERN = re.compile(r"\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", re.I)
-_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(str(token).strip().lower() for token in VARIANT_OPTION_VALUE_NOISE_TOKENS if str(token).strip())
-_PLACEHOLDER_IMAGE_URL_PATTERNS_LOWER = tuple(str(pattern).lower() for pattern in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ()) if str(pattern).strip())
+_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
+    str(token).strip().lower()
+    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
+    if str(token).strip()
+)
+_PLACEHOLDER_IMAGE_URL_PATTERNS_LOWER = tuple(
+    str(pattern).lower()
+    for pattern in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ())
+    if str(pattern).strip()
+)
 _DETAIL_BASE_PLACEHOLDER_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^404$"),
     re.compile(r"^(?:error\s*)?404\b", re.I),
@@ -77,16 +93,25 @@ _DETAIL_BASE_PLACEHOLDER_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^not found$", re.I),
     re.compile(r"^access denied$", re.I),
 )
-_DETAIL_WAF_QUEUE_TITLE_PATTERNS = (
-    re.compile(r"\bsorry for the wait\b", re.I),
-    re.compile(r"\bplease wait while we verify\b", re.I),
-    re.compile(r"\bwe need to verify\b", re.I),
-    re.compile(r"\bjust a moment while we\b", re.I),
-    re.compile(r"\bqueue-it\b", re.I),
-    re.compile(r"^please wait\b", re.I),
-    re.compile(r"\byou are in a virtual queue\b", re.I),
+_DETAIL_WAF_QUEUE_TITLE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(WAF_QUEUE_PATTERNS or ())
+    if str(pattern).strip()
 )
-_DETAIL_PLACEHOLDER_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (*_DETAIL_BASE_PLACEHOLDER_TITLE_PATTERNS, *_DETAIL_WAF_QUEUE_TITLE_PATTERNS)
+_DETAIL_PLACEHOLDER_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    *_DETAIL_BASE_PLACEHOLDER_TITLE_PATTERNS,
+    *_DETAIL_WAF_QUEUE_TITLE_PATTERNS,
+)
+_ORG_SUFFIX_PATTERN = (
+    re.compile(
+        r"\b(?:"
+        + "|".join(re.escape(token) for token in sorted(ORG_SUFFIXES))
+        + r")\b",
+        re.I,
+    )
+    if ORG_SUFFIXES
+    else None
+)
 
 
 def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
@@ -145,7 +170,7 @@ def _sanitize_detail_placeholder_scalars(
         record.pop("title", None)
         record["_placeholder_title_removed"] = True
     category = clean_text(record.get("category"))
-    if category.lower() in {"category", "categories", "uncategorized"}:
+    if category.lower() in CATEGORY_PLACEHOLDER_VALUES:
         record.pop("category", None)
     elif category:
         cleaned_category = _clean_detail_category_path(
@@ -308,7 +333,9 @@ def _clean_detail_category_path(
         str(prefix).casefold() for prefix in tuple(DETAIL_CATEGORY_LABEL_PREFIXES or ())
     )
     cleaned_parts: list[str] = []
-    strip_chars = "".join(map(str, DETAIL_BREADCRUMB_SEPARATOR_LABELS or ())) + " \t\n\r"
+    strip_chars = (
+        "".join(map(str, DETAIL_BREADCRUMB_SEPARATOR_LABELS or ())) + " \t\n\r"
+    )
     for part in parts:
         cleaned = clean_text(part.strip(strip_chars))
         lowered = cleaned.casefold()
@@ -364,23 +391,10 @@ def _detail_title_looks_like_placeholder(title: str) -> bool:
 
 def _materials_value_looks_like_org_name(value: str) -> bool:
     lowered = value.lower()
-    if any(
-        token in lowered
-        for token in (
-            "cotton",
-            "polyester",
-            "rubber",
-            "leather",
-            "wool",
-            "nylon",
-            "polyamide",
-            "spandex",
-            "linen",
-        )
-    ):
+    if any(token in lowered for token in MATERIAL_KEYWORDS):
         return False
     return bool(
-        re.search(r"\b(?:inc|llc|ltd|corp|company|co|se)\b", lowered)
+        (_ORG_SUFFIX_PATTERN is not None and _ORG_SUFFIX_PATTERN.search(lowered))
         or re.fullmatch(r"[A-Z0-9 .,&'-]{6,}", value, re.IGNORECASE)
     )
 
@@ -465,9 +479,7 @@ def _sanitize_variant_row(
         if _variant_option_value_is_noise(cleaned_value):
             variant.pop(field_name, None)
             continue
-        if _option_value_repeats_product_title(
-            cleaned_value, title_hint=title_hint
-        ):
+        if _option_value_repeats_product_title(cleaned_value, title_hint=title_hint):
             variant.pop(field_name, None)
             continue
         variant[field_name] = cleaned_value
@@ -515,11 +527,10 @@ def repair_ecommerce_detail_record_quality(
     page_url: str,
     requested_page_url: str | None = None,
 ) -> None:
-    identity_url = text_or_none(requested_page_url) or page_url
     _sanitize_ecommerce_detail_record(
         record,
         page_url=page_url,
-        requested_page_url=identity_url,
+        requested_page_url=requested_page_url,
     )
     backfill_detail_price_from_html(record, html=html)
     reconcile_detail_price_magnitudes(record)
@@ -528,6 +539,7 @@ def repair_ecommerce_detail_record_quality(
     _repair_invalid_original_prices(record)
     _drop_invalid_detail_discounts(record)
     _repair_detail_variant_prices_and_identity(record)
+
 
 def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
     parent_price = text_or_none(record.get("price"))
@@ -903,27 +915,19 @@ def _detail_image_candidate_is_usable(url: str, *, identity_url: str) -> bool:
         return False
     return True
 
+
 def _detail_image_url_is_extensionless_transform(path: str) -> bool:
     filename = unquote(str(path or "").rsplit("/", 1)[-1])
     if re.search(r"\.(?:avif|gif|jpe?g|png|svg|tiff?|webp)$", filename, re.I):
         return False
     return re.search(r"\._[A-Z]+_[A-Z]{2}\d+\s*$", filename, re.I) is not None
 
+
 def _detail_path_looks_like_image_asset(path: str, lowered_url: str) -> bool:
     lowered_path = str(path or "").lower()
     if re.search(r"\.(?:avif|gif|jpe?g|png|svg|tiff?|webp)(?:$|\?)", lowered_url):
         return True
-    return any(
-        token in lowered_path
-        for token in (
-            "/image/",
-            "/images/",
-            "/media/",
-            "/picture",
-            "/is/image/",
-            "/cdn/",
-        )
-    )
+    return any(token in lowered_path for token in IMAGE_PATH_TOKENS)
 
 
 def _detail_image_matches_primary_family(
@@ -1057,31 +1061,7 @@ def _detail_image_family_tokens(url: str) -> set[str]:
         for segment in re.split(r"[^a-z0-9]+", unquote(urlparse(url).path).lower())
         if len(segment) >= 4
     ]
-    noise = {
-        "assets",
-        "image",
-        "images",
-        "product",
-        "products",
-        "media",
-        "picture",
-        "files",
-        "file",
-        "main",
-        "hero",
-        "detail",
-        "standard",
-        "hover",
-        "editorial",
-        "square",
-        "width",
-        "height",
-        "crop",
-        "shop",
-        "cdn",
-        "public",
-    }
-    return {part for part in parts if part not in noise}
+    return {part for part in parts if part not in IMAGE_FAMILY_NOISE_TOKENS}
 
 
 def _detail_image_media_code(url: str) -> str | None:

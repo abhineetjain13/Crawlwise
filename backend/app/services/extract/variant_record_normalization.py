@@ -17,11 +17,10 @@ from app.services.config.extraction_rules import (
     VARIANT_PLACEHOLDER_VALUES,
     VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SIZE_VALUE_EXTRACT_PATTERNS,
-    VARIANT_AXIS_ALLOWED_SINGLE_TOKENS,
     STANDARD_SIZE_VALUES,
     VARIANT_TITLE_STOPWORDS,
 )
-from app.services.config.field_mappings import FLAT_VARIANT_KEYS
+from app.services.config.field_mappings import FLAT_VARIANT_KEYS, PUBLIC_VARIANT_AXIS_FIELDS
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import (
     clean_text,
@@ -78,7 +77,11 @@ _GENDER_ARTIFACT_RE = re.compile(
     _GENDER_ARTIFACT_PATTERN.format(candidate=r"[a-z0-9.]+"),
     re.I,
 ) if _GENDER_ARTIFACT_PATTERN else None
-_GENDER_POSSESSIVE_RE = re.compile(str(GENDER_POSSESSIVE_PATTERN or ""), re.I)
+_GENDER_POSSESSIVE_RE = (
+    re.compile(str(GENDER_POSSESSIVE_PATTERN), re.I)
+    if GENDER_POSSESSIVE_PATTERN
+    else None
+)
 _STANDARD_SIZE_VALUES = frozenset(str(value).lower() for value in tuple(STANDARD_SIZE_VALUES or ()))
 _VARIANT_TITLE_STOPWORDS = frozenset(
     clean_text(token).lower()
@@ -91,13 +94,15 @@ _GENDER_KEYWORD_TOKENS_SET = frozenset(
     if clean_text(token)
 )
 _LEGACY_VARIANT_KEYS = ("selected_variant", "variant_axes", "available_sizes")
+_PUBLIC_VARIANT_AXIS_FIELDS = tuple(
+    str(field_name).strip().lower()
+    for field_name in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
+    if str(field_name).strip()
+)
 
 
 def _variant_has_axis_value(variant: dict[str, Any]) -> bool:
-    return any(
-        clean_text(variant.get(axis))
-        for axis in ("size", "color", *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS)
-    )
+    return any(clean_text(variant.get(axis)) for axis in _PUBLIC_VARIANT_AXIS_FIELDS)
 
 
 def normalize_variant_record(record: dict[str, Any]) -> None:
@@ -212,7 +217,7 @@ def _clean_variant_rows(record: dict[str, Any]) -> None:
         if not isinstance(variant, dict):
             continue
         cleaned_variant = dict(variant)
-        for field_name in ("size", "color"):
+        for field_name in _PUBLIC_VARIANT_AXIS_FIELDS:
             cleaned_value = _normalize_variant_axis_value(
                 field_name,
                 cleaned_variant.get(field_name),
@@ -223,7 +228,7 @@ def _clean_variant_rows(record: dict[str, Any]) -> None:
                 cleaned_variant.pop(field_name, None)
         if any(
             cleaned_variant.get(field_name) not in (None, "", [], {})
-            for field_name in (*FLAT_VARIANT_KEYS, *VARIANT_AXIS_ALLOWED_SINGLE_TOKENS)
+            for field_name in (*FLAT_VARIANT_KEYS, *_PUBLIC_VARIANT_AXIS_FIELDS)
         ):
             cleaned_variants.append(cleaned_variant)
     if cleaned_variants:
@@ -385,6 +390,7 @@ def _variant_size_from_title_or_url(
         if (
             extracted
             and extracted.lower() in _STANDARD_SIZE_VALUES
+            and _GENDER_POSSESSIVE_RE is not None
             and _GENDER_POSSESSIVE_RE.search(text)
         ):
             continue

@@ -5,6 +5,7 @@ Alias consumers prefer exact canonical field keys before alias fallbacks.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -220,13 +221,134 @@ PUBLIC_RECORD_CANONICAL_URL_FIELDS = frozenset(
     {APPLY_URL_FIELD, CANONICAL_URL_FIELD, URL_FIELD}
 )
 BRAND_LIKE_FIELDS = frozenset({"brand", "company", "dealer_name", "vendor"})
-OPTION_SCALAR_FIELDS = frozenset(
-    {COLOR_FIELD, "condition", "material", SIZE_FIELD, "storage", "style"}
+VARIANT_AXIS_CANONICAL_MAPPING: dict[frozenset[str], str] = {
+    frozenset(
+        {
+            COLOR_FIELD,
+            "colors",
+            "colour",
+            "colours",
+            "hue",
+            "shade",
+            "color way",
+            "color_way",
+            "colorway",
+            "frame color",
+            "frame_color",
+            "frame colour",
+            "frame_colour",
+        }
+    ): COLOR_FIELD,
+    frozenset(
+        {
+            SIZE_FIELD,
+            "sizes",
+            "frame size",
+            "frame_size",
+        }
+    ): SIZE_FIELD,
+    frozenset(
+        {
+            "dimensions",
+            "dimension",
+            "measurements",
+            "measurement",
+            "proportions",
+            "proportion",
+        }
+    ): "dimensions",
+    frozenset({"flavor", "flavors", "flavour", "flavours", "taste"}): "flavor",
+    frozenset({"material", "materials"}): "material",
+    frozenset({"pattern", "patterns"}): "pattern",
+    frozenset({"finish", "finishes"}): "finish",
+    frozenset(
+        {
+            "count",
+            "counts",
+            "pack count",
+            "pack_count",
+            "package count",
+            "package_count",
+        }
+    ): "count",
+    frozenset(
+        {
+            "bundle type",
+            "bundle_type",
+            "bundle",
+            "bundles",
+            "part or kit",
+            "part_or_kit",
+        }
+    ): "bundle_type",
+    frozenset({"weight", "weights"}): "weight",
+    frozenset({"storage capacity", "storage_capacity"}): "storage_capacity",
+    frozenset({"material composition", "material_composition", "composition"}): (
+        "material_composition"
+    ),
+}
+PUBLIC_VARIANT_AXIS_FIELDS: tuple[str, ...] = (
+    COLOR_FIELD,
+    SIZE_FIELD,
+    "flavor",
+    "material",
+    "pattern",
+    "finish",
+    "count",
+    "bundle_type",
+    "weight",
+    "dimensions",
+    "style",
+    "condition",
+    "state",
+    "storage",
+    "storage_capacity",
+    "connectivity",
+    "voltage",
+    "plug_type",
+    "volume",
+    "scent",
+    "spf_rating",
+    "skin_type",
+    "configuration",
+    "fabric_grade",
+    "leg_finish",
+    "tolerance_level",
+    "thread_size",
+    "material_composition",
+    "load_rating",
+    "frequency",
+    "commitment_period",
+    "seat_count",
+    "usage_limit",
+    "tier",
 )
+
+
+def _normalized_variant_axis_alias_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.strip().lower().replace("&", " ")).strip(
+        "_"
+    )
+
+
+def _build_axis_name_aliases() -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for group, canonical in VARIANT_AXIS_CANONICAL_MAPPING.items():
+        normalized_canonical = _normalized_variant_axis_alias_key(canonical)
+        if normalized_canonical:
+            aliases[normalized_canonical] = normalized_canonical
+        for raw_alias in group:
+            normalized_alias = _normalized_variant_axis_alias_key(str(raw_alias))
+            if normalized_alias:
+                aliases[normalized_alias] = normalized_canonical
+    return aliases
+
+
+AXIS_NAME_ALIASES = _build_axis_name_aliases()
+OPTION_SCALAR_FIELDS = frozenset(PUBLIC_VARIANT_AXIS_FIELDS)
 PUBLIC_RECORD_CANONICAL_SURFACE = "ecommerce_detail"
 FLAT_VARIANT_KEYS: tuple[str, ...] = (
     COLOR_FIELD,
-    "flavor",
     SIZE_FIELD,
     SKU_FIELD,
     PRICE_FIELD,
@@ -235,6 +357,12 @@ FLAT_VARIANT_KEYS: tuple[str, ...] = (
     IMAGE_URL_FIELD,
     AVAILABILITY_FIELD,
     STOCK_QUANTITY_FIELD,
+)
+VARIANT_PARENT_SHARED_FIELDS: tuple[str, ...] = (
+    PRICE_FIELD,
+    CURRENCY_FIELD,
+    URL_FIELD,
+    IMAGE_URL_FIELD,
 )
 PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS = frozenset(
     {"page_markdown", "table_markdown", "record_type"}
@@ -334,6 +462,7 @@ _EXTRA_EXPORTS = [
     "JS_STATE_VARIANT_FIELD_SPEC",
     "AVAILABLE_SIZES_FIELD",
     "APPLY_URL_FIELD",
+    "AXIS_NAME_ALIASES",
     "AVAILABILITY_FIELD",
     "BARCODE_FIELD",
     "BRAND_LIKE_FIELDS",
@@ -345,6 +474,8 @@ _EXTRA_EXPORTS = [
     "NORMALIZER_LIST_TEXT_FIELDS",
     "OPTION_SCALAR_FIELDS",
     "PRICE_FIELD",
+    "PUBLIC_VARIANT_AXIS_FIELDS",
+    "VARIANT_AXIS_CANONICAL_MAPPING",
     "PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS",
     "PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS",
     "PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS",
@@ -364,6 +495,7 @@ _EXTRA_EXPORTS = [
     "URL_FIELD",
     "VARIANTS_FIELD",
     "VARIANT_AXES_FIELD",
+    "VARIANT_PARENT_SHARED_FIELDS",
     "WIDTH_FIELD",
 ]
 

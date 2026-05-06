@@ -3,6 +3,7 @@ from __future__ import annotations
 from bs4 import BeautifulSoup
 
 from app.services.extract.shared_variant_logic import (
+    iter_variant_choice_groups,
     iter_variant_select_groups,
     normalized_variant_axis_key,
     resolve_variant_group_name,
@@ -136,10 +137,22 @@ def test_resolve_variants_three_axis_cartesian() -> None:
         "material": ["Cotton", "Poly"],
     }
     variants = [
-        {"variant_id": "1", "option_values": {"color": "Red", "size": "S", "material": "Cotton"}},
-        {"variant_id": "2", "option_values": {"color": "Red", "size": "S", "material": "Poly"}},
-        {"variant_id": "3", "option_values": {"color": "Red", "size": "M", "material": "Cotton"}},
-        {"variant_id": "4", "option_values": {"color": "Blue", "size": "S", "material": "Cotton"}},
+        {
+            "variant_id": "1",
+            "option_values": {"color": "Red", "size": "S", "material": "Cotton"},
+        },
+        {
+            "variant_id": "2",
+            "option_values": {"color": "Red", "size": "S", "material": "Poly"},
+        },
+        {
+            "variant_id": "3",
+            "option_values": {"color": "Red", "size": "M", "material": "Cotton"},
+        },
+        {
+            "variant_id": "4",
+            "option_values": {"color": "Blue", "size": "S", "material": "Cotton"},
+        },
     ]
 
     resolved = resolve_variants(axes, variants)
@@ -179,7 +192,9 @@ def test_resolve_variants_dedupes_no_option_values_against_each_other() -> None:
 
     resolved = resolve_variants(axes, variants)
 
-    assert [variant.get("variant_id") or variant.get("sku") for variant in resolved] == [
+    assert [
+        variant.get("variant_id") or variant.get("sku") for variant in resolved
+    ] == [
         "1",
         "2",
         "SKU-3",
@@ -195,7 +210,9 @@ def test_variant_axis_name_is_semantic_accepts_non_generic_axis_labels() -> None
     assert variant_axis_name_is_semantic("Availability") is False
 
 
-def test_resolve_variant_group_name_infers_unlabeled_select_size_axis_from_values() -> None:
+def test_resolve_variant_group_name_infers_unlabeled_select_size_axis_from_values() -> (
+    None
+):
     soup = BeautifulSoup(
         """
         <select>
@@ -275,7 +292,10 @@ def test_variant_select_groups_reject_cookie_consent_token_selects() -> None:
 
     groups = list(iter_variant_select_groups(soup))
 
-    assert [normalized_variant_axis_key(resolve_variant_group_name(group)) for group in groups] == ["size"]
+    assert [
+        normalized_variant_axis_key(resolve_variant_group_name(group))
+        for group in groups
+    ] == ["size"]
 
 
 def test_variant_select_groups_reject_style_control_selects() -> None:
@@ -337,3 +357,120 @@ def test_resolve_variant_group_name_ignores_external_option_label_for_radio() ->
     )
 
     assert resolve_variant_group_name(soup.select_one("input")) == "size"
+
+
+def test_variant_choice_groups_ignore_single_image_swatches_and_keep_button_grid() -> (
+    None
+):
+    soup = BeautifulSoup(
+        """
+        <div class="image-viewer-swatch-col hmf-span-3">
+          <button
+            id="alt-image-viewer-wrapper-123"
+            class="image-wrapper-padding image-wrapper-height image-viewer-swatch-wrapper"
+            aria-label="View Image in Full Screen"
+            type="button"
+          ></button>
+        </div>
+        <section id="pdp-selector-attributes" class="selector-attributes-container">
+          <p><span>Shoe Size:</span></p>
+          <div class="hmf-grid selector-attribute-outer overflow-scroll">
+            <hmf-selectable>
+              <div class="hmf-selectable-container hmf-display-flex hmf-body-m hmf-flex-wrap">
+                <div class="hmf-option-container">
+                  <button class="hmf-selectable-base hmf-selectable-unselected" aria-label="5.0/5.5 US (36 EU)" type="button">
+                    <span>5.0/5.5 US (36 EU)</span>
+                  </button>
+                </div>
+                <div class="hmf-option-container">
+                  <button class="hmf-selectable-base hmf-selectable-unselected" aria-label="6.0/6.5 US (37 EU)" type="button">
+                    <span>6.0/6.5 US (37 EU)</span>
+                  </button>
+                </div>
+              </div>
+            </hmf-selectable>
+          </div>
+        </section>
+        """,
+        "html.parser",
+    )
+
+    groups = list(iter_variant_choice_groups(soup))
+
+    assert len(groups) == 1
+    assert "5.0/5.5 US (36 EU)" in groups[0].get_text(" ", strip=True)
+
+
+def test_variant_choice_groups_skip_overbroad_parent_and_keep_fieldsets() -> None:
+    soup = BeautifulSoup(
+        """
+        <div class="page">
+          <div id="attribute-accordion" class="accordion">
+            <div class="card-body">
+              <div class="attr-group-body">
+                <fieldset class="attr-group-items">
+                  <input
+                    type="radio"
+                    id="size-size_a_small"
+                    name="size"
+                    data-attr-displayvalue="Size A - Small"
+                  />
+                  <label for="size-size_a_small">
+                    <span class="sr-only">View this product in: Size</span>
+                    <span>Size A - Small</span>
+                  </label>
+                  <input
+                    type="radio"
+                    id="size-size_b_medium"
+                    name="size"
+                    data-attr-displayvalue="Size B - Medium"
+                  />
+                  <label for="size-size_b_medium">
+                    <span class="sr-only">View this product in: Size</span>
+                    <span>Size B - Medium</span>
+                  </label>
+                </fieldset>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="attr-group-body">
+                <fieldset class="attr-group-items">
+                  <input
+                    type="radio"
+                    id="backSupport-basic_back_support"
+                    name="backSupport"
+                    data-attr-displayvalue="Basic Back Support"
+                  />
+                  <label for="backSupport-basic_back_support">
+                    <span class="sr-only">View this product in: Back Support</span>
+                    <span>Basic Back Support</span>
+                  </label>
+                  <input
+                    type="radio"
+                    id="backSupport-adjustable_lumbar_support"
+                    name="backSupport"
+                    data-attr-displayvalue="Adjustable Lumbar Support"
+                  />
+                  <label for="backSupport-adjustable_lumbar_support">
+                    <span class="sr-only">View this product in: Back Support</span>
+                    <span>Adjustable Lumbar Support</span>
+                  </label>
+                </fieldset>
+              </div>
+            </div>
+          </div>
+        </div>
+        """,
+        "html.parser",
+    )
+
+    groups = list(iter_variant_choice_groups(soup))
+
+    assert [
+        normalized_variant_axis_key(resolve_variant_group_name(group))
+        for group in groups
+    ] == [
+        "size",
+        "back_support",
+    ]
+    assert not any(group.get("id") == "attribute-accordion" for group in groups)

@@ -929,6 +929,7 @@ __all__ = [
     "normalize_mismatched_host_currency_price",
     "reconcile_detail_price_magnitudes",
     "reconcile_detail_currency_with_url",
+    "reconcile_parent_price_against_variant_range",
     "record_field_sources",
     "detail_price_decimal",
 ]

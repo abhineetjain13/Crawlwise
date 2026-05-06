@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from app.services import js_state_mapper
-from app.services.js_state_mapper import map_configured_state_payload, map_js_state_to_fields
+from app.services.js_state_mapper import (
+    map_configured_state_payload,
+    map_js_state_to_fields,
+)
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 
 
@@ -69,7 +72,7 @@ def test_map_js_state_to_fields_recovers_next_data_shopify_product_fields() -> N
     assert mapped["brand"] == "Acme Outdoors"
     assert mapped["vendor"] == "Acme Outdoors"
     assert mapped["handle"] == "trail-runner"
-    assert mapped["description"] == "<p>Stable all-terrain shoe.</p>"
+    assert mapped["description"] == "Stable all-terrain shoe."
     assert mapped["product_id"] == 9001
     assert "category" not in mapped
     assert mapped["product_type"] == "Shoes"
@@ -246,7 +249,9 @@ def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None
     ]
 
 
-def test_map_js_state_to_fields_ignores_header_payment_state_before_real_product() -> None:
+def test_map_js_state_to_fields_ignores_header_payment_state_before_real_product() -> (
+    None
+):
     js_state_objects = {
         "__INITIAL_STATE__": {
             "header": {
@@ -293,7 +298,9 @@ def test_map_js_state_to_fields_ignores_header_payment_state_before_real_product
     ]
 
 
-def test_map_js_state_to_fields_does_not_merge_variants_from_different_product_identity() -> None:
+def test_map_js_state_to_fields_does_not_merge_variants_from_different_product_identity() -> (
+    None
+):
     js_state_objects = {
         "__INITIAL_STATE__": {
             "catalog": {
@@ -374,7 +381,9 @@ def test_map_network_payloads_to_fields_recovers_workday_job_detail_payload() ->
     ]
 
 
-def test_map_js_state_to_fields_recovers_generic_nextjs_product_payload_without_schema_bleed() -> None:
+def test_map_js_state_to_fields_recovers_generic_nextjs_product_payload_without_schema_bleed() -> (
+    None
+):
     mapped = map_js_state_to_fields(
         {
             "__NEXT_DATA__": {
@@ -450,7 +459,9 @@ def test_map_js_state_to_fields_recovers_nuxt_array_payload_variant() -> None:
     assert mapped["image_url"] == "https://store.example.com/images/commuter-1.jpg"
 
 
-def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_variant_recovery() -> None:
+def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_variant_recovery() -> (
+    None
+):
     mapped = map_js_state_to_fields(
         {
             "__INITIAL_STATE__": {
@@ -506,7 +517,9 @@ def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_varian
     assert mapped["additional_images"] == ["https://cdn.example.com/iphone-14-back.jpg"]
 
 
-def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_product_object() -> None:
+def test_map_js_state_to_fields_backfills_richer_variant_state_from_later_same_product_object() -> (
+    None
+):
     mapped = map_js_state_to_fields(
         {
             "__STATE_A__": {
@@ -612,7 +625,9 @@ def test_map_js_state_to_fields_merges_same_product_sibling_payloads() -> None:
     assert mapped["price"] == "129.95"
 
 
-def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_payload() -> None:
+def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_payload() -> (
+    None
+):
     mapped = map_js_state_to_fields(
         {
             "__PRELOADED_STATE__": {
@@ -633,7 +648,10 @@ def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_
                                 "productType": "innerwear",
                                 "prices": {
                                     "base": {"currency": {"code": "INR"}, "value": 990},
-                                    "promo": {"currency": {"code": "INR"}, "value": 390},
+                                    "promo": {
+                                        "currency": {"code": "INR"},
+                                        "value": 390,
+                                    },
                                 },
                                 "colors": [
                                     {"name": "OLIVE"},
@@ -675,14 +693,18 @@ def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_
     assert mapped["price"] == "390"
     assert mapped["original_price"] == "990"
     assert mapped["currency"] == "INR"
-    assert mapped["image_url"] == "https://cdn.example.com/products/airism-olive-main.jpg"
+    assert (
+        mapped["image_url"] == "https://cdn.example.com/products/airism-olive-main.jpg"
+    )
     assert mapped["additional_images"] == [
         "https://cdn.example.com/products/airism-detail-1.jpg",
         "https://cdn.example.com/products/airism-detail-2.jpg",
     ]
 
 
-def test_map_js_state_to_fields_recovers_direct_grade_and_storage_axes_from_variants() -> None:
+def test_map_js_state_to_fields_recovers_direct_grade_and_storage_axes_from_variants() -> (
+    None
+):
     mapped = map_js_state_to_fields(
         {
             "__INITIAL_STATE__": {
@@ -762,6 +784,7 @@ def test_map_js_state_to_fields_keeps_ambiguous_availability_neutral() -> None:
     assert "availability" not in mapped
     assert "availability" not in mapped["variants"][0]
 
+
 def test_job_detail_mappers_keep_shared_html_section_behavior() -> None:
     description_html = (
         "<p>Lead platform delivery.</p>"
@@ -838,7 +861,9 @@ def test_job_detail_mappers_keep_shared_html_section_behavior() -> None:
     ]
 
 
-def test_map_js_state_to_fields_uses_platform_owned_job_detail_selector_config() -> None:
+def test_map_js_state_to_fields_uses_platform_owned_job_detail_selector_config() -> (
+    None
+):
     mapped = map_js_state_to_fields(
         {
             "__remixContext": {
@@ -1059,7 +1084,9 @@ def test_normalize_variant_does_not_use_product_id_as_variant_id() -> None:
     assert mapped is None
 
 
-def test_map_js_state_to_fields_uses_selected_options_and_skips_marketing_axis_names() -> None:
+def test_map_js_state_to_fields_uses_selected_options_and_skips_marketing_axis_names() -> (
+    None
+):
     mapped = map_js_state_to_fields(
         {
             "__NEXT_DATA__": {
@@ -1128,7 +1155,10 @@ def test_map_js_state_to_fields_reads_nested_variant_price_objects() -> None:
                                 {
                                     "id": "jet-black-8",
                                     "available": True,
-                                    "price": {"amount": "100.00", "currencyCode": "USD"},
+                                    "price": {
+                                        "amount": "100.00",
+                                        "currencyCode": "USD",
+                                    },
                                     "selectedOptions": [
                                         {"name": "Color", "value": "Jet Black"},
                                         {"name": "Size", "value": "8"},
@@ -1137,7 +1167,10 @@ def test_map_js_state_to_fields_reads_nested_variant_price_objects() -> None:
                                 {
                                     "id": "jet-black-9",
                                     "available": True,
-                                    "priceV2": {"amount": "100.00", "currencyCode": "USD"},
+                                    "priceV2": {
+                                        "amount": "100.00",
+                                        "currencyCode": "USD",
+                                    },
                                     "selectedOptions": [
                                         {"name": "Color", "value": "Jet Black"},
                                         {"name": "Size", "value": "9"},
@@ -1171,12 +1204,18 @@ def test_map_js_state_to_fields_reads_nested_variant_original_price_objects() ->
                             "variants": [
                                 {
                                     "id": "runner-8",
-                                    "compare_at_price": {"amount": "120.00", "currencyCode": "USD"},
+                                    "compare_at_price": {
+                                        "amount": "120.00",
+                                        "currencyCode": "USD",
+                                    },
                                     "selectedOptions": [{"name": "Size", "value": "8"}],
                                 },
                                 {
                                     "id": "runner-9",
-                                    "compareAtPrice": {"amount": "130.00", "currencyCode": "USD"},
+                                    "compareAtPrice": {
+                                        "amount": "130.00",
+                                        "currencyCode": "USD",
+                                    },
                                     "selectedOptions": [{"name": "Size", "value": "9"}],
                                 },
                             ],

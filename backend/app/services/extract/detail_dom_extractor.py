@@ -35,6 +35,10 @@ from app.services.field_value_core import (
     surface_fields,
     text_or_none,
 )
+from app.services.config.field_mappings import (
+    OPTION_SCALAR_FIELDS,
+    PUBLIC_VARIANT_AXIS_FIELDS,
+)
 from app.services.field_value_dom import (
     apply_selector_fallbacks,
     extract_feature_rows,
@@ -92,6 +96,28 @@ _variant_artifact_value_tokens = frozenset(
     for token in tuple(DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or ())
     if str(token).strip()
 )
+_visible_node_text_cache: dict[int, str] = {}
+_public_variant_axis_fields = frozenset(
+    str(token).strip().lower()
+    for token in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
+    if str(token).strip()
+)
+_option_scalar_fields = frozenset(
+    str(token).strip().lower()
+    for token in tuple(OPTION_SCALAR_FIELDS or ())
+    if str(token).strip()
+)
+
+
+def _dom_variant_axis_allowed(axis_name: str) -> bool:
+    return axis_name in _public_variant_axis_fields or axis_name == "style"
+
+
+def _dom_variant_group_name_allowed(group_name: str) -> bool:
+    axis_name = normalized_variant_axis_key(group_name)
+    return _dom_variant_axis_allowed(axis_name) or bool(
+        _split_compound_axis_name(group_name)
+    )
 
 
 def primary_dom_context(
@@ -381,6 +407,41 @@ def _strip_variant_option_value_suffix_noise(value: object) -> str:
     return stripped or cleaned
 
 
+def _coerce_variant_option_value(
+    axis_name: str,
+    raw_value: object,
+    *,
+    page_url: str,
+) -> str:
+    if axis_name in _option_scalar_fields:
+        coerced = text_or_none(coerce_field_value(axis_name, raw_value, page_url))
+        if coerced:
+            return coerced
+    return clean_text(raw_value)
+
+
+def _prefer_axis_inferred_from_values(
+    cleaned_name: str,
+    values: list[str],
+) -> str:
+    inferred_name = infer_variant_group_name_from_values(values)
+    if not inferred_name:
+        return cleaned_name
+    normalized_name = normalized_variant_axis_key(cleaned_name)
+    if normalized_name == inferred_name:
+        return cleaned_name
+    normalized_values = {
+        clean_text(value).casefold() for value in values if clean_text(value)
+    }
+    if clean_text(cleaned_name).casefold() in normalized_values:
+        return inferred_name
+    if normalized_name == "base" and inferred_name in {"color", "size"}:
+        return inferred_name
+    if not variant_axis_name_is_semantic(cleaned_name):
+        return inferred_name
+    return cleaned_name
+
+
 def _variant_input_label(container: Any, input_node: Any) -> Any | None:
     input_id = (
         text_or_none(input_node.get("id")) if hasattr(input_node, "get") else None
@@ -404,12 +465,18 @@ def _variant_input_label(container: Any, input_node: Any) -> Any | None:
 def _visible_node_text(node: Any | None) -> str:
     if node is None or not hasattr(node, "get_text"):
         return ""
+    cache_key = id(node)
+    cached = _visible_node_text_cache.get(cache_key)
+    if cached is not None:
+        return cached
     parsed = BeautifulSoup(str(node), "html.parser")
     for hidden in parsed.select(
         ".sr-only, .visually-hidden, [aria-hidden='true'], svg, title, use"
     ):
         hidden.decompose()
-    return clean_text(parsed.get_text(" ", strip=True))
+    visible_text = clean_text(parsed.get_text(" ", strip=True))
+    _visible_node_text_cache[cache_key] = visible_text
+    return visible_text
 
 
 def _node_state_matches(node: Any, *tokens: str) -> bool:
@@ -526,8 +593,6 @@ def _variant_option_url(
             raw = candidate.get(attr_name)
             url = text_or_none(raw)
             if url:
-                from app.services.field_value_core import absolute_url
-
                 return absolute_url(page_url, url)
     return None
 
@@ -576,7 +641,14 @@ def _merge_variant_option_state(
 def _collect_variant_choice_entries(
     container: Any, *, page_url: str
 ) -> list[dict[str, object]]:
-    axis_name = normalized_variant_axis_key(_resolve_dom_variant_group_name(container))
+    raw_group_name = _resolve_dom_variant_group_name(container)
+    axis_name = normalized_variant_axis_key(raw_group_name)
+    coercion_axis = (
+        axis_name
+        if axis_name in _option_scalar_fields
+        or axis_name in _public_variant_axis_fields
+        else "style"
+    )
     entries_by_value: dict[str, dict[str, object]] = {}
     for node in container.select(
         "[role='radio'], "
@@ -585,12 +657,10 @@ def _collect_variant_choice_entries(
         "[data-value], [data-option-value], "
         "[aria-pressed], [aria-selected], [data-state], [data-selected]"
     )[:24]:
-        cleaned = text_or_none(
-            coerce_field_value(
-                axis_name if axis_name in {"color", "size"} else "size",
-                _variant_choice_entry_value(container, node),
-                page_url,
-            )
+        cleaned = _coerce_variant_option_value(
+            coercion_axis,
+            _variant_choice_entry_value(container, node),
+            page_url=page_url,
         )
         cleaned = _strip_variant_option_value_suffix_noise(cleaned)
         if _variant_option_value_is_noise(cleaned):
@@ -613,14 +683,10 @@ def _collect_variant_choice_entries(
         :24
     ]:
         label_node = _variant_input_label(container, input_node)
-        cleaned = text_or_none(
-            coerce_field_value(
-                axis_name if axis_name in {"color", "size"} else "size",
-                _variant_choice_entry_value(
-                    container, input_node, label_node=label_node
-                ),
-                page_url,
-            )
+        cleaned = _coerce_variant_option_value(
+            coercion_axis,
+            _variant_choice_entry_value(container, input_node, label_node=label_node),
+            page_url=page_url,
         )
         cleaned = _strip_variant_option_value_suffix_noise(cleaned)
         if _variant_option_value_is_noise(cleaned):
@@ -904,8 +970,6 @@ def _state_variant_targets(
                     None,
                 )
                 if explicit_url:
-                    from app.services.field_value_core import absolute_url
-
                     row_metadata["url"] = absolute_url(page_url, explicit_url)
                 for key in mapping_row_id_keys:
                     raw_value = text_or_none(mapping_row.get(key))
@@ -948,21 +1012,22 @@ def _extract_variants_from_dom(
         cleaned_name = resolve_variant_group_name(
             select
         ) or infer_variant_group_name_from_values(raw_option_values)
-        inferred_name = infer_variant_group_name_from_values(raw_option_values)
-        if inferred_name and normalized_variant_axis_key(cleaned_name) != inferred_name:
-            cleaned_name = inferred_name
+        cleaned_name = _prefer_axis_inferred_from_values(
+            cleaned_name,
+            raw_option_values,
+        )
         if not cleaned_name:
             continue
         option_entries: list[dict[str, object]] = []
         axis_key = normalized_variant_axis_key(cleaned_name)
+        if not _dom_variant_group_name_allowed(cleaned_name):
+            continue
         select_options = list(select.find_all("option"))
         for option_index, option in enumerate(select_options):
-            cleaned_value = text_or_none(
-                coerce_field_value(
-                    axis_key if axis_key in {"color", "size"} else "size",
-                    option.get_text(" ", strip=True),
-                    page_url,
-                )
+            cleaned_value = _coerce_variant_option_value(
+                axis_key,
+                option.get_text(" ", strip=True),
+                page_url=page_url,
             ) or clean_text(option.get_text(" ", strip=True))
             cleaned_value = _strip_variant_option_value_suffix_noise(cleaned_value)
             raw_value_attr = text_or_none(option.get("value"))
@@ -1013,13 +1078,10 @@ def _extract_variants_from_dom(
             for entry in option_entries
             if text_or_none(entry.get("value"))
         ]
-        inferred_name = infer_variant_group_name_from_values(deduped_values)
-        if (
-            inferred_name
-            and normalized_variant_axis_key(cleaned_name) != inferred_name
-            and not variant_axis_name_is_semantic(cleaned_name)
-        ):
-            cleaned_name = inferred_name
+        cleaned_name = _prefer_axis_inferred_from_values(
+            cleaned_name,
+            deduped_values,
+        )
         if len(deduped_values) >= 2:
             option_groups.append(
                 {
@@ -1087,7 +1149,12 @@ def _extract_variants_from_dom(
             merged_entries[value] = existing
     try:
         group_limit = max(1, int(DOM_VARIANT_GROUP_LIMIT))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Invalid DOM_VARIANT_GROUP_LIMIT; using 1",
+            extra={"value": DOM_VARIANT_GROUP_LIMIT},
+            exc_info=exc,
+        )
         group_limit = 1
     for group in merged_groups.values():
         values = [
@@ -1123,7 +1190,7 @@ def _extract_variants_from_dom(
         name = clean_text(group.get("name"))
         values = [str(value) for value in _object_list(group.get("values"))]
         axis_key = normalized_variant_axis_key(name)
-        if not axis_key:
+        if not _dom_variant_axis_allowed(axis_key):
             continue
         axis_values_by_name[axis_key] = values
         axis_option_metadata[axis_key] = {
@@ -1279,12 +1346,13 @@ def _backfill_variants_from_dom_if_missing(
         js_state_objects=js_state_objects,
     )
     dom_variant_rows = [
-        row for row in _object_list(dom_variants.get("variants")) if isinstance(row, dict)
+        row
+        for row in _object_list(dom_variants.get("variants"))
+        if isinstance(row, dict)
     ]
     if dom_variant_rows:
         existing_by_key: dict[str, dict[str, Any]] = {}
-        existing_by_index: dict[int, dict[str, Any]] = {}
-        for index, row in enumerate(existing_variants):
+        for row in existing_variants:
             row_key = text_or_none(row.get("variant_id")) or text_or_none(
                 row.get("url")
             )
@@ -1292,16 +1360,12 @@ def _backfill_variants_from_dom_if_missing(
                 # Preserve the first occurrence so duplicate variant_id/url
                 # keys cannot overwrite earlier rows and merge unrelated variants.
                 existing_by_key.setdefault(row_key, row)
-            existing_by_index[index] = row
-        index_fallback_allowed = False
         merged_rows: list[dict[str, Any]] = []
-        for index, dom_row in enumerate(dom_variant_rows):
+        for dom_row in dom_variant_rows:
             dom_key = text_or_none(dom_row.get("variant_id")) or text_or_none(
                 dom_row.get("url")
             )
             existing_row = existing_by_key.get(dom_key or "") if dom_key else None
-            if existing_row is None and index_fallback_allowed:
-                existing_row = existing_by_index.get(index)
             merged_rows.append(
                 merge_variant_pair(dom_row, existing_row)
                 if isinstance(existing_row, dict)

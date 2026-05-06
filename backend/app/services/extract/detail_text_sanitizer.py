@@ -25,6 +25,7 @@ from app.services.config.extraction_rules import (
     DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX,
     DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES,
     DETAIL_LOW_SIGNAL_TITLE_VALUES,
+    DETAIL_LEGAL_TAIL_PATTERNS,
     DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS,
     DETAIL_LONG_TEXT_UI_TAIL_PHRASES,
     DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS,
@@ -34,6 +35,11 @@ from app.services.config.extraction_rules import (
     DETAIL_TITLE_DIMENSION_SIZE_PATTERN,
     DETAIL_TRACKING_TOKEN_PATTERN,
     DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
+    LONG_TEXT_MAX_WORDS,
+    LONG_TEXT_MIN_WORDS,
+    LONG_TEXT_PREFIXES,
+    TOKEN_MIN_LEN_CHUNK,
+    TOKEN_MIN_LEN_DISTINCTIVE,
 )
 from app.services.field_value_core import LONG_TEXT_FIELDS, clean_text, text_or_none
 
@@ -113,9 +119,27 @@ _detail_noise_prefixes = tuple(
     for prefix in tuple(DETAIL_NOISE_PREFIXES or ())
     if clean_text(prefix)
 )
+long_text_ui_tail_phrases = tuple(
+    clean_text(phrase).lower()
+    for phrase in tuple(DETAIL_LONG_TEXT_UI_TAIL_PHRASES or ())
+    if clean_text(phrase)
+)
 _long_text_ui_tail_min_product_words = int(DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS)
 _guide_glossary_heading_min_hits = int(DETAIL_GUIDE_GLOSSARY_HEADING_MIN_HITS)
 _bracket_prose_min_words = int(DETAIL_BRACKET_PROSE_MIN_WORDS)
+_long_text_min_words = int(LONG_TEXT_MIN_WORDS)
+_long_text_max_words = int(LONG_TEXT_MAX_WORDS)
+_token_min_len_distinctive = int(TOKEN_MIN_LEN_DISTINCTIVE)
+_token_min_len_chunk = int(TOKEN_MIN_LEN_CHUNK)
+_long_text_prefixes = tuple(
+    clean_text(prefix).lower()
+    for prefix in tuple(LONG_TEXT_PREFIXES or ())
+    if clean_text(prefix)
+)
+_legal_tail_contains = tuple(DETAIL_LEGAL_TAIL_PATTERNS.get("contains", ()))
+_legal_tail_digit_contains = tuple(DETAIL_LEGAL_TAIL_PATTERNS.get("digit_contains", ()))
+_legal_tail_all_contains = tuple(DETAIL_LEGAL_TAIL_PATTERNS.get("all_contains", ()))
+_legal_tail_exact = frozenset(DETAIL_LEGAL_TAIL_PATTERNS.get("exact", ()))
 artifact_price_values = frozenset(
     clean_text(v).lower()
     for v in tuple(DETAIL_ARTIFACT_PRICE_VALUES or ())
@@ -327,7 +351,9 @@ def sanitize_detail_long_text(text: str, *, title: str) -> str:
     cleaned_text = _strip_long_text_ui_tail(
         _strip_bracket_artifact_noise(clean_text(text))
     )
-    if _text_is_structured_object_repr(cleaned_text) or _text_is_structured_json_array(cleaned_text):
+    if _text_is_structured_object_repr(cleaned_text) or _text_is_structured_json_array(
+        cleaned_text
+    ):
         return ""
     if cleaned_text.lower() in low_signal_long_text_values:
         return ""
@@ -377,9 +403,8 @@ def sanitize_detail_features(value: object, *, title: str) -> list[str]:
             continue
         cleaned = sanitize_detail_long_text(text, title=title)
         lowered = cleaned.lower()
-        if (
-            not cleaned
-            or any(pattern.search(cleaned) for pattern in long_text_disclaimer_patterns)
+        if not cleaned or any(
+            pattern.search(cleaned) for pattern in long_text_disclaimer_patterns
         ):
             continue
         if lowered in seen:
@@ -391,6 +416,7 @@ def sanitize_detail_features(value: object, *, title: str) -> list[str]:
 
 _BRACKET_RUN_RE = re.compile(r"(?:\[\s*){2,}|(?:\]\s*){2,}")
 _BRACKETS_RE = re.compile(r"[\[\]]+")
+
 
 def _text_is_structured_object_repr(text: str) -> bool:
     cleaned = text.strip()
@@ -437,13 +463,10 @@ def _strip_bracket_artifact_noise(text: str) -> str:
 def _strip_long_text_ui_tail(text: str) -> str:
     cleaned = clean_text(text)
     lowered = cleaned.lower()
-    for phrase in tuple(DETAIL_LONG_TEXT_UI_TAIL_PHRASES or ()):
-        normalized_phrase = clean_text(phrase).lower()
-        if not normalized_phrase:
-            continue
-        if lowered == normalized_phrase:
+    for phrase in long_text_ui_tail_phrases:
+        if lowered == phrase:
             return ""
-        suffix = f" {normalized_phrase}"
+        suffix = f" {phrase}"
         if lowered.endswith(suffix):
             return clean_text(cleaned[: -len(suffix)])
     return cleaned
@@ -533,13 +556,16 @@ def detail_long_text_is_cookie_disclosure_dump(text: str) -> bool:
 def detail_long_text_chunk_is_legal_tail(chunk: str) -> bool:
     lowered = chunk.lower()
     return (
-        "product safety" in lowered
-        or "powered by product details have been supplied by the manufacturer"
-        in lowered
-        or ("customer service" in lowered and any(char.isdigit() for char in chunk))
-        or ("contact " in lowered and any(char.isdigit() for char in chunk))
-        or ("privacy" in lowered and "policy" in lowered)
-        or lowered == "view more"
+        any(pattern in lowered for pattern in _legal_tail_contains)
+        or (
+            any(pattern in lowered for pattern in _legal_tail_digit_contains)
+            and any(char.isdigit() for char in chunk)
+        )
+        or any(
+            all(pattern in lowered for pattern in group)
+            for group in _legal_tail_all_contains
+        )
+        or lowered in _legal_tail_exact
     )
 
 
@@ -584,7 +610,7 @@ def detail_long_text_chunk_is_other_product(chunk: str, *, title: str) -> bool:
         return False
     normalized_chunk = clean_text(chunk)
     words = normalized_chunk.split()
-    if len(words) < 3 or len(words) > 14:
+    if len(words) < _long_text_min_words or len(words) > _long_text_max_words:
         return False
     if not detail_long_text_chunk_has_product_name_shape(chunk):
         return False
@@ -595,18 +621,20 @@ def detail_long_text_chunk_is_other_product(chunk: str, *, title: str) -> bool:
     distinctive_title_tokens = {
         token
         for token in title_tokens
-        if len(token) >= 5 and token not in cross_product_text_generic_tokens
+        if len(token) >= _token_min_len_distinctive
+        and token not in cross_product_text_generic_tokens
     }
     lowered_chunk = normalized_chunk.lower()
     if chunk_tokens & distinctive_title_tokens and lowered_chunk.startswith(
-        ("official ", "shop for ")
+        _long_text_prefixes
     ):
         return False
     if not distinctive_title_tokens or chunk_tokens & distinctive_title_tokens:
         distinctive_chunk_tokens = {
             token
             for token in chunk_tokens
-            if len(token) >= 4 and token not in cross_product_text_generic_tokens
+            if len(token) >= _token_min_len_chunk
+            and token not in cross_product_text_generic_tokens
         }
         return bool(
             distinctive_chunk_tokens - title_tokens
@@ -615,7 +643,8 @@ def detail_long_text_chunk_is_other_product(chunk: str, *, title: str) -> bool:
     distinctive_chunk_tokens = {
         token
         for token in chunk_tokens
-        if len(token) >= 4 and token not in cross_product_text_generic_tokens
+        if len(token) >= _token_min_len_chunk
+        and token not in cross_product_text_generic_tokens
     }
     return bool(distinctive_chunk_tokens - title_tokens)
 

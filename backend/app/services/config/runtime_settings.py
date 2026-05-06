@@ -242,10 +242,16 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_connection_type: str = "wifi"
     browser_connection_save_data: bool = False
     browser_mobile_max_touch_points: int = 5
-    browser_permission_notifications_state: Literal["granted", "denied", "prompt"] = "prompt"
+    browser_permission_notifications_state: Literal["granted", "denied", "prompt"] = (
+        "prompt"
+    )
     browser_permission_camera_state: Literal["granted", "denied", "prompt"] = "prompt"
-    browser_permission_microphone_state: Literal["granted", "denied", "prompt"] = "prompt"
-    browser_permission_geolocation_state: Literal["granted", "denied", "prompt"] = "prompt"
+    browser_permission_microphone_state: Literal["granted", "denied", "prompt"] = (
+        "prompt"
+    )
+    browser_permission_geolocation_state: Literal["granted", "denied", "prompt"] = (
+        "prompt"
+    )
     fingerprint_browser: str = "chrome"
     fingerprint_os: tuple[str, ...] = ("windows", "macos", "linux")
     fingerprint_device: str = "desktop"
@@ -356,7 +362,9 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError(
                 "max_url_process_timeout_seconds must be >= url_process_timeout_seconds"
             )
-        _require_non_negative("http_retry_backoff_base_ms", self.http_retry_backoff_base_ms)
+        _require_non_negative(
+            "http_retry_backoff_base_ms", self.http_retry_backoff_base_ms
+        )
         if self.http_retry_backoff_max_ms < self.http_retry_backoff_base_ms:
             raise ValueError(
                 "http_retry_backoff_max_ms must be >= http_retry_backoff_base_ms"
@@ -369,8 +377,6 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError(
                 "proxy_failure_cooldown_max_ms must be >= proxy_failure_cooldown_base_ms"
             )
-        self.min_max_pages = int(self.min_max_pages)
-        self.max_max_pages = int(self.max_max_pages)
         if self.min_max_pages < 1:
             raise ValueError("min_max_pages must be >= 1")
         if self.max_max_pages < self.min_max_pages:
@@ -402,17 +408,14 @@ class CrawlerRuntimeSettings(BaseSettings):
             "browser_behavior_scroll_min_px",
             self.browser_behavior_scroll_min_px,
         )
-        browser_behavior_scroll_min_px = int(self.browser_behavior_scroll_min_px)
-        self.browser_behavior_scroll_min_px = browser_behavior_scroll_min_px
-        browser_behavior_scroll_max_px = int(self.browser_behavior_scroll_max_px)
         _require_non_negative(
             "browser_behavior_scroll_max_px",
-            browser_behavior_scroll_max_px,
+            self.browser_behavior_scroll_max_px,
         )
-        self.browser_behavior_scroll_max_px = max(
-            browser_behavior_scroll_min_px,
-            browser_behavior_scroll_max_px,
-        )
+        if self.browser_behavior_scroll_max_px < self.browser_behavior_scroll_min_px:
+            raise ValueError(
+                "browser_behavior_scroll_max_px must be >= browser_behavior_scroll_min_px"
+            )
         _require_non_negative(
             "browser_behavior_pause_min_ms",
             self.browser_behavior_pause_min_ms,
@@ -454,7 +457,9 @@ class CrawlerRuntimeSettings(BaseSettings):
             "acquisition_artifact_cleanup_interval_seconds",
         ):
             _require_non_negative(field_name, getattr(self, field_name))
-        _require_unit_interval("llm_confidence_threshold", self.llm_confidence_threshold)
+        _require_unit_interval(
+            "llm_confidence_threshold", self.llm_confidence_threshold
+        )
         _require_unit_interval(
             "selector_self_heal_min_confidence",
             self.selector_self_heal_min_confidence,
@@ -486,7 +491,6 @@ class CrawlerRuntimeSettings(BaseSettings):
             max(timeout, acquisition_timeout + buffer_seconds),
             float(self.max_url_process_timeout_seconds),
         )
-
 
 
 crawler_runtime_settings = CrawlerRuntimeSettings()

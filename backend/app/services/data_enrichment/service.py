@@ -751,6 +751,7 @@ def _normalize_materials(
     return found or None
 
 
+@lru_cache(maxsize=1)
 def _compiled_material_strip_patterns() -> tuple[re.Pattern[str], ...]:
     compiled: list[re.Pattern[str]] = []
     for pattern in tuple(DATA_ENRICHMENT_MATERIAL_CONTEXT_STRIP_PATTERNS or ()):
@@ -1116,59 +1117,91 @@ def _targeted_candidate_values(
     return values
 
 
-def _flatten_dict_values(value: dict[str, object]) -> list[object]:
+def _flatten_dict_values(
+    value: dict[str, object], max_depth: int | None = None
+) -> list[object]:
+    if max_depth is None:
+        max_depth = data_enrichment_settings.candidate_flatten_max_depth
+    if max_depth <= 0:
+        return []
     values: list[object] = []
     for item in value.values():
         if isinstance(item, dict):
-            values.extend(_flatten_dict_values(item))
+            values.extend(_flatten_dict_values(item, max_depth - 1))
         elif isinstance(item, list):
-            values.extend(_flatten_list_values(item))
+            values.extend(_flatten_list_values(item, max_depth - 1))
         else:
             values.append(item)
     return values
 
 
-def _flatten_list_values(value: list[object]) -> list[object]:
+def _flatten_list_values(
+    value: list[object], max_depth: int | None = None
+) -> list[object]:
+    if max_depth is None:
+        max_depth = data_enrichment_settings.candidate_flatten_max_depth
+    if max_depth <= 0:
+        return []
     values: list[object] = []
     for item in value:
         if isinstance(item, dict):
-            values.extend(_flatten_dict_values(item))
+            values.extend(_flatten_dict_values(item, max_depth - 1))
         elif isinstance(item, list):
-            values.extend(_flatten_list_values(item))
+            values.extend(_flatten_list_values(item, max_depth - 1))
         else:
             values.append(item)
     return values
 
 
 def _flatten_targeted_dict_values(
-    value: dict[str, object], target_keys: set[str]
+    value: dict[str, object],
+    target_keys: set[str],
+    max_depth: int | None = None,
 ) -> list[object]:
+    if max_depth is None:
+        max_depth = data_enrichment_settings.candidate_flatten_max_depth
+    if max_depth <= 0:
+        return []
     values: list[object] = []
     for key, item in value.items():
         if str(key).casefold() in target_keys and item not in (None, "", [], {}):
             if isinstance(item, dict):
-                values.extend(_flatten_dict_values(item))
+                values.extend(_flatten_dict_values(item, max_depth - 1))
             elif isinstance(item, list):
-                values.extend(_flatten_list_values(item))
+                values.extend(_flatten_list_values(item, max_depth - 1))
             else:
                 values.append(item)
             continue
         if isinstance(item, dict):
-            values.extend(_flatten_targeted_dict_values(item, target_keys))
+            values.extend(
+                _flatten_targeted_dict_values(item, target_keys, max_depth - 1)
+            )
         elif isinstance(item, list):
-            values.extend(_flatten_targeted_list_values(item, target_keys))
+            values.extend(
+                _flatten_targeted_list_values(item, target_keys, max_depth - 1)
+            )
     return values
 
 
 def _flatten_targeted_list_values(
-    value: list[object], target_keys: set[str]
+    value: list[object],
+    target_keys: set[str],
+    max_depth: int | None = None,
 ) -> list[object]:
+    if max_depth is None:
+        max_depth = data_enrichment_settings.candidate_flatten_max_depth
+    if max_depth <= 0:
+        return []
     values: list[object] = []
     for item in value:
         if isinstance(item, dict):
-            values.extend(_flatten_targeted_dict_values(item, target_keys))
+            values.extend(
+                _flatten_targeted_dict_values(item, target_keys, max_depth - 1)
+            )
         elif isinstance(item, list):
-            values.extend(_flatten_targeted_list_values(item, target_keys))
+            values.extend(
+                _flatten_targeted_list_values(item, target_keys, max_depth - 1)
+            )
     return values
 
 

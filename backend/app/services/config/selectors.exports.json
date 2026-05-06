@@ -436,13 +436,5 @@
       }
     ]
   },
-  "SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS": {
-    "__type__": "frozenset",
-    "items": [
-      "button",
-      "input",
-      "select"
-    ]
-  },
   "TITLE_SELECTOR": "h1 a, h2 a, h3 a, h4 a, h5 a, h1, h2, h3, h4, h5"
 }

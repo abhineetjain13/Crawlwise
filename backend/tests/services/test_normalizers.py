@@ -189,6 +189,12 @@ def test_normalize_variant_record_preserves_referenced_single_value_axes() -> No
 
     normalize_variant_record(record)
 
+    assert record["variants"] == [
+        {"size": "Small", "scent": "Lavender", "sku": "LAV-S"},
+        {"size": "Large", "scent": "Lavender", "sku": "LAV-L"},
+    ]
+    assert record["variant_count"] == 2
+
 
 def test_normalize_variant_record_drops_axisless_rows_and_rejects_foreign_currency() -> None:
     record = {

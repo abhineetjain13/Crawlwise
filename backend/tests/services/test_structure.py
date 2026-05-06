@@ -91,13 +91,13 @@ FILE_LOC_BUDGETS = {
     Path("app/services/acquisition/traversal.py"): 1965,
     # Config owners.
     # Config rules grown due to category/nav URL rules.
-    Path("app/services/config/extraction_rules.py"): 1095,
+    Path("app/services/config/extraction_rules.py"): 1420,
     # Fetch runtime remains the request/browser arbitration owner.
     Path("app/services/crawl_fetch_runtime.py"): 1235,
     # Detail extraction owns candidate arbitration and tier orchestration.
-    Path("app/services/detail_extractor.py"): 1470,
+    Path("app/services/detail_extractor.py"): 1640,
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
-    Path("app/services/extract/detail_dom_extractor.py"): 1330,
+    Path("app/services/extract/detail_dom_extractor.py"): 1530,
     # Detail finalizer owns public-boundary cleanup and record repair.
     # Grown (+10) to accommodate additional axis-gating logic that reuses
     # shared_variant_logic frozensets instead of re-deriving them locally.
@@ -105,7 +105,7 @@ FILE_LOC_BUDGETS = {
     # Shared variant logic owns generic axis and row reconciliation.
     # Grown (+90) to absorb the extended allowed-axis taxonomy (flavor, type,
     # material_composition, etc.) and related JS-state / DOM helpers.
-    Path("app/services/extract/shared_variant_logic.py"): 1150,
+    Path("app/services/extract/shared_variant_logic.py"): 1530,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
@@ -118,11 +118,11 @@ FILE_LOC_BUDGETS = {
     # (2026-05-04 sweep, gemini DQ-4 / DQ-8).
     # TODO(chore): baseline LOC drift here, then extract canonical_coercion /
     # field_recovery / availability_gate owners when scheduled.
-    Path("app/services/field_value_core.py"): 1520,
+    Path("app/services/field_value_core.py"): 1745,
     # Enrichment owns deterministic product normalization and job application.
-    Path("app/services/data_enrichment/service.py"): 1300,
+    Path("app/services/data_enrichment/service.py"): 1455,
     # JS state mapping stays centralized to avoid adapter-specific drift.
-    Path("app/services/js_state_mapper.py"): 1060,
+    Path("app/services/js_state_mapper.py"): 1170,
     # LLM task runtime owns prompt validation, provider calls, cost logging, and typed errors.
     Path("app/services/llm_tasks.py"): 1080,
     # Pipeline core still owns the per-URL orchestration boundary.

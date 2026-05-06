@@ -46,8 +46,10 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    LIGHT THEME — Fiori Navy
    Palette: Warm neutrals · SAP-style navy accent · Clean surfaces
-   Note: glass dark-surface variants depend on backdrop-filter support; enable
-   vendor support/polyfill or provide a non-blurred fallback where needed.
+   Note: frosted utilities like `.glass` / `.glass--*` and blur-backed surface
+   layers built from `--bg-panel` / `--bg-elevated` need `backdrop-filter`.
+   For light-theme fallback, use solid or translucent non-blurred fills, or
+   gate blur styles behind `@supports`.
    ═══════════════════════════════════════════════════════════════════════════ */
 :root {
   color-scheme: light;

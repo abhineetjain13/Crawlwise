@@ -7,30 +7,42 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app.services.config._export_data import load_export_data
+from app.services.config.field_mappings import (
+    AXIS_NAME_ALIASES,
+    PUBLIC_VARIANT_AXIS_FIELDS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 
 _EXPORTS_PATH = Path(__file__).with_name("extraction_rules.exports.json")
-_STATIC_EXPORTS = {name: value for name, value in load_export_data(str(_EXPORTS_PATH)).items() if not name.startswith("_")}
+_STATIC_EXPORTS = {
+    name: value
+    for name, value in load_export_data(str(_EXPORTS_PATH)).items()
+    if not name.startswith("_")
+}
 for _name, _value in _STATIC_EXPORTS.items():
     if _name.isidentifier() and _name not in globals():
         globals()[_name] = _value
 
 HYDRATED_STATE_PATTERNS = tuple(
     dict.fromkeys(
-        (
-            *(
-                value
-                for value in tuple(_STATIC_EXPORTS.get("HYDRATED_STATE_PATTERNS", ()))
-                if str(value).strip()
-            ),
-        )
+        value
+        for value in _STATIC_EXPORTS.get("HYDRATED_STATE_PATTERNS", ())
+        if str(value).strip()
     )
 )
+SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS = frozenset(
+    {"shipping_date", "special_days", "is_available", "is_inventory_only"}
+)
+ECOMMERCE_DESCRIPTION_BLOCK_LIMIT = 40
 
 _EXTRACTION_RULES_RAW = _STATIC_EXPORTS.get("EXTRACTION_RULES", {})
-EXTRACTION_RULES = dict(_EXTRACTION_RULES_RAW) if isinstance(_EXTRACTION_RULES_RAW, dict) else {}
+EXTRACTION_RULES = (
+    dict(_EXTRACTION_RULES_RAW) if isinstance(_EXTRACTION_RULES_RAW, dict) else {}
+)
 
-_CANDIDATE_IMAGE_FILE_EXTENSIONS = _STATIC_EXPORTS.get("CANDIDATE_IMAGE_FILE_EXTENSIONS", ())
+_CANDIDATE_IMAGE_FILE_EXTENSIONS = _STATIC_EXPORTS.get(
+    "CANDIDATE_IMAGE_FILE_EXTENSIONS", ()
+)
 _BARE_HOST_URL_PATTERN = _STATIC_EXPORTS.get("BARE_HOST_URL_PATTERN", "")
 _IMAGE_FIELDS_RAW = _STATIC_EXPORTS.get("IMAGE_FIELDS", ())
 _INTEGER_VALUE_FIELDS_RAW = _STATIC_EXPORTS.get("INTEGER_VALUE_FIELDS", ())
@@ -43,7 +55,9 @@ _REVIEW_COUNT_PATTERN = _STATIC_EXPORTS.get("REVIEW_COUNT_PATTERN", "")
 _REVIEW_TITLE_PATTERN = _STATIC_EXPORTS.get("REVIEW_TITLE_PATTERN", "")
 _STRUCTURED_MULTI_FIELDS_RAW = _STATIC_EXPORTS.get("STRUCTURED_MULTI_FIELDS", ())
 _STRUCTURED_OBJECT_FIELDS_RAW = _STATIC_EXPORTS.get("STRUCTURED_OBJECT_FIELDS", ())
-_STRUCTURED_OBJECT_LIST_FIELDS_RAW = _STATIC_EXPORTS.get("STRUCTURED_OBJECT_LIST_FIELDS", ())
+_STRUCTURED_OBJECT_LIST_FIELDS_RAW = _STATIC_EXPORTS.get(
+    "STRUCTURED_OBJECT_LIST_FIELDS", ()
+)
 _URL_FIELDS_RAW = _STATIC_EXPORTS.get("URL_FIELDS", ())
 
 
@@ -130,6 +144,7 @@ DETAIL_ARTIFACT_PRICE_VALUES = frozenset(
     {"free", "n/a", "na", "unavailable", "contact us"}
 )
 DETAIL_ARTIFACT_SKU_PREFIXES = ("copy-",)
+CATEGORY_PLACEHOLDER_VALUES = frozenset({"category", "categories", "uncategorized"})
 DETAIL_CATEGORY_UI_TOKENS = frozenset(
     {
         "...",
@@ -152,6 +167,20 @@ DETAIL_LONG_TEXT_UI_TAIL_PHRASES = (
     "more details",
     "learn more",
 )
+DETAIL_LEGAL_TAIL_PATTERNS = {
+    "contains": (
+        "product safety",
+        "powered by product details have been supplied by the manufacturer",
+    ),
+    "digit_contains": ("customer service", "contact "),
+    "all_contains": (("privacy", "policy"),),
+    "exact": ("view more",),
+}
+LONG_TEXT_MIN_WORDS = 3
+LONG_TEXT_MAX_WORDS = 14
+TOKEN_MIN_LEN_DISTINCTIVE = 5
+TOKEN_MIN_LEN_CHUNK = 4
+LONG_TEXT_PREFIXES = ("official ", "shop for ")
 DETAIL_NOISE_PREFIXES = (
     "buy ",
     "check the details",
@@ -248,9 +277,31 @@ DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS = frozenset(
 )
 AVAILABILITY_IN_STOCK = "in_stock"
 AVAILABILITY_OUT_OF_STOCK = "out_of_stock"
+MATERIAL_KEYWORDS = frozenset(
+    {
+        "cotton",
+        "leather",
+        "linen",
+        "nylon",
+        "polyamide",
+        "polyester",
+        "rubber",
+        "spandex",
+        "wool",
+    }
+)
+ORG_SUFFIXES = frozenset({"co", "company", "corp", "inc", "llc", "ltd", "se"})
 NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
     tuple(_STATIC_EXPORTS.get("NOISY_PRODUCT_ATTRIBUTE_KEYS", ()) or ())
-) | frozenset({"availability", "available", AVAILABILITY_IN_STOCK, AVAILABILITY_OUT_OF_STOCK, "stock_status"})
+) | frozenset(
+    {
+        "availability",
+        "available",
+        AVAILABILITY_IN_STOCK,
+        AVAILABILITY_OUT_OF_STOCK,
+        "stock_status",
+    }
+)
 DETAIL_TEXT_SCOPE_SELECTORS = tuple(
     dict.fromkeys(
         (
@@ -344,7 +395,9 @@ VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH = 6
 # Used when runtime config is invalid; 3 keeps noise pruning local to variant UI.
 VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK = 3
 # Last-resort parse default after configured depth and fallback both fail.
-VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK
+VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = (
+    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK
+)
 DETAIL_VARIANT_SCOPE_SELECTOR = (
     "form[action*='cart' i], "
     "form[id*='product' i], "
@@ -402,7 +455,16 @@ DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS = (
     "per month",
 )
 DETAIL_BREADCRUMB_ROOT_LABELS = frozenset(
-    {"home", "shop", "store", "homepage", "frontpage", "index", "home page", "homepage home"}
+    {
+        "home",
+        "shop",
+        "store",
+        "homepage",
+        "frontpage",
+        "index",
+        "home page",
+        "homepage home",
+    }
 )
 DETAIL_BREADCRUMB_SELECTORS = (
     "[aria-label*='breadcrumb' i] li",
@@ -509,9 +571,12 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "pickup not available",
     # Marketing / guarantee badges mis-classified as variant axes
     # (ROAM Luggage — DQ-2).
+    "change size",
+    "features",
     "lifetime warranty",
     "free trial",
     "day free trial",
+    "size and weight",
 )
 VARIANT_PLACEHOLDER_VALUES = frozenset(
     {"default title", "choose", "option", "select", "swatch"}
@@ -548,6 +613,49 @@ PLACEHOLDER_IMAGE_URL_PATTERNS = (
     "blank.gif",
     "transparent.gif",
     "clear.gif",
+)
+IMAGE_PATH_TOKENS = (
+    "/image/",
+    "/images/",
+    "/media/",
+    "/picture",
+    "/is/image/",
+    "/cdn/",
+)
+IMAGE_FAMILY_NOISE_TOKENS = frozenset(
+    {
+        "assets",
+        "cdn",
+        "crop",
+        "detail",
+        "editorial",
+        "file",
+        "files",
+        "height",
+        "hero",
+        "hover",
+        "image",
+        "images",
+        "main",
+        "media",
+        "picture",
+        "product",
+        "products",
+        "public",
+        "shop",
+        "square",
+        "standard",
+        "width",
+    }
+)
+WAF_QUEUE_PATTERNS = (
+    r"\bsorry for the wait\b",
+    r"\bplease wait while we verify\b",
+    r"\bwe need to verify\b",
+    r"\bjust a moment while we\b",
+    r"\bqueue-it\b",
+    r"^please wait\b",
+    r"\byou are in a virtual queue\b",
 )
 URL_CONCATENATION_SCHEME_PATTERN = r"https?:/+"
 URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS = (
@@ -631,6 +739,27 @@ DETAIL_GENERIC_TERMINAL_TOKENS = frozenset(
 )
 JOB_LISTING_DETAIL_ROOT_MARKERS = frozenset(
     {"job", "jobs", "opening", "position", "posting", "career", "careers"}
+)
+JOB_POSTING_PATH_MARKERS = tuple(
+    dict.fromkeys(
+        (
+            *tuple(_STATIC_EXPORTS.get("JOB_LISTING_DETAIL_PATH_MARKERS", ()) or ()),
+            "/career/",
+            "/careers/",
+            "/opening/",
+            "/openings/",
+            "/position/",
+            "/positions/",
+            "/posting/",
+            "/postings/",
+            "/requisition/",
+            "/requisitions/",
+            "/role/",
+            "/roles/",
+            "/vacancy/",
+            "/vacancies/",
+        )
+    )
 )
 DETAIL_IDENTITY_CODE_MIN_LENGTH = 8
 REMOTE_BOOLEAN_TRUE_TOKENS = frozenset(
@@ -797,8 +926,51 @@ PAGE_URL_CURRENCY_HINTS_RAW = {
 }
 VARIANT_AXIS_ALIASES = {
     **dict(_STATIC_EXPORTS.get("VARIANT_AXIS_ALIASES", {})),
+    **dict(AXIS_NAME_ALIASES),
+    "part_or_kit": "bundle_type",
     "style_and_size": "size",
 }
+VARIANT_CHOICE_GROUP_SELECTOR = ", ".join(
+    dict.fromkeys(
+        (
+            *(
+                str(value).strip()
+                for value in str(
+                    _STATIC_EXPORTS.get("VARIANT_CHOICE_GROUP_SELECTOR", "")
+                ).split(",")
+                if str(value).strip()
+            ),
+            "[data-testid*='variants-selector' i]",
+            "[class*='selectable-container' i]",
+        )
+    )
+)
+VARIANT_SIZE_VALUE_PATTERNS = tuple(
+    dict.fromkeys(
+        (
+            *tuple(_STATIC_EXPORTS.get("VARIANT_SIZE_VALUE_PATTERNS", ()) or ()),
+            r"^\d+(?:\.\d+)?/\d+(?:\.\d+)?\s+us\s+\(\d+\s+eu\)$",
+        )
+    )
+)
+VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
+    dict.fromkeys(
+        (
+            *(
+                str(value).strip()
+                for value in tuple(
+                    _STATIC_EXPORTS.get(
+                        "VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS", ()
+                    )
+                    or ()
+                )
+                if str(value).strip()
+            ),
+            r"^\s*option\s+",
+            r"\s+(?:not\s+)?selected\s*$",
+        )
+    )
+)
 AVAILABILITY_URL_MAP = {
     "https://schema.org/instock": "in_stock",
     "http://schema.org/instock": "in_stock",
@@ -830,16 +1002,7 @@ NORMALIZER_AVAILABILITY_TOKENS = {
     "out_of_stock": ("out of stock", "outofstock", "oos", "sold out", "unavailable"),
     "preorder": ("pre-order", "preorder", "backorder", "back-order"),
 }
-VARIANT_OPTION_TEXT_FIELDS = frozenset(
-    {
-        "color",
-        "condition",
-        "material",
-        "size",
-        "storage",
-        "style",
-    }
-)
+VARIANT_OPTION_TEXT_FIELDS = frozenset(PUBLIC_VARIANT_AXIS_FIELDS)
 VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
     {
         *VARIANT_OPTION_TEXT_FIELDS,
@@ -954,6 +1117,7 @@ _EXTRA_EXPORTS = [
     "AVAILABILITY_URL_MAP",
     "NORMALIZER_AVAILABILITY_TOKENS",
     "BARE_HOST_URL_RE",
+    "CATEGORY_PLACEHOLDER_VALUES",
     "COLOR_KEYWORD_PATTERN",
     "DEFAULT_DETAIL_MAX_VARIANT_ROWS",
     "FALLBACK_MAX_VARIANT_ROWS",
@@ -997,6 +1161,12 @@ _EXTRA_EXPORTS = [
     "DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS",
     "DETAIL_LONG_TEXT_MAX_SECTION_CHARS",
     "DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS",
+    "DETAIL_LEGAL_TAIL_PATTERNS",
+    "LONG_TEXT_MIN_WORDS",
+    "LONG_TEXT_MAX_WORDS",
+    "TOKEN_MIN_LEN_DISTINCTIVE",
+    "TOKEN_MIN_LEN_CHUNK",
+    "LONG_TEXT_PREFIXES",
     "DETAIL_MATERIALS_ZERO_PERCENT_PATTERN",
     "DETAIL_NOISE_PREFIXES",
     "DETAIL_NOISE_SECTION_SELECTORS",
@@ -1036,9 +1206,12 @@ _EXTRA_EXPORTS = [
     "GENDER_ARTIFACT_PATTERN",
     "GENDER_POSSESSIVE_PATTERN",
     "IMAGE_FIELDS",
+    "IMAGE_FAMILY_NOISE_TOKENS",
+    "IMAGE_PATH_TOKENS",
     "INTEGER_VALUE_FIELDS",
     "JSON_RECORD_LIST_KEYS",
     "JOB_LISTING_DETAIL_ROOT_MARKERS",
+    "JOB_POSTING_PATH_MARKERS",
     "LISTING_CHROME_TEXT_LIMIT",
     "LISTING_PRICE_NODE_SELECTORS",
     "LISTING_PROMINENT_TITLE_TAGS",
@@ -1047,6 +1220,7 @@ _EXTRA_EXPORTS = [
     "LISTING_PRODUCT_DETAIL_ID_RE",
     "LONG_TEXT_FIELDS",
     "MAX_CANDIDATES_PER_FIELD",
+    "MATERIAL_KEYWORDS",
     "ORACLE_HCM_CX_CONFIG_RE",
     "ORACLE_HCM_DEFAULT_FACETS",
     "ORACLE_HCM_JOB_PATH_RE",
@@ -1054,6 +1228,7 @@ _EXTRA_EXPORTS = [
     "ORACLE_HCM_LOCATION_LIST_KEYS",
     "ORACLE_HCM_SITE_PATH_RE",
     "OPTION_VALUE_NOISE_WORDS",
+    "ORG_SUFFIXES",
     "REMOTE_BOOLEAN_FALSE_TOKENS",
     "REMOTE_BOOLEAN_TRUE_TOKENS",
     "PERCENT_RE",
@@ -1064,10 +1239,12 @@ _EXTRA_EXPORTS = [
     "RATING_RE",
     "REVIEW_COUNT_RE",
     "REVIEW_TITLE_RE",
+    "SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS",
     "SEMANTIC_SECTION_LABEL_SKIP_TOKENS",
     "STRUCTURED_MULTI_FIELDS",
     "STRUCTURED_OBJECT_FIELDS",
     "STRUCTURED_OBJECT_LIST_FIELDS",
+    "ECOMMERCE_DESCRIPTION_BLOCK_LIMIT",
     "URL_FIELDS",
     "VARIANT_FIELDS",
     "VARIANT_AXIS_ALIASES",
@@ -1097,6 +1274,7 @@ _EXTRA_EXPORTS = [
     "VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK",
     "DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS",
     "NOISY_PRODUCT_ATTRIBUTE_KEYS",
+    "WAF_QUEUE_PATTERNS",
 ]
 
 

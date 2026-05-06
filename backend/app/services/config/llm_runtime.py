@@ -92,10 +92,15 @@ class LLMRuntimeSettings(BaseSettings):
         "data-test,data-qa,data-sku,data-product-id,data-price,"
         "data-availability,data-component,data-section,data-field"
     )
+    groq_chat_completions_url: str = "https://api.groq.com/openai/v1/chat/completions"
     groq_max_tokens: int = 1200
     groq_temperature: float = 0.1
+    anthropic_messages_url: str = "https://api.anthropic.com/v1/messages"
     anthropic_max_tokens: int = 3000
     anthropic_temperature: float = 0.1
+    nvidia_chat_completions_url: str = (
+        "https://integrate.api.nvidia.com/v1/chat/completions"
+    )
     nvidia_max_tokens: int = 1200
     nvidia_temperature: float = 0.1
     aws_max_tokens: int = 4096

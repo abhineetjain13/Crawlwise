@@ -26,10 +26,13 @@ _groq_client_timeout: float | None = None
 _groq_client_lock = asyncio.Lock()
 _anthropic_client: httpx.AsyncClient | None = None
 _anthropic_client_timeout: float | None = None
+_anthropic_client_lock = asyncio.Lock()
 _nvidia_client: httpx.AsyncClient | None = None
 _nvidia_client_timeout: float | None = None
+_nvidia_client_lock = asyncio.Lock()
 _aws_client: httpx.AsyncClient | None = None
 _aws_client_timeout: float | None = None
+_aws_client_lock = asyncio.Lock()
 
 
 async def close_llm_provider_clients() -> None:
@@ -38,17 +41,26 @@ async def close_llm_provider_clients() -> None:
     global _anthropic_client, _anthropic_client_timeout
     global _nvidia_client, _nvidia_client_timeout
     global _aws_client, _aws_client_timeout
-    for client in (_groq_client, _anthropic_client, _nvidia_client, _aws_client):
-        if client is not None and not client.is_closed:
-            await client.aclose()
-    _groq_client = None
-    _groq_client_timeout = None
-    _anthropic_client = None
-    _anthropic_client_timeout = None
-    _nvidia_client = None
-    _nvidia_client_timeout = None
-    _aws_client = None
-    _aws_client_timeout = None
+    async with _groq_client_lock:
+        async with _anthropic_client_lock:
+            async with _nvidia_client_lock:
+                async with _aws_client_lock:
+                    for client in (
+                        _groq_client,
+                        _anthropic_client,
+                        _nvidia_client,
+                        _aws_client,
+                    ):
+                        if client is not None and not client.is_closed:
+                            await client.aclose()
+                    _groq_client = None
+                    _groq_client_timeout = None
+                    _anthropic_client = None
+                    _anthropic_client_timeout = None
+                    _nvidia_client = None
+                    _nvidia_client_timeout = None
+                    _aws_client = None
+                    _aws_client_timeout = None
 
 
 async def _refresh_shared_client(
@@ -82,29 +94,32 @@ async def _shared_groq_client() -> httpx.AsyncClient:
 
 async def _shared_anthropic_client() -> httpx.AsyncClient:
     global _anthropic_client, _anthropic_client_timeout
-    _anthropic_client, _anthropic_client_timeout = await _refresh_shared_client(
-        _anthropic_client,
-        _anthropic_client_timeout,
-    )
-    return _anthropic_client
+    async with _anthropic_client_lock:
+        _anthropic_client, _anthropic_client_timeout = await _refresh_shared_client(
+            _anthropic_client,
+            _anthropic_client_timeout,
+        )
+        return _anthropic_client
 
 
 async def _shared_nvidia_client() -> httpx.AsyncClient:
     global _nvidia_client, _nvidia_client_timeout
-    _nvidia_client, _nvidia_client_timeout = await _refresh_shared_client(
-        _nvidia_client,
-        _nvidia_client_timeout,
-    )
-    return _nvidia_client
+    async with _nvidia_client_lock:
+        _nvidia_client, _nvidia_client_timeout = await _refresh_shared_client(
+            _nvidia_client,
+            _nvidia_client_timeout,
+        )
+        return _nvidia_client
 
 
 async def _shared_aws_client() -> httpx.AsyncClient:
     global _aws_client, _aws_client_timeout
-    _aws_client, _aws_client_timeout = await _refresh_shared_client(
-        _aws_client,
-        _aws_client_timeout,
-    )
-    return _aws_client
+    async with _aws_client_lock:
+        _aws_client, _aws_client_timeout = await _refresh_shared_client(
+            _aws_client,
+            _aws_client_timeout,
+        )
+        return _aws_client
 
 
 async def call_provider(
@@ -232,7 +247,7 @@ async def _call_groq(
 ) -> tuple[str, int, int]:
     client = await _shared_groq_client()
     response = await client.post(
-        "https://api.groq.com/openai/v1/chat/completions",
+        llm_runtime_settings.groq_chat_completions_url,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": JSON_CONTENT_TYPE,
@@ -260,7 +275,7 @@ async def _call_anthropic(
 ) -> tuple[str, int, int]:
     client = await _shared_anthropic_client()
     response = await client.post(
-        "https://api.anthropic.com/v1/messages",
+        llm_runtime_settings.anthropic_messages_url,
         headers={
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
@@ -302,7 +317,7 @@ async def _call_nvidia(
 ) -> tuple[str, int, int]:
     client = await _shared_nvidia_client()
     response = await client.post(
-        "https://integrate.api.nvidia.com/v1/chat/completions",
+        llm_runtime_settings.nvidia_chat_completions_url,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": JSON_CONTENT_TYPE,

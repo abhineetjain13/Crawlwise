@@ -69,3 +69,6 @@ docs/prompts/
 
 # HTML test fixture folder
 backend/tests/fixtures/artifact_html/
+
+# Local agent debug hub
+agent_debug/

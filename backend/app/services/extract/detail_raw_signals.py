@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from difflib import SequenceMatcher
 from functools import lru_cache
 import json
 import logging
 import re
-from typing import Any
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, Tag
@@ -124,7 +124,7 @@ def _breadcrumb_labels_from_container(container) -> list[str]:
     return _clean_breadcrumb_labels(str(container.get_text(" ", strip=True)).split(">"))
 
 
-def _clean_breadcrumb_labels(values: Any) -> list[str]:
+def _clean_breadcrumb_labels(values: Iterable[object]) -> list[str]:
     return dedupe_adjacent(
         [cleaned for value in values if (cleaned := _clean_breadcrumb_label(value))]
     )
@@ -186,7 +186,11 @@ def _trim_breadcrumb_labels(
     if not rows:
         return []
 
-    if len(rows) > 1 and detail_breadcrumb_is_root_label(rows[-1], page_url) and not detail_breadcrumb_is_root_label(rows[0], page_url):
+    if (
+        len(rows) > 1
+        and detail_breadcrumb_is_root_label(rows[-1], page_url)
+        and not detail_breadcrumb_is_root_label(rows[0], page_url)
+    ):
         rows.reverse()
 
     category_ui_tokens = {
@@ -224,6 +228,7 @@ def _breadcrumb_label_matches_title(label: object, title: str) -> bool:
 
 def _breadcrumb_title_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", clean_text(value).casefold())
+
 
 def dedupe_adjacent(values: list[str]) -> list[str]:
     rows: list[str] = []
@@ -327,15 +332,15 @@ def prune_irrelevant_detail_dom_nodes(
     # (e.g. ``/undefined/``) but the page genuinely represents that product,
     # so we keep the DOM signal intact.
     if pruned_product_names:
+
         def _norm(value: str) -> str:
             return " ".join(value.lower().split())
 
         pruned_norms = {_norm(name) for name in pruned_product_names if name}
         for h1 in soup.find_all("h1"):
             h1_text = _norm(h1.get_text(separator=" ", strip=True))
-            if h1_text and h1_text in pruned_norms:
-                continue
-            h1.decompose()
+            if h1_text and h1_text not in pruned_norms:
+                h1.decompose()
 
     # 2. Prune common cross-product UI noise sections
     for selector in tuple(DETAIL_NOISE_SECTION_SELECTORS or ()):

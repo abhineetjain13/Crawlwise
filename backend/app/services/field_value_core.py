@@ -60,10 +60,12 @@ from app.services.config.extraction_rules import (
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
     ADDITIONAL_IMAGES_FIELD,
+    AXIS_NAME_ALIASES,
     BRAND_LIKE_FIELDS,
     FIELD_ALIASES,
     FLAT_VARIANT_KEYS,
     OPTION_SCALAR_FIELDS,
+    PUBLIC_VARIANT_AXIS_FIELDS,
     PUBLIC_RECORD_BARCODE_LENGTHS,
     PUBLIC_RECORD_BRAND_REGION_SUFFIX_TOKENS,
     PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS,
@@ -74,6 +76,7 @@ from app.services.config.field_mappings import (
     PUBLIC_RECORD_PRODUCT_TYPE_NOISE_TOKENS,
     PUBLIC_RECORD_SKU_DRAFT_PREFIX_PATTERN,
     URL_FIELD,
+    VARIANT_PARENT_SHARED_FIELDS,
 )
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_url_normalization import (
@@ -713,7 +716,9 @@ def _sanitize_option_scalar(field_name: str, value: object) -> str | None:
         cleaned = re.split(r"\bstyle\s*:", cleaned, maxsplit=1, flags=re.I)[0]
         if ":" in cleaned:
             prefix, suffix = cleaned.rsplit(":", 1)
-            if len(clean_text(suffix).split()) <= 4 and _COLOR_KEYWORD_RE.search(suffix):
+            if len(clean_text(suffix).split()) <= 4 and _COLOR_KEYWORD_RE.search(
+                suffix
+            ):
                 cleaned = suffix
         cleaned = re.sub(r"^color\s*:\s*", "", cleaned, flags=re.I)
         cleaned = re.split(r"\bview as list\b", cleaned, maxsplit=1, flags=re.I)[0]
@@ -870,6 +875,11 @@ _placeholder_image_url_tokens = tuple(
     for token in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ())
     if str(token).strip()
 )
+_PUBLIC_VARIANT_AXIS_KEYS = frozenset(
+    str(token).strip().lower()
+    for token in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
+    if str(token).strip()
+)
 
 
 def _is_placeholder_image_url(value: str) -> bool:
@@ -879,6 +889,30 @@ def _is_placeholder_image_url(value: str) -> bool:
     return any(token in lowered for token in _placeholder_image_url_tokens)
 
 
+def _canonical_variant_axis_key(value: object) -> str:
+    axis_key = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        str(value or "").strip().lower().replace("&", " "),
+    ).strip("_")
+    return AXIS_NAME_ALIASES.get(axis_key, axis_key)
+
+
+def _coerce_variant_axis_value(
+    axis_key: str,
+    value: object,
+    *,
+    page_url: str,
+) -> str | None:
+    if value in (None, "", [], {}):
+        return None
+    coerced = coerce_field_value(axis_key, value, page_url)
+    text = text_or_none(coerced)
+    if text:
+        return text
+    return clean_text(value) or None
+
+
 def flatten_variants_for_public_output(
     value: object,
     *,
@@ -886,11 +920,10 @@ def flatten_variants_for_public_output(
 ) -> list[dict[str, object]] | None:
     """Flatten variants to the Zyte-shaped public schema.
 
-    Each emitted variant carries only ``FLAT_VARIANT_KEYS`` plus any
-    recognised variant axis keys from ``option_values``.  Nested
-    ``option_values`` are merged into top-level ``color`` / ``size`` /
-    ``weight`` / ``flavor`` / etc. when those axes are missing, then
-    dropped.  Unknown keys (``variant_id``, ``name``, ``title``,
+    Each emitted variant carries only ``FLAT_VARIANT_KEYS`` plus recognised
+    semantic variant axes from ``option_values`` / top-level variant fields.
+    Nested ``option_values`` are merged into top-level keys before being
+    dropped. Unknown keys (``variant_id``, ``name``, ``title``,
     ``option_values``, etc.) are removed entirely.
 
     Producers may keep rich rows briefly for source-local matching, but emitted
@@ -910,23 +943,32 @@ def flatten_variants_for_public_output(
         if isinstance(option_values, dict):
             for axis_name, axis_value in option_values.items():
                 axis_text = text_or_none(axis_name)
-                value_text = text_or_none(axis_value)
-                if not axis_text or not value_text:
+                if not axis_text:
                     continue
-                axis_key = axis_text.strip().lower()
-                if axis_key in {"color", "colour"}:
-                    axis_key = "color"
-                if axis_key in {"flavor", "flavour"}:
-                    axis_key = "flavor"
+                axis_key = _canonical_variant_axis_key(axis_text)
                 if axis_key == "style":
+                    value_text = _coerce_variant_axis_value(
+                        axis_key,
+                        axis_value,
+                        page_url=page_url,
+                    )
+                    if not value_text:
+                        continue
                     compound_size_prefix = value_text
                     has_option_axis = True
                     continue
-                if axis_key not in FLAT_VARIANT_KEYS:
+                if axis_key not in _PUBLIC_VARIANT_AXIS_KEYS:
+                    continue
+                value_text = _coerce_variant_axis_value(
+                    axis_key,
+                    axis_value,
+                    page_url=page_url,
+                )
+                if not value_text:
                     continue
                 if axis_key not in merged:
                     merged[axis_key] = value_text
-                    has_option_axis = True
+                has_option_axis = True
         for key in FLAT_VARIANT_KEYS:
             if key in merged and merged[key] not in (None, "", [], {}):
                 continue
@@ -937,20 +979,30 @@ def flatten_variants_for_public_output(
             if coerced in (None, "", [], {}):
                 continue
             merged[key] = coerced
+        for raw_key, candidate in raw_variant.items():
+            axis_key = _canonical_variant_axis_key(raw_key)
+            if axis_key not in _PUBLIC_VARIANT_AXIS_KEYS or axis_key in merged:
+                continue
+            value_text = _coerce_variant_axis_value(
+                axis_key,
+                candidate,
+                page_url=page_url,
+            )
+            if not value_text:
+                continue
+            merged[axis_key] = value_text
+            has_option_axis = True
         if compound_size_prefix:
             size_value = text_or_none(merged.get("size"))
             if size_value:
                 merged["size"] = clean_text(f"{compound_size_prefix} {size_value}")
             elif "size" not in merged:
                 merged["size"] = compound_size_prefix
-        if text_or_none(merged.get("flavor")) and not text_or_none(merged.get("color")):
-            merged["color"] = merged["flavor"]
-            merged.pop("flavor", None)
         if merged and (
             has_option_axis
             or any(
                 text_or_none(merged.get(field_name))
-                for field_name in ("color", "flavor", "size")
+                for field_name in _PUBLIC_VARIANT_AXIS_KEYS
             )
         ):
             flattened.append(merged)
@@ -964,8 +1016,7 @@ def _drop_parent_shared_variant_fields(record: dict[str, Any]) -> None:
     variant_rows = [variant for variant in variants if isinstance(variant, dict)]
     if len(variant_rows) < 2:
         return
-    parent_shared_fields = ("price", "currency", "url", "image_url")
-    for field_name in parent_shared_fields:
+    for field_name in VARIANT_PARENT_SHARED_FIELDS:
         parent_value = text_or_none(record.get(field_name))
         if parent_value is None:
             continue
@@ -1155,7 +1206,7 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         return _coerce_sku(value)
     if field_name == "gender":
         return _coerce_gender(value)
-    if field_name in {"color", "condition", "material", "size", "storage", "style"}:
+    if field_name in OPTION_SCALAR_FIELDS:
         return _sanitize_option_scalar(
             field_name,
             coerce_structured_scalar(
@@ -1535,7 +1586,4 @@ def validate_and_clean(
 
 def _is_template_url(url: str) -> bool:
     lowered = str(url or "").lower()
-    return any(
-        token in lowered
-        for token in _UNRESOLVED_TEMPLATE_URL_TOKENS_LOWER
-    )
+    return any(token in lowered for token in _UNRESOLVED_TEMPLATE_URL_TOKENS_LOWER)

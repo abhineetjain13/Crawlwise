@@ -32,6 +32,7 @@ def test_tirerack_category_root_url_still_structural() -> None:
 
 
 def test_embedded_category_marker_segment_stays_structural() -> None:
+    """Embedded category-marker slugs must still count as structural links."""
     page = "https://example.com/shop/womens-productlist-sale"
     candidate = "https://example.com/shop/mens-productlist-sale"
 

@@ -11,6 +11,7 @@ from app.services.config.field_mappings import (
     JS_STATE_PRODUCT_FIELD_SPEC,
     JS_STATE_VARIANT_FIELD_SPEC,
 )
+from app.services.config.extraction_rules import ECOMMERCE_DESCRIPTION_BLOCK_LIMIT
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.field_policy import normalize_field_key
 from app.services.field_value_dom import dedupe_image_urls, extract_feature_rows
@@ -551,7 +552,10 @@ def _extract_ecommerce_description_fields(value: object) -> dict[str, object]:
     features = extract_feature_rows(soup)
     blocks: list[tuple[str, str]] = []
     alias_lookup = surface_alias_lookup("ecommerce_detail", None)
-    for node in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p"], limit=40):
+    for node in soup.find_all(
+        ["h1", "h2", "h3", "h4", "h5", "h6", "p"],
+        limit=ECOMMERCE_DESCRIPTION_BLOCK_LIMIT,
+    ):
         text = text_or_none(node.get_text(" ", strip=True))
         if text:
             blocks.append((str(node.name).lower(), text))

@@ -46,7 +46,9 @@ def test_static_config_exports_remain_import_stable() -> None:
     assert "job_detail" in field_mappings_reloaded.CANONICAL_SCHEMAS
 
     assert "NETWORK_PAYLOAD_SPECS" in network_payload_specs_reloaded.__all__
-    assert network_payload_specs_reloaded.NETWORK_PAYLOAD_SPECS == original_payload_specs
+    assert (
+        network_payload_specs_reloaded.NETWORK_PAYLOAD_SPECS == original_payload_specs
+    )
     assert "ecommerce_detail" in network_payload_specs_reloaded.NETWORK_PAYLOAD_SPECS
 
 
@@ -60,7 +62,9 @@ def test_static_config_exports_have_provenance() -> None:
         validate_export_file(path)
 
 
-def test_export_validator_main_returns_clean_error_for_bad_payload(tmp_path, capsys) -> None:
+def test_export_validator_main_returns_clean_error_for_bad_payload(
+    tmp_path, capsys
+) -> None:
     bad_export = tmp_path / "broken.exports.json"
     bad_export.write_text(json.dumps({"CARD_SELECTORS": []}), encoding="utf-8")
 
@@ -77,7 +81,9 @@ def test_location_interstitial_tokens_are_unique() -> None:
         "LOCATION_INTERSTITIAL_TEXT_TOKENS",
     ):
         values = [str(item) for item in list(exports[key] or [])]
-        duplicates = {value: count for value, count in Counter(values).items() if count > 1}
+        duplicates = {
+            value: count for value, count in Counter(values).items() if count > 1
+        }
         assert duplicates == {}
 
 
@@ -99,7 +105,10 @@ def test_extraction_rules_export_keys_cover_module_references() -> None:
     assert "LISTING_EDITORIAL_PATH_SEGMENTS" in extraction_rules.__all__
     assert set(exports) <= set(extraction_rules.__all__)
     assert "SOURCE_TIERS" in vars(extraction_rules)
-    assert extraction_rules.AVAILABILITY_OUT_OF_STOCK in extraction_rules.NOISY_PRODUCT_ATTRIBUTE_KEYS
+    assert (
+        extraction_rules.AVAILABILITY_OUT_OF_STOCK
+        in extraction_rules.NOISY_PRODUCT_ATTRIBUTE_KEYS
+    )
 
 
 def test_extraction_rules_exports_document_link_patterns_via___all__() -> None:
@@ -158,17 +167,18 @@ def test_runtime_settings_reject_invalid_page_bounds() -> None:
         CrawlerRuntimeSettings(min_max_pages=5, max_max_pages=4)
 
 
-def test_runtime_settings_normalizes_scroll_bounds() -> None:
-    settings = CrawlerRuntimeSettings(
-        browser_behavior_scroll_min_px=200,
-        browser_behavior_scroll_max_px=100,
-    )
+def test_runtime_settings_reject_invalid_scroll_bounds() -> None:
+    with pytest.raises(
+        ValueError,
+        match="browser_behavior_scroll_max_px must be >= browser_behavior_scroll_min_px",
+    ):
+        CrawlerRuntimeSettings(
+            browser_behavior_scroll_min_px=200,
+            browser_behavior_scroll_max_px=100,
+        )
 
-    assert settings.browser_behavior_scroll_min_px == 200
-    assert settings.browser_behavior_scroll_max_px == 200
 
-
-def test_selectors_export_keeps_keep_worthy_tags_in_static_payload() -> None:
+def test_selectors_export_does_not_drive_keep_worthy_tags() -> None:
     selectors = importlib.import_module("app.services.config.selectors")
     exports = load_export_data(
         str(
@@ -180,8 +190,9 @@ def test_selectors_export_keeps_keep_worthy_tags_in_static_payload() -> None:
         )
     )
 
-    assert exports["SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS"] == (
-        selectors.SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS
+    assert "SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS" not in exports
+    assert selectors.SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS == frozenset(
+        {"button", "input", "select"}
     )
 
 
@@ -222,10 +233,14 @@ def test_crawl_run_settings_normalizes_zero_source_run_id_to_unset() -> None:
         }
     )
 
-    assert settings.acquisition_contract()["last_quality_success"]["source_run_id"] is None
+    assert (
+        settings.acquisition_contract()["last_quality_success"]["source_run_id"] is None
+    )
 
 
-def test_legacy_migration_start_detects_missing_data_enrichment_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_migration_start_detects_missing_data_enrichment_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Inspector:
         def get_table_names(self) -> list[str]:
             return ["users", "crawl_runs", "crawl_records"]
@@ -356,7 +371,9 @@ def test_crawl_run_settings_acquisition_profile_keeps_disabled_proxy_profile() -
     }
 
 
-def test_crawl_run_settings_infers_sticky_rotation_from_sessionized_proxy_username() -> None:
+def test_crawl_run_settings_infers_sticky_rotation_from_sessionized_proxy_username() -> (
+    None
+):
     settings = CrawlRunSettings.from_value(
         {
             "proxy_profile": {
@@ -389,13 +406,13 @@ def test_crawl_run_settings_does_not_store_inferred_proxy_rotation() -> None:
 
     assert normalized["proxy_profile"] == {
         "enabled": True,
-        "proxy_list": [
-            "http://user-session-autozone123:pass@rp.scrapegw.com:6060"
-        ],
+        "proxy_list": ["http://user-session-autozone123:pass@rp.scrapegw.com:6060"],
     }
 
 
-def test_platform_runtime_policy_does_not_force_browser_for_vendor_specific_domains() -> None:
+def test_platform_runtime_policy_does_not_force_browser_for_vendor_specific_domains() -> (
+    None
+):
     policy = resolve_platform_runtime_policy("https://www.autozone.com/")
 
     assert policy["requires_browser"] is False

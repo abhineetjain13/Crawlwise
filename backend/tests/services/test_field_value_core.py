@@ -272,6 +272,40 @@ def test_public_record_firewall_flattens_variants_to_public_shape() -> None:
     }
 
 
+def test_public_record_firewall_normalizes_variant_axis_aliases() -> None:
+    data, _rejected = public_record_data_for_surface(
+        {
+            "title": "Widget",
+            "variants": [
+                {
+                    "option_values": {
+                        "Hue": "Midnight Black",
+                        "Measurements": "10 x 12 x 2 cm",
+                        "Part or Kit": "Starter Pack",
+                    },
+                    "sku": "W-BLK",
+                }
+            ],
+            "variant_count": 1,
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget",
+    )
+
+    assert data == {
+        "title": "Widget",
+        "variants": [
+            {
+                "color": "Midnight Black",
+                "dimensions": "10 x 12 x 2 cm",
+                "bundle_type": "Starter Pack",
+                "sku": "W-BLK",
+            }
+        ],
+        "variant_count": 1,
+    }
+
+
 def test_public_record_firewall_drops_parent_shared_variant_fields() -> None:
     data, rejected = public_record_data_for_surface(
         {

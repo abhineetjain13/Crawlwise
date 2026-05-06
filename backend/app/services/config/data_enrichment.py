@@ -261,6 +261,7 @@ class DataEnrichmentSettings:
     taxonomy_path: Path = DATA_ENRICHMENT_TAXONOMY_PATH
     attributes_path: Path = DATA_ENRICHMENT_ATTRIBUTES_PATH
     category_match_threshold: float = 0.42
+    candidate_flatten_max_depth: int = 50
     max_seo_keywords: int = 20
     llm_description_excerpt_chars: int = 300
     llm_taxonomy_hint_count: int = 5

@@ -73,10 +73,6 @@ export function isSubduedStatus(status: string): boolean {
   return status === 'completed' || status === 'killed';
 }
 
-export function isStatusFlat(status: string): boolean {
-  return isSubduedStatus(status);
-}
-
 /** Completed / killed / partial verdicts use flat (text-only) badges. */
 export function isFlatStatus(status: string, summary?: RunSummaryLike): boolean {
   if (status === 'killed') return true;

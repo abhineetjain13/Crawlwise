@@ -16,6 +16,7 @@ from app.services.config.extraction_rules import (
     DETAIL_UTILITY_PATH_TOKENS,
     JOB_LISTING_DETAIL_ROOT_MARKERS,
     JOB_LISTING_DETAIL_PATH_MARKERS,
+    JOB_POSTING_PATH_MARKERS,
     LISTING_CATEGORY_PATH_SEGMENTS,
     LISTING_CATEGORY_PATH_PREFIXES,
     LISTING_DETAIL_PATH_MARKERS,
@@ -69,9 +70,9 @@ def _listing_url_has_category_path_segment(path: str) -> bool:
         if segment.strip()
     ]
     for segment in segments:
-        segment_tokens = {
-            token for token in re.split(r"[^a-z0-9]+", segment) if token
-        }
+        # Broader split is intentional here, unlike _path_segment_tokens:
+        # _LISTING_CATEGORY_PATH_SEGMENTS may be embedded behind "_" or mixed punctuation.
+        segment_tokens = {token for token in re.split(r"[^a-z0-9]+", segment) if token}
         if segment in _LISTING_CATEGORY_PATH_SEGMENTS:
             return True
         if _LISTING_CATEGORY_PATH_SEGMENTS.intersection(segment_tokens):
@@ -100,10 +101,9 @@ def listing_url_is_structural(url: str, page_url: str) -> bool:
         # a navigation link to another category, not a product.
         candidate_path = parsed.path.lower()
         page_path = page_parsed.path.lower()
-        if (
-            _listing_url_has_category_path_segment(page_path)
-            and _listing_url_has_category_path_segment(candidate_path)
-        ):
+        if _listing_url_has_category_path_segment(
+            page_path
+        ) and _listing_url_has_category_path_segment(candidate_path):
             return True
         for prefix in LISTING_CATEGORY_PATH_PREFIXES:
             if page_path.startswith(prefix) and candidate_path.startswith(prefix):
@@ -142,7 +142,7 @@ def listing_url_is_structural(url: str, page_url: str) -> bool:
             or any(segment in non_listing_tokens for segment in leading_raw)
         ):
             return True
-    except Exception:
+    except ValueError:
         logger.debug("URL structural check failed for %s", page_url, exc_info=True)
     return False
 
@@ -245,27 +245,7 @@ def _job_listing_url_looks_like_posting(url: str) -> bool:
         return False
     if not re.search(r"\d{4,}", terminal):
         return False
-    if any(
-        marker in parsed.path
-        for marker in (
-            "/job/",
-            "/jobs/",
-            "/opening/",
-            "/openings/",
-            "/position/",
-            "/positions/",
-            "/posting/",
-            "/postings/",
-            "/career/",
-            "/careers/",
-            "/requisition/",
-            "/requisitions/",
-            "/role/",
-            "/roles/",
-            "/vacancy/",
-            "/vacancies/",
-        )
-    ):
+    if any(marker in parsed.path for marker in JOB_POSTING_PATH_MARKERS):
         return True
     terminal_words = [
         token
@@ -506,7 +486,6 @@ def _detail_identity_record_tokens(record: dict[str, object]) -> set[str]:
     for field_name in ("title", "brand", "color", "size", "description"):
         tokens.update(_detail_identity_tokens(record.get(field_name)))
     return tokens
-
 
 
 def _detail_url_matches_requested_identity(

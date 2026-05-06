@@ -13,6 +13,7 @@ from app.services.config.extraction_rules import (
     INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS,
     INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS,
     PRICE_SOURCE_KEY_FIELDS,
+    SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS,
     STRUCTURED_CANDIDATE_LIST_SLICE,
     STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT,
 )
@@ -498,14 +499,10 @@ def _structured_alias_value_allowed(
     if not isinstance(value, (int, float, str)):
         return True
     payload_keys = {normalize_field_key(str(key or "")) for key in payload}
+    inventory_payload_keys = payload_keys & SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS
     return not (
-        "shipping_date" in payload_keys
-        and "special_days" in payload_keys
-        and (
-            "is_available" in payload_keys
-            or "isinventoryonly" in payload_keys
-            or "is_inventory_only" in payload_keys
-        )
+        {"shipping_date", "special_days"} <= inventory_payload_keys
+        and bool(inventory_payload_keys & {"is_available", "is_inventory_only"})
     )
 
 

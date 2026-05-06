@@ -31,7 +31,10 @@ from app.services.config.extraction_rules import (
     LISTING_UTILITY_TITLE_TOKENS,
     LISTING_UTILITY_URL_TOKENS,
 )
-from app.services.config.field_mappings import PUBLIC_RECORD_LEGACY_VARIANT_FIELDS
+from app.services.config.field_mappings import (
+    PUBLIC_RECORD_LEGACY_VARIANT_FIELDS,
+    PUBLIC_VARIANT_AXIS_FIELDS,
+)
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -41,7 +44,13 @@ HARNESS_MODE_FULL_PIPELINE = "full_pipeline"
 DEFAULT_SITE_SET_PATH = (
     Path(__file__).resolve().parent / "test_site_sets" / "commerce_browser_heavy.json"
 )
-_VARIANT_AXIS_FIELDS = ("color", "size")
+_VARIANT_AXIS_FIELDS = tuple(
+    dict.fromkeys(
+        str(token).strip().lower()
+        for token in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
+        if str(token).strip()
+    )
+)
 _HIGH_DENOMINATION_PRICE_CURRENCIES = {"INR", "JPY", "KRW", "VND", "IDR", "HUF", "CLP"}
 _MIN_SANE_PRICE = 0.01
 

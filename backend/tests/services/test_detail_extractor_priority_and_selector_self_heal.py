@@ -343,7 +343,7 @@ def test_reduce_html_for_selector_synthesis_preserves_price_and_buy_box_controls
     assert 'value="sku-1"' in reduced
 
 
-def test_selector_synthesis_keep_worthy_tags_round_trip_through_export() -> None:
+def test_selector_synthesis_keep_worthy_tags_are_code_owned() -> None:
     from app.services.config.selectors import SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS
 
     exports = load_export_data(
@@ -356,8 +356,9 @@ def test_selector_synthesis_keep_worthy_tags_round_trip_through_export() -> None
         )
     )
 
-    assert exports["SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS"] == (
-        SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS
+    assert "SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS" not in exports
+    assert SELECTOR_SYNTHESIS_KEEP_WORTHY_TAGS == frozenset(
+        {"button", "input", "select"}
     )
 
 
