@@ -263,6 +263,36 @@ def _review_bucket_rows(record: CrawlRecord) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)]
 
 
+def _selector_signature(
+    *,
+    field_name: object,
+    selector_kind: object,
+    selector_value: object,
+) -> tuple[str, str, str]:
+    return (
+        str(field_name or "").strip().lower(),
+        str(selector_kind or "").strip().lower(),
+        str(selector_value or "").strip(),
+    )
+
+
+def _saved_selector_signature(row: dict[str, object]) -> tuple[str, str, str]:
+    if row.get("css_selector"):
+        selector_kind = "css_selector"
+        selector_value = row.get("css_selector")
+    elif row.get("xpath"):
+        selector_kind = "xpath"
+        selector_value = row.get("xpath")
+    else:
+        selector_kind = "regex"
+        selector_value = row.get("regex")
+    return _selector_signature(
+        field_name=row.get("field_name"),
+        selector_kind=selector_kind,
+        selector_value=selector_value,
+    )
+
+
 async def _promote_review_bucket_fields(
     session: AsyncSession, run: CrawlRun, mapping: dict[str, str]
 ) -> None:
@@ -357,34 +387,6 @@ async def build_domain_recipe_payload(
         domain=domain,
         surface=run.surface,
     )
-    def _selector_signature(
-        *,
-        field_name: object,
-        selector_kind: object,
-        selector_value: object,
-    ) -> tuple[str, str, str]:
-        return (
-            str(field_name or "").strip().lower(),
-            str(selector_kind or "").strip().lower(),
-            str(selector_value or "").strip(),
-        )
-
-    def _saved_selector_signature(row: dict[str, object]) -> tuple[str, str, str]:
-        if row.get("css_selector"):
-            selector_kind = "css_selector"
-            selector_value = row.get("css_selector")
-        elif row.get("xpath"):
-            selector_kind = "xpath"
-            selector_value = row.get("xpath")
-        else:
-            selector_kind = "regex"
-            selector_value = row.get("regex")
-        return _selector_signature(
-            field_name=row.get("field_name"),
-            selector_kind=selector_kind,
-            selector_value=selector_value,
-        )
-
     saved_selector_index = {
         _saved_selector_signature(row): row
         for row in saved_selectors
@@ -635,34 +637,6 @@ async def promote_domain_recipe_selectors(
     commit: bool = True,
 ) -> list[dict[str, object]]:
     domain = normalize_domain(run.url)
-    def _selector_signature(
-        *,
-        field_name: object,
-        selector_kind: object,
-        selector_value: object,
-    ) -> tuple[str, str, str]:
-        return (
-            str(field_name or "").strip().lower(),
-            str(selector_kind or "").strip().lower(),
-            str(selector_value or "").strip(),
-        )
-
-    def _saved_selector_signature(row: dict[str, object]) -> tuple[str, str, str]:
-        if row.get("css_selector"):
-            selector_kind = "css_selector"
-            selector_value = row.get("css_selector")
-        elif row.get("xpath"):
-            selector_kind = "xpath"
-            selector_value = row.get("xpath")
-        else:
-            selector_kind = "regex"
-            selector_value = row.get("regex")
-        return _selector_signature(
-            field_name=row.get("field_name"),
-            selector_kind=selector_kind,
-            selector_value=selector_value,
-        )
-
     existing = await list_selector_records(
         session,
         domain=domain,

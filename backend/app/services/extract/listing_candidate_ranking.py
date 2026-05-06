@@ -5,6 +5,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from app.services.config.extraction_rules import (
+    JOB_POSTING_PATH_MARKERS,
     JOB_UTILITY_URL_TOKENS,
     LISTING_EDITORIAL_PATH_SEGMENTS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
@@ -347,27 +348,7 @@ def job_listing_url_looks_like_posting(url: str) -> bool:
         return False
     if not re.search(r"\d{4,}", terminal):
         return False
-    if any(
-        marker in parsed.path
-        for marker in (
-            "/job/",
-            "/jobs/",
-            "/opening/",
-            "/openings/",
-            "/position/",
-            "/positions/",
-            "/posting/",
-            "/postings/",
-            "/career/",
-            "/careers/",
-            "/requisition/",
-            "/requisitions/",
-            "/role/",
-            "/roles/",
-            "/vacancy/",
-            "/vacancies/",
-        )
-    ):
+    if any(marker in parsed.path for marker in JOB_POSTING_PATH_MARKERS):
         return True
     terminal_words = [
         token

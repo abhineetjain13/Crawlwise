@@ -16,7 +16,6 @@ from app.services.config.extraction_rules import (
     DETAIL_UTILITY_PATH_TOKENS,
     JOB_LISTING_DETAIL_ROOT_MARKERS,
     JOB_LISTING_DETAIL_PATH_MARKERS,
-    JOB_POSTING_PATH_MARKERS,
     LISTING_CATEGORY_PATH_SEGMENTS,
     LISTING_CATEGORY_PATH_PREFIXES,
     LISTING_DETAIL_PATH_MARKERS,
@@ -26,6 +25,10 @@ from app.services.config.extraction_rules import (
     YEAR_SLUG_PATTERN,
 )
 from app.services.config.surface_hints import detail_path_hints
+from app.services.extract.listing_candidate_ranking import (
+    job_listing_url_is_hub as _job_listing_url_is_hub,
+    job_listing_url_looks_like_posting as _job_listing_url_looks_like_posting,
+)
 from app.services.field_value_core import (
     PRODUCT_URL_HINTS,
     clean_text,
@@ -201,58 +204,6 @@ def _job_detail_like_path(url: str) -> bool:
         ):
             return True
     return False
-
-
-def _job_listing_url_is_hub(url: str) -> bool:
-    parsed = urlparse(url.lower())
-    segments = [segment for segment in parsed.path.split("/") if segment]
-    terminal = segments[-1] if segments else ""
-    if terminal in {
-        "careers",
-        "jobs",
-        "openings",
-        "search",
-        "search-jobs",
-        "search-results",
-    }:
-        return True
-    return terminal.startswith(
-        (
-            "jobs-in-",
-            "careers-in-",
-            "openings-in-",
-            "search-jobs",
-            "job-search",
-        )
-    )
-
-
-def _job_listing_url_looks_like_posting(url: str) -> bool:
-    parsed = urlparse(url.lower())
-    segments = [
-        segment.strip().lower() for segment in parsed.path.split("/") if segment.strip()
-    ]
-    if not segments:
-        return False
-    terminal = segments[-1]
-    leading_tokens = [_path_segment_tokens(segment) for segment in segments[:-1]]
-    if any(tokens & set(LISTING_NON_LISTING_PATH_TOKENS) for tokens in leading_tokens):
-        return False
-    terminal_tokens = _path_segment_tokens(terminal)
-    if terminal_tokens & set(LISTING_NON_LISTING_PATH_TOKENS):
-        return False
-    if re.fullmatch(r"(?:19|20)\d{2}", terminal):
-        return False
-    if not re.search(r"\d{4,}", terminal):
-        return False
-    if any(marker in parsed.path for marker in JOB_POSTING_PATH_MARKERS):
-        return True
-    terminal_words = [
-        token
-        for token in re.split(r"[^a-z0-9]+", terminal)
-        if len(token) >= 3 and not token.isdigit()
-    ]
-    return len(terminal_words) >= 2
 
 
 def _detail_url_path_segments(url: str) -> list[str]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from app.core.dependencies import get_current_user, get_db
+from app.models.crawl import CrawlRun
 from app.models.user import User
 from app.schemas.crawl import (
     CrawlRunResponse,
@@ -12,7 +13,10 @@ from app.schemas.crawl import (
     ReviewSaveResponse,
     serialize_crawl_record_responses,
 )
-from app.services.crawl_crud import get_run
+from app.services.crawl_access_service import (
+    RUN_NOT_FOUND_DETAIL,
+    require_accessible_run,
+)
 from app.services.review import build_review_payload, load_review_html, save_review
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
@@ -20,7 +24,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/review", tags=["review"])
 
-RUN_NOT_FOUND_DETAIL = "Run not found"
+
+async def _get_review_run_or_404(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    user: User,
+) -> CrawlRun:
+    try:
+        return await require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=RUN_NOT_FOUND_DETAIL,
+        ) from exc
 
 
 @router.get("/{run_id}")
@@ -29,11 +46,7 @@ async def review_detail(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> ReviewResponse:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+    await _get_review_run_or_404(session, run_id=run_id, user=user)
     payload = await build_review_payload(session, run_id)
     if payload is None:
         raise HTTPException(
@@ -56,11 +69,7 @@ async def review_artifact_html(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> HTMLResponse:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+    await _get_review_run_or_404(session, run_id=run_id, user=user)
     html_text = await load_review_html(session, run_id)
     if not html_text:
         raise HTTPException(
@@ -76,11 +85,7 @@ async def review_save(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> ReviewSaveResponse:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+    run = await _get_review_run_or_404(session, run_id=run_id, user=user)
     selections = [row.model_dump() for row in payload.selections]
     for extra_field in payload.extra_fields:
         name = str(extra_field or "").strip()
