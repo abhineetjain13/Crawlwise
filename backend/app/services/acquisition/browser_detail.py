@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
+from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.services.config.extraction_rules import (
     BROWSER_DETAIL_EXPAND_KEYWORDS,
@@ -353,10 +355,12 @@ async def expand_all_interactive_elements_impl(
                 if navigational_anchor:
                     continue
                 if (
-                    probe
-                    and any(token in probe for token in DETAIL_BLOCKED_TOKENS)
-                    and not size_toggle_hint
-                ):
+                    any(token in keyword_probe for token in DETAIL_BLOCKED_TOKENS)
+                    or (
+                        probe
+                        and any(token in probe for token in DETAIL_BLOCKED_TOKENS)
+                    )
+                ) and not size_toggle_hint:
                     continue
                 matches_requested_keywords = bool(
                     requested_keywords
@@ -491,7 +495,16 @@ async def expand_interactive_elements_via_accessibility_impl(
         return diagnostics
     diagnostics["attempted"] = True
     try:
-        snapshot = await snapshot_fn()
+        snapshot = await asyncio.wait_for(
+            snapshot_fn(),
+            timeout=crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds,
+        )
+    except asyncio.CancelledError:
+        raise
+    except (asyncio.TimeoutError, PlaywrightTimeoutError):
+        diagnostics["status"] = "snapshot_timeout"
+        diagnostics["elapsed_ms"] = elapsed_ms(started_at)
+        return diagnostics
     except Exception as exc:
         diagnostics["status"] = "snapshot_failed"
         diagnostics["interaction_failures"] = [f"snapshot_failed:{exc}"]

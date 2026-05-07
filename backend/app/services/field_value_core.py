@@ -442,26 +442,14 @@ def validate_record_for_surface(
 def surface_fields(surface: str, requested_fields: list[str] | None) -> list[str]:
     normalized_surface = str(surface or "").strip().lower()
     fields = list(CANONICAL_SCHEMAS.get(normalized_surface, ALL_CANONICAL_FIELDS))
-    allowed_fields = set(fields)
     if URL_FIELD not in fields:
         fields.append(URL_FIELD)
-        allowed_fields.add(URL_FIELD)
     for field_name in list(requested_fields or []):
         exact_field = exact_requested_field_key(field_name)
-        if (
-            exact_field
-            and exact_field not in fields
-            and (
-                exact_field in allowed_fields or exact_field not in ALL_CANONICAL_FIELDS
-            )
-        ):
+        if exact_field and exact_field not in fields:
             fields.append(exact_field)
     for field_name in expand_requested_fields(list(requested_fields or [])):
-        if (
-            field_name
-            and field_name not in fields
-            and (field_name in allowed_fields or field_name not in ALL_CANONICAL_FIELDS)
-        ):
+        if field_name and field_name not in fields:
             fields.append(field_name)
     return fields
 

@@ -22,6 +22,7 @@ from app.services.config.extraction_rules import (
     DETAIL_CATEGORY_SOURCE_RANKS,
     DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_LONG_TEXT_SOURCE_RANKS,
+    DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS,
     DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS,
     DETAIL_TITLE_SOURCE_RANKS,
     SOURCE_PRIORITY,
@@ -403,7 +404,10 @@ def _materialize_record(
         winning_values = grouped_candidates[0][1] if grouped_candidates else []
         if field_name in DETAIL_LONG_TEXT_RANK_FIELDS and grouped_candidates:
             selected_long_text = finalize_candidate_value(field_name, winning_values)
-            if _detail_long_text_value_looks_truncated(selected_long_text):
+            if _detail_long_text_value_looks_truncated(selected_long_text) or (
+                field_name == "description"
+                and _detail_description_value_looks_thin(selected_long_text)
+            ):
                 for candidate_source, candidate_values in grouped_candidates[1:]:
                     candidate_long_text = finalize_candidate_value(
                         field_name, candidate_values
@@ -415,6 +419,9 @@ def _materialize_record(
                         {},
                     ) and not _detail_long_text_value_looks_truncated(
                         candidate_long_text
+                    ) and not (
+                        field_name == "description"
+                        and _detail_description_value_looks_thin(candidate_long_text)
                     ):
                         selected_source = candidate_source
                         winning_values = candidate_values
@@ -916,6 +923,15 @@ def _detail_long_text_value_looks_truncated(value: object) -> bool:
     return bool(tokens) and tokens[-1] in DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS
 
 
+def _detail_description_value_looks_thin(value: object) -> bool:
+    text = clean_text(value)
+    if not text:
+        return False
+    return len(re.findall(r"[A-Za-z0-9']+", text)) <= int(
+        DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS
+    )
+
+
 def _requires_dom_long_text_completion(
     record: dict[str, Any],
     *,
@@ -934,6 +950,11 @@ def _requires_dom_long_text_completion(
             for source in _object_list(field_sources.get(field_name))
         ]
         best_rank = min(source_ranks) if source_ranks else 20
+        if (
+            field_name == "description"
+            and _detail_description_value_looks_thin(value)
+        ):
+            return True
         if best_rank >= weak_source_rank or _detail_long_text_value_looks_truncated(
             value
         ):

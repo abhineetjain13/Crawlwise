@@ -752,3 +752,45 @@ def test_detail_record_quality_repairs_invalid_original_prices_and_selected_vari
 
     assert record["original_price"] == "100.00"
     assert all("original_price" not in variant for variant in record["variants"])
+
+
+def test_normalize_variant_record_drops_numeric_shade_code_size_duplicate() -> None:
+    record = {
+        "title": "Colorful Eyeshadow",
+        "variants": [
+            {
+                "sku": "2820108",
+                "size": "209",
+                "color": "209 Mocha Latte",
+                "image_url": "https://www.sephora.com/productimages/sku/s2820108-main-hero.jpg",
+            },
+            {
+                "sku": "2819449",
+                "size": "601",
+                "color": "601 Silver Storm",
+                "image_url": "https://www.sephora.com/productimages/sku/s2819449-main-hero.jpg",
+            },
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variant_count"] == 2
+    assert [variant.get("color") for variant in record["variants"]] == [
+        "209 Mocha Latte",
+        "601 Silver Storm",
+    ]
+    assert all("size" not in variant for variant in record["variants"])
+
+
+def test_normalize_variant_record_keeps_parent_scalar_size_without_variants() -> None:
+    record = {
+        "title": "Colorful Eyeshadow",
+        "size": "0.035 oz / 0.99 g",
+        "color": "209 Mocha Latte - soft mocha brown matte",
+    }
+
+    normalize_variant_record(record)
+
+    assert record["size"] == "0.035 oz / 0.99 g"
+    assert record["color"] == "209 Mocha Latte - soft mocha brown matte"

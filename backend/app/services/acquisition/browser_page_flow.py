@@ -801,10 +801,18 @@ async def settle_browser_page_impl(
             initial_extractability,
             surface=surface,
             requested_fields=requested_fields,
+            readiness_probe=current_probe,
         ):
+            skip_reason = "requested_content_already_extractable"
+            if (
+                not list(requested_fields or [])
+                and str(surface or "").strip().lower() == "ecommerce_detail"
+                and bool(current_probe.get("is_ready"))
+            ):
+                skip_reason = "canonical_detail_already_ready"
             expansion_diagnostics = {
                 "status": "skipped",
-                "reason": "requested_content_already_extractable",
+                "reason": skip_reason,
                 "clicked_count": 0,
                 "expanded_elements": [],
                 "interaction_failures": [],
@@ -1148,7 +1156,55 @@ def _object_int(value: object, default: int = 0) -> int:
         return default
 
 
+async def _page_might_have_location_interstitial(page: Any) -> bool:
+    selectors = _string_config_list(LOCATION_INTERSTITIAL_CONTAINER_SELECTORS)
+    tokens = _string_config_list(LOCATION_INTERSTITIAL_TEXT_TOKENS)
+    if not selectors or not tokens:
+        return False
+    try:
+        result = await page.evaluate(
+            """
+            ({selectors, tokens}) => {
+              const normalizedSelectors = Array.isArray(selectors) ? selectors : [];
+              const normalizedTokens = (Array.isArray(tokens) ? tokens : [])
+                .map((value) => String(value || '').trim().toLowerCase())
+                .filter(Boolean);
+              if (!normalizedSelectors.length || !normalizedTokens.length) {
+                return false;
+              }
+              const hasToken = (text) => {
+                const normalized = String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                return normalized && normalizedTokens.some((token) => normalized.includes(token));
+              };
+              for (const selector of normalizedSelectors) {
+                try {
+                  const node = document.querySelector(selector);
+                  if (node && hasToken(node.innerText || node.textContent || '')) {
+                    return true;
+                  }
+                } catch {}
+              }
+              const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+              return hasToken(bodyText);
+            }
+            """,
+            {"selectors": selectors, "tokens": tokens},
+        )
+    except asyncio.CancelledError:
+        raise
+    except (asyncio.TimeoutError, PlaywrightTimeoutError, PlaywrightError):
+        logger.debug(
+            "Location interstitial precheck failed url=%s",
+            getattr(page, "url", ""),
+            exc_info=True,
+        )
+        return True
+    return bool(result)
+
+
 async def dismiss_safe_location_interstitial(page: Any) -> dict[str, object]:
+    if not await _page_might_have_location_interstitial(page):
+        return {"status": "not_found", "reason": "no_location_signal"}
     selectors = _string_config_list(LOCATION_INTERSTITIAL_DISMISS_SELECTORS)
     still_present_result: dict[str, object] | None = None
     visible_timeout_ms = int(
@@ -1712,12 +1768,20 @@ def _detail_expansion_can_skip(
     *,
     surface: str | None,
     requested_fields: list[str] | None,
+    readiness_probe: dict[str, object] | None = None,
 ) -> bool:
+    if list(requested_fields or []):
+        return bool(extractability.get("verified")) and bool(
+            extractability.get("matched_requested_fields")
+        )
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface == "ecommerce_detail" and bool(
+        (readiness_probe or {}).get("is_ready")
+    ):
+        return True
     if not bool(extractability.get("verified")):
         return False
-    if list(requested_fields or []):
-        return bool(extractability.get("matched_requested_fields"))
-    return "ecommerce" not in str(surface or "").strip().lower()
+    return "ecommerce" not in normalized_surface
 
 
 async def _capture_listing_visual_elements(

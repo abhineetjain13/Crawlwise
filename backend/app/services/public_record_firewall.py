@@ -60,6 +60,7 @@ def public_record_data_for_surface(
         for field_name in canonical_requested_fields(requested_fields or [])
         if normalize_field_key(field_name)
     }
+    allowed_fields.update(explicit_fields)
     default_excluded = _default_excluded_fields_for_surface(normalized_surface)
     ecommerce_contract_excluded = {
         normalize_field_key(value)

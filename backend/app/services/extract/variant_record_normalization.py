@@ -372,6 +372,7 @@ def _clean_variant_rows(record: dict[str, Any]) -> None:
         if drop_row:
             continue
         _promote_misfiled_color_size(cleaned_variant)
+        _drop_shade_code_size_duplicate(cleaned_variant)
         _drop_invalid_variant_urls(cleaned_variant)
         if any(
             cleaned_variant.get(field_name) not in (None, "", [], {})
@@ -542,6 +543,11 @@ def _value_is_ui_noise(value: str) -> bool:
 
 
 def _drop_polluted_parent_scalar_axes(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or not any(
+        isinstance(variant, dict) for variant in variants
+    ):
+        return
     max_tokens = max(1, int(SCALAR_FIELD_MAX_OPTION_TOKENS))
     for field_name in ("color", "size"):
         value = clean_text(record.get(field_name))
@@ -595,6 +601,24 @@ def _promote_misfiled_color_size(variant: dict[str, Any]) -> None:
     if not color_value:
         return
     variant["color"] = color_value
+    variant.pop("size", None)
+
+
+def _drop_shade_code_size_duplicate(variant: dict[str, Any]) -> None:
+    size_value = clean_text(variant.get("size"))
+    color_value = clean_text(variant.get("color"))
+    if not size_value or not color_value:
+        return
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict) and clean_text(option_values.get("size")):
+        return
+    if not size_value.isdigit():
+        return
+    color_tokens = color_value.split()
+    if len(color_tokens) < 2:
+        return
+    if color_tokens[0].casefold() != size_value.casefold():
+        return
     variant.pop("size", None)
 
 

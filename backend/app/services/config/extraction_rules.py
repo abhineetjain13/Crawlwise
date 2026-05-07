@@ -808,6 +808,7 @@ DETAIL_IDENTITY_FIELDS = frozenset({"title", "image_url"})
 VARIANT_FIELDS = frozenset({"variants"})
 VARIANT_SIZE_ALIAS_SUFFIXES = (" us",)
 VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
+    "create an account",
     "sign up",
     "updates and promotions",
     # Add-to-cart / add-to-bag call-to-action captured as a variant option
@@ -830,6 +831,9 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     # Fulfillment / shipping banners leaking into variants.
     "pickup unavailable",
     "pickup not available",
+    "shipping & returns",
+    "for free shipping",
+    "your location",
     # Marketing / guarantee badges mis-classified as variant axes
     # (ROAM Luggage — DQ-2).
     "change size",
@@ -858,6 +862,12 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "show reviews with",
     "deliver once",
     "now & every",
+    "about auto-replenish",
+    "auto-replenish save",
+    "delivery every",
+    "most common",
+    "about same-day delivery",
+    "same-day delivery free",
     "shipping restrictions",
     "chat support",
     "save to wishlist",
@@ -1191,6 +1201,7 @@ DETAIL_LONG_TEXT_SOURCE_RANKS = {
     "dom_images": 12,
     "dom_text": 13,
 }
+DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS = 18
 IMAGE_FIELDS = frozenset(_IMAGE_FIELDS_RAW)
 INTEGER_VALUE_FIELDS = frozenset(_INTEGER_VALUE_FIELDS_RAW)
 LONG_TEXT_FIELDS = frozenset(
@@ -1523,6 +1534,7 @@ _EXTRA_EXPORTS = [
     "DETAIL_IDENTITY_FIELDS",
     "DETAIL_LONG_TEXT_RANK_FIELDS",
     "DETAIL_LONG_TEXT_SOURCE_RANKS",
+    "DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS",
     "DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS",
     "DETAIL_VARIANT_SIZE_SEQUENCE_MIN_COUNT",
     "DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES",

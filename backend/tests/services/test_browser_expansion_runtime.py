@@ -271,6 +271,7 @@ async def test_location_interstitial_dismisses_by_safe_text_token() -> None:
 
         def __init__(self) -> None:
             self.waited = False
+            self.dismissed = False
 
         def locator(self, selector: str):
             del selector
@@ -278,11 +279,20 @@ async def test_location_interstitial_dismisses_by_safe_text_token() -> None:
 
         async def evaluate(self, script: str, payload: dict[str, object]):
             del script
+            if "selectors" in payload:
+                return True
             assert "Continue" in payload["tokens"]
+            self.dismissed = True
             return {"status": "dismissed", "selector": "text:continue"}
 
         async def content(self) -> str:
-            return "<html><body></body></html>"
+            if self.dismissed:
+                return "<html><body></body></html>"
+            return (
+                "<html><body><div role='dialog'>"
+                "<h2>Choose your location</h2><button>Continue</button>"
+                "</div></body></html>"
+            )
 
         async def wait_for_timeout(self, timeout_ms: int) -> None:
             del timeout_ms
@@ -299,16 +309,23 @@ async def test_location_interstitial_dismisses_by_safe_text_token() -> None:
 @pytest.mark.asyncio
 async def test_location_interstitial_dismissal_counts_before_first_locator() -> None:
     class _FirstLocator:
+        def __init__(self, page: "_Page") -> None:
+            self._page = page
+
         async def wait_for(self, **_kwargs) -> None:
             return None
 
         async def click(self, **_kwargs) -> None:
+            self._page.dismissed = True
             return None
 
     class _Locator:
+        def __init__(self, page: "_Page") -> None:
+            self._page = page
+
         @property
         def first(self):
-            return _FirstLocator()
+            return _FirstLocator(self._page)
 
         async def count(self) -> int:
             return 1
@@ -318,12 +335,24 @@ async def test_location_interstitial_dismissal_counts_before_first_locator() -> 
 
         def __init__(self) -> None:
             self.waited = False
+            self.dismissed = False
 
         def locator(self, _selector: str):
-            return _Locator()
+            return _Locator(self)
+
+        async def evaluate(self, _script: str, payload: dict[str, object]):
+            if "selectors" in payload:
+                return True
+            return {"status": "not_found"}
 
         async def content(self) -> str:
-            return "<html><body></body></html>"
+            if self.dismissed:
+                return "<html><body></body></html>"
+            return (
+                "<html><body><div role='dialog'>"
+                "<h2>Choose your location</h2><button>Continue</button>"
+                "</div></body></html>"
+            )
 
         async def wait_for_timeout(self, _timeout_ms: int) -> None:
             self.waited = True
@@ -369,7 +398,7 @@ async def test_location_interstitial_dismissal_requires_modal_to_clear() -> None
             return html
 
         async def evaluate(self, _script: str, _payload: dict[str, object]):
-            return {"status": "not_found"}
+            return True
 
     result = await browser_page_flow.dismiss_safe_location_interstitial(_Page())
 
@@ -377,6 +406,24 @@ async def test_location_interstitial_dismissal_requires_modal_to_clear() -> None
     assert "selector" in result
     assert isinstance(result["selector"], str)
     assert result["selector"].strip()
+
+
+@pytest.mark.asyncio
+async def test_location_interstitial_dismissal_skips_when_no_signal_present() -> None:
+    class _Page:
+        url = "https://example.com/products/widget"
+
+        def locator(self, _selector: str):
+            raise AssertionError("locator probe should be skipped when no signal exists")
+
+        async def evaluate(self, _script: str, payload: dict[str, object]):
+            if "selectors" in payload:
+                return False
+            raise AssertionError("dismiss-by-text should be skipped when no signal exists")
+
+    result = await browser_page_flow.dismiss_safe_location_interstitial(_Page())
+
+    assert result == {"status": "not_found", "reason": "no_location_signal"}
 
 
 @dataclass
@@ -853,9 +900,9 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
     assert result.browser_diagnostics["networkidle_skip_reason"] == "fast_path_ready"
     assert (
         result.browser_diagnostics["detail_expansion"]["reason"]
-        == "missing_detail_content"
+        == "canonical_detail_already_ready"
     )
-    assert result.browser_diagnostics["detail_expansion"]["status"] == "attempted"
+    assert result.browser_diagnostics["detail_expansion"]["status"] == "skipped"
     assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 0
     assert page.goto_calls == ["domcontentloaded"]
     assert page.wait_timeout_calls == []
@@ -1427,6 +1474,34 @@ async def test_expand_all_interactive_elements_skips_blocked_commerce_actions() 
 
     assert diagnostics["clicked_count"] == 1
     assert diagnostics["expanded_elements"] == ["materials"]
+
+
+@pytest.mark.asyncio
+async def test_expand_all_interactive_elements_skips_blocked_label_tokens_without_requested_fields() -> (
+    None
+):
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {
+                "label": "Auto-Replenish Save 5% on this item",
+                "attributes": {"aria-controls": "auto-replenish-panel"},
+            },
+            {
+                "label": "Product details",
+                "attributes": {"aria-controls": "details-panel"},
+            },
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=[],
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["product details"]
 
 
 @pytest.mark.asyncio
@@ -2700,6 +2775,35 @@ async def test_expand_interactive_elements_via_accessibility_waits_for_visibilit
 
     assert locator.wait_for_calls == [("visible", 375)]
     assert diagnostics["clicked_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_expand_interactive_elements_via_accessibility_times_out_slow_snapshot(
+    patch_settings,
+) -> None:
+    patch_settings(browser_accessibility_snapshot_timeout_seconds=0.01)
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1></body></html>",
+        accessibility_snapshot={"role": "document", "children": []},
+    )
+
+    async def _slow_snapshot() -> dict[str, object]:
+        await asyncio.sleep(1)
+        return {"role": "document", "children": []}
+
+    page.accessibility = SimpleNamespace(snapshot=_slow_snapshot)
+    diagnostics = await browser_detail.expand_interactive_elements_via_accessibility_impl(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=None,
+        detail_expansion_keywords=browser_runtime.detail_expansion_keywords,
+        accessibility_expand_candidates=browser_runtime.accessibility_expand_candidates,
+        elapsed_ms=browser_runtime._elapsed_ms,
+    )
+
+    assert diagnostics["status"] == "snapshot_timeout"
+    assert diagnostics["clicked_count"] == 0
+    assert diagnostics["attempted"] is True
 
 
 @pytest.mark.asyncio

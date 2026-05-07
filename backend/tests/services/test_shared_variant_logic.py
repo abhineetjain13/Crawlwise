@@ -42,10 +42,19 @@ def test_resolve_variants_pairs_color_with_size_cartesian() -> None:
     [
         "Save to Wishlist",
         "Login to add to account Wishlist",
+        "create an account",
         "necessary",
         "functional",
         "performance",
         "targeting",
+        "Shipping & Returns",
+        "for FREE shipping",
+        "Delivery every 3 Months (most common)",
+        "About Auto-Replenish",
+        "Auto-Replenish Save 5% on this item",
+        "your location",
+        "About Same-Day Delivery",
+        "Same-Day Delivery FREE with code FREESAME",
         "Show Reviews with 5 stars",
         "Make Offer",
         "Buy Now",
@@ -552,3 +561,32 @@ def test_dom_variant_extraction_trusts_size_values_over_color_container_label() 
         "M 6 / W 7.5",
     ]
     assert all("color" not in row for row in record["variants"])
+
+
+def test_dom_variant_extraction_filters_fulfillment_noise_from_color_group() -> None:
+    soup = BeautifulSoup(
+        """
+        <main>
+          <fieldset class="color-selector">
+            <legend>Color</legend>
+            <button aria-label="209 Mocha Latte - soft mocha brown matte"></button>
+            <button aria-label="210 Satin Corset - rose gold shimmer"></button>
+            <button>Shipping &amp; Returns</button>
+            <button>About Auto-Replenish</button>
+            <button>Same-Day Delivery FREE with code FREESAME</button>
+          </fieldset>
+        </main>
+        """,
+        "html.parser",
+    )
+
+    record = extract_variants_from_dom(
+        soup,
+        page_url="https://www.sephora.com/product/colorful-eyeshadow-P515026",
+    )
+
+    assert record["variant_count"] == 2
+    assert [row.get("color") for row in record["variants"]] == [
+        "209 Mocha Latte - soft mocha brown matte",
+        "210 Satin Corset - rose gold shimmer",
+    ]

@@ -156,3 +156,21 @@ def test_sanitize_detail_features_drops_related_product_price_ctas() -> None:
     assert sanitize_detail_features(value, title="Millennium Falcon") == [
         "Includes detailed cockpit and rotating cannons"
     ]
+
+
+def test_sanitize_detail_long_text_promotes_product_details_when_description_missing() -> (
+    None
+):
+    record = {
+        "title": "Cozyla Calendar+ 2",
+        "product_details": (
+            "Better than leaving notes on the fridge, this display keeps your "
+            "family calendar, chores, and reminders in one shared place."
+        ),
+    }
+
+    from app.services.extract.detail_text_sanitizer import sanitize_detail_long_text_fields
+
+    sanitize_detail_long_text_fields(record, title_hint=record["title"])
+
+    assert record["description"] == record["product_details"]

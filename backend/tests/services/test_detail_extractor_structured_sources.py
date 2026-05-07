@@ -5516,6 +5516,50 @@ def test_build_detail_record_prefers_js_state_html_description_over_truncated_js
     assert record["features"] == ["Coreless Direct-Drive Motor"]
 
 
+def test_extract_ecommerce_detail_uses_dom_description_when_authoritative_copy_is_thin() -> (
+    None
+):
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>ABC Warpstreme Jogger</h1>
+          <section>
+            <h2>Description</h2>
+            <p>Designed for office commutes and long-haul travel.</p>
+            <ul>
+              <li>Warpstreme fabric feels sleek and dries fast.</li>
+              <li>Secure pockets keep cards and keys close.</li>
+              <li>Streamlined taper pairs easily with sneakers or loafers.</li>
+            </ul>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://shop.lululemon.com/p/men-joggers/Abc-Jogger/_/prod8530240",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "ABC Warpstreme Jogger",
+                "description": (
+                    "These sleek joggers feature our ABC technology for travel."
+                ),
+            }
+        ],
+    )
+
+    assert record["description"].startswith(
+        "Designed for office commutes and long-haul travel."
+    )
+    assert "Warpstreme fabric feels sleek and dries fast." in record["description"]
+    assert record["_extraction_tiers"]["current"] == "dom"
+
+
 def test_extract_ecommerce_detail_prefers_displayvalue_for_variant_sizes() -> None:
     html = """
     <html>
@@ -5739,3 +5783,30 @@ def test_normalize_variant_record_infers_single_variant_size_from_title_tokens()
             "size": "EU 42",
         }
     ]
+
+
+def test_extract_ecommerce_detail_reads_scalar_size_from_two_span_label_value_row() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Colorful Eyeshadow</h1>
+          <div><span>Color</span><span>209 Mocha Latte - soft mocha brown matte</span></div>
+          <div><span>Size</span><span>0.035 oz / 0.99 g</span></div>
+          <div>$8.00</div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.sephora.com/product/colorful-eyeshadow-P515026",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["size", "color", "title", "price"],
+    )
+
+    assert rows
+    assert rows[0]["color"] == "209 Mocha Latte - soft mocha brown matte"
+    assert rows[0]["size"] == "0.035 oz / 0.99 g"
