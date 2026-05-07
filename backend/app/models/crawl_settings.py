@@ -163,6 +163,14 @@ class CrawlRunSettings:
     def fetch_profile(self) -> dict[str, object]:
         stored = _mapping(self.data.get("fetch_profile"))
         traversal_mode = self.traversal_mode()
+        host_memory_ttl_seconds = _coerce_optional_int(
+            stored.get(
+                "host_memory_ttl_seconds",
+                self.data.get("host_memory_ttl_seconds"),
+            ),
+            crawler_runtime_settings.host_memory_ttl_min_seconds,
+            crawler_runtime_settings.host_memory_ttl_max_seconds,
+        )
         if stored:
             return {
                 "fetch_mode": str(stored.get("fetch_mode") or "auto").strip().lower()
@@ -178,11 +186,7 @@ class CrawlRunSettings:
                 "request_delay_ms": self.sleep_ms(),
                 "max_pages": self.max_pages(),
                 "max_scrolls": self.max_scrolls(),
-                "host_memory_ttl_seconds": _coerce_optional_int(
-                    stored.get("host_memory_ttl_seconds"),
-                    1,
-                    crawler_runtime_settings.host_memory_ttl_max_seconds,
-                ),
+                "host_memory_ttl_seconds": host_memory_ttl_seconds,
             }
         return {
             "fetch_mode": "auto",
@@ -193,11 +197,7 @@ class CrawlRunSettings:
             "request_delay_ms": self.sleep_ms(),
             "max_pages": self.max_pages(),
             "max_scrolls": self.max_scrolls(),
-            "host_memory_ttl_seconds": _coerce_optional_int(
-                stored.get("host_memory_ttl_seconds"),
-                1,
-                crawler_runtime_settings.host_memory_ttl_max_seconds,
-            ),
+            "host_memory_ttl_seconds": host_memory_ttl_seconds,
         }
 
     def locality_profile(self) -> dict[str, object]:
@@ -454,6 +454,7 @@ class CrawlRunSettings:
         normalized["sleep_ms"] = self.sleep_ms()
         normalized["request_delay_ms"] = self.sleep_ms()
         normalized["traversal_mode"] = self.traversal_mode()
+        normalized.pop("host_memory_ttl_seconds", None)
         normalized["proxy_enabled"] = bool(self.proxy_profile()["enabled"])
         normalized["proxy_list"] = self.proxy_list()
         normalized["proxy_profile"] = self.proxy_profile(infer_rotation=False)

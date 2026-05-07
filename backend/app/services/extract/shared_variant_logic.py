@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from app.services.config.extraction_rules import (
+    DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
     DETAIL_VARIANT_CONTEXT_NOISE_TOKENS,
     DETAIL_VARIANT_SCOPE_SELECTOR,
     VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH,
@@ -33,7 +34,11 @@ from app.services.config.extraction_rules import (
     VARIANT_GROUP_ATTR_NOISE_PATTERNS,
     VARIANT_GROUP_ATTR_NOISE_TOKENS,
     VARIANT_MATCHING_INPUT_LIMIT,
+    VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
+    VARIANT_OPTION_VALUE_NOISE_PATTERNS,
+    VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
+    VARIANT_PROMO_NOISE_TOKENS,
     VARIANT_QUANTITY_ATTR_TOKENS,
     VARIANT_SELECT_GROUP_MAX,
     VARIANT_SIZE_ALIAS_SUFFIXES,
@@ -47,6 +52,7 @@ from app.services.config.extraction_rules import (
     VARIANT_SWATCH_BUTTON_SELECTOR,
     VARIANT_SWATCH_PARENT_DEPTH,
     VARIANT_AXIS_TECHNICAL_PATTERNS,
+    VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH,
 )
 from app.services.field_value_core import clean_text, text_or_none
 
@@ -88,6 +94,22 @@ _variant_option_value_noise_tokens = frozenset(
     for token in tuple(VARIANT_OPTION_VALUE_NOISE_TOKENS or ())
     if str(token).strip()
 )
+_variant_promo_noise_tokens = tuple(
+    str(token).strip().lower()
+    for token in tuple(VARIANT_PROMO_NOISE_TOKENS or ())
+    if str(token).strip()
+)
+_variant_promo_noise_tokens = frozenset(_variant_promo_noise_tokens)
+_variant_artifact_value_tokens = frozenset(
+    re.sub(r"[^a-z0-9%#]+", "", str(token).strip().lower())
+    for token in tuple(DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or ())
+    if re.sub(r"[^a-z0-9%#]+", "", str(token).strip().lower())
+)
+_variant_option_value_ui_noise_phrases = tuple(
+    cleaned.casefold()
+    for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
+    if (cleaned := clean_text(token))
+)
 _variant_context_noise_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(DETAIL_VARIANT_CONTEXT_NOISE_TOKENS or ())
@@ -104,6 +126,7 @@ _variant_axis_allowed_single_tokens = frozenset(
     for token in tuple(VARIANT_AXIS_ALLOWED_SINGLE_TOKENS or ())
     if str(token).strip()
 )
+variant_axis_allowed_single_tokens = _variant_axis_allowed_single_tokens
 _variant_axis_generic_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_AXIS_GENERIC_TOKENS or ())
@@ -118,6 +141,22 @@ _variant_quantity_attr_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_QUANTITY_ATTR_TOKENS or ())
     if str(token).strip()
+)
+_variant_option_value_exact_noise_tokens = frozenset(
+    str(token).strip().lower()
+    for token in tuple(VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS or ())
+    if str(token).strip()
+)
+_variant_option_value_noise_patterns = VARIANT_OPTION_VALUE_NOISE_PATTERNS or {}
+_variant_option_value_noise_fullmatch_regexes = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(_variant_option_value_noise_patterns.get("fullmatch") or ())
+    if str(pattern).strip()
+)
+_variant_option_value_noise_search_regexes = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(_variant_option_value_noise_patterns.get("search") or ())
+    if str(pattern).strip()
 )
 
 
@@ -702,6 +741,59 @@ def _is_sequential_integer_run(
         ints.append(int(stripped))
     ints.sort()
     return ints[-1] - ints[0] == len(ints) - 1
+
+
+def variant_option_value_matches_ui_noise(value: object) -> bool:
+    """Return True for UI-control phrases. Blank values are not noise here."""
+    lowered = clean_text(value).casefold()
+    if not lowered:
+        return False
+    if any(
+        rx.fullmatch(lowered) for rx in _variant_option_value_noise_fullmatch_regexes
+    ):
+        return True
+    try:
+        max_len = int(VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH)
+    except (TypeError, ValueError):
+        max_len = 8
+    for phrase in _variant_option_value_ui_noise_phrases:
+        if len(phrase) <= max_len and " " not in phrase:
+            if lowered == phrase:
+                return True
+            continue
+        if phrase in lowered:
+            return True
+    return False
+
+
+def variant_option_value_is_noise(value: object) -> bool:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return True
+    lowered = cleaned.casefold()
+    compact = re.sub(r"[^a-z0-9%#]+", "", lowered)
+    return (
+        compact in _variant_option_value_noise_tokens
+        or compact in _variant_artifact_value_tokens
+        or re.fullmatch(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?", compact) is not None
+        or (
+            "%" in lowered
+            and any(token in lowered for token in _variant_promo_noise_tokens)
+        )
+        or lowered in _variant_option_value_exact_noise_tokens
+        or variant_option_value_matches_ui_noise(cleaned)
+        or (
+            "size guide" in lowered
+            and any(
+                rx.search(lowered)
+                for rx in _variant_option_value_noise_search_regexes
+            )
+        )
+        or any(
+            rx.fullmatch(lowered)
+            for rx in _variant_option_value_noise_fullmatch_regexes
+        )
+    )
 
 
 def _select_option_values_are_noise(node: Any) -> bool:

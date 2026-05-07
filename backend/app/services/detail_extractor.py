@@ -494,7 +494,6 @@ def _materialize_record(
             page_url=page_url,
             requested_page_url=requested_page_url,
         )
-        enforce_flat_variant_public_contract(record, page_url=page_url)
     drop_low_signal_zero_detail_price(record)
     _dedupe_primary_and_additional_images(record)
     confidence = score_record_confidence(

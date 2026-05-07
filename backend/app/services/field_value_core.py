@@ -64,6 +64,8 @@ from app.services.config.field_mappings import (
     BRAND_LIKE_FIELDS,
     FIELD_ALIASES,
     PRICE_FIELD,
+    TITLE_FIELD,
+    TITLE_STRUCTURED_VALUE_KEYS,
     URL_FIELD,
     WEIGHT_FIELD,
 )
@@ -958,24 +960,12 @@ def flatten_variants_for_public_output(
         merged: dict[str, object] = {}
         has_option_axis = False
         option_values = raw_variant.get("option_values")
-        compound_size_prefix: str | None = None
         if isinstance(option_values, dict):
             for axis_name, axis_value in option_values.items():
                 axis_text = text_or_none(axis_name)
                 if not axis_text:
                     continue
                 axis_key = _canonical_variant_axis_key(axis_text)
-                if axis_key == "style":
-                    value_text = _coerce_variant_axis_value(
-                        axis_key,
-                        axis_value,
-                        page_url=page_url,
-                    )
-                    if not value_text:
-                        continue
-                    compound_size_prefix = value_text
-                    has_option_axis = True
-                    continue
                 if axis_key not in _PUBLIC_VARIANT_AXIS_KEYS:
                     continue
                 value_text = _coerce_variant_axis_value(
@@ -1011,12 +1001,6 @@ def flatten_variants_for_public_output(
                 continue
             merged[axis_key] = value_text
             has_option_axis = True
-        if compound_size_prefix:
-            size_value = text_or_none(merged.get("size"))
-            if size_value:
-                merged["size"] = clean_text(f"{compound_size_prefix} {size_value}")
-            elif "size" not in merged:
-                merged["size"] = compound_size_prefix
         if merged and (
             has_option_axis
             or any(
@@ -1307,8 +1291,8 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         return _coerce_product_type_clean(value)
     if field_name == "product_id":
         return _coerce_identity_token_or_none(value)
-    if field_name == "title":
-        return _coerce_identity_token_or_none(value)
+    if field_name == TITLE_FIELD:
+        return _coerce_title_text(value)
     if field_name == "barcode":
         return _coerce_barcode(value)
     if field_name == "sku":
@@ -1578,6 +1562,24 @@ def _coerce_identity_token_or_none(value: object) -> str | None:
     if folded in _identity_internal_tokens:
         return None
     return text
+
+
+def _coerce_title_text(value: object) -> str | None:
+    is_structured_input = isinstance(value, dict) or (
+        isinstance(value, str)
+        and value.strip().startswith("{")
+        and value.strip().endswith("}")
+    )
+    if is_structured_input:
+        structured = coerce_structured_scalar(
+            value,
+            keys=tuple(TITLE_STRUCTURED_VALUE_KEYS or ()),
+        )
+        if structured:
+            value = structured
+        else:
+            return None
+    return _coerce_identity_token_or_none(value)
 
 
 def _coerce_product_type_clean(value: object) -> str | None:

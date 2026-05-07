@@ -18,6 +18,7 @@ from app.services.extract.detail_price_extractor import (
     reconcile_detail_currency_with_url,
 )
 from app.services.extract import detail_raw_signals
+from app.services.extract import detail_dom_extractor
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
 from tests.fixtures.loader import read_optional_artifact_text
@@ -1645,6 +1646,57 @@ def test_extract_ecommerce_detail_requires_cartesian_color_size_dom_variants() -
     record = rows[0]
     assert record["variant_count"] == 6
     assert all(row.get("size") and row.get("color") for row in record["variants"])
+
+
+def test_extract_ecommerce_detail_guarded_dom_cartesian_keeps_axis_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(detail_dom_extractor, "DOM_VARIANT_CARTESIAN_COMBO_LIMIT", 4)
+    html = """
+    <html>
+      <body>
+        <main class="product-detail">
+          <h1>Suede Runner</h1>
+          <form class="product-form" action="/cart/add">
+            <fieldset class="size-selector">
+              <legend>Size</legend>
+              <button type="button">8</button>
+              <button type="button">9</button>
+              <button type="button">10</button>
+            </fieldset>
+            <div class="color-swatch-group" aria-label="Color">
+              <button type="button" aria-label="Black"></button>
+              <button type="button" aria-label="Red"></button>
+              <button type="button" aria-label="White"></button>
+            </div>
+          </form>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/suede-runner",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_count"] == 6
+    size_rows = [row for row in record["variants"] if row.get("size")]
+    color_rows = [row for row in record["variants"] if row.get("color")]
+    assert [row.get("size") for row in size_rows] == [
+        "8",
+        "9",
+        "10",
+    ]
+    assert [row.get("color") for row in color_rows] == [
+        "Black",
+        "Red",
+        "White",
+    ]
+    assert all(not row.get("color") for row in size_rows)
+    assert all(not row.get("size") for row in color_rows)
 
 
 def test_extract_ecommerce_detail_ignores_related_product_carousel_variants() -> None:
@@ -4771,6 +4823,84 @@ def test_build_detail_record_strips_review_copy_from_color_scalar() -> None:
     )
 
     assert record["color"] == "Ivory Dove"
+
+
+def test_build_detail_record_drops_polluted_parent_color_dump_when_variants_are_cleaner() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Rambler 8 oz Stackable Cup</h1></main></body></html>",
+        "https://www.yeti.com/drinkware/tumblers/21071507376.html",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Rambler 8 oz Stackable Cup",
+                "color": (
+                    "Desert Bloom Trio 1 2 3 4 5 6 7 8 9 10 - + "
+                    "Rescue Red/White/Navy Big Sky Blue"
+                ),
+                "variants": [
+                    {"color": "Desert Bloom Trio"},
+                    {"color": "Rescue Red/White/Navy"},
+                    {"color": "Big Sky Blue"},
+                ],
+            }
+        ],
+    )
+
+    assert "color" not in record
+    assert {variant.get("color") for variant in record["variants"]} == {
+        "Desert Bloom Trio",
+        "Rescue Red/White/Navy",
+        "Big Sky Blue",
+    }
+
+
+def test_build_detail_record_prefers_dom_sizes_over_existing_color_only_variants() -> None:
+    html = """
+    <html>
+      <body>
+        <main class="product-detail">
+          <h1>Speedcat Sneakers</h1>
+          <form class="product-form" action="/cart/add">
+            <label>
+              Size
+              <select name="size">
+                <option value="">Choose size</option>
+                <option value="uk-7">UK 7</option>
+                <option value="uk-8">UK 8</option>
+                <option value="uk-9">UK 9</option>
+              </select>
+            </label>
+          </form>
+        </main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://in.puma.com/in/en/pd/speedcat-sneakers/406329?swatch=02",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Speedcat Sneakers",
+                "color": "For All Time Red-PUMA White",
+                "variants": [
+                    {"color": "PUMA Black-PUMA White"},
+                    {"color": "For All Time Red-PUMA White"},
+                    {"color": "Strawberry Burst-PUMA Black"},
+                ],
+            }
+        ],
+    )
+
+    assert record["variants"] == [
+        {"size": "UK 7"},
+        {"size": "UK 8"},
+        {"size": "UK 9"},
+    ]
+    assert record["color"] == "For All Time Red-PUMA White"
 
 
 def test_build_detail_record_drops_document_link_only_description() -> None:

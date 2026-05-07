@@ -315,6 +315,37 @@ def test_public_record_firewall_normalizes_variant_axis_aliases() -> None:
     }
 
 
+def test_public_record_firewall_preserves_flat_variant_style_axis() -> None:
+    data, _rejected = public_record_data_for_surface(
+        {
+            "title": "Italian Seersucker Sutton Suit",
+            "variants": [
+                {
+                    "option_values": {"style": "Jacket", "size": "36S"},
+                    "sku": "SUIT-JKT-36S",
+                },
+                {
+                    "option_values": {"style": "Pant", "size": "28/32"},
+                    "sku": "SUIT-PANT-28-32",
+                },
+            ],
+            "variant_count": 2,
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/suit",
+    )
+
+    assert _rejected == {}
+    assert data == {
+        "title": "Italian Seersucker Sutton Suit",
+        "variants": [
+            {"size": "36S", "style": "Jacket", "sku": "SUIT-JKT-36S"},
+            {"size": "28/32", "style": "Pant", "sku": "SUIT-PANT-28-32"},
+        ],
+        "variant_count": 2,
+    }
+
+
 def test_public_record_firewall_drops_parent_shared_variant_fields() -> None:
     data, rejected = public_record_data_for_surface(
         {
@@ -600,6 +631,21 @@ def test_option_scalars_coerce_dict_like_labels_and_reject_null_tokens() -> None
         "Please select US EU",
         "https://example.com/p/sandal",
     ) is None
+
+
+def test_title_coerces_nested_dict_like_label_instead_of_stringifying_object() -> None:
+    assert coerce_field_value(
+        "title",
+        (
+            # coerce_field_value ignores the top-level UI/display label ("Name")
+            # and prefers values.label when this dict-like shape carries the title.
+            "{'id': 20005, 'key': 'name', 'label': 'Name', 'type': '', "
+            "'multiSelect': False, 'values': {'id': 20005, "
+            "'label': 'Emperor 100% Arctic Duck Down Duvet (8.5 Tog)', "
+            "'value': 'name'}}"
+        ),
+        "https://www.harrods.com/en-gb/p/brinkhaus-emperor-duvet",
+    ) == "Emperor 100% Arctic Duck Down Duvet (8.5 Tog)"
 
 
 def test_color_scalar_extracts_value_from_prefixed_product_copy() -> None:

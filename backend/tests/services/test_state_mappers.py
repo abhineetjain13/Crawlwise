@@ -97,6 +97,43 @@ def test_map_js_state_to_fields_recovers_next_data_shopify_product_fields() -> N
     )
 
 
+def test_map_js_state_to_fields_treats_shopify_product_level_prices_as_cents() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "id": 123,
+                            "title": "Abzorb 1890 Sneaker",
+                            "handle": "abzorb-1890-sneaker",
+                            "currency": "USD",
+                            "prices": {
+                                "currentPrice": 19600,
+                                "initialPrice": 22000,
+                            },
+                            "variants": [
+                                {
+                                    "id": 53040530784367,
+                                    "sku": "U18908JY-5",
+                                    "option1": "5 M",
+                                    "available": True,
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.notre-shop.com/products/abzorb-1890-sneaker",
+    )
+
+    assert mapped["currency"] == "USD"
+    assert mapped["price"] == "USD 196"
+    assert mapped["original_price"] == "USD 220"
+
+
 def test_map_js_state_to_fields_recovers_shopify_available_sizes_rows() -> None:
     mapped = map_js_state_to_fields(
         {

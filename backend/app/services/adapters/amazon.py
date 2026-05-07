@@ -16,6 +16,14 @@ from app.services.adapters.base import (
     selectolax_node_attr,
     selectolax_node_text,
 )
+from app.services.config.extraction_rules import (
+    AMAZON_DETAIL_PRICE_SELECTORS,
+    AMAZON_PRICE_CONTAINER_SELECTOR,
+    AMAZON_PRICE_FRACTION_SELECTOR,
+    AMAZON_PRICE_OFFSCREEN_SELECTOR,
+    AMAZON_PRICE_SYMBOL_SELECTOR,
+    AMAZON_PRICE_WHOLE_SELECTOR,
+)
 from app.services.field_value_core import (
     extract_currency_code,
     flatten_variants_for_public_output,
@@ -59,6 +67,37 @@ def _normalize_price_text(value: object) -> str | None:
         re.I,
     )
     return match.group(0) if match else None
+
+
+def _price_from_price_node(price_node: object) -> str | None:
+    if price_node is None or not hasattr(price_node, "css_first"):
+        return None
+    offscreen = price_node.css_first(AMAZON_PRICE_OFFSCREEN_SELECTOR)
+    offscreen_text = _normalize_price_text(selectolax_node_text(offscreen))
+    if offscreen_text:
+        return offscreen_text
+    whole_node = price_node.css_first(AMAZON_PRICE_WHOLE_SELECTOR)
+    fraction_node = price_node.css_first(AMAZON_PRICE_FRACTION_SELECTOR)
+    whole = re.sub(r"[^\d,]+", "", selectolax_node_text(whole_node))
+    if not whole:
+        return None
+    fraction = re.sub(r"\D+", "", selectolax_node_text(fraction_node))[:2]
+    symbol = selectolax_node_text(price_node.css_first(AMAZON_PRICE_SYMBOL_SELECTOR))
+    return f"{symbol or ''}{whole}.{fraction or '00'}"
+
+
+def _detail_price_text(parser: LexborHTMLParser) -> str | None:
+    for selector in AMAZON_DETAIL_PRICE_SELECTORS:
+        price_text = _normalize_price_text(
+            selectolax_node_text(parser.css_first(selector))
+        )
+        if price_text:
+            return price_text
+    for price_node in parser.css(AMAZON_PRICE_CONTAINER_SELECTOR):
+        price_text = _price_from_price_node(price_node)
+        if price_text:
+            return price_text
+    return None
 
 
 def _asin_from_url(url: str) -> str | None:
@@ -128,9 +167,6 @@ class AmazonAdapter(BaseAdapter):
 
     def _extract_detail(self, parser: LexborHTMLParser, url: str) -> dict | None:
         title_el = parser.css_first("#productTitle")
-        price_el = parser.css_first(
-            ".a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice"
-        )
         brand_el = parser.css_first("#bylineInfo, .po-brand .a-span9 .a-size-base")
         rating_el = parser.css_first("#acrPopover .a-icon-alt, .a-icon-star span")
         review_el = parser.css_first("#acrCustomerReviewText")
@@ -150,7 +186,7 @@ class AmazonAdapter(BaseAdapter):
         rating_match = re.search(r"(\d+\.?\d*)", rating_text)
         review_text = selectolax_node_text(review_el)
         review_match = re.search(r"([\d,]+)", review_text)
-        price_text = _normalize_price_text(selectolax_node_text(price_el))
+        price_text = _detail_price_text(parser)
         currency = extract_currency_code(price_text)
         images = self._detail_images(parser)
         bullets = self._feature_bullets(parser)

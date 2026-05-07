@@ -9,6 +9,7 @@ from app.services.extract.shared_variant_logic import (
     resolve_variant_group_name,
     resolve_variants,
     variant_axis_name_is_semantic,
+    variant_option_value_is_noise,
 )
 
 
@@ -31,6 +32,31 @@ def test_resolve_variants_pairs_color_with_size_cartesian() -> None:
     assert resolved[1]["variant_id"] == "3"
     assert resolved[2]["variant_id"] == "4"
     assert resolved[3]["variant_id"] == "1"
+
+
+def test_variant_option_value_is_noise_handles_ui_controls_without_dropping_real_sizes() -> None:
+    noisy_values = [
+        "Save to Wishlist",
+        "Login to add to account Wishlist",
+        "necessary",
+        "functional",
+        "performance",
+        "targeting",
+        "Show Reviews with 5 stars",
+        "Make Offer",
+        "Buy Now",
+        "-",
+        "+",
+        "5 stars",
+    ]
+
+    for value in noisy_values:
+        assert variant_option_value_is_noise(value) is True, repr(value)
+
+    valid_values = ["Size A - Small", "Black / Onyx Ultra Matte", "UK 9"]
+
+    for value in valid_values:
+        assert variant_option_value_is_noise(value) is False, repr(value)
 
 
 def test_resolve_variants_skips_missing_combinations() -> None:

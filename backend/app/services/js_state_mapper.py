@@ -610,7 +610,10 @@ def _map_product_payload(
     active_variant = select_variant(variants, page_url=page_url)
     price = variant_attribute(active_variant, "price")
     if price in (None, "", [], {}):
-        raw_current_price = _raw_current_price_value(product)
+        raw_current_price = _raw_current_price_value(
+            product,
+            interpret_integral_as_cents=shopify_like,
+        )
         if raw_current_price is not None:
             price = raw_current_price
         else:
@@ -625,7 +628,10 @@ def _map_product_payload(
         "original_price",
     )
     if original_price in (None, "", [], {}):
-        raw_original_price = _raw_original_price_value(product)
+        raw_original_price = _raw_original_price_value(
+            product,
+            interpret_integral_as_cents=shopify_like,
+        )
         original_price = raw_original_price if raw_original_price is not None else normalize_price(
             base.get("original_price"),
             interpret_integral_as_cents=shopify_like,
@@ -748,7 +754,11 @@ def _extract_ecommerce_description_fields(value: object) -> dict[str, object]:
     return result
 
 
-def _raw_current_price_value(product: dict[str, Any]) -> str | None:
+def _raw_current_price_value(
+    product: dict[str, Any],
+    *,
+    interpret_integral_as_cents: bool,
+) -> str | None:
     return _contextual_numeric_value(
         product,
         (
@@ -757,9 +767,15 @@ def _raw_current_price_value(product: dict[str, Any]) -> str | None:
             ("pricing_information", "currentPrice"),
             ("pricing_information", "standard_price"),
         ),
+        interpret_integral_as_cents=interpret_integral_as_cents,
     )
 
-def _raw_original_price_value(product: dict[str, Any]) -> str | None:
+
+def _raw_original_price_value(
+    product: dict[str, Any],
+    *,
+    interpret_integral_as_cents: bool,
+) -> str | None:
     return _contextual_numeric_value(
         product,
         (
@@ -768,6 +784,7 @@ def _raw_original_price_value(product: dict[str, Any]) -> str | None:
             ("pricing_information", "listPrice"),
             ("mrp",),
         ),
+        interpret_integral_as_cents=interpret_integral_as_cents,
     )
 
 
@@ -787,6 +804,8 @@ def _discounted_percentage_price(product: dict[str, Any]) -> str | None:
 def _contextual_numeric_value(
     product: dict[str, Any],
     paths: tuple[tuple[str, ...], ...],
+    *,
+    interpret_integral_as_cents: bool,
 ) -> str | None:
     currency = _raw_currency_value(product)
     if not currency:
@@ -794,7 +813,15 @@ def _contextual_numeric_value(
     value = _raw_numeric_value(product, paths)
     if value is None:
         return None
-    return f"{currency} {value}"
+    normalized = normalize_price(
+        value,
+        interpret_integral_as_cents=interpret_integral_as_cents,
+    )
+    if normalized is None:
+        return f"{currency} {value}"
+    if normalized.startswith(f"{currency} "):
+        return normalized
+    return f"{currency} {normalized}"
 
 def _raw_numeric_value(
     product: dict[str, Any],

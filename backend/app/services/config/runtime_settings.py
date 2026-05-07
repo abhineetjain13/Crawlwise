@@ -156,6 +156,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     protected_host_additional_interval_ms: int = 2000
     pacing_host_cache_max_entries: int = 1024
     pacing_host_cache_ttl_seconds: int = 900
+    host_memory_ttl_min_seconds: int = 1
     host_memory_ttl_max_seconds: int = 86400
     browser_first_host_block_threshold: int = 2
     run_quality_threshold_high: float = 0.8
@@ -346,7 +347,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     low_quality_browser_retry_min_remaining_seconds: float = 85.0
     acquisition_contract_stale_failure_threshold: int = 2
     detail_max_variant_axes: int = 3
-    detail_max_variant_rows: int = 100
+    detail_max_variant_rows: int = 0
     detail_max_variant_matrix_cells: int = 200
     listing_candidate_strong_score_threshold: int = 18
     robots_cache_size: int = 512
@@ -466,9 +467,17 @@ class CrawlerRuntimeSettings(BaseSettings):
         for field_name in (
             "acquisition_artifact_ttl_seconds",
             "acquisition_artifact_cleanup_interval_seconds",
-            "host_memory_ttl_max_seconds",
         ):
             _require_non_negative(field_name, getattr(self, field_name))
+        _require_positive("host_memory_ttl_min_seconds", self.host_memory_ttl_min_seconds)
+        _require_non_negative(
+            "host_memory_ttl_max_seconds",
+            self.host_memory_ttl_max_seconds,
+        )
+        if self.host_memory_ttl_max_seconds < self.host_memory_ttl_min_seconds:
+            raise ValueError(
+                "host_memory_ttl_max_seconds must be >= host_memory_ttl_min_seconds"
+            )
         _require_unit_interval(
             "llm_confidence_threshold", self.llm_confidence_threshold
         )
@@ -480,12 +489,20 @@ class CrawlerRuntimeSettings(BaseSettings):
             "selector_self_heal_min_confidence",
             self.selector_self_heal_min_confidence,
         )
-        for field_name in (
-            "detail_max_variant_axes",
-            "detail_max_variant_rows",
+        _require_positive("detail_max_variant_axes", self.detail_max_variant_axes)
+        _require_non_negative(
             "detail_max_variant_matrix_cells",
-        ):
-            _require_positive(field_name, getattr(self, field_name))
+            self.detail_max_variant_matrix_cells,
+        )
+        _require_non_negative("detail_max_variant_rows", self.detail_max_variant_rows)
+        if self.detail_max_variant_rows > 0:
+            required_cells = (
+                self.detail_max_variant_rows * self.detail_max_variant_axes
+            )
+            if self.detail_max_variant_matrix_cells < required_cells:
+                raise ValueError(
+                    "detail_max_variant_matrix_cells must be >= detail_max_variant_rows * detail_max_variant_axes"
+                )
         return self
 
     def coerce_url_timeout_seconds(self, value: object) -> float:
@@ -509,7 +526,8 @@ class CrawlerRuntimeSettings(BaseSettings):
         )
 
     def coerce_host_memory_ttl_seconds(self, value: object) -> int:
-        default_ttl = max(1, int(self.pacing_host_cache_ttl_seconds))
+        min_ttl = max(1, int(self.host_memory_ttl_min_seconds))
+        default_ttl = max(min_ttl, int(self.pacing_host_cache_ttl_seconds))
         max_ttl = max(default_ttl, int(self.host_memory_ttl_max_seconds))
         if value is None:
             return default_ttl
@@ -522,7 +540,7 @@ class CrawlerRuntimeSettings(BaseSettings):
             return default_ttl
         if ttl <= 0:
             return default_ttl
-        return min(ttl, max_ttl)
+        return min(max(ttl, min_ttl), max_ttl)
 
 
 crawler_runtime_settings = CrawlerRuntimeSettings()

@@ -196,6 +196,43 @@ def test_normalize_variant_record_preserves_referenced_single_value_axes() -> No
     assert record["variant_count"] == 2
 
 
+def test_normalize_variant_record_drops_subset_rows_using_indexed_axis_lookup() -> None:
+    record = {
+        "variants": [
+            {"size": "M"},
+            {"size": "M", "color": "Black"},
+            {"size": "L"},
+            {"size": "L", "color": "Black"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {"size": "M", "color": "Black"},
+        {"size": "L", "color": "Black"},
+    ]
+    assert record["variant_count"] == 2
+
+
+def test_normalize_variant_record_drops_parent_sku_alias_rows_using_indexed_lookup() -> None:
+    record = {
+        "variants": [
+            {"sku": "BOMBAS-BLACK", "size": "M"},
+            {"sku": "BOMBAS-BLACK-M", "size": "M", "availability": "InStock"},
+            {"sku": "BOMBAS-BLACK-L", "size": "L", "availability": "InStock"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {"sku": "BOMBAS-BLACK-M", "size": "M", "availability": "in_stock"},
+        {"sku": "BOMBAS-BLACK-L", "size": "L", "availability": "in_stock"},
+    ]
+    assert record["variant_count"] == 2
+
+
 def test_normalize_variant_record_drops_axisless_rows_and_rejects_foreign_currency() -> None:
     record = {
         "currency": "GBP",
@@ -231,6 +268,76 @@ def test_normalize_variant_record_drops_ui_control_variant_values() -> None:
 
     assert "variants" not in record
     assert "variant_count" not in record
+
+
+def test_normalize_variant_record_drops_ce4_ui_and_cookie_axis_values() -> None:
+    record = {
+        "variants": [
+            {"size": "Save to Wishlist"},
+            {"size": "Saved to wishlist"},
+            {"size": "Login to add to account Wishlist"},
+            {"size": "necessary"},
+            {"size": "functional"},
+            {"size": "performance"},
+            {"size": "targeting"},
+            {"color": "Make Offer"},
+            {"color": "Buy Now"},
+            {"size": "sign in"},
+            {"size": "Link your member number,"},
+            {"size": "a lifetime of benefits."},
+            {"size": "5 stars"},
+            {"size": "-"},
+            {"size": "+"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert "variants" not in record
+    assert "variant_count" not in record
+
+
+def test_normalize_variant_record_strips_learn_more_from_real_size() -> None:
+    record = {
+        "variants": [
+            {
+                "url": "https://www.size.co.uk/product/purple-shoe/19738059/?size=7",
+                "size": "7 Learn More",
+            },
+            {
+                "url": "https://www.size.co.uk/product/purple-shoe/19738059/?size=7-5",
+                "size": "7.5 Learn More",
+            },
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {
+            "url": "https://www.size.co.uk/product/purple-shoe/19738059/?size=7",
+            "size": "7",
+        },
+        {
+            "url": "https://www.size.co.uk/product/purple-shoe/19738059/?size=7-5",
+            "size": "7.5",
+        },
+    ]
+
+
+def test_normalize_variant_record_drops_quantity_size_rows_before_color_only_rows_survive() -> None:
+    record = {
+        "variants": [
+            {"size": "-", "color": "Black"},
+            {"size": "+", "color": "Black"},
+            {"size": "8 oz Ceramic", "color": "Black"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [{"size": "8 oz Ceramic", "color": "Black"}]
+    assert record["variant_count"] == 1
 
 
 def test_normalize_variant_record_preserves_real_short_axes_after_ui_noise_prune() -> None:
@@ -280,6 +387,135 @@ def test_normalize_variant_record_promotes_color_values_misfiled_as_size() -> No
         {"color": "Matte Black"},
     ]
     assert record["variant_count"] == 2
+
+
+def test_normalize_variant_record_infers_bombas_sizes_from_sku_suffixes() -> None:
+    record = {
+        "title": "Men's All Sport Ankle Socks",
+        "variants": [
+            {
+                "sku": "A-E-A-129AM3-SADS-01P-BLACK-XL",
+                "color": "black onyx",
+                "price": "15.00",
+            },
+            {
+                "sku": "A-E-A-129A44-CLAS-01P-BLACK-M",
+                "color": "charcoal marl",
+                "price": "15.00",
+            },
+            {
+                "sku": "A-E-A-129A44-SOLI-01P-WHITE-L-2024",
+                "color": "True White",
+                "price": "15.00",
+            },
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert [variant.get("size") for variant in record["variants"]] == ["XL", "M", "L"]
+
+
+def test_normalize_variant_record_prunes_patagonia_cross_product_size_noise() -> None:
+    record = {
+        "title": "Men's Nano Puff Jacket",
+        "gender": "Men",
+        "variants": [
+            {"size": "NB-7lb"},
+            {"size": "0-3m"},
+            {"size": "2T"},
+            {"size": "XS"},
+            {"size": "S"},
+            {"size": "M"},
+            {"size": "L"},
+            {"size": "Climbing"},
+            {"size": "Yoga"},
+            {"size": "Runs Small"},
+            {"size": "True to Size"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert [variant["size"] for variant in record["variants"]] == ["XS", "S", "M", "L"]
+
+
+def test_normalize_variant_record_drops_backmarket_condition_tabs() -> None:
+    record = {
+        "variants": [
+            {"color": "Black", "storage": "128 GB", "condition": "Fair"},
+            {"color": "Blue", "storage": "128 GB", "condition": "Good"},
+            {"color": "Black", "storage": "128 GB", "condition": "More"},
+            {"color": "Black", "storage": "128 GB", "condition": "Condition (476)"},
+            {"color": "Black", "storage": "128 GB", "condition": "Quality (383)"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {"color": "Black", "storage": "128 GB", "condition": "Fair"},
+        {"color": "Blue", "storage": "128 GB", "condition": "Good"},
+    ]
+    assert record["variant_count"] == len(record["variants"]) == 2
+
+
+def test_normalize_variant_record_preserves_separate_suit_sizes_with_dimension_labels() -> None:
+    record = {
+        "title": "Italian Seersucker Sutton Suit",
+        "variants": [
+            {"size": "36S"},
+            {"size": "40R"},
+            {"size": "28/32"},
+            {"size": "34/30"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {"size": "36S", "style": "Jacket"},
+        {"size": "40R", "style": "Jacket"},
+        {"size": "28/32", "style": "Pant"},
+        {"size": "34/30", "style": "Pant"},
+    ]
+    assert record["variant_count"] == 4
+
+
+def test_normalize_variant_record_keeps_independent_color_rows_without_selected_parent_color() -> None:
+    record = {
+        "title": "Canvas Sneaker",
+        "variants": [
+            {"color": "Black"},
+            {"color": "White"},
+            {"size": "US 8"},
+            {"size": "US 9"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {"color": "Black"},
+        {"color": "White"},
+        {"size": "US 8"},
+        {"size": "US 9"},
+    ]
+
+
+def test_normalize_variant_record_drops_foreign_product_titles_misfiled_as_colors() -> None:
+    record = {
+        "title": "40th Anniversary Graphic Womens Short Sleeve Shirt",
+        "variants": [
+            {"color": "Black/Red"},
+            {"color": "Flight Muay Thai Mens Shorts (Black/Sail/University Red)"},
+            {"color": 'Brooklyn Graphic 9" Mens Shorts (Black/Gray)'},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [{"color": "Black/Red"}]
 
 
 

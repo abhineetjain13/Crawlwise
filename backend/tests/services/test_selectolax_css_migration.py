@@ -939,6 +939,31 @@ async def test_amazon_adapter_preserves_currency_code_in_price_text() -> None:
 
 
 @pytest.mark.asyncio
+async def test_amazon_adapter_combines_visible_whole_and_fraction_price() -> None:
+    result = await AmazonAdapter().extract(
+        "https://www.amazon.com/dp/B08J5F3G18",
+        """
+        <html>
+          <body>
+            <span id="productTitle">EVGA GeForce RTX 3090</span>
+            <span class="a-price">
+              <span class="a-price-symbol">$</span>
+              <span class="a-price-whole">1,359.</span>
+              <span class="a-price-fraction">96</span>
+            </span>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    assert result.records, result.records
+    record = result.records[0]
+    assert record["price"] == "$1,359.96"
+    assert record["currency"] == "USD"
+
+
+@pytest.mark.asyncio
 async def test_amazon_adapter_preserves_store_brand_suffix() -> None:
     result = await AmazonAdapter().extract(
         "https://www.amazon.com/dp/example",

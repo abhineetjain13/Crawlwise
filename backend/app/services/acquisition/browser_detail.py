@@ -163,8 +163,8 @@ def _finish_expansion_diagnostics(
     started_at: float,
     elapsed_ms: Callable[[float], int],
 ) -> dict[str, object]:
-    if diagnostics.get("status") == "attempted" and clicked_count > 0:
-        diagnostics["status"] = "expanded"
+    if diagnostics.get("status") == "attempted":
+        diagnostics["status"] = "expanded" if clicked_count > 0 else "no_matches"
     diagnostics["clicked_count"] = clicked_count
     diagnostics["expanded_elements"] = expanded_elements
     diagnostics["interaction_failures"] = interaction_failures

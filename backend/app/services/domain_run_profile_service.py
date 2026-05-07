@@ -237,7 +237,7 @@ def normalize_domain_run_profile(
             ),
             "host_memory_ttl_seconds": _coerce_optional_int(
                 fetch_profile.get("host_memory_ttl_seconds"),
-                minimum=1,
+                minimum=crawler_runtime_settings.host_memory_ttl_min_seconds,
                 maximum=crawler_runtime_settings.host_memory_ttl_max_seconds,
             ),
         },

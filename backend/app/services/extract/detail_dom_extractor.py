@@ -11,12 +11,9 @@ from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
+    DOM_VARIANT_CARTESIAN_COMBO_LIMIT,
     DOM_VARIANT_GROUP_LIMIT,
-    DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
-    VARIANT_PROMO_NOISE_TOKENS,
-    VARIANT_OPTION_VALUE_NOISE_TOKENS,
-    VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_SIZE_VALUE_PATTERNS,
 )
@@ -62,6 +59,7 @@ from app.services.extract.shared_variant_logic import (
     split_variant_axes,
     variant_axis_name_is_semantic,
     variant_dom_cues_present,
+    variant_option_value_is_noise as _shared_variant_option_value_is_noise,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,26 +73,6 @@ _variant_option_value_suffix_noise_patterns = tuple(
     re.compile(str(pattern), re.I)
     for pattern in VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS
     if str(pattern).strip()
-)
-_variant_option_value_noise_tokens = frozenset(
-    str(token).strip().lower()
-    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
-    if str(token).strip()
-)
-_variant_option_value_ui_noise_phrases = tuple(
-    str(token).strip().lower()
-    for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
-    if str(token).strip()
-)
-_variant_promo_noise_tokens = tuple(
-    str(token).strip().lower()
-    for token in tuple(VARIANT_PROMO_NOISE_TOKENS or ())
-    if str(token).strip()
-)
-_variant_artifact_value_tokens = frozenset(
-    str(token).strip().lower()
-    for token in tuple(DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or ())
-    if str(token).strip()
 )
 _public_variant_axis_fields = frozenset(
     str(token).strip().lower()
@@ -368,32 +346,7 @@ def _resolve_dom_variant_group_name(node: Any) -> str:
 
 
 def _variant_option_value_is_noise(value: str | None) -> bool:
-    if not value:
-        return True
-    lowered = value.lower()
-    compact = re.sub(r"[^a-z0-9%#]+", "", lowered)
-    return (
-        compact in _variant_option_value_noise_tokens
-        or compact in _variant_artifact_value_tokens
-        or re.fullmatch(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?", compact) is not None
-        or (
-            "%" in lowered
-            and any(token in lowered for token in _variant_promo_noise_tokens)
-        )
-        or lowered in {"select", "choose", "option", "size guide"}
-        or any(phrase in lowered for phrase in _variant_option_value_ui_noise_phrases)
-        or (
-            "size guide" in lowered
-            and re.search(r"\b(?:please\s+)?select\b", lowered) is not None
-        )
-        or (
-            re.fullmatch(r"[-\s]*(?:click\s+to\s+)?(?:choose|select)\b.*", lowered)
-            is not None
-        )
-        or re.fullmatch(r"[-\s]+.+[-\s]+", lowered) is not None
-        or re.fullmatch(r"\(\d+\)", value) is not None
-        or re.fullmatch(r"\d{3,5}/\d{2,5}/\d{2,5}", value) is not None
-    )
+    return _shared_variant_option_value_is_noise(value)
 
 
 def _strip_variant_option_value_suffix_noise(value: object) -> str:
@@ -1292,39 +1245,46 @@ def _extract_variants_from_dom(
     variants: list[dict[str, object]] = []
     axis_names = [axis_key for axis_key, _label, _values in axis_order]
     axis_value_lists = [values for _axis_key, _label, values in axis_order]
-    for combo in product(*axis_value_lists):
-        option_values = {
-            axis_name: value
-            for axis_name, value in zip(axis_names, combo, strict=False)
-            if clean_text(value)
-        }
-        if not option_values:
-            continue
-        variant: dict[str, object] = {
-            "option_values": option_values,
-        }
-        for axis_name, value in option_values.items():
-            variant[axis_name] = value
-        combo_metadata = state_combo_targets.get(
-            tuple(sorted(option_values.items())), {}
-        )
-        for key in ("url", "variant_id"):
-            if combo_metadata.get(key) not in (None, "", [], {}):
-                variant[key] = combo_metadata[key]
-        if len(axis_names) == 1:
-            axis_key = axis_names[0]
-            option_metadata = axis_option_metadata.get(axis_key, {}).get(
-                str(combo[0]), {}
+    try:
+        combo_limit = int(DOM_VARIANT_CARTESIAN_COMBO_LIMIT)
+    except (TypeError, ValueError):
+        combo_limit = 1000
+    if _dom_variant_combo_count(axis_value_lists) > combo_limit:
+        variants = _axis_only_dom_variants(axis_order, axis_option_metadata)
+    else:
+        for combo in product(*axis_value_lists):
+            option_values = {
+                axis_name: value
+                for axis_name, value in zip(axis_names, combo, strict=False)
+                if clean_text(value)
+            }
+            if not option_values:
+                continue
+            variant: dict[str, object] = {
+                "option_values": option_values,
+            }
+            for axis_name, value in option_values.items():
+                variant[axis_name] = value
+            combo_metadata = state_combo_targets.get(
+                tuple(sorted(option_values.items())), {}
             )
-            availability = text_or_none(option_metadata.get("availability"))
-            if availability:
-                variant["availability"] = availability
-            if option_metadata.get("stock_quantity") not in (None, "", [], {}):
-                variant["stock_quantity"] = option_metadata.get("stock_quantity")
             for key in ("url", "variant_id"):
-                if option_metadata.get(key) not in (None, "", [], {}):
-                    variant[key] = option_metadata.get(key)
-        variants.append(variant)
+                if combo_metadata.get(key) not in (None, "", [], {}):
+                    variant[key] = combo_metadata[key]
+            if len(axis_names) == 1:
+                axis_key = axis_names[0]
+                option_metadata = axis_option_metadata.get(axis_key, {}).get(
+                    str(combo[0]), {}
+                )
+                availability = text_or_none(option_metadata.get("availability"))
+                if availability:
+                    variant["availability"] = availability
+                if option_metadata.get("stock_quantity") not in (None, "", [], {}):
+                    variant["stock_quantity"] = option_metadata.get("stock_quantity")
+                for key in ("url", "variant_id"):
+                    if option_metadata.get(key) not in (None, "", [], {}):
+                        variant[key] = option_metadata.get(key)
+            variants.append(variant)
 
     selectable_axes, single_value_attributes = split_variant_axes(
         axis_values_by_name,
@@ -1381,6 +1341,42 @@ def _extract_variants_from_dom(
                 if selected_availability:
                     record["availability"] = selected_availability
     return record
+
+
+def _dom_variant_combo_count(axis_value_lists: list[list[str]]) -> int:
+    count = 1
+    for values in axis_value_lists:
+        count *= max(1, len(values))
+    return count
+
+
+def _axis_only_dom_variants(
+    axis_order: list[tuple[str, str, list[str]]],
+    axis_option_metadata: dict[str, dict[str, dict[str, object]]],
+) -> list[dict[str, object]]:
+    variants: list[dict[str, object]] = []
+    for axis_key, _name, values in axis_order:
+        for value in values:
+            cleaned_value = clean_text(value)
+            if not cleaned_value:
+                continue
+            option_values = {axis_key: cleaned_value}
+            variant: dict[str, object] = {
+                "option_values": option_values,
+                axis_key: cleaned_value,
+            }
+            metadata = axis_option_metadata.get(axis_key, {}).get(cleaned_value, {})
+            for key in (
+                "availability",
+                "selected",
+                "stock_quantity",
+                "url",
+                "variant_id",
+            ):
+                if metadata.get(key) not in (None, "", [], {}):
+                    variant[key] = metadata[key]
+            variants.append(variant)
+    return variants
 
 
 def _backfill_variants_from_dom_if_missing(

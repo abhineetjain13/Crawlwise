@@ -30,12 +30,15 @@ from app.services.config.extraction_rules import (
 )
 from app.services.field_value_core import (
     clean_text,
-    flatten_variants_for_public_output,
+    enforce_flat_variant_public_contract,
     same_site,
     text_or_none,
 )
 from app.services.field_value_dom import dedupe_image_urls, upgrade_low_resolution_image_url
-from app.services.extract.detail_dom_extractor import (
+from app.services.extract.shared_variant_logic import (
+    normalized_variant_axis_key,
+    variant_axis_allowed_single_tokens,
+    variant_axis_name_is_semantic,
     variant_option_value_is_noise as _variant_option_value_is_noise,
 )
 from app.services.extract.detail_identity import (
@@ -62,11 +65,6 @@ from app.services.extract.detail_text_sanitizer import (
     detail_scalar_size_is_low_signal,
     detail_title_value_is_low_signal,
     sanitize_detail_long_text_fields,
-)
-from app.services.extract.shared_variant_logic import (
-    normalized_variant_axis_key,
-    variant_axis_name_is_semantic,
-    _variant_axis_allowed_single_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -435,15 +433,8 @@ def _sanitize_detail_variant_payload(
     if _detail_variant_cluster_is_low_signal_numeric_only(cleaned_variants):
         cleaned_variants = []
     if cleaned_variants:
-        flat_variants = flatten_variants_for_public_output(
-            cleaned_variants, page_url=identity_url
-        )
-        if flat_variants:
-            record["variants"] = flat_variants
-            record["variant_count"] = len(flat_variants)
-        else:
-            record.pop("variants", None)
-            record.pop("variant_count", None)
+        record["variants"] = cleaned_variants
+        record["variant_count"] = len(cleaned_variants)
     else:
         record.pop("variants", None)
         record.pop("variant_count", None)
@@ -535,7 +526,7 @@ def _sanitize_variant_row(
             "option_values",
             "size",
             "color",
-            *_variant_axis_allowed_single_tokens,
+            *variant_axis_allowed_single_tokens,
         )
     )
 
@@ -559,6 +550,7 @@ def repair_ecommerce_detail_record_quality(
     _repair_invalid_original_prices(record)
     _drop_invalid_detail_discounts(record)
     _repair_detail_variant_prices_and_identity(record)
+    enforce_flat_variant_public_contract(record, page_url=page_url)
 
 
 def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
@@ -840,8 +832,6 @@ def _drop_variant_derived_parent_axis_scalars(record: dict[str, Any]) -> None:
     field_sources = record.get("_field_sources")
     sources = field_sources if isinstance(field_sources, dict) else {}
     for field_name in ("size", "color"):
-        if sources.get(field_name):
-            continue
         parent_value = clean_text(record.get(field_name))
         if not parent_value:
             continue
@@ -850,8 +840,49 @@ def _drop_variant_derived_parent_axis_scalars(record: dict[str, Any]) -> None:
             for row in variants
             if clean_text(row.get(field_name))
         }
+        if field_name == "color" and _parent_axis_value_looks_like_variant_dump(
+            parent_value,
+            variant_values,
+        ):
+            record.pop(field_name, None)
+            continue
+        if sources.get(field_name):
+            continue
         if variant_values == {parent_value.casefold()}:
             record.pop(field_name, None)
+            continue
+
+
+def _parent_axis_value_looks_like_variant_dump(
+    parent_value: str,
+    variant_values: set[str],
+) -> bool:
+    if len(variant_values) < 2:
+        return False
+    normalized_parent = clean_text(parent_value).casefold()
+    if not normalized_parent:
+        return False
+    def _whole_value_pattern(value: str) -> re.Pattern[str]:
+        return re.compile(rf"(?<![a-z0-9]){re.escape(value)}(?![a-z0-9])")
+
+    if not all(
+        value and _whole_value_pattern(value).search(normalized_parent)
+        for value in variant_values
+    ):
+        return False
+    residual = normalized_parent
+    for value in sorted(variant_values, key=len, reverse=True):
+        residual = _whole_value_pattern(value).sub(" ", residual)
+    residual = clean_text(re.sub(r"[\d+\-−/]+", " ", residual)).casefold()
+    if residual:
+        return True
+    return (
+        re.search(r"\b\d+\b", normalized_parent) is not None
+        or "+" in normalized_parent
+        or "-" in normalized_parent
+        or "−" in normalized_parent
+        or "/" in normalized_parent
+    )
 
 
 def _sanitize_detail_images(record: dict[str, Any], *, identity_url: str) -> None:

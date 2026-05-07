@@ -25,6 +25,7 @@ NORMALIZER_LIST_TEXT_FIELDS = frozenset(
 )
 
 COLOR_FIELD = "color"
+TITLE_FIELD = "title"
 SIZE_FIELD = "size"
 WIDTH_FIELD = "width"
 WEIGHT_FIELD = "weight"
@@ -46,6 +47,14 @@ SKU_FIELD = "sku"
 ROUTE_BARCODE_TO_SKU = True
 NAVIGATION_URL_FIELDS = frozenset({URL_FIELD, APPLY_URL_FIELD, CANONICAL_URL_FIELD})
 BRAND_LIKE_FIELDS = frozenset({"brand", "company", "dealer_name", "vendor"})
+TITLE_STRUCTURED_VALUE_KEYS = (
+    "name",
+    "title",
+    "values",
+    "label",
+    "text",
+    "value",
+)
 _EXTRA_EXPORTS = [
     "AVAILABLE_SIZES_FIELD",
     "APPLY_URL_FIELD",
@@ -63,6 +72,8 @@ _EXTRA_EXPORTS = [
     "SIZE_FIELD",
     "SKU_FIELD",
     "STOCK_QUANTITY_FIELD",
+    "TITLE_FIELD",
+    "TITLE_STRUCTURED_VALUE_KEYS",
     "URL_FIELD",
     "VARIANTS_FIELD",
     "VARIANT_AXES_FIELD",

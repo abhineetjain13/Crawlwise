@@ -16,6 +16,16 @@ from app.services.config.runtime_settings import crawler_runtime_settings
 HTML_PARSER = "html.parser"
 AOM_EXPAND_ROLES = frozenset({"button", "tab", "link", "menuitem"})
 DETAIL_AOM_EXPAND_ROLES = frozenset({"button", "tab"})
+AMAZON_PRICE_OFFSCREEN_SELECTOR = ".a-offscreen"
+AMAZON_PRICE_WHOLE_SELECTOR = ".a-price-whole"
+AMAZON_PRICE_FRACTION_SELECTOR = ".a-price-fraction"
+AMAZON_PRICE_SYMBOL_SELECTOR = ".a-price-symbol"
+AMAZON_PRICE_CONTAINER_SELECTOR = ".a-price"
+AMAZON_DETAIL_PRICE_SELECTORS = (
+    f"{AMAZON_PRICE_CONTAINER_SELECTOR} {AMAZON_PRICE_OFFSCREEN_SELECTOR}",
+    "#priceblock_ourprice",
+    "#priceblock_dealprice",
+)
 
 _EXPORTS_PATH = Path(__file__).with_name("extraction_rules.exports.json")
 _STATIC_EXPORTS = {
@@ -378,9 +388,8 @@ STANDARD_SIZE_VALUES = frozenset({"xs", "s", "m", "l", "xl", "xxl", "xxxl"})
 VARIANT_TITLE_STOPWORDS = frozenset(
     {"and", "for", "the", "with", "size", "color", "colour", "variant"}
 )
-DEFAULT_DETAIL_MAX_VARIANT_ROWS = 1
-FALLBACK_MAX_VARIANT_ROWS = 100
 DOM_VARIANT_GROUP_LIMIT = 4
+DOM_VARIANT_CARTESIAN_COMBO_LIMIT = 1000
 UNRESOLVED_TEMPLATE_URL_TOKENS = (
     "url_to_",
     "{{",
@@ -722,11 +731,40 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "now & every",
     "shipping restrictions",
     "chat support",
+    "save to wishlist",
+    "saved to wishlist",
+    "account wishlist",
+    "make offer",
+    "buy now",
+    "sign in",
+    "link your member number",
+    "lifetime of benefits",
+    "more",
+    "necessary",
+    "functional",
+    "performance",
+    "targeting",
+    "-",
+    "+",
 )
+VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS = frozenset(
+    {"select", "choose", "option", "size guide"}
+)
+VARIANT_OPTION_VALUE_NOISE_PATTERNS = {
+    "fullmatch": (
+        r"\d+(?:\.\d+)?\s+stars?",
+        r"[-\s]*(?:click\s+to\s+)?(?:choose|select)\b.*",
+        r"[-\s]+.+[-\s]+",
+        r"\(\d+\)",
+        r"\d{3,5}/\d{2,5}/\d{2,5}",
+    ),
+    "search": (r"\b(?:please\s+)?select\b",),
+}
 VARIANT_PLACEHOLDER_VALUES = frozenset(
     {"default title", "choose", "option", "select", "swatch"}
 )
 VARIANT_PLACEHOLDER_PREFIXES = ("please select", "open ")
+VARIANT_SIZE_QUANTITY_CONTROL_VALUES = frozenset({"-", "+"})
 SIZE_REJECT_TOKENS = frozenset(
     {
         "customer reviews",
@@ -738,6 +776,12 @@ SIZE_REJECT_TOKENS = frozenset(
         "q&a",
         "ratings",
         "reviews",
+        "all",
+        "runs small",
+        "kinda small",
+        "true to size",
+        "kinda large",
+        "runs large",
         "shipping",
         "specifications",
         "verified purchases",
@@ -746,6 +790,41 @@ SIZE_REJECT_TOKENS = frozenset(
         "price",
         "quantity",
     }
+)
+COMMON_WORD_SIZE_VALUES = frozenset(
+    {
+        "one size",
+        "os",
+        "queen",
+        "king",
+        "twin",
+        "twin xl",
+        "full",
+        "full queen",
+        "cal king",
+        "california king",
+        "regular",
+        "tall",
+        "petite",
+        "short",
+        "long",
+    }
+)
+ADULT_SIZE_CONTEXT_TOKENS = frozenset(
+    {"men", "mens", "women", "womens", "unisex", "adult"}
+)
+VARIANT_CHILD_SIZE_PATTERNS = (
+    r"^nb-\d+lb$",
+    r"^\d{1,2}-\d{1,2}m$",
+    r"^\d{1,2}t$",
+)
+VARIANT_SKU_SIZE_SUFFIX_PATTERNS = (
+    r"(?:^|[-_/])(?P<size>(?:\d+xl|xxxs|xxs|xs|s|m|l|xl|xxl|xxxl|xxxxl))(?:[-_/](?:19|20)\d{2})?$",
+)
+VARIANT_CONDITION_HEADER_PREFIXES = ("condition", "quality")
+VARIANT_SEPARATE_DIMENSION_SIZE_RULES = (
+    {"pattern": r"^\d{2}(?:[srl])$", "style": "Jacket"},
+    {"pattern": r"^\d{2}/\d{2}$", "style": "Pant"},
 )
 PLACEHOLDER_IMAGE_URL_PATTERNS = (
     "via.placeholder.com",
@@ -1143,6 +1222,7 @@ VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
             r"\s+(?:not\s+)?selected\s*$",
             r"\s+\((?:sold\s+out|unavailable)\)\s*$",
             r"\s+(?:variant\s+)?sold\s+out(?:\s+or\s+unavailable)?\s*$",
+            r"\s+learn\s+more\s*$",
         )
     )
 )
@@ -1294,9 +1374,8 @@ _EXTRA_EXPORTS = [
     "BARE_HOST_URL_RE",
     "CATEGORY_PLACEHOLDER_VALUES",
     "COLOR_KEYWORD_PATTERN",
-    "DEFAULT_DETAIL_MAX_VARIANT_ROWS",
-    "FALLBACK_MAX_VARIANT_ROWS",
     "DOM_VARIANT_GROUP_LIMIT",
+    "DOM_VARIANT_CARTESIAN_COMBO_LIMIT",
     "DETAIL_BRACKET_PROSE_MIN_WORDS",
     "DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS",
     "DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS",
@@ -1413,6 +1492,12 @@ _EXTRA_EXPORTS = [
     "PRICE_VALUE_FIELDS",
     "PRICE_SOURCE_KEY_FIELDS",
     "CANONICAL_PRICE_FIELDS",
+    "AMAZON_PRICE_OFFSCREEN_SELECTOR",
+    "AMAZON_PRICE_WHOLE_SELECTOR",
+    "AMAZON_PRICE_FRACTION_SELECTOR",
+    "AMAZON_PRICE_SYMBOL_SELECTOR",
+    "AMAZON_PRICE_CONTAINER_SELECTOR",
+    "AMAZON_DETAIL_PRICE_SELECTORS",
     "AMAZON_IMAGE_CDN_HOSTS",
     "AMAZON_IMAGE_LOW_RES_SUFFIX_PATTERN",
     "CDN_IMAGE_QUERY_PARAMS",
@@ -1444,14 +1529,23 @@ _EXTRA_EXPORTS = [
     "VARIANT_AXIS_GENERIC_TOKENS",
     "VARIANT_AXIS_TECHNICAL_PATTERNS",
     "VARIANT_OPTION_VALUE_UI_NOISE_PHRASES",
+    "VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS",
+    "VARIANT_OPTION_VALUE_NOISE_PATTERNS",
     "VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH",
     "VARIANT_PLACEHOLDER_PREFIXES",
     "VARIANT_PLACEHOLDER_VALUES",
+    "VARIANT_SIZE_QUANTITY_CONTROL_VALUES",
     "VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS",
     "VARIANT_OPTION_TEXT_FIELDS",
     "VARIANT_QUANTITY_ATTR_TOKENS",
     "VARIANT_SIZE_ALIAS_SUFFIXES",
     "SIZE_REJECT_TOKENS",
+    "COMMON_WORD_SIZE_VALUES",
+    "ADULT_SIZE_CONTEXT_TOKENS",
+    "VARIANT_CHILD_SIZE_PATTERNS",
+    "VARIANT_SKU_SIZE_SUFFIX_PATTERNS",
+    "VARIANT_CONDITION_HEADER_PREFIXES",
+    "VARIANT_SEPARATE_DIMENSION_SIZE_RULES",
     "PLACEHOLDER_IMAGE_URL_PATTERNS",
     "SMALL_NUMERIC_PATTERN",
     "TRACKING_PIXEL_PATTERN",

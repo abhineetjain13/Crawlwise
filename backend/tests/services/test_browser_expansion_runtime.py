@@ -1375,7 +1375,9 @@ def test_accessibility_expand_candidates_ignores_navigation_roles() -> None:
     assert candidates == [("button", "product details")]
 
 
-def test_finish_expansion_diagnostics_preserves_attempted_status_without_clicks() -> None:
+def test_finish_expansion_diagnostics_marks_attempt_without_clicks_as_no_matches() -> (
+    None
+):
     diagnostics = browser_detail._finish_expansion_diagnostics(
         {"status": "attempted"},
         clicked_count=0,
@@ -1385,7 +1387,7 @@ def test_finish_expansion_diagnostics_preserves_attempted_status_without_clicks(
         elapsed_ms=lambda _started_at: 0,
     )
 
-    assert diagnostics["status"] == "attempted"
+    assert diagnostics["status"] == "no_matches"
 
 
 @pytest.mark.asyncio

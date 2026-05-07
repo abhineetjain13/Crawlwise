@@ -415,6 +415,21 @@ def test_crawl_run_settings_acquisition_profile_exposes_host_memory_ttl() -> Non
     assert profile["host_memory_ttl_seconds"] == 1800
 
 
+def test_crawl_run_settings_fetch_profile_keeps_legacy_top_level_host_memory_ttl() -> (
+    None
+):
+    settings = CrawlRunSettings.from_value({"host_memory_ttl_seconds": 1800})
+
+    acquisition_profile = settings.acquisition_profile()
+    profile = settings.fetch_profile()
+    normalized = settings.normalized_for_storage()
+
+    assert acquisition_profile["host_memory_ttl_seconds"] == 1800
+    assert profile["host_memory_ttl_seconds"] == 1800
+    assert normalized["fetch_profile"]["host_memory_ttl_seconds"] == 1800
+    assert "host_memory_ttl_seconds" not in normalized
+
+
 def test_crawl_run_settings_infers_sticky_rotation_from_sessionized_proxy_username() -> (
     None
 ):

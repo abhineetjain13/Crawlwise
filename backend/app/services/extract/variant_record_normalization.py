@@ -2,22 +2,29 @@ from __future__ import annotations
 
 import logging
 import re
+from itertools import combinations
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from app.services.config.extraction_rules import (
+    DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS,
+    DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS,
+    ADULT_SIZE_CONTEXT_TOKENS,
+    COMMON_WORD_SIZE_VALUES,
     CURRENCY_CODES,
-    DEFAULT_DETAIL_MAX_VARIANT_ROWS,
-    FALLBACK_MAX_VARIANT_ROWS,
     GENDER_ARTIFACT_PATTERN,
     GENDER_KEYWORD_TOKENS,
     GENDER_POSSESSIVE_PATTERN,
+    VARIANT_CHILD_SIZE_PATTERNS,
     VARIANT_COLOR_HINT_WORDS,
+    VARIANT_CONDITION_HEADER_PREFIXES,
+    VARIANT_OPTION_LABEL_MAX_WORDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
-    VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
-    VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH,
     VARIANT_PLACEHOLDER_PREFIXES,
     VARIANT_PLACEHOLDER_VALUES,
+    VARIANT_SEPARATE_DIMENSION_SIZE_RULES,
+    VARIANT_SKU_SIZE_SUFFIX_PATTERNS,
+    VARIANT_SIZE_QUANTITY_CONTROL_VALUES,
     VARIANT_SIZE_VALUE_PATTERNS,
     VARIANT_SIZE_VALUE_EXTRACT_PATTERNS,
     STANDARD_SIZE_VALUES,
@@ -39,6 +46,7 @@ from app.services.extract.shared_variant_logic import (
     collapse_duplicate_size_aliases,
     merge_variant_pair,
     normalized_variant_axis_key,
+    variant_option_value_matches_ui_noise,
     variant_identity,
     variant_row_richness,
     variant_semantic_identity,
@@ -69,11 +77,6 @@ _VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
     for pattern in tuple(VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS or ())
     if str(pattern).strip()
 )
-_VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = tuple(
-    clean_text(token).casefold()
-    for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
-    if clean_text(token)
-)
 _VARIANT_PLACEHOLDER_VALUES_SET = frozenset(
     clean_text(value).lower()
     for value in tuple(VARIANT_PLACEHOLDER_VALUES or ())
@@ -84,6 +87,15 @@ _VARIANT_PLACEHOLDER_PREFIXES_LOWER = tuple(
     for prefix in tuple(VARIANT_PLACEHOLDER_PREFIXES or ())
     if clean_text(prefix)
 )
+_VARIANT_SIZE_QUANTITY_CONTROL_VALUES = frozenset(
+    clean_text(value).lower()
+    for value in tuple(VARIANT_SIZE_QUANTITY_CONTROL_VALUES or ())
+    if clean_text(value)
+)
+try:
+    _VARIANT_OPTION_LABEL_MAX_WORDS = max(1, int(VARIANT_OPTION_LABEL_MAX_WORDS))
+except (TypeError, ValueError):
+    _VARIANT_OPTION_LABEL_MAX_WORDS = 6
 _OPTION_FIELD_PATTERN = re.compile(r"option\d+_(?:name|values?)")
 _GENDER_ARTIFACT_PATTERN = str(GENDER_ARTIFACT_PATTERN or "")
 _GENDER_ARTIFACT_RE = (
@@ -102,6 +114,11 @@ _GENDER_POSSESSIVE_RE = (
 _STANDARD_SIZE_VALUES = frozenset(
     str(value).lower() for value in tuple(STANDARD_SIZE_VALUES or ())
 )
+_COMMON_WORD_SIZE_VALUES = frozenset(
+    clean_text(value).lower()
+    for value in tuple(COMMON_WORD_SIZE_VALUES or ())
+    if clean_text(value)
+)
 _VARIANT_TITLE_STOPWORDS = frozenset(
     clean_text(token).lower()
     for token in tuple(VARIANT_TITLE_STOPWORDS or ())
@@ -111,6 +128,43 @@ _GENDER_KEYWORD_TOKENS_SET = frozenset(
     clean_text(token).lower()
     for token in tuple(GENDER_KEYWORD_TOKENS or ())
     if clean_text(token)
+)
+_ADULT_SIZE_CONTEXT_TOKENS = frozenset(
+    clean_text(token).lower()
+    for token in tuple(ADULT_SIZE_CONTEXT_TOKENS or ())
+    if clean_text(token)
+)
+_DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS = frozenset(
+    clean_text(token).lower()
+    for token in tuple(DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS or ())
+    if clean_text(token)
+)
+_DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS = frozenset(
+    clean_text(token).lower()
+    for token in tuple(DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS or ())
+    if clean_text(token)
+)
+_VARIANT_CHILD_SIZE_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_CHILD_SIZE_PATTERNS or ())
+    if str(pattern).strip()
+)
+_VARIANT_SKU_SIZE_SUFFIX_PATTERNS = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_SKU_SIZE_SUFFIX_PATTERNS or ())
+    if str(pattern).strip()
+)
+_VARIANT_CONDITION_HEADER_PREFIXES = frozenset(
+    clean_text(token).lower()
+    for token in tuple(VARIANT_CONDITION_HEADER_PREFIXES or ())
+    if clean_text(token)
+)
+_VARIANT_SEPARATE_DIMENSION_SIZE_RULES = tuple(
+    (re.compile(str(rule.get("pattern")), re.I), clean_text(rule.get("style")))
+    for rule in tuple(VARIANT_SEPARATE_DIMENSION_SIZE_RULES or ())
+    if isinstance(rule, dict)
+    and str(rule.get("pattern") or "").strip()
+    and clean_text(rule.get("style"))
 )
 _LEGACY_VARIANT_KEYS = ("selected_variant", "variant_axes", "available_sizes")
 _PUBLIC_VARIANT_AXIS_FIELDS = tuple(
@@ -125,22 +179,48 @@ def _variant_has_axis_value(variant: dict[str, Any]) -> bool:
 
 
 def normalize_variant_record(record: dict[str, Any]) -> None:
+    _hydrate_variant_axes(record)
+    _sanitize_variant_axes(record)
+    _dedupe_and_prune_variant_rows(record)
+    _backfill_variant_context(record)
+    _finalize_variant_contract(record)
+
+
+def _hydrate_variant_axes(record: dict[str, Any]) -> None:
     _infer_variant_sizes_from_titles(record)
+    _infer_variant_sizes_from_skus(record)
     _infer_single_variant_axes(record)
+
+
+def _sanitize_variant_axes(record: dict[str, Any]) -> None:
     _drop_cross_product_variant_rows(record)
     _flatten_variant_rows(record)
     _clean_variant_rows(record)
+    _normalize_separate_dimension_size_rows(record)
+    _prune_unrecognized_size_rows_when_real_sizes_exist(record)
+    _prune_child_size_rows_from_adult_products(record)
     _drop_parent_shared_variant_axes(record)
     _enforce_variant_axis_contract(record)
     _enforce_variant_currency_context(record)
+
+
+def _dedupe_and_prune_variant_rows(record: dict[str, Any]) -> None:
     collapse_duplicate_size_aliases(record)
     _dedupe_variant_rows(record)
+    _drop_color_only_rows_when_size_rows_exist(record)
+    _drop_subset_variants_when_richer_alternative_exists(record)
     _prune_axisless_rows_when_axisful_rows_exist(record)
+
+
+def _backfill_variant_context(record: dict[str, Any]) -> None:
     _backfill_variant_prices_from_record(record)
     _enforce_variant_currency_context(record)
     _backfill_variant_shared_fields_from_record(record)
     _prune_low_signal_numeric_only_variants(record)
     _drop_parent_sku_alias_variant_rows(record)
+
+
+def _finalize_variant_contract(record: dict[str, Any]) -> None:
     _enforce_variant_payload_limits(record)
     _enforce_flat_variant_contract(record)
 
@@ -165,6 +245,8 @@ def _drop_cross_product_variant_rows(record: dict[str, Any]) -> None:
     kept: list[dict[str, Any]] = []
     for variant in variants:
         if not isinstance(variant, dict):
+            continue
+        if _variant_row_looks_like_foreign_product(record, variant):
             continue
         variant_tokens = _variant_title_tokens(
             variant.get("title") or variant.get("name")
@@ -205,6 +287,32 @@ def _variant_axis_tokens(variant: dict[str, Any]) -> set[str]:
     return tokens
 
 
+def _variant_row_looks_like_foreign_product(
+    record: dict[str, Any],
+    variant: dict[str, Any],
+) -> bool:
+    parent_tokens = _variant_title_tokens(record.get("title"))
+    if not parent_tokens:
+        return False
+    color_value = clean_text(variant.get("color"))
+    if not color_value:
+        return False
+    color_tokens = _variant_title_tokens(color_value)
+    if len(color_tokens) < max(3, _VARIANT_OPTION_LABEL_MAX_WORDS - 1):
+        return False
+    extracted_color = _extract_color_value(color_value)
+    if not extracted_color:
+        return False
+    unmatched_tokens = color_tokens - parent_tokens
+    if len(unmatched_tokens) < 2:
+        return False
+    product_like_tokens = unmatched_tokens & (
+        _DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS
+        | _DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS
+    )
+    return bool(product_like_tokens) or "(" in color_value or ")" in color_value
+
+
 def _single_nonpublic_option_variant_should_drop(variant: dict[str, Any]) -> bool:
     if not isinstance(variant, dict):
         return False
@@ -235,15 +343,25 @@ def _clean_variant_rows(record: dict[str, Any]) -> None:
         if not isinstance(variant, dict):
             continue
         cleaned_variant = dict(variant)
+        drop_row = False
         for field_name in _PUBLIC_VARIANT_AXIS_FIELDS:
+            raw_axis_value = cleaned_variant.get(field_name)
+            if _variant_size_axis_value_is_quantity_control(
+                field_name,
+                raw_axis_value,
+            ):
+                drop_row = True
+                break
             cleaned_value = _normalize_variant_axis_value(
                 field_name,
-                cleaned_variant.get(field_name),
+                raw_axis_value,
             )
             if cleaned_value:
                 cleaned_variant[field_name] = cleaned_value
             else:
                 cleaned_variant.pop(field_name, None)
+        if drop_row:
+            continue
         _promote_misfiled_color_size(cleaned_variant)
         _drop_invalid_variant_urls(cleaned_variant)
         if any(
@@ -374,10 +492,21 @@ def _normalize_variant_axis_value(field_name: str, value: object) -> str:
         not cleaned
         or _value_is_placeholder(cleaned)
         or _value_is_ui_noise(cleaned)
+        or _value_is_axis_header_noise(field_name, cleaned)
         or _variant_axis_value_is_header(field_name, cleaned)
     ):
         return ""
     return cleaned
+
+
+def _variant_size_axis_value_is_quantity_control(
+    field_name: str,
+    value: object,
+) -> bool:
+    return (
+        normalized_variant_axis_key(field_name) == "size"
+        and clean_text(value).lower() in _VARIANT_SIZE_QUANTITY_CONTROL_VALUES
+    )
 
 
 def _strip_variant_option_suffix_noise(value: object) -> str:
@@ -400,22 +529,19 @@ def _value_is_placeholder(value: str) -> bool:
 
 
 def _value_is_ui_noise(value: str) -> bool:
+    return variant_option_value_matches_ui_noise(value)
+
+
+def _value_is_axis_header_noise(field_name: str, value: str) -> bool:
+    axis_name = normalized_variant_axis_key(field_name)
     lowered = clean_text(value).casefold()
-    for phrase in _VARIANT_OPTION_VALUE_UI_NOISE_PHRASES:
-        if not phrase:
-            continue
-        # Very short control labels like "next" must be exact; otherwise
-        # valid values such as "Next Blue" would be over-pruned.
-        if (
-            len(phrase) <= int(VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH)
-            and " " not in phrase
-        ):
-            if lowered == phrase:
-                return True
-            continue
-        if phrase in lowered:
-            return True
-    return False
+    if axis_name not in {"condition", "state"}:
+        return False
+    return any(
+        prefix
+        and re.fullmatch(rf"{re.escape(prefix)}\s*\(\d+\)", lowered) is not None
+        for prefix in _VARIANT_CONDITION_HEADER_PREFIXES
+    )
 
 
 def _drop_invalid_variant_urls(variant: dict[str, Any]) -> None:
@@ -473,6 +599,28 @@ def _infer_variant_sizes_from_titles(record: dict[str, Any]) -> None:
             variant["size"] = size_value
 
 
+def _infer_variant_sizes_from_skus(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    inferred_by_index: dict[int, str] = {}
+    for index, variant in enumerate(variants):
+        if not isinstance(variant, dict) or clean_text(variant.get("size")):
+            continue
+        size_value = _variant_size_from_sku(variant.get("sku"))
+        if size_value:
+            inferred_by_index[index] = size_value
+    unique_values = {
+        value.casefold() for value in inferred_by_index.values() if clean_text(value)
+    }
+    if len(unique_values) < 2:
+        return
+    for index, size_value in inferred_by_index.items():
+        variant = variants[index]
+        if isinstance(variant, dict) and variant.get("size") in (None, "", [], {}):
+            variant["size"] = size_value
+
+
 def _infer_single_variant_axes(record: dict[str, Any]) -> None:
     variants = record.get("variants")
     if not isinstance(variants, list) or len(variants) != 1:
@@ -519,6 +667,20 @@ def _variant_size_from_title_or_url(
             continue
         if extracted:
             return extracted
+    return ""
+
+
+def _variant_size_from_sku(value: object) -> str:
+    sku = clean_text(value)
+    if not sku:
+        return ""
+    for pattern in _VARIANT_SKU_SIZE_SUFFIX_PATTERNS:
+        match = pattern.search(sku)
+        if match is None:
+            continue
+        size_value = clean_text(match.groupdict().get("size") or match.group(0))
+        if size_value:
+            return size_value.upper()
     return ""
 
 
@@ -576,6 +738,113 @@ def _extract_size_value(value: object) -> str:
             ):
                 return candidate
     return ""
+
+
+def _size_value_is_recognized(value: object) -> bool:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return False
+    lowered = cleaned.casefold()
+    if lowered in _COMMON_WORD_SIZE_VALUES:
+        return True
+    if any(pattern.fullmatch(cleaned) for pattern in _VARIANT_SIZE_VALUE_PATTERNS):
+        return True
+    extracted = _extract_size_value(cleaned)
+    return bool(extracted) and extracted.casefold() == lowered
+
+
+def _size_value_is_child_specific(value: object) -> bool:
+    cleaned = clean_text(value)
+    return bool(
+        cleaned and any(pattern.fullmatch(cleaned) for pattern in _VARIANT_CHILD_SIZE_PATTERNS)
+    )
+
+
+def _record_targets_adult_sizes(record: dict[str, Any]) -> bool:
+    probes = (
+        record.get("title"),
+        record.get("gender"),
+        record.get("category"),
+    )
+    tokens: set[str] = set()
+    for value in probes:
+        tokens.update(_variant_title_tokens(value))
+    return bool(tokens & _ADULT_SIZE_CONTEXT_TOKENS)
+
+
+def _prune_unrecognized_size_rows_when_real_sizes_exist(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    recognized_rows = [
+        variant
+        for variant in variants
+        if isinstance(variant, dict)
+        and (
+            _size_value_is_recognized(variant.get("size"))
+            or _variant_row_has_labeled_size_dimension(variant)
+        )
+    ]
+    if len(recognized_rows) < 2:
+        return
+    kept = [
+        variant
+        for variant in variants
+        if not isinstance(variant, dict)
+        or not clean_text(variant.get("size"))
+        or _size_value_is_recognized(variant.get("size"))
+        or _variant_row_has_labeled_size_dimension(variant)
+        or clean_text(variant.get("color"))
+    ]
+    if kept:
+        record["variants"] = kept
+        record["variant_count"] = len(kept)
+        return
+    record.pop("variants", None)
+    record.pop("variant_count", None)
+
+
+def _variant_row_has_labeled_size_dimension(variant: dict[str, Any]) -> bool:
+    if not clean_text(variant.get("size")):
+        return False
+    option_values = variant.get("option_values")
+    if not isinstance(option_values, dict):
+        return False
+    return bool(clean_text(option_values.get("style")))
+
+
+def _prune_child_size_rows_from_adult_products(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    if not _record_targets_adult_sizes(record):
+        return
+    adult_rows = [
+        variant
+        for variant in variants
+        if isinstance(variant, dict)
+        and _size_value_is_recognized(variant.get("size"))
+        and not _size_value_is_child_specific(variant.get("size"))
+    ]
+    child_rows = [
+        variant
+        for variant in variants
+        if isinstance(variant, dict) and _size_value_is_child_specific(variant.get("size"))
+    ]
+    if len(adult_rows) < 2 or not child_rows:
+        return
+    kept = [
+        variant
+        for variant in variants
+        if not isinstance(variant, dict)
+        or not _size_value_is_child_specific(variant.get("size"))
+    ]
+    if kept:
+        record["variants"] = kept
+        record["variant_count"] = len(kept)
+        return
+    record.pop("variants", None)
+    record.pop("variant_count", None)
 
 
 def _variant_color_from_title_or_url(
@@ -729,6 +998,97 @@ def _prune_axisless_rows_when_axisful_rows_exist(record: dict[str, Any]) -> None
     record.pop("variant_count", None)
 
 
+def _drop_color_only_rows_when_size_rows_exist(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    rows = [variant for variant in variants if isinstance(variant, dict)]
+    if len(rows) < 2:
+        return
+    combo_rows = [
+        variant
+        for variant in rows
+        if clean_text(variant.get("size")) and clean_text(variant.get("color"))
+    ]
+    if combo_rows:
+        return
+    size_rows = [
+        variant for variant in rows if clean_text(variant.get("size"))
+    ]
+    color_only_rows = [
+        variant
+        for variant in rows
+        if clean_text(variant.get("color")) and not clean_text(variant.get("size"))
+    ]
+    if len(size_rows) < 2 or not color_only_rows:
+        return
+    if not _color_only_rows_match_selected_parent_color(record, color_only_rows):
+        return
+    kept = [variant for variant in rows if variant not in color_only_rows]
+    if kept:
+        record["variants"] = kept
+        record["variant_count"] = len(kept)
+        return
+    record.pop("variants", None)
+    record.pop("variant_count", None)
+
+
+def _color_only_rows_match_selected_parent_color(
+    record: dict[str, Any],
+    color_only_rows: list[dict[str, Any]],
+) -> bool:
+    parent_color = clean_text(record.get("color")).casefold()
+    if not parent_color:
+        return False
+    return any(
+        clean_text(row.get("color")).casefold() == parent_color
+        for row in color_only_rows
+    )
+
+
+def _drop_subset_variants_when_richer_alternative_exists(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    rows = [variant for variant in variants if isinstance(variant, dict)]
+    if len(rows) < 2:
+        return
+    superset_axis_keys: set[tuple[tuple[str, str], ...]] = set()
+    for variant in rows:
+        axis_items = tuple(_variant_row_axis_map(variant).items())
+        if len(axis_items) < 2:
+            continue
+        for subset_size in range(1, len(axis_items)):
+            for subset in combinations(axis_items, subset_size):
+                superset_axis_keys.add(tuple(sorted(subset)))
+    kept: list[dict[str, Any]] = []
+    for variant in rows:
+        candidate_key = _variant_row_axis_key(variant)
+        if not candidate_key:
+            kept.append(variant)
+            continue
+        if candidate_key not in superset_axis_keys:
+            kept.append(variant)
+    if kept:
+        record["variants"] = kept
+        record["variant_count"] = len(kept)
+        return
+    record.pop("variants", None)
+    record.pop("variant_count", None)
+
+
+def _variant_row_axis_map(variant: dict[str, Any]) -> dict[str, str]:
+    return {
+        axis_name: clean_text(variant.get(axis_name))
+        for axis_name in _PUBLIC_VARIANT_AXIS_FIELDS
+        if clean_text(variant.get(axis_name))
+    }
+
+
+def _variant_row_axis_key(variant: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted(_variant_row_axis_map(variant).items()))
+
+
 def _drop_axisless_variant_row(
     variant: dict[str, Any],
     *,
@@ -795,13 +1155,22 @@ def _drop_parent_sku_alias_variant_rows(record: dict[str, Any]) -> None:
     if not isinstance(variants, list) or len(variants) < 2:
         return
     variant_rows = [variant for variant in variants if isinstance(variant, dict)]
+    children_by_terminal_size: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, variant in enumerate(variant_rows):
+        sku = clean_text(variant.get("sku"))
+        terminal = _variant_sku_terminal_token(sku)
+        if terminal:
+            children_by_terminal_size.setdefault(terminal, []).append((index, variant))
     dropped_indexes: set[int] = set()
     for index, variant in enumerate(variant_rows):
         sku = clean_text(variant.get("sku"))
         size = clean_text(variant.get("size"))
         if not sku or not size:
             continue
-        for other_index, other in enumerate(variant_rows):
+        size_token = re.sub(r"[^a-z0-9]+", "", size.casefold())
+        if not size_token:
+            continue
+        for other_index, other in children_by_terminal_size.get(size_token, []):
             if index == other_index:
                 continue
             if _variant_sku_is_size_specific_child(
@@ -824,6 +1193,51 @@ def _drop_parent_sku_alias_variant_rows(record: dict[str, Any]) -> None:
         return
     record.pop("variants", None)
     record.pop("variant_count", None)
+
+
+def _variant_sku_terminal_token(sku: str) -> str:
+    tokens = [token for token in re.split(r"[^a-z0-9]+", sku.casefold()) if token]
+    return tokens[-1] if tokens else ""
+
+
+def _normalize_separate_dimension_size_rows(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    rows = [variant for variant in variants if isinstance(variant, dict)]
+    if not rows or any(clean_text(row.get("color")) for row in rows):
+        return
+    size_values = [clean_text(row.get("size")) for row in rows if clean_text(row.get("size"))]
+    if len(size_values) < 2:
+        return
+    separate_family_hits = [
+        sum(1 for value in size_values if pattern.fullmatch(value))
+        for pattern, _label in _VARIANT_SEPARATE_DIMENSION_SIZE_RULES
+    ]
+    if sum(1 for count in separate_family_hits if count >= 2) < 2:
+        return
+    relabeled_rows: list[dict[str, Any]] = []
+    for row in rows:
+        relabeled = dict(row)
+        size_value = clean_text(relabeled.get("size"))
+        style_label = _separate_dimension_style_label(size_value)
+        if style_label and size_value:
+            option_values = relabeled.get("option_values")
+            relabeled["option_values"] = (
+                dict(option_values) if isinstance(option_values, dict) else {}
+            )
+            relabeled["option_values"]["style"] = style_label
+            relabeled["option_values"]["size"] = size_value
+        relabeled_rows.append(relabeled)
+    record["variants"] = relabeled_rows
+    record["variant_count"] = len(relabeled_rows)
+
+
+def _separate_dimension_style_label(size_value: str) -> str:
+    for pattern, label in _VARIANT_SEPARATE_DIMENSION_SIZE_RULES:
+        if pattern.fullmatch(size_value):
+            return label
+    return ""
 
 
 def _variant_sku_is_size_specific_child(
@@ -891,12 +1305,12 @@ def _enforce_variant_payload_limits(record: dict[str, Any]) -> None:
     if not isinstance(variants, list) or not variants:
         return
     try:
-        max_rows = max(1, int(crawler_runtime_settings.detail_max_variant_rows))
+        raw_limit = crawler_runtime_settings.detail_max_variant_rows
+        max_rows = int(raw_limit) if raw_limit is not None else 0
     except (TypeError, ValueError):
-        try:
-            max_rows = max(1, int(DEFAULT_DETAIL_MAX_VARIANT_ROWS))
-        except (TypeError, ValueError):
-            max_rows = max(1, int(FALLBACK_MAX_VARIANT_ROWS))
+        max_rows = 0
+    if max_rows <= 0:
+        return
     if len(variants) <= max_rows:
         return
     kept = [
