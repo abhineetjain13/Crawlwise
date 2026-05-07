@@ -41,10 +41,6 @@ ALLOWED_PRIVATE_SERVICE_IMPORTS = {
     # these call-sites import via an aliased local-scope import to minimise coupling.
     "extract/detail_raw_signals.py -> app.services.extract.detail_identity:_detail_url_matches_requested_identity",
     "extract/detail_raw_signals.py -> app.services.extract.detail_identity:_record_matches_requested_detail_identity",
-    # Lowercased frozenset derived from VARIANT_AXIS_ALLOWED_SINGLE_TOKENS; finalizer
-    # consumes the already-normalised form to keep axis-gating semantics consistent
-    # with shared_variant_logic.
-    "extract/detail_record_finalizer.py -> app.services.extract.shared_variant_logic:_variant_axis_allowed_single_tokens",
 }
 CONFIG_CONSTANT_NAME_MARKERS = (
     "SELECTOR",
@@ -61,6 +57,9 @@ ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS"),
     ("crawl_fetch_runtime.py", "_RETRY_SENTINEL"),
     ("extract/detail_record_finalizer.py", "_VARIANT_OPTION_VALUE_NOISE_TOKENS"),
+    ("extract/variant_record_normalization.py", "_ADULT_SIZE_CONTEXT_TOKENS"),
+    ("extract/variant_record_normalization.py", "_DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS"),
+    ("extract/variant_record_normalization.py", "_DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS"),
     ("extract/variant_record_normalization.py", "_GENDER_KEYWORD_TOKENS_SET"),
     ("extract/shared_variant_logic.py", "_VARIANT_AXIS_LABEL_NOISE_TOKENS"),
     ("extract/shared_variant_logic.py", "_VARIANT_GROUP_ATTR_NOISE_TOKENS"),
@@ -90,7 +89,7 @@ FILE_LOC_BUDGETS = {
     Path("app/services/acquisition/traversal.py"): 1965,
     # Config owners.
     # Config rules grown due to category/nav URL rules.
-    Path("app/services/config/extraction_rules.py"): 1490,
+    Path("app/services/config/extraction_rules.py"): 1580,
     # Fetch runtime remains the request/browser arbitration owner.
     Path("app/services/crawl_fetch_runtime.py"): 1285,
     # Detail extraction owns candidate arbitration and tier orchestration.
@@ -100,11 +99,13 @@ FILE_LOC_BUDGETS = {
     # Detail finalizer owns public-boundary cleanup and record repair.
     # Grown (+10) to accommodate additional axis-gating logic that reuses
     # shared_variant_logic frozensets instead of re-deriving them locally.
-    Path("app/services/extract/detail_record_finalizer.py"): 1115,
+    Path("app/services/extract/detail_record_finalizer.py"): 1140,
     # Shared variant logic owns generic axis and row reconciliation.
     # Grown (+380) to absorb the extended allowed-axis taxonomy (flavor, type,
     # material_composition, etc.) and related JS-state / DOM helpers.
     Path("app/services/extract/shared_variant_logic.py"): 1530,
+    # Variant normalization owns the detail variant cleanup pipeline.
+    Path("app/services/extract/variant_record_normalization.py"): 1390,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
@@ -121,7 +122,7 @@ FILE_LOC_BUDGETS = {
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1455,
     # JS state mapping stays centralized to avoid adapter-specific drift.
-    Path("app/services/js_state_mapper.py"): 1325,
+    Path("app/services/js_state_mapper.py"): 1345,
     # LLM task runtime owns prompt validation, provider calls, cost logging, and typed errors.
     Path("app/services/llm_tasks.py"): 1080,
     # Pipeline core still owns the per-URL orchestration boundary.

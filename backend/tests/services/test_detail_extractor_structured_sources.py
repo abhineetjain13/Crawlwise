@@ -7,15 +7,17 @@ from bs4 import BeautifulSoup
 
 from app.services.adapters.myntra import MyntraAdapter
 from app.services.detail_extractor import (
-    _detail_image_matches_primary_family,
-    _sanitize_variant_row,
     build_detail_record,
-    variant_option_availability,
 )
+from app.services.extract.detail_dom_extractor import variant_option_availability
 from app.services.extract.detail_price_extractor import (
     detail_currency_hint_is_host_level,
     reconcile_parent_price_against_variant_range,
     reconcile_detail_currency_with_url,
+)
+from app.services.extract.detail_record_finalizer import (
+    detail_image_matches_primary_family,
+    sanitize_variant_row,
 )
 from app.services.extract import detail_raw_signals
 from app.services.extract import detail_dom_extractor
@@ -302,7 +304,7 @@ def test_detail_record_runs_dom_tier_when_variant_dom_cues_exist() -> None:
 def test_sanitize_variant_row_keeps_option_label_titles_with_variant_signals() -> None:
     variant = {"title": "Large", "sku": "TRAIL-L", "price": "8.99"}
 
-    assert _sanitize_variant_row(
+    assert sanitize_variant_row(
         variant,
         identity_url="https://example.com/products/trail-mix",
     )
@@ -310,7 +312,7 @@ def test_sanitize_variant_row_keeps_option_label_titles_with_variant_signals() -
 
 
 def test_detail_image_family_requires_full_media_code_match() -> None:
-    assert not _detail_image_matches_primary_family(
+    assert not detail_image_matches_primary_family(
         "https://cdn.example.com/a999999/image.jpg",
         primary_image="https://cdn.example.com/a123456/image.jpg",
         title="",

@@ -566,15 +566,17 @@ def test_extract_records_visual_listing_orders_top_grid_before_lower_recommendat
 
 
 def test_detail_identity_codes_require_exact_match() -> None:
+    from app.services.extract.detail_identity import detail_identity_codes_match
+
     assert (
-        detail_extractor.detail_identity_codes_match(
+        detail_identity_codes_match(
             {"ABC12345"},
             {"ABC123456"},
         )
         is False
     )
     assert (
-        detail_extractor.detail_identity_codes_match(
+        detail_identity_codes_match(
             {"ABC12345"},
             {"ABC12345"},
         )

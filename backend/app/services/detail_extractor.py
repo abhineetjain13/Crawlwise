@@ -65,14 +65,12 @@ from app.services.extract.detail_dom_extractor import (
     backfill_variants_from_dom_if_missing as _backfill_variants_from_dom_if_missing,
     extract_variants_from_dom as _extract_variants_from_dom,
     primary_dom_context,
-    variant_option_availability,  # noqa: F401
 )
 from app.services.extract.detail_raw_signals import (
     breadcrumb_category_from_dom,
     prune_irrelevant_detail_dom_nodes,
 )
 from app.services.extract.detail_identity import (
-    detail_identity_codes_match,  # noqa: F401
     detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
     detail_identity_codes_from_url as _detail_identity_codes_from_url,
     detail_identity_tokens as _detail_identity_tokens,
@@ -87,10 +85,8 @@ from app.services.extract.detail_identity import (
 )
 from app.services.extract.detail_record_finalizer import (
     dedupe_primary_and_additional_images as _dedupe_primary_and_additional_images,
-    detail_image_matches_primary_family as _detail_image_matches_primary_family,  # noqa: F401
     detail_title_looks_like_placeholder as _detail_title_looks_like_placeholder,
     repair_ecommerce_detail_record_quality,
-    sanitize_variant_row as _sanitize_variant_row,  # noqa: F401
 )
 from app.services.extract.detail_text_sanitizer import detail_candidate_is_valid
 from app.services.extract.detail_price_extractor import (

@@ -128,7 +128,7 @@ _ORG_SUFFIX_PATTERN = (
 )
 
 
-def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
+def dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
     raw_additional_images = record.get("additional_images")
     additional_images = (
         list(raw_additional_images)
@@ -178,7 +178,7 @@ def _sanitize_detail_placeholder_scalars(
     record: dict[str, Any], *, identity_url: str = ""
 ) -> None:
     title = clean_text(record.get("title"))
-    if _detail_title_looks_like_placeholder(title) or detail_title_value_is_low_signal(
+    if detail_title_looks_like_placeholder(title) or detail_title_value_is_low_signal(
         title
     ):
         record.pop("title", None)
@@ -395,7 +395,7 @@ def _category_part_matches_identity(part: object, identity: str) -> bool:
     )
 
 
-def _detail_title_looks_like_placeholder(title: str) -> bool:
+def detail_title_looks_like_placeholder(title: str) -> bool:
     normalized = clean_text(title)
     if not normalized:
         return False
@@ -425,7 +425,7 @@ def _sanitize_detail_variant_payload(
     for variant in list(record.get("variants") or []):
         if not isinstance(variant, dict):
             continue
-        if not _sanitize_variant_row(
+        if not sanitize_variant_row(
             variant, identity_url=identity_url, title_hint=title_hint
         ):
             continue
@@ -448,7 +448,7 @@ def _sanitize_detail_variant_payload(
     _drop_variant_derived_parent_axis_scalars(record)
 
 
-def _sanitize_variant_row(
+def sanitize_variant_row(
     variant: dict[str, Any],
     *,
     identity_url: str,
@@ -907,7 +907,7 @@ def _sanitize_detail_images(record: dict[str, Any], *, identity_url: str) -> Non
             normalized_image, identity_url=identity_url
         ):
             continue
-        if not _detail_image_matches_primary_family(
+        if not detail_image_matches_primary_family(
             normalized_image,
             primary_image=primary_image,
             title=record.get("title"),
@@ -981,7 +981,7 @@ def _detail_path_looks_like_image_asset(path: str, lowered_url: str) -> bool:
     return any(token in lowered_path for token in IMAGE_PATH_TOKENS)
 
 
-def _detail_image_matches_primary_family(
+def detail_image_matches_primary_family(
     url: str,
     *,
     primary_image: str,
@@ -1135,9 +1135,3 @@ def _reconcile_detail_availability_from_variants(record: dict[str, Any]) -> None
         record["availability"] = AVAILABILITY_IN_STOCK
     elif availabilities == {AVAILABILITY_OUT_OF_STOCK}:
         record["availability"] = AVAILABILITY_OUT_OF_STOCK
-
-
-dedupe_primary_and_additional_images = _dedupe_primary_and_additional_images
-detail_image_matches_primary_family = _detail_image_matches_primary_family
-detail_title_looks_like_placeholder = _detail_title_looks_like_placeholder
-sanitize_variant_row = _sanitize_variant_row
