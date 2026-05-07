@@ -1184,6 +1184,13 @@ DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS = frozenset(
     }
 )
 DETAIL_TITLE_DIMENSION_SIZE_PATTERN = r"\b\d{2,}(?:\.\d+)?\s*(?:\"|in\.?|inch|inches)"
+DETAIL_DOM_SCALAR_SIZE_PATTERN = (
+    r"\bsize\b\s*[:\-]?\s*"
+    r"("
+    r"\d+(?:\.\d+)?\s*(?:fl\.?\s*oz|oz|g|kg|mg|ml|l|lb|lbs)\b"
+    r"(?:\s*/\s*\d+(?:\.\d+)?\s*(?:fl\.?\s*oz|oz|g|kg|mg|ml|l|lb|lbs)\b)?"
+    r")"
+)
 DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX = 4
 DETAIL_LONG_TEXT_SOURCE_RANKS = {
     "adapter": 0,
@@ -1619,6 +1626,7 @@ _EXTRA_EXPORTS = [
     "DETAIL_GENDER_TERMS",
     "DETAIL_GENERIC_TERMINAL_TOKENS",
     "DETAIL_IDENTITY_CODE_MIN_LENGTH",
+    "DETAIL_DOM_SCALAR_SIZE_PATTERN",
     "DETAIL_TITLE_DIMENSION_SIZE_PATTERN",
     "DETAIL_IDENTITY_STOPWORDS",
     "DYNAMIC_FIELD_NAME_MAX_TOKENS",

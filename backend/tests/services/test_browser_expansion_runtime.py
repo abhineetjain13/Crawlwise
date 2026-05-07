@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
+from bs4 import BeautifulSoup
 from patchright.async_api import Error as PlaywrightError
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -257,6 +258,76 @@ def test_fast_finalize_accepts_verified_extractability_without_probe_payload() -
 
 
 @pytest.mark.asyncio
+async def test_fast_finalize_keeps_location_clear_when_precheck_found_no_signal() -> None:
+    class _PayloadCapture:
+        async def close(self, _page):
+            return SimpleNamespace(
+                network_payload_count=0,
+                malformed_network_payloads=0,
+                network_payload_read_failures=0,
+                network_payload_read_timeouts=0,
+                closed_network_payloads=0,
+                skipped_oversized_network_payloads=0,
+                dropped_payload_events=0,
+                payloads=[],
+            )
+
+    async def _classify_blocked_page_async(_html: str, _status_code: int):
+        return SimpleNamespace(blocked=False, evidence=[], outcome="ok")
+
+    async def _emit_browser_event(*_args, **_kwargs):
+        return None
+
+    html = "<html><body><h1>Widget Prime</h1><div>Description</div></body></html>"
+    payload = browser_page_flow.BrowserFinalizeInput(
+        page=SimpleNamespace(url="https://example.com/products/widget"),
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_reason="http-escalation",
+        on_event=None,
+        response=SimpleNamespace(status=200, headers={}),
+        navigation_strategy="domcontentloaded",
+        readiness_probes=[
+            {
+                "is_ready": True,
+                "visible_text_length": 5000,
+                "structured_data_present": True,
+                "detail_hint_count": 4,
+            }
+        ],
+        networkidle_timed_out=False,
+        networkidle_skip_reason="fast_path_ready",
+        readiness_policy={},
+        readiness_diagnostics={},
+        expansion_diagnostics={},
+        listing_recovery_diagnostics={},
+        payload_capture=_PayloadCapture(),
+        html=html,
+        traversal_result=None,
+        rendered_html=html,
+        page_markdown="",
+        phase_timings_ms={},
+        started_at=0.0,
+        interstitial_diagnostics={"status": "not_found", "reason": "no_location_signal"},
+    )
+
+    result = await browser_page_flow.finalize_browser_fetch(
+        payload,
+        blocked_html_checker=lambda *_args, **_kwargs: False,
+        classify_blocked_page_async=_classify_blocked_page_async,
+        classify_low_content_reason=lambda *_args, **_kwargs: None,
+        classify_browser_outcome=lambda **_kwargs: "usable_content",
+        capture_browser_screenshot=lambda _page: "",
+        emit_browser_event=_emit_browser_event,
+        elapsed_ms=lambda _started_at: 0,
+    )
+
+    assert result["blocked"] is False
+    assert result["diagnostics"]["browser_outcome"] == "usable_content"
+    assert result["diagnostics"]["interstitial"]["location_required"] is False
+
+
+@pytest.mark.asyncio
 async def test_location_interstitial_dismisses_by_safe_text_token() -> None:
     class _MissingLocator:
         async def count(self) -> int:
@@ -416,14 +487,72 @@ async def test_location_interstitial_dismissal_skips_when_no_signal_present() ->
         def locator(self, _selector: str):
             raise AssertionError("locator probe should be skipped when no signal exists")
 
-        async def evaluate(self, _script: str, payload: dict[str, object]):
+        async def evaluate(self, script: str, payload: dict[str, object]):
             if "selectors" in payload:
+                assert "bodyText" not in script
                 return False
             raise AssertionError("dismiss-by-text should be skipped when no signal exists")
 
     result = await browser_page_flow.dismiss_safe_location_interstitial(_Page())
 
     assert result == {"status": "not_found", "reason": "no_location_signal"}
+
+
+@pytest.mark.asyncio
+async def test_serialize_browser_page_content_reuses_prefetched_html_without_page_content() -> (
+    None
+):
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1></body></html>",
+    )
+    html, traversal_result, rendered_html, listing_recovery_diagnostics, page_markdown = (
+        await browser_page_flow.serialize_browser_page_content_impl(
+            page,
+            surface="ecommerce_detail",
+            traversal_mode=None,
+            listing_recovery_mode=None,
+            traversal_active=False,
+            timeout_seconds=5,
+            max_pages=1,
+            max_scrolls=1,
+            max_records=1,
+            prefetched_html="<html><body><h1>Widget Prime</h1></body></html>",
+            capture_page_markdown=False,
+            phase_timings_ms={},
+            execute_listing_traversal=None,
+            recover_listing_page_content=None,
+            elapsed_ms=lambda _started_at: 0,
+            on_event=None,
+        )
+    )
+
+    assert page.content_calls == 0
+    assert html == rendered_html
+    assert traversal_result is None
+    assert listing_recovery_diagnostics["status"] == "skipped"
+    assert page_markdown == ""
+
+
+def test_detail_expansion_extractability_reuses_supplied_soup_without_reparse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soup = BeautifulSoup(
+        "<html><body><section><h2>Materials</h2><p>Leather upper.</p></section></body></html>",
+        "html.parser",
+    )
+
+    def _unexpected_bs4(*_args, **_kwargs):
+        raise AssertionError("BeautifulSoup should not be called when soup is supplied")
+
+    monkeypatch.setattr(browser_page_flow, "BeautifulSoup", _unexpected_bs4)
+    extractability = browser_page_flow._detail_expansion_extractability(
+        html="",
+        soup=soup,
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+    )
+
+    assert extractability["matched_requested_fields"] == ["materials"]
 
 
 @dataclass
@@ -906,6 +1035,7 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
     assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 0
     assert page.goto_calls == ["domcontentloaded"]
     assert page.wait_timeout_calls == []
+    assert page.content_calls == 2
     assert "networkidle" not in page.load_state_calls
 
 

@@ -683,11 +683,15 @@ async def settle_browser_page_impl(
 ):
     readiness_probes: list[dict[str, object]] = []
     cached_html: str | None = None
+    cached_analysis: HtmlAnalysis | None = None
 
     async def _cached_probe(*, refresh_html: bool = False) -> dict[str, object]:
-        nonlocal cached_html
+        nonlocal cached_html, cached_analysis
         if refresh_html or cached_html is None:
             cached_html = await get_page_html_impl(page)
+            cached_analysis = analyze_html(cached_html or "")
+        elif cached_analysis is None:
+            cached_analysis = analyze_html(cached_html or "")
         return await probe_browser_readiness(
             page,
             url=url,
@@ -794,6 +798,7 @@ async def settle_browser_page_impl(
     else:
         initial_extractability = _detail_expansion_extractability(
             html=cached_html or "",
+            soup=cached_analysis.soup if cached_analysis is not None else None,
             surface=surface or "",
             requested_fields=requested_fields,
         )
@@ -839,6 +844,7 @@ async def settle_browser_page_impl(
             )
             expansion_diagnostics["extractability"] = _detail_expansion_extractability(
                 html=cached_html or "",
+                soup=cached_analysis.soup if cached_analysis is not None else None,
                 surface=surface or "",
                 requested_fields=requested_fields,
             )
@@ -849,6 +855,7 @@ async def settle_browser_page_impl(
         networkidle_skip_reason,
         readiness_diagnostics,
         expansion_diagnostics,
+        cached_html or "",
     )
 
 
@@ -863,6 +870,7 @@ async def serialize_browser_page_content_impl(
     max_pages: int,
     max_scrolls: int,
     max_records: int | None = None,
+    prefetched_html: str | None = None,
     capture_page_markdown: bool,
     phase_timings_ms: dict[str, int],
     execute_listing_traversal,
@@ -930,10 +938,12 @@ async def serialize_browser_page_content_impl(
     phase_timings_ms["traversal"] = elapsed_ms(traversal_started_at)
     serialization_started_at = time.perf_counter()
     if traversal_result is None:
-        html = await get_page_html(
-            page,
-            flatten_shadow=should_flatten_shadow,
-        )
+        html = str(prefetched_html or "")
+        if not html.strip():
+            html = await get_page_html(
+                page,
+                flatten_shadow=should_flatten_shadow,
+            )
         rendered_html = html
     phase_timings_ms["content_serialization"] = elapsed_ms(serialization_started_at)
     if capture_page_markdown:
@@ -1184,8 +1194,7 @@ async def _page_might_have_location_interstitial(page: Any) -> bool:
                   }
                 } catch {}
               }
-              const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
-              return hasToken(bodyText);
+              return false;
             }
             """,
             {"selectors": selectors, "tokens": tokens},
@@ -1747,17 +1756,19 @@ def _normalize_listing_recovery_mode(value: object) -> str | None:
 def _detail_expansion_extractability(
     *,
     html: str,
+    soup: BeautifulSoup | None = None,
     surface: str,
     requested_fields: list[str] | None,
 ) -> dict[str, object]:
-    if not str(html or "").strip():
+    if soup is None and not str(html or "").strip():
         return {
             "verified": False,
             "matched_requested_fields": [],
             "extractable_fields": [],
             "section_fields": [],
         }
-    soup = BeautifulSoup(str(html or ""), HTML_PARSER)
+    if soup is None:
+        soup = BeautifulSoup(str(html or ""), HTML_PARSER)
     return requested_content_extractability(
         soup, surface=surface, requested_fields=requested_fields
     )

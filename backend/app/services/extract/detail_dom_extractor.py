@@ -7,12 +7,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from collections.abc import Callable
 from typing import Any
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
     DOM_VARIANT_CARTESIAN_COMBO_LIMIT,
     DOM_VARIANT_GROUP_LIMIT,
+    DETAIL_DOM_SCALAR_SIZE_PATTERN,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
 )
 from app.services.field_value_core import (
@@ -61,49 +62,6 @@ from app.services.extract.shared_variant_logic import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _direct_text_fragments(node: Tag) -> list[str]:
-    fragments: list[str] = []
-    for child in node.contents:
-        if isinstance(child, NavigableString):
-            text = clean_text(str(child))
-        elif isinstance(child, Tag):
-            text = clean_text(child.get_text(" ", strip=True))
-        else:
-            text = ""
-        if text:
-            fragments.append(text)
-    return fragments
-
-
-def _extract_inline_scalar_label_value_pairs(
-    root: BeautifulSoup,
-    *,
-    alias_lookup: dict[str, str],
-) -> list[tuple[str, str]]:
-    rows: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for node in root.find_all(["li", "p", "div", "span"]):
-        if not isinstance(node, Tag):
-            continue
-        fragments = _direct_text_fragments(node)
-        if len(fragments) != 2:
-            continue
-        label, value = (clean_text(fragments[0]), clean_text(fragments[1]))
-        if not label or not value or len(label) > 40 or len(value) > 250:
-            continue
-        normalized = alias_lookup.get(label.lower()) or alias_lookup.get(
-            re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
-        )
-        if normalized not in {"size", "color"}:
-            continue
-        key = (normalized, value.casefold())
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append((normalized, value))
-    return rows
 
 def _dom_variant_axis_allowed(axis_name: str) -> bool:
     return axis_name in public_variant_axis_fields or axis_name == "style"
@@ -248,21 +206,6 @@ def apply_dom_fallbacks(
                 coerce_field_value(normalized, value, page_url),
                 source="dom_sections",
             )
-    for normalized, value in _extract_inline_scalar_label_value_pairs(
-        soup,
-        alias_lookup=alias_lookup,
-    ):
-        if candidates.get(normalized):
-            continue
-        add_sourced_candidate(
-            candidates,
-            candidate_sources,
-            field_sources,
-            selector_trace_candidates,
-            normalized,
-            coerce_field_value(normalized, value, page_url),
-            source="dom_text",
-        )
     if "features" in fields:
         feature_rows = extract_feature_rows(soup)
         if feature_rows:
@@ -308,6 +251,18 @@ def apply_dom_fallbacks(
     body_text = (
         clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""
     )
+    if "size" in fields and not candidates.get("size"):
+        size_match = re.search(str(DETAIL_DOM_SCALAR_SIZE_PATTERN), body_text, re.I)
+        if size_match:
+            add_sourced_candidate(
+                candidates,
+                candidate_sources,
+                field_sources,
+                selector_trace_candidates,
+                "size",
+                coerce_field_value("size", size_match.group(1), page_url),
+                source="dom_text",
+            )
     if "currency" in fields and not candidates.get("currency"):
         for price_value in list(candidates.get("price") or []):
             currency_code = extract_currency_code(price_value)
