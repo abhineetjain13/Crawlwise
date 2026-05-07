@@ -31,6 +31,98 @@ from app.services.config.selectors import CARD_SELECTORS
 from app.services.extraction_runtime import extract_records
 
 
+def _network_capture_summary() -> SimpleNamespace:
+    return SimpleNamespace(
+        network_payload_count=0,
+        malformed_network_payloads=0,
+        network_payload_read_failures=0,
+        network_payload_read_timeouts=0,
+        closed_network_payloads=0,
+        skipped_oversized_network_payloads=0,
+        dropped_payload_events=0,
+        payloads=[],
+    )
+
+
+class _StaticPayloadCapture:
+    async def close(self, _page):
+        return _network_capture_summary()
+
+
+async def _emit_browser_event_noop(*_args, **_kwargs):
+    return None
+
+
+async def _classify_browser_page_ok(_html: str, _status_code: int):
+    return browser_page_flow.BlockPageClassification(
+        blocked=False,
+        evidence=[],
+        outcome="ok",
+    )
+
+
+@pytest.fixture
+def browser_finalize_support(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    visual_calls: list[str | None] = []
+
+    async def _capture_fragments(*_args, **_kwargs):
+        return []
+
+    async def _capture_visuals(*_args, **_kwargs):
+        visual_calls.append(_kwargs.get("surface"))
+        return []
+
+    monkeypatch.setattr(
+        browser_page_flow,
+        "capture_rendered_listing_fragments",
+        _capture_fragments,
+    )
+    monkeypatch.setattr(
+        browser_page_flow,
+        "_capture_listing_visual_elements",
+        _capture_visuals,
+    )
+
+    def _make_payload(**overrides: Any) -> browser_page_flow.BrowserFinalizeInput:
+        html = str(
+            overrides.get(
+                "html",
+                "<html><body><h1>Widget Prime</h1><div>Description</div></body></html>",
+            )
+        )
+        defaults = {
+            "page": SimpleNamespace(url="https://example.com/products/widget"),
+            "url": "https://example.com/products/widget",
+            "surface": "ecommerce_detail",
+            "browser_reason": "http-escalation",
+            "on_event": None,
+            "response": SimpleNamespace(status=200, headers={}),
+            "navigation_strategy": "domcontentloaded",
+            "readiness_probes": [],
+            "networkidle_timed_out": False,
+            "networkidle_skip_reason": None,
+            "readiness_policy": {},
+            "readiness_diagnostics": {},
+            "expansion_diagnostics": {},
+            "listing_recovery_diagnostics": {},
+            "payload_capture": _StaticPayloadCapture(),
+            "html": html,
+            "traversal_result": None,
+            "rendered_html": html,
+            "page_markdown": "",
+            "phase_timings_ms": {},
+            "started_at": 0.0,
+        }
+        return browser_page_flow.BrowserFinalizeInput(**{**defaults, **overrides})
+
+    return SimpleNamespace(
+        make_payload=_make_payload,
+        classify_blocked_page_async=_classify_browser_page_ok,
+        emit_browser_event=_emit_browser_event_noop,
+        visual_calls=visual_calls,
+    )
+
+
 def test_select_primary_browser_html_prefers_full_rendered_when_traversal_fragment_is_capped() -> (
     None
 ):
@@ -106,81 +198,23 @@ def test_location_interstitial_diagnostics_marks_location_required() -> None:
 
 @pytest.mark.asyncio
 async def test_finalize_browser_fetch_marks_location_interstitial_blocked(
-    monkeypatch: pytest.MonkeyPatch,
+    browser_finalize_support: SimpleNamespace,
 ) -> None:
     html = (
         "<html><body><div role='dialog' class='location-modal'>"
         "<h2>Choose your location</h2><button>Continue</button>"
         "</div></body></html>"
     )
-
-    async def _capture_rendered_listing_fragments(*_args, **_kwargs):
-        return []
-
-    async def _capture_listing_visual_elements(*_args, **_kwargs):
-        return []
-
-    async def _classify_blocked_page_async(*_args, **_kwargs):
-        return browser_page_flow.BlockPageClassification(blocked=False, outcome="ok")
-
-    async def _emit_browser_event(*_args, **_kwargs):
-        return None
-
-    class _PayloadCapture:
-        async def close(self, _page):
-            return SimpleNamespace(
-                network_payload_count=0,
-                malformed_network_payloads=0,
-                network_payload_read_failures=0,
-                network_payload_read_timeouts=0,
-                closed_network_payloads=0,
-                skipped_oversized_network_payloads=0,
-                dropped_payload_events=0,
-                payloads=[],
-            )
-
-    monkeypatch.setattr(
-        browser_page_flow,
-        "capture_rendered_listing_fragments",
-        _capture_rendered_listing_fragments,
-    )
-    monkeypatch.setattr(
-        browser_page_flow,
-        "_capture_listing_visual_elements",
-        _capture_listing_visual_elements,
-    )
-    payload = browser_page_flow.BrowserFinalizeInput(
-        page=SimpleNamespace(url="https://example.com/products/widget"),
-        url="https://example.com/products/widget",
-        surface="ecommerce_detail",
-        browser_reason="http-escalation",
-        on_event=None,
-        response=SimpleNamespace(status=200, headers={}),
-        navigation_strategy="domcontentloaded",
-        readiness_probes=[],
-        networkidle_timed_out=False,
-        networkidle_skip_reason=None,
-        readiness_policy={},
-        readiness_diagnostics={},
-        expansion_diagnostics={},
-        listing_recovery_diagnostics={},
-        payload_capture=_PayloadCapture(),
-        html=html,
-        traversal_result=None,
-        rendered_html=html,
-        page_markdown="",
-        phase_timings_ms={},
-        started_at=0.0,
-    )
+    payload = browser_finalize_support.make_payload(html=html)
 
     result = await browser_page_flow.finalize_browser_fetch(
         payload,
         blocked_html_checker=lambda *_args, **_kwargs: False,
-        classify_blocked_page_async=_classify_blocked_page_async,
+        classify_blocked_page_async=browser_finalize_support.classify_blocked_page_async,
         classify_low_content_reason=lambda *_args, **_kwargs: None,
         classify_browser_outcome=lambda **_kwargs: "usable_content",
         capture_browser_screenshot=lambda _page: "",
-        emit_browser_event=_emit_browser_event,
+        emit_browser_event=browser_finalize_support.emit_browser_event,
         elapsed_ms=lambda _started_at: 0,
     )
 
@@ -189,6 +223,7 @@ async def test_finalize_browser_fetch_marks_location_interstitial_blocked(
     assert result["diagnostics"]["failure_reason"] == "location_required"
     assert result["diagnostics"]["low_content_reason"] == "location_required"
     assert "location_interstitial" in result["diagnostics"]["challenge_evidence"]
+    assert browser_finalize_support.visual_calls == []
 
 
 def test_location_interstitial_detects_text_only_fallback() -> None:
@@ -258,35 +293,10 @@ def test_fast_finalize_accepts_verified_extractability_without_probe_payload() -
 
 
 @pytest.mark.asyncio
-async def test_fast_finalize_keeps_location_clear_when_precheck_found_no_signal() -> None:
-    class _PayloadCapture:
-        async def close(self, _page):
-            return SimpleNamespace(
-                network_payload_count=0,
-                malformed_network_payloads=0,
-                network_payload_read_failures=0,
-                network_payload_read_timeouts=0,
-                closed_network_payloads=0,
-                skipped_oversized_network_payloads=0,
-                dropped_payload_events=0,
-                payloads=[],
-            )
-
-    async def _classify_blocked_page_async(_html: str, _status_code: int):
-        return SimpleNamespace(blocked=False, evidence=[], outcome="ok")
-
-    async def _emit_browser_event(*_args, **_kwargs):
-        return None
-
-    html = "<html><body><h1>Widget Prime</h1><div>Description</div></body></html>"
-    payload = browser_page_flow.BrowserFinalizeInput(
-        page=SimpleNamespace(url="https://example.com/products/widget"),
-        url="https://example.com/products/widget",
-        surface="ecommerce_detail",
-        browser_reason="http-escalation",
-        on_event=None,
-        response=SimpleNamespace(status=200, headers={}),
-        navigation_strategy="domcontentloaded",
+async def test_fast_finalize_keeps_location_clear_when_precheck_found_no_signal(
+    browser_finalize_support: SimpleNamespace,
+) -> None:
+    payload = browser_finalize_support.make_payload(
         readiness_probes=[
             {
                 "is_ready": True,
@@ -295,30 +305,18 @@ async def test_fast_finalize_keeps_location_clear_when_precheck_found_no_signal(
                 "detail_hint_count": 4,
             }
         ],
-        networkidle_timed_out=False,
         networkidle_skip_reason="fast_path_ready",
-        readiness_policy={},
-        readiness_diagnostics={},
-        expansion_diagnostics={},
-        listing_recovery_diagnostics={},
-        payload_capture=_PayloadCapture(),
-        html=html,
-        traversal_result=None,
-        rendered_html=html,
-        page_markdown="",
-        phase_timings_ms={},
-        started_at=0.0,
         interstitial_diagnostics={"status": "not_found", "reason": "no_location_signal"},
     )
 
     result = await browser_page_flow.finalize_browser_fetch(
         payload,
         blocked_html_checker=lambda *_args, **_kwargs: False,
-        classify_blocked_page_async=_classify_blocked_page_async,
+        classify_blocked_page_async=browser_finalize_support.classify_blocked_page_async,
         classify_low_content_reason=lambda *_args, **_kwargs: None,
         classify_browser_outcome=lambda **_kwargs: "usable_content",
         capture_browser_screenshot=lambda _page: "",
-        emit_browser_event=_emit_browser_event,
+        emit_browser_event=browser_finalize_support.emit_browser_event,
         elapsed_ms=lambda _started_at: 0,
     )
 
@@ -349,21 +347,12 @@ async def test_location_interstitial_dismisses_by_safe_text_token() -> None:
             return _MissingLocator()
 
         async def evaluate(self, script: str, payload: dict[str, object]):
-            del script
             if "selectors" in payload:
-                return True
+                return not self.dismissed
             assert "Continue" in payload["tokens"]
+            assert "document.body.innerText" not in script
             self.dismissed = True
             return {"status": "dismissed", "selector": "text:continue"}
-
-        async def content(self) -> str:
-            if self.dismissed:
-                return "<html><body></body></html>"
-            return (
-                "<html><body><div role='dialog'>"
-                "<h2>Choose your location</h2><button>Continue</button>"
-                "</div></body></html>"
-            )
 
         async def wait_for_timeout(self, timeout_ms: int) -> None:
             del timeout_ms
@@ -413,17 +402,8 @@ async def test_location_interstitial_dismissal_counts_before_first_locator() -> 
 
         async def evaluate(self, _script: str, payload: dict[str, object]):
             if "selectors" in payload:
-                return True
+                return not self.dismissed
             return {"status": "not_found"}
-
-        async def content(self) -> str:
-            if self.dismissed:
-                return "<html><body></body></html>"
-            return (
-                "<html><body><div role='dialog'>"
-                "<h2>Choose your location</h2><button>Continue</button>"
-                "</div></body></html>"
-            )
 
         async def wait_for_timeout(self, _timeout_ms: int) -> None:
             self.waited = True
@@ -435,12 +415,6 @@ async def test_location_interstitial_dismissal_counts_before_first_locator() -> 
 
 @pytest.mark.asyncio
 async def test_location_interstitial_dismissal_requires_modal_to_clear() -> None:
-    html = (
-        "<html><body><div role='dialog'>"
-        "<h2>Choose your location</h2><button>Continue</button>"
-        "</div></body></html>"
-    )
-
     class _FirstLocator:
         async def wait_for(self, **_kwargs) -> None:
             return None
@@ -464,9 +438,6 @@ async def test_location_interstitial_dismissal_requires_modal_to_clear() -> None
 
         async def wait_for_timeout(self, _timeout_ms: int) -> None:
             return None
-
-        async def content(self) -> str:
-            return html
 
         async def evaluate(self, _script: str, _payload: dict[str, object]):
             return True
@@ -499,12 +470,19 @@ async def test_location_interstitial_dismissal_skips_when_no_signal_present() ->
 
 
 @pytest.mark.asyncio
-async def test_serialize_browser_page_content_reuses_prefetched_html_without_page_content() -> (
-    None
-):
+async def test_serialize_browser_page_content_reuses_prefetched_html_without_page_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html = "<html><body><h1>Widget Prime</h1></body></html>"
     page = _FakeExpansionPage(
-        base_html="<html><body><h1>Widget Prime</h1></body></html>",
+        base_html=html,
     )
+    prefetched_analysis = browser_page_flow.analyze_html(html)
+
+    def _unexpected_analyze_html(*_args, **_kwargs):
+        raise AssertionError("analyze_html should not run for prefetched analysis")
+
+    monkeypatch.setattr(browser_page_flow, "analyze_html", _unexpected_analyze_html)
     html, traversal_result, rendered_html, listing_recovery_diagnostics, page_markdown = (
         await browser_page_flow.serialize_browser_page_content_impl(
             page,
@@ -516,8 +494,9 @@ async def test_serialize_browser_page_content_reuses_prefetched_html_without_pag
             max_pages=1,
             max_scrolls=1,
             max_records=1,
-            prefetched_html="<html><body><h1>Widget Prime</h1></body></html>",
-            capture_page_markdown=False,
+            prefetched_html=html,
+            prefetched_analysis=prefetched_analysis,
+            capture_page_markdown=True,
             phase_timings_ms={},
             execute_listing_traversal=None,
             recover_listing_page_content=None,
@@ -530,7 +509,7 @@ async def test_serialize_browser_page_content_reuses_prefetched_html_without_pag
     assert html == rendered_html
     assert traversal_result is None
     assert listing_recovery_diagnostics["status"] == "skipped"
-    assert page_markdown == ""
+    assert "Widget Prime" in page_markdown
 
 
 def test_detail_expansion_extractability_reuses_supplied_soup_without_reparse(
@@ -810,10 +789,12 @@ class _FakeExpansionPage:
         self.expanded = False
         self.url = "https://example.com/products/widget"
         self.wait_timeout_calls: list[int] = []
+        self.wait_function_calls: list[int] = []
         self.load_state_calls: list[str] = []
         self.card_selectors = set()
         self.role_targets = set(role_targets or set())
         self.goto_calls: list[str] = []
+        self.goto_timeout_calls: list[int | None] = []
         self.goto_failures = dict(goto_failures or {})
         self.response_events = list(response_events or [])
         self.wait_for_selector_error = wait_for_selector_error
@@ -857,10 +838,10 @@ class _FakeExpansionPage:
         wait_until: str | None = None,
         timeout: int | None = None,
     ) -> Any:
-        del timeout
         self.url = url
         strategy = str(wait_until or "")
         self.goto_calls.append(strategy)
+        self.goto_timeout_calls.append(timeout)
         if strategy in self.goto_failures:
             raise self.goto_failures[strategy]
         for callback in list(self.listeners.get("response", [])):
@@ -899,6 +880,21 @@ class _FakeExpansionPage:
 
     async def wait_for_timeout(self, timeout_ms: int) -> None:
         self.wait_timeout_calls.append(timeout_ms)
+        if self.wait_html_sequence:
+            next_html = self.wait_html_sequence.pop(0)
+            self.base_html = next_html
+            self.expanded_html = next_html
+        if len(self.cookie_snapshots) > 1:
+            self.cookie_snapshots.pop(0)
+
+    async def wait_for_function(
+        self,
+        _script: str,
+        _arg: object | None = None,
+        *,
+        timeout: int | None = None,
+    ) -> None:
+        self.wait_function_calls.append(int(timeout or 0))
         if self.wait_html_sequence:
             next_html = self.wait_html_sequence.pop(0)
             self.base_html = next_html
@@ -1266,7 +1262,8 @@ async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_lis
 
     assert result.browser_diagnostics["phase_timings_ms"]["optimistic_wait"] >= 0
     assert result.browser_diagnostics["phase_timings_ms"]["networkidle_wait"] >= 0
-    assert page.wait_timeout_calls == [25]
+    assert page.wait_timeout_calls == []
+    assert page.wait_function_calls == [25]
     assert page.load_state_calls == ["networkidle"]
     assert result.browser_diagnostics["networkidle_skip_reason"] is None
 
@@ -1868,6 +1865,7 @@ async def test_generate_page_markdown_tolerates_nodes_with_missing_attrs(
 
     async def _skip_settle(*args, **kwargs):
         del args, kwargs
+        html = "<html><body><div><span>Widget Prime</span></div></body></html>"
         return (
             {"is_ready": True},
             [],
@@ -1875,6 +1873,8 @@ async def test_generate_page_markdown_tolerates_nodes_with_missing_attrs(
             "test_override",
             {},
             {"status": "skipped", "reason": "test_override", "clicked_count": 0},
+            html,
+            browser_page_flow.analyze_html(html),
         )
 
     monkeypatch.setattr(browser_runtime, "_settle_browser_page", _skip_settle)
@@ -2628,7 +2628,7 @@ async def test_browser_fetch_waits_for_challenge_recovery_before_settling(
     )
 
     assert "Widget Prime" in result.html
-    assert page.wait_timeout_calls
+    assert page.wait_function_calls
     assert page.goto_calls == ["domcontentloaded"]
     assert page.load_state_calls == ["networkidle"]
 
@@ -4091,29 +4091,16 @@ async def test_get_page_html_outer_html_fallback_preserves_doctype(
 
 
 @pytest.mark.asyncio
-async def test_page_has_location_interstitial_uses_resilient_html_fetch(
-    patch_settings,
-) -> None:
-    patch_settings(browser_error_retry_attempts=0, browser_error_retry_delay_ms=0)
-
+async def test_page_might_have_location_interstitial_uses_live_selector_probe() -> None:
     class _Page:
         url = "https://example.com/product"
 
-        async def content(self) -> str:
-            raise RuntimeError(
-                "Page.content: Connection closed while reading from the driver"
-            )
+        async def evaluate(self, script: str, payload: dict[str, object]):
+            assert "document.querySelector" in script
+            assert "selectors" in payload
+            return True
 
-        async def evaluate(self, script: str):
-            if "flattenedRoots" in script:
-                return 0
-            return (
-                "<html><body>"
-                "<div role='dialog'>Choose your location to continue</div>"
-                "</body></html>"
-            )
-
-    detected = await browser_page_flow._page_has_location_interstitial(_Page())
+    detected = await browser_page_flow._page_might_have_location_interstitial(_Page())
 
     assert detected is True
 
@@ -4258,6 +4245,32 @@ async def test_browser_fetch_records_navigation_timing_when_fallback_navigation_
     assert page.goto_calls == ["domcontentloaded", "commit"]
     assert diagnostics["navigation_strategy"] == "commit"
     assert diagnostics["phase_timings_ms"]["navigation"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_networkidle_navigation_uses_primary_budget_cap(patch_settings) -> None:
+    patch_settings(
+        browser_navigation_networkidle_timeout_ms=30000,
+        browser_navigation_networkidle_primary_budget_ratio=0.4,
+    )
+    page = _FakeExpansionPage(
+        base_html="<html><body>Widget</body></html>",
+        goto_failures={"networkidle": PlaywrightTimeoutError("primary timeout")},
+    )
+
+    _response, strategy = await browser_page_flow.navigate_browser_page_impl(
+        page,
+        url="https://example.com/products/widget",
+        timeout_seconds=5,
+        phase_timings_ms={},
+        readiness_policy={"navigation_wait_until": "networkidle"},
+        crawler_runtime_settings=crawler_runtime_settings,
+        elapsed_ms=lambda _started_at: 0,
+    )
+
+    assert strategy == "domcontentloaded"
+    assert page.goto_calls == ["networkidle", "domcontentloaded"]
+    assert page.goto_timeout_calls[:2] == [2000, 5000]
 
 
 @pytest.mark.asyncio

@@ -188,6 +188,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_post_block_cooldown_ms: int = 500
     low_quality_browser_retry_methods: tuple[str, ...] = ("curl_cffi", "httpx")
     browser_navigation_networkidle_timeout_ms: int = 30000
+    browser_navigation_networkidle_primary_budget_ratio: float = 0.4
     browser_navigation_load_timeout_ms: int = 15000
     browser_navigation_domcontentloaded_timeout_ms: int = 15000
     browser_navigation_optimistic_wait_ms: int = 3000
@@ -486,10 +487,11 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError(
                 "run_quality_threshold_high must be >= run_quality_threshold_medium"
             )
-        _require_unit_interval(
+        for field_name in (
             "selector_self_heal_min_confidence",
-            self.selector_self_heal_min_confidence,
-        )
+            "browser_navigation_networkidle_primary_budget_ratio",
+        ):
+            _require_unit_interval(field_name, getattr(self, field_name))
         _require_positive("detail_max_variant_axes", self.detail_max_variant_axes)
         _require_non_negative(
             "detail_max_variant_matrix_cells",

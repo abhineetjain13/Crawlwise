@@ -1354,12 +1354,14 @@ async def browser_fetch(
                     page=page,
                     timeout_seconds=_remaining(),
                     phase_timings_ms=phase_timings_ms,
-                    operation=lambda: _navigate_browser_page(
+                    operation=lambda: navigate_browser_page_impl(
                         page,
                         url=url,
                         timeout_seconds=_remaining(),
                         phase_timings_ms=phase_timings_ms,
                         readiness_policy=readiness_policy,
+                        crawler_runtime_settings=crawler_runtime_settings,
+                        elapsed_ms=_elapsed_ms,
                     ),
                 )
                 page_title = ""
@@ -1406,6 +1408,7 @@ async def browser_fetch(
                     readiness_diagnostics,
                     expansion_diagnostics,
                     prefetched_html,
+                    prefetched_analysis,
                 ) = await _run_browser_stage(
                     stage="settle",
                     page=page,
@@ -1438,7 +1441,7 @@ async def browser_fetch(
                         ),
                     ),
                     phase_timings_ms=phase_timings_ms,
-                    operation=lambda: _serialize_browser_page_content(
+                    operation=lambda: serialize_browser_page_content_impl(
                         page,
                         surface=normalized_surface,
                         traversal_mode=traversal_mode,
@@ -1449,8 +1452,12 @@ async def browser_fetch(
                         max_scrolls=max_scrolls,
                         max_records=max_records,
                         prefetched_html=prefetched_html,
+                        prefetched_analysis=prefetched_analysis,
                         capture_page_markdown=capture_page_markdown,
                         phase_timings_ms=phase_timings_ms,
+                        execute_listing_traversal=execute_listing_traversal,
+                        recover_listing_page_content=recover_listing_page_content,
+                        elapsed_ms=_elapsed_ms,
                         on_event=on_event,
                     ),
                 )
@@ -1482,6 +1489,9 @@ async def browser_fetch(
                             listing_recovery_diagnostics=listing_recovery_diagnostics,
                             payload_capture=payload_capture,
                             html=html,
+                            html_analysis=prefetched_analysis
+                            if html == prefetched_html
+                            else None,
                             traversal_result=traversal_result,
                             rendered_html=rendered_html,
                             page_markdown=page_markdown,
@@ -1685,25 +1695,6 @@ async def _maybe_warm_origin_before_navigation(
         phase_timings_ms["origin_warmup"] = _elapsed_ms(started_at)
 
 
-async def _navigate_browser_page(
-    page: Any,
-    *,
-    url: str,
-    timeout_seconds: float,
-    phase_timings_ms: dict[str, int],
-    readiness_policy: dict[str, object] | None = None,
-):
-    return await navigate_browser_page_impl(
-        page,
-        url=url,
-        timeout_seconds=timeout_seconds,
-        phase_timings_ms=phase_timings_ms,
-        readiness_policy=readiness_policy,
-        crawler_runtime_settings=crawler_runtime_settings,
-        elapsed_ms=_elapsed_ms,
-    )
-
-
 async def _settle_browser_page(
     page: Any,
     *,
@@ -1730,42 +1721,6 @@ async def _settle_browser_page(
         expand_detail_content_if_needed=expand_detail_content_if_needed,
         append_readiness_probe=append_readiness_probe,
         elapsed_ms=_elapsed_ms,
-    )
-
-
-async def _serialize_browser_page_content(
-    page: Any,
-    *,
-    surface: str | None,
-    traversal_mode: str | None,
-    listing_recovery_mode: str | None,
-    traversal_active: bool,
-    timeout_seconds: float,
-    max_pages: int,
-    max_scrolls: int,
-    max_records: int | None,
-    prefetched_html: str | None,
-    capture_page_markdown: bool,
-    phase_timings_ms: dict[str, int],
-    on_event=None,
-):
-    return await serialize_browser_page_content_impl(
-        page,
-        surface=surface,
-        traversal_mode=traversal_mode,
-        listing_recovery_mode=listing_recovery_mode,
-        traversal_active=traversal_active,
-        timeout_seconds=timeout_seconds,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        max_records=max_records,
-        prefetched_html=prefetched_html,
-        capture_page_markdown=capture_page_markdown,
-        phase_timings_ms=phase_timings_ms,
-        execute_listing_traversal=execute_listing_traversal,
-        recover_listing_page_content=recover_listing_page_content,
-        elapsed_ms=_elapsed_ms,
-        on_event=on_event,
     )
 
 

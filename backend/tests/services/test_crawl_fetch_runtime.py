@@ -2269,6 +2269,7 @@ async def test_fetch_page_learns_browser_first_after_vendor_blocked_http_recover
     url = "https://wellfound.com/location/united-states"
     curl_calls: list[str] = []
     browser_reasons: list[str | None] = []
+    policy_loads: list[str] = []
     learned_policy = HostProtectionPolicy(host="wellfound.com")
 
     async def _vendor_blocked_curl(
@@ -2301,8 +2302,9 @@ async def test_fetch_page_learns_browser_first_after_vendor_blocked_http_recover
             blocked=False,
         )
 
-    async def _fake_load_policy(url: str, *, session=None, ttl_seconds=None):
-        del url, session, ttl_seconds
+    async def _fake_load_policy(request_url: str, *, session=None, ttl_seconds=None):
+        del session, ttl_seconds
+        policy_loads.append(request_url)
         return learned_policy
 
     async def _fake_note_host_hard_block(value: str | None, **kwargs):
@@ -2332,6 +2334,7 @@ async def test_fetch_page_learns_browser_first_after_vendor_blocked_http_recover
     assert first.method == "browser"
     assert second.method == "browser"
     assert curl_calls == [url]
+    assert policy_loads == [url, url, url]
     assert browser_reasons == ["vendor-block:datadome", "host-preference"]
 
 

@@ -102,6 +102,7 @@ class _FetchRuntimeContext:
     prefer_curl_handoff: bool = False
     handoff_cookie_engine: str | None = None
     locality_profile: dict[str, object] = field(default_factory=dict)
+    host_policy: HostProtectionPolicy | None = None
     last_browser_attempt_diagnostics: dict[str, object] = field(default_factory=dict)
     last_error: Exception | None = None
 
@@ -292,18 +293,15 @@ async def fetch_page(
         if "ttl_seconds" in inspect.signature(load_host_protection_policy).parameters
         else {}
     )
-    learned_host_policy = await load_host_protection_policy(url, **host_policy_kwargs)
-    host_preference_enabled = bool(learned_host_policy.prefer_browser)
+    context.host_policy = await load_host_protection_policy(url, **host_policy_kwargs)
+    host_preference_enabled = bool(context.host_policy.prefer_browser)
     browser_first = _browser_first_decision(
         context=context,
         prefer_browser=prefer_browser,
         host_preference_enabled=host_preference_enabled,
     )
     if browser_first:
-        handoff_result = await _try_browser_http_handoff(
-            context,
-            host_policy=learned_host_policy,
-        )
+        handoff_result = await _try_browser_http_handoff(context)
         if handoff_result is not None:
             await _update_host_result_memory(
                 context,
@@ -324,7 +322,6 @@ async def fetch_page(
             capture_page_markdown=bool(capture_page_markdown),
             capture_screenshot=context.capture_screenshot,
             proxies=context.proxies,
-            host_policy=learned_host_policy,
         )
         await _update_host_result_memory(
             context,
@@ -333,10 +330,7 @@ async def fetch_page(
         return browser_result
 
     if context.prefer_curl_handoff:
-        handoff_result = await _try_browser_http_handoff(
-            context,
-            host_policy=learned_host_policy,
-        )
+        handoff_result = await _try_browser_http_handoff(context)
         if handoff_result is not None:
             await _update_host_result_memory(
                 context,
@@ -356,10 +350,6 @@ async def fetch_page(
             type(context.last_error).__name__,
         )
         try:
-            browser_host_policy = await load_host_protection_policy(
-                context.url,
-                ttl_seconds=context.host_memory_ttl_seconds,
-            )
             return await _run_browser_attempts(
                 context,
                 reason=browser_reason or "http-escalation",
@@ -368,7 +358,6 @@ async def fetch_page(
                 capture_page_markdown=bool(capture_page_markdown),
                 capture_screenshot=context.capture_screenshot,
                 proxies=context.proxies,
-                host_policy=browser_host_policy,
             )
         except Exception as exc:
             _attach_exception_browser_diagnostics(
@@ -517,7 +506,13 @@ async def _run_browser_attempts(
         if listing_recovery_mode is None
         else str(listing_recovery_mode or "").strip() or None
     )
-    active_host_policy = host_policy or await load_host_protection_policy(context.url)
+    active_host_policy = host_policy or context.host_policy
+    if active_host_policy is None:
+        active_host_policy = await load_host_protection_policy(
+            context.url,
+            ttl_seconds=context.host_memory_ttl_seconds,
+        )
+    context.host_policy = active_host_policy
     browser_proxies = list(proxies or context.proxies)
     for proxy_attempt_index, proxy in enumerate(browser_proxies, start=1):
         engine_attempts = _browser_engine_attempts(
@@ -586,6 +581,7 @@ async def _run_browser_attempts(
                         result.final_url or result.url or context.url,
                         ttl_seconds=context.host_memory_ttl_seconds,
                     )
+                    context.host_policy = active_host_policy
                     engine_attempts = _extend_browser_engine_attempts_after_block(
                         engine_attempts=engine_attempts,
                         attempted_engine=browser_engine,
@@ -690,19 +686,17 @@ async def _run_http_fetch_chain_with_fetcher(
 
 async def _try_browser_http_handoff(
     context: _FetchRuntimeContext,
-    *,
-    host_policy: HostProtectionPolicy,
 ) -> PageFetchResult | None:
+    host_policy = context.host_policy
+    if host_policy is None:
+        return None
     if not bool(crawler_runtime_settings.browser_http_handoff_enabled):
         return None
     if _hard_browser_requirement(context=context):
         return None
     if context.fetch_mode == "browser_only":
         return None
-    if not (
-        host_policy.prefer_browser
-        or context.prefer_curl_handoff
-    ):
+    if not (host_policy.prefer_browser or context.prefer_curl_handoff):
         return None
     engines = _handoff_cookie_engines(
         host_policy,
@@ -924,6 +918,10 @@ async def _handle_http_result(
             proxy_used=proxy is not None,
             ttl_seconds=context.host_memory_ttl_seconds,
         )
+        context.host_policy = await load_host_protection_policy(
+            result.final_url or result.url or context.url,
+            ttl_seconds=context.host_memory_ttl_seconds,
+        )
     if (
         _retryable_status_for_http_fetch(result.status_code)
         and not vendor
@@ -952,10 +950,6 @@ async def _handle_http_result(
             capture_page_markdown=False,
             capture_screenshot=context.capture_screenshot,
             proxies=browser_proxies,
-            host_policy=await load_host_protection_policy(
-                result.final_url or result.url or context.url,
-                ttl_seconds=context.host_memory_ttl_seconds,
-            ),
         )
         await _update_host_result_memory(
             context,

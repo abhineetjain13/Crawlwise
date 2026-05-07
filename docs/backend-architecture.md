@@ -1,6 +1,6 @@
 # Backend Architecture
 
-> Last updated: 2026-04-29
+> Last updated: 2026-05-07
 >
 > Canonical detailed backend reference. This is the merged replacement for the older split architecture docs.
 
@@ -243,7 +243,7 @@ Current live behavior:
 - browser stages (`navigation`, `settle`, `serialize`, `finalize`) now run in cancellation-aware tasks; if a stage times out or the run is killed mid-flight, the runtime force-closes the page/context before unwinding so local hard-kill does not wait forever on a stuck Playwright DOM call
 - acquisition timeout budget is staged: HTTP/curl attempts are capped at `http_timeout_seconds` (10s) per attempt, leaving the rest of the `acquisition_attempt_timeout_seconds` (90s) budget for browser launch, navigation, and settling. `browser_only` mode skips the HTTP tier and allocates the full budget to the browser path. The outer URL-processing timeout (`url_timeout_seconds` + buffer, default 105s) enforces the ceiling across all acquisition tiers
 - shared browser runtimes now recycle once when the driver disconnects during `new_context` / page bootstrap, so a dead browser process does not poison later URLs in the same run
-- browser rendering now probes extractability at `domcontentloaded`, skips optimistic/network-idle/readiness waits when content is already usable, and limits detail expansion with bounded DOM-first then accessibility-assisted fallback
+- browser rendering probes extractability at `domcontentloaded`, caps primary `networkidle` navigation to a configured budget slice, uses a short-circuit readiness wait instead of fixed optimistic sleep, reuses settled HTML/analysis for serialization, and limits detail expansion with bounded DOM-first then accessibility-assisted fallback
 - listing readiness no longer fast-paths from thin shell text alone; listing surfaces now require actual listing evidence before browser acquisition is considered ready
 - detail expansion now skips plain navigation anchors with real `href`s (for example footer/about/careers/returns links) unless they behave like true in-page expanders, which prevents Souled Store-style utility-page navigations during PDP acquisition
 - detail expansion also skips header/nav/footer controls outside main content, preventing Lowe's-style pivots from a requested PDP into site chrome or marketing pages

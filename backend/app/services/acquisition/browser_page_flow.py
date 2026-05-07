@@ -83,6 +83,7 @@ class BrowserFinalizeInput:
     started_at: float
     interstitial_diagnostics: dict[str, object] | None = None
     capture_screenshot: bool = False
+    html_analysis: HtmlAnalysis | None = None
 
 
 class BrowserAcquisitionResultBuilder:
@@ -162,7 +163,9 @@ class BrowserAcquisitionResultBuilder:
                 payload.html,
                 html_bytes=html_bytes,
             )
-            location_interstitial_present = location_interstitial_detected(payload.html)
+            location_interstitial_present = location_interstitial_detected(
+                payload.html, analysis=payload.html_analysis
+            )
         browser_outcome = self.classify_browser_outcome(
             html=payload.html,
             html_bytes=html_bytes,
@@ -357,17 +360,24 @@ class BrowserAcquisitionResultBuilder:
             stage="rendered_listing_fragment_capture",
             item_kind="text",
         )
-        (
-            listing_visual_elements,
-            listing_visual_capture,
-        ) = await self._capture_timed_listing_artifact(
-            _capture_listing_visual_elements(
-                payload.page,
-                surface=payload.surface,
-            ),
-            stage="listing_visual_capture",
-            item_kind="mapping",
-        )
+        if "listing" in str(payload.surface or "").lower():
+            (
+                listing_visual_elements,
+                listing_visual_capture,
+            ) = await self._capture_timed_listing_artifact(
+                _capture_listing_visual_elements(
+                    payload.page,
+                    surface=payload.surface,
+                ),
+                stage="listing_visual_capture",
+                item_kind="mapping",
+            )
+        else:
+            payload.phase_timings_ms["listing_visual_capture"] = 0
+            listing_visual_elements, listing_visual_capture = [], {
+                "status": "skipped",
+                "reason": "non_listing_surface",
+            }
         return (
             cast(list[str], rendered_listing_fragments),
             cast(list[dict[str, object]], listing_visual_elements),
@@ -562,16 +572,26 @@ async def navigate_browser_page_impl(
         .strip()
         .lower()
     )
-    primary_timeout_cap_ms = (
-        int(crawler_runtime_settings.browser_navigation_networkidle_timeout_ms)
-        if navigation_wait_until == "networkidle"
-        else int(
-            crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms
-        )
+    total_timeout_ms = int(timeout_seconds * 1000)
+    primary_timeout_cap_ms = int(
+        crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms
     )
-    goto_timeout_ms = min(int(timeout_seconds * 1000), primary_timeout_cap_ms)
+    if navigation_wait_until == "networkidle":
+        primary_timeout_cap_ms = min(
+            int(crawler_runtime_settings.browser_navigation_networkidle_timeout_ms),
+            max(
+                1,
+                int(
+                    total_timeout_ms
+                    * float(
+                        crawler_runtime_settings.browser_navigation_networkidle_primary_budget_ratio
+                    )
+                ),
+            ),
+        )
+    goto_timeout_ms = min(total_timeout_ms, primary_timeout_cap_ms)
     fallback_timeout_ms = min(
-        int(timeout_seconds * 1000),
+        total_timeout_ms,
         int(crawler_runtime_settings.browser_navigation_min_final_commit_timeout_ms),
     )
     navigation_strategy = navigation_wait_until
@@ -593,7 +613,7 @@ async def navigate_browser_page_impl(
         try:
             fallback_timeout = (
                 min(
-                    int(timeout_seconds * 1000),
+                    total_timeout_ms,
                     int(
                         crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms
                     ),
@@ -710,7 +730,16 @@ async def settle_browser_page_impl(
     )
     if wait_ms > 0 and not current_probe["is_ready"]:
         optimistic_wait_started_at = time.perf_counter()
-        await page.wait_for_timeout(wait_ms)
+        try:
+            await page.wait_for_function(
+                "({visibleTextMin}) => String((document.body && (document.body.innerText || document.body.textContent)) || '').trim().length >= Number(visibleTextMin || 0)",
+                {
+                    "visibleTextMin": crawler_runtime_settings.browser_readiness_visible_text_min,
+                },
+                timeout=wait_ms,
+            )
+        except PlaywrightTimeoutError:
+            pass
         phase_timings_ms["optimistic_wait"] = elapsed_ms(optimistic_wait_started_at)
         current_probe = await _cached_probe(refresh_html=True)
         append_readiness_probe(
@@ -808,16 +837,16 @@ async def settle_browser_page_impl(
             requested_fields=requested_fields,
             readiness_probe=current_probe,
         ):
-            skip_reason = "requested_content_already_extractable"
-            if (
-                not list(requested_fields or [])
-                and str(surface or "").strip().lower() == "ecommerce_detail"
-                and bool(current_probe.get("is_ready"))
-            ):
-                skip_reason = "canonical_detail_already_ready"
             expansion_diagnostics = {
                 "status": "skipped",
-                "reason": skip_reason,
+                "reason": (
+                    "canonical_detail_already_ready"
+                    if (
+                        not list(requested_fields or [])
+                        and str(surface or "").strip().lower() == "ecommerce_detail"
+                    )
+                    else "requested_content_already_extractable"
+                ),
                 "clicked_count": 0,
                 "expanded_elements": [],
                 "interaction_failures": [],
@@ -856,6 +885,7 @@ async def settle_browser_page_impl(
         readiness_diagnostics,
         expansion_diagnostics,
         cached_html or "",
+        cached_analysis,
     )
 
 
@@ -871,6 +901,7 @@ async def serialize_browser_page_content_impl(
     max_scrolls: int,
     max_records: int | None = None,
     prefetched_html: str | None = None,
+    prefetched_analysis: HtmlAnalysis | None = None,
     capture_page_markdown: bool,
     phase_timings_ms: dict[str, int],
     execute_listing_traversal,
@@ -948,11 +979,16 @@ async def serialize_browser_page_content_impl(
     phase_timings_ms["content_serialization"] = elapsed_ms(serialization_started_at)
     if capture_page_markdown:
         markdown_started_at = time.perf_counter()
+        markdown_analysis = (
+            prefetched_analysis
+            if traversal_result is None and rendered_html == str(prefetched_html or "")
+            else None
+        )
         page_markdown = await _generate_page_markdown(
             page,
             html=rendered_html or html,
             surface=surface,
-            analysis=analyze_html(rendered_html or html),
+            analysis=markdown_analysis or analyze_html(rendered_html or html),
         )
         phase_timings_ms["page_markdown"] = elapsed_ms(markdown_started_at)
     else:
@@ -1080,8 +1116,12 @@ def _string_config_list(value: object) -> list[str]:
     return [str(item).strip() for item in items if str(item).strip()]
 
 
-def location_interstitial_detected(html: str) -> bool:
-    analysis = analyze_html(str(html or ""))
+def location_interstitial_detected(
+    html: str,
+    *,
+    analysis: HtmlAnalysis | None = None,
+) -> bool:
+    analysis = analysis or analyze_html(str(html or ""))
     soup = analysis.soup
     text = analysis.normalized_text.lower()
     tokens = _string_config_list(LOCATION_INTERSTITIAL_TEXT_TOKENS)
@@ -1249,7 +1289,7 @@ async def dismiss_safe_location_interstitial(page: Any) -> dict[str, object]:
                 force=True,
             )
             await page.wait_for_timeout(postclick_wait_ms)
-            if not await _page_has_location_interstitial(page):
+            if not await _page_might_have_location_interstitial(page):
                 return {"status": "dismissed", "selector": selector}
             still_present_result = {"status": "still_present", "selector": selector}
         except asyncio.CancelledError:
@@ -1289,7 +1329,7 @@ async def _dismiss_location_interstitial_by_text(page: Any) -> dict[str, object]
               const hasLocationText = (node) => {
                 const root = node.closest('[aria-modal="true"],[role="dialog"],.modal,.popup,.overlay')
                   || node.parentElement;
-                const text = String((root && root.innerText) || document.body.innerText || '')
+                const text = String((root && (root.innerText || root.textContent)) || document.body.textContent || '')
                   .replace(/\\s+/g, ' ')
                   .trim()
                   .toLowerCase();
@@ -1330,7 +1370,7 @@ async def _dismiss_location_interstitial_by_text(page: Any) -> dict[str, object]
             await page.wait_for_timeout(
                 int(crawler_runtime_settings.cookie_consent_postclick_wait_ms)
             )
-            if not await _page_has_location_interstitial(page):
+            if not await _page_might_have_location_interstitial(page):
                 return dict(result)
             return {
                 **dict(result),
@@ -1345,20 +1385,6 @@ async def _dismiss_location_interstitial_by_text(page: Any) -> dict[str, object]
             exc_info=True,
         )
     return {"status": "not_found"}
-
-
-async def _page_has_location_interstitial(page: Any) -> bool:
-    try:
-        return location_interstitial_detected(await get_page_html(page))
-    except asyncio.CancelledError:
-        raise
-    except (asyncio.TimeoutError, PlaywrightTimeoutError, PlaywrightError):
-        logger.debug(
-            "Location interstitial post-click verification failed url=%s",
-            getattr(page, "url", ""),
-            exc_info=True,
-        )
-        return True
 
 
 def _select_primary_browser_html(
