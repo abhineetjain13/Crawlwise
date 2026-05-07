@@ -11,9 +11,16 @@ from app.services.shared.url_utils import (
 
 def test_absolute_url_repairs_relative_and_bare_host_values() -> None:
     assert absolute_url("https://example.com/a/page", "../p") == "https://example.com/p"
+    assert absolute_url("https://example.com/a/page", "?q=1") == (
+        "https://example.com/a/page?q=1"
+    )
+    assert absolute_url("https://example.com/a/page", "#details") == (
+        "https://example.com/a/page#details"
+    )
     assert absolute_url("https://example.com", "cdn.example.com") == (
         "https://cdn.example.com"
     )
+    assert absolute_url("https://example.com", "") == ""
 
 
 def test_ensure_scheme_preserves_relative_and_existing_scheme() -> None:
@@ -31,6 +38,14 @@ def test_same_host_and_extract_urls_trim_malformed_candidates() -> None:
         "https://example.com",
     ) == ["https://example.com/a", "https://example.com/b"]
     assert extract_urls("https://example.com/ahttps://example.com/b", "https://x") == []
+    assert extract_urls(
+        {"image": {"url": "/img.png"}},
+        "https://example.com/p",
+    ) == ["https://example.com/img.png"]
+    assert extract_urls(["/a", "/a", "/B"], "https://example.com") == [
+        "https://example.com/a",
+        "https://example.com/B",
+    ]
 
 
 def test_placeholder_images_are_rejected() -> None:

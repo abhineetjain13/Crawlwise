@@ -23,6 +23,7 @@ from app.services.extraction_html_helpers import html_to_text
 
 __all__ = [
     "clean_text",
+    "coerce_literal_text_list",
     "coerce_long_text",
     "coerce_text",
     "is_title_noise",
@@ -137,3 +138,6 @@ def _coerce_literal_text_list(value: str) -> list[str]:
         for item in parsed
         if not isinstance(item, (bool, dict, list, tuple, set)) and clean_text(item)
     ]
+
+
+coerce_literal_text_list = _coerce_literal_text_list

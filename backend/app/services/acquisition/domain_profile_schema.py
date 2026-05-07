@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# TODO(phase-3): wire as canonical domain profile type in acquisition/domain_memory.py.
+
 from datetime import UTC, datetime
 from typing import Any, Literal
 

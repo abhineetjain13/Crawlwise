@@ -6,6 +6,13 @@
 **Secondary audits:** `docs/audits/pipeline-audit.md`, `docs/audits/llm-audit.md`
 **Scope:** Output contracts, idempotency, storage abstraction, quality gates, policy middleware, rate limiting, metrics, alerts, dependency hardening.
 
+STRICT LOC DISCIPLINE:
+- Every file you MODIFY must have deletions >= 50% of additions (net LOC change must be ≤ +50% of what you add).
+- Every new file you CREATE must correspond to code MOVED from an existing file, not net-new logic. State which source file the code came from.
+- You are not permitted to add to detail_extractor.py, field_value_core.py, field_value_dom.py, js_state_mapper.py, or crawl_fetch_runtime.py without an equal or greater deletion from the same file.
+- If you cannot delete code to offset an addition, stop and explain why, do not add anyway.
+- After implementation, output a table: filename | lines added | lines deleted | net change. Flag any file with net > +20 lines that was not in the task scope.
+
 ## Independent Context
 
 After Phase 3, pipeline and extraction should have clear owners. Phase 4 uses those owners to enforce production contracts at boundaries: records written to DB, artifacts written to storage, exports delivered downstream, domain policies applied around fetches, and operational health visible through logs/metrics/alerts.

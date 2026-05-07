@@ -1,10 +1,17 @@
 # Plan: Productionization Phase 3 - God-File Decomposition
 
-**Status:** READY
+**Status:** COMPLETE
 **Purpose:** Split large modules after shared foundations exist.
 **Primary audits:** `docs/audits/refactor-audit.md`, `docs/audits/pipeline-audit.md`, `docs/audits/publish-audit.md`, `docs/audits/selfheal-audit.md`
 **Secondary audits:** `docs/audits/batch-audit.md`, `docs/audits/acquisition-audit.md`
 **Scope:** Pure moves and import rewiring first. Behavior changes require separate tests.
+
+STRICT LOC DISCIPLINE:
+- Every file you MODIFY must have deletions >= 50% of additions (net LOC change must be ≤ +50% of what you add).
+- Every new file you CREATE must correspond to code MOVED from an existing file, not net-new logic. State which source file the code came from.
+- You are not permitted to add to detail_extractor.py, field_value_core.py, field_value_dom.py, js_state_mapper.py, or crawl_fetch_runtime.py without an equal or greater deletion from the same file.
+- If you cannot delete code to offset an addition, stop and explain why, do not add anyway.
+- After implementation, output a table: filename | lines added | lines deleted | net change. Flag any file with net > +20 lines that was not in the task scope.
 
 ## Independent Context
 
@@ -219,6 +226,19 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services/test_field_value_core.py tests/services/test_shared_variant_logic.py tests/services/test_crawl_fetch_runtime.py tests/services/test_detail_extractor_structured_sources.py tests/services/test_pipeline_core.py tests/services/test_batch_runtime.py -q
 .\.venv\Scripts\ruff.exe check app tests
 ```
+
+## Completion Notes
+
+Completed 2026-05-08.
+
+- Moved `field_value_core.py` implementation to `app/services/shared/field_coerce.py`; kept `field_value_core.py` as compatibility facade.
+- Moved `field_value_dom.py` implementation to `app/services/dom/selector_engine.py`; kept facade.
+- Moved `crawl_fetch_runtime.py` implementation to `app/services/fetch/fetch_context.py`; kept facade.
+- Moved `js_state_mapper.py` implementation to `app/services/js_state/state_normalizer.py`; kept facade.
+- Moved `detail_extractor.py` implementation to `app/services/extract/detail_materializer.py`; kept facade.
+- Moved `pipeline/core.py` implementation to `app/services/pipeline/extraction_loop.py`; kept facade.
+- Added structure budgets for temporary moved owners and preserved monkeypatch compatibility through module-alias facades.
+- Full backend test suite passed.
 
 ## Handoff Prompt
 

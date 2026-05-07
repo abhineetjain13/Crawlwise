@@ -13,22 +13,32 @@ from app.services.shared.text_coerce import (
 
 def test_clean_text_normalizes_entities_whitespace_and_css_noise() -> None:
     assert clean_text("  A&nbsp;\n B  ") == "A B"
+    assert clean_text(None) == ""
+    assert clean_text(False) == ""
+    assert clean_text("A\t\tB\r\nC") == "A B C"
     assert clean_text(".x{display:none} Product") == "Product"
 
 
 def test_strip_and_coerce_html_text() -> None:
     assert strip_html_tags("<p>Hello <b>world</b></p>") == "Hello world"
+    assert strip_html_tags("plain text") == "plain text"
     assert coerce_text("<p>Hello&nbsp;world</p>") == "Hello world"
+    assert coerce_text("A&nbsp;B") == "A B"
+    assert coerce_text({"x": 1}) == "{'x': 1}"
     assert coerce_long_text("<p>One</p><p>Two</p>") == "One Two"
 
 
 def test_literal_text_lists_and_empty_values() -> None:
     assert coerce_text("['Small', 'Large']") == "Small; Large"
+    assert coerce_text("[True, {'bad': 1}, 'Good']") == "Good"
+    assert coerce_text("[") == "["
     assert text_or_none(" \n ") is None
 
 
 def test_title_noise_and_slug_tokens() -> None:
     assert is_title_noise("undefined")
+    assert is_title_noise("null")
     assert is_title_noise("12345")
     assert not is_title_noise("Cotton Shirt")
+    assert slug_tokens("Café au lait") == ["caf", "au", "lait"]
     assert slug_tokens("Cotton-Shirt / Blue") == ["cotton", "shirt", "blue"]

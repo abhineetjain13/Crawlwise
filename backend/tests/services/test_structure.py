@@ -51,6 +51,7 @@ ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_NAME_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS"),
     ("crawl_fetch_runtime.py", "_RETRY_SENTINEL"),
+    ("fetch/fetch_context.py", "_RETRY_SENTINEL"),
     ("extract/variant_record_normalization.py", "_ADULT_SIZE_CONTEXT_TOKENS"),
     ("extract/variant_record_normalization.py", "_DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS"),
     ("extract/variant_record_normalization.py", "_DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS"),
@@ -62,6 +63,9 @@ ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("field_value_core.py", "_UNRESOLVED_TEMPLATE_URL_TOKENS_LOWER"),
     ("field_value_dom.py", "_SECTION_CONTAINER_SELECTORS"),
     ("field_value_dom.py", "_SECTION_LABEL_SELECTOR"),
+    ("dom/selector_engine.py", "_SECTION_CONTAINER_SELECTORS"),
+    ("dom/selector_engine.py", "_SECTION_LABEL_SELECTOR"),
+    ("shared/field_coerce.py", "_SIZE_REJECT_TOKENS_NORMALIZED"),
     ("normalizers/__init__.py", "_AVAILABILITY_TOKENS"),
     ("platform_policy.py", "_GENERIC_COMMERCE_TOKENS"),
     ("platform_policy.py", "_GENERIC_JOB_TOKENS"),
@@ -111,6 +115,14 @@ FILE_LOC_BUDGETS = {
     # TODO(chore): baseline LOC drift here, then extract canonical_coercion /
     # field_recovery / availability_gate owners when scheduled.
     Path("app/services/field_value_core.py"): 1600,
+    # Phase 3 moved owners. These are temporary high-water marks while public
+    # facades preserve imports; later slices split internals under these owners.
+    Path("app/services/dom/selector_engine.py"): 1706,
+    Path("app/services/extract/detail_materializer.py"): 1441,
+    Path("app/services/fetch/fetch_context.py"): 1254,
+    Path("app/services/js_state/state_normalizer.py"): 1386,
+    Path("app/services/pipeline/extraction_loop.py"): 1413,
+    Path("app/services/shared/field_coerce.py"): 1364,
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1455,
     # JS state mapping stays centralized to avoid adapter-specific drift.
