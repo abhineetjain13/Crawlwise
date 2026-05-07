@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 
 from bs4 import BeautifulSoup
@@ -19,7 +20,7 @@ from app.services.config.selectors import (
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.db_utils import mapping_or_empty
-from app.services.extraction_runtime import extract_records_async
+from app.services.extraction_runtime import extract_records
 from app.services.domain_memory_service import (
     load_domain_memory,
     save_domain_memory,
@@ -89,7 +90,9 @@ def _append_reduced_node(
     if not isinstance(node, Tag):
         return 0
     # Defensive for direct callers that skip reduce_html_for_selector_synthesis().
-    if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS and not _keep_low_value_node(node):
+    if node.name in SELECTOR_SYNTHESIS_LOW_VALUE_TAGS and not _keep_low_value_node(
+        node
+    ):
         return 0
     if node.name == "template" and not node.has_attr("shadowrootmode"):
         return 0
@@ -289,7 +292,8 @@ async def apply_selector_self_heal(
             updated_records.append(next_record)
             continue
         candidate_rules = _merge_selector_rules(current_rules, synthesized_rules)
-        rerun_records = await extract_records_async(
+        rerun_records = await asyncio.to_thread(
+            extract_records,
             html,
             page_url,
             run.surface,

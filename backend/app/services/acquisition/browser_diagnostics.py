@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from app.core.config import settings
 from app.services.acquisition.browser_proxy_config import display_proxy, proxy_scheme
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -70,15 +72,15 @@ def _normalized_optional_lower(value: str | None) -> str | None:
 
 def _merge_phase_timings(
     payload: dict[str, object],
-    phase_timings_ms: dict[str, int] | None,
+    phase_timings_ms: Mapping[str, object] | None,
 ) -> dict[str, object]:
     phase_timings_payload = payload.get("phase_timings_ms")
     existing_timings: dict[str, object] = (
         dict(phase_timings_payload)
-        if isinstance(phase_timings_payload, dict)
+        if isinstance(phase_timings_payload, Mapping)
         else {}
     )
-    if phase_timings_ms is not None:
+    if isinstance(phase_timings_ms, Mapping):
         existing_timings.update(dict(phase_timings_ms))
     return existing_timings
 
@@ -87,12 +89,15 @@ def _apply_retry_reason(
     payload: dict[str, object],
     retry_reason: str | None,
 ) -> None:
+    """`None` preserves existing retry metadata; blank strings clear it."""
     if retry_reason is None:
         payload.setdefault("retry_reason", None)
         return
     normalized_retry = _normalized_optional_lower(retry_reason)
-    if normalized_retry or "retry_reason" not in payload:
-        payload["retry_reason"] = normalized_retry
+    if normalized_retry is None:
+        payload["retry_reason"] = None
+        return
+    payload["retry_reason"] = normalized_retry
 
 
 def build_browser_diagnostics_contract(
@@ -104,7 +109,7 @@ def build_browser_diagnostics_contract(
     browser_binary: str | None = None,
     failure_reason: str | None = None,
     retry_reason: str | None = None,
-    phase_timings_ms: dict[str, int] | None = None,
+    phase_timings_ms: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     normalized_engine = normalize_browser_engine(browser_engine)
     payload = dict(diagnostics or {})
@@ -194,7 +199,7 @@ def build_failed_browser_diagnostics(
         browser_engine=normalized_engine,
         browser_binary=browser_binary,
         failure_reason=failure_kind,
-        phase_timings_ms=dict(getattr(exc, "browser_phase_timings_ms", {}) or {}),
+        phase_timings_ms=getattr(exc, "browser_phase_timings_ms", None),
     )
 
 

@@ -32,9 +32,37 @@ from app.services.run_summary import as_int, merge_run_summary_patch
 
 CRAWL_RUN_FK = "crawl_runs.id"
 USERS_FK = "users.id"
+CASCADE = "CASCADE"
 SET_NULL = "SET NULL"
 PRODUCT_INTELLIGENCE_JOB_FK = "product_intelligence_jobs.id"
+PRODUCT_INTELLIGENCE_SOURCE_PRODUCTS_FK = "product_intelligence_source_products.id"
+PRODUCT_INTELLIGENCE_CANDIDATES_FK = "product_intelligence_candidates.id"
+DATA_ENRICHMENT_JOBS_FK = "data_enrichment_jobs.id"
 CRAWL_RECORD_FK = "crawl_records.id"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+class CreatedAtMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
+class UpdatedAtMixin(CreatedAtMixin):
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+
+
+class CompletedAtMixin:
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 def _string_list(value: object) -> list[str]:
@@ -43,7 +71,7 @@ def _string_list(value: object) -> list[str]:
     )
 
 
-class CrawlRun(Base):
+class CrawlRun(UpdatedAtMixin, CompletedAtMixin, Base):
     __tablename__ = "crawl_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -64,17 +92,6 @@ class CrawlRun(Base):
     )
     claim_count: Mapped[int] = mapped_column(Integer, default=0)
     last_claimed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -507,7 +524,7 @@ def _merge_run_quality_summary(
     return summary
 
 
-class CrawlRecord(Base):
+class CrawlRecord(CreatedAtMixin, Base):
     __tablename__ = "crawl_records"
     __table_args__ = (
         Index(
@@ -521,7 +538,7 @@ class CrawlRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="CASCADE"), index=True
+        ForeignKey(CRAWL_RUN_FK, ondelete=CASCADE), index=True
     )
     source_url: Mapped[str] = mapped_column(Text)
     url_identity_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -541,47 +558,33 @@ class CrawlRecord(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
 
 
-class CrawlLog(Base):
+class CrawlLog(CreatedAtMixin, Base):
     __tablename__ = "crawl_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="CASCADE"), index=True
+        ForeignKey(CRAWL_RUN_FK, ondelete=CASCADE), index=True
     )
     level: Mapped[str] = mapped_column(String(20), default="info")
     message: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
 
 
-class ReviewPromotion(Base):
+class ReviewPromotion(UpdatedAtMixin, Base):
     __tablename__ = "review_promotions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int] = mapped_column(
-        ForeignKey(CRAWL_RUN_FK, ondelete="CASCADE"), index=True
+        ForeignKey(CRAWL_RUN_FK, ondelete=CASCADE), index=True
     )
     domain: Mapped[str] = mapped_column(String(255), index=True)
     surface: Mapped[str] = mapped_column(String(40))
     approved_schema: Mapped[dict] = mapped_column(JSONB, default=dict)
     field_mapping: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
 
 
-class DomainMemory(Base):
+class DomainMemory(UpdatedAtMixin, Base):
     __tablename__ = "domain_memory"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -589,17 +592,9 @@ class DomainMemory(Base):
     surface: Mapped[str] = mapped_column(String(40), index=True)
     platform: Mapped[str | None] = mapped_column(String(40), nullable=True)
     selectors: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
 
 
-class ProductIntelligenceJob(Base):
+class ProductIntelligenceJob(UpdatedAtMixin, CompletedAtMixin, Base):
     __tablename__ = "product_intelligence_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -616,25 +611,14 @@ class ProductIntelligenceJob(Base):
     )
     options: Mapped[dict] = mapped_column(JSONB, default=dict)
     summary: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
 
-class ProductIntelligenceSourceProduct(Base):
+class ProductIntelligenceSourceProduct(CreatedAtMixin, Base):
     __tablename__ = "product_intelligence_source_products"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(
-        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete=CASCADE),
         index=True,
     )
     source_run_id: Mapped[int | None] = mapped_column(
@@ -659,21 +643,18 @@ class ProductIntelligenceSourceProduct(Base):
     image_url: Mapped[str] = mapped_column(Text, default="")
     is_private_label: Mapped[bool] = mapped_column(default=False)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
 
 
-class ProductIntelligenceCandidate(Base):
+class ProductIntelligenceCandidate(UpdatedAtMixin, Base):
     __tablename__ = "product_intelligence_candidates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(
-        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete=CASCADE),
         index=True,
     )
     source_product_id: Mapped[int] = mapped_column(
-        ForeignKey("product_intelligence_source_products.id", ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_SOURCE_PRODUCTS_FK, ondelete=CASCADE),
         index=True,
     )
     candidate_crawl_run_id: Mapped[int | None] = mapped_column(
@@ -692,17 +673,9 @@ class ProductIntelligenceCandidate(Base):
         index=True,
     )
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
 
 
-class ProductIntelligenceMatch(Base):
+class ProductIntelligenceMatch(UpdatedAtMixin, Base):
     __tablename__ = "product_intelligence_matches"
     __table_args__ = (
         Index(
@@ -714,15 +687,15 @@ class ProductIntelligenceMatch(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(
-        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_JOB_FK, ondelete=CASCADE),
         index=True,
     )
     source_product_id: Mapped[int] = mapped_column(
-        ForeignKey("product_intelligence_source_products.id", ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_SOURCE_PRODUCTS_FK, ondelete=CASCADE),
         index=True,
     )
     candidate_id: Mapped[int] = mapped_column(
-        ForeignKey("product_intelligence_candidates.id", ondelete="CASCADE"),
+        ForeignKey(PRODUCT_INTELLIGENCE_CANDIDATES_FK, ondelete=CASCADE),
         index=True,
     )
     candidate_record_id: Mapped[int | None] = mapped_column(
@@ -745,17 +718,9 @@ class ProductIntelligenceMatch(Base):
     candidate_domain: Mapped[str] = mapped_column(String(255), default="", index=True)
     score_reasons: Mapped[dict] = mapped_column(JSONB, default=dict)
     llm_enrichment: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
 
 
-class DataEnrichmentJob(Base):
+class DataEnrichmentJob(UpdatedAtMixin, CompletedAtMixin, Base):
     __tablename__ = "data_enrichment_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -772,20 +737,9 @@ class DataEnrichmentJob(Base):
     )
     options: Mapped[dict] = mapped_column(JSONB, default=dict)
     summary: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
 
-class EnrichedProduct(Base):
+class EnrichedProduct(UpdatedAtMixin, Base):
     __tablename__ = "enriched_products"
     __table_args__ = (
         Index(
@@ -798,7 +752,7 @@ class EnrichedProduct(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     job_id: Mapped[int] = mapped_column(
-        ForeignKey("data_enrichment_jobs.id", ondelete="CASCADE"),
+        ForeignKey(DATA_ENRICHMENT_JOBS_FK, ondelete=CASCADE),
         index=True,
     )
     source_run_id: Mapped[int | None] = mapped_column(
@@ -835,17 +789,9 @@ class EnrichedProduct(Base):
     ai_discovery_tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     suggested_bundles: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     diagnostics: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
 
 
-class DomainRunProfile(Base):
+class DomainRunProfile(UpdatedAtMixin, Base):
     __tablename__ = "domain_run_profiles"
     __table_args__ = (
         Index(
@@ -860,17 +806,9 @@ class DomainRunProfile(Base):
     domain: Mapped[str] = mapped_column(String(255), index=True)
     surface: Mapped[str] = mapped_column(String(40), index=True)
     profile: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
 
 
-class DomainCookieMemory(Base):
+class DomainCookieMemory(UpdatedAtMixin, Base):
     __tablename__ = "domain_cookie_memory"
     __table_args__ = (
         Index(
@@ -884,17 +822,9 @@ class DomainCookieMemory(Base):
     domain: Mapped[str] = mapped_column(String(255), index=True)
     storage_state: Mapped[dict] = mapped_column(JSONB, default=dict)
     state_fingerprint: Mapped[str] = mapped_column(String(128), default="")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
 
 
-class DomainFieldFeedback(Base):
+class DomainFieldFeedback(CreatedAtMixin, Base):
     __tablename__ = "domain_field_feedback"
     __table_args__ = (
         Index(
@@ -917,12 +847,9 @@ class DomainFieldFeedback(Base):
         index=True,
     )
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
 
 
-class HostProtectionMemory(Base):
+class HostProtectionMemory(UpdatedAtMixin, Base):
     __tablename__ = "host_protection_memory"
     __table_args__ = (
         Index(
@@ -955,11 +882,3 @@ class HostProtectionMemory(Base):
         nullable=True,
     )
     last_success_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )

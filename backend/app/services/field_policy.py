@@ -34,8 +34,13 @@ def excluded_fields_for_surface(surface: str) -> frozenset[str]:
     return (_ALL_CANONICAL_FIELDS - allowed) | INTERNAL_ONLY_FIELDS
 
 
-def field_allowed_for_surface(surface: str, field_name: str) -> bool:
-    normalized_field = normalize_field_key(field_name)
+def field_allowed_for_surface(
+    surface: str,
+    field_name: str,
+    *,
+    pre_normalized: bool = False,
+) -> bool:
+    normalized_field = field_name if pre_normalized else normalize_field_key(field_name)
     if not normalized_field:
         return False
     return normalized_field in frozenset(canonical_fields_for_surface(surface))
@@ -323,7 +328,7 @@ def _surface_requested_defaults_union(
     requested = [
         field_name
         for field_name in canonical_requested_fields(requested_fields)
-        if field_allowed_for_surface(surface, field_name)
+        if field_allowed_for_surface(surface, field_name, pre_normalized=True)
     ]
     defaults = [
         field_name

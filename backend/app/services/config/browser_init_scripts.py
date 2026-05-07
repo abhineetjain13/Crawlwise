@@ -7,6 +7,14 @@ from app.services.config.browser_fingerprint_profiles import (
     WEBGL_PROFILE_BY_PLATFORM,
 )
 
+_INIT_WRAPPER_START = "(() => {"
+_TRY_LINE = "  try {"
+_ENUMERABLE_FALSE_LINE = "      enumerable: false,"
+_CONFIGURABLE_TRUE_LINE = "      configurable: true,"
+_DEFINE_PROPERTY_CLOSE_LINE = "    });"
+_CATCH_IGNORE_LINE = "  } catch (_) {}"
+_INIT_WRAPPER_END = "})();"
+
 
 def _runtime_settings():
     from app.services.config.runtime_settings import crawler_runtime_settings

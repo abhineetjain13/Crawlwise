@@ -65,14 +65,22 @@ def select_variant(
             )
         ]
         if partial_matches:
-            return next(
-                (
-                    variant
-                    for variant in partial_matches
-                    if variant.get("availability") == "in_stock"
+            ranked_matches = sorted(
+                partial_matches,
+                key=lambda variant: (
+                    -sum(
+                        1
+                        for axis_key, requested_value in requested_axes.items()
+                        if _variant_axis_matches(
+                            variant,
+                            axis_key=axis_key,
+                            requested_value=requested_value,
+                        )
+                    ),
+                    0 if availability_value(variant) == "in_stock" else 1,
                 ),
-                partial_matches[0],
             )
+            return ranked_matches[0]
     if len(variants) == 1:
         return variants[0]
     return None

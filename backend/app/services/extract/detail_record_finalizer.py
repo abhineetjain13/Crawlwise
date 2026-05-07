@@ -34,7 +34,7 @@ from app.services.field_value_core import (
     same_site,
     text_or_none,
 )
-from app.services.field_value_dom import dedupe_image_urls
+from app.services.field_value_dom import dedupe_image_urls, upgrade_low_resolution_image_url
 from app.services.extract.detail_dom_extractor import (
     variant_option_value_is_noise as _variant_option_value_is_noise,
 )
@@ -859,7 +859,7 @@ def _sanitize_detail_images(record: dict[str, Any], *, identity_url: str) -> Non
         text_or_none(record.get("image_url")),
         *[text_or_none(value) for value in list(record.get("additional_images") or [])],
     ]
-    images = [image for image in raw_images if image]
+    images = [upgrade_low_resolution_image_url(image) for image in raw_images if image]
     if not images:
         return
     primary_image = (

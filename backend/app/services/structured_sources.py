@@ -40,6 +40,9 @@ _NON_STATE_ASSIGNMENT_REGEXES = tuple(
     if str(pattern).strip()
 )
 logger = logging.getLogger(__name__)
+JSON_LD_CONTEXT_KEY = "@context"
+JSON_LD_ID_KEY = "@id"
+JSON_LD_TYPE_KEY = "@type"
 JSON_LD_GRAPH_KEY = "@graph"
 
 
@@ -88,9 +91,9 @@ def json_ld_candidates(value: Any) -> list[dict[str, Any]]:
 def _resolve_json_ld_graph(graph: list[Any]) -> list[dict[str, Any]]:
     nodes = [item for item in graph if isinstance(item, dict)]
     id_index = {
-        str(node.get("@id") or "").strip(): node
+        str(node.get(JSON_LD_ID_KEY) or "").strip(): node
         for node in nodes
-        if str(node.get("@id") or "").strip()
+        if str(node.get(JSON_LD_ID_KEY) or "").strip()
     }
     resolved = [
         _resolve_json_ld_value(node, id_index=id_index, path=()) for node in nodes
@@ -115,7 +118,7 @@ def _resolve_json_ld_value(
     if not isinstance(value, dict):
         return value
 
-    node_id = str(value.get("@id") or "").strip()
+    node_id = str(value.get(JSON_LD_ID_KEY) or "").strip()
     resolved: dict[str, Any] = {}
     if node_id and node_id in id_index and node_id not in path:
         base_node = id_index[node_id]
@@ -132,7 +135,7 @@ def _resolve_json_ld_value(
     for key, item in value.items():
         if key == JSON_LD_GRAPH_KEY:
             continue
-        if key == "@id" and node_id:
+        if key == JSON_LD_ID_KEY and node_id:
             resolved[key] = node_id
             continue
         resolved[str(key)] = _resolve_json_ld_value(
@@ -144,7 +147,7 @@ def _resolve_json_ld_value(
 
 
 def _json_ld_node_priority(node: dict[str, Any]) -> tuple[int, str]:
-    raw_type = node.get("@type")
+    raw_type = node.get(JSON_LD_TYPE_KEY)
     if isinstance(raw_type, list):
         lowered_types = {str(item or "").strip().lower() for item in raw_type}
     else:
@@ -160,11 +163,19 @@ def _json_ld_node_priority(node: dict[str, Any]) -> tuple[int, str]:
 
 
 def _json_ld_node_id(node: dict[str, Any]) -> str:
-    return str(node.get("@id") or node.get("name") or "").strip().lower()
+    return str(node.get(JSON_LD_ID_KEY) or node.get("name") or "").strip().lower()
 
 
 def _looks_like_json_ld_node(node: dict[str, Any]) -> bool:
-    return any(key in node for key in ("@context", JSON_LD_GRAPH_KEY, "@id", "@type"))
+    return any(
+        key in node
+        for key in (
+            JSON_LD_CONTEXT_KEY,
+            JSON_LD_GRAPH_KEY,
+            JSON_LD_ID_KEY,
+            JSON_LD_TYPE_KEY,
+        )
+    )
 
 
 def parse_microdata(
@@ -408,7 +419,7 @@ def _parse_microdata_node(node: Any, page_url: str) -> dict[str, Any]:
     row: dict[str, Any] = {}
     item_type = str(node.get("itemtype") or "").strip()
     if item_type:
-        row["@type"] = item_type
+        row[JSON_LD_TYPE_KEY] = item_type
     for candidate in node.find_all(attrs={"itemprop": True}):
         if _belongs_to_nested_itemscope(candidate, node):
             continue
@@ -494,9 +505,9 @@ def _normalize_opengraph_row(row: dict[str, Any]) -> dict[str, Any]:
         if raw_key.startswith("product:"):
             saw_product_property = True
     if explicit_type:
-        normalized["@type"] = explicit_type
+        normalized[JSON_LD_TYPE_KEY] = explicit_type
     elif saw_product_property:
-        normalized["@type"] = OPENGRAPH_PRODUCT_TYPE
+        normalized[JSON_LD_TYPE_KEY] = OPENGRAPH_PRODUCT_TYPE
     return normalized
 
 

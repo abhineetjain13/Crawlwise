@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
+from selectolax.lexbor import LexborHTMLParser
+
 from app.services.acquisition import HttpFetchResult, request_result, wait_for_host_slot
 from app.services.platform_policy import detect_platform_family
 
@@ -105,6 +107,9 @@ class BaseAdapter(ABC):
 
     def _is_detail_surface(self, surface: str | None) -> bool:
         return "detail" in str(surface or "").strip().lower()
+
+    def _is_job_surface(self, surface: str | None) -> bool:
+        return "job" in str(surface or "").strip().lower()
 
     def _matches_platform_family(self, url: str, html: str) -> bool:
         expected_family = str(self.platform_family or "").strip().lower()
@@ -228,3 +233,63 @@ class BaseAdapter(ABC):
                 exc_info=True,
             )
             return None
+
+
+class PublicEndpointAdapter(BaseAdapter):
+    job_surface_only: bool = False
+
+    async def can_handle(self, url: str, html: str) -> bool:
+        return self._matches_platform_family(url, html)
+
+    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        records = await self.try_public_endpoint(url, html, surface)
+        return self._result(records)
+
+    async def try_public_endpoint(
+        self,
+        url: str,
+        html: str = "",
+        surface: str = "",
+        *,
+        proxy: str | None = None,
+    ) -> list[dict]:
+        if self.job_surface_only and not self._is_job_surface(surface):
+            return []
+        return await self._try_public_endpoint(
+            url,
+            html,
+            surface,
+            proxy=proxy,
+        )
+
+    @abstractmethod
+    async def _try_public_endpoint(
+        self,
+        url: str,
+        html: str,
+        surface: str,
+        *,
+        proxy: str | None = None,
+    ) -> list[dict]: ...
+
+
+class SelectolaxJobAdapter(BaseAdapter):
+    async def can_handle(self, url: str, html: str) -> bool:
+        return self._matches_platform_family(url, html)
+
+    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        parser = LexborHTMLParser(html)
+        records = []
+        if surface in ("job_detail",):
+            record = self._extract_detail(parser, url)
+            if record:
+                records.append(record)
+        elif surface in ("job_listing",):
+            records = self._extract_listing(parser, url)
+        return self._result(records)
+
+    @abstractmethod
+    def _extract_detail(self, parser: LexborHTMLParser, url: str) -> dict | None: ...
+
+    @abstractmethod
+    def _extract_listing(self, parser: LexborHTMLParser, url: str) -> list[dict]: ...

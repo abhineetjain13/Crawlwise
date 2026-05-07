@@ -6,7 +6,7 @@ import json
 from html import unescape
 from urllib.parse import urlparse
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import PublicEndpointAdapter
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.config.extraction_rules import (
     ORACLE_HCM_CX_CONFIG_RE,
@@ -21,28 +21,19 @@ from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup
 
 
-class OracleHCMAdapter(BaseAdapter):
+class OracleHCMAdapter(PublicEndpointAdapter):
     name = "oracle_hcm"
     platform_family = "oracle_hcm"
+    job_surface_only = True
 
-    async def can_handle(self, url: str, html: str) -> bool:
-        return self._matches_platform_family(url, html)
-
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        records = await self.try_public_endpoint(url, html, surface)
-        return self._result(records)
-
-    async def try_public_endpoint(
+    async def _try_public_endpoint(
         self,
         url: str,
-        html: str = "",
-        surface: str = "",
+        html: str,
+        surface: str,
         *,
         proxy: str | None = None,
     ) -> list[dict]:
-        if "job" not in str(surface or "").lower():
-            return []
-
         parsed = urlparse(url)
         site_number = self._extract_site_number(url, html)
         if not site_number:
@@ -224,7 +215,9 @@ class OracleHCMAdapter(BaseAdapter):
 
     def _extract_cx_config(self, html: str) -> dict:
         match = ORACLE_HCM_CX_CONFIG_RE.search(str(html or ""))
-        raw = unescape(match.group(1)) if match else self._extract_cx_config_object(html)
+        raw = (
+            unescape(match.group(1)) if match else self._extract_cx_config_object(html)
+        )
         if not raw:
             return {}
         try:
@@ -309,4 +302,3 @@ class OracleHCMAdapter(BaseAdapter):
     def _join_locations(self, requisition: dict) -> str:
         unique_locations = dict.fromkeys(self._iter_location_values(requisition))
         return " | ".join(unique_locations)
-

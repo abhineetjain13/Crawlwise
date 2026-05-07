@@ -311,6 +311,21 @@ def dedupe_image_urls(urls: list[str]) -> list[str]:
     return [best_by_key[key][2] for key in order]
 
 
+def upgrade_low_resolution_image_url(url: str) -> str:
+    normalized_url = _normalize_image_url_text(url)
+    parsed = urlparse(normalized_url)
+    host = str(parsed.netloc or "").lower()
+    if host not in {"m.media-amazon.com", "images-na.ssl-images-amazon.com"}:
+        return normalized_url
+    path = re.sub(
+        r"\._(?:AC_)?(?:US|SR|SL|SX|SY|SS)\d+_?(?=\.[a-z0-9]+$)",
+        "",
+        parsed.path or "",
+        flags=re.I,
+    )
+    return urlunparse(parsed._replace(path=path))
+
+
 def _node_attr_text(node: Tag, *, max_depth: int = 6) -> str:
     parts: list[str] = []
     current: Tag | None = node

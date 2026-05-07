@@ -6,7 +6,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 from curl_cffi import requests as curl_requests
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import PublicEndpointAdapter
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.field_value_core import clean_text
 
@@ -15,27 +15,19 @@ _CONFIG_RE = re.compile(r"var configsFromHost = (\{.*?\});\s*var Mountable", re.
 _JOB_ID_RE = re.compile(r"/jobs/(\d+)", re.IGNORECASE)
 
 
-class PaycomAdapter(BaseAdapter):
+class PaycomAdapter(PublicEndpointAdapter):
     name = "paycom"
     platform_family = "paycom"
+    job_surface_only = True
 
-    async def can_handle(self, url: str, html: str) -> bool:
-        return self._matches_platform_family(url, html)
-
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        records = await self.try_public_endpoint(url, html, surface)
-        return self._result(records)
-
-    async def try_public_endpoint(
+    async def _try_public_endpoint(
         self,
         url: str,
-        html: str = "",
-        surface: str = "",
+        html: str,
+        surface: str,
         *,
         proxy: str | None = None,
     ) -> list[dict]:
-        if "job" not in str(surface or "").lower():
-            return []
         host_config = self._extract_host_config(html)
         if not host_config:
             return []

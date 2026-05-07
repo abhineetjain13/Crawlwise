@@ -11,6 +11,7 @@ from app.services.field_value_dom import (
     _is_garbage_image_candidate,
     dedupe_image_urls,
     extract_feature_rows,
+    upgrade_low_resolution_image_url,
 )
 
 
@@ -75,6 +76,12 @@ def test_dedupe_image_urls_normalizes_repeated_scheme_slashes() -> None:
         "https://cdn.example.com/hero.jpg?width=1200",
         "https://cdn.example.com/alt.jpg?width=1200",
     }
+
+
+def test_upgrade_low_resolution_amazon_image_url_strips_thumbnail_transform() -> None:
+    assert upgrade_low_resolution_image_url(
+        "https://m.media-amazon.com/images/I/51DRLHAa2AS._AC_US40_.jpg"
+    ) == "https://m.media-amazon.com/images/I/51DRLHAa2AS.jpg"
 
 
 def test_dash_separated_feature_text_splits_into_rows() -> None:

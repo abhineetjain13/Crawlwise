@@ -11,6 +11,8 @@ from app.models.crawl import HostProtectionMemory
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_host
 
+BROWSER_METHOD = "browser"
+CHROMIUM_METHOD = "browser:chromium"
 PATCHRIGHT_METHOD = "browser:patchright"
 REAL_CHROME_METHOD = "browser:real_chrome"
 
@@ -51,7 +53,9 @@ def _coerce_method(value: object) -> str:
 
 
 def _is_browser_method(value: str | None) -> bool:
-    return bool(value) and str(value).startswith("browser")
+    return bool(value) and (
+        str(value) == BROWSER_METHOD or str(value).startswith(f"{BROWSER_METHOD}:")
+    )
 
 
 def _recent_success_overrides_block(
@@ -116,13 +120,13 @@ async def load_host_protection_policy(
             last_block_method
             not in {
                 None,
-                "browser",
-                "browser:chromium",
+                BROWSER_METHOD,
+                CHROMIUM_METHOD,
                 PATCHRIGHT_METHOD,
                 REAL_CHROME_METHOD,
             }
         ),
-        chromium_blocked=last_block_method == "browser:chromium",
+        chromium_blocked=last_block_method == CHROMIUM_METHOD,
         patchright_blocked=last_block_method == PATCHRIGHT_METHOD,
         real_chrome_blocked=last_block_method == REAL_CHROME_METHOD,
         patchright_success=last_success_method == PATCHRIGHT_METHOD,

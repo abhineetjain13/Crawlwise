@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from app.services.acquisition.browser_readiness import HtmlAnalysis, analyze_html
 from app.core.config import settings
 from app.services.config.block_signatures import BLOCK_SIGNATURES
+from app.services.config.content_types import HTML_CONTENT_TYPE
 from app.services.config.extraction_rules import (
     ACTION_BUY_NOW,
     BROWSER_DETAIL_READINESS_HINTS,
@@ -37,7 +38,6 @@ from app.services.platform_policy import resolve_platform_runtime_policy
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 
 logger = logging.getLogger(__name__)
-HTML_CONTENT_TYPE = "text/html"
 
 _SHARED_HTTP_CLIENTS: dict[tuple[str | None, str], httpx.AsyncClient] = {}
 _SHARED_HTTP_CLIENT_LOCK = asyncio.Lock()

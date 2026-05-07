@@ -12,14 +12,23 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 from patchright.async_api import Error as PlaywrightError
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from app.services.acquisition.browser_capture import is_response_closed_error
+from app.services.acquisition.browser_readiness import HtmlAnalysis, analyze_html
+from app.services.acquisition.dom_runtime import get_page_html
 from app.services.acquisition.browser_recovery import (
     capture_rendered_listing_fragments,
     recover_browser_challenge,
 )
+from app.services.acquisition.runtime import (
+    BlockPageClassification,
+    classify_blocked_page_async,
+    copy_headers,
+)
 from app.services.config.extraction_rules import (
     DETAIL_MARKDOWN_LINE_NOISE,
     DETAIL_MARKDOWN_SECTION_NOISE_TOKENS,
+    HTML_PARSER,
     LISTING_VISUAL_PRICE_REGEX_PATTERN,
     LISTING_BRAND_SELECTORS,
     LISTING_UTILITY_URL_TOKENS,
@@ -38,18 +47,9 @@ from app.services.config.selectors import (
     LISTING_VISUAL_CANDIDATE_CONTAINER_SELECTORS,
     LISTING_VISUAL_CAPTURE_SELECTORS,
 )
-
-HTML_PARSER = "html.parser"
-from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.acquisition.dom_runtime import get_page_html
-from app.services.acquisition.browser_readiness import HtmlAnalysis, analyze_html
 from app.services.config.surface_hints import detail_path_hints
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_dom import requested_content_extractability
-from app.services.acquisition.runtime import (
-    BlockPageClassification,
-    classify_blocked_page_async,
-    copy_headers,
-)
 from app.services.platform_policy import (
     resolve_browser_readiness_policy,
     resolve_platform_runtime_policy,

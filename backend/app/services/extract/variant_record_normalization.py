@@ -242,6 +242,8 @@ def _clean_variant_rows(record: dict[str, Any]) -> None:
                 cleaned_variant[field_name] = cleaned_value
             else:
                 cleaned_variant.pop(field_name, None)
+        _promote_misfiled_color_size(cleaned_variant)
+        _drop_invalid_variant_urls(cleaned_variant)
         if any(
             cleaned_variant.get(field_name) not in (None, "", [], {})
             for field_name in (*FLAT_VARIANT_KEYS, *_PUBLIC_VARIANT_AXIS_FIELDS)
@@ -397,7 +399,46 @@ def _value_is_placeholder(value: str) -> bool:
 
 def _value_is_ui_noise(value: str) -> bool:
     lowered = clean_text(value).casefold()
-    return any(phrase in lowered for phrase in _VARIANT_OPTION_VALUE_UI_NOISE_PHRASES)
+    for phrase in _VARIANT_OPTION_VALUE_UI_NOISE_PHRASES:
+        if not phrase:
+            continue
+        # Very short control labels like "next" must be exact; otherwise
+        # valid values such as "Next Blue" would be over-pruned.
+        if len(phrase) <= 8 and " " not in phrase:
+            if lowered == phrase:
+                return True
+            continue
+        if phrase in lowered:
+            return True
+    return False
+
+
+def _drop_invalid_variant_urls(variant: dict[str, Any]) -> None:
+    for field_name in ("url", "image_url"):
+        value = text_or_none(variant.get(field_name))
+        if value and _variant_url_is_public_http(value):
+            continue
+        variant.pop(field_name, None)
+
+
+def _variant_url_is_public_http(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+def _promote_misfiled_color_size(variant: dict[str, Any]) -> None:
+    if clean_text(variant.get("color")):
+        return
+    size_value = clean_text(variant.get("size"))
+    if not size_value:
+        return
+    if _extract_size_value(size_value):
+        return
+    color_value = _extract_color_value(size_value)
+    if not color_value:
+        return
+    variant["color"] = color_value
+    variant.pop("size", None)
 
 
 def _infer_variant_sizes_from_titles(record: dict[str, Any]) -> None:

@@ -3760,11 +3760,32 @@ def test_browser_diagnostics_preserves_existing_retry_reason_and_timings() -> No
         phase_timings_ms={"content_serialization": 20},
     )
 
-    assert diagnostics["retry_reason"] == "empty_extraction"
+    assert diagnostics["retry_reason"] is None
     assert diagnostics["phase_timings_ms"] == {
         "navigation": 120,
         "content_serialization": 20,
     }
+
+
+def test_browser_diagnostics_preserves_existing_retry_reason_when_unspecified() -> None:
+    diagnostics = browser_runtime.build_browser_diagnostics_contract(
+        diagnostics={"retry_reason": "empty_extraction"},
+        retry_reason=None,
+    )
+
+    assert diagnostics["retry_reason"] == "empty_extraction"
+
+
+def test_build_failed_browser_diagnostics_tolerates_non_mapping_phase_timings() -> None:
+    exc = RuntimeError("broken timings payload")
+    setattr(exc, "browser_phase_timings_ms", object())
+
+    diagnostics = browser_runtime.build_failed_browser_diagnostics(
+        browser_reason="http-escalation",
+        exc=exc,
+    )
+
+    assert diagnostics["phase_timings_ms"] == {}
 
 
 def test_browser_diagnostics_contract_clears_stale_nested_outcome_fields() -> None:

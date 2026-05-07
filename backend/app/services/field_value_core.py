@@ -1125,6 +1125,8 @@ def _normalize_shared_price_decimal_text(value: str) -> str:
             return stripped.replace(".", "").replace(",", ".")
         return stripped.replace(",", "")
     if "," in stripped:
+        if "." not in stripped and stripped.count(",") > 1:
+            return stripped.replace(",", "")
         head, _, tail = stripped.rpartition(",")
         if head and tail.isdigit() and len(tail) == 3 and "," not in head:
             return f"{head}{tail}"

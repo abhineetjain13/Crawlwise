@@ -28,6 +28,13 @@ from app.services.config.browser_fingerprint_profiles import (
     USER_AGENT_PLATFORM_LABELS,
 )
 from app.services.config.browser_init_scripts import (
+    _CATCH_IGNORE_LINE,
+    _CONFIGURABLE_TRUE_LINE,
+    _DEFINE_PROPERTY_CLOSE_LINE,
+    _ENUMERABLE_FALSE_LINE,
+    _INIT_WRAPPER_END,
+    _INIT_WRAPPER_START,
+    _TRY_LINE,
     build_audio_fingerprint_init_script,
     build_canvas_fingerprint_init_script,
     build_chrome_runtime_init_script,
@@ -42,14 +49,6 @@ from app.services.config.runtime_settings import (
     crawler_runtime_settings,
 )
 from app.services.network_resolution import _accept_language_for_locale
-
-_INIT_WRAPPER_START = "(() => {"
-_TRY_LINE = "  try {"
-_ENUMERABLE_FALSE_LINE = "      enumerable: false,"
-_CONFIGURABLE_TRUE_LINE = "      configurable: true,"
-_DEFINE_PROPERTY_CLOSE_LINE = "    });"
-_CATCH_IGNORE_LINE = "  } catch (_) {}"
-_INIT_WRAPPER_END = "})();"
 
 try:
     from browserforge.fingerprints import Fingerprint as _BrowserforgeFingerprintType
@@ -1357,15 +1356,15 @@ def _playwright_init_script_from_identity(
             "        enumerable: true,",
             "        configurable: true,",
             "      });",
-            "    } catch (_) {}",
+            _CATCH_IGNORE_LINE,
             "    return wrapped;",
             "  };",
-            "})();",
+            _INIT_WRAPPER_END,
         ]
     )
     webrtc_mask_script = "\n".join(
         [
-            "(() => {",
+            _INIT_WRAPPER_START,
             f"  const enabled = {_json.dumps(bool(crawler_runtime_settings.browser_mask_webrtc_local_ips))};",
             "  if (!enabled) {",
             "    return;",
@@ -1478,7 +1477,7 @@ def _playwright_init_script_from_identity(
             "  MaskedRTCPeerConnection.generateCertificate = () => Promise.resolve({});",
             _TRY_LINE,
             "    Object.defineProperty(MaskedRTCPeerConnection, 'name', { value: 'RTCPeerConnection' });",
-            "  } catch (_) {}",
+            _CATCH_IGNORE_LINE,
             "  globalThis.RTCPeerConnection = MaskedRTCPeerConnection;",
             "  if (globalThis.webkitRTCPeerConnection) {",
             "    globalThis.webkitRTCPeerConnection = MaskedRTCPeerConnection;",
@@ -1486,17 +1485,17 @@ def _playwright_init_script_from_identity(
             "  if (globalThis.mozRTCPeerConnection) {",
             "    globalThis.mozRTCPeerConnection = MaskedRTCPeerConnection;",
             "  }",
-            "})();",
+            _INIT_WRAPPER_END,
         ]
     )
     locality_script = "\n".join(
         [
-            "(() => {",
+            _INIT_WRAPPER_START,
             f"  const locale = {_json.dumps(identity.locale)};",
             f"  const languages = {_json.dumps(_locale_languages(identity.locale))};",
             f"  const navigatorPlatform = {_json.dumps(_navigator_platform_from_user_agent(identity.user_agent))};",
             f"  const uaPlatform = {_json.dumps(_platform_label_from_user_agent(identity.user_agent))};",
-            "  try {",
+            _TRY_LINE,
             "    Object.defineProperty(Navigator.prototype, 'language', {",
             "      get: () => locale,",
             _ENUMERABLE_FALSE_LINE,

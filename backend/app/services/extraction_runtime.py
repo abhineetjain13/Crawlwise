@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from typing import Any
@@ -60,6 +59,7 @@ from app.services.extract.listing_candidate_ranking import best_listing_candidat
 from app.services.listing_extractor import extract_listing_records
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.normalizers import normalize_decimal_price
+
 
 def extract_records(
     html: str,
@@ -170,15 +170,15 @@ def extract_records(
         return []
     return _postprocess_detail_records(
         extract_detail_records(
-        html,
-        page_url,
-        surface,
-        requested_page_url=requested_page_url,
-        requested_fields=requested_fields,
-        adapter_records=adapter_records,
-        network_payloads=network_payloads,
-        selector_rules=selector_rules,
-        extraction_runtime_snapshot=extraction_runtime_snapshot,
+            html,
+            page_url,
+            surface,
+            requested_page_url=requested_page_url,
+            requested_fields=requested_fields,
+            adapter_records=adapter_records,
+            network_payloads=network_payloads,
+            selector_rules=selector_rules,
+            extraction_runtime_snapshot=extraction_runtime_snapshot,
         )[:max_records],
         html=html,
         page_url=page_url,
@@ -269,7 +269,12 @@ def _backfill_listing_rows_from_network(
         brand = candidate.get("brand")
         if price not in (None, "", [], {}) and row.get("price") in (None, "", [], {}):
             row["price"] = price
-        if currency not in (None, "", [], {}) and row.get("currency") in (None, "", [], {}):
+        if currency not in (None, "", [], {}) and row.get("currency") in (
+            None,
+            "",
+            [],
+            {},
+        ):
             row["currency"] = currency
         if brand not in (None, "", [], {}) and row.get("brand") in (None, "", [], {}):
             row["brand"] = brand
@@ -322,7 +327,9 @@ def _listing_network_backfill_maps(
     for payload in list(network_payloads or []):
         body = payload.get("body")
         for candidate in _iter_listing_price_candidates(body):
-            entry = _listing_candidate_backfill_entry(candidate, alias_lookup=alias_lookup)
+            entry = _listing_candidate_backfill_entry(
+                candidate, alias_lookup=alias_lookup
+            )
             if not entry:
                 continue
             identifier = _first_candidate_text(candidate, LISTING_NETWORK_ID_KEYS)
@@ -334,7 +341,9 @@ def _listing_network_backfill_maps(
     return by_id, by_title
 
 
-def _iter_listing_price_candidates(value: object, *, depth: int = 0) -> list[dict[str, Any]]:
+def _iter_listing_price_candidates(
+    value: object, *, depth: int = 0
+) -> list[dict[str, Any]]:
     if depth > 4:
         return []
     rows: list[dict[str, Any]] = []
@@ -465,7 +474,9 @@ def _listing_candidate_currency(candidate: dict[str, Any]) -> str | None:
         code = clean_text(offers.get("priceCurrency"))
         if code:
             return code
-    return clean_text(candidate.get("currency") or candidate.get("currencyCode")) or None
+    return (
+        clean_text(candidate.get("currency") or candidate.get("currencyCode")) or None
+    )
 
 
 def _listing_currency_code(value: object) -> str | None:
@@ -475,7 +486,9 @@ def _listing_currency_code(value: object) -> str | None:
 
 
 def _listing_row_identity(row: dict[str, Any]) -> str:
-    product_id = clean_text(row.get("product_id") or row.get("productId") or row.get("sku"))
+    product_id = clean_text(
+        row.get("product_id") or row.get("productId") or row.get("sku")
+    )
     if product_id:
         return product_id.lower()
     return _listing_identity_from_url(str(row.get("url") or ""))
@@ -493,38 +506,6 @@ def _listing_identity_from_url(url: str) -> str:
     if not segment:
         return ""
     return re.sub(r"\.(?:html?|php|aspx?)$", "", segment)
-
-
-async def extract_records_async(
-    html: str,
-    page_url: str,
-    surface: str,
-    *,
-    max_records: int,
-    requested_page_url: str | None = None,
-    requested_fields: list[str] | None = None,
-    adapter_records: list[dict] | None = None,
-    network_payloads: list[dict[str, object]] | None = None,
-    artifacts: dict[str, object] | None = None,
-    selector_rules: list[dict[str, object]] | None = None,
-    extraction_runtime_snapshot: dict[str, object] | None = None,
-    content_type: str | None = None,
-) -> list[dict]:
-    return await asyncio.to_thread(
-        extract_records,
-        html,
-        page_url,
-        surface,
-        max_records=max_records,
-        requested_page_url=requested_page_url,
-        requested_fields=requested_fields,
-        adapter_records=adapter_records,
-        network_payloads=network_payloads,
-        artifacts=artifacts,
-        selector_rules=selector_rules,
-        extraction_runtime_snapshot=extraction_runtime_snapshot,
-        content_type=content_type,
-    )
 
 
 def _extract_xml_sitemap_records(
@@ -688,7 +669,9 @@ def _has_surface_field_overlap(items: list[object], *, surface: str) -> bool:
 def _raw_json_items(payload: object, *, surface: str) -> list[object]:
     is_listing_surface = "listing" in str(surface or "").lower()
     if isinstance(payload, list):
-        if is_listing_surface and not _has_surface_field_overlap(payload, surface=surface):
+        if is_listing_surface and not _has_surface_field_overlap(
+            payload, surface=surface
+        ):
             return []
         return list(payload)
     if not isinstance(payload, dict):
@@ -696,7 +679,9 @@ def _raw_json_items(payload: object, *, surface: str) -> list[object]:
     for key in JSON_RECORD_LIST_KEYS:
         value = payload.get(key)
         if isinstance(value, list) and value:
-            if is_listing_surface and not _has_surface_field_overlap(value, surface=surface):
+            if is_listing_surface and not _has_surface_field_overlap(
+                value, surface=surface
+            ):
                 continue
             return value
     if is_listing_surface:
@@ -704,7 +689,9 @@ def _raw_json_items(payload: object, *, surface: str) -> list[object]:
     return [payload]
 
 
-def _best_nested_listing_items(payload: object, *, depth: int = 0, surface: str = "") -> list[object]:
+def _best_nested_listing_items(
+    payload: object, *, depth: int = 0, surface: str = ""
+) -> list[object]:
     if depth > 6:
         return []
     candidates: list[tuple[int, list[object]]] = []
@@ -715,11 +702,17 @@ def _best_nested_listing_items(payload: object, *, depth: int = 0, surface: str 
                 if score > 0:
                     candidates.append((score, value))
                 for item in value[:10]:
-                    nested = _best_nested_listing_items(item, depth=depth + 1, surface=surface)
+                    nested = _best_nested_listing_items(
+                        item, depth=depth + 1, surface=surface
+                    )
                     if nested:
-                        candidates.append((_listing_items_score("nested", nested), nested))
+                        candidates.append(
+                            (_listing_items_score("nested", nested), nested)
+                        )
             elif isinstance(value, dict):
-                nested = _best_nested_listing_items(value, depth=depth + 1, surface=surface)
+                nested = _best_nested_listing_items(
+                    value, depth=depth + 1, surface=surface
+                )
                 if nested:
                     candidates.append((_listing_items_score(key, nested), nested))
     elif isinstance(payload, list):
@@ -741,9 +734,7 @@ def _best_nested_listing_items(payload: object, *, depth: int = 0, surface: str 
 def _listing_items_score(key: str, items: list[object]) -> int:
     if not items:
         return 0
-    dict_like_count = sum(
-        1 for item in items[:20] if isinstance(item, dict) and item
-    )
+    dict_like_count = sum(1 for item in items[:20] if isinstance(item, dict) and item)
     if dict_like_count == 0:
         return 0
     lowered_key = str(key or "").strip().lower()
@@ -752,7 +743,11 @@ def _listing_items_score(key: str, items: list[object]) -> int:
         score += 20
     if lowered_key in {"edges", "nodes"}:
         score += 10
-    if any(isinstance(item, dict) and any(token in item for token in ("node", "url", "title", "name")) for item in items[:10]):
+    if any(
+        isinstance(item, dict)
+        and any(token in item for token in ("node", "url", "title", "name"))
+        for item in items[:10]
+    ):
         score += 5
     return score
 
@@ -771,13 +766,13 @@ def _raw_json_record(
         collect_structured_candidates(payload, alias_lookup, page_url, candidates)
         record: dict[str, Any] = {"source_url": page_url, "_source": "raw_json"}
         for field_name in surface_fields(surface, requested_fields):
-            finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
+            finalized = finalize_candidate_value(
+                field_name, candidates.get(field_name, [])
+            )
             if finalized not in (None, "", [], {}):
                 record[field_name] = finalized
         preferred_title = coerce_text(
-            payload.get("title")
-            or payload.get("name")
-            or payload.get("label")
+            payload.get("title") or payload.get("name") or payload.get("label")
         )
         if preferred_title:
             record["title"] = preferred_title
@@ -786,7 +781,9 @@ def _raw_json_record(
             if description:
                 record["description"] = description
         if not record.get("url"):
-            record["url"] = _raw_json_url(payload, page_url, fallback_index=fallback_index)
+            record["url"] = _raw_json_url(
+                payload, page_url, fallback_index=fallback_index
+            )
         cleaned = finalize_record(record, surface=surface)
         if "listing" in surface:
             cleaned = finalize_listing_price_fields(cleaned)
@@ -823,7 +820,9 @@ def _raw_json_url(
         resolved = absolute_url(page_url, author_url)
         if resolved:
             return resolved
-    identifier = clean_text(payload.get("id") or payload.get("slug") or payload.get("handle"))
+    identifier = clean_text(
+        payload.get("id") or payload.get("slug") or payload.get("handle")
+    )
     base_url = page_url.split("#", 1)[0]
     if identifier:
         return f"{base_url}#item-{identifier}"

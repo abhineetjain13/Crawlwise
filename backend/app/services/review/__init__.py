@@ -19,9 +19,15 @@ from app.services.domain_run_profile_service import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import normalize_field_key, normalize_review_target
-from app.services.field_value_core import object_list as _object_list, safe_int as _safe_int
+from app.services.field_value_core import (
+    object_list as _object_list,
+    safe_int as _safe_int,
+)
 from app.services.normalizers import normalize_value
-from app.services.publish import refresh_record_commit_metadata
+from app.services.publish import (
+    load_domain_field_mapping,
+    refresh_record_commit_metadata,
+)
 from app.services.schema_service import load_resolved_schema
 from app.services.selectors_runtime import (
     create_selector_record,
@@ -31,25 +37,6 @@ from app.services.selectors_runtime import (
 from sqlalchemy import desc
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-
-async def _load_domain_mapping(
-    session: AsyncSession,
-    *,
-    domain: str,
-    surface: str,
-) -> dict[str, str]:
-    result = await session.execute(
-        select(ReviewPromotion.field_mapping)
-        .where(
-            ReviewPromotion.domain == domain,
-            ReviewPromotion.surface == surface,
-        )
-        .order_by(ReviewPromotion.created_at.desc(), ReviewPromotion.id.desc())
-        .limit(1)
-    )
-    mapping = result.scalar_one_or_none()
-    return dict(mapping) if isinstance(mapping, dict) else {}
 
 
 async def build_review_payload(session: AsyncSession, run_id: int) -> dict | None:
@@ -62,7 +49,7 @@ async def build_review_payload(session: AsyncSession, run_id: int) -> dict | Non
     records = list(records_result.scalars().all())
     domain = normalize_domain(run.url)
     canonical_fields = (await load_resolved_schema(session, run.surface, domain)).fields
-    domain_mapping = await _load_domain_mapping(
+    domain_mapping = await load_domain_field_mapping(
         session,
         domain=domain,
         surface=run.surface,
@@ -147,18 +134,14 @@ async def save_review(
         dict.fromkeys(
             normalized_field
             for field in resolved_schema.baseline_fields
-            if (
-                normalized_field := normalize_review_target(run.surface, field)
-            )
+            if (normalized_field := normalize_review_target(run.surface, field))
         )
     )
     normalized_new_fields = list(
         dict.fromkeys(
             normalized_field
             for field in resolved_schema.new_fields
-            if (
-                normalized_field := normalize_review_target(run.surface, field)
-            )
+            if (normalized_field := normalize_review_target(run.surface, field))
         )
     )
     normalized_baseline_field_set = set(normalized_baseline_fields)
@@ -347,12 +330,9 @@ async def _promote_review_bucket_fields(
         discovered_data["review_bucket"] = [
             row
             for row in remaining_rows
-            if normalize_field_key(row.get("key"))
-            not in mapped_source_fields
+            if normalize_field_key(row.get("key")) not in mapped_source_fields
             or mapping_or_empty(record.data).get(
-                normalized_mapping.get(
-                    normalize_field_key(row.get("key")), ""
-                )
+                normalized_mapping.get(normalize_field_key(row.get("key")), "")
             )
             not in (None, "", [], {})
         ]
@@ -378,7 +358,9 @@ async def build_domain_recipe_payload(
     run: CrawlRun,
 ) -> dict[str, object]:
     records_result = await session.execute(
-        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+        select(CrawlRecord)
+        .where(CrawlRecord.run_id == run.id)
+        .order_by(CrawlRecord.id.asc())
     )
     records = list(records_result.scalars().all())
     domain = normalize_domain(run.url)
@@ -388,8 +370,7 @@ async def build_domain_recipe_payload(
         surface=run.surface,
     )
     saved_selector_index = {
-        _saved_selector_signature(row): row
-        for row in saved_selectors
+        _saved_selector_signature(row): row for row in saved_selectors
     }
     found_fields = sorted(
         {
@@ -407,7 +388,11 @@ async def build_domain_recipe_payload(
             if isinstance(payload, dict) and payload.get("status") == "found"
         }
     )
-    requested_fields = [str(value) for value in list(run.requested_fields or []) if str(value or "").strip()]
+    requested_fields = [
+        str(value)
+        for value in list(run.requested_fields or [])
+        if str(value or "").strip()
+    ]
     if not found_fields and requested_fields:
         dom_patterns = mapping_or_empty(EXTRACTION_RULES.get("dom_patterns"))
         found_fields = sorted(
@@ -442,14 +427,19 @@ async def build_domain_recipe_payload(
             if method:
                 actual_fetch_method = method
         if browser_reason is None:
-            next_browser_reason = str(browser_diagnostics.get("browser_reason") or "").strip().lower()
+            next_browser_reason = (
+                str(browser_diagnostics.get("browser_reason") or "").strip().lower()
+            )
             if next_browser_reason:
                 browser_reason = next_browser_reason
-        if (
-            str(acquisition.get("method") or "").strip().lower() == "browser"
-            and str(browser_diagnostics.get("browser_reason") or "").strip().lower()
-            in {"http-escalation", "vendor-block", "traversal-required", "host-preference"}
-        ):
+        if str(acquisition.get("method") or "").strip().lower() == "browser" and str(
+            browser_diagnostics.get("browser_reason") or ""
+        ).strip().lower() in {
+            "http-escalation",
+            "vendor-block",
+            "traversal-required",
+            "host-preference",
+        }:
             browser_required = True
         _merge_affordance_candidates(
             affordance_candidates,
@@ -523,10 +513,13 @@ async def build_domain_recipe_payload(
                     "selector_kind": selector_kind,
                     "selector_value": selector_value,
                     "selector_source": str(selector_trace.get("selector_source") or ""),
-                    "sample_value": selector_trace.get("sample_value") or payload_map.get("value"),
+                    "sample_value": selector_trace.get("sample_value")
+                    or payload_map.get("value"),
                     "source_record_ids": [],
                     "source_run_id": selector_trace.get("source_run_id") or run.id,
-                    "saved_selector_id": saved_selector.get("id") if isinstance(saved_selector, dict) else None,
+                    "saved_selector_id": saved_selector.get("id")
+                    if isinstance(saved_selector, dict)
+                    else None,
                     "already_saved": isinstance(saved_selector, dict),
                     "final_field_source": (
                         _object_list(payload_map.get("sources"))[-1]
@@ -538,7 +531,10 @@ async def build_domain_recipe_payload(
             entry["source_record_ids"] = sorted(
                 {
                     parsed
-                    for value in [*_object_list(entry.get("source_record_ids")), record.id]
+                    for value in [
+                        *_object_list(entry.get("source_record_ids")),
+                        record.id,
+                    ]
                     if (parsed := _safe_int(value)) is not None
                 }
             )
@@ -575,7 +571,9 @@ async def build_domain_recipe_payload(
                 "sample_value": row.get("sample_value"),
                 "source_record_ids": [],
                 "source_run_id": row.get("source_run_id") or run.id,
-                "saved_selector_id": saved_selector.get("id") if isinstance(saved_selector, dict) else None,
+                "saved_selector_id": saved_selector.get("id")
+                if isinstance(saved_selector, dict)
+                else None,
                 "already_saved": isinstance(saved_selector, dict),
                 "final_field_source": None,
             }
@@ -594,13 +592,18 @@ async def build_domain_recipe_payload(
         "requested_field_coverage": {
             "requested": requested_fields,
             "found": [field for field in requested_fields if field in found_fields],
-            "missing": [field for field in requested_fields if field not in found_fields],
+            "missing": [
+                field for field in requested_fields if field not in found_fields
+            ],
         },
         "acquisition_evidence": {
             "actual_fetch_method": actual_fetch_method,
             "browser_used": actual_fetch_method == "browser",
             "browser_reason": browser_reason,
-            "acquisition_summary": mapping_or_empty(run.result_summary).get("acquisition_summary") or {},
+            "acquisition_summary": mapping_or_empty(run.result_summary).get(
+                "acquisition_summary"
+            )
+            or {},
             "cookie_memory_available": cookie_memory_exists,
         },
         "field_learning": sorted(
@@ -642,10 +645,7 @@ async def promote_domain_recipe_selectors(
         domain=domain,
         surface=run.surface,
     )
-    by_signature = {
-        _saved_selector_signature(row): row
-        for row in existing
-    }
+    by_signature = {_saved_selector_signature(row): row for row in existing}
     saved_rows: list[dict[str, object]] = []
     for row in selectors:
         selector_kind = str(row.get("selector_kind") or "").strip()
@@ -688,12 +688,12 @@ async def promote_domain_recipe_selectors(
                 saved_rows.append(updated_row)
             continue
         created_row = await create_selector_record(
-                session,
-                domain=domain,
-                surface=run.surface,
-                payload=payload,
-                commit=commit,
-            )
+            session,
+            domain=domain,
+            surface=run.surface,
+            payload=payload,
+            commit=commit,
+        )
         if created_row is not None:
             saved_rows.append(created_row)
     return [row for row in saved_rows if isinstance(row, dict)]
@@ -851,9 +851,13 @@ async def _latest_field_feedback_index(
                     DomainFieldFeedback.domain == domain,
                     DomainFieldFeedback.surface == surface,
                 )
-                .order_by(desc(DomainFieldFeedback.created_at), desc(DomainFieldFeedback.id))
+                .order_by(
+                    desc(DomainFieldFeedback.created_at), desc(DomainFieldFeedback.id)
+                )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     index: dict[tuple[str, str, str], DomainFieldFeedback] = {}
     for row in rows:
@@ -911,13 +915,18 @@ def _merge_affordance_candidates(
     tab_labels = _object_list(affordance_candidates.get("tabs"))
     if not affordance_candidates.get("iframe_promotion"):
         final_url = str(acquisition.get("final_url") or "").strip()
-        if final_url and final_url != str(acquisition.get("requested_url") or "").strip():
+        if (
+            final_url
+            and final_url != str(acquisition.get("requested_url") or "").strip()
+        ):
             affordance_candidates["iframe_promotion"] = final_url
     detail_expansion = mapping_or_empty(browser_diagnostics.get("detail_expansion"))
     for label in _string_values(detail_expansion.get("expanded_elements")):
         if label not in accordion_labels:
             accordion_labels.append(label)
-    for label in _string_values(mapping_or_empty(detail_expansion.get("aom")).get("expanded_elements")):
+    for label in _string_values(
+        mapping_or_empty(detail_expansion.get("aom")).get("expanded_elements")
+    ):
         if label not in tab_labels:
             tab_labels.append(label)
     affordance_candidates["accordions"] = accordion_labels

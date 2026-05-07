@@ -151,6 +151,21 @@ def test_select_variant_falls_back_to_partial_axis_match() -> None:
     assert selected == variants[1]
 
 
+def test_select_variant_prefers_highest_ranked_partial_axis_match() -> None:
+    variants = [
+        {"size": "M", "color": "Blue", "availability": "out_of_stock"},
+        {"size": "M", "color": "Green", "availability": "in_stock"},
+        {"size": "S", "color": "Blue", "availability": "in_stock"},
+    ]
+
+    selected = select_variant(
+        variants,
+        page_url="https://example.com/products/widget?size=M&color=Blue&material=Cotton",
+    )
+
+    assert selected == variants[0]
+
+
 def test_extract_detail_keeps_encoded_cdn_image_url() -> None:
     image_url = (
         "https://i.example-cdn.com/rs:fit/g:sm/q:90/h:600/w:600/"

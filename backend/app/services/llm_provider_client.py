@@ -249,8 +249,31 @@ async def _call_groq(
     user_prompt: str,
 ) -> tuple[str, int, int]:
     client = await _shared_groq_client()
+    return await _call_chat_completions_endpoint(
+        client,
+        url=llm_runtime_settings.groq_chat_completions_url,
+        api_key=api_key,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_tokens=llm_runtime_settings.groq_max_tokens,
+        temperature=llm_runtime_settings.groq_temperature,
+    )
+
+
+async def _call_chat_completions_endpoint(
+    client,
+    *,
+    url: str,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+    temperature: float,
+) -> tuple[str, int, int]:
     response = await client.post(
-        llm_runtime_settings.groq_chat_completions_url,
+        url,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": JSON_CONTENT_TYPE,
@@ -261,8 +284,8 @@ async def _call_groq(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": llm_runtime_settings.groq_max_tokens,
-            "temperature": llm_runtime_settings.groq_temperature,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
         },
     )
     if response.status_code != 200:
@@ -319,26 +342,16 @@ async def _call_nvidia(
     user_prompt: str,
 ) -> tuple[str, int, int]:
     client = await _shared_nvidia_client()
-    response = await client.post(
-        llm_runtime_settings.nvidia_chat_completions_url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": JSON_CONTENT_TYPE,
-        },
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "max_tokens": llm_runtime_settings.nvidia_max_tokens,
-            "temperature": llm_runtime_settings.nvidia_temperature,
-        },
+    return await _call_chat_completions_endpoint(
+        client,
+        url=llm_runtime_settings.nvidia_chat_completions_url,
+        api_key=api_key,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_tokens=llm_runtime_settings.nvidia_max_tokens,
+        temperature=llm_runtime_settings.nvidia_temperature,
     )
-    if response.status_code != 200:
-        return _http_error(response), 0, 0
-    return _extract_chat_completion_payload(_safe_json_response(response))
-
 
 
 async def _call_aws(
@@ -368,6 +381,7 @@ async def _call_aws(
     if response.status_code != 200:
         return _http_error(response), 0, 0
     return _extract_chat_completion_payload(_safe_json_response(response))
+
 
 _PROVIDER_DISPATCH = {
     "groq": _call_groq,

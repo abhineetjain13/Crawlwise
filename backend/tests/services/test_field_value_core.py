@@ -163,6 +163,8 @@ def test_ecommerce_price_original_aliases_to_original_price() -> None:
 
 def test_decimal_for_shared_price_supports_european_decimal_format() -> None:
     assert _decimal_for_shared_price("1.234,56") == Decimal("1234.56")
+    assert _decimal_for_shared_price("234,56") == Decimal("234.56")
+    assert _decimal_for_shared_price("1.234.567,89") == Decimal("1234567.89")
 
 
 def test_persistence_schema_firewall_drops_unknown_and_internal_fields() -> None:

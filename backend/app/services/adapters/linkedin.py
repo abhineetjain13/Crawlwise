@@ -4,14 +4,13 @@ from __future__ import annotations
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.adapters.base import (
-    AdapterResult,
-    BaseAdapter,
+    SelectolaxJobAdapter,
     selectolax_node_attr,
     selectolax_node_text,
 )
 
 
-class LinkedInAdapter(BaseAdapter):
+class LinkedInAdapter(SelectolaxJobAdapter):
     name = "linkedin"
     platform_family = "linkedin"
 
@@ -20,17 +19,6 @@ class LinkedInAdapter(BaseAdapter):
         return self._matches_platform_family(url, html) and (
             "/jobs/" in lowered_url or "/job/" in lowered_url
         )
-
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        parser = LexborHTMLParser(html)
-        records = []
-        if surface in ("job_detail",):
-            record = self._extract_detail(parser, url)
-            if record:
-                records.append(record)
-        elif surface in ("job_listing",):
-            records = self._extract_listing(parser, url)
-        return self._result(records)
 
     def _extract_detail(self, parser: LexborHTMLParser, url: str) -> dict | None:
         title_el = parser.css_first(".top-card-layout__title, h1")

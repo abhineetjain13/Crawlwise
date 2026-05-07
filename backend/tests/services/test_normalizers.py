@@ -214,6 +214,74 @@ def test_normalize_variant_record_drops_axisless_rows_and_rejects_foreign_curren
     assert record["variant_count"] == 1
 
 
+def test_normalize_variant_record_drops_ui_control_variant_values() -> None:
+    record = {
+        "variants": [
+            {"url": "javascript:void(0)", "size": "Your Cookie Settings"},
+            {"size": "Show Reviews with 5 stars"},
+            {"color": "Previous"},
+            {"color": "Show image 1"},
+            {"color": "Enable Keyboard Shortcuts:"},
+            {"color": "Now & Every 15 Days"},
+            {"size": "Shipping Restrictions : Sales and Export of this item"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert "variants" not in record
+    assert "variant_count" not in record
+
+
+def test_normalize_variant_record_preserves_real_short_axes_after_ui_noise_prune() -> None:
+    record = {
+        "variants": [
+            {"url": "https://example.com/products/shirt?variant=1", "size": "M"},
+            {"url": "https://example.com/products/shirt?variant=2", "color": "Navy"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {"size": "M", "url": "https://example.com/products/shirt?variant=1"},
+        {"color": "Navy", "url": "https://example.com/products/shirt?variant=2"},
+    ]
+    assert record["variant_count"] == 2
+
+
+def test_normalize_variant_record_collapses_backmarket_carousel_compare_rows() -> None:
+    record = {
+        "variants": [
+            {"color": "Previous", "storage": "128 GB", "condition": "Compare"},
+            {"color": "Show image 1", "storage": "128 GB", "condition": "Compare"},
+            {"color": "Next", "storage": "128 GB", "condition": "Compare"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [{"storage": "128 GB"}]
+    assert record["variant_count"] == 1
+
+
+def test_normalize_variant_record_promotes_color_values_misfiled_as_size() -> None:
+    record = {
+        "variants": [
+            {"size": "Smoke Green (sold out)"},
+            {"size": "Matte Black sold out"},
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert record["variants"] == [
+        {"color": "Smoke Green"},
+        {"color": "Matte Black"},
+    ]
+    assert record["variant_count"] == 2
+
+
 
 def test_normalize_variant_record_prunes_global_axes_and_collapses_permutations() -> None:
     variants = []

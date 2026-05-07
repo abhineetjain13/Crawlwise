@@ -13,6 +13,8 @@ from app.services.config.variant_policy import (
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 
+HTML_PARSER = "html.parser"
+
 _EXPORTS_PATH = Path(__file__).with_name("extraction_rules.exports.json")
 _STATIC_EXPORTS = {
     name: value
@@ -315,6 +317,18 @@ DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS = (
     # "Read customer reviews ... and discover more").
     r"\bshop\s+the\b.{0,160}\bat\s+\S+\s+today\b",
     r"\bread\s+customer\s+reviews?\b.{0,160}\b(?:discover|learn|and\s+more)\b",
+    r"\bread\s+reviews?\s+and\s+buy\b.{0,220}\b(?:same\s+day\s+delivery|drive\s+up|contactless|more)\b",
+    r"^\s*read\s+reviews?\s+and\s+buy\b",
+    r"^\s*shop\b.{0,120}\brefurbished\s+excellent\b",
+    r"\bchoose\s+from\s+contactless\b.{0,160}\b(?:same\s+day\s+delivery|drive\s+up)\b",
+    r"\bfind\s+low\s+everyday\s+prices\b.{0,180}\b(?:buy\s+online|price\s+match\s+guarantee|in-store\s+pick-?up)\b",
+    r"\bprice\s+match\s+guarantee\b",
+    r"\bitem\s+details\s+above\s+aren['’]?t\s+accurate\b",
+    r"\breport\s+incorrect\s+product\s+info\b",
+    r"\bwants\s+you\s+to\s+be\s+fully\s+satisfied\s+with\s+your\s+purchase\b",
+    r"\bview\s+our\s+returns?\s+policy\b",
+    r"\bunlock\s+unlimited\s+free\s+international\s+shipping\b",
+    r"\bexclusive\s+member-only\s+deals\b",
     r"\bwas\s+this\s+product\s+information\s+helpful\b",
     r"\bwrite\s+a\s+review\b",
 )
@@ -671,6 +685,27 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "see all",
     "view market data",
     "sell now for",
+    # Cookie/review/carousel controls captured as variant axes (CE4).
+    "your cookie settings",
+    "cookie settings",
+    "accept all cookies",
+    "necessary",
+    "targeting",
+    "search",
+    "close",
+    "compare",
+    "previous",
+    "next",
+    "show image",
+    "scroll carousel",
+    "keyboard shortcuts",
+    "show reviews with",
+    "stars",
+    "deliver once",
+    "now & every",
+    "shipping restrictions",
+    "chat",
+    "email",
 )
 VARIANT_PLACEHOLDER_VALUES = frozenset(
     {"default title", "choose", "option", "select", "swatch"}
@@ -793,6 +828,7 @@ DETAIL_MATERIALS_ZERO_PERCENT_PATTERN = r"\b0\s*%"
 FEATURE_ROW_NOISE_PATTERNS = (
     r"^(?:key\s+)?features?(?:\s*&\s*benefits?)?$",
     r"^(?:see|show)\s+more\s+(?:key\s+)?features?(?:\s*&\s*benefits?)?$",
+    r"^.+?\$\d[\d,.]*\s+add\s+to\s+(?:bag|cart|basket)$",
 )
 DETAIL_BRACKET_PROSE_MIN_WORDS = 5
 PRICE_SOURCE_KEY_FIELDS = frozenset(
@@ -1089,6 +1125,8 @@ VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS = tuple(
             ),
             r"^\s*option\s+",
             r"\s+(?:not\s+)?selected\s*$",
+            r"\s+\((?:sold\s+out|unavailable)\)\s*$",
+            r"\s+(?:variant\s+)?sold\s+out(?:\s+or\s+unavailable)?\s*$",
         )
     )
 )

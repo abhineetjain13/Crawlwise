@@ -6,7 +6,7 @@ import re
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import PublicEndpointAdapter
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.extraction_html_helpers import html_to_text
 from app.services.field_value_core import clean_text
@@ -15,22 +15,15 @@ from app.services.field_value_core import clean_text
 _SEARCH_CONFIG_RE = re.compile(r"window\.searchConfig\s*=\s*(\{.*?\});", re.DOTALL)
 
 
-class JibeAdapter(BaseAdapter):
+class JibeAdapter(PublicEndpointAdapter):
     name = "jibe"
     platform_family = "jibe"
 
-    async def can_handle(self, url: str, html: str) -> bool:
-        return self._matches_platform_family(url, html)
-
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        records = await self.try_public_endpoint(url, html, surface)
-        return self._result(records)
-
-    async def try_public_endpoint(
+    async def _try_public_endpoint(
         self,
         url: str,
-        html: str = "",
-        surface: str = "",
+        html: str,
+        surface: str,
         *,
         proxy: str | None = None,
     ) -> list[dict]:
@@ -132,9 +125,7 @@ class JibeAdapter(BaseAdapter):
             full_location = ", ".join(
                 part
                 for part in [
-                    clean_text(
-                        payload.get("location_name") or payload.get("city")
-                    ),
+                    clean_text(payload.get("location_name") or payload.get("city")),
                     clean_text(payload.get("state")),
                 ]
                 if part
@@ -180,4 +171,3 @@ class JibeAdapter(BaseAdapter):
 
     def _normalize_job_id(self, value: object) -> str:
         return clean_text(value).strip().lower()
-

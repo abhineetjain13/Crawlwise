@@ -156,6 +156,24 @@ async def expand_detail_content_if_needed_impl(
     }
 
 
+def _finish_expansion_diagnostics(
+    diagnostics: dict[str, object],
+    *,
+    clicked_count: int,
+    expanded_elements: list[str],
+    interaction_failures: list[str],
+    started_at: float,
+    elapsed_ms,
+) -> dict[str, object]:
+    if diagnostics["status"] == "attempted":
+        diagnostics["status"] = "expanded" if clicked_count > 0 else "no_matches"
+    diagnostics["clicked_count"] = clicked_count
+    diagnostics["expanded_elements"] = expanded_elements
+    diagnostics["interaction_failures"] = interaction_failures
+    diagnostics["elapsed_ms"] = elapsed_ms(started_at)
+    return diagnostics
+
+
 async def expand_all_interactive_elements_impl(
     page: Any,
     *,
@@ -416,13 +434,14 @@ async def expand_all_interactive_elements_impl(
                     break
             except Exception as exc:
                 interaction_failures.append(str(exc))
-    if diagnostics["status"] == "attempted":
-        diagnostics["status"] = "expanded" if clicked_count > 0 else "no_matches"
-    diagnostics["clicked_count"] = clicked_count
-    diagnostics["expanded_elements"] = expanded_elements
-    diagnostics["interaction_failures"] = interaction_failures
-    diagnostics["elapsed_ms"] = elapsed_ms(started_at)
-    return diagnostics
+    return _finish_expansion_diagnostics(
+        diagnostics,
+        clicked_count=clicked_count,
+        expanded_elements=expanded_elements,
+        interaction_failures=interaction_failures,
+        started_at=started_at,
+        elapsed_ms=elapsed_ms,
+    )
 
 
 async def expand_interactive_elements_via_accessibility_impl(
@@ -523,13 +542,14 @@ async def expand_interactive_elements_via_accessibility_impl(
             expanded_elements.append(name)
         except Exception as exc:
             interaction_failures.append(str(exc))
-    if diagnostics["status"] == "attempted":
-        diagnostics["status"] = "expanded" if clicked_count > 0 else "no_matches"
-    diagnostics["clicked_count"] = clicked_count
-    diagnostics["expanded_elements"] = expanded_elements
-    diagnostics["interaction_failures"] = interaction_failures
-    diagnostics["elapsed_ms"] = elapsed_ms(started_at)
-    return diagnostics
+    return _finish_expansion_diagnostics(
+        diagnostics,
+        clicked_count=clicked_count,
+        expanded_elements=expanded_elements,
+        interaction_failures=interaction_failures,
+        started_at=started_at,
+        elapsed_ms=elapsed_ms,
+    )
 
 
 def accessibility_expand_candidates_impl(

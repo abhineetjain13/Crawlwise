@@ -6,30 +6,15 @@ from urllib.parse import urlsplit
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.adapters.base import (
-    AdapterResult,
-    BaseAdapter,
+    SelectolaxJobAdapter,
     selectolax_node_attr,
     selectolax_node_text,
 )
 
 
-class IndeedAdapter(BaseAdapter):
+class IndeedAdapter(SelectolaxJobAdapter):
     name = "indeed"
     platform_family = "indeed"
-
-    async def can_handle(self, url: str, html: str) -> bool:
-        return self._matches_platform_family(url, html)
-
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        parser = LexborHTMLParser(html)
-        records = []
-        if surface in ("job_detail",):
-            record = self._extract_detail(parser, url)
-            if record:
-                records.append(record)
-        elif surface in ("job_listing",):
-            records = self._extract_listing(parser, url)
-        return self._result(records)
 
     def _extract_detail(self, parser: LexborHTMLParser, url: str) -> dict | None:
         title_el = parser.css_first(".jobsearch-JobInfoHeader-title, h1")

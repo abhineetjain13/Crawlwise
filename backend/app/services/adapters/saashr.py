@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import PublicEndpointAdapter
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup
@@ -15,27 +15,22 @@ SAASHR_DOMAIN = "saashr.com"
 SECURE7_SAASHR_DOMAIN = f"secure7.{SAASHR_DOMAIN}"
 
 
-class SaaSHRAdapter(BaseAdapter):
+class SaaSHRAdapter(PublicEndpointAdapter):
     name = "saashr"
     platform_family = "saashr"
+    job_surface_only = True
 
     async def can_handle(self, url: str, html: str) -> bool:
         return bool(self._discover_board_url(url, html))
 
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        records = await self.try_public_endpoint(url, html, surface)
-        return self._result(records)
-
-    async def try_public_endpoint(
+    async def _try_public_endpoint(
         self,
         url: str,
-        html: str = "",
-        surface: str = "",
+        html: str,
+        surface: str,
         *,
         proxy: str | None = None,
     ) -> list[dict]:
-        if "job" not in str(surface or "").lower():
-            return []
         board_url = self._discover_board_url(url, html)
         if not board_url:
             return []
@@ -129,11 +124,7 @@ class SaaSHRAdapter(BaseAdapter):
                 return ""
         except (OSError, RuntimeError, ValueError, TypeError):
             return ""
-        return (
-            clean_text(payload.get("comp_name"))
-            if isinstance(payload, dict)
-            else ""
-        )
+        return clean_text(payload.get("comp_name")) if isinstance(payload, dict) else ""
 
     def _discover_board_url(self, url: str, html: str) -> str:
         if SAASHR_DOMAIN in str(url or "").lower():

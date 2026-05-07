@@ -83,6 +83,36 @@ class TestMarketingBannerAndSeoDescriptions:
         result = sanitize_detail_long_text(value, title="Silver Bracelet")
         assert "Crafted from silver" in result
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            (
+                "Read reviews and buy Tobago Stripe Blue Twin/Twin XL Duvet Cover "
+                "Set - Levtex Home. Choose from contactless Same Day Delivery, "
+                "Drive Up and more."
+            ),
+            (
+                "Shop Apple Refurbished Excellent AirPods Pro 2. Find low everyday "
+                "prices and buy online for delivery or in-store pick-up. Price "
+                "Match Guarantee."
+            ),
+            (
+                "info: If the item details above aren't accurate or complete, "
+                "we want to know about it. Report incorrect product info"
+            ),
+            (
+                "DTLR wants you to be fully satisfied with your purchase. "
+                "You can view our Returns Policy here."
+            ),
+            (
+                "Unlock unlimited free international shipping, 30-day returns, "
+                "and exclusive member-only deals for your order."
+            ),
+        ],
+    )
+    def test_ce4_storefront_policy_and_seo_copy_is_rejected(self, value: str) -> None:
+        assert sanitize_detail_long_text(value, title="Product") == ""
+
 
 @pytest.mark.parametrize(
     "value",
@@ -107,4 +137,16 @@ def test_sanitize_detail_features_drops_accordion_button_labels() -> None:
     assert sanitize_detail_features(value, title="HP Laptop 15") == [
         "AMD Ryzen 3 Processor",
         "Full HD display",
+    ]
+
+
+def test_sanitize_detail_features_drops_related_product_price_ctas() -> None:
+    value = [
+        "Darth Vader Key Chain $5.99 Add to Bag",
+        "Lightsaber Gel Pen - Black $4.99 Add to Bag",
+        "Includes detailed cockpit and rotating cannons",
+    ]
+
+    assert sanitize_detail_features(value, title="Millennium Falcon") == [
+        "Includes detailed cockpit and rotating cannons"
     ]

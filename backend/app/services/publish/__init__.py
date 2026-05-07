@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.publish.metadata import (
+    load_domain_field_mapping,
     load_domain_requested_fields,
     refresh_record_commit_metadata,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "diagnostics_indicate_block",
     "finalize_url_metrics",
     "is_effectively_blocked",
+    "load_domain_field_mapping",
     "load_domain_requested_fields",
     "refresh_record_commit_metadata",
 ]

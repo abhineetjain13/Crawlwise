@@ -121,7 +121,6 @@ https://www.walmart.com/ip/Apple-AirPods-with-Charging-Case-2nd-Generation/60434
 https://www.target.com/p/tobago-stripe-duvet-cover-set-levtex-home/-/A-1002150739?preselect=1002150742#lnk=sametab
 https://www.bestbuy.com/product/apple-airpods-pro-2nd-generation-white/JJ8ZH6TPSW?intl=nosplash
 https://www.costco.com/p/-/sleep-number-ultimate-12-mattress/4201005351?langId=-1
-https://www.lowes.com/pd/Minka-Lavery-Lansdale-Sand-Black-Transitional-Opal-Glass-Lantern-Pendant-Light/1001420790
 https://www.homedepot.com/p/MSI-Yellow-Pebbles-12-in-x-12-in-Polished-Quartzite-Floor-and-Wall-Tile-10-sq-ft-case-LPEBMYEL1212POL/202515091
 https://www.samsclub.com/ip/Scotch-Heavy-Duty-Shipping-Packaging-Tape-Dispensers-1-88-x-27-7-yd-6-Pack/5113185138?classType=REGULAR
 https://www.macys.com/shop/product/tommy-hilfiger-mens-hiday-casualized-hybrid-oxfords?ID=19116329&swatchColor=Black

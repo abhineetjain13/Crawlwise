@@ -276,8 +276,9 @@ async def _upsert_domain_storage_state(
         select(DomainCookieMemory)
         .where(DomainCookieMemory.domain == storage_key)
         .order_by(DomainCookieMemory.updated_at.desc(), DomainCookieMemory.id.desc())
+        .limit(1)
     )
-    row = next(iter(result.scalars().all()), None)
+    row = result.scalars().first()
     if row is not None and str(row.state_fingerprint or "") == fingerprint:
         return False
     if row is None:

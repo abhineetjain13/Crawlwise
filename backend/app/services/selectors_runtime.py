@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Tag
@@ -24,6 +24,9 @@ from app.services.domain_memory_service import (
     selector_payload_from_rules,
     selector_rules_from_memory,
 )
+
+if TYPE_CHECKING:
+    from app.models.crawl import DomainMemory
 from app.services.extraction_html_helpers import html_to_text
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import normalize_field_key
@@ -143,7 +146,7 @@ async def list_selector_records(
 def _selector_record_from_memory(
     row: dict[str, object],
     *,
-    memory,
+    memory: DomainMemory | None,
     domain: str | None = None,
     surface: str | None = None,
 ) -> dict[str, object]:

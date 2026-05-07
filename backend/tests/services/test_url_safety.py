@@ -68,7 +68,7 @@ def test_raise_if_non_public_ip_rejects_configured_blocked_ip() -> None:
         url_safety.SecurityError,
         match="Target host resolves to a blocked platform IP address",
     ):
-        url_safety._raise_if_non_public_ip(blocked_ip, "blocked.example")
+        url_safety._raise_if_non_public_ip(blocked_ip, "blocked.example", "Target")
 
 
 def test_raise_if_non_public_ip_rejects_cgnat_range() -> None:
@@ -78,4 +78,25 @@ def test_raise_if_non_public_ip_rejects_cgnat_range() -> None:
         url_safety.SecurityError,
         match="Target host resolves to a non-public IP address",
     ):
-        url_safety._raise_if_non_public_ip(ip_value, "cgnat.example")
+        url_safety._raise_if_non_public_ip(ip_value, "cgnat.example", "Target")
+
+
+@pytest.mark.asyncio
+async def test_validate_proxy_endpoint_uses_proxy_resolution_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _always_fail_getaddrinfo(hostname: str, port: int, family: int, socktype: int):
+        del hostname, port, family, socktype
+        raise socket.gaierror(11001, "getaddrinfo failed")
+
+    monkeypatch.setattr(
+        "app.services.url_safety.socket.getaddrinfo",
+        _always_fail_getaddrinfo,
+    )
+    monkeypatch.setattr(
+        "app.services.url_safety.dns_resolution_families",
+        lambda: (socket.AF_UNSPEC,),
+    )
+
+    with pytest.raises(ValueError, match="Proxy host could not be resolved"):
+        await url_safety.validate_proxy_endpoint("http://proxy.example:8080")
