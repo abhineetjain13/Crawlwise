@@ -1,3 +1,7 @@
+# PHASE-3 CHILD: Belongs in extract/ decomposition of detail_extractor.py.
+# Imported by detail_extractor.py temporarily. Do not add new imports here
+# until Phase 2 shared/text_coerce.py exists and this file's clean_text
+# import is updated to: from app.services.shared.text_coerce import clean_text
 from __future__ import annotations
 
 import re

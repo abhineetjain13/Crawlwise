@@ -1,10 +1,17 @@
 # Plan: Productionization Phase 2 - Foundation Layer
 
-**Status:** READY
+**Status:** COMPLETE
 **Purpose:** Add shared typed foundations before moving god-file code.
 **Primary audits:** `docs/audits/refactor-audit.md`, `docs/audits/acquisition-audit.md`, `docs/audits/pipeline-audit.md`, `docs/audits/llm-audit.md`
 **Secondary audits:** `docs/audits/selfheal-audit.md`, `docs/audits/batch-audit.md`
 **Scope:** Additive foundations first. No import rewiring until tests exist.
+
+STRICT LOC DISCIPLINE:
+- Every file you MODIFY must have deletions >= 50% of additions (net LOC change must be ≤ +50% of what you add).
+- Every new file you CREATE must correspond to code MOVED from an existing file, not net-new logic. State which source file the code came from.
+- You are not permitted to add to detail_extractor.py, field_value_core.py, field_value_dom.py, js_state_mapper.py, or crawl_fetch_runtime.py without an equal or greater deletion from the same file.
+- If you cannot delete code to offset an addition, stop and explain why, do not add anyway.
+- After implementation, output a table: filename | lines added | lines deleted | net change. Flag any file with net > +20 lines that was not in the task scope.
 
 ## Independent Context
 
@@ -152,6 +159,17 @@ $env:PYTHONPATH='.'
 .\.venv\Scripts\python.exe -m pytest tests/services/test_llm_runtime.py tests/services/test_acquisition_domain_profile_schema.py tests/services/test_shared_coerce_primitives.py tests/services/test_shared_url_utils.py tests/services/test_shared_text_coerce.py -q
 .\.venv\Scripts\ruff.exe check app tests
 ```
+
+## Completion Notes
+
+Completed 2026-05-08.
+
+- Added shared coercion primitives, URL utilities, and text coercion modules with focused tests.
+- Added `DomainProfileV2`, `FetchProfile`, `SelectorRule`, `AcquisitionContract`, profile config constants, and legacy dict parsing tests.
+- Moved LLM error category/classification into pure `llm_errors.py`; `llm_types.py` no longer imports circuit-breaker infrastructure.
+- Consolidated provider API-key lookup and provider catalog around one provider definition list.
+- Added extraction result/candidate/warning contracts, selector health snapshot, critical surface fields, and runtime metrics contract.
+- Verified focused Phase 2 tests and `ruff check app tests`.
 
 ## Handoff Prompt
 

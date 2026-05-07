@@ -17,11 +17,6 @@ from app.services.llm_cache import (
     load_cached_llm_result,
     store_cached_llm_result,
 )
-from app.services.llm_circuit_breaker import (
-    ERROR_PREFIX,
-    LLMErrorCategory,
-    classify_error,
-)
 from app.services.llm_budget import reserve_run_llm_call
 from app.services.llm_config_service import (
     get_prompt_task,
@@ -31,6 +26,7 @@ from app.services.llm_config_service import (
 )
 from app.services.llm_provider_client import call_provider_with_retry, estimate_cost_usd
 from app.services.extraction_html_helpers import prune_html_tree
+from app.services.llm_errors import ERROR_PREFIX, LLMErrorCategory, classify_error
 from app.services.llm_types import LLMTaskResult
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 from bs4 import BeautifulSoup, Tag

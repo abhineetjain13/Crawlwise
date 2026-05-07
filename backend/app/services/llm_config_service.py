@@ -18,6 +18,45 @@ _PROMPTS_DIR = Path(__file__).resolve().parents[1] / "data" / "prompts"
 _LEGACY_PROMPTS_DIR = (
     Path(__file__).resolve().parents[1] / "data" / "knowledge_base" / "prompts"
 )
+_LLM_PROVIDER_DEFINITIONS = (
+    {
+        "provider": "groq",
+        "label": "Groq",
+        "settings_attr": "groq_api_key",
+        "recommended_models": [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+        ],
+    },
+    {
+        "provider": "nvidia",
+        "label": "NVIDIA",
+        "settings_attr": "nvidia_api_key",
+        "recommended_models": [
+            "meta/llama-3.1-70b-instruct",
+            "meta/llama-3.1-8b-instruct",
+        ],
+    },
+    {
+        "provider": "anthropic",
+        "label": "Anthropic",
+        "settings_attr": "anthropic_api_key",
+        "recommended_models": [
+            "claude-3-5-haiku-latest",
+            "claude-sonnet-4-20250514",
+        ],
+    },
+    {
+        "provider": "aws",
+        "label": "AWS Bedrock",
+        "settings_attr": None,
+        "uses_ambient_auth": True,
+        "recommended_models": [
+            "amazon.nova-lite-v1:0",
+            "amazon.nova-pro-v1:0",
+        ],
+    },
+)
 
 
 def get_prompt_task(task_type: str) -> dict | None:
@@ -122,14 +161,14 @@ async def resolve_run_config(
 
 def provider_env_key(provider: str) -> str:
     normalized = str(provider or "").strip().lower()
-    if normalized == "groq":
-        return settings.groq_api_key
-    if normalized == "anthropic":
-        return settings.anthropic_api_key
-    if normalized == "nvidia":
-        return settings.nvidia_api_key
-    if normalized == "aws":
-        return "ambient"
+    for definition in _LLM_PROVIDER_DEFINITIONS:
+        if definition["provider"] != normalized:
+            continue
+        settings_attr = definition.get("settings_attr")
+        if settings_attr:
+            return str(getattr(settings, str(settings_attr), "") or "")
+        if definition.get("uses_ambient_auth"):
+            return "ambient"
     return ""
 
 
@@ -142,41 +181,21 @@ def resolve_provider_api_key(*, provider: str, encrypted_value: str) -> str:
 
 def llm_provider_catalog() -> list[dict[str, Any]]:
     return [
-        {
-            "provider": "groq",
-            "label": "Groq",
-            "api_key_set": bool(settings.groq_api_key),
-            "recommended_models": [
-                "llama-3.3-70b-versatile",
-                "llama-3.1-8b-instant",
-            ],
-        },
-        {
-            "provider": "nvidia",
-            "label": "NVIDIA",
-            "api_key_set": bool(settings.nvidia_api_key),
-            "recommended_models": [
-                "meta/llama-3.1-70b-instruct",
-                "meta/llama-3.1-8b-instruct",
-            ],
-        },
-        {
-            "provider": "anthropic",
-            "label": "Anthropic",
-            "api_key_set": bool(settings.anthropic_api_key),
-            "recommended_models": [
-                "claude-3-5-haiku-latest",
-                "claude-sonnet-4-20250514",
-            ],
-        },
-        {
-            "provider": "aws",
-            "label": "AWS Bedrock",
-            "api_key_set": False,
-            "uses_ambient_auth": True,
-            "recommended_models": [
-                "amazon.nova-lite-v1:0",
-                "amazon.nova-pro-v1:0",
-            ],
-        },
+        _provider_catalog_entry(definition)
+        for definition in _LLM_PROVIDER_DEFINITIONS
     ]
+
+
+def _provider_catalog_entry(definition: dict[str, Any]) -> dict[str, Any]:
+    settings_attr = definition.get("settings_attr")
+    entry = {
+        "provider": definition["provider"],
+        "label": definition["label"],
+        "api_key_set": bool(
+            getattr(settings, str(settings_attr), "") if settings_attr else False
+        ),
+        "recommended_models": list(definition["recommended_models"]),
+    }
+    if definition.get("uses_ambient_auth"):
+        entry["uses_ambient_auth"] = True
+    return entry

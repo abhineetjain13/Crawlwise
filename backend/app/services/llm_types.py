@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.services.llm_circuit_breaker import LLMErrorCategory
+from app.services.llm_errors import LLMErrorCategory
 
 
 @dataclass
