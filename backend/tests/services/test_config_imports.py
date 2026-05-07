@@ -441,9 +441,43 @@ def test_crawl_run_settings_fetch_profile_clamps_low_host_memory_ttl() -> None:
         == crawler_runtime_settings.host_memory_ttl_min_seconds
     )
     assert (
+        normalized["fetch_profile"]["host_memory_ttl_seconds"]
+        == crawler_runtime_settings.host_memory_ttl_min_seconds
+    )
+    assert (
         normalized["host_memory_ttl_seconds"]
         == crawler_runtime_settings.host_memory_ttl_min_seconds
     )
+
+    nested_settings = CrawlRunSettings.from_value(
+        {"fetch_profile": {"host_memory_ttl_seconds": 0}}
+    )
+    nested_profile = nested_settings.fetch_profile()
+    nested_normalized = nested_settings.normalized_for_storage()
+
+    assert (
+        nested_profile["host_memory_ttl_seconds"]
+        == crawler_runtime_settings.host_memory_ttl_min_seconds
+    )
+    assert (
+        nested_normalized["fetch_profile"]["host_memory_ttl_seconds"]
+        == crawler_runtime_settings.host_memory_ttl_min_seconds
+    )
+    assert (
+        nested_normalized["host_memory_ttl_seconds"]
+        == crawler_runtime_settings.host_memory_ttl_min_seconds
+    )
+
+
+def test_crawl_run_settings_ignores_blank_or_invalid_host_memory_ttl() -> None:
+    for value in ("   ", "abc"):
+        settings = CrawlRunSettings.from_value({"host_memory_ttl_seconds": value})
+        profile = settings.fetch_profile()
+        normalized = settings.normalized_for_storage()
+
+        assert profile["host_memory_ttl_seconds"] is None
+        assert normalized["fetch_profile"]["host_memory_ttl_seconds"] is None
+        assert "host_memory_ttl_seconds" not in normalized
 
 
 def test_crawl_run_settings_infers_sticky_rotation_from_sessionized_proxy_username() -> (

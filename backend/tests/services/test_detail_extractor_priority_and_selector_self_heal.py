@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bs4 import BeautifulSoup
+
+from app.services.detail_extractor import (
+    _materialize_image_fields,
+    _requires_dom_completion,
+)
 from app.services.config._export_data import load_export_data
 from app.services.extraction_runtime import extract_records
 from app.services.selector_self_heal import (
@@ -39,6 +45,59 @@ def test_extract_records_prefers_higher_priority_adapter_value_even_when_dom_val
     assert "adapter" in str(record["_field_sources"]["price"])
     assert "dom_selector" in str(record["_field_sources"]["price"])
     assert record["_source"] == "adapter"
+
+
+def test_requires_dom_completion_uses_raw_variant_cues_after_pruning() -> None:
+    soup = BeautifulSoup("<main><h1>Widget</h1></main>", "html.parser")
+    raw_soup = BeautifulSoup(
+        """
+        <main>
+          <form class="product-form">
+            <select name="size"><option>S</option><option>M</option></select>
+          </form>
+        </main>
+        """,
+        "html.parser",
+    )
+
+    assert _requires_dom_completion(
+        record={"title": "Widget", "image_url": "https://example.com/widget.jpg"},
+        surface="ecommerce_detail",
+        requested_fields=None,
+        selector_rules=None,
+        soup=soup,
+        breadcrumb_soup=raw_soup,
+    )
+
+
+def test_materialize_image_fields_merges_raw_soup_gallery_when_structured_is_single() -> None:
+    raw_soup = BeautifulSoup(
+        """
+        <main>
+          <section class="product-gallery">
+            <img data-lazy-src="/images/widget-1.jpg" />
+            <img data-lazy-src="/images/widget-2.jpg" />
+          </section>
+        </main>
+        """,
+        "html.parser",
+    )
+
+    images, source = _materialize_image_fields(
+        surface="ecommerce_detail",
+        candidates={"image_url": ["https://example.com/images/widget-cover.jpg"]},
+        candidate_sources={"image_url": ["json_ld"]},
+        page_url="https://example.com/products/widget",
+        soup=BeautifulSoup("<main></main>", "html.parser"),
+        raw_soup=raw_soup,
+    )
+
+    assert images == [
+        "https://example.com/images/widget-cover.jpg",
+        "https://example.com/images/widget-1.jpg",
+        "https://example.com/images/widget-2.jpg",
+    ]
+    assert source == "json_ld"
 
 
 def test_extract_records_does_not_fabricate_discount_percentage_from_unrelated_body_text() -> (

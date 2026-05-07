@@ -23,6 +23,8 @@ from app.services.config.extraction_rules import (
     AMAZON_PRICE_OFFSCREEN_SELECTOR,
     AMAZON_PRICE_SYMBOL_SELECTOR,
     AMAZON_PRICE_WHOLE_SELECTOR,
+    CURRENCY_DECIMAL_PLACES,
+    DEFAULT_DECIMAL_PLACES,
 )
 from app.services.field_value_core import (
     extract_currency_code,
@@ -81,9 +83,19 @@ def _price_from_price_node(price_node: object) -> str | None:
     whole = re.sub(r"[^\d,]+", "", selectolax_node_text(whole_node))
     if not whole:
         return None
-    fraction = re.sub(r"\D+", "", selectolax_node_text(fraction_node))[:2].zfill(2)
     symbol = selectolax_node_text(price_node.css_first(AMAZON_PRICE_SYMBOL_SELECTOR))
-    return _normalize_price_text(f"{symbol or ''}{whole}.{fraction or '00'}")
+    currency = extract_currency_code(symbol)
+    decimal_places = int(
+        CURRENCY_DECIMAL_PLACES.get(currency or "", DEFAULT_DECIMAL_PLACES)
+    )
+    fraction = re.sub(r"\D+", "", selectolax_node_text(fraction_node))[
+        :decimal_places
+    ].zfill(decimal_places)
+    symbol_prefix = symbol or ""
+    if re.fullmatch(r"[A-Z]{3}", symbol_prefix.strip(), re.I):
+        symbol_prefix = f"{symbol_prefix.strip()} "
+    separator = "." if decimal_places > 0 else ""
+    return _normalize_price_text(f"{symbol_prefix}{whole}{separator}{fraction}")
 
 
 def _detail_price_text(parser: LexborHTMLParser) -> str | None:

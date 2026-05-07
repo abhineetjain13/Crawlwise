@@ -382,6 +382,7 @@ def validate_record_for_surface(
     surface: str,
     *,
     requested_fields: list[str] | None = None,
+    strict_types: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     logical_fields = {
         key: value
@@ -395,10 +396,37 @@ def validate_record_for_surface(
         normalize_field_key(field_name)
         for field_name in surface_fields(surface, requested_fields)
     }
+    validation_errors: list[str] = []
     validated_fields: dict[str, Any] = {}
+    scalar_list_fields = set(STRUCTURED_MULTI_FIELDS) | {ADDITIONAL_IMAGES_FIELD}
     for field_name, value in logical_fields.items():
-        if normalize_field_key(field_name) in allowed_fields:
-            validated_fields[field_name] = value
+        normalized_field = normalize_field_key(field_name)
+        if normalized_field not in allowed_fields:
+            continue
+        if (
+            strict_types
+            and normalized_field in STRUCTURED_OBJECT_LIST_FIELDS
+            and not isinstance(value, list)
+        ):
+            validation_errors.append(f"{field_name} expected list")
+            continue
+        if (
+            strict_types
+            and normalized_field in STRUCTURED_OBJECT_FIELDS
+            and not isinstance(value, dict)
+        ):
+            validation_errors.append(f"{field_name} expected object")
+            continue
+        if (
+            strict_types
+            and normalized_field not in STRUCTURED_OBJECT_FIELDS
+            and normalized_field not in STRUCTURED_OBJECT_LIST_FIELDS
+            and not (normalized_field in scalar_list_fields and isinstance(value, list))
+            and isinstance(value, (dict, list, set, frozenset))
+        ):
+            validation_errors.append(f"{field_name} expected scalar")
+            continue
+        validated_fields[field_name] = value
     if str(surface or "").strip().lower().startswith("ecommerce_"):
         for field_name in (
             *tuple(PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS or ()),
@@ -408,7 +436,7 @@ def validate_record_for_surface(
     return {
         **clean_record(validated_fields),
         **internal_fields,
-    }, []
+    }, validation_errors
 
 
 def surface_fields(surface: str, requested_fields: list[str] | None) -> list[str]:

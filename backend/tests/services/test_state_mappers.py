@@ -132,8 +132,8 @@ def test_map_js_state_to_fields_treats_shopify_product_level_prices_as_cents() -
     # Cents-trigger: no prices.currency, so product-level currency makes numeric prices cents.
     assert mapped["handle"] == "abzorb-1890-sneaker"
     assert mapped["currency"] == "USD"
-    assert mapped["price"] == "USD 196.5"
-    assert mapped["original_price"] == "USD 220"
+    assert mapped["price"] == "USD 196.50"
+    assert mapped["original_price"] == "USD 220.00"
 
 
 def test_map_js_state_to_fields_recovers_shopify_available_sizes_rows() -> None:
@@ -867,6 +867,36 @@ def test_map_js_state_to_fields_merges_same_product_sibling_payloads() -> None:
 
     assert mapped["title"] == "Trail Runner"
     assert mapped["price"] == "129.95"
+
+
+def test_map_js_state_to_fields_backfills_url_matched_variant_payload() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__STATE_A__": {
+                "product": {
+                    "id": "prod-1",
+                    "name": "Trail Runner Black",
+                    "price": "129.95",
+                }
+            },
+            "__STATE_B__": {
+                "variantIndex": {
+                    "id": "variant-index",
+                    "name": "All Sizes",
+                    "handle": "trail-runner",
+                    "variants": [
+                        {"id": "black-9", "color": "Black", "size": "9"},
+                        {"id": "black-10", "color": "Black", "size": "10"},
+                    ],
+                }
+            },
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/trail-runner?variant=black-9",
+    )
+
+    assert mapped["title"] == "Trail Runner Black"
+    assert mapped["variant_count"] == 2
 
 
 def test_map_js_state_to_fields_prefers_preloaded_state_product_over_app_banner_payload() -> (

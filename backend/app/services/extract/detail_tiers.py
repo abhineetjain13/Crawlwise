@@ -24,6 +24,8 @@ class DetailTierState:
     selector_trace_candidates: dict[str, list[dict[str, object]]]
     extraction_runtime_snapshot: dict[str, object] | None
     completed_tiers: list[str]
+    raw_soup: Any = None
+    soup: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +341,8 @@ class DetailTierExecutor:
             extraction_runtime_snapshot=state.extraction_runtime_snapshot,
             tier_name=tier_name,
             completed_tiers=state.completed_tiers,
+            soup=state.soup,
+            raw_soup=state.raw_soup,
         )
 
     def _promote_dom_title(

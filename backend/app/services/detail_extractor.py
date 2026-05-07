@@ -17,6 +17,7 @@ from app.services.config.field_mappings import (
 from app.services.config.extraction_rules import (
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
+    DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES,
     DETAIL_PAYLOAD_LIST_LIMIT,
     DETAIL_CATEGORY_SOURCE_RANKS,
     DETAIL_LONG_TEXT_RANK_FIELDS,
@@ -54,6 +55,7 @@ from app.services.field_value_candidates import (
 )
 from app.services.field_value_dom import (
     dedupe_image_urls,
+    extract_page_images,
     requested_content_extractability,
 )
 from app.services.js_state_mapper import map_js_state_to_fields
@@ -368,6 +370,8 @@ def _materialize_record(
     extraction_runtime_snapshot: dict[str, object] | None,
     tier_name: str,
     completed_tiers: list[str],
+    soup: BeautifulSoup | None = None,
+    raw_soup: BeautifulSoup | None = None,
 ) -> dict[str, Any]:
     identity_url = _preferred_detail_identity_url(
         surface=surface,
@@ -381,6 +385,9 @@ def _materialize_record(
         surface=surface,
         candidates=candidates,
         candidate_sources=candidate_sources,
+        page_url=page_url,
+        soup=soup,
+        raw_soup=raw_soup,
     )
     for field_name in fields:
         if field_name in {"image_url", "additional_images"}:
@@ -848,6 +855,9 @@ def _materialize_image_fields(
     surface: str,
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
+    page_url: str,
+    soup: BeautifulSoup | None = None,
+    raw_soup: BeautifulSoup | None = None,
 ) -> tuple[list[str], str | None]:
     values: list[str] = []
     primary_source: str | None = None
@@ -867,7 +877,19 @@ def _materialize_image_fields(
             image = text_or_none(item)
             if image:
                 values.append(image)
-    return dedupe_image_urls(values), primary_source
+    images = dedupe_image_urls(values)
+    if (
+        str(surface or "").strip().lower() == "ecommerce_detail"
+        and raw_soup is not None
+        and len(images) <= int(DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES)
+    ):
+        soup_img_count = len(soup.find_all("img")) if soup is not None else 0
+        if len(raw_soup.find_all("img")) > soup_img_count:
+            images = dedupe_image_urls(
+                [*images, *extract_page_images(raw_soup, page_url, surface=surface)]
+            )
+            primary_source = primary_source or "dom_selector"
+    return images, primary_source
 
 
 def _missing_requested_fields(
@@ -929,22 +951,25 @@ def _requires_dom_completion(
     breadcrumb_soup: BeautifulSoup | None = None,
 ) -> bool:
     normalized_surface = str(surface or "").strip().lower()
+    raw_soup = breadcrumb_soup or soup
     requested_missing_fields = _missing_requested_fields(record, requested_fields)
     if normalized_surface == "ecommerce_detail":
         breadcrumb_category = breadcrumb_category_from_dom(
-            breadcrumb_soup or soup,
+            raw_soup,
             current_title=text_or_none(record.get("title")),
         )
         record_category = _normalized_category_path(record.get("category"))
         dom_category = _normalized_category_path(breadcrumb_category)
         if dom_category and record_category != dom_category:
             return True
-    if normalized_surface == "ecommerce_detail" and variant_dom_cues_present(soup):
+    if normalized_surface == "ecommerce_detail" and (
+        variant_dom_cues_present(soup) or variant_dom_cues_present(raw_soup)
+    ):
         return True
     if (
         normalized_surface == "ecommerce_detail"
         and record.get("image_url") in (None, "", [], {})
-        and soup.select_one("main img, article img, [role='main'] img, img") is not None
+        and raw_soup.select_one("main img, article img, [role='main'] img, img") is not None
     ):
         return True
     extractability = requested_content_extractability(
@@ -1030,6 +1055,7 @@ def _finalize_early_detail_record(
             js_state_objects=js_state_objects,
         )
         drop_low_signal_zero_detail_price(record)
+        record = finalize_record(record, surface=surface)
     record["_confidence"] = score_record_confidence(
         record,
         surface=surface,
@@ -1097,6 +1123,7 @@ def _finalize_dom_detail_record(
             js_state_objects=js_state_objects,
         )
         drop_low_signal_zero_detail_price(record)
+        record = finalize_record(record, surface=surface)
     record["_confidence"] = score_record_confidence(
         record,
         surface=surface,
@@ -1141,6 +1168,8 @@ def _prepare_detail_extraction(
         selector_trace_candidates=selector_trace_candidates,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
         completed_tiers=[],
+        raw_soup=raw_soup,
+        soup=soup,
     )
     js_state_objects = harvest_js_state_objects(None, context.cleaned_html)
     js_state_record = map_js_state_to_fields(

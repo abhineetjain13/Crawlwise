@@ -74,7 +74,7 @@ def test_variant_option_value_is_noise_handles_ui_controls(value: str) -> None:
         "Blue",
         "42",
         "38",
-        "US",
+        "US 9",
     ],
 )
 def test_variant_option_value_is_noise_preserves_real_values(value: str) -> None:
@@ -530,9 +530,9 @@ def test_dom_variant_extraction_trusts_size_values_over_color_container_label() 
         <main>
           <section class="product-detail">
             <div class="color-selector">
-              <button aria-label="M 5 / W 6.5">M 5 / W 6.5</button>
-              <button aria-label="M 5.5 / W 7">M 5.5 / W 7</button>
-              <button aria-label="M 6 / W 7.5">M 6 / W 7.5</button>
+              <button aria-label="M 5 / W 6.5">Visible M5/W6.5</button>
+              <button aria-label="M 5.5 / W 7">Visible M5.5/W7</button>
+              <button aria-label="M 6 / W 7.5">Visible M6/W7.5</button>
             </div>
           </section>
         </main>

@@ -22,6 +22,7 @@ from app.services.config.extraction_rules import (
     CDN_IMAGE_QUERY_PARAMS,
     CDN_IMAGE_PATH_SUFFIX_PATTERN,
     DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS,
+    DETAIL_IMAGE_URL_ATTRS,
     DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS,
     DETAIL_LONG_TEXT_MAX_SECTION_CHARS,
@@ -638,15 +639,10 @@ def _candidate_image_urls_from_node(node: Tag, page_url: str) -> list[str]:
     ):
         if raw_value not in (None, "", [], {}):
             candidates.extend(extract_urls(_srcset_urls(raw_value), page_url))
-    fallback = (
-        node.get("src")
-        or node.get("data-src")
-        or node.get("data-original")
-        or node.get("data-image")
-        or ""
-    )
-    if fallback:
-        candidates.extend(extract_urls(fallback, page_url))
+    for attr_name in tuple(DETAIL_IMAGE_URL_ATTRS or ()):
+        raw_value = node.get(str(attr_name))
+        if raw_value not in (None, "", [], {}):
+            candidates.extend(extract_urls(raw_value, page_url))
     return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
@@ -724,9 +720,14 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
             if srcset not in (None, "", [], {})
             else (
                 node.get("content")
-                or node.get("src")
-                or node.get("data-src")
-                or node.get("data-image")
+                or next(
+                    (
+                        node.get(str(attr_name))
+                        for attr_name in tuple(DETAIL_IMAGE_URL_ATTRS or ())
+                        if node.get(str(attr_name)) not in (None, "", [], {})
+                    ),
+                    None,
+                )
                 or node.get("href")
                 or ""
             )

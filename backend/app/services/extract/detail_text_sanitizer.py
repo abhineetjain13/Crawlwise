@@ -383,11 +383,14 @@ def sanitize_detail_long_text_fields(
 
 def _repair_description_feature_duplicate(record: dict[str, Any]) -> None:
     description = clean_text(record.get("description"))
-    features = [
-        clean_text(row)
-        for row in (record.get("features") if isinstance(record.get("features"), list) else [])
-        if clean_text(row)
-    ]
+    raw_features = (
+        record.get("features") if isinstance(record.get("features"), list) else []
+    )
+    features = []
+    for row in raw_features:
+        cleaned = clean_text(row)
+        if cleaned:
+            features.append(cleaned)
     if not description or not features:
         return
     feature_text = clean_text(" ".join(features))

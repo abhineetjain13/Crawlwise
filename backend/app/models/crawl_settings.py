@@ -163,20 +163,30 @@ class CrawlRunSettings:
     def fetch_profile(self) -> dict[str, object]:
         stored = _mapping(self.data.get("fetch_profile"))
         traversal_mode = self.traversal_mode()
+        ttl_key = crawler_runtime_settings.host_memory_ttl_seconds_key
         raw_host_memory_ttl_seconds = stored.get(
-            "host_memory_ttl_seconds",
-            self.data.get("host_memory_ttl_seconds"),
+            ttl_key,
+            self.data.get(ttl_key),
         )
-        host_memory_ttl_seconds = (
-            None
-            if raw_host_memory_ttl_seconds in (None, "")
-            else _coerce_int(
-                raw_host_memory_ttl_seconds,
-                crawler_runtime_settings.pacing_host_cache_ttl_seconds,
-                crawler_runtime_settings.host_memory_ttl_min_seconds,
-                crawler_runtime_settings.host_memory_ttl_max_seconds,
-            )
-        )
+        if raw_host_memory_ttl_seconds is None:
+            host_memory_ttl_seconds = None
+        else:
+            raw_host_memory_ttl_text = str(raw_host_memory_ttl_seconds).strip()
+            if not raw_host_memory_ttl_text:
+                host_memory_ttl_seconds = None
+            else:
+                try:
+                    parsed_host_memory_ttl_seconds = int(raw_host_memory_ttl_text)
+                except (TypeError, ValueError):
+                    host_memory_ttl_seconds = None
+                else:
+                    host_memory_ttl_seconds = min(
+                        max(
+                            parsed_host_memory_ttl_seconds,
+                            crawler_runtime_settings.host_memory_ttl_min_seconds,
+                        ),
+                        crawler_runtime_settings.host_memory_ttl_max_seconds,
+                    )
         if stored:
             return {
                 "fetch_mode": str(stored.get("fetch_mode") or "auto").strip().lower()
@@ -192,7 +202,7 @@ class CrawlRunSettings:
                 "request_delay_ms": self.sleep_ms(),
                 "max_pages": self.max_pages(),
                 "max_scrolls": self.max_scrolls(),
-                "host_memory_ttl_seconds": host_memory_ttl_seconds,
+                ttl_key: host_memory_ttl_seconds,
             }
         return {
             "fetch_mode": "auto",
@@ -203,7 +213,7 @@ class CrawlRunSettings:
             "request_delay_ms": self.sleep_ms(),
             "max_pages": self.max_pages(),
             "max_scrolls": self.max_scrolls(),
-            "host_memory_ttl_seconds": host_memory_ttl_seconds,
+            ttl_key: host_memory_ttl_seconds,
         }
 
     def locality_profile(self) -> dict[str, object]:
@@ -448,14 +458,14 @@ class CrawlRunSettings:
 
     def normalized_for_storage(self) -> dict[str, Any]:
         normalized = dict(self.data)
+        ttl_key = crawler_runtime_settings.host_memory_ttl_seconds_key
         normalized["urls"] = self.urls()
         normalized["max_records"] = self.max_records()
         normalized["respect_robots_txt"] = self.respect_robots_txt()
         normalized["fetch_profile"] = self.fetch_profile()
-        if normalized["fetch_profile"].get("host_memory_ttl_seconds") is not None:
-            normalized["host_memory_ttl_seconds"] = normalized["fetch_profile"][
-                "host_memory_ttl_seconds"
-            ]
+        normalized.pop(ttl_key, None)
+        if normalized["fetch_profile"].get(ttl_key) is not None:
+            normalized[ttl_key] = normalized["fetch_profile"][ttl_key]
         normalized["locality_profile"] = self.locality_profile()
         normalized["diagnostics_profile"] = self.diagnostics_profile()
         normalized["acquisition_contract"] = self.acquisition_contract()

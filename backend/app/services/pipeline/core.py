@@ -777,6 +777,7 @@ async def _run_normalization_stage(
             dict(record),
             context.surface,
             requested_fields=context.requested_fields,
+            strict_types=True,
         )
         normalized_records.append(normalized_record)
         if validation_errors:

@@ -88,6 +88,23 @@ def test_extract_page_images_keeps_main_gallery_carousel_images_on_detail_pages(
     assert images == ["https://example.com/images/gallery-2.jpg"]
 
 
+def test_extract_page_images_reads_lazy_image_attributes() -> None:
+    soup = BeautifulSoup(
+        """
+        <main>
+          <div class="product-gallery">
+            <img data-lazy-src="/images/gallery-lazy.jpg" />
+          </div>
+        </main>
+        """,
+        "html.parser",
+    )
+
+    images = extract_page_images(soup, "https://example.com/products/widget")
+
+    assert images == ["https://example.com/images/gallery-lazy.jpg"]
+
+
 def test_extract_page_images_dedupes_cdn_resized_variants_and_keeps_highest_resolution() -> None:
     soup = BeautifulSoup(
         """

@@ -1397,7 +1397,7 @@ def backfill_variants_from_dom_if_missing(
             )
             existing_row = existing_by_key.get(dom_key or "") if dom_key else None
             merged_rows.append(
-                merge_variant_pair(dom_row, existing_row)
+                merge_variant_pair(existing_row, dom_row)
                 if isinstance(existing_row, dict)
                 else dom_row
             )

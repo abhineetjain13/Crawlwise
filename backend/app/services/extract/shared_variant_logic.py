@@ -786,6 +786,8 @@ def variant_option_value_matches_ui_noise(value: object) -> bool:
             continue
         if len(phrase) <= max_len and lowered == phrase:
             return True
+        if len(phrase) <= max_len:
+            continue
         if phrase in lowered:
             return True
     return False
@@ -812,12 +814,9 @@ def variant_option_value_is_noise(value: object) -> bool:
         )
         or lowered in _variant_option_value_exact_noise_tokens
         or variant_option_value_matches_ui_noise(cleaned)
-        or (
-            any(phrase in lowered for phrase in _variant_option_noise_phrases)
-            and any(
-                rx.search(lowered)
-                for rx in _variant_option_value_noise_search_regexes
-            )
+        or any(phrase in lowered for phrase in _variant_option_noise_phrases)
+        or any(
+            rx.search(lowered) for rx in _variant_option_value_noise_search_regexes
         )
     )
 

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from decimal import Decimal
+from functools import lru_cache
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -543,8 +544,6 @@ def repair_ecommerce_detail_record_quality(
     soup: Any | None = None,
     js_state_objects: object | None = None,
 ) -> None:
-    if _variant_rows_have_no_option_values(record):
-        normalize_variant_record(record, finalize_contract=False)
     _sanitize_ecommerce_detail_record(
         record,
         page_url=page_url,
@@ -562,12 +561,6 @@ def repair_ecommerce_detail_record_quality(
     _repair_detail_variant_prices_and_identity(record)
     enforce_flat_variant_public_contract(record, page_url=page_url)
 
-
-def _variant_rows_have_no_option_values(record: dict[str, Any]) -> bool:
-    rows = [row for row in list(record.get("variants") or []) if isinstance(row, dict)]
-    return bool(rows) and not any(
-        isinstance(row.get("option_values"), dict) for row in rows
-    )
 
 def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
     parent_price = text_or_none(record.get("price"))
@@ -839,6 +832,7 @@ def _option_value_repeats_product_title(value: str, *, title_hint: str) -> bool:
     return title_key in value_key
 
 
+@lru_cache(maxsize=None)
 def _whole_value_pattern(value: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![a-z0-9]){re.escape(value)}(?![a-z0-9])")
 

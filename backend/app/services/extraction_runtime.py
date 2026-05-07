@@ -223,7 +223,7 @@ def _postprocess_detail_records(
             requested_page_url=requested_page_url,
         )
         drop_low_signal_zero_detail_price(record)
-        rows.append(record)
+        rows.append(finalize_record(record, surface="ecommerce_detail"))
     return rows
 
 

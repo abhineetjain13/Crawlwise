@@ -22,6 +22,8 @@ from app.services.config.extraction_rules import (
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_PLACEHOLDER_PREFIXES,
     VARIANT_PLACEHOLDER_VALUES,
+    SCALAR_FIELD_MAX_OPTION_TOKENS,
+    SCALAR_FIELD_POLLUTION_VALUES,
     VARIANT_SEPARATE_DIMENSION_SIZE_RULES,
     VARIANT_SKU_SIZE_SUFFIX_PATTERNS,
     VARIANT_SIZE_QUANTITY_CONTROL_VALUES,
@@ -172,6 +174,11 @@ _PUBLIC_VARIANT_AXIS_FIELDS = tuple(
     for field_name in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
     if str(field_name).strip()
 )
+_SCALAR_FIELD_POLLUTION_VALUES = frozenset(
+    clean_text(value).casefold()
+    for value in tuple(SCALAR_FIELD_POLLUTION_VALUES or ())
+    if clean_text(value)
+)
 
 
 def _variant_has_axis_value(variant: dict[str, Any]) -> bool:
@@ -183,6 +190,7 @@ def normalize_variant_record(record: dict[str, Any], *, finalize_contract: bool 
     _sanitize_variant_axes(record)
     _dedupe_and_prune_variant_rows(record)
     _backfill_variant_context(record)
+    _drop_polluted_parent_scalar_axes(record)
     if finalize_contract:
         _finalize_variant_contract(record)
 
@@ -531,6 +539,23 @@ def _value_is_placeholder(value: str) -> bool:
 
 def _value_is_ui_noise(value: str) -> bool:
     return variant_option_value_matches_ui_noise(value)
+
+
+def _drop_polluted_parent_scalar_axes(record: dict[str, Any]) -> None:
+    max_tokens = max(1, int(SCALAR_FIELD_MAX_OPTION_TOKENS))
+    for field_name in ("color", "size"):
+        value = clean_text(record.get(field_name))
+        if not value:
+            continue
+        lowered = value.casefold()
+        tokens = [token for token in re.split(r"[\s,|/]+", lowered) if token]
+        numeric_tokens = sum(1 for token in tokens if re.search(r"\d", token))
+        if lowered in _SCALAR_FIELD_POLLUTION_VALUES or (
+            field_name == "size"
+            and len(tokens) > max_tokens + 2
+            and numeric_tokens >= 2
+        ):
+            record.pop(field_name, None)
 
 
 def _value_is_axis_header_noise(field_name: str, value: str) -> bool:

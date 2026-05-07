@@ -964,6 +964,31 @@ async def test_amazon_adapter_combines_visible_whole_and_fraction_price() -> Non
 
 
 @pytest.mark.asyncio
+async def test_amazon_adapter_uses_currency_decimal_places_for_zero_decimal_markets() -> None:
+    result = await AmazonAdapter().extract(
+        "https://www.amazon.co.jp/dp/example",
+        """
+        <html>
+          <body>
+            <span id="productTitle">Desk Lamp</span>
+            <span class="a-price">
+              <span class="a-price-symbol">JPY</span>
+              <span class="a-price-whole">1,359</span>
+              <span class="a-price-fraction">96</span>
+            </span>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    assert len(result.records) == 1
+    record = result.records[0]
+    assert record["price"] == "JPY 1,359"
+    assert record["currency"] == "JPY"
+
+
+@pytest.mark.asyncio
 async def test_amazon_adapter_preserves_store_brand_suffix() -> None:
     result = await AmazonAdapter().extract(
         "https://www.amazon.com/dp/example",

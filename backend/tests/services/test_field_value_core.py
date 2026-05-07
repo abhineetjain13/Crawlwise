@@ -19,6 +19,7 @@ from app.services.field_value_core import (
     validate_record_for_surface,
 )
 from app.services.extract.shared_variant_logic import merge_variant_rows
+from app.services.field_url_normalization import registrable_host, same_site
 from app.services.public_record_firewall import public_record_data_for_surface
 
 
@@ -535,6 +536,11 @@ def test_strip_tracking_query_params_keeps_short_flags_without_detail_context_tr
     )
 
     assert cleaned == "https://example.com/products/widget-prime?ls=r&variant=blue"
+
+
+def test_same_site_preserves_ipv4_hosts() -> None:
+    assert registrable_host("http://192.168.1.1/product") == "192.168.1.1"
+    assert same_site("http://192.168.1.1/product", "http://192.168.1.1/cart")
 
 
 def test_extract_currency_code_supports_rs_price_prefixes() -> None:

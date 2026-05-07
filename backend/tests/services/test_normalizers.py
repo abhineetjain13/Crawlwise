@@ -270,6 +270,20 @@ def test_normalize_variant_record_drops_ui_control_variant_values() -> None:
     assert "variant_count" not in record
 
 
+def test_normalize_variant_record_drops_polluted_parent_scalar_axes() -> None:
+    record = {
+        "color": "Color",
+        "size": "100 Softgels 200 Softgels 365 Softgels",
+        "variants": [{"size": "100 Softgels"}, {"size": "200 Softgels"}],
+    }
+
+    normalize_variant_record(record)
+
+    assert "color" not in record
+    assert "size" not in record
+    assert record["variant_count"] == 2
+
+
 def test_repair_ecommerce_detail_backfills_dom_variants_before_sanitizing_noise() -> None:
     html = """
     <main>
@@ -494,8 +508,7 @@ def test_normalize_variant_record_drops_backmarket_condition_tabs() -> None:
         {"color": "Black", "storage": "128 GB", "condition": "Fair"},
         {"color": "Blue", "storage": "128 GB", "condition": "Good"},
     ]
-    assert record["variant_count"] == len(record["variants"])
-    assert len(record["variants"]) == 2
+    assert record["variant_count"] == 2
 
 
 def test_normalize_variant_record_preserves_separate_suit_sizes_with_dimension_labels() -> None:

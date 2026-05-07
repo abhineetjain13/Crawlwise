@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -15,6 +16,7 @@ from app.services.config.extraction_rules import (
     TRACKING_STRIP_SURFACE_PREFIXES,
     MAX_TRACKING_KEY_LENGTH,
     MAX_TRACKING_VALUE_LENGTH,
+    MULTI_PART_PUBLIC_SUFFIXES,
     URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS,
     URL_CONCATENATION_SCHEME_PATTERN,
 )
@@ -33,30 +35,6 @@ _URL_SCHEME_RE = re.compile(str(URL_CONCATENATION_SCHEME_PATTERN), re.I)
 _URL_CONCAT_ALLOWED_PREFIX_SEPARATORS = tuple(
     str(value) for value in (URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS or ())
 )
-_MULTI_PART_PUBLIC_SUFFIXES = frozenset(
-    {
-        "ac.in",
-        "co.in",
-        "co.jp",
-        "co.kr",
-        "co.nz",
-        "co.uk",
-        "com.au",
-        "com.br",
-        "com.cn",
-        "com.mx",
-        "com.sg",
-        "com.tr",
-        "edu.au",
-        "gov.in",
-        "gov.uk",
-        "net.au",
-        "org.au",
-        "org.uk",
-    }
-)
-
-
 def _text_or_none(value: object) -> str | None:
     text = str(value or "").strip()
     return text or None
@@ -66,11 +44,17 @@ def registrable_host(url: str) -> str:
     host = (urlparse(url).hostname or "").lower().strip(".")
     if not host:
         return ""
+    try:
+        ipaddress.IPv4Address(host)
+    except ValueError:
+        pass
+    else:
+        return host
     parts = [part for part in host.split(".") if part]
     if len(parts) <= 2:
         return host
     suffix = ".".join(parts[-2:])
-    if suffix in _MULTI_PART_PUBLIC_SUFFIXES and len(parts) >= 3:
+    if suffix in MULTI_PART_PUBLIC_SUFFIXES:
         return ".".join(parts[-3:])
     return ".".join(parts[-2:])
 

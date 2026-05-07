@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
@@ -220,6 +221,12 @@ def _map_ecommerce_detail_state(
                         mapped,
                         page_url=page_url,
                     )
+                elif (
+                    not base_record.get("variants")
+                    and mapped.get("variants")
+                    and _mapped_record_matches_page_url(mapped, page_url)
+                ):
+                    base_record = _merge_variant_fields(base_record, mapped)
     return base_record
 
 def _extract_product_payloads_from_normalized(
@@ -294,6 +301,20 @@ def _merge_same_product_record(
         merged["variant_count"] = len(merged_variants)
     return compact_dict(merged)
 
+
+def _merge_variant_fields(
+    base_record: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
+    merged = dict(base_record)
+    merged_variants = merge_variant_rows(
+        base_record.get("variants"), incoming.get("variants")
+    )
+    if merged_variants:
+        merged["variants"] = merged_variants
+        merged["variant_count"] = len(merged_variants)
+    return compact_dict(merged)
+
+
 def _mapped_product_identity_matches(
     base_record: dict[str, Any],
     mapped: dict[str, Any],
@@ -310,11 +331,26 @@ def _mapped_product_identity_matches(
     mapped_url = text_or_none(mapped.get("url"))
     if base_url and mapped_url and base_url == mapped_url:
         return True
+    if _mapped_record_matches_page_url(
+        mapped, page_url
+    ) and _mapped_product_family_matches(base_record, mapped):
+        return True
     base_title = text_or_none(base_record.get("title"))
     mapped_title = text_or_none(mapped.get("title"))
     if base_title and mapped_title and base_title == mapped_title:
         return True
     return _mapped_product_family_matches(base_record, mapped)
+
+
+def _mapped_record_matches_page_url(record: dict[str, Any], page_url: str) -> bool:
+    page_path = urlsplit(page_url).path.rstrip("/").lower()
+    for field_name in ("url", "handle"):
+        value = text_or_none(record.get(field_name))
+        if value and urlsplit(value).path.rstrip("/").lower() == page_path:
+            return True
+        if value and f"/{value.strip('/').lower()}" in page_path:
+            return True
+    return False
 
 
 def _mapped_product_family_matches(
@@ -819,6 +855,11 @@ def _contextual_numeric_value(
     )
     if normalized is None:
         return None
+    if interpret_integral_as_cents:
+        try:
+            normalized = format(Decimal(normalized).quantize(Decimal("0.01")), "f")
+        except (InvalidOperation, ValueError):
+            return None
     if normalized.startswith(f"{currency} "):
         return normalized
     return f"{currency} {normalized}"

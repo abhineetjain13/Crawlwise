@@ -139,6 +139,10 @@ def prune_irrelevant_detail_dom_nodes(
                 candidate = {
                     "title": item.get("name"),
                     "sku": item.get("sku") or item.get("productId"),
+                    "brand": item.get("brand"),
+                    "color": item.get("color"),
+                    "size": item.get("size"),
+                    "description": item.get("description"),
                 }
                 if _record_matches_requested_detail_identity(
                     candidate,
@@ -160,9 +164,15 @@ def prune_irrelevant_detail_dom_nodes(
             return " ".join(value.lower().split())
 
         pruned_norms = {_norm(name) for name in pruned_product_names if name}
-        for h1 in soup.find_all("h1"):
+        h1_nodes = list(soup.find_all("h1"))
+        keep_non_pruned_h1 = any(
+            (h1_text := _norm(h1.get_text(separator=" ", strip=True)))
+            and h1_text not in pruned_norms
+            for h1 in h1_nodes
+        )
+        for h1 in h1_nodes:
             h1_text = _norm(h1.get_text(separator=" ", strip=True))
-            if h1_text and h1_text not in pruned_norms:
+            if h1_text and h1_text in pruned_norms and keep_non_pruned_h1:
                 h1.decompose()
 
     for selector in tuple(DETAIL_NOISE_SECTION_SELECTORS or ()):

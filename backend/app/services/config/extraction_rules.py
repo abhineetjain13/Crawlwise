@@ -554,6 +554,50 @@ DETAIL_LOW_SIGNAL_PRICE_MAX = Decimal("1")
 DETAIL_LOW_SIGNAL_PARENT_MIN = Decimal("10")
 DETAIL_PARENT_VARIANT_PRICE_RATIO_MIN = Decimal("0.5")
 DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX = Decimal("2")
+DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES = 1
+DETAIL_IMAGE_URL_ATTRS = ("src", "data-src", "data-lazy-src", "data-original", "data-image")
+SCALAR_FIELD_MAX_OPTION_TOKENS = 1
+SCALAR_FIELD_POLLUTION_VALUES = frozenset({"size", "color", "colour", "bust", "waist", "hips", "length"})
+DEFAULT_DECIMAL_PLACES = 2
+CURRENCY_DECIMAL_PLACES = {
+    "BIF": 0,
+    "CLP": 0,
+    "DJF": 0,
+    "GNF": 0,
+    "JPY": 0,
+    "KMF": 0,
+    "KRW": 0,
+    "PYG": 0,
+    "RWF": 0,
+    "UGX": 0,
+    "VND": 0,
+    "VUV": 0,
+    "XAF": 0,
+    "XOF": 0,
+    "XPF": 0,
+}
+MULTI_PART_PUBLIC_SUFFIXES = frozenset(
+    {
+        "ac.in",
+        "co.in",
+        "co.jp",
+        "co.kr",
+        "co.nz",
+        "co.uk",
+        "com.au",
+        "com.br",
+        "com.cn",
+        "com.mx",
+        "com.sg",
+        "com.tr",
+        "edu.au",
+        "gov.in",
+        "gov.uk",
+        "net.au",
+        "org.au",
+        "org.uk",
+    }
+)
 VARIANT_OPTION_LABEL_MAX_WORDS = 6
 DETAIL_ORIGINAL_PRICE_SELECTORS = (
     *tuple(_STATIC_EXPORTS.get("DETAIL_ORIGINAL_PRICE_SELECTORS", ())),
@@ -572,19 +616,63 @@ DETAIL_ORIGINAL_PRICE_SELECTORS = (
     "[aria-label*='was price' i]",
 )
 DETAIL_CURRENT_PRICE_SELECTORS = (
-    *tuple(globals().get("DETAIL_CURRENT_PRICE_SELECTORS", ())),
+    *tuple(_STATIC_EXPORTS.get("DETAIL_CURRENT_PRICE_SELECTORS", ())),
     "button[aria-label*='$']",
     "[role='button'][aria-label*='$']",
     "[aria-label*='$'][class*='buy' i]",
     "[aria-label*='$'][data-testid*='buy' i]",
 )
-DETAIL_JSONLD_GRAPH_FIELDS = ("@graph",)
-DETAIL_JSONLD_TYPE_FIELDS = ("@type",)
-DETAIL_JSONLD_OFFER_FIELDS = ("offers", "offer")
-DETAIL_JSONLD_PRICE_FIELDS = ("price", "lowPrice")
-DETAIL_JSONLD_ORIGINAL_PRICE_FIELDS = ("highPrice",)
-DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS = ("priceSpecification",)
-DETAIL_JSONLD_CURRENCY_FIELDS = ("priceCurrency", "currency")
+DETAIL_JSONLD_GRAPH_FIELDS = tuple(
+    str(field).strip()
+    for field in tuple(_STATIC_EXPORTS.get("DETAIL_JSONLD_GRAPH_FIELDS", ("@graph",)))
+    if str(field).strip()
+)
+DETAIL_JSONLD_TYPE_FIELDS = tuple(
+    str(field).strip()
+    for field in tuple(_STATIC_EXPORTS.get("DETAIL_JSONLD_TYPE_FIELDS", ("@type",)))
+    if str(field).strip()
+)
+DETAIL_JSONLD_OFFER_FIELDS = tuple(
+    str(field).strip()
+    for field in tuple(
+        _STATIC_EXPORTS.get("DETAIL_JSONLD_OFFER_FIELDS", ("offers", "offer"))
+    )
+    if str(field).strip()
+)
+DETAIL_JSONLD_PRICE_FIELDS = tuple(
+    str(field).strip()
+    for field in tuple(
+        _STATIC_EXPORTS.get("DETAIL_JSONLD_PRICE_FIELDS", ("price", "lowPrice"))
+    )
+    if str(field).strip()
+)
+DETAIL_JSONLD_ORIGINAL_PRICE_FIELDS = tuple(
+    str(field).strip()
+    for field in tuple(
+        _STATIC_EXPORTS.get("DETAIL_JSONLD_ORIGINAL_PRICE_FIELDS", ("highPrice",))
+    )
+    if str(field).strip()
+)
+DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS = tuple(
+    str(field).strip()
+    for field in tuple(
+        _STATIC_EXPORTS.get(
+            "DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS",
+            ("priceSpecification",),
+        )
+    )
+    if str(field).strip()
+)
+DETAIL_JSONLD_CURRENCY_FIELDS = tuple(
+    str(field).strip()
+    for field in tuple(
+        _STATIC_EXPORTS.get(
+            "DETAIL_JSONLD_CURRENCY_FIELDS",
+            ("priceCurrency", "currency"),
+        )
+    )
+    if str(field).strip()
+)
 DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS = (
     "afterpay",
     "affirm",
@@ -613,13 +701,6 @@ DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS_NORMALIZED = tuple(
     for token in tuple(DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS or ())
     if str(token).strip()
 )
-DETAIL_JSONLD_GRAPH_FIELDS = tuple(str(field) for field in tuple(DETAIL_JSONLD_GRAPH_FIELDS or ()))
-DETAIL_JSONLD_TYPE_FIELDS = tuple(str(field) for field in tuple(DETAIL_JSONLD_TYPE_FIELDS or ()))
-DETAIL_JSONLD_OFFER_FIELDS = tuple(str(field) for field in tuple(DETAIL_JSONLD_OFFER_FIELDS or ()))
-DETAIL_JSONLD_PRICE_FIELDS = tuple(str(field) for field in tuple(DETAIL_JSONLD_PRICE_FIELDS or ()))
-DETAIL_JSONLD_ORIGINAL_PRICE_FIELDS = tuple(str(field) for field in tuple(DETAIL_JSONLD_ORIGINAL_PRICE_FIELDS or ()))
-DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS = tuple(str(field) for field in tuple(DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS or ()))
-DETAIL_JSONLD_CURRENCY_FIELDS = tuple(str(field) for field in tuple(DETAIL_JSONLD_CURRENCY_FIELDS or ()))
 DETAIL_PRICE_JSONLD_TYPE_RE = re.compile(
     str(globals().get("DETAIL_PRICE_JSONLD_TYPE_PATTERN", r"\bOffer\b"))
 )
@@ -1462,6 +1543,10 @@ _EXTRA_EXPORTS = [
     "DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX_DECIMAL",
     "DETAIL_LOW_SIGNAL_PRICE_MAX",
     "DETAIL_LOW_SIGNAL_PARENT_MIN",
+    "DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES",
+    "DETAIL_IMAGE_URL_ATTRS",
+    "DEFAULT_DECIMAL_PLACES",
+    "CURRENCY_DECIMAL_PLACES",
     "DETAIL_PRICE_MAGNITUDE_EPSILON",
     "DETAIL_PRICE_MAGNITUDE_EPSILON_DECIMAL",
     "DETAIL_CENT_BASED_PRICE_CURRENCY_SET",
@@ -1605,6 +1690,8 @@ _EXTRA_EXPORTS = [
     "VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH",
     "VARIANT_PLACEHOLDER_PREFIXES",
     "VARIANT_PLACEHOLDER_VALUES",
+    "SCALAR_FIELD_MAX_OPTION_TOKENS",
+    "SCALAR_FIELD_POLLUTION_VALUES",
     "VARIANT_SIZE_QUANTITY_CONTROL_VALUES",
     "VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS",
     "VARIANT_OPTION_TEXT_FIELDS",
@@ -1618,6 +1705,7 @@ _EXTRA_EXPORTS = [
     "VARIANT_CONDITION_HEADER_PREFIXES",
     "VARIANT_SEPARATE_DIMENSION_SIZE_RULES",
     "PLACEHOLDER_IMAGE_URL_PATTERNS",
+    "MULTI_PART_PUBLIC_SUFFIXES",
     "SMALL_NUMERIC_PATTERN",
     "TRACKING_PIXEL_PATTERN",
     "URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS",

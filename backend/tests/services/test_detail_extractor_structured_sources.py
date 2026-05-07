@@ -5001,11 +5001,18 @@ def test_build_detail_record_replaces_feature_duplicate_description_with_details
         ],
     )
 
-    assert record["description"].startswith("Now even the heaviest packages")
+    assert (
+        record["description"]
+        == "Now even the heaviest packages can withstand rough handling. This packaging tape holds strong on recycled boxes."
+    )
     assert record["features"] == [
         "Guaranteed to Stay Sealed.",
         "Provides excellent holding power.",
     ]
+    assert (
+        record["product_details"]
+        == "Now even the heaviest packages can withstand rough handling. This packaging tape holds strong on recycled boxes."
+    )
 
 
 def test_build_detail_record_backfills_price_from_buy_button_aria_label() -> None:
@@ -5033,6 +5040,7 @@ def test_build_detail_record_backfills_price_from_buy_button_aria_label() -> Non
 
     assert record["price"] == "99.00"
     assert record["currency"] == "USD"
+    assert record["_field_sources"]["price"] == ["dom_text"]
 
 
 def test_build_detail_record_repairs_shopify_cent_variant_prices_and_numeric_titles() -> None:
