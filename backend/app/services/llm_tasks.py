@@ -22,6 +22,7 @@ from app.services.llm_circuit_breaker import (
     LLMErrorCategory,
     classify_error,
 )
+from app.services.llm_budget import reserve_run_llm_call
 from app.services.llm_config_service import (
     get_prompt_task,
     load_prompt_file,
@@ -320,6 +321,20 @@ async def run_prompt_task(
     cached_result = await load_cached_llm_result(cache_key)
     if cached_result is not None:
         return _finish(cached_result)
+
+    if not await reserve_run_llm_call(run_id):
+        return _finish(
+            LLMTaskResult(
+                payload=None,
+                provider=provider,
+                model=model,
+                error_message=(
+                    "Error: LLM call budget exceeded for crawl run "
+                    f"{run_id}; max={llm_runtime_settings.llm_max_calls_per_run}"
+                ),
+                error_category=LLMErrorCategory.BUDGET_EXCEEDED,
+            )
+        )
 
     raw, input_tokens, output_tokens = await call_provider_with_retry(
         provider=provider,

@@ -111,6 +111,13 @@ from app.services.extract.detail_tiers import (
 
 logger = logging.getLogger(__name__)
 
+try:
+    DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS_INT = int(
+        DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS
+    )
+except (TypeError, ValueError):
+    DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS_INT = 50
+
 
 def _coerce_float(value: object, default: float = 0.0) -> float:
     if isinstance(value, (int, float)):
@@ -206,11 +213,23 @@ def _collect_structured_payload_candidates(
 ) -> None:
     identity_url = requested_page_url or page_url
     if identity_url:
+        had_irrelevant_product_payload = (
+            isinstance(payload, dict)
+            and _detail_structured_payload_is_irrelevant_product(
+                payload,
+                page_url=page_url,
+                requested_page_url=identity_url,
+            )
+        )
         payload = _prune_irrelevant_detail_structured_payload(
             payload,
             page_url=page_url,
             requested_page_url=identity_url,
         )
+        if had_irrelevant_product_payload and payload in (None, "", [], {}):
+            candidates.setdefault("_irrelevant_detail_structured_product", []).append(
+                True
+            )
     if payload in (None, "", [], {}):
         return
     structured_candidates: dict[str, list[object]] = {}
@@ -474,6 +493,8 @@ def _materialize_record(
     }
     if selected_selector_traces:
         record["_selector_traces"] = selected_selector_traces
+    if candidates.get("_irrelevant_detail_structured_product"):
+        record["_irrelevant_detail_structured_product"] = True
     record["_source"] = _primary_source_for_record(selected_field_sources)
     if str(surface or "").strip().lower() == "ecommerce_detail":
         _reconcile_detail_currency_with_url(record, page_url=page_url)
@@ -660,6 +681,21 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         and record.get("image_url") not in (None, "", [], {})
         and len(description_text) >= 160
     )
+    if (
+        confidence_score < 0.2
+        and bool(record.get("_irrelevant_detail_structured_product"))
+        and title_sources == {"dom_h1"}
+        and not any(
+            value not in (None, "", [], {})
+            for key, value in record.items()
+            if not str(key).startswith("_")
+            and key not in {"source_url", "url", "title"}
+        )
+        and not has_generic_detail_fields
+        and not has_strong_detail_fields
+        and not has_identity_fields
+    ):
+        return True
     if (
         confidence_score < 0.5
         and not has_strong_detail_fields
@@ -927,9 +963,12 @@ def _detail_description_value_looks_thin(value: object) -> bool:
     text = clean_text(value)
     if not text:
         return False
-    return len(re.findall(r"[A-Za-z0-9']+", text)) <= int(
-        DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS
+    tokens = (
+        re.findall(r"[A-Za-z0-9']+", text)
+        if text.isascii()
+        else re.findall(r"\w+", text, flags=re.UNICODE)
     )
+    return bool(tokens) and len(tokens) <= DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS_INT
 
 
 def _requires_dom_long_text_completion(

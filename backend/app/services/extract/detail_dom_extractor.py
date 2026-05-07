@@ -60,6 +60,7 @@ from app.services.extract.shared_variant_logic import (
     variant_option_value_suffix_noise_patterns,
     variant_size_value_patterns,
 )
+from app.services.extract.detail_inline_scalar import collect_inline_scalar_rows
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,18 @@ def apply_dom_fallbacks(
             source="dom_images",
         )
     alias_lookup = surface_alias_lookup(surface, requested_fields)
+    for field_name, value in collect_inline_scalar_rows(soup, alias_lookup):
+        if field_name not in fields or candidates.get(field_name):
+            continue
+        add_sourced_candidate(
+            candidates,
+            candidate_sources,
+            field_sources,
+            selector_trace_candidates,
+            field_name,
+            coerce_field_value(field_name, value, page_url),
+            source="dom_text",
+        )
     for label, value in extract_heading_sections(soup).items():
         normalized = alias_lookup.get(label.lower()) or alias_lookup.get(
             re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")

@@ -590,3 +590,4 @@ def test_dom_variant_extraction_filters_fulfillment_noise_from_color_group() -> 
         "209 Mocha Latte - soft mocha brown matte",
         "210 Satin Corset - rose gold shimmer",
     ]
+    assert all(set(row) <= {"color"} for row in record["variants"])

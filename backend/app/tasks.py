@@ -14,6 +14,7 @@ from app.core.database import SessionLocal
 from app.core.telemetry import install_asyncio_exception_filter
 from app.services.acquisition import shutdown_browser_runtime_sync
 from app.services._batch_runtime import process_run as process_run_async
+from app.services.config.runtime_settings import crawler_runtime_settings
 
 logger = logging.getLogger(__name__)
 _SignalHandler = Callable[[int, FrameType | None], object]
@@ -28,6 +29,12 @@ class _WorkerTaskState:
 
 
 _WORKER_TASK_STATE = _WorkerTaskState()
+
+
+def _crawl_task_time_limits() -> dict[str, int]:
+    hard_limit = max(1, int(crawler_runtime_settings.job_max_wall_seconds))
+    soft_limit = max(1, hard_limit - 60) if hard_limit > 60 else hard_limit
+    return {"time_limit": hard_limit, "soft_time_limit": soft_limit}
 
 
 @worker_process_init.connect
@@ -103,7 +110,7 @@ def _run_task_in_worker_loop(run_id: int) -> None:
                 loop.close()
 
 
-@celery_app.task(name="crawl.process_run")
+@celery_app.task(name="crawl.process_run", **_crawl_task_time_limits())
 def process_run_task(run_id: int) -> None:
     with _install_task_signal_handlers():
         _run_task_in_worker_loop(run_id)

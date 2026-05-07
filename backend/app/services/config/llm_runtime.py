@@ -81,6 +81,8 @@ class LLMRuntimeSettings(BaseSettings):
     prompt_compact_json_max_keys: int = 12
     prompt_compact_json_max_list_items: int = 10
     prompt_compact_leaf_string_max_chars: int = 220
+    llm_max_calls_per_run: int = Field(default=50, ge=0)
+    llm_call_budget_ttl_seconds: int = Field(default=7 * 24 * 60 * 60, ge=60)
     html_anchor_min_length: int = 3
     schema_field_name_max_length: int = 40
     html_prune_stripped_tags: str = "script,style,svg,noscript,iframe,nav,footer,header,aside,form,button,input,select,textarea"

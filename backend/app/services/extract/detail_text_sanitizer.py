@@ -378,8 +378,8 @@ def sanitize_detail_long_text_fields(
         record["features"] = features
     else:
         record.pop("features", None)
-    _repair_description_feature_duplicate(record)
     _promote_product_details_description(record)
+    _repair_description_feature_duplicate(record)
 
 
 def _repair_description_feature_duplicate(record: dict[str, Any]) -> None:
@@ -409,7 +409,10 @@ def _repair_description_feature_duplicate(record: dict[str, Any]) -> None:
 
 def _promote_product_details_description(record: dict[str, Any]) -> None:
     description = clean_text(record.get("description"))
-    product_details = clean_text(record.get("product_details"))
+    product_details = sanitize_detail_long_text(
+        clean_text(record.get("product_details")),
+        title=clean_text(record.get("title")),
+    )
     if not product_details:
         return
     if not description:
@@ -417,9 +420,11 @@ def _promote_product_details_description(record: dict[str, Any]) -> None:
         return
     if product_details.casefold() == description.casefold():
         return
-    if len(product_details.split()) <= len(description.split()):
+    product_word_count = len(product_details.split())
+    description_word_count = len(description.split())
+    if product_word_count <= description_word_count:
         return
-    if len(description.split()) >= _long_text_min_words:
+    if description_word_count >= _long_text_min_words:
         return
     record["description"] = product_details
 

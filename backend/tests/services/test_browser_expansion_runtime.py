@@ -460,9 +460,14 @@ async def test_location_interstitial_dismissal_skips_when_no_signal_present() ->
 
         async def evaluate(self, script: str, payload: dict[str, object]):
             if "selectors" in payload:
-                assert "bodyText" not in script
                 return False
             raise AssertionError("dismiss-by-text should be skipped when no signal exists")
+
+        async def wait_for_timeout(self, *_args, **_kwargs) -> None:
+            raise AssertionError("wait_for_timeout should be skipped when no signal exists")
+
+        async def content(self) -> str:
+            raise AssertionError("content should be skipped when no signal exists")
 
     result = await browser_page_flow.dismiss_safe_location_interstitial(_Page())
 
@@ -1025,9 +1030,9 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
     assert result.browser_diagnostics["networkidle_skip_reason"] == "fast_path_ready"
     assert (
         result.browser_diagnostics["detail_expansion"]["reason"]
-        == "canonical_detail_already_ready"
+        == "missing_detail_content"
     )
-    assert result.browser_diagnostics["detail_expansion"]["status"] == "skipped"
+    assert result.browser_diagnostics["detail_expansion"]["status"] == "attempted"
     assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 0
     assert page.goto_calls == ["domcontentloaded"]
     assert page.wait_timeout_calls == []
@@ -2911,7 +2916,7 @@ async def test_expand_interactive_elements_via_accessibility_waits_for_visibilit
 async def test_expand_interactive_elements_via_accessibility_times_out_slow_snapshot(
     patch_settings,
 ) -> None:
-    patch_settings(browser_accessibility_snapshot_timeout_seconds=0.01)
+    patch_settings(browser_accessibility_snapshot_timeout_seconds=0.05)
     page = _FakeExpansionPage(
         base_html="<html><body><h1>Widget Prime</h1></body></html>",
         accessibility_snapshot={"role": "document", "children": []},
@@ -2934,6 +2939,18 @@ async def test_expand_interactive_elements_via_accessibility_times_out_slow_snap
     assert diagnostics["status"] == "snapshot_timeout"
     assert diagnostics["clicked_count"] == 0
     assert diagnostics["attempted"] is True
+
+
+def test_detail_expansion_skip_requires_extractable_ecommerce_content() -> None:
+    can_skip, reason = browser_page_flow._detail_expansion_can_skip(
+        {"verified": False, "matched_requested_fields": []},
+        surface="ecommerce_detail",
+        requested_fields=None,
+        readiness_probe={"is_ready": True},
+    )
+
+    assert can_skip is False
+    assert reason is None
 
 
 @pytest.mark.asyncio

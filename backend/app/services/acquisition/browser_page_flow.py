@@ -28,6 +28,7 @@ from app.services.acquisition.runtime import (
 from app.services.config.extraction_rules import (
     DETAIL_MARKDOWN_LINE_NOISE,
     DETAIL_MARKDOWN_SECTION_NOISE_TOKENS,
+    ECOMMERCE_DETAIL_SURFACE,
     HTML_PARSER,
     LISTING_VISUAL_PRICE_REGEX_PATTERN,
     LISTING_BRAND_SELECTORS,
@@ -56,6 +57,20 @@ from app.services.platform_policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _accessibility_snapshot_timeout_seconds() -> float:
+    try:
+        timeout = float(
+            crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds
+        )
+    except (TypeError, ValueError):
+        timeout = float(
+            crawler_runtime_settings.__class__.model_fields[
+                "browser_accessibility_snapshot_timeout_seconds"
+            ].default
+        )
+    return max(0.0, timeout)
 
 
 @dataclass(slots=True)
@@ -831,22 +846,16 @@ async def settle_browser_page_impl(
             surface=surface or "",
             requested_fields=requested_fields,
         )
-        if _detail_expansion_can_skip(
+        skip_expansion, skip_reason = _detail_expansion_can_skip(
             initial_extractability,
             surface=surface,
             requested_fields=requested_fields,
             readiness_probe=current_probe,
-        ):
+        )
+        if skip_expansion:
             expansion_diagnostics = {
                 "status": "skipped",
-                "reason": (
-                    "canonical_detail_already_ready"
-                    if (
-                        not list(requested_fields or [])
-                        and str(surface or "").strip().lower() == "ecommerce_detail"
-                    )
-                    else "requested_content_already_extractable"
-                ),
+                "reason": skip_reason,
                 "clicked_count": 0,
                 "expanded_elements": [],
                 "interaction_failures": [],
@@ -1209,7 +1218,7 @@ def _object_int(value: object, default: int = 0) -> int:
 async def _page_might_have_location_interstitial(page: Any) -> bool:
     selectors = _string_config_list(LOCATION_INTERSTITIAL_CONTAINER_SELECTORS)
     tokens = _string_config_list(LOCATION_INTERSTITIAL_TEXT_TOKENS)
-    if not selectors or not tokens:
+    if not tokens:
         return False
     try:
         result = await page.evaluate(
@@ -1219,22 +1228,24 @@ async def _page_might_have_location_interstitial(page: Any) -> bool:
               const normalizedTokens = (Array.isArray(tokens) ? tokens : [])
                 .map((value) => String(value || '').trim().toLowerCase())
                 .filter(Boolean);
-              if (!normalizedSelectors.length || !normalizedTokens.length) {
+              if (!normalizedTokens.length) {
                 return false;
               }
               const hasToken = (text) => {
                 const normalized = String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
                 return normalized && normalizedTokens.some((token) => normalized.includes(token));
               };
-              for (const selector of normalizedSelectors) {
-                try {
-                  const node = document.querySelector(selector);
-                  if (node && hasToken(node.innerText || node.textContent || '')) {
-                    return true;
-                  }
-                } catch {}
+              if (normalizedSelectors.length) {
+                for (const selector of normalizedSelectors) {
+                  try {
+                    const node = document.querySelector(selector);
+                    if (node && hasToken(node.innerText || node.textContent || '')) {
+                      return true;
+                    }
+                  } catch {}
+                }
               }
-              return false;
+              return hasToken(document.body ? document.body.innerText : '');
             }
             """,
             {"selectors": selectors, "tokens": tokens},
@@ -1516,10 +1527,8 @@ async def _append_accessibility_markdown(page: Any, markdown: str) -> str:
     if snapshot_fn is None:
         return markdown
     try:
-        snapshot = await asyncio.wait_for(
-            snapshot_fn(),
-            timeout=crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds,
-        )
+        async with asyncio.timeout(_accessibility_snapshot_timeout_seconds()):
+            snapshot = await snapshot_fn()
     except asyncio.CancelledError:
         raise
     except (asyncio.TimeoutError, PlaywrightTimeoutError):
@@ -1806,19 +1815,25 @@ def _detail_expansion_can_skip(
     surface: str | None,
     requested_fields: list[str] | None,
     readiness_probe: dict[str, object] | None = None,
-) -> bool:
+) -> tuple[bool, str | None]:
     if list(requested_fields or []):
-        return bool(extractability.get("verified")) and bool(
+        can_skip = bool(extractability.get("verified")) and bool(
             extractability.get("matched_requested_fields")
         )
+        return (
+            can_skip,
+            "requested_content_already_extractable" if can_skip else None,
+        )
     normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface == "ecommerce_detail" and bool(
+    if normalized_surface == ECOMMERCE_DETAIL_SURFACE and bool(
         (readiness_probe or {}).get("is_ready")
     ):
-        return True
+        can_skip = bool(extractability.get("verified"))
+        return can_skip, "canonical_detail_already_ready" if can_skip else None
     if not bool(extractability.get("verified")):
-        return False
-    return "ecommerce" not in normalized_surface
+        return False, None
+    can_skip = "ecommerce" not in normalized_surface
+    return can_skip, "requested_content_already_extractable" if can_skip else None
 
 
 async def _capture_listing_visual_elements(

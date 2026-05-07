@@ -72,3 +72,12 @@ def test_run_task_in_worker_loop_installs_asyncio_exception_filter(
     assert installed_loops == [loop]
     assert event_loops == [loop, None]
     assert loop.closed is True
+
+
+def test_crawl_task_time_limits_use_runtime_config(monkeypatch) -> None:
+    monkeypatch.setattr(tasks.crawler_runtime_settings, "job_max_wall_seconds", 120)
+
+    assert tasks._crawl_task_time_limits() == {
+        "time_limit": 120,
+        "soft_time_limit": 60,
+    }

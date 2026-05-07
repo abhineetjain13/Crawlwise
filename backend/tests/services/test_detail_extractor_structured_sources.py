@@ -5793,7 +5793,7 @@ def test_extract_ecommerce_detail_reads_scalar_size_from_two_span_label_value_ro
           <h1>Colorful Eyeshadow</h1>
           <div><span>Color</span><span>209 Mocha Latte - soft mocha brown matte</span></div>
           <div><span>Size</span><span>0.035 oz / 0.99 g</span></div>
-          <div>$8.00</div>
+          <div data-testid="price">$8.00</div>
         </main>
       </body>
     </html>
@@ -5804,8 +5804,11 @@ def test_extract_ecommerce_detail_reads_scalar_size_from_two_span_label_value_ro
         "https://www.sephora.com/product/colorful-eyeshadow-P515026",
         "ecommerce_detail",
         max_records=1,
-        requested_fields=["size", "title", "price"],
+        requested_fields=["size", "title", "price", "color"],
     )
 
     assert rows
+    assert rows[0]["title"] == "Colorful Eyeshadow"
+    assert rows[0]["price"] == "8.00"
+    assert rows[0]["color"] == "209 Mocha Latte - soft mocha brown matte"
     assert rows[0]["size"] == "0.035 oz / 0.99 g"

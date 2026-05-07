@@ -8,7 +8,7 @@ import re
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from app.api.auth import router as auth_router
 from app.api.crawls import router as crawls_router
@@ -122,15 +122,35 @@ async def correlation_middleware(request: Request, call_next) -> Response:
     return response
 
 
-@app.get("/api/health")
-async def health() -> dict:
-    checks = {
+async def _health_checks() -> dict[str, bool]:
+    return {
         "database": await check_database(),
         "redis": await check_redis(),
         "browser_pool": check_browser_pool(),
     }
+
+
+def _health_payload(checks: dict[str, bool]) -> dict[str, object]:
     status = "healthy" if all(checks.values()) else "degraded"
     return {"status": status, "checks": checks}
+
+
+@app.get("/health/live")
+async def health_live() -> dict[str, str]:
+    return {"status": "live"}
+
+
+@app.get("/health/ready")
+async def health_ready() -> JSONResponse:
+    checks = await _health_checks()
+    payload = _health_payload(checks)
+    status_code = 200 if all(checks.values()) else 503
+    return JSONResponse(payload, status_code=status_code)
+
+
+@app.get("/api/health")
+async def health() -> dict[str, object]:
+    return _health_payload(await _health_checks())
 
 
 @app.get("/api/metrics")

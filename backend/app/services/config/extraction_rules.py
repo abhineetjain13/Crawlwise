@@ -556,7 +556,11 @@ DETAIL_PARENT_VARIANT_PRICE_RATIO_MIN = Decimal("0.5")
 DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX = Decimal("2")
 DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES = 1
 DETAIL_IMAGE_URL_ATTRS = ("src", "data-src", "data-lazy-src", "data-original", "data-image")
+INLINE_SCALAR_LABEL_MAX_LEN = 40
+INLINE_SCALAR_VALUE_MAX_LEN = 80
+INLINE_SCALAR_ALLOWED_FIELDS = frozenset({"color", "size"})
 SCALAR_FIELD_MAX_OPTION_TOKENS = 1
+SHADE_CODE_COLOR_MIN_TOKENS = 2
 SCALAR_FIELD_POLLUTION_VALUES = frozenset({"size", "color", "colour", "bust", "waist", "hips", "length"})
 DEFAULT_DECIMAL_PLACES = 2
 CURRENCY_DECIMAL_PLACES = {
@@ -833,7 +837,7 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "pickup not available",
     "shipping & returns",
     "for free shipping",
-    "your location",
+    "choose your location",
     # Marketing / guarantee badges mis-classified as variant axes
     # (ROAM Luggage — DQ-2).
     "change size",
@@ -864,8 +868,9 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "now & every",
     "about auto-replenish",
     "auto-replenish save",
-    "delivery every",
-    "most common",
+    "delivery every week",
+    "delivery every 2 weeks",
+    "delivery every month",
     "about same-day delivery",
     "same-day delivery free",
     "shipping restrictions",
@@ -887,7 +892,7 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "+",
 )
 VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS = frozenset(
-    {"select", "choose", "option", "size guide"}
+    {"select", "choose", "option", "size guide", "your location"}
 )
 VARIANT_OPTION_VALUE_NOISE_PATTERNS = {
     "fullmatch": (
@@ -896,6 +901,7 @@ VARIANT_OPTION_VALUE_NOISE_PATTERNS = {
         r"[-\s]+.+[-\s]+",
         r"\(\d+\)",
         r"\d{3,5}/\d{2,5}/\d{2,5}",
+        r"delivery every\s+\d+\s+\w+(?:\s+\(most common\))?",
     ),
     "search": (r"\b(?:please\s+)?select\b",),
 }
@@ -1564,6 +1570,9 @@ _EXTRA_EXPORTS = [
     "DETAIL_LOW_SIGNAL_PARENT_MIN",
     "DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES",
     "DETAIL_IMAGE_URL_ATTRS",
+    "INLINE_SCALAR_LABEL_MAX_LEN",
+    "INLINE_SCALAR_VALUE_MAX_LEN",
+    "INLINE_SCALAR_ALLOWED_FIELDS",
     "DEFAULT_DECIMAL_PLACES",
     "CURRENCY_DECIMAL_PLACES",
     "DETAIL_PRICE_MAGNITUDE_EPSILON",
@@ -1711,6 +1720,7 @@ _EXTRA_EXPORTS = [
     "VARIANT_PLACEHOLDER_PREFIXES",
     "VARIANT_PLACEHOLDER_VALUES",
     "SCALAR_FIELD_MAX_OPTION_TOKENS",
+    "SHADE_CODE_COLOR_MIN_TOKENS",
     "SCALAR_FIELD_POLLUTION_VALUES",
     "VARIANT_SIZE_QUANTITY_CONTROL_VALUES",
     "VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS",

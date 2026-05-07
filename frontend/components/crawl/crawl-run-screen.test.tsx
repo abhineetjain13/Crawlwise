@@ -10,6 +10,7 @@ import { CrawlRunScreen, storeProductIntelligencePrefill } from './crawl-run-scr
 const replaceMock = vi.fn();
 
 vi.mock('next/navigation', () => ({
+  usePathname: () => '/runs/42',
   useRouter: () => ({
     replace: replaceMock,
   }),

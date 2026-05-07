@@ -109,6 +109,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     url_process_timeout_seconds: float = 90.0
     url_process_timeout_buffer_seconds: float = 15.0
     max_url_process_timeout_seconds: float = 600.0
+    job_max_wall_seconds: int = 3600
     worker_max_concurrent_jobs: int = 8
     worker_orphan_recovery_grace_seconds: int = 900
     long_run_threshold_seconds: int = 30 * 60
@@ -398,6 +399,7 @@ class CrawlerRuntimeSettings(BaseSettings):
         for field_name in (
             "url_process_timeout_seconds",
             "max_url_process_timeout_seconds",
+            "job_max_wall_seconds",
             "browser_render_timeout_seconds",
             "browser_capture_max_network_payloads",
             "browser_capture_max_network_payload_bytes",

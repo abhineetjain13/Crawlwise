@@ -394,7 +394,11 @@ def validate_record_for_surface(
     }
     allowed_fields = {
         normalize_field_key(field_name)
-        for field_name in surface_fields(surface, requested_fields)
+        for field_name in surface_fields(
+            surface,
+            requested_fields,
+            allow_noncanonical_requested=False,
+        )
     }
     validation_errors: list[str] = []
     validated_fields: dict[str, Any] = {}
@@ -439,17 +443,31 @@ def validate_record_for_surface(
     }, validation_errors
 
 
-def surface_fields(surface: str, requested_fields: list[str] | None) -> list[str]:
+def surface_fields(
+    surface: str,
+    requested_fields: list[str] | None,
+    *,
+    allow_noncanonical_requested: bool = True,
+) -> list[str]:
     normalized_surface = str(surface or "").strip().lower()
     fields = list(CANONICAL_SCHEMAS.get(normalized_surface, ALL_CANONICAL_FIELDS))
+    allowed_fields = set(ALL_CANONICAL_FIELDS)
     if URL_FIELD not in fields:
         fields.append(URL_FIELD)
     for field_name in list(requested_fields or []):
         exact_field = exact_requested_field_key(field_name)
-        if exact_field and exact_field not in fields:
+        if (
+            exact_field
+            and (allow_noncanonical_requested or exact_field in allowed_fields)
+            and exact_field not in fields
+        ):
             fields.append(exact_field)
     for field_name in expand_requested_fields(list(requested_fields or [])):
-        if field_name and field_name not in fields:
+        if (
+            field_name
+            and (allow_noncanonical_requested or field_name in allowed_fields)
+            and field_name not in fields
+        ):
             fields.append(field_name)
     return fields
 
@@ -494,7 +512,11 @@ def direct_record_to_surface_fields(
     base_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     shaped = dict(base_fields or {})
-    source_fields = surface_fields(surface, requested_fields)
+    source_fields = surface_fields(
+        surface,
+        requested_fields,
+        allow_noncanonical_requested=False,
+    )
     for field_name in source_fields:
         value = coerce_field_value(
             field_name, dict(record or {}).get(field_name), page_url

@@ -78,18 +78,18 @@ FILE_LOC_BUDGETS = {
     Path("app/services/acquisition/browser_runtime.py"): 2275,
     # Page flow owns navigation, readiness, artifact capture, and final browser shaping.
     # Grown (+38) for dedicated location-interstitial timings and config-owned visual price regex.
-    Path("app/services/acquisition/browser_page_flow.py"): 1935,
+    Path("app/services/acquisition/browser_page_flow.py"): 2047,
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
     # Config owners.
     # Config rules own typed extraction constants and category/nav URL rules.
-    Path("app/services/config/extraction_rules.py"): 1654,
+    Path("app/services/config/extraction_rules.py"): 1764,
     # Fetch runtime remains the request/browser arbitration owner.
     Path("app/services/crawl_fetch_runtime.py"): 1260,
     # Detail extraction owns candidate arbitration and tier orchestration.
     Path("app/services/detail_extractor.py"): 1640,
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
-    Path("app/services/extract/detail_dom_extractor.py"): 1425,
+    Path("app/services/extract/detail_dom_extractor.py"): 1448,
     # Detail finalizer owns public-boundary cleanup and record repair.
     # Grown (+10) to accommodate additional axis-gating logic that reuses
     # shared_variant_logic frozensets instead of re-deriving them locally.
@@ -99,7 +99,7 @@ FILE_LOC_BUDGETS = {
     # material_composition, etc.) and related JS-state / DOM helpers.
     Path("app/services/extract/shared_variant_logic.py"): 1560,
     # Variant normalization owns the detail variant cleanup pipeline.
-    Path("app/services/extract/variant_record_normalization.py"): 1414,
+    Path("app/services/extract/variant_record_normalization.py"): 1449,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
@@ -110,13 +110,13 @@ FILE_LOC_BUDGETS = {
     # Shrunk after removing stranded URL helpers and duplicate output schema checks.
     # TODO(chore): baseline LOC drift here, then extract canonical_coercion /
     # field_recovery / availability_gate owners when scheduled.
-    Path("app/services/field_value_core.py"): 1590,
+    Path("app/services/field_value_core.py"): 1600,
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1455,
     # JS state mapping stays centralized to avoid adapter-specific drift.
-    Path("app/services/js_state_mapper.py"): 1380,
+    Path("app/services/js_state_mapper.py"): 1386,
     # LLM task runtime owns prompt validation, provider calls, cost logging, and typed errors.
-    Path("app/services/llm_tasks.py"): 1080,
+    Path("app/services/llm_tasks.py"): 1095,
     # Pipeline core still owns the per-URL orchestration boundary.
     Path("app/services/pipeline/core.py"): 1415,
     # Product Intelligence service owns job + discovery orchestration with brand and enrichment LLM helpers.

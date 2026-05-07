@@ -23,6 +23,7 @@ const {
 }));
 
 vi.mock('next/navigation', () => ({
+  usePathname: () => '/crawl',
   useRouter: () => ({
     replace: replaceMock,
     refresh: refreshMock,

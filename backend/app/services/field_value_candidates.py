@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -42,6 +43,10 @@ from app.services.extract.shared_variant_logic import (
 from app.services.normalizers import normalize_decimal_price
 
 logger = logging.getLogger(__name__)
+_OFFER_TITLE_SIZE_RE = re.compile(
+    r"(?:^|[,\s])(\d+(?:\.\d+)?\s*-?\s*(?:lb|lbs|oz|kg|g|ml|l|ct|count|pack|pk|bag|bags))\b",
+    re.I,
+)
 _structured_candidate_list_slice = int(STRUCTURED_CANDIDATE_LIST_SLICE)
 _structured_candidate_traversal_limit = int(STRUCTURED_CANDIDATE_TRAVERSAL_LIMIT)
 _price_source_key_fields = frozenset(
@@ -248,6 +253,9 @@ def _structured_offer_variant_rows(
         title = coerce_text(item.get("name") or offered_item.get("name"))
         if title:
             row["title"] = title
+            title_size = _offer_title_size(title)
+            if title_size:
+                row["size"] = title_size
         sku = coerce_text(item.get("sku") or offered_item.get("sku"))
         if sku:
             row["sku"] = sku
@@ -266,6 +274,13 @@ def _structured_offer_variant_rows(
         if row.get("url") or row.get("price"):
             rows.append(row)
     return rows
+
+
+def _offer_title_size(title: str) -> str:
+    match = _OFFER_TITLE_SIZE_RE.search(title)
+    if not match:
+        return ""
+    return re.sub(r"\s+", "", match.group(1)).lower()
 
 
 def _structured_feature_rows(payload: dict[str, object], page_url: str) -> list[str]:

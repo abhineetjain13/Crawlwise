@@ -23,6 +23,7 @@ from app.services.config.extraction_rules import (
     VARIANT_PLACEHOLDER_PREFIXES,
     VARIANT_PLACEHOLDER_VALUES,
     SCALAR_FIELD_MAX_OPTION_TOKENS,
+    SHADE_CODE_COLOR_MIN_TOKENS,
     SCALAR_FIELD_POLLUTION_VALUES,
     VARIANT_SEPARATE_DIMENSION_SIZE_RULES,
     VARIANT_SKU_SIZE_SUFFIX_PATTERNS,
@@ -55,6 +56,16 @@ from app.services.extract.shared_variant_logic import (
 )
 
 logger = logging.getLogger(__name__)
+
+try:
+    _SCALAR_FIELD_MAX_OPTION_TOKENS = max(1, int(SCALAR_FIELD_MAX_OPTION_TOKENS))
+except (TypeError, ValueError):
+    _SCALAR_FIELD_MAX_OPTION_TOKENS = 6
+
+try:
+    _SHADE_CODE_COLOR_MIN_TOKENS = max(2, int(SHADE_CODE_COLOR_MIN_TOKENS))
+except (TypeError, ValueError):
+    _SHADE_CODE_COLOR_MIN_TOKENS = 2
 
 _VARIANT_SIZE_VALUE_EXTRACT_PATTERNS = tuple(
     re.compile(str(pattern), re.I)
@@ -548,7 +559,7 @@ def _drop_polluted_parent_scalar_axes(record: dict[str, Any]) -> None:
         isinstance(variant, dict) for variant in variants
     ):
         return
-    max_tokens = max(1, int(SCALAR_FIELD_MAX_OPTION_TOKENS))
+    max_tokens = _SCALAR_FIELD_MAX_OPTION_TOKENS
     for field_name in ("color", "size"):
         value = clean_text(record.get(field_name))
         if not value:
@@ -615,9 +626,9 @@ def _drop_shade_code_size_duplicate(variant: dict[str, Any]) -> None:
     if not size_value.isdigit():
         return
     color_tokens = color_value.split()
-    if len(color_tokens) < 2:
+    if len(color_tokens) < _SHADE_CODE_COLOR_MIN_TOKENS:
         return
-    if color_tokens[0].casefold() != size_value.casefold():
+    if color_tokens[0].casefold() != size_value:
         return
     variant.pop("size", None)
 

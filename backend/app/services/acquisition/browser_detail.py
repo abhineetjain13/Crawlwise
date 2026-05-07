@@ -35,6 +35,22 @@ _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
     for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
 }
+
+
+def _accessibility_snapshot_timeout_seconds() -> float:
+    try:
+        timeout = float(
+            crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds
+        )
+    except (TypeError, ValueError):
+        timeout = float(
+            crawler_runtime_settings.__class__.model_fields[
+                "browser_accessibility_snapshot_timeout_seconds"
+            ].default
+        )
+    return max(0.0, timeout)
+
+
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, Iterable) or isinstance(value, (str, bytes, dict)):
         return []
@@ -356,11 +372,8 @@ async def expand_all_interactive_elements_impl(
                     continue
                 if (
                     any(token in keyword_probe for token in DETAIL_BLOCKED_TOKENS)
-                    or (
-                        probe
-                        and any(token in probe for token in DETAIL_BLOCKED_TOKENS)
-                    )
-                ) and not size_toggle_hint:
+                    and not size_toggle_hint
+                ):
                     continue
                 matches_requested_keywords = bool(
                     requested_keywords
@@ -495,10 +508,8 @@ async def expand_interactive_elements_via_accessibility_impl(
         return diagnostics
     diagnostics["attempted"] = True
     try:
-        snapshot = await asyncio.wait_for(
-            snapshot_fn(),
-            timeout=crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds,
-        )
+        async with asyncio.timeout(_accessibility_snapshot_timeout_seconds()):
+            snapshot = await snapshot_fn()
     except asyncio.CancelledError:
         raise
     except (asyncio.TimeoutError, PlaywrightTimeoutError):

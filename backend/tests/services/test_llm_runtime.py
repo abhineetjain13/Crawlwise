@@ -166,6 +166,83 @@ async def test_run_prompt_task_returns_typed_provider_failure(
 
 
 @pytest.mark.asyncio
+async def test_run_prompt_task_blocks_uncached_provider_calls_over_run_cap(
+    db_session: AsyncSession,
+    create_test_run,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+    )
+
+    async def fake_resolve_run_config(session, *, run_id, task_type):
+        del session, run_id, task_type
+        return {"provider": "groq", "model": "llama", "api_key_encrypted": ""}
+
+    def fake_get_prompt_task(_task_type: str):
+        return {
+            "system_file": "system.txt",
+            "user_file": "user.txt",
+            "response_type": "object",
+        }
+
+    calls = 0
+
+    async def fake_call_provider_with_retry(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return '{"materials":"Cotton"}', 1, 1
+
+    async def fake_load_cached_llm_result(_cache_key: str):
+        return None
+
+    async def fake_store_cached_llm_result(_cache_key: str, _result) -> None:
+        return None
+
+    monkeypatch.setattr(llm_tasks.llm_runtime_settings, "llm_max_calls_per_run", 1)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.resolve_run_config", fake_resolve_run_config
+    )
+    monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_prompt_file", lambda _path: "Return JSON."
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.call_provider_with_retry",
+        fake_call_provider_with_retry,
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_cached_llm_result",
+        fake_load_cached_llm_result,
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.store_cached_llm_result",
+        fake_store_cached_llm_result,
+    )
+
+    first = await llm_runtime.run_prompt_task(
+        db_session,
+        task_type="missing_field_extraction",
+        run_id=run.id,
+        domain="example.com",
+        variables={"field": "materials"},
+    )
+    second = await llm_runtime.run_prompt_task(
+        db_session,
+        task_type="missing_field_extraction",
+        run_id=run.id,
+        domain="example.com",
+        variables={"field": "care"},
+    )
+
+    assert first.payload == {"materials": "Cotton"}
+    assert second.payload is None
+    assert second.error_category == llm_runtime.LLMErrorCategory.BUDGET_EXCEEDED
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_run_prompt_task_validates_direct_record_extraction_array_payload(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

@@ -9,6 +9,7 @@ from app.services.field_value_core import (
     absolute_url,
     clean_text,
     coerce_field_value,
+    direct_record_to_surface_fields,
     extract_currency_code,
     extract_urls,
     infer_brand_from_product_url,
@@ -96,6 +97,20 @@ def test_ecommerce_price_original_aliases_to_original_price() -> None:
     aliases = surface_alias_lookup("ecommerce_detail", None)
 
     assert aliases["price_original"] == "original_price"
+
+
+def test_direct_record_to_surface_fields_rejects_unknown_requested_fields() -> None:
+    shaped = direct_record_to_surface_fields(
+        {
+            "title": "Widget Prime",
+            "unknown_requested_field": "leak",
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget-prime",
+        requested_fields=["unknown_requested_field"],
+    )
+
+    assert shaped == {"title": "Widget Prime"}
 
 
 def test_decimal_for_shared_price_supports_european_decimal_format() -> None:

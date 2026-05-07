@@ -50,6 +50,7 @@ class LLMErrorCategory(StrEnum):
     PARSE_FAILURE = "parse_failure"
     VALIDATION_FAILURE = "validation_failure"
     CIRCUIT_OPEN = "circuit_open"
+    BUDGET_EXCEEDED = "budget_exceeded"
     MISSING_CONFIG = "missing_config"
 
 
