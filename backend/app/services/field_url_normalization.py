@@ -33,11 +33,52 @@ _URL_SCHEME_RE = re.compile(str(URL_CONCATENATION_SCHEME_PATTERN), re.I)
 _URL_CONCAT_ALLOWED_PREFIX_SEPARATORS = tuple(
     str(value) for value in (URL_CONCATENATION_ALLOWED_PREFIX_SEPARATORS or ())
 )
+_MULTI_PART_PUBLIC_SUFFIXES = frozenset(
+    {
+        "ac.in",
+        "co.in",
+        "co.jp",
+        "co.kr",
+        "co.nz",
+        "co.uk",
+        "com.au",
+        "com.br",
+        "com.cn",
+        "com.mx",
+        "com.sg",
+        "com.tr",
+        "edu.au",
+        "gov.in",
+        "gov.uk",
+        "net.au",
+        "org.au",
+        "org.uk",
+    }
+)
 
 
 def _text_or_none(value: object) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def registrable_host(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower().strip(".")
+    if not host:
+        return ""
+    parts = [part for part in host.split(".") if part]
+    if len(parts) <= 2:
+        return host
+    suffix = ".".join(parts[-2:])
+    if suffix in _MULTI_PART_PUBLIC_SUFFIXES and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def same_site(base_url: str, candidate_url: str) -> bool:
+    base_site = registrable_host(base_url)
+    candidate_site = registrable_host(candidate_url)
+    return bool(candidate_site) and candidate_site == base_site
 
 def _surface_needs_tracking_strip(surface: str | None) -> bool:
     normalized_surface = str(surface or "").strip().lower()

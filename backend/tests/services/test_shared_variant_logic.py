@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from bs4 import BeautifulSoup
 
 from app.services.extract.shared_variant_logic import (
@@ -11,6 +13,7 @@ from app.services.extract.shared_variant_logic import (
     variant_axis_name_is_semantic,
     variant_option_value_is_noise,
 )
+from app.services.extract.detail_dom_extractor import extract_variants_from_dom
 
 
 def test_resolve_variants_pairs_color_with_size_cartesian() -> None:
@@ -34,8 +37,9 @@ def test_resolve_variants_pairs_color_with_size_cartesian() -> None:
     assert resolved[3]["variant_id"] == "1"
 
 
-def test_variant_option_value_is_noise_handles_ui_controls_without_dropping_real_sizes() -> None:
-    noisy_values = [
+@pytest.mark.parametrize(
+    "value",
+    [
         "Save to Wishlist",
         "Login to add to account Wishlist",
         "necessary",
@@ -48,15 +52,33 @@ def test_variant_option_value_is_noise_handles_ui_controls_without_dropping_real
         "-",
         "+",
         "5 stars",
-    ]
+    ],
+)
+def test_variant_option_value_is_noise_handles_ui_controls(value: str) -> None:
+    assert variant_option_value_is_noise(value) is True
 
-    for value in noisy_values:
-        assert variant_option_value_is_noise(value) is True, repr(value)
 
-    valid_values = ["Size A - Small", "Black / Onyx Ultra Matte", "UK 9"]
-
-    for value in valid_values:
-        assert variant_option_value_is_noise(value) is False, repr(value)
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Size A - Small",
+        "Black / Onyx Ultra Matte",
+        "UK 9",
+        "Performance Fit",
+        "Functional Grey",
+        "M",
+        "L",
+        "S",
+        "XL",
+        "Red",
+        "Blue",
+        "42",
+        "38",
+        "US",
+    ],
+)
+def test_variant_option_value_is_noise_preserves_real_values(value: str) -> None:
+    assert variant_option_value_is_noise(value) is False
 
 
 def test_resolve_variants_skips_missing_combinations() -> None:
@@ -500,3 +522,33 @@ def test_variant_choice_groups_skip_overbroad_parent_and_keep_fieldsets() -> Non
         "back_support",
     ]
     assert not any(group.get("id") == "attribute-accordion" for group in groups)
+
+
+def test_dom_variant_extraction_trusts_size_values_over_color_container_label() -> None:
+    soup = BeautifulSoup(
+        """
+        <main>
+          <section class="product-detail">
+            <div class="color-selector">
+              <button aria-label="M 5 / W 6.5">M 5 / W 6.5</button>
+              <button aria-label="M 5.5 / W 7">M 5.5 / W 7</button>
+              <button aria-label="M 6 / W 7.5">M 6 / W 7.5</button>
+            </div>
+          </section>
+        </main>
+        """,
+        "html.parser",
+    )
+
+    record = extract_variants_from_dom(
+        soup,
+        page_url="https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111",
+    )
+
+    assert record["variant_count"] == 3
+    assert [row.get("size") for row in record["variants"]] == [
+        "M 5 / W 6.5",
+        "M 5.5 / W 7",
+        "M 6 / W 7.5",
+    ]
+    assert all("color" not in row for row in record["variants"])

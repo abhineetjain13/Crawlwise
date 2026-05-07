@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from difflib import SequenceMatcher
 from functools import lru_cache
-import json
 import logging
 import re
 from urllib.parse import urlparse
@@ -22,9 +21,8 @@ from app.services.config.extraction_rules import (
     DETAIL_CATEGORY_LABEL_PREFIXES,
     DETAIL_CATEGORY_UI_TOKENS,
     DETAIL_GENDER_TERMS,
-    DETAIL_NOISE_SECTION_SELECTORS,
 )
-from app.services.field_value_core import absolute_url, clean_text
+from app.services.field_value_core import clean_text
 
 logger = logging.getLogger(__name__)
 _BREADCRUMB_NOISE_ICON_PATTERNS = tuple(DETAIL_BREADCRUMB_NOISE_ICON_PATTERNS or ())
@@ -237,112 +235,3 @@ def dedupe_adjacent(values: list[str]) -> list[str]:
         if cleaned and (not rows or rows[-1].lower() != cleaned.lower()):
             rows.append(cleaned)
     return rows
-
-
-def _jsonld_items(payload: object) -> list[object]:
-    if isinstance(payload, list):
-        items: list[object] = []
-        for item in payload:
-            if isinstance(item, dict):
-                graph = item.get("@graph")
-                if isinstance(graph, list):
-                    items.extend(graph)
-                elif isinstance(graph, dict):
-                    items.append(graph)
-                else:
-                    items.append(item)
-            else:
-                items.append(item)
-        return items
-    if isinstance(payload, dict):
-        graph = payload.get("@graph")
-        if isinstance(graph, list):
-            return list(graph)
-        if isinstance(graph, dict):
-            return [graph]
-        return [payload]
-    return []
-
-
-def prune_irrelevant_detail_dom_nodes(
-    soup: BeautifulSoup,
-    *,
-    page_url: str,
-    requested_page_url: str,
-) -> None:
-    from app.services.extract.detail_identity import (
-        _detail_url_matches_requested_identity as _url_matches,
-        _record_matches_requested_detail_identity as _record_matches,
-    )
-
-    # 1. Prune irrelevant JSON-LD scripts
-    pruned_product_names: list[str] = []
-    for script in soup.select("script[type='application/ld+json']"):
-        try:
-            payload = json.loads(script.get_text())
-            items = _jsonld_items(payload)
-            if not items:
-                continue
-
-            # If any item in the script matches, we keep the whole script
-            # (as it might be a @graph or BreadcrumbList + Product)
-            match_found = False
-            script_product_name = ""
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                # If it doesn't look like a product, don't prune based on it
-                if not any(k in item for k in ("name", "offers", "sku", "mpn")):
-                    match_found = True
-                    break
-                if not script_product_name:
-                    raw_name = item.get("name")
-                    if isinstance(raw_name, str):
-                        script_product_name = raw_name.strip()
-
-                raw_url = item.get("url") or item.get("@id")
-                if not raw_url:
-                    match_found = True
-                    break
-
-                abs_url = absolute_url(page_url, raw_url)
-                if _url_matches(abs_url, requested_page_url=requested_page_url):
-                    match_found = True
-                    break
-
-                candidate = {
-                    "title": item.get("name"),
-                    "sku": item.get("sku") or item.get("productId"),
-                }
-                if _record_matches(candidate, requested_page_url=requested_page_url):
-                    match_found = True
-                    break
-
-            if not match_found:
-                if script_product_name:
-                    pruned_product_names.append(script_product_name)
-                script.decompose()
-        except json.JSONDecodeError:
-            continue
-
-    # When product-level JSON-LD was pruned for identity mismatch AND the DOM
-    # H1 disagrees with the pruned product name, the H1 is likely part of an
-    # unrelated/cross-product shell and should not emit a lone title record.
-    # If the H1 agrees with the pruned name, the JSON-LD URL was a placeholder
-    # (e.g. ``/undefined/``) but the page genuinely represents that product,
-    # so we keep the DOM signal intact.
-    if pruned_product_names:
-
-        def _norm(value: str) -> str:
-            return " ".join(value.lower().split())
-
-        pruned_norms = {_norm(name) for name in pruned_product_names if name}
-        for h1 in soup.find_all("h1"):
-            h1_text = _norm(h1.get_text(separator=" ", strip=True))
-            if h1_text and h1_text not in pruned_norms:
-                h1.decompose()
-
-    # 2. Prune common cross-product UI noise sections
-    for selector in tuple(DETAIL_NOISE_SECTION_SELECTORS or ()):
-        for node in soup.select(str(selector)):
-            node.decompose()

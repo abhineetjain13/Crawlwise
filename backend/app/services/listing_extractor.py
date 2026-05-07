@@ -43,6 +43,7 @@ from app.services.extract.listing_card_fragments import (
 )
 from app.services.extract.listing_record_finalizer import finalize_listing_price_fields
 from app.services.extract.listing_visual import visual_listing_records
+from app.services.extract.detail_price_extractor import currency_hint_from_page_url
 from app.services.field_policy import normalize_requested_field
 from app.services.field_value_core import (
     PRICE_RE,
@@ -55,13 +56,12 @@ from app.services.field_value_core import (
     extract_currency_code,
     extract_price_text,
     finalize_record,
-    infer_currency_from_page_url,
     is_title_noise,
     same_host,
-    same_site,
     surface_alias_lookup,
     surface_fields,
 )
+from app.services.field_url_normalization import same_site
 from app.services.field_value_candidates import (
     add_candidate,
     collect_structured_candidates,
@@ -911,7 +911,7 @@ def _listing_record_from_card(
                 add_candidate(candidates, "currency", currency_code)
                 break
         else:
-            inferred_currency = infer_currency_from_page_url(page_url)
+            inferred_currency = currency_hint_from_page_url(page_url)
             if inferred_currency and candidates.get("price"):
                 add_candidate(candidates, "currency", inferred_currency)
     if is_job and not candidates.get("salary"):

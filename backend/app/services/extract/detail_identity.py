@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from urllib.parse import parse_qsl, urlparse
+
+from bs4 import BeautifulSoup
 
 from app.services.config.extraction_rules import (
     CANDIDATE_PLACEHOLDER_VALUES,
     DETAIL_COLLECTION_PATH_TOKENS,
     DETAIL_GENERIC_TERMINAL_TOKENS,
     DETAIL_IDENTITY_CODE_MIN_LENGTH,
+    DETAIL_NOISE_SECTION_SELECTORS,
     DETAIL_IDENTITY_STOPWORDS,
     DETAIL_NON_PAGE_FILE_EXTENSIONS,
     DETAIL_PRODUCT_PATH_TOKENS,
@@ -31,11 +35,12 @@ from app.services.extract.listing_candidate_ranking import (
 )
 from app.services.field_value_core import (
     PRODUCT_URL_HINTS,
+    absolute_url,
     clean_text,
     is_title_noise,
-    same_site,
     text_or_none,
 )
+from app.services.field_url_normalization import same_site
 
 logger = logging.getLogger(__name__)
 _DETAIL_URL_PLACEHOLDER_SEGMENTS = frozenset(
@@ -64,6 +69,105 @@ def _path_segment_tokens(value: str) -> set[str]:
 
 def _listing_url_has_product_detail_identity(url: str) -> bool:
     return LISTING_PRODUCT_DETAIL_ID_RE.search(str(url or "")) is not None
+
+
+def _jsonld_items(payload: object) -> list[object]:
+    if isinstance(payload, list):
+        items: list[object] = []
+        for item in payload:
+            if isinstance(item, dict):
+                graph = item.get("@graph")
+                if isinstance(graph, list):
+                    items.extend(graph)
+                elif isinstance(graph, dict):
+                    items.append(graph)
+                else:
+                    items.append(item)
+            else:
+                items.append(item)
+        return items
+    if isinstance(payload, dict):
+        graph = payload.get("@graph")
+        if isinstance(graph, list):
+            return list(graph)
+        if isinstance(graph, dict):
+            return [graph]
+        return [payload]
+    return []
+
+
+def prune_irrelevant_detail_dom_nodes(
+    soup: BeautifulSoup,
+    *,
+    page_url: str,
+    requested_page_url: str,
+) -> None:
+    pruned_product_names: list[str] = []
+    for script in soup.select("script[type='application/ld+json']"):
+        try:
+            payload = json.loads(script.get_text())
+            items = _jsonld_items(payload)
+            if not items:
+                continue
+
+            match_found = False
+            script_product_name = ""
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if not any(k in item for k in ("name", "offers", "sku", "mpn")):
+                    match_found = True
+                    break
+                if not script_product_name:
+                    raw_name = item.get("name")
+                    if isinstance(raw_name, str):
+                        script_product_name = raw_name.strip()
+
+                raw_url = item.get("url") or item.get("@id")
+                if not raw_url:
+                    match_found = True
+                    break
+
+                abs_url = absolute_url(page_url, raw_url)
+                if _detail_url_matches_requested_identity(
+                    abs_url,
+                    requested_page_url=requested_page_url,
+                ):
+                    match_found = True
+                    break
+
+                candidate = {
+                    "title": item.get("name"),
+                    "sku": item.get("sku") or item.get("productId"),
+                }
+                if _record_matches_requested_detail_identity(
+                    candidate,
+                    requested_page_url=requested_page_url,
+                ):
+                    match_found = True
+                    break
+
+            if not match_found:
+                if script_product_name:
+                    pruned_product_names.append(script_product_name)
+                script.decompose()
+        except json.JSONDecodeError:
+            continue
+
+    if pruned_product_names:
+
+        def _norm(value: str) -> str:
+            return " ".join(value.lower().split())
+
+        pruned_norms = {_norm(name) for name in pruned_product_names if name}
+        for h1 in soup.find_all("h1"):
+            h1_text = _norm(h1.get_text(separator=" ", strip=True))
+            if h1_text and h1_text not in pruned_norms:
+                h1.decompose()
+
+    for selector in tuple(DETAIL_NOISE_SECTION_SELECTORS or ()):
+        for node in soup.select(str(selector)):
+            node.decompose()
 
 
 def _listing_url_has_category_path_segment(path: str) -> bool:

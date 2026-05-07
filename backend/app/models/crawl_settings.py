@@ -163,13 +163,19 @@ class CrawlRunSettings:
     def fetch_profile(self) -> dict[str, object]:
         stored = _mapping(self.data.get("fetch_profile"))
         traversal_mode = self.traversal_mode()
-        host_memory_ttl_seconds = _coerce_optional_int(
-            stored.get(
-                "host_memory_ttl_seconds",
-                self.data.get("host_memory_ttl_seconds"),
-            ),
-            crawler_runtime_settings.host_memory_ttl_min_seconds,
-            crawler_runtime_settings.host_memory_ttl_max_seconds,
+        raw_host_memory_ttl_seconds = stored.get(
+            "host_memory_ttl_seconds",
+            self.data.get("host_memory_ttl_seconds"),
+        )
+        host_memory_ttl_seconds = (
+            None
+            if raw_host_memory_ttl_seconds in (None, "")
+            else _coerce_int(
+                raw_host_memory_ttl_seconds,
+                crawler_runtime_settings.pacing_host_cache_ttl_seconds,
+                crawler_runtime_settings.host_memory_ttl_min_seconds,
+                crawler_runtime_settings.host_memory_ttl_max_seconds,
+            )
         )
         if stored:
             return {
@@ -446,6 +452,10 @@ class CrawlRunSettings:
         normalized["max_records"] = self.max_records()
         normalized["respect_robots_txt"] = self.respect_robots_txt()
         normalized["fetch_profile"] = self.fetch_profile()
+        if normalized["fetch_profile"].get("host_memory_ttl_seconds") is not None:
+            normalized["host_memory_ttl_seconds"] = normalized["fetch_profile"][
+                "host_memory_ttl_seconds"
+            ]
         normalized["locality_profile"] = self.locality_profile()
         normalized["diagnostics_profile"] = self.diagnostics_profile()
         normalized["acquisition_contract"] = self.acquisition_contract()
@@ -454,7 +464,6 @@ class CrawlRunSettings:
         normalized["sleep_ms"] = self.sleep_ms()
         normalized["request_delay_ms"] = self.sleep_ms()
         normalized["traversal_mode"] = self.traversal_mode()
-        normalized.pop("host_memory_ttl_seconds", None)
         normalized["proxy_enabled"] = bool(self.proxy_profile()["enabled"])
         normalized["proxy_list"] = self.proxy_list()
         normalized["proxy_profile"] = self.proxy_profile(infer_rotation=False)

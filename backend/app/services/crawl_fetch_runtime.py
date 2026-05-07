@@ -316,7 +316,7 @@ async def fetch_page(
             traversal_required=context.traversal_required,
             host_preference_enabled=host_preference_enabled,
         )
-        browser_result = await _invoke_run_browser_attempts(
+        browser_result = await _run_browser_attempts(
             context,
             reason=resolved_browser_reason,
             requested_fields=context.requested_fields,
@@ -360,7 +360,7 @@ async def fetch_page(
                 context.url,
                 ttl_seconds=context.host_memory_ttl_seconds,
             )
-            return await _invoke_run_browser_attempts(
+            return await _run_browser_attempts(
                 context,
                 reason=browser_reason or "http-escalation",
                 requested_fields=context.requested_fields,
@@ -944,7 +944,7 @@ async def _handle_http_result(
             current_proxy=proxy,
             vendor_blocked=bool(vendor),
         )
-        browser_result = await _invoke_run_browser_attempts(
+        browser_result = await _run_browser_attempts(
             context,
             reason=browser_reason,
             requested_fields=context.requested_fields,
@@ -1160,29 +1160,6 @@ def _browser_escalation_proxies(
         return attempts
     remaining = [candidate for candidate in attempts if candidate != current_proxy]
     return remaining or attempts
-
-
-async def _invoke_run_browser_attempts(
-    context: _FetchRuntimeContext,
-    *,
-    reason: str,
-    requested_fields: list[str] | None,
-    listing_recovery_mode: str | None,
-    capture_page_markdown: bool,
-    capture_screenshot: bool,
-    proxies: list[str | None] | None,
-    host_policy: HostProtectionPolicy | None,
-) -> PageFetchResult:
-    return await _run_browser_attempts(
-        context,
-        reason=reason,
-        requested_fields=requested_fields,
-        listing_recovery_mode=listing_recovery_mode,
-        capture_page_markdown=capture_page_markdown,
-        capture_screenshot=capture_screenshot,
-        proxies=proxies,
-        host_policy=host_policy,
-    )
 
 
 async def _update_host_result_memory(

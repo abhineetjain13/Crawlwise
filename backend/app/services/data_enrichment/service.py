@@ -53,10 +53,10 @@ from app.services.data_enrichment.shopify_catalog import (
 from app.services.field_value_core import (
     clean_text,
     extract_currency_code,
-    infer_currency_from_page_url,
     strip_html_tags,
     text_or_none,
 )
+from app.services.extract.detail_price_extractor import currency_hint_from_page_url
 from app.services.llm_runtime import run_prompt_task
 from app.services.normalizers import normalize_decimal_price
 from app.services.product_intelligence.matching import source_domain
@@ -607,7 +607,7 @@ def _normalize_price(
     currency = (
         extract_currency_code(data.get("currency"))
         or extract_currency_code(raw_price)
-        or infer_currency_from_page_url(source_url)
+        or currency_hint_from_page_url(source_url)
     )
     range_match = _PRICE_RANGE_RE.fullmatch(clean_text(raw_price))
     if range_match:

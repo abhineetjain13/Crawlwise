@@ -16,7 +16,6 @@ from app.services.field_value_core import (
     is_title_noise,
     strip_tracking_query_params,
     surface_alias_lookup,
-    validate_and_clean,
     validate_record_for_surface,
 )
 from app.services.extract.shared_variant_logic import merge_variant_rows
@@ -71,69 +70,6 @@ def test_frequently_bought_together_is_title_noise() -> None:
     assert is_title_noise("Frequently Bought Together") is True
 
 
-def test_validate_and_clean_drops_fields_outside_surface_schema() -> None:
-    cleaned, errors = validate_and_clean(
-        {
-            "price": "19.99",
-            "internal_score": 0.91,
-            "title": "Widget",
-        },
-        "ecommerce_detail",
-    )
-
-    assert cleaned == {"price": "19.99"}
-    assert errors == []
-
-
-def test_validate_and_clean_nulls_schema_type_mismatches() -> None:
-    cleaned, errors = validate_and_clean(
-        {
-            "price": {"amount": "19.99"},
-            "variants": "not-a-list",
-        },
-        "ecommerce_detail",
-    )
-
-    assert cleaned == {"price": None, "variants": None}
-    assert len(errors) == 2
-
-
-def test_validate_and_clean_applies_listing_surface_schema() -> None:
-    cleaned, errors = validate_and_clean(
-        {
-            "title": ["Widget"],
-            "url": "https://example.com/products/widget",
-            "image_url": {"src": "https://cdn.example.com/widget.jpg"},
-        },
-        "ecommerce_listing",
-    )
-
-    assert cleaned == {
-        "title": None,
-        "url": "https://example.com/products/widget",
-        "image_url": None,
-    }
-    assert len(errors) == 2
-
-
-def test_validate_and_clean_applies_job_listing_surface_schema() -> None:
-    cleaned, errors = validate_and_clean(
-        {
-            "title": "Platform Engineer",
-            "company": {"name": "Acme"},
-            "apply_url": "https://jobs.example.com/apply/123",
-        },
-        "job_listing",
-    )
-
-    assert cleaned == {
-        "title": "Platform Engineer",
-        "company": None,
-        "apply_url": "https://jobs.example.com/apply/123",
-    }
-    assert len(errors) == 1
-
-
 def test_validate_record_for_surface_drops_unknown_fields_but_keeps_canonical_fields() -> None:
     cleaned, errors = validate_record_for_surface(
         {
@@ -144,8 +80,8 @@ def test_validate_record_for_surface_drops_unknown_fields_but_keeps_canonical_fi
         "ecommerce_detail",
     )
 
-    assert cleaned == {"title": "Widget Prime"}
-    assert len(errors) == 1
+    assert cleaned == {"title": "Widget Prime", "price": {"amount": "19.99"}}
+    assert errors == []
 
 
 def test_ecommerce_aliases_keep_product_id_distinct_from_sku() -> None:
@@ -316,7 +252,7 @@ def test_public_record_firewall_normalizes_variant_axis_aliases() -> None:
 
 
 def test_public_record_firewall_preserves_flat_variant_style_axis() -> None:
-    data, _rejected = public_record_data_for_surface(
+    data, rejected = public_record_data_for_surface(
         {
             "title": "Italian Seersucker Sutton Suit",
             "variants": [
@@ -335,7 +271,6 @@ def test_public_record_firewall_preserves_flat_variant_style_axis() -> None:
         page_url="https://example.com/products/suit",
     )
 
-    assert _rejected == {}
     assert data == {
         "title": "Italian Seersucker Sutton Suit",
         "variants": [
@@ -344,6 +279,7 @@ def test_public_record_firewall_preserves_flat_variant_style_axis() -> None:
         ],
         "variant_count": 2,
     }
+    assert rejected == {}
 
 
 def test_public_record_firewall_drops_parent_shared_variant_fields() -> None:

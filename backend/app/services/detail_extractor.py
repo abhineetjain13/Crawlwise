@@ -65,7 +65,6 @@ from app.services.extract.detail_dom_extractor import (
 )
 from app.services.extract.detail_raw_signals import (
     breadcrumb_category_from_dom,
-    prune_irrelevant_detail_dom_nodes,
 )
 from app.services.extract.detail_identity import (
     detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
@@ -78,11 +77,12 @@ from app.services.extract.detail_identity import (
     detail_url_is_utility as _detail_url_is_utility,
     detail_url_matches_requested_identity as _detail_url_matches_requested_identity,
     preferred_detail_identity_url as _preferred_detail_identity_url,
+    prune_irrelevant_detail_dom_nodes,
     record_matches_requested_detail_identity as _record_matches_requested_detail_identity,
 )
 from app.services.extract.detail_record_finalizer import (
-    dedupe_primary_and_additional_images as _dedupe_primary_and_additional_images,
-    detail_title_looks_like_placeholder as _detail_title_looks_like_placeholder,
+    dedupe_primary_and_additional_images,
+    detail_title_looks_like_placeholder,
     repair_ecommerce_detail_record_quality,
 )
 from app.services.extract.detail_text_sanitizer import detail_candidate_is_valid
@@ -464,7 +464,7 @@ def _materialize_record(
     if str(surface or "").strip().lower() == "ecommerce_detail":
         _reconcile_detail_currency_with_url(record, page_url=page_url)
     drop_low_signal_zero_detail_price(record)
-    _dedupe_primary_and_additional_images(record)
+    dedupe_primary_and_additional_images(record)
     confidence = score_record_confidence(
         record,
         surface=surface,
@@ -684,7 +684,7 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         and not has_identity_fields
     ):
         return True
-    if _detail_title_looks_like_placeholder(title) and not any(
+    if detail_title_looks_like_placeholder(title) and not any(
         record.get(field_name) not in (None, "", [], {})
         for field_name in (
             "price",
@@ -709,7 +709,7 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
     ):
         return True
     if (
-        _detail_title_looks_like_placeholder(title)
+        detail_title_looks_like_placeholder(title)
         and not has_generic_detail_fields
         and not any(
             record.get(field_name) not in (None, "", [], {})

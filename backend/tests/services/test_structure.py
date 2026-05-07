@@ -36,11 +36,6 @@ ALLOWED_PRIVATE_SERVICE_IMPORTS = {
     "config/llm_runtime.py -> app.services.config.runtime_settings:_settings_config",
     "config/product_intelligence.py -> app.services.config.runtime_settings:_settings_config",
     "publish/__init__.py -> app.services.publish.verdict:_aggregate_verdict",
-    # Shared detail-identity helpers used by detail_raw_signals.prune_irrelevant_detail_dom_nodes.
-    # Kept private because the implementation is an implementation detail of detail_identity;
-    # these call-sites import via an aliased local-scope import to minimise coupling.
-    "extract/detail_raw_signals.py -> app.services.extract.detail_identity:_detail_url_matches_requested_identity",
-    "extract/detail_raw_signals.py -> app.services.extract.detail_identity:_record_matches_requested_detail_identity",
 }
 CONFIG_CONSTANT_NAME_MARKERS = (
     "SELECTOR",
@@ -87,14 +82,14 @@ FILE_LOC_BUDGETS = {
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
     # Config owners.
-    # Config rules grown due to category/nav URL rules.
-    Path("app/services/config/extraction_rules.py"): 1580,
+    # Config rules own typed extraction constants and category/nav URL rules.
+    Path("app/services/config/extraction_rules.py"): 1620,
     # Fetch runtime remains the request/browser arbitration owner.
-    Path("app/services/crawl_fetch_runtime.py"): 1285,
+    Path("app/services/crawl_fetch_runtime.py"): 1260,
     # Detail extraction owns candidate arbitration and tier orchestration.
     Path("app/services/detail_extractor.py"): 1640,
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
-    Path("app/services/extract/detail_dom_extractor.py"): 1530,
+    Path("app/services/extract/detail_dom_extractor.py"): 1425,
     # Detail finalizer owns public-boundary cleanup and record repair.
     # Grown (+10) to accommodate additional axis-gating logic that reuses
     # shared_variant_logic frozensets instead of re-deriving them locally.
@@ -102,7 +97,7 @@ FILE_LOC_BUDGETS = {
     # Shared variant logic owns generic axis and row reconciliation.
     # Grown (+380) to absorb the extended allowed-axis taxonomy (flavor, type,
     # material_composition, etc.) and related JS-state / DOM helpers.
-    Path("app/services/extract/shared_variant_logic.py"): 1530,
+    Path("app/services/extract/shared_variant_logic.py"): 1560,
     # Variant normalization owns the detail variant cleanup pipeline.
     Path("app/services/extract/variant_record_normalization.py"): 1390,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
@@ -112,12 +107,10 @@ FILE_LOC_BUDGETS = {
     # section-image cleanup / audit wiring owners when scheduled.
     Path("app/services/field_value_dom.py"): 1705,
     # Canonical field coercion remains centralized here instead of scattering value policy.
-    # Grown (+225) for the availability canonical-enum gate, negative-price rejection
-    # wiring, category URL-path rejection, and associated audit comments
-    # (2026-05-04 sweep, gemini DQ-4 / DQ-8).
+    # Shrunk after removing stranded URL helpers and duplicate output schema checks.
     # TODO(chore): baseline LOC drift here, then extract canonical_coercion /
     # field_recovery / availability_gate owners when scheduled.
-    Path("app/services/field_value_core.py"): 1745,
+    Path("app/services/field_value_core.py"): 1565,
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1455,
     # JS state mapping stays centralized to avoid adapter-specific drift.

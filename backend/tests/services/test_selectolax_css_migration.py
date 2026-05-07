@@ -957,7 +957,7 @@ async def test_amazon_adapter_combines_visible_whole_and_fraction_price() -> Non
         "ecommerce_detail",
     )
 
-    assert result.records, result.records
+    assert len(result.records) == 1
     record = result.records[0]
     assert record["price"] == "$1,359.96"
     assert record["currency"] == "USD"

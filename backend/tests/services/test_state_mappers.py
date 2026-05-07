@@ -109,7 +109,7 @@ def test_map_js_state_to_fields_treats_shopify_product_level_prices_as_cents() -
                             "handle": "abzorb-1890-sneaker",
                             "currency": "USD",
                             "prices": {
-                                "currentPrice": 19600,
+                                "currentPrice": 19650,
                                 "initialPrice": 22000,
                             },
                             "variants": [
@@ -129,8 +129,10 @@ def test_map_js_state_to_fields_treats_shopify_product_level_prices_as_cents() -
         page_url="https://www.notre-shop.com/products/abzorb-1890-sneaker",
     )
 
+    # Cents-trigger: no prices.currency, so product-level currency makes numeric prices cents.
+    assert mapped["handle"] == "abzorb-1890-sneaker"
     assert mapped["currency"] == "USD"
-    assert mapped["price"] == "USD 196"
+    assert mapped["price"] == "USD 196.5"
     assert mapped["original_price"] == "USD 220"
 
 

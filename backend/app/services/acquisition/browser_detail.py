@@ -11,6 +11,13 @@ from app.services.config.extraction_rules import (
     BROWSER_REQUESTED_DETAIL_GENERIC_TOGGLE_LABELS,
     BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY,
     DETAIL_BLOCKED_TOKENS,
+    DETAIL_EXPANSION_STATUS_ATTEMPTED,
+    DETAIL_EXPANSION_STATUS_EXPANDED,
+    DETAIL_EXPANSION_STATUS_INTERACTION_FAILED,
+    DETAIL_EXPANSION_STATUS_INTERACTION_LIMIT_REACHED,
+    DETAIL_EXPANSION_STATUS_NO_MATCHES,
+    DETAIL_EXPANSION_STATUS_SKIPPED,
+    DETAIL_EXPANSION_STATUS_TIME_BUDGET_REACHED,
     DETAIL_EXPAND_KEYWORD_EXTENSIONS,
     DETAIL_EXPAND_SELECTORS,
 )
@@ -34,7 +41,7 @@ def _string_list(value: object) -> list[str]:
 
 def detail_expansion_skip(reason: str) -> dict[str, object]:
     return {
-        "status": "skipped",
+        "status": DETAIL_EXPANSION_STATUS_SKIPPED,
         "reason": reason,
         "clicked_count": 0,
         "expanded_elements": [],
@@ -114,7 +121,7 @@ async def expand_detail_content_if_needed_impl(
             surface=surface,
         )
     aom = {
-        "status": "skipped",
+        "status": DETAIL_EXPANSION_STATUS_SKIPPED,
         "reason": "not_needed",
         "clicked_count": 0,
         "expanded_elements": [],
@@ -135,9 +142,9 @@ async def expand_detail_content_if_needed_impl(
             ),
         )
     return {
-        "status": "expanded"
+        "status": DETAIL_EXPANSION_STATUS_EXPANDED
         if dom.get("clicked_count", 0) or aom.get("clicked_count", 0)
-        else "attempted",
+        else DETAIL_EXPANSION_STATUS_ATTEMPTED,
         "reason": "missing_detail_content",
         "clicked_count": _coerce_int(dom.get("clicked_count"), default=0)
         + _coerce_int(aom.get("clicked_count"), default=0),
@@ -163,8 +170,13 @@ def _finish_expansion_diagnostics(
     started_at: float,
     elapsed_ms: Callable[[float], int],
 ) -> dict[str, object]:
-    if diagnostics.get("status") == "attempted":
-        diagnostics["status"] = "expanded" if clicked_count > 0 else "no_matches"
+    if diagnostics.get("status") == DETAIL_EXPANSION_STATUS_ATTEMPTED:
+        if clicked_count > 0:
+            diagnostics["status"] = DETAIL_EXPANSION_STATUS_EXPANDED
+        elif interaction_failures:
+            diagnostics["status"] = DETAIL_EXPANSION_STATUS_INTERACTION_FAILED
+        else:
+            diagnostics["status"] = DETAIL_EXPANSION_STATUS_NO_MATCHES
     diagnostics["clicked_count"] = clicked_count
     diagnostics["expanded_elements"] = expanded_elements
     diagnostics["interaction_failures"] = interaction_failures
@@ -186,7 +198,7 @@ async def expand_all_interactive_elements_impl(
     started_at = time.perf_counter()
     click_timeout_ms = int(crawler_runtime_settings.detail_expand_click_timeout_ms)
     diagnostics: dict[str, object] = {
-        "status": "attempted",
+        "status": DETAIL_EXPANSION_STATUS_ATTEMPTED,
         "buttons_found": 0,
         "clicked_count": 0,
         "expanded_elements": [],
@@ -221,10 +233,10 @@ async def expand_all_interactive_elements_impl(
     )
     for selector in selectors:
         if clicked_count >= max_interactions:
-            diagnostics["status"] = "interaction_limit_reached"
+            diagnostics["status"] = DETAIL_EXPANSION_STATUS_INTERACTION_LIMIT_REACHED
             break
         if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
-            diagnostics["status"] = "time_budget_reached"
+            diagnostics["status"] = DETAIL_EXPANSION_STATUS_TIME_BUDGET_REACHED
             break
         try:
             candidates = await page.locator(selector).element_handles()
@@ -243,7 +255,7 @@ async def expand_all_interactive_elements_impl(
                 if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(
                     max_elapsed_ms
                 ):
-                    diagnostics["status"] = "time_budget_reached"
+                    diagnostics["status"] = DETAIL_EXPANSION_STATUS_TIME_BUDGET_REACHED
                     break
                 try:
                     snapshot = await interactive_candidate_snapshot(handle)
@@ -270,12 +282,12 @@ async def expand_all_interactive_elements_impl(
         selector_clicks = 0
         for handle, prefetched_snapshot in candidate_rows:
             if clicked_count >= max_interactions:
-                diagnostics["status"] = "interaction_limit_reached"
+                diagnostics["status"] = DETAIL_EXPANSION_STATUS_INTERACTION_LIMIT_REACHED
                 break
             if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(
                 max_elapsed_ms
             ):
-                diagnostics["status"] = "time_budget_reached"
+                diagnostics["status"] = DETAIL_EXPANSION_STATUS_TIME_BUDGET_REACHED
                 break
             if selector_clicks >= max_per_selector:
                 break
@@ -407,7 +419,7 @@ async def expand_all_interactive_elements_impl(
                 if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(
                     max_elapsed_ms
                 ):
-                    diagnostics["status"] = "time_budget_reached"
+                    diagnostics["status"] = DETAIL_EXPANSION_STATUS_TIME_BUDGET_REACHED
                     break
                 await handle.scroll_into_view_if_needed()
                 try:
@@ -428,7 +440,7 @@ async def expand_all_interactive_elements_impl(
                 if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(
                     max_elapsed_ms
                 ):
-                    diagnostics["status"] = "time_budget_reached"
+                    diagnostics["status"] = DETAIL_EXPANSION_STATUS_TIME_BUDGET_REACHED
                     break
             except Exception as exc:
                 interaction_failures.append(str(exc))
@@ -458,7 +470,7 @@ async def expand_interactive_elements_via_accessibility_impl(
         crawler_runtime_settings.detail_expand_visibility_timeout_ms
     )
     diagnostics: dict[str, object] = {
-        "status": "attempted",
+        "status": DETAIL_EXPANSION_STATUS_ATTEMPTED,
         "attempted": False,
         "limit": int(crawler_runtime_settings.detail_aom_expand_max_interactions),
         "max_elapsed_ms": max_elapsed_ms,
@@ -473,7 +485,7 @@ async def expand_interactive_elements_via_accessibility_impl(
     accessibility = getattr(page, "accessibility", None)
     snapshot_fn = getattr(accessibility, "snapshot", None)
     if snapshot_fn is None:
-        diagnostics["status"] = "skipped"
+        diagnostics["status"] = DETAIL_EXPANSION_STATUS_SKIPPED
         diagnostics["reason"] = "accessibility_unavailable"
         diagnostics["elapsed_ms"] = elapsed_ms(started_at)
         return diagnostics
@@ -509,7 +521,7 @@ async def expand_interactive_elements_via_accessibility_impl(
         diagnostics["skipped_count"] = len(candidates) - max_interactions
     for role, name in candidates[:max_interactions]:
         if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
-            diagnostics["status"] = "time_budget_reached"
+            diagnostics["status"] = DETAIL_EXPANSION_STATUS_TIME_BUDGET_REACHED
             break
         try:
             locator_factory = getattr(page, "get_by_role", None)

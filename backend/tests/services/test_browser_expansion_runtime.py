@@ -1390,6 +1390,22 @@ def test_finish_expansion_diagnostics_marks_attempt_without_clicks_as_no_matches
     assert diagnostics["status"] == "no_matches"
 
 
+def test_finish_expansion_diagnostics_marks_attempt_failures_as_interaction_failed() -> (
+    None
+):
+    diagnostics = browser_detail._finish_expansion_diagnostics(
+        {"status": "attempted"},
+        clicked_count=0,
+        expanded_elements=[],
+        interaction_failures=["click_failed:size"],
+        started_at=0.0,
+        elapsed_ms=lambda _started_at: 7,
+    )
+
+    assert diagnostics["status"] == "interaction_failed"
+    assert diagnostics["interaction_failures"] == ["click_failed:size"]
+
+
 @pytest.mark.asyncio
 async def test_expand_all_interactive_elements_skips_blocked_commerce_actions() -> None:
     page = _FakeExpansionPage(

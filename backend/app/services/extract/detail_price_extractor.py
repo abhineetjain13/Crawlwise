@@ -9,11 +9,12 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from app.services.config.extraction_rules import (
-    DETAIL_CENT_BASED_PRICE_CURRENCIES,
+    DETAIL_CENT_BASED_PRICE_CURRENCY_SET,
+    DETAIL_AUTHORITATIVE_PRICE_SOURCE_SET,
     DETAIL_CURRENT_PRICE_SELECTORS,
-    DETAIL_CURRENCY_JSONLD_PATTERN,
+    DETAIL_CURRENCY_JSONLD_RE,
     DETAIL_CURRENCY_META_SELECTORS,
-    DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS,
+    DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS_NORMALIZED,
     DETAIL_JSONLD_CURRENCY_FIELDS,
     DETAIL_JSONLD_GRAPH_FIELDS,
     DETAIL_JSONLD_OFFER_FIELDS,
@@ -23,59 +24,22 @@ from app.services.config.extraction_rules import (
     DETAIL_JSONLD_TYPE_FIELDS,
     DETAIL_LOW_SIGNAL_PRICE_VISIBLE_MIN_DELTA,
     DETAIL_LOW_SIGNAL_PRICE_VISIBLE_RATIO,
-    DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES,
+    DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCE_SET,
     DETAIL_ORIGINAL_PRICE_SELECTORS,
-    DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX,
-    DETAIL_PRICE_CENT_MAGNITUDE_RATIO,
-    DETAIL_PRICE_JSONLD_PATTERN,
-    DETAIL_PRICE_JSONLD_TYPE_PATTERN,
-    DETAIL_PRICE_MAGNITUDE_EPSILON,
+    DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX_DECIMAL,
+    DETAIL_PRICE_CENT_MAGNITUDE_RATIO_DECIMAL,
+    DETAIL_PRICE_JSONLD_RE,
+    DETAIL_PRICE_JSONLD_TYPE_RE,
+    DETAIL_PRICE_MAGNITUDE_EPSILON_DECIMAL,
     DETAIL_PRICE_META_SELECTORS,
+    DETAIL_STRICT_PARENT_PRICE_SOURCE_SET,
     PAGE_URL_CURRENCY_HINTS_RAW,
 )
 from app.services.field_value_core import (
     extract_currency_code,
-    infer_currency_from_page_url,
     text_or_none,
 )
 from app.services.normalizers import normalize_decimal_price
-
-_LOW_SIGNAL_ZERO_PRICE_SOURCES = frozenset(DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES)
-_AUTHORITATIVE_PRICE_SOURCES = frozenset({"adapter", "json_ld", "network_payload"})
-_STRICT_PARENT_PRICE_SOURCES = frozenset({"network_payload"})
-_CENT_BASED_CURRENCIES = frozenset(DETAIL_CENT_BASED_PRICE_CURRENCIES)
-_PRICE_CENT_MAGNITUDE_RATIO = Decimal(str(DETAIL_PRICE_CENT_MAGNITUDE_RATIO))
-_PRICE_MAGNITUDE_EPSILON = Decimal(str(DETAIL_PRICE_MAGNITUDE_EPSILON))
-_PARENT_VARIANT_PRICE_RATIO_MAX = Decimal(str(DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX))
-_installment_price_text_tokens = tuple(
-    str(token).strip().lower()
-    for token in tuple(DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS or ())
-    if str(token).strip()
-)
-_jsonld_graph_fields = tuple(
-    str(field) for field in tuple(DETAIL_JSONLD_GRAPH_FIELDS or ())
-)
-_jsonld_type_fields = tuple(
-    str(field) for field in tuple(DETAIL_JSONLD_TYPE_FIELDS or ())
-)
-_jsonld_offer_fields = tuple(
-    str(field) for field in tuple(DETAIL_JSONLD_OFFER_FIELDS or ())
-)
-_jsonld_price_fields = tuple(
-    str(field) for field in tuple(DETAIL_JSONLD_PRICE_FIELDS or ())
-)
-_jsonld_original_price_fields = tuple(
-    str(field) for field in tuple(DETAIL_JSONLD_ORIGINAL_PRICE_FIELDS or ())
-)
-_jsonld_price_specification_fields = tuple(
-    str(field) for field in tuple(DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS or ())
-)
-_jsonld_currency_fields = tuple(
-    str(field) for field in tuple(DETAIL_JSONLD_CURRENCY_FIELDS or ())
-)
-_DETAIL_PRICE_JSONLD_TYPE_RE = re.compile(str(DETAIL_PRICE_JSONLD_TYPE_PATTERN))
-_DETAIL_PRICE_JSONLD_RE = re.compile(str(DETAIL_PRICE_JSONLD_PATTERN))
-_DETAIL_CURRENCY_JSONLD_RE = re.compile(str(DETAIL_CURRENCY_JSONLD_PATTERN))
 
 
 def backfill_detail_price_from_html(
@@ -95,7 +59,7 @@ def backfill_detail_price_from_html(
         jsonld_price_bundle=jsonld_price_bundle,
     )
     record_url = text_or_none(record.get("url")) or ""
-    expected_currency = text_or_none(infer_currency_from_page_url(record_url))
+    expected_currency = text_or_none(currency_hint_from_page_url(record_url))
     preliminary_currency = text_or_none(record.get("currency")) or expected_currency or html_currency
     visible_price = _detail_price_from_selector_text(
         soup,
@@ -157,7 +121,9 @@ def backfill_detail_price_from_html(
     if (
         price_source == "json_ld"
         and price == jsonld_price
-        and not (record_field_sources(record, "price") & _AUTHORITATIVE_PRICE_SOURCES)
+        and not (
+            record_field_sources(record, "price") & DETAIL_AUTHORITATIVE_PRICE_SOURCE_SET
+        )
     ):
         record["price"] = price
         append_record_field_source(record, "price", "json_ld")
@@ -219,7 +185,7 @@ def drop_low_signal_zero_detail_price(record: dict[str, Any]) -> None:
     if not _price_value_is_zero(record.get("price")):
         return
     price_sources = record_field_sources(record, "price")
-    if not price_sources or not price_sources <= _LOW_SIGNAL_ZERO_PRICE_SOURCES:
+    if not price_sources or not price_sources <= DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCE_SET:
         return
     if _detail_record_has_positive_price_corroboration(record):
         return
@@ -244,7 +210,7 @@ def drop_low_signal_zero_detail_price(record: dict[str, Any]) -> None:
 
     currency_sources = record_field_sources(record, "currency")
     if (
-        not currency_sources or currency_sources <= _LOW_SIGNAL_ZERO_PRICE_SOURCES
+        not currency_sources or currency_sources <= DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCE_SET
     ) and record.get("original_price") in (None, "", [], {}):
         record.pop("currency", None)
 
@@ -254,7 +220,7 @@ def reconcile_detail_currency_with_url(
     *,
     page_url: str,
 ) -> None:
-    expected_currency = text_or_none(infer_currency_from_page_url(page_url))
+    expected_currency = text_or_none(currency_hint_from_page_url(page_url))
     if not expected_currency:
         return
     strong_host_hint = detail_currency_hint_is_host_level(
@@ -323,7 +289,9 @@ def reconcile_detail_price_magnitudes(record: dict[str, Any]) -> None:
         parent_price is not None
         and safe_variant_price is not None
         and _decimal_is_cent_magnitude_copy(parent_price, safe_variant_price)
-        and not (record_field_sources(record, "price") & _STRICT_PARENT_PRICE_SOURCES)
+        and not (
+            record_field_sources(record, "price") & DETAIL_STRICT_PARENT_PRICE_SOURCE_SET
+        )
     ):
         record["price"] = _format_price_decimal(safe_variant_price)
         append_record_field_source(record, "price", "variant_price_magnitude")
@@ -389,10 +357,10 @@ def reconcile_parent_price_against_variant_range(record: dict[str, Any]) -> None
     # scrape.
     if (
         parent_price > unanimous_variant_price
-        and (parent_price / unanimous_variant_price) > _PARENT_VARIANT_PRICE_RATIO_MAX
+        and (parent_price / unanimous_variant_price) > DETAIL_PARENT_VARIANT_PRICE_RATIO_MAX_DECIMAL
     ):
         return
-    if record_field_sources(record, "price") & _STRICT_PARENT_PRICE_SOURCES:
+    if record_field_sources(record, "price") & DETAIL_STRICT_PARENT_PRICE_SOURCE_SET:
         return
     record["price"] = _format_price_decimal(unanimous_variant_price)
     append_record_field_source(record, "price", "variant_price_range")
@@ -442,14 +410,15 @@ def _should_override_record_price_from_dom(
     if not _detail_price_is_visible_outlier(current_price, dom_price):
         return False
     current_sources = record_field_sources(record, "price")
-    return not bool(current_sources & _AUTHORITATIVE_PRICE_SOURCES)
+    return not bool(current_sources & DETAIL_AUTHORITATIVE_PRICE_SOURCE_SET)
 
 
-def detail_currency_hint_is_host_level(
-    page_url: str,
-    *,
-    expected_currency: str,
-) -> bool:
+def currency_hint_from_page_url(page_url: object) -> str | None:
+    code, _is_host_level = _currency_hint_from_page_url(page_url)
+    return code
+
+
+def _currency_hint_from_page_url(page_url: object) -> tuple[str | None, bool]:
     parsed = urlparse(str(page_url or "").strip())
     hostname = str(parsed.hostname or "").strip().lower()
     path_segments = {
@@ -458,10 +427,19 @@ def detail_currency_hint_is_host_level(
         if segment.strip()
     }
     if not hostname and not path_segments:
-        return False
+        return None, False
     for token, code in dict(PAGE_URL_CURRENCY_HINTS_RAW or {}).items():
         normalized_token = str(token).strip().lower()
-        if not normalized_token or normalized_token.startswith("/"):
+        if not normalized_token:
+            continue
+        if normalized_token.startswith("/"):
+            token_path_segments = {
+                segment.strip().lower()
+                for segment in normalized_token.split("/")
+                if segment.strip()
+            }
+            if token_path_segments and token_path_segments <= path_segments:
+                return str(code), False
             continue
         host_token, _, raw_path = normalized_token.partition("/")
         token_path_segments = {
@@ -471,9 +449,18 @@ def detail_currency_hint_is_host_level(
         }
         host_matches = hostname == host_token or hostname.endswith(f".{host_token}")
         path_matches = not token_path_segments or token_path_segments <= path_segments
-        if str(code) == expected_currency and host_matches and path_matches:
-            return True
-    return False
+        if host_matches and path_matches:
+            return str(code), True
+    return None, False
+
+
+def detail_currency_hint_is_host_level(
+    page_url: str,
+    *,
+    expected_currency: str,
+) -> bool:
+    code, is_host_level = _currency_hint_from_page_url(page_url)
+    return code == expected_currency and is_host_level
 
 
 def normalize_mismatched_host_currency_price(
@@ -489,7 +476,7 @@ def normalize_mismatched_host_currency_price(
         return None
     normalized = normalize_decimal_price(
         text,
-        interpret_integral_as_cents=expected_currency in _CENT_BASED_CURRENCIES,
+        interpret_integral_as_cents=expected_currency in DETAIL_CENT_BASED_PRICE_CURRENCY_SET,
     )
     if normalized and "." not in normalized:
         return f"{normalized}.00"
@@ -615,8 +602,8 @@ def _decimal_is_cent_magnitude_copy(value: Decimal, reference: Decimal) -> bool:
     if value <= 0 or reference <= 0:
         return False
     return (
-        abs(value - (reference * _PRICE_CENT_MAGNITUDE_RATIO))
-        <= _PRICE_MAGNITUDE_EPSILON
+        abs(value - (reference * DETAIL_PRICE_CENT_MAGNITUDE_RATIO_DECIMAL))
+        <= DETAIL_PRICE_MAGNITUDE_EPSILON_DECIMAL
     )
 
 
@@ -676,9 +663,9 @@ def _detail_price_from_html(
         script_text = str(script.string or script.get_text() or "").strip()
         if not script_text or '"price"' not in script_text.lower():
             continue
-        if _DETAIL_PRICE_JSONLD_TYPE_RE.search(script_text) is None:
+        if DETAIL_PRICE_JSONLD_TYPE_RE.search(script_text) is None:
             continue
-        match = _DETAIL_PRICE_JSONLD_RE.search(script_text)
+        match = DETAIL_PRICE_JSONLD_RE.search(script_text)
         if match is None:
             continue
         normalized = _normalize_detail_price_candidate(
@@ -744,7 +731,7 @@ def _price_node_looks_like_installment(node: object) -> bool:
             elif raw not in (None, "", [], {}):
                 text_parts.append(str(raw))
     lowered = " ".join(text_parts).lower()
-    return any(token in lowered for token in _installment_price_text_tokens)
+    return any(token in lowered for token in DETAIL_INSTALLMENT_PRICE_TEXT_TOKENS_NORMALIZED)
 
 
 def _detail_currency_from_html(
@@ -768,7 +755,7 @@ def _detail_currency_from_html(
         script_text = str(script.string or script.get_text() or "").strip()
         if not script_text:
             continue
-        match = _DETAIL_CURRENCY_JSONLD_RE.search(script_text)
+        match = DETAIL_CURRENCY_JSONLD_RE.search(script_text)
         if match is not None:
             return text_or_none(match.group("currency"))
 
@@ -790,16 +777,16 @@ def _detail_jsonld_price_bundle(
 ) -> tuple[str | None, str | None, str | None]:
     saved_currency = text_or_none(currency)
     for offer in _iter_jsonld_offers(soup):
-        offer_currency = _first_text(offer, _jsonld_currency_fields) or currency
+        offer_currency = _first_text(offer, DETAIL_JSONLD_CURRENCY_FIELDS) or currency
         saved_currency = text_or_none(offer_currency) or saved_currency
         price = _first_normalized_price(
             offer,
-            _jsonld_price_fields,
+            DETAIL_JSONLD_PRICE_FIELDS,
             currency=offer_currency,
         )
         original_price = _first_normalized_price(
             offer,
-            _jsonld_original_price_fields,
+            DETAIL_JSONLD_ORIGINAL_PRICE_FIELDS,
             currency=offer_currency,
         )
         spec_original = _price_from_jsonld_specifications(
@@ -847,18 +834,18 @@ def _offers_from_jsonld_node(value: Any) -> list[dict[str, Any]]:
         return results
     if not isinstance(value, dict):
         return []
-    for field_name in _jsonld_graph_fields:
+    for field_name in DETAIL_JSONLD_GRAPH_FIELDS:
         results.extend(_offers_from_jsonld_node(value.get(field_name)))
     node_type = _jsonld_type_text(value)
     if node_type in {"offer", "aggregateoffer"}:
         results.append(value)
-    for field_name in _jsonld_offer_fields:
+    for field_name in DETAIL_JSONLD_OFFER_FIELDS:
         results.extend(_offers_from_jsonld_node(value.get(field_name)))
     return results
 
 
 def _jsonld_type_text(value: dict[str, Any]) -> str:
-    for field_name in _jsonld_type_fields:
+    for field_name in DETAIL_JSONLD_TYPE_FIELDS:
         raw_type = value.get(field_name)
         if isinstance(raw_type, list):
             raw_type = next((item for item in raw_type if text_or_none(item)), None)
@@ -899,7 +886,7 @@ def _price_from_jsonld_specifications(
     current_price: str | None,
 ) -> str | None:
     specs: list[Any] = []
-    for field_name in _jsonld_price_specification_fields:
+    for field_name in DETAIL_JSONLD_PRICE_SPECIFICATION_FIELDS:
         raw_specs = offer.get(field_name)
         if isinstance(raw_specs, list):
             specs.extend(raw_specs)
@@ -911,7 +898,7 @@ def _price_from_jsonld_specifications(
         if not isinstance(spec, dict):
             continue
         price = detail_price_decimal(
-            _first_normalized_price(spec, _jsonld_price_fields, currency=currency)
+            _first_normalized_price(spec, DETAIL_JSONLD_PRICE_FIELDS, currency=currency)
         )
         if price is None:
             continue
@@ -943,6 +930,7 @@ def _normalize_detail_price_candidate(
 __all__ = [
     "append_record_field_source",
     "backfill_detail_price_from_html",
+    "currency_hint_from_page_url",
     "detail_currency_hint_is_host_level",
     "drop_low_signal_zero_detail_price",
     "format_detail_price_decimal",

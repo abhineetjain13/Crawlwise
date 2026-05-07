@@ -30,9 +30,9 @@ from app.services.config.extraction_rules import (
 from app.services.field_value_core import (
     clean_text,
     enforce_flat_variant_public_contract,
-    same_site,
     text_or_none,
 )
+from app.services.field_url_normalization import same_site
 from app.services.field_value_dom import dedupe_image_urls, upgrade_low_resolution_image_url
 from app.services.extract.shared_variant_logic import (
     normalized_variant_axis_key,
@@ -839,6 +839,10 @@ def _option_value_repeats_product_title(value: str, *, title_hint: str) -> bool:
     return title_key in value_key
 
 
+def _whole_value_pattern(value: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![a-z0-9]){re.escape(value)}(?![a-z0-9])")
+
+
 def _drop_variant_derived_parent_axis_scalars(record: dict[str, Any]) -> None:
     variants = [
         row for row in list(record.get("variants") or []) if isinstance(row, dict)
@@ -856,7 +860,8 @@ def _drop_variant_derived_parent_axis_scalars(record: dict[str, Any]) -> None:
             for row in variants
             if clean_text(row.get(field_name))
         }
-        if field_name == "color" and _parent_axis_value_looks_like_variant_dump(
+        # Drop parent axis strings that are just a dump of child variant values.
+        if field_name in ("color", "size") and _parent_axis_value_looks_like_variant_dump(
             parent_value,
             variant_values,
         ):
@@ -878,9 +883,6 @@ def _parent_axis_value_looks_like_variant_dump(
     normalized_parent = clean_text(parent_value).casefold()
     if not normalized_parent:
         return False
-    def _whole_value_pattern(value: str) -> re.Pattern[str]:
-        return re.compile(rf"(?<![a-z0-9]){re.escape(value)}(?![a-z0-9])")
-
     if not all(
         value and _whole_value_pattern(value).search(normalized_parent)
         for value in variant_values

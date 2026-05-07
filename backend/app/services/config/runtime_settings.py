@@ -107,7 +107,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     batch_url_concurrency: int = 8
     url_batch_concurrency: int = 4
     url_process_timeout_seconds: float = 90.0
-    url_process_timeout_buffer_seconds: float = 15.0
+    url_process_timeout_buffer_seconds: float = 45.0
     max_url_process_timeout_seconds: float = 600.0
     worker_max_concurrent_jobs: int = 8
     worker_orphan_recovery_grace_seconds: int = 900
@@ -347,7 +347,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     low_quality_browser_retry_min_remaining_seconds: float = 85.0
     acquisition_contract_stale_failure_threshold: int = 2
     detail_max_variant_axes: int = 3
-    detail_max_variant_rows: int = 0
+    detail_max_variant_rows: int = 50
     detail_max_variant_matrix_cells: int = 200
     listing_candidate_strong_score_threshold: int = 18
     robots_cache_size: int = 512
@@ -470,7 +470,7 @@ class CrawlerRuntimeSettings(BaseSettings):
         ):
             _require_non_negative(field_name, getattr(self, field_name))
         _require_positive("host_memory_ttl_min_seconds", self.host_memory_ttl_min_seconds)
-        _require_non_negative(
+        _require_positive(
             "host_memory_ttl_max_seconds",
             self.host_memory_ttl_max_seconds,
         )

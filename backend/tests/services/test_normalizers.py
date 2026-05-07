@@ -356,7 +356,7 @@ def test_normalize_variant_record_strips_learn_more_from_real_size() -> None:
     ]
 
 
-def test_normalize_variant_record_drops_quantity_size_rows_before_color_only_rows_survive() -> None:
+def test_normalize_variant_record_drops_quantity_size_controls_preserves_real_rows() -> None:
     record = {
         "variants": [
             {"size": "-", "color": "Black"},
@@ -445,6 +445,12 @@ def test_normalize_variant_record_infers_bombas_sizes_from_sku_suffixes() -> Non
     normalize_variant_record(record)
 
     assert [variant.get("size") for variant in record["variants"]] == ["XL", "M", "L"]
+    assert [variant.get("color") for variant in record["variants"]] == [
+        "black onyx",
+        "charcoal marl",
+        "True White",
+    ]
+    assert record["variant_count"] == 3
 
 
 def test_normalize_variant_record_prunes_patagonia_cross_product_size_noise() -> None:
@@ -488,7 +494,8 @@ def test_normalize_variant_record_drops_backmarket_condition_tabs() -> None:
         {"color": "Black", "storage": "128 GB", "condition": "Fair"},
         {"color": "Blue", "storage": "128 GB", "condition": "Good"},
     ]
-    assert record["variant_count"] == len(record["variants"]) == 2
+    assert record["variant_count"] == len(record["variants"])
+    assert len(record["variants"]) == 2
 
 
 def test_normalize_variant_record_preserves_separate_suit_sizes_with_dimension_labels() -> None:

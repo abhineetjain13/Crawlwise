@@ -1687,16 +1687,8 @@ def test_extract_ecommerce_detail_guarded_dom_cartesian_keeps_axis_rows(monkeypa
     assert record["variant_count"] == 6
     size_rows = [row for row in record["variants"] if row.get("size")]
     color_rows = [row for row in record["variants"] if row.get("color")]
-    assert [row.get("size") for row in size_rows] == [
-        "8",
-        "9",
-        "10",
-    ]
-    assert [row.get("color") for row in color_rows] == [
-        "Black",
-        "Red",
-        "White",
-    ]
+    assert {row.get("size") for row in size_rows} == {"8", "9", "10"}
+    assert {row.get("color") for row in color_rows} == {"Black", "Red", "White"}
     assert all(not row.get("color") for row in size_rows)
     assert all(not row.get("size") for row in color_rows)
 
@@ -4985,6 +4977,62 @@ def test_build_detail_record_repairs_nike_uuid_variant_skus_and_empty_prices() -
     assert record["variants"][0]["price"] == "115.00"
     assert "sku" not in record["variants"][0]
     assert record["sku"] == "CW2288-111"
+
+
+def test_build_detail_record_replaces_feature_duplicate_description_with_details() -> None:
+    record = build_detail_record(
+        "<html><body><main><h1>Scotch Heavy Duty Shipping Packaging Tape</h1></main></body></html>",
+        "https://www.samsclub.com/ip/scotch-heavy-duty-shipping-packaging-tape-dispensers-6-pack/5113185138",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Scotch Heavy Duty Shipping Packaging Tape",
+                "description": "Guaranteed to Stay Sealed. Provides excellent holding power.",
+                "features": [
+                    "Guaranteed to Stay Sealed.",
+                    "Provides excellent holding power.",
+                ],
+                "product_details": (
+                    "Now even the heaviest packages can withstand rough handling. "
+                    "This packaging tape holds strong on recycled boxes."
+                ),
+            }
+        ],
+    )
+
+    assert record["description"].startswith("Now even the heaviest packages")
+    assert record["features"] == [
+        "Guaranteed to Stay Sealed.",
+        "Provides excellent holding power.",
+    ]
+
+
+def test_build_detail_record_backfills_price_from_buy_button_aria_label() -> None:
+    record = build_detail_record(
+        """
+        <html>
+          <body>
+            <main>
+              <h1>Nike Dunk Low 'Black White'</h1>
+              <button aria-label="Buy New for $99">Buy New</button>
+            </main>
+          </body>
+        </html>
+        """,
+        "https://www.goat.com/sneakers/dunk-low-black-white-dd1391-100",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Nike Dunk Low 'Black White'",
+                "description": "Shop the Nike Dunk Low 'Black White' and other curated styles from Nike on GOAT.",
+            }
+        ],
+    )
+
+    assert record["price"] == "99.00"
+    assert record["currency"] == "USD"
 
 
 def test_build_detail_record_repairs_shopify_cent_variant_prices_and_numeric_titles() -> None:

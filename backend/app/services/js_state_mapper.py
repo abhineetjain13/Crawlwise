@@ -818,7 +818,7 @@ def _contextual_numeric_value(
         interpret_integral_as_cents=interpret_integral_as_cents,
     )
     if normalized is None:
-        return f"{currency} {value}"
+        return None
     if normalized.startswith(f"{currency} "):
         return normalized
     return f"{currency} {normalized}"

@@ -81,9 +81,9 @@ def _price_from_price_node(price_node: object) -> str | None:
     whole = re.sub(r"[^\d,]+", "", selectolax_node_text(whole_node))
     if not whole:
         return None
-    fraction = re.sub(r"\D+", "", selectolax_node_text(fraction_node))[:2]
+    fraction = re.sub(r"\D+", "", selectolax_node_text(fraction_node))[:2].zfill(2)
     symbol = selectolax_node_text(price_node.css_first(AMAZON_PRICE_SYMBOL_SELECTOR))
-    return f"{symbol or ''}{whole}.{fraction or '00'}"
+    return _normalize_price_text(f"{symbol or ''}{whole}.{fraction or '00'}")
 
 
 def _detail_price_text(parser: LexborHTMLParser) -> str | None:

@@ -50,10 +50,10 @@ BRAND_LIKE_FIELDS = frozenset({"brand", "company", "dealer_name", "vendor"})
 TITLE_STRUCTURED_VALUE_KEYS = (
     "name",
     "title",
-    "values",
     "label",
     "text",
     "value",
+    "values",
 )
 _EXTRA_EXPORTS = [
     "AVAILABLE_SIZES_FIELD",

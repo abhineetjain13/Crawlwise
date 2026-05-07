@@ -41,7 +41,6 @@ from app.services.config.extraction_rules import (
     LONG_TEXT_FIELDS,
     NOISY_PRODUCT_ATTRIBUTE_KEYS,
     OPTION_VALUE_NOISE_WORDS,
-    PAGE_URL_CURRENCY_HINTS_RAW,
     PLACEHOLDER_IMAGE_URL_PATTERNS,
     PRICE_VALUE_FIELDS,
     RATING_RE,
@@ -367,49 +366,7 @@ def same_host(base_url: str, candidate_url: str) -> bool:
     return bool(candidate_host) and candidate_host == base_host
 
 
-_MULTI_PART_PUBLIC_SUFFIXES = frozenset(
-    {
-        "ac.in",
-        "co.in",
-        "co.jp",
-        "co.kr",
-        "co.nz",
-        "co.uk",
-        "com.au",
-        "com.br",
-        "com.cn",
-        "com.mx",
-        "com.sg",
-        "com.tr",
-        "edu.au",
-        "gov.in",
-        "gov.uk",
-        "net.au",
-        "org.au",
-        "org.uk",
-    }
-)
-
 _HTML_ENTITY_RE = re.compile(r"&(?:#[0-9]+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]+);")
-
-
-def registrable_host(url: str) -> str:
-    host = (urlparse(url).hostname or "").lower().strip(".")
-    if not host:
-        return ""
-    parts = [part for part in host.split(".") if part]
-    if len(parts) <= 2:
-        return host
-    suffix = ".".join(parts[-2:])
-    if suffix in _MULTI_PART_PUBLIC_SUFFIXES and len(parts) >= 3:
-        return ".".join(parts[-3:])
-    return ".".join(parts[-2:])
-
-
-def same_site(base_url: str, candidate_url: str) -> bool:
-    base_site = registrable_host(base_url)
-    candidate_site = registrable_host(candidate_url)
-    return bool(candidate_site) and candidate_site == base_site
 
 
 def clean_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -438,10 +395,8 @@ def validate_record_for_surface(
         normalize_field_key(field_name)
         for field_name in surface_fields(surface, requested_fields)
     }
-    validated_fields, errors = validate_and_clean(logical_fields, surface)
+    validated_fields: dict[str, Any] = {}
     for field_name, value in logical_fields.items():
-        if field_name in validated_fields:
-            continue
         if normalize_field_key(field_name) in allowed_fields:
             validated_fields[field_name] = value
     if str(surface or "").strip().lower().startswith("ecommerce_"):
@@ -453,7 +408,7 @@ def validate_record_for_surface(
     return {
         **clean_record(validated_fields),
         **internal_fields,
-    }, errors
+    }, []
 
 
 def surface_fields(surface: str, requested_fields: list[str] | None) -> list[str]:
@@ -655,16 +610,6 @@ def extract_currency_code(value: object) -> str | None:
     return None
 
 
-def infer_currency_from_page_url(page_url: object) -> str | None:
-    lowered_url = str(page_url or "").strip().lower()
-    if not lowered_url:
-        return None
-    for token, code in dict(PAGE_URL_CURRENCY_HINTS_RAW or {}).items():
-        if str(token).lower() in lowered_url:
-            return str(code)
-    return None
-
-
 def coerce_structured_scalar(
     value: object,
     *,
@@ -676,9 +621,10 @@ def coerce_structured_scalar(
             try:
                 parsed = ast.literal_eval(stripped)
             except (MemoryError, RecursionError, SyntaxError, TypeError, ValueError):
-                parsed = None
-            if isinstance(parsed, dict):
+                return None
+            if isinstance(parsed, (dict, list)):
                 return coerce_structured_scalar(parsed, keys=keys)
+            return None
     if isinstance(value, dict):
         for key in keys:
             candidate = value.get(key)
@@ -1609,90 +1555,6 @@ def finalize_record(
     cleaned = clean_record(record)
     cleaned = strip_record_tracking_params(cleaned, surface=surface)
     return normalize_record_fields(cleaned) if normalize_fields else cleaned
-
-
-# ---------------------------------------------------------------------------
-# Output schema validation
-# ---------------------------------------------------------------------------
-
-# Defines the allowed Python type names for key fields per surface.
-# Used by validate_and_clean() to catch type-mismatched values after extraction.
-_OUTPUT_SCHEMAS: dict[str, dict[str, frozenset[str]]] = {
-    "ecommerce_listing": {
-        "title": frozenset({"str", "NoneType"}),
-        "url": frozenset({"str", "NoneType"}),
-        "price": frozenset({"str", "NoneType"}),
-        "sale_price": frozenset({"str", "NoneType"}),
-        "original_price": frozenset({"str", "NoneType"}),
-        "image_url": frozenset({"str", "NoneType"}),
-        "additional_images": frozenset({"list", "NoneType"}),
-    },
-    "ecommerce_detail": {
-        "price": frozenset({"str", "NoneType"}),
-        "sale_price": frozenset({"str", "NoneType"}),
-        "original_price": frozenset({"str", "NoneType"}),
-        "variants": frozenset({"list", "NoneType"}),
-        "stock_quantity": frozenset({"int", "str", "NoneType"}),
-        "image_url": frozenset({"str", "NoneType"}),
-        "additional_images": frozenset({"list", "NoneType"}),
-    },
-    "job_listing": {
-        "title": frozenset({"str", "NoneType"}),
-        "company": frozenset({"str", "NoneType"}),
-        "location": frozenset({"str", "NoneType"}),
-        "url": frozenset({"str", "NoneType"}),
-        "apply_url": frozenset({"str", "NoneType"}),
-        "salary": frozenset({"str", "NoneType"}),
-    },
-    "job_detail": {
-        "salary": frozenset({"str", "NoneType"}),
-        "salary_range": frozenset({"dict", "str", "NoneType"}),
-    },
-}
-
-
-def validate_and_clean(
-    record: dict[str, Any],
-    surface: str,
-) -> tuple[dict[str, Any], list[str]]:
-    """Validate a post-extraction record against the surface output schema.
-
-    Fields outside the schema are omitted. Fields whose type does not match the
-    expected schema are nullified so they are dropped by the downstream
-    ``clean_record`` pass. Returns a
-    ``(cleaned_record, errors)`` tuple where *errors* is a list of human-readable
-    messages describing each violation found.
-
-    Example usage::
-
-        cleaned, errors = validate_and_clean(record, "ecommerce_detail")
-        if errors:
-            logger.warning("Schema violations: %s", errors)
-        record = clean_record(cleaned)
-    """
-    normalized_surface = str(surface or "").strip().lower()
-    schema = _OUTPUT_SCHEMAS.get(normalized_surface, {})
-    if not schema:
-        return dict(record), []
-    errors: list[str] = []
-    cleaned: dict[str, Any] = {}
-    for field_name, value in record.items():
-        if field_name not in schema:
-            continue
-        if value in (None, "", [], {}):
-            cleaned[field_name] = value
-            continue
-        expected_types = schema[field_name]
-        actual_type = type(value).__name__
-        if actual_type not in expected_types:
-            errors.append(
-                f"{field_name}: expected one of {sorted(expected_types)}, "
-                f"got {actual_type!r} (value={str(value)[:60]!r})"
-            )
-            cleaned[field_name] = None  # Nullify so clean_record drops it
-        else:
-            cleaned[field_name] = value
-    return cleaned, errors
 
 
 def _is_template_url(url: str) -> bool:

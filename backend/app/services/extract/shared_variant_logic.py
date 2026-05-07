@@ -37,7 +37,9 @@ from app.services.config.extraction_rules import (
     VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS,
     VARIANT_OPTION_VALUE_NOISE_TOKENS,
     VARIANT_OPTION_VALUE_NOISE_PATTERNS,
+    VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
+    VARIANT_OPTION_NOISE_PHRASES,
     VARIANT_PROMO_NOISE_TOKENS,
     VARIANT_QUANTITY_ATTR_TOKENS,
     VARIANT_SELECT_GROUP_MAX,
@@ -54,6 +56,7 @@ from app.services.config.extraction_rules import (
     VARIANT_AXIS_TECHNICAL_PATTERNS,
     VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH,
 )
+from app.services.config.variant_policy import OPTION_SCALAR_FIELDS, PUBLIC_VARIANT_AXIS_FIELDS
 from app.services.field_value_core import clean_text, text_or_none
 
 logger = logging.getLogger(__name__)
@@ -89,17 +92,32 @@ _variant_size_value_patterns = tuple(
     for pattern in tuple(VARIANT_SIZE_VALUE_PATTERNS or ())
     if str(pattern).strip()
 )
+variant_size_value_patterns = _variant_size_value_patterns
+variant_option_value_suffix_noise_patterns = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS or ())
+    if str(pattern).strip()
+)
+public_variant_axis_fields = frozenset(
+    str(token).strip().lower()
+    for token in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
+    if str(token).strip()
+)
+option_scalar_fields = frozenset(
+    str(token).strip().lower()
+    for token in tuple(OPTION_SCALAR_FIELDS or ())
+    if str(token).strip()
+)
 _variant_option_value_noise_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_OPTION_VALUE_NOISE_TOKENS or ())
     if str(token).strip()
 )
-_variant_promo_noise_tokens = tuple(
+_variant_promo_noise_tokens = frozenset(
     str(token).strip().lower()
     for token in tuple(VARIANT_PROMO_NOISE_TOKENS or ())
     if str(token).strip()
 )
-_variant_promo_noise_tokens = frozenset(_variant_promo_noise_tokens)
 _variant_artifact_value_tokens = frozenset(
     re.sub(r"[^a-z0-9%#]+", "", str(token).strip().lower())
     for token in tuple(DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or ())
@@ -108,6 +126,11 @@ _variant_artifact_value_tokens = frozenset(
 _variant_option_value_ui_noise_phrases = tuple(
     cleaned.casefold()
     for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
+    if (cleaned := clean_text(token))
+)
+_variant_option_noise_phrases = tuple(
+    cleaned.casefold()
+    for token in tuple(VARIANT_OPTION_NOISE_PHRASES or ())
     if (cleaned := clean_text(token))
 )
 _variant_context_noise_tokens = frozenset(
@@ -757,10 +780,12 @@ def variant_option_value_matches_ui_noise(value: object) -> bool:
     except (TypeError, ValueError):
         max_len = 8
     for phrase in _variant_option_value_ui_noise_phrases:
-        if len(phrase) <= max_len and " " not in phrase:
+        if " " not in phrase:
             if lowered == phrase:
                 return True
             continue
+        if len(phrase) <= max_len and lowered == phrase:
+            return True
         if phrase in lowered:
             return True
     return False
@@ -788,15 +813,11 @@ def variant_option_value_is_noise(value: object) -> bool:
         or lowered in _variant_option_value_exact_noise_tokens
         or variant_option_value_matches_ui_noise(cleaned)
         or (
-            "size guide" in lowered
+            any(phrase in lowered for phrase in _variant_option_noise_phrases)
             and any(
                 rx.search(lowered)
                 for rx in _variant_option_value_noise_search_regexes
             )
-        )
-        or any(
-            rx.fullmatch(lowered)
-            for rx in _variant_option_value_noise_fullmatch_regexes
         )
     )
 

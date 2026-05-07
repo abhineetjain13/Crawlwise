@@ -14,8 +14,6 @@ from app.services.config.extraction_rules import (
     DOM_VARIANT_CARTESIAN_COMBO_LIMIT,
     DOM_VARIANT_GROUP_LIMIT,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
-    VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
-    VARIANT_SIZE_VALUE_PATTERNS,
 )
 from app.services.field_value_core import (
     RATING_RE,
@@ -31,10 +29,6 @@ from app.services.field_value_core import (
     surface_alias_lookup,
     surface_fields,
     text_or_none,
-)
-from app.services.config.variant_policy import (
-    OPTION_SCALAR_FIELDS,
-    PUBLIC_VARIANT_AXIS_FIELDS,
 )
 from app.services.field_value_dom import (
     apply_selector_fallbacks,
@@ -54,40 +48,22 @@ from app.services.extract.shared_variant_logic import (
     merge_variant_pair,
     normalized_variant_axis_display_name,
     normalized_variant_axis_key,
+    option_scalar_fields,
+    public_variant_axis_fields,
     resolve_variants,
     resolve_variant_group_name,
     split_variant_axes,
     variant_axis_name_is_semantic,
     variant_dom_cues_present,
-    variant_option_value_is_noise as _shared_variant_option_value_is_noise,
+    variant_option_value_is_noise,
+    variant_option_value_suffix_noise_patterns,
+    variant_size_value_patterns,
 )
 
 logger = logging.getLogger(__name__)
 
-_detail_variant_size_value_patterns = tuple(
-    re.compile(str(pattern), re.I)
-    for pattern in VARIANT_SIZE_VALUE_PATTERNS
-    if str(pattern).strip()
-)
-_variant_option_value_suffix_noise_patterns = tuple(
-    re.compile(str(pattern), re.I)
-    for pattern in VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS
-    if str(pattern).strip()
-)
-_public_variant_axis_fields = frozenset(
-    str(token).strip().lower()
-    for token in tuple(PUBLIC_VARIANT_AXIS_FIELDS or ())
-    if str(token).strip()
-)
-_option_scalar_fields = frozenset(
-    str(token).strip().lower()
-    for token in tuple(OPTION_SCALAR_FIELDS or ())
-    if str(token).strip()
-)
-
-
 def _dom_variant_axis_allowed(axis_name: str) -> bool:
-    return axis_name in _public_variant_axis_fields or axis_name == "style"
+    return axis_name in public_variant_axis_fields or axis_name == "style"
 
 
 def _dom_variant_group_name_allowed(group_name: str) -> bool:
@@ -345,16 +321,12 @@ def _resolve_dom_variant_group_name(node: Any) -> str:
     return ""
 
 
-def _variant_option_value_is_noise(value: str | None) -> bool:
-    return _shared_variant_option_value_is_noise(value)
-
-
 def _strip_variant_option_value_suffix_noise(value: object) -> str:
     cleaned = clean_text(value)
     if not cleaned:
         return ""
     stripped = cleaned
-    for pattern in _variant_option_value_suffix_noise_patterns:
+    for pattern in variant_option_value_suffix_noise_patterns:
         stripped = pattern.sub("", stripped).strip()
     return stripped or cleaned
 
@@ -367,7 +339,7 @@ def _coerce_variant_option_value(
 ) -> str:
     if axis_name == "color":
         return _coerce_color_option_value(raw_value, page_url=page_url)
-    if axis_name in _option_scalar_fields:
+    if axis_name in option_scalar_fields:
         coerced = text_or_none(coerce_field_value(axis_name, raw_value, page_url))
         if coerced:
             return coerced
@@ -415,6 +387,8 @@ def _prefer_axis_inferred_from_values(
         clean_text(value).casefold() for value in values if clean_text(value)
     }
     if clean_text(cleaned_name).casefold() in normalized_values:
+        return inferred_name
+    if {normalized_name, inferred_name} == {"color", "size"}:
         return inferred_name
     if normalized_name == "base" and inferred_name in {"color", "size"}:
         return inferred_name
@@ -632,8 +606,8 @@ def _collect_variant_choice_entries(
     axis_name = normalized_variant_axis_key(raw_group_name)
     coercion_axis = (
         axis_name
-        if axis_name in _option_scalar_fields
-        or axis_name in _public_variant_axis_fields
+        if axis_name in option_scalar_fields
+        or axis_name in public_variant_axis_fields
         else "style"
     )
     entries_by_value: dict[str, dict[str, object]] = {}
@@ -657,7 +631,7 @@ def _collect_variant_choice_entries(
             page_url=page_url,
         )
         cleaned = _strip_variant_option_value_suffix_noise(cleaned)
-        if _variant_option_value_is_noise(cleaned):
+        if variant_option_value_is_noise(cleaned):
             continue
         entry = entries_by_value.setdefault(cleaned, {"value": cleaned})
         _merge_variant_option_state(
@@ -689,7 +663,7 @@ def _collect_variant_choice_entries(
             page_url=page_url,
         )
         cleaned = _strip_variant_option_value_suffix_noise(cleaned)
-        if _variant_option_value_is_noise(cleaned):
+        if variant_option_value_is_noise(cleaned):
             continue
         entry = entries_by_value.setdefault(cleaned, {"value": cleaned})
         _merge_variant_option_state(
@@ -788,7 +762,7 @@ def _split_compound_option_value(
         size_candidate = " ".join(tokens[-width:])
         if not any(
             pattern.fullmatch(size_candidate)
-            for pattern in _detail_variant_size_value_patterns
+            for pattern in variant_size_value_patterns
         ):
             continue
         other_value = clean_text(" ".join(tokens[:-width]))
@@ -940,7 +914,7 @@ def _state_variant_targets(
                 if (
                     option_id
                     and option_value
-                    and not _variant_option_value_is_noise(option_value)
+                    and not variant_option_value_is_noise(option_value)
                 ):
                     value_by_id[option_id] = option_value
             if value_by_id:
@@ -1011,7 +985,7 @@ def _state_variant_targets(
     return axis_targets, combo_targets
 
 
-def _extract_variants_from_dom(
+def extract_variants_from_dom(
     soup: BeautifulSoup,
     *,
     page_url: str,
@@ -1048,7 +1022,7 @@ def _extract_variants_from_dom(
             raw_value_attr = text_or_none(option.get("value"))
             if (
                 not cleaned_value
-                or _variant_option_value_is_noise(cleaned_value)
+                or variant_option_value_is_noise(cleaned_value)
                 or (
                     raw_value_attr is not None
                     and raw_value_attr.lower() in {"select", "choose"}
@@ -1247,7 +1221,12 @@ def _extract_variants_from_dom(
     axis_value_lists = [values for _axis_key, _label, values in axis_order]
     try:
         combo_limit = int(DOM_VARIANT_CARTESIAN_COMBO_LIMIT)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Invalid DOM_VARIANT_CARTESIAN_COMBO_LIMIT; using 1000",
+            extra={"value": DOM_VARIANT_CARTESIAN_COMBO_LIMIT},
+            exc_info=exc,
+        )
         combo_limit = 1000
     if _dom_variant_combo_count(axis_value_lists) > combo_limit:
         variants = _axis_only_dom_variants(axis_order, axis_option_metadata)
@@ -1379,7 +1358,7 @@ def _axis_only_dom_variants(
     return variants
 
 
-def _backfill_variants_from_dom_if_missing(
+def backfill_variants_from_dom_if_missing(
     record: dict[str, Any],
     *,
     soup: BeautifulSoup,
@@ -1391,7 +1370,7 @@ def _backfill_variants_from_dom_if_missing(
     ]
     if not variant_dom_cues_present(soup):
         return
-    dom_variants = _extract_variants_from_dom(
+    dom_variants = extract_variants_from_dom(
         soup,
         page_url=page_url,
         js_state_objects=js_state_objects,
@@ -1441,8 +1420,3 @@ def _backfill_variants_from_dom_if_missing(
             variant["price"] = price
         if currency and variant.get("currency") in (None, "", [], {}):
             variant["currency"] = currency
-
-
-backfill_variants_from_dom_if_missing = _backfill_variants_from_dom_if_missing
-extract_variants_from_dom = _extract_variants_from_dom
-variant_option_value_is_noise = _variant_option_value_is_noise
