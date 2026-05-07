@@ -25,7 +25,6 @@ from app.services.detail_extractor import (
     repair_ecommerce_detail_record_quality,
 )
 from app.services.extract.detail_price_extractor import (
-    backfill_detail_price_from_html,
     drop_low_signal_zero_detail_price,
 )
 from app.services.extract.detail_identity import (
@@ -33,15 +32,11 @@ from app.services.extract.detail_identity import (
     listing_url_is_structural,
 )
 from app.services.extract.listing_record_finalizer import finalize_listing_price_fields
-from app.services.extract.variant_record_normalization import (
-    normalize_variant_record,
-)
 from app.services.field_value_core import (
     absolute_url,
     clean_text,
     coerce_text,
     direct_record_to_surface_fields,
-    enforce_flat_variant_public_contract,
     finalize_record,
     is_title_noise,
     surface_alias_lookup,
@@ -221,16 +216,13 @@ def _postprocess_detail_records(
     for record in list(records or []):
         if not isinstance(record, dict):
             continue
-        normalize_variant_record(record)
         repair_ecommerce_detail_record_quality(
             record,
             html=html,
             page_url=page_url,
             requested_page_url=requested_page_url,
         )
-        backfill_detail_price_from_html(record, html=html)
         drop_low_signal_zero_detail_price(record)
-        enforce_flat_variant_public_contract(record, page_url=page_url)
         rows.append(record)
     return rows
 

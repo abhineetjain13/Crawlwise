@@ -52,6 +52,7 @@ from app.services.extract.detail_identity import (
     record_matches_requested_detail_identity as _record_matches_requested_detail_identity,
     semantic_detail_identity_tokens as _semantic_detail_identity_tokens,
 )
+from app.services.extract.detail_dom_extractor import backfill_variants_from_dom_if_missing
 from app.services.extract.detail_raw_signals import detail_breadcrumb_is_root_label
 from app.services.extract.detail_price_extractor import (
     backfill_detail_price_from_html,
@@ -60,6 +61,7 @@ from app.services.extract.detail_price_extractor import (
     reconcile_detail_price_magnitudes,
     reconcile_parent_price_against_variant_range,
 )
+from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extract.detail_text_sanitizer import (
     detail_product_type_is_low_signal,
     detail_scalar_size_is_low_signal,
@@ -156,10 +158,16 @@ def _sanitize_ecommerce_detail_record(
     *,
     page_url: str,
     requested_page_url: str | None,
+    soup: Any | None = None,
+    js_state_objects: object | None = None,
 ) -> None:
     identity_url = text_or_none(requested_page_url) or page_url
     _sanitize_detail_placeholder_scalars(record, identity_url=identity_url)
     _sanitize_detail_identity_scalars(record, identity_url=identity_url)
+    if soup is not None:
+        backfill_variants_from_dom_if_missing(
+            record, soup=soup, page_url=page_url, js_state_objects=js_state_objects
+        )
     _sanitize_detail_variant_payload(record, identity_url=identity_url)
     sanitize_detail_long_text_fields(
         record,
@@ -532,12 +540,19 @@ def repair_ecommerce_detail_record_quality(
     html: str,
     page_url: str,
     requested_page_url: str | None = None,
+    soup: Any | None = None,
+    js_state_objects: object | None = None,
 ) -> None:
+    if _variant_rows_have_no_option_values(record):
+        normalize_variant_record(record, finalize_contract=False)
     _sanitize_ecommerce_detail_record(
         record,
         page_url=page_url,
         requested_page_url=requested_page_url,
+        soup=soup,
+        js_state_objects=js_state_objects,
     )
+    normalize_variant_record(record, finalize_contract=False)
     backfill_detail_price_from_html(record, html=html)
     reconcile_detail_price_magnitudes(record)
     reconcile_parent_price_against_variant_range(record)
@@ -547,6 +562,12 @@ def repair_ecommerce_detail_record_quality(
     _repair_detail_variant_prices_and_identity(record)
     enforce_flat_variant_public_contract(record, page_url=page_url)
 
+
+def _variant_rows_have_no_option_values(record: dict[str, Any]) -> bool:
+    rows = [row for row in list(record.get("variants") or []) if isinstance(row, dict)]
+    return bool(rows) and not any(
+        isinstance(row.get("option_values"), dict) for row in rows
+    )
 
 def _repair_detail_variant_prices_and_identity(record: dict[str, Any]) -> None:
     parent_price = text_or_none(record.get("price"))

@@ -270,6 +270,37 @@ def test_normalize_variant_record_drops_ui_control_variant_values() -> None:
     assert "variant_count" not in record
 
 
+def test_repair_ecommerce_detail_backfills_dom_variants_before_sanitizing_noise() -> None:
+    html = """
+    <main>
+      <h1>Trail Shoe</h1>
+      <select name="size">
+        <option>Please select</option>
+        <option>S</option>
+        <option>M</option>
+      </select>
+    </main>
+    """
+    record = {
+        "title": "Trail Shoe",
+        "price": "49.99",
+        "currency": "USD",
+        "variants": [
+            {"size": "Please select", "option_values": {"size": "Please select"}},
+        ],
+    }
+
+    repair_ecommerce_detail_record_quality(
+        record,
+        html=html,
+        page_url="https://example.com/products/trail-shoe",
+        soup=BeautifulSoup(html, "html.parser"),
+    )
+
+    assert record["variants"] == [{"size": "S"}, {"size": "M"}]
+    assert record["variant_count"] == 2
+
+
 def test_normalize_variant_record_drops_ce4_ui_and_cookie_axis_values() -> None:
     record = {
         "variants": [

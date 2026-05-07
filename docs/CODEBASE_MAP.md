@@ -146,11 +146,11 @@ Canonical config owner:
 | `extract/detail_dom_extractor.py` | Detail DOM context selection, DOM fallback fields, and DOM variant recovery |
 | `extract/detail_raw_signals.py` | Raw detail breadcrumb category and deterministic gender signal helpers |
 | `extract/detail_price_extractor.py` | Detail price, currency reconciliation, and visible PDP price backfill |
-| `extract/detail_record_finalizer.py` | Detail record image dedupe, field cleanup, variant row repair, and final quality normalization |
+| `extract/detail_record_finalizer.py` | Detail record image dedupe, field cleanup, DOM variant backfill sequencing, variant row repair, and final quality normalization |
 | `extract/detail_text_sanitizer.py` | Detail long-text pollution filters, fulfillment copy cleanup, and low-signal scalar checks |
 | `extract/detail_title_scorer.py` | Detail title promotion and shell-title scoring |
 | `extract/shared_variant_logic.py` | Canonical variant identity, merge, richness, DOM cue, and axis helpers |
-| `extract/variant_record_normalization.py` | Variant axis/value normalization before record persistence |
+| `extract/variant_record_normalization.py` | Variant axis/value normalization delegated by detail record finalization before public variant flattening |
 | `extract/*` | Other extraction helpers |
 
 Canonical config owners:

@@ -1389,13 +1389,6 @@ def _backfill_variants_from_dom_if_missing(
     existing_variants = [
         row for row in list(record.get("variants") or []) if isinstance(row, dict)
     ]
-    existing_has_axis = any(
-        row.get("color") not in (None, "", [], {})
-        or row.get("size") not in (None, "", [], {})
-        for row in existing_variants
-    )
-    if existing_variants and existing_has_axis:
-        return
     if not variant_dom_cues_present(soup):
         return
     dom_variants = _extract_variants_from_dom(

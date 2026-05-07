@@ -178,12 +178,13 @@ def _variant_has_axis_value(variant: dict[str, Any]) -> bool:
     return any(clean_text(variant.get(axis)) for axis in _PUBLIC_VARIANT_AXIS_FIELDS)
 
 
-def normalize_variant_record(record: dict[str, Any]) -> None:
+def normalize_variant_record(record: dict[str, Any], *, finalize_contract: bool = True) -> None:
     _hydrate_variant_axes(record)
     _sanitize_variant_axes(record)
     _dedupe_and_prune_variant_rows(record)
     _backfill_variant_context(record)
-    _finalize_variant_contract(record)
+    if finalize_contract:
+        _finalize_variant_contract(record)
 
 
 def _hydrate_variant_axes(record: dict[str, Any]) -> None:

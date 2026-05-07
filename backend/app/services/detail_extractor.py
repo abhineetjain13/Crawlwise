@@ -38,7 +38,6 @@ from app.services.field_value_core import (
     absolute_url,
     clean_text,
     coerce_field_value,
-    enforce_flat_variant_public_contract,
     finalize_record,
     is_title_noise,
     object_dict as _object_dict,
@@ -61,7 +60,6 @@ from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 from app.services.extract.detail_dom_extractor import (
     apply_dom_fallbacks,
-    backfill_variants_from_dom_if_missing as _backfill_variants_from_dom_if_missing,
     extract_variants_from_dom as _extract_variants_from_dom,
     primary_dom_context,
 )
@@ -89,9 +87,7 @@ from app.services.extract.detail_record_finalizer import (
 )
 from app.services.extract.detail_text_sanitizer import detail_candidate_is_valid
 from app.services.extract.detail_price_extractor import (
-    backfill_detail_price_from_html,
     drop_low_signal_zero_detail_price,
-    reconcile_detail_price_magnitudes,
     reconcile_detail_currency_with_url as _reconcile_detail_currency_with_url,
 )
 from app.services.extract.detail_title_scorer import (
@@ -100,9 +96,6 @@ from app.services.extract.detail_title_scorer import (
 )
 from app.services.extract.shared_variant_logic import (
     variant_dom_cues_present,
-)
-from app.services.extract.variant_record_normalization import (
-    normalize_variant_record,
 )
 from app.services.field_policy import exact_requested_field_key
 from app.services.extract.detail_tiers import (
@@ -470,14 +463,6 @@ def _materialize_record(
     record["_source"] = _primary_source_for_record(selected_field_sources)
     if str(surface or "").strip().lower() == "ecommerce_detail":
         _reconcile_detail_currency_with_url(record, page_url=page_url)
-    normalize_variant_record(record)
-    if str(surface or "").strip().lower() == "ecommerce_detail":
-        repair_ecommerce_detail_record_quality(
-            record,
-            html="",
-            page_url=page_url,
-            requested_page_url=requested_page_url,
-        )
     drop_low_signal_zero_detail_price(record)
     _dedupe_primary_and_additional_images(record)
     confidence = score_record_confidence(
@@ -1030,20 +1015,21 @@ def _finalize_early_detail_record(
     page_url: str,
     surface: str,
     requested_fields: list[str] | None,
+    requested_page_url: str | None,
     soup: BeautifulSoup,
     js_state_objects: dict[str, Any],
 ) -> dict[str, Any]:
-    backfill_detail_price_from_html(record, html=html)
-    reconcile_detail_price_magnitudes(record)
-    _backfill_variants_from_dom_if_missing(
-        record,
-        soup=soup,
-        page_url=page_url,
-        js_state_objects=js_state_objects,
-    )
-    _reconcile_detail_currency_with_url(record, page_url=page_url)
-    drop_low_signal_zero_detail_price(record)
-    enforce_flat_variant_public_contract(record, page_url=page_url)
+    if str(surface or "").strip().lower() == "ecommerce_detail":
+        _reconcile_detail_currency_with_url(record, page_url=page_url)
+        repair_ecommerce_detail_record_quality(
+            record,
+            html=html,
+            page_url=page_url,
+            requested_page_url=requested_page_url,
+            soup=soup,
+            js_state_objects=js_state_objects,
+        )
+        drop_low_signal_zero_detail_price(record)
     record["_confidence"] = score_record_confidence(
         record,
         surface=surface,
@@ -1096,20 +1082,21 @@ def _finalize_dom_detail_record(
     page_url: str,
     surface: str,
     requested_fields: list[str] | None,
+    requested_page_url: str | None,
     soup: BeautifulSoup,
     js_state_objects: dict[str, Any],
 ) -> dict[str, Any]:
-    backfill_detail_price_from_html(record, html=html)
-    reconcile_detail_price_magnitudes(record)
-    drop_low_signal_zero_detail_price(record)
-    _backfill_variants_from_dom_if_missing(
-        record,
-        soup=soup,
-        page_url=page_url,
-        js_state_objects=js_state_objects,
-    )
-    _reconcile_detail_currency_with_url(record, page_url=page_url)
-    enforce_flat_variant_public_contract(record, page_url=page_url)
+    if str(surface or "").strip().lower() == "ecommerce_detail":
+        _reconcile_detail_currency_with_url(record, page_url=page_url)
+        repair_ecommerce_detail_record_quality(
+            record,
+            html=html,
+            page_url=page_url,
+            requested_page_url=requested_page_url,
+            soup=soup,
+            js_state_objects=js_state_objects,
+        )
+        drop_low_signal_zero_detail_price(record)
     record["_confidence"] = score_record_confidence(
         record,
         surface=surface,

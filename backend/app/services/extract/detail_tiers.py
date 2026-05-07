@@ -116,6 +116,7 @@ class DetailTierExecutor:
                 page_url=inputs.page_url,
                 surface=inputs.surface,
                 requested_fields=inputs.requested_fields,
+                requested_page_url=prepared.state.requested_page_url,
                 soup=prepared.soup,
                 js_state_objects=prepared.js_state_objects,
             )
@@ -127,6 +128,7 @@ class DetailTierExecutor:
             page_url=inputs.page_url,
             surface=inputs.surface,
             requested_fields=inputs.requested_fields,
+            requested_page_url=prepared.state.requested_page_url,
             soup=prepared.soup,
             js_state_objects=prepared.js_state_objects,
         )

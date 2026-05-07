@@ -4126,7 +4126,7 @@ def test_build_detail_record_sanitizes_cross_sell_images_placeholder_variants_an
             "price": "8.00",
             "currency": "USD",
             "color": "Black",
-            "image_url": "http://www.puravidabracelets.com/cdn/shop/files/50907BLCK_1-min.jpg?v=1717477241",
+            "image_url": "https://www.puravidabracelets.com/cdn/shop/files/50907BLCK_1-min.jpg?v=1717477241",
         }
     ]
 
