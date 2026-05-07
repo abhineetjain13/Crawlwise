@@ -766,6 +766,11 @@ def variant_option_value_matches_ui_noise(value: object) -> bool:
     return False
 
 
+def variant_option_value_matches_noise_token(value: object) -> bool:
+    cleaned = clean_text(value)
+    return bool(cleaned) and cleaned.casefold() in _variant_option_value_noise_tokens
+
+
 def variant_option_value_is_noise(value: object) -> bool:
     cleaned = clean_text(value)
     if not cleaned:

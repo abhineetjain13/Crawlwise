@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
 from app.services.config.extraction_rules import (
     DETAIL_BREADCRUMB_JSONLD_TYPES,
@@ -57,12 +57,14 @@ class DetailTierInputs:
     requested_fields: list[str] | None
 
 
-class PreparedDetailPage(Protocol):
-    state: DetailTierState
+@dataclass(slots=True)
+class PreparedDetailExtraction:
     context: Any
-    js_state_record: dict[str, Any]
+    dom_parser: Any
     soup: Any
     raw_soup: Any
+    state: DetailTierState
+    js_state_record: dict[str, Any]
     js_state_objects: list[object]
     selector_self_heal: dict[str, object]
 
@@ -101,7 +103,7 @@ class DetailTierExecutor:
 
     def build_record(
         self,
-        prepared: PreparedDetailPage,
+        prepared: PreparedDetailExtraction,
         inputs: DetailTierInputs,
     ) -> dict[str, Any]:
         record = self._collect_pre_dom_tiers(prepared, inputs)
@@ -131,7 +133,7 @@ class DetailTierExecutor:
 
     def _collect_pre_dom_tiers(
         self,
-        prepared: PreparedDetailPage,
+        prepared: PreparedDetailExtraction,
         inputs: DetailTierInputs,
     ) -> dict[str, Any]:
         self._collect_authoritative_tier(
@@ -240,7 +242,7 @@ class DetailTierExecutor:
 
     def _build_dom_tier_record(
         self,
-        prepared: PreparedDetailPage,
+        prepared: PreparedDetailExtraction,
         inputs: DetailTierInputs,
     ) -> dict[str, Any]:
         self._collect_dom_tier(
@@ -258,7 +260,7 @@ class DetailTierExecutor:
         self,
         state: DetailTierState,
         *,
-        prepared: PreparedDetailPage,
+        prepared: PreparedDetailExtraction,
         soup,
         selector_rules: list[dict[str, object]] | None,
     ) -> None:
@@ -294,7 +296,7 @@ class DetailTierExecutor:
     def _can_skip_dom_tier(
         self,
         record: dict[str, Any],
-        prepared: PreparedDetailPage,
+        prepared: PreparedDetailExtraction,
         inputs: DetailTierInputs,
     ) -> bool:
         confidence_score = self._runtime.coerce_float(

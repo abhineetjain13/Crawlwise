@@ -41,7 +41,7 @@ from app.services.field_value_core import (
 from app.services.normalizers import normalize_decimal_price
 
 _LOW_SIGNAL_ZERO_PRICE_SOURCES = frozenset(DETAIL_LOW_SIGNAL_ZERO_PRICE_SOURCES)
-_AUTHORITATIVE_PRICE_SOURCES = frozenset({"adapter", "network_payload"})
+_AUTHORITATIVE_PRICE_SOURCES = frozenset({"adapter", "json_ld", "network_payload"})
 _STRICT_PARENT_PRICE_SOURCES = frozenset({"network_payload"})
 _CENT_BASED_CURRENCIES = frozenset(DETAIL_CENT_BASED_PRICE_CURRENCIES)
 _PRICE_CENT_MAGNITUDE_RATIO = Decimal(str(DETAIL_PRICE_CENT_MAGNITUDE_RATIO))

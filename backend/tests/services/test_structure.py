@@ -56,7 +56,6 @@ ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_NAME_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS"),
     ("crawl_fetch_runtime.py", "_RETRY_SENTINEL"),
-    ("extract/detail_record_finalizer.py", "_VARIANT_OPTION_VALUE_NOISE_TOKENS"),
     ("extract/variant_record_normalization.py", "_ADULT_SIZE_CONTEXT_TOKENS"),
     ("extract/variant_record_normalization.py", "_DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS"),
     ("extract/variant_record_normalization.py", "_DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS"),

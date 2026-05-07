@@ -25,7 +25,6 @@ from app.services.config.extraction_rules import (
     DETAIL_PRICE_COMPARISON_TOLERANCE,
     PLACEHOLDER_IMAGE_URL_PATTERNS,
     VARIANT_OPTION_LABEL_MAX_WORDS,
-    VARIANT_OPTION_VALUE_NOISE_TOKENS,
     WAF_QUEUE_PATTERNS,
 )
 from app.services.field_value_core import (
@@ -39,6 +38,7 @@ from app.services.extract.shared_variant_logic import (
     normalized_variant_axis_key,
     variant_axis_allowed_single_tokens,
     variant_axis_name_is_semantic,
+    variant_option_value_matches_noise_token,
     variant_option_value_is_noise as _variant_option_value_is_noise,
 )
 from app.services.extract.detail_identity import (
@@ -71,11 +71,6 @@ logger = logging.getLogger(__name__)
 
 _UUID_LIKE_PATTERN = re.compile(r"(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _MERCH_CODE_PATTERN = re.compile(r"\b[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", re.I)
-_VARIANT_OPTION_VALUE_NOISE_TOKENS = frozenset(
-    str(token).strip().lower()
-    for token in VARIANT_OPTION_VALUE_NOISE_TOKENS
-    if str(token).strip()
-)
 _PLACEHOLDER_IMAGE_URL_PATTERNS_LOWER = tuple(
     str(pattern).lower()
     for pattern in tuple(PLACEHOLDER_IMAGE_URL_PATTERNS or ())
@@ -703,7 +698,7 @@ def _variant_title_is_low_signal(title: str) -> bool:
     normalized = clean_text(title)
     return bool(normalized) and (
         normalized.isdigit()
-        or normalized.lower() in _VARIANT_OPTION_VALUE_NOISE_TOKENS
+        or variant_option_value_matches_noise_token(normalized)
         or len(normalized) <= 2
     )
 

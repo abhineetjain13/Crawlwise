@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
 from urllib.parse import urlparse
 from typing import Any
 
@@ -111,21 +110,10 @@ from app.services.extract.detail_tiers import (
     DetailTierInputs,
     DetailTierRuntime,
     DetailTierState,
+    PreparedDetailExtraction,
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class PreparedDetailExtraction:
-    context: Any
-    dom_parser: Any
-    soup: BeautifulSoup
-    raw_soup: BeautifulSoup
-    state: DetailTierState
-    js_state_objects: dict[str, Any]
-    js_state_record: dict[str, Any]
-    selector_self_heal: dict[str, object]
 
 
 def _coerce_float(value: object, default: float = 0.0) -> float:
@@ -1361,12 +1349,6 @@ def extract_detail_records(
         selector_rules=selector_rules,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
     )
-    if surface == "ecommerce_detail":
-        normalize_variant_record(record)
-        backfill_detail_price_from_html(record, html=html)
-        reconcile_detail_price_magnitudes(record)
-        _reconcile_detail_currency_with_url(record, page_url=page_url)
-        enforce_flat_variant_public_contract(record, page_url=page_url)
     if surface == "ecommerce_detail" and _looks_like_site_shell_record(
         record,
         page_url=page_url,
