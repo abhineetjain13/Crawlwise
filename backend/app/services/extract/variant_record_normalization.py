@@ -15,6 +15,7 @@ from app.services.config.extraction_rules import (
     VARIANT_COLOR_HINT_WORDS,
     VARIANT_OPTION_VALUE_SUFFIX_NOISE_PATTERNS,
     VARIANT_OPTION_VALUE_UI_NOISE_PHRASES,
+    VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH,
     VARIANT_PLACEHOLDER_PREFIXES,
     VARIANT_PLACEHOLDER_VALUES,
     VARIANT_SIZE_VALUE_PATTERNS,
@@ -139,6 +140,7 @@ def normalize_variant_record(record: dict[str, Any]) -> None:
     _enforce_variant_currency_context(record)
     _backfill_variant_shared_fields_from_record(record)
     _prune_low_signal_numeric_only_variants(record)
+    _drop_parent_sku_alias_variant_rows(record)
     _enforce_variant_payload_limits(record)
     _enforce_flat_variant_contract(record)
 
@@ -404,7 +406,10 @@ def _value_is_ui_noise(value: str) -> bool:
             continue
         # Very short control labels like "next" must be exact; otherwise
         # valid values such as "Next Blue" would be over-pruned.
-        if len(phrase) <= 8 and " " not in phrase:
+        if (
+            len(phrase) <= int(VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH)
+            and " " not in phrase
+        ):
             if lowered == phrase:
                 return True
             continue
@@ -783,6 +788,62 @@ def _prune_low_signal_numeric_only_variants(record: dict[str, Any]) -> None:
         return
     record.pop("variants", None)
     record.pop("variant_count", None)
+
+
+def _drop_parent_sku_alias_variant_rows(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    variant_rows = [variant for variant in variants if isinstance(variant, dict)]
+    dropped_indexes: set[int] = set()
+    for index, variant in enumerate(variant_rows):
+        sku = clean_text(variant.get("sku"))
+        size = clean_text(variant.get("size"))
+        if not sku or not size:
+            continue
+        for other_index, other in enumerate(variant_rows):
+            if index == other_index:
+                continue
+            if _variant_sku_is_size_specific_child(
+                parent_sku=sku,
+                child_sku=clean_text(other.get("sku")),
+                size=size,
+            ) and variant_row_richness(other) >= variant_row_richness(variant):
+                dropped_indexes.add(index)
+                break
+    if not dropped_indexes:
+        return
+    kept = [
+        variant
+        for index, variant in enumerate(variant_rows)
+        if index not in dropped_indexes
+    ]
+    if kept:
+        record["variants"] = kept
+        record["variant_count"] = len(kept)
+        return
+    record.pop("variants", None)
+    record.pop("variant_count", None)
+
+
+def _variant_sku_is_size_specific_child(
+    *,
+    parent_sku: str,
+    child_sku: str,
+    size: str,
+) -> bool:
+    parent = parent_sku.casefold()
+    child = child_sku.casefold()
+    size_token = re.sub(r"[^a-z0-9]+", "", size.casefold())
+    if not parent or not child or not size_token:
+        return False
+    if not child.startswith(parent) or len(child) <= len(parent):
+        return False
+    separator = child[len(parent) : len(parent) + 1]
+    if separator and separator.isalnum():
+        return False
+    child_tokens = [token for token in re.split(r"[^a-z0-9]+", child) if token]
+    return bool(child_tokens and child_tokens[-1] == size_token)
 
 
 def _variant_row_is_low_signal_numeric_only(variant: object) -> bool:

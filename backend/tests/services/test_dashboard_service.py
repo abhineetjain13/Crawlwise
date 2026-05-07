@@ -210,6 +210,7 @@ async def test_split_reset_crawl_data_and_domain_memory_preserve_the_other_scope
             "surface": "ecommerce_detail",
         },
     )
+    (cookies_dir / "memory-reset.json").write_text("cookie", encoding="utf-8")
 
     assert next_run.id is not None
     assert next_run.id > 0
@@ -218,15 +219,19 @@ async def test_split_reset_crawl_data_and_domain_memory_preserve_the_other_scope
 
     assert memory_reset["domain_memory_deleted"] == 1
     assert memory_reset["domain_run_profiles_deleted"] == 1
-    assert memory_reset["domain_cookie_memory_deleted"] == 0
-    assert memory_reset["domain_cookie_memory_preserved"] == 1
+    assert memory_reset["domain_cookie_memory_deleted"] == 1
     assert memory_reset["domain_field_feedback_deleted"] == 1
-    assert memory_reset["host_protection_memory_deleted"] == 0
-    assert memory_reset["host_protection_memory_preserved"] == 1
-    for model in (DomainMemory, DomainRunProfile, DomainFieldFeedback):
+    assert memory_reset["host_protection_memory_deleted"] == 1
+    assert memory_reset["cookies_removed"] == 1
+    for model in (
+        DomainMemory,
+        DomainRunProfile,
+        DomainCookieMemory,
+        DomainFieldFeedback,
+        HostProtectionMemory,
+    ):
         assert (await db_session.execute(select(model))).scalars().all() == []
-    assert (await db_session.execute(select(DomainCookieMemory))).scalars().all() != []
-    assert (await db_session.execute(select(HostProtectionMemory))).scalars().all() != []
+    assert list(cookies_dir.iterdir()) == []
 
 
 @pytest.mark.asyncio

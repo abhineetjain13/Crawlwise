@@ -32,7 +32,13 @@ class ShopifyAdapter(BaseAdapter):
         ]
         return any(signals)
 
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+    async def extract(
+        self,
+        url: str,
+        html: str,
+        surface: str,
+        proxy: str | None = None,
+    ) -> AdapterResult:
         records: list[dict] = []
         embedded = self._extract_embedded_product(html, url)
         if embedded:
@@ -45,6 +51,7 @@ class ShopifyAdapter(BaseAdapter):
                 url,
                 html=html,
                 surface=surface,
+                proxy=proxy,
             )
             if api_records:
                 if surface == "ecommerce_detail" and records:
@@ -117,7 +124,9 @@ class ShopifyAdapter(BaseAdapter):
                 batch = data.get("products", [])
                 if not isinstance(batch, list) or not batch:
                     break
-                products.extend(product for product in batch if isinstance(product, dict))
+                products.extend(
+                    product for product in batch if isinstance(product, dict)
+                )
                 if (
                     len(products) >= adapter_runtime_settings.shopify_max_products
                     or len(batch) < adapter_runtime_settings.shopify_catalog_limit
@@ -315,7 +324,9 @@ class ShopifyAdapter(BaseAdapter):
     ) -> dict:
         parsed = urlparse(page_url)
         variants = (
-            product.get("variants", []) if isinstance(product.get("variants"), list) else []
+            product.get("variants", [])
+            if isinstance(product.get("variants"), list)
+            else []
         )
         option_names = self._option_names(product.get("options"))
         product_url = urljoin(
@@ -351,13 +362,15 @@ class ShopifyAdapter(BaseAdapter):
         images = [
             image_url
             for img in product.get("images", [])
-            if (
-                image_url := self._normalize_url(self._image_src(img), parsed.scheme)
-            )
+            if (image_url := self._normalize_url(self._image_src(img), parsed.scheme))
         ]
         raw_tags = product.get("tags")
         tags = (
-            [token for token in (item.strip() for item in raw_tags.strip().split(",")) if token]
+            [
+                token
+                for token in (item.strip() for item in raw_tags.strip().split(","))
+                if token
+            ]
             if isinstance(raw_tags, str) and raw_tags.strip()
             else ([] if isinstance(raw_tags, str) else product.get("tags", []))
         )
@@ -413,11 +426,7 @@ class ShopifyAdapter(BaseAdapter):
             if key not in merged or merged.get(key) in (None, "", [], {}):
                 merged[key] = value
                 continue
-            if (
-                isinstance(merged.get(key), dict)
-                and isinstance(value, dict)
-                and value
-            ):
+            if isinstance(merged.get(key), dict) and isinstance(value, dict) and value:
                 nested = dict(value)
                 nested.update(
                     {
@@ -455,7 +464,9 @@ class ShopifyAdapter(BaseAdapter):
         marker_index = raw_path.find(marker)
         prefix = raw_path[:marker_index] if marker_index >= 0 else ""
         if marker_index < 0:
-            locale_match = re.match(r"^/([a-z]{2}(?:-[a-z]{2})?)(?:/|$)", raw_path, re.I)
+            locale_match = re.match(
+                r"^/([a-z]{2}(?:-[a-z]{2})?)(?:/|$)", raw_path, re.I
+            )
             if locale_match is not None:
                 prefix = f"/{locale_match.group(1)}"
         return f"{prefix}/products/{product_handle}"

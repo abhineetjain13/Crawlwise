@@ -24,6 +24,20 @@ NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL: dict[str, str] = {
     "macOS": "MacIntel",
     "Linux": "Linux x86_64",
 }
+PLATFORM_VERSION_BY_LABEL: dict[str, str] = {
+    "Windows": "15.0.0",
+    "macOS": "14.0.0",
+    "Linux": "6.0.0",
+}
+CHROME_CLIENT_HINT_BRANDS: tuple[str, ...] = (
+    "Not:A-Brand",
+    "Google Chrome",
+    "Chromium",
+)
+CHROME_CLIENT_HINT_GREASE_BRAND: str = "Not:A-Brand"
+CHROME_CLIENT_HINT_GREASE_VERSION: str = "99"
+CHROME_CLIENT_HINT_GREASE_FULL_VERSION: str = "99.0.0.0"
+CHROME_RUNTIME_VERSION_FALLBACK: str = "145.0.0.0"
 
 TIMEZONE_ALIASES: dict[str, str] = {
     "asia/calcutta": "Asia/Kolkata",
@@ -44,6 +58,14 @@ WARMUP_ELIGIBLE_BROWSER_REASONS: frozenset[str] = frozenset(
     }
 )
 WARMUP_VENDOR_BLOCK_PREFIX: str = "vendor-block:"
+BROWSER_REQUIRED_REASONS: frozenset[str] = frozenset(
+    {
+        "host-preference",
+        "http-escalation",
+        "traversal-required",
+        "vendor-block",
+    }
+)
 
 _DESKTOP_WEBGL_LIMITS: dict[str, object] = {
     "max_texture_size": 16384,
@@ -286,7 +308,13 @@ FONT_ALLOWLIST_BY_PLATFORM: dict[str, tuple[str, ...]] = {
 }
 
 __all__ = [
+    "CHROME_CLIENT_HINT_BRANDS",
+    "CHROME_CLIENT_HINT_GREASE_BRAND",
+    "CHROME_CLIENT_HINT_GREASE_FULL_VERSION",
+    "CHROME_CLIENT_HINT_GREASE_VERSION",
+    "CHROME_RUNTIME_VERSION_FALLBACK",
     "DEVICE_MEMORY_BUCKETS",
+    "BROWSER_REQUIRED_REASONS",
     "FONT_ALLOWLIST_BY_PLATFORM",
     "HOST_OS_PLATFORM_LABELS",
     "HOST_OS_UA_TOKENS",

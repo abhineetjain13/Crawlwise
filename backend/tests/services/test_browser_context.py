@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from uuid import uuid4
 from types import SimpleNamespace
 
@@ -81,7 +82,9 @@ def test_build_playwright_context_options_uses_generated_identity(
         "_FINGERPRINT_GENERATOR",
         SimpleNamespace(generate=lambda: fingerprint),
     )
-    monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "America/New_York")
+    monkeypatch.setattr(
+        browser_identity, "_get_localzone_name", lambda: "America/New_York"
+    )
 
     options = browser_identity.build_playwright_context_options()
 
@@ -434,7 +437,9 @@ def test_build_playwright_context_options_replaces_malformed_client_hints_withou
         "_FINGERPRINT_GENERATOR",
         SimpleNamespace(generate=lambda: fingerprint),
     )
-    monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "America/New_York")
+    monkeypatch.setattr(
+        browser_identity, "_get_localzone_name", lambda: "America/New_York"
+    )
 
     options = browser_identity.build_playwright_context_options()
 
@@ -589,7 +594,9 @@ def test_align_raw_fingerprint_to_browser_major_falls_back_to_safe_shallow_copy(
     )
 
     assert aligned is not raw_fingerprint
-    assert raw_fingerprint.navigator.userAgent.endswith("Chrome/125.0.0.0 Safari/537.36")
+    assert raw_fingerprint.navigator.userAgent.endswith(
+        "Chrome/125.0.0.0 Safari/537.36"
+    )
     assert aligned.navigator.userAgent.endswith("Chrome/145.0.0.0 Safari/537.36")
     assert raw_fingerprint.headers["sec-ch-ua"] == (
         '"Google Chrome";v="125", "Chromium";v="125"'
@@ -599,7 +606,9 @@ def test_align_raw_fingerprint_to_browser_major_falls_back_to_safe_shallow_copy(
     )
 
 
-def test_align_raw_fingerprint_to_browser_major_returns_original_when_navigator_missing() -> None:
+def test_align_raw_fingerprint_to_browser_major_returns_original_when_navigator_missing() -> (
+    None
+):
     raw_fingerprint = SimpleNamespace(
         navigator=None,
         headers={"sec-ch-ua": '"Google Chrome";v="125", "Chromium";v="125"'},
@@ -630,10 +639,20 @@ def test_align_raw_fingerprint_to_user_agent_platform_keeps_original_when_clone_
         headers={"sec-ch-ua-platform": '"Linux"'},
     )
 
-    monkeypatch.setattr(browser_identity._copy, "deepcopy", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("deepcopy boom")))
-    monkeypatch.setattr(browser_identity._copy, "copy", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("copy boom")))
+    monkeypatch.setattr(
+        browser_identity._copy,
+        "deepcopy",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("deepcopy boom")),
+    )
+    monkeypatch.setattr(
+        browser_identity._copy,
+        "copy",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("copy boom")),
+    )
 
-    aligned = browser_identity._align_raw_fingerprint_to_user_agent_platform(raw_fingerprint)
+    aligned = browser_identity._align_raw_fingerprint_to_user_agent_platform(
+        raw_fingerprint
+    )
 
     assert aligned is raw_fingerprint
     assert raw_fingerprint.navigator.platform == "Linux x86_64"
@@ -698,7 +717,9 @@ async def test_socks5_auth_bridge_start_is_singleflight(
         await asyncio.sleep(0)
         return _Server()
 
-    monkeypatch.setattr(browser_proxy_bridge.asyncio, "start_server", _fake_start_server)
+    monkeypatch.setattr(
+        browser_proxy_bridge.asyncio, "start_server", _fake_start_server
+    )
     bridge = browser_proxy_bridge.Socks5AuthBridge(
         browser_proxy_bridge.Socks5UpstreamProxy(
             scheme="socks5",
@@ -813,7 +834,10 @@ def test_build_playwright_context_spec_injects_chrome_runtime_and_audio_masks() 
     assert "globalThis.chrome = globalThis.chrome || {};" in spec.init_script
     assert "OnInstalledReason" in spec.init_script
     assert "assignIfMissing('getManifest', () => undefined);" in spec.init_script
-    assert "const extensionId = typeof runtime.id === 'string' && runtime.id ? runtime.id : '';" in spec.init_script
+    assert (
+        "const extensionId = typeof runtime.id === 'string' && runtime.id ? runtime.id : '';"
+        in spec.init_script
+    )
     assert "const audioSeed =" in spec.init_script
     assert "getFloatFrequencyData" in spec.init_script
     assert "getChannelData(channel)" in spec.init_script
@@ -821,7 +845,10 @@ def test_build_playwright_context_spec_injects_chrome_runtime_and_audio_masks() 
     assert "getByteTimeDomainData" in spec.init_script
     assert "globalThis.OfflineAudioContext" in spec.init_script
     assert "const wrapContextConstructor = (globalKey) => {" in spec.init_script
-    assert "return patchAudioContextInstance(Reflect.construct(target, args, newTarget));" in spec.init_script
+    assert (
+        "return patchAudioContextInstance(Reflect.construct(target, args, newTarget));"
+        in spec.init_script
+    )
     assert "getImageData" in spec.init_script
     assert "toDataURL" in spec.init_script
     assert "getParameter" in spec.init_script
@@ -829,12 +856,20 @@ def test_build_playwright_context_spec_injects_chrome_runtime_and_audio_masks() 
     assert "WEBGL_debug_renderer_info" in spec.init_script
     assert "runtime.csi = runtime.csi ||" in spec.init_script
     assert "runtime.loadTimes = runtime.loadTimes ||" in spec.init_script
-    assert "installDescriptor(Navigator.prototype, 'keyboard', () => keyboard);" in spec.init_script
-    assert "installDescriptor(Navigator.prototype, 'mediaCapabilities', () => mediaCapabilities);" in spec.init_script
-    assert "installDescriptor(Navigator.prototype, 'gpu', () => gpu);" in spec.init_script
+    assert (
+        "installDescriptor(Navigator.prototype, 'keyboard', () => keyboard);"
+        in spec.init_script
+    )
+    assert (
+        "installDescriptor(Navigator.prototype, 'mediaCapabilities', () => mediaCapabilities);"
+        in spec.init_script
+    )
+    assert (
+        "installDescriptor(Navigator.prototype, 'gpu', () => gpu);" in spec.init_script
+    )
 
 
-def test_build_playwright_context_spec_skips_legacy_init_script_for_patchright() -> None:
+def test_build_playwright_context_spec_applies_init_script_for_patchright() -> None:
     spec = browser_identity.build_playwright_context_spec(
         identity=browser_identity.BrowserIdentity(
             user_agent=(
@@ -851,6 +886,37 @@ def test_build_playwright_context_spec_skips_legacy_init_script_for_patchright()
             raw_fingerprint=None,
         ),
         browser_engine="patchright",
+    )
+
+    assert spec.init_script is not None
+    assert "__pwInitScripts" in spec.init_script
+
+
+def test_build_playwright_context_spec_skips_init_script_for_native_real_chrome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        browser_identity.crawler_runtime_settings,
+        "browser_real_chrome_native_context",
+        True,
+    )
+
+    spec = browser_identity.build_playwright_context_spec(
+        identity=browser_identity.BrowserIdentity(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            locale="en-US",
+            device_scale_factor=1.0,
+            has_touch=False,
+            is_mobile=False,
+            raw_fingerprint=None,
+        ),
+        browser_engine="real_chrome",
     )
 
     assert spec.init_script is None
@@ -921,7 +987,9 @@ def test_build_playwright_context_options_aligns_auto_locality_to_system_timezon
         "_FINGERPRINT_GENERATOR",
         SimpleNamespace(generate=lambda: fingerprint),
     )
-    monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "Asia/Calcutta")
+    monkeypatch.setattr(
+        browser_identity, "_get_localzone_name", lambda: "Asia/Calcutta"
+    )
 
     options = browser_identity.build_playwright_context_options(
         locality_profile={"geo_country": "auto", "language_hint": None}
@@ -955,7 +1023,9 @@ def test_build_playwright_context_options_prefers_explicit_locality_profile(
         "_FINGERPRINT_GENERATOR",
         SimpleNamespace(generate=lambda: fingerprint),
     )
-    monkeypatch.setattr(browser_identity, "_get_localzone_name", lambda: "America/New_York")
+    monkeypatch.setattr(
+        browser_identity, "_get_localzone_name", lambda: "America/New_York"
+    )
 
     options = browser_identity.build_playwright_context_options(
         locality_profile={
@@ -1053,7 +1123,9 @@ def test_build_playwright_context_spec_injects_navigator_coherence_bundle() -> N
     assert "Navigator.prototype, 'maxTouchPoints'" in spec.init_script
     assert "Screen.prototype, 'orientation'" in spec.init_script
     assert "const buildOrientation = () => {" in spec.init_script
-    assert "nativeOrientation.lock ? nativeOrientation.lock(...args)" in spec.init_script
+    assert (
+        "nativeOrientation.lock ? nativeOrientation.lock(...args)" in spec.init_script
+    )
     assert "FontFaceSet.prototype.check" in spec.init_script
     assert "CSSStyleDeclaration.prototype.setProperty" in spec.init_script
     assert "Element.prototype.setAttribute" in spec.init_script
@@ -1066,7 +1138,9 @@ def test_build_playwright_context_spec_injects_navigator_coherence_bundle() -> N
     assert '"portrait-primary"' not in spec.init_script
 
 
-def test_build_playwright_context_spec_sets_mobile_touch_points_and_orientation() -> None:
+def test_build_playwright_context_spec_sets_mobile_touch_points_and_orientation() -> (
+    None
+):
     spec = browser_identity.build_playwright_context_spec(
         identity=browser_identity.BrowserIdentity(
             user_agent=(
@@ -1283,9 +1357,7 @@ def test_coherent_sec_ch_headers_accepts_tuple_brand_entries() -> None:
         }
     )
 
-    assert headers["sec-ch-ua"] == (
-        '"Chromium";v="145", "Google Chrome";v="145"'
-    )
+    assert headers["sec-ch-ua"] == ('"Chromium";v="145", "Google Chrome";v="145"')
     assert headers["sec-ch-ua-mobile"] == "?0"
     assert headers["sec-ch-ua-platform"] == '"Windows"'
     assert headers["sec-ch-ua-platform-version"] == '"15.0.0"'
@@ -1432,6 +1504,65 @@ async def test_persist_storage_state_for_run_replaces_existing_state(
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_persist_storage_state_for_run_keeps_cache_clean_when_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(cookie_store.settings, "cookie_store_dir", tmp_path)
+    await cookie_store.clear_cookie_store_cache()
+
+    def _raise_write(path, storage_state) -> None:
+        del path, storage_state
+        raise OSError("write failed")
+
+    monkeypatch.setattr(cookie_store, "_write_storage_state_file", _raise_write)
+
+    with pytest.raises(OSError, match="write failed"):
+        await cookie_store.persist_storage_state_for_run(
+            77,
+            {
+                "cookies": [
+                    {
+                        "name": "fresh",
+                        "value": "2",
+                        "domain": ".example.com",
+                        "path": "/",
+                    }
+                ],
+                "origins": [],
+            },
+        )
+
+    assert await cookie_store.load_storage_state_for_run(77) is None
+
+
+def test_write_storage_state_file_retries_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    path = tmp_path / "state.json"
+    attempts: list[int] = []
+    original_replace = Path.replace
+
+    def _flaky_replace(self: Path, target: Path) -> Path:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise PermissionError("busy")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _flaky_replace)
+    monkeypatch.setattr(cookie_store.time, "sleep", lambda _seconds: None)
+
+    cookie_store._write_storage_state_file(
+        path,
+        {"cookies": [], "origins": []},
+    )
+
+    assert path.exists()
+    assert len(attempts) == 2
 
 
 @pytest.mark.asyncio
@@ -1592,7 +1723,7 @@ async def test_shared_browser_runtime_uses_native_context_for_real_chrome(
     async with runtime.page():
         pass
 
-    assert captured_kwargs == [{'no_viewport': True}]
+    assert captured_kwargs == [{"no_viewport": True}]
 
 
 @pytest.mark.asyncio
@@ -1903,12 +2034,17 @@ async def test_shared_browser_runtime_launches_real_chrome_headful_for_fallback(
 
 
 def test_display_proxy_masks_authenticated_proxy_credentials() -> None:
-    assert acquisition_browser_runtime._display_proxy(
-        "http://user-name:pass-word@31.58.9.4:6077"
-    ) == "http://***:***@31.58.9.4:6077"
+    assert (
+        acquisition_browser_runtime._display_proxy(
+            "http://user-name:pass-word@31.58.9.4:6077"
+        )
+        == "http://***:***@31.58.9.4:6077"
+    )
 
 
-def test_build_browser_proxy_config_normalizes_scheme_and_requires_username_for_password() -> None:
+def test_build_browser_proxy_config_normalizes_scheme_and_requires_username_for_password() -> (
+    None
+):
     assert build_browser_proxy_config("HTTP://user:pass@31.58.9.4:6077") == {
         "server": "http://31.58.9.4:6077",
         "username": "user",
@@ -1917,7 +2053,10 @@ def test_build_browser_proxy_config_normalizes_scheme_and_requires_username_for_
 
 
 def test_display_proxy_redacts_invalid_proxy_credentials() -> None:
-    assert acquisition_browser_runtime._display_proxy("user:pass@31.58.9.4:6077") == "REDACTED"
+    assert (
+        acquisition_browser_runtime._display_proxy("user:pass@31.58.9.4:6077")
+        == "REDACTED"
+    )
 
 
 def test_storage_state_entry_count_ignores_generators() -> None:
@@ -2219,7 +2358,9 @@ async def test_shared_browser_runtime_skips_domain_storage_for_proxied_runtime_b
         domain_load_calls.append(domain)
         return {"cookies": [], "origins": []}
 
-    async def _persist_domain(domain: str, storage_state: dict[str, object], **_kwargs) -> None:
+    async def _persist_domain(
+        domain: str, storage_state: dict[str, object], **_kwargs
+    ) -> None:
         del storage_state, _kwargs
         domain_persist_calls.append(domain)
 
@@ -2283,17 +2424,21 @@ async def test_shared_browser_runtime_suppresses_storage_state_persist_failures(
         "build_playwright_context_spec",
         lambda **_: _context_spec(),
     )
+
     async def _boom(*args, **kwargs) -> None:
         del args, kwargs
         raise RuntimeError("boom")
+
     monkeypatch.setattr(
         acquisition_browser_runtime,
         "persist_storage_state_for_run",
         _boom,
     )
+
     async def _no_state(run_id: int | None, **_kwargs):
         del run_id, _kwargs
         return None
+
     monkeypatch.setattr(
         acquisition_browser_runtime,
         "load_storage_state_for_run",
@@ -2424,8 +2569,7 @@ async def test_shared_browser_runtime_close_bounds_hung_shutdown(
         for record in caplog.records
     )
     assert any(
-        "Timed out stopping playwright" in record.message
-        for record in caplog.records
+        "Timed out stopping playwright" in record.message for record in caplog.records
     )
     assert any(
         "Timed out closing SOCKS5 auth bridge" in record.message
@@ -2443,7 +2587,9 @@ async def test_persist_context_storage_state_normalizes_domain_before_persist(
 
     persisted_domains: list[str] = []
 
-    async def _persist_domain(domain: str, storage_state: dict[str, object], **_kwargs) -> None:
+    async def _persist_domain(
+        domain: str, storage_state: dict[str, object], **_kwargs
+    ) -> None:
         del storage_state, _kwargs
         persisted_domains.append(domain)
 
@@ -2482,7 +2628,9 @@ async def test_persist_context_storage_state_skips_domain_persist_when_disallowe
 
     persisted_domains: list[str] = []
 
-    async def _persist_domain(domain: str, storage_state: dict[str, object], **_kwargs) -> None:
+    async def _persist_domain(
+        domain: str, storage_state: dict[str, object], **_kwargs
+    ) -> None:
         del storage_state, _kwargs
         persisted_domains.append(domain)
 
@@ -2522,7 +2670,9 @@ async def test_persist_context_storage_state_skips_run_persist_when_disallowed(
 
     persisted_run_ids: list[int] = []
 
-    async def _persist_run(run_id: int | None, storage_state: dict[str, object], **_kwargs) -> None:
+    async def _persist_run(
+        run_id: int | None, storage_state: dict[str, object], **_kwargs
+    ) -> None:
         del storage_state, _kwargs
         persisted_run_ids.append(int(run_id or 0))
 
@@ -2670,7 +2820,9 @@ async def test_shared_browser_runtime_recycles_browser_without_deadlocking(
         "browser_max_contexts_before_recycle",
         1,
     )
-    monkeypatch.setattr("patchright.async_api.async_playwright", lambda: FakePlaywrightManager())
+    monkeypatch.setattr(
+        "patchright.async_api.async_playwright", lambda: FakePlaywrightManager()
+    )
 
     async with asyncio.timeout(1):
         async with runtime.page():
@@ -2707,7 +2859,9 @@ async def test_acquisition_shared_browser_runtime_recycles_after_driver_closed_o
 
         async def new_context(self, **kwargs):
             del kwargs
-            raise Exception("Browser.new_context: Connection closed while reading from the driver")
+            raise Exception(
+                "Browser.new_context: Connection closed while reading from the driver"
+            )
 
         async def close(self) -> None:
             old_events.append("browser_closed")
@@ -2757,7 +2911,7 @@ async def test_acquisition_shared_browser_runtime_recycles_after_driver_closed_o
     monkeypatch.setattr(
         acquisition_browser_runtime,
         "_patchright_async_playwright_factory",
-        lambda: (lambda: FakePlaywrightManager()),
+        lambda: lambda: FakePlaywrightManager(),
     )
 
     async with runtime.page():
@@ -2765,6 +2919,7 @@ async def test_acquisition_shared_browser_runtime_recycles_after_driver_closed_o
 
     assert old_events == ["browser_closed", "playwright_stopped"]
     assert new_events == ["launched", "new_context", "context_closed"]
+
 
 def test_browser_runtime_snapshot_reports_runtime_capacity_without_host_cache() -> None:
     snapshot = crawl_fetch_runtime.browser_runtime_snapshot()
@@ -2809,7 +2964,13 @@ async def test_get_browser_runtime_evicts_idle_proxied_runtime_when_pool_is_full
     closed: list[tuple[str | None, str]] = []
 
     class FakeRuntime:
-        def __init__(self, *, max_contexts: int, launch_proxy: str | None = None, browser_engine: str = "chromium") -> None:
+        def __init__(
+            self,
+            *,
+            max_contexts: int,
+            launch_proxy: str | None = None,
+            browser_engine: str = "chromium",
+        ) -> None:
             del max_contexts
             self.launch_proxy = launch_proxy
             self.browser_engine = browser_engine
@@ -2830,7 +2991,12 @@ async def test_get_browser_runtime_evicts_idle_proxied_runtime_when_pool_is_full
             return (0, self._last_used_at)
 
         def snapshot(self) -> dict[str, int | bool | str]:
-            return {"active": 0, "queued": 0, "ready": False, "browser_engine": self.browser_engine}
+            return {
+                "active": 0,
+                "queued": 0,
+                "ready": False,
+                "browser_engine": self.browser_engine,
+            }
 
         async def close(self) -> None:
             closed.append((self.launch_proxy, self.browser_engine))
@@ -2878,7 +3044,13 @@ async def test_get_browser_runtime_evicts_idle_direct_runtime_when_pool_is_full(
     closed: list[tuple[str | None, str]] = []
 
     class FakeRuntime:
-        def __init__(self, *, max_contexts: int, launch_proxy: str | None = None, browser_engine: str = "chromium") -> None:
+        def __init__(
+            self,
+            *,
+            max_contexts: int,
+            launch_proxy: str | None = None,
+            browser_engine: str = "chromium",
+        ) -> None:
             del max_contexts
             self.launch_proxy = launch_proxy
             self.browser_engine = browser_engine
@@ -2896,7 +3068,12 @@ async def test_get_browser_runtime_evicts_idle_direct_runtime_when_pool_is_full(
             return (0, self._last_used_at)
 
         def snapshot(self) -> dict[str, int | bool | str]:
-            return {"active": 0, "queued": 0, "ready": False, "browser_engine": self.browser_engine}
+            return {
+                "active": 0,
+                "queued": 0,
+                "ready": False,
+                "browser_engine": self.browser_engine,
+            }
 
         async def close(self) -> None:
             closed.append((self.launch_proxy, self.browser_engine))
@@ -2918,8 +3095,12 @@ async def test_get_browser_runtime_evicts_idle_direct_runtime_when_pool_is_full(
     )
 
     await acquisition_browser_runtime.shutdown_browser_runtime()
-    first = await acquisition_browser_runtime.get_browser_runtime(browser_engine="chromium")
-    second = await acquisition_browser_runtime.get_browser_runtime(browser_engine="real_chrome")
+    first = await acquisition_browser_runtime.get_browser_runtime(
+        browser_engine="chromium"
+    )
+    second = await acquisition_browser_runtime.get_browser_runtime(
+        browser_engine="real_chrome"
+    )
 
     assert first is not second
     assert created == [(None, "chromium"), (None, "real_chrome")]
@@ -2928,7 +3109,9 @@ async def test_get_browser_runtime_evicts_idle_direct_runtime_when_pool_is_full(
 
 
 @pytest.mark.asyncio
-async def test_persist_storage_state_for_domain_commits_owned_session(db_session) -> None:
+async def test_persist_storage_state_for_domain_commits_owned_session(
+    db_session,
+) -> None:
     domain = f"owned-session-{uuid4().hex}.example.com"
     saved = await cookie_store.persist_storage_state_for_domain(
         f"https://{domain}/products/widget",
@@ -2953,7 +3136,9 @@ async def test_persist_storage_state_for_domain_commits_owned_session(db_session
 
 
 @pytest.mark.asyncio
-async def test_persist_storage_state_for_domain_persists_test_domains(db_session) -> None:
+async def test_persist_storage_state_for_domain_persists_test_domains(
+    db_session,
+) -> None:
     domain = f"owned-session-{uuid4().hex}.example.test"
 
     saved = await cookie_store.persist_storage_state_for_domain(
@@ -2973,7 +3158,9 @@ async def test_persist_storage_state_for_domain_persists_test_domains(db_session
     )
 
     rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
-    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(
+        domain, session=db_session
+    )
 
     assert saved is True
     assert len(rows) == 1
@@ -3008,7 +3195,9 @@ async def test_persist_storage_state_for_domain_strips_null_bytes(db_session) ->
         session=db_session,
     )
 
-    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(
+        domain, session=db_session
+    )
 
     assert saved is True
     assert loaded is not None
@@ -3017,7 +3206,9 @@ async def test_persist_storage_state_for_domain_strips_null_bytes(db_session) ->
 
 
 @pytest.mark.asyncio
-async def test_persist_storage_state_for_domain_keeps_engine_specific_rows(db_session) -> None:
+async def test_persist_storage_state_for_domain_keeps_engine_specific_rows(
+    db_session,
+) -> None:
     domain = f"engine-scoped-{uuid4().hex}.example.com"
 
     chromium_saved = await cookie_store.persist_storage_state_for_domain(
@@ -3094,7 +3285,9 @@ async def test_persist_storage_state_for_domain_keeps_engine_specific_rows(db_se
 
 
 @pytest.mark.asyncio
-async def test_persist_storage_state_for_domain_persists_localhost_with_port(db_session) -> None:
+async def test_persist_storage_state_for_domain_persists_localhost_with_port(
+    db_session,
+) -> None:
     domain = "http://localhost:3000/products/widget"
 
     saved = await cookie_store.persist_storage_state_for_domain(
@@ -3113,9 +3306,13 @@ async def test_persist_storage_state_for_domain_persists_localhost_with_port(db_
         session=db_session,
     )
 
-    rows = await cookie_store.list_domain_cookie_memory("localhost:3000", session=db_session)
+    rows = await cookie_store.list_domain_cookie_memory(
+        "localhost:3000", session=db_session
+    )
     all_rows = await cookie_store.list_domain_cookie_memory(session=db_session)
-    loaded = await cookie_store.load_storage_state_for_domain("localhost:3000", session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(
+        "localhost:3000", session=db_session
+    )
 
     assert saved is True
     assert len(rows) == 1
@@ -3144,9 +3341,7 @@ async def test_persist_storage_state_for_domain_accepts_iterable_storage_rows(
             "origins": (
                 {
                     "origin": f"https://{domain}",
-                    "localStorage": (
-                        {"name": "consent", "value": "accepted"},
-                    ),
+                    "localStorage": ({"name": "consent", "value": "accepted"},),
                 },
             ),
         },
@@ -3154,7 +3349,9 @@ async def test_persist_storage_state_for_domain_accepts_iterable_storage_rows(
     )
 
     rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
-    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(
+        domain, session=db_session
+    )
 
     assert saved is True
     assert len(rows) == 1
@@ -3375,6 +3572,23 @@ async def test_load_host_protection_policy_tracks_patchright_as_browser_lane(
 
 
 @pytest.mark.asyncio
+async def test_load_host_protection_policy_maps_legacy_browser_block_to_patchright(
+    db_session,
+) -> None:
+    url = f"https://legacy-browser-policy-{uuid4().hex}.example.com/products/widget"
+
+    blocked_policy = await host_protection_memory.note_host_hard_block(
+        url,
+        method="browser",
+        session=db_session,
+    )
+
+    assert blocked_policy.request_blocked is False
+    assert blocked_policy.patchright_blocked is True
+    assert blocked_policy.last_block_method == "browser"
+
+
+@pytest.mark.asyncio
 async def test_load_storage_state_for_domain_filters_existing_challenge_state(
     db_session,
 ) -> None:
@@ -3425,7 +3639,9 @@ async def test_load_storage_state_for_domain_filters_existing_challenge_state(
     )
     await db_session.commit()
 
-    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(
+        domain, session=db_session
+    )
 
     assert loaded == {
         "cookies": [
@@ -3522,7 +3738,9 @@ async def test_persist_storage_state_for_domain_rejects_challenge_only_state(
     )
 
     rows = await cookie_store.list_domain_cookie_memory(domain, session=db_session)
-    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(
+        domain, session=db_session
+    )
 
     assert saved is False
     assert rows == []
@@ -3560,7 +3778,9 @@ async def test_load_storage_state_for_domain_keeps_origin_when_local_storage_fil
     )
     await db_session.commit()
 
-    loaded = await cookie_store.load_storage_state_for_domain(domain, session=db_session)
+    loaded = await cookie_store.load_storage_state_for_domain(
+        domain, session=db_session
+    )
 
     assert loaded == {
         "cookies": [

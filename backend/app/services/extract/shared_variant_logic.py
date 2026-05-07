@@ -422,7 +422,7 @@ def _descendant_variant_group_name(node: Any) -> str:
 def _node_supports_value_only_axis_inference(node: Any) -> bool:
     return hasattr(node, "select") and bool(
         node.select(
-            "select, input[type='radio'], input[type='checkbox'], [data-option-name]"
+            "select, input[type='radio'], input[type='checkbox'], [data-option-name], a[href]"
         )
     )
 
@@ -464,6 +464,8 @@ def _variant_choice_container_is_overbroad(node: Any) -> bool:
     ]:
         if str(getattr(group_node, "name", "") or "").strip().lower() in {
             "button",
+            "a",
+            "img",
             "input",
             "option",
         }:
@@ -721,7 +723,7 @@ def _variant_group_has_multiple_options(node: Any) -> bool:
     if tag_name in {"button", "a", "img", "input", "option"}:
         return False
     option_nodes = node.select(
-        "button, [role='radio'], [role='option'], input[type='radio'], "
+        "button, a[href], [role='radio'], [role='option'], input[type='radio'], "
         "input[type='checkbox'], [data-value], [data-option-value], "
         "[data-selected], [aria-selected], [data-state], option"
     )

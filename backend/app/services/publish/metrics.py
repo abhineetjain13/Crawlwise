@@ -52,6 +52,10 @@ def build_url_metrics(
     browser_attempted = bool(browser_diagnostics.get("browser_attempted")) or (
         acquisition_result.method == "browser"
     )
+    memory_browser_first = (
+        str(browser_diagnostics.get("browser_reason") or "").strip().lower()
+        in {"host-preference", "acquisition-contract"}
+    )
     browser_engine = str(browser_diagnostics.get("browser_engine") or "").strip().lower() or None
     browser_fetch_method = (
         f"browser:{browser_engine}"
@@ -67,6 +71,7 @@ def build_url_metrics(
         "requested_fields": list(requested_fields or []),
         "browser_used": acquisition_result.method == "browser",
         "browser_attempted": browser_attempted,
+        "memory_browser_first": memory_browser_first,
         "browser_engine": browser_engine,
         "browser_profile": browser_diagnostics.get("browser_profile"),
         "browser_launch_mode": browser_diagnostics.get("browser_launch_mode"),

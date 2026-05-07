@@ -5,7 +5,10 @@ from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
 from app.models.crawl_settings import CrawlRunSettings
 from app.services.crawl_events import append_log_event
 from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE
-from app.services.domain_run_profile_service import load_domain_run_profile
+from app.services.domain_run_profile_service import (
+    merge_saved_run_profile,
+    load_domain_run_profile,
+)
 from app.services.domain_utils import normalize_domain
 from app.services.publish import (
     load_domain_requested_fields,
@@ -51,9 +54,10 @@ async def create_crawl_run(
             surface=normalized_surface,
         )
         if saved_profile_record is not None:
-            settings_payload = _merge_saved_run_profile(
+            settings_payload = merge_saved_run_profile(
                 settings_payload,
                 saved_profile_record.profile,
+                ignore_default_equivalent_values=False,
             )
     settings = normalize_crawl_settings(settings_payload)
     settings_view = CrawlRunSettings.from_value(settings)
@@ -102,94 +106,6 @@ async def create_crawl_run(
     await session.commit()
     await session.refresh(run)
     return run
-
-
-def _merge_saved_run_profile(
-    explicit_settings: object,
-    saved_profile: object,
-) -> dict[str, object]:
-    merged = dict(explicit_settings or {}) if isinstance(explicit_settings, dict) else {}
-    saved = dict(saved_profile or {}) if isinstance(saved_profile, dict) else {}
-    if not saved:
-        return merged
-    merged["fetch_profile"] = _merge_profile_section(
-        merged,
-        "fetch_profile",
-        dict(saved.get("fetch_profile") or {}),
-        legacy_keys={
-            "fetch_mode",
-            "extraction_source",
-            "js_mode",
-            "include_iframes",
-            "traversal_mode",
-            "advanced_mode",
-            "request_delay_ms",
-            "sleep_ms",
-            "max_pages",
-            "max_scrolls",
-        },
-        legacy_aliases={
-            "advanced_mode": "traversal_mode",
-            "sleep_ms": "request_delay_ms",
-            "request_delay_ms": "request_delay_ms",
-            "max_pages": "max_pages",
-            "max_scrolls": "max_scrolls",
-        },
-    )
-    merged["locality_profile"] = _merge_profile_section(
-        merged,
-        "locality_profile",
-        dict(saved.get("locality_profile") or {}),
-        legacy_keys={"geo_country", "language_hint", "currency_hint"},
-        legacy_aliases={},
-    )
-    merged["diagnostics_profile"] = _merge_profile_section(
-        merged,
-        "diagnostics_profile",
-        dict(saved.get("diagnostics_profile") or {}),
-        legacy_keys={
-            "capture_html",
-            "capture_screenshot",
-            "capture_network",
-            "capture_response_headers",
-            "capture_browser_diagnostics",
-        },
-        legacy_aliases={},
-    )
-    saved_contract = dict(saved.get("acquisition_contract") or {})
-    explicit_contract = dict(merged.get("acquisition_contract") or {})
-    if saved_contract or explicit_contract:
-        merged["acquisition_contract"] = {
-            **saved_contract,
-            **explicit_contract,
-        }
-    return merged
-
-
-def _merge_profile_section(
-    explicit_settings: dict[str, object],
-    key: str,
-    saved_section: dict[str, object],
-    *,
-    legacy_keys: set[str],
-    legacy_aliases: dict[str, str],
-) -> dict[str, object]:
-    explicit_section_raw = explicit_settings.get(key)
-    explicit_section = (
-        dict(explicit_section_raw)
-        if isinstance(explicit_section_raw, dict)
-        else {}
-    )
-    merged = dict(saved_section)
-    merged.update(explicit_section)
-    for legacy_key in legacy_keys:
-        if legacy_key not in explicit_settings:
-            continue
-        target_key = legacy_aliases.get(legacy_key, legacy_key)
-        merged[target_key] = explicit_settings[legacy_key]
-    return merged
-
-
 async def list_runs(
     session: AsyncSession,
     page: int,

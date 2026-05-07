@@ -100,7 +100,8 @@ Current live behavior:
 Current live behavior:
 
 - nested run-profile settings are the canonical execution-shaping contract: `fetch_profile`, `locality_profile`, and `diagnostics_profile`
-- `create_crawl_run()` resolves single-URL settings in this order: generic UI defaults, saved `DomainRunProfile`, explicit user edits from Crawl Studio, then backend normalization/snapshotting
+- `create_crawl_run()` resolves single-URL settings in this order: generic UI defaults, saved `DomainRunProfile.fetch/locality/diagnostics` defaults, explicit user edits from Crawl Studio, then backend normalization/snapshotting
+- acquisition-contract reuse is not snapshotted into the run at create time; `pipeline/core.py` resolves it per URL for crawl/batch/CSV as `explicit settings -> saved DomainRunProfile(domain, surface) -> defaults`
 - saved run profiles are limited to execution defaults only and intentionally exclude selector rows, proxies, LLM config/budgets, requested fields, cookies, auth/session state, and user identifiers
 - Crawl Studio now exposes `Quick Mode` and `Advanced Mode` as UI presentation modes only; both dispatch the same nested settings contract to the backend
 
@@ -179,7 +180,7 @@ Current live behavior:
 - per-URL pipeline calls return `URLProcessingResult`; tuple result compatibility is removed so batch orchestration depends on the typed public result interface
 - acceptance harness runs now support curated manifest-driven site sets with bucketed expectations, explicit acceptance surfaces remain authoritative instead of being silently re-inferred from URLs, and curated commerce rows can reuse artifact-backed run ids before falling back to live execution
 - acceptance reports now distinguish transport verdicts from output quality through `quality_verdict`, `observed_failure_mode`, and `quality_checks`, so runs that technically succeed but return shell pages, promo pages, chrome-heavy listings, or broken variant semantics no longer look healthy
-- reusable domain execution defaults are persisted separately from selector memory in `DomainRunProfile`, then merged into single-URL run creation before `CrawlRun.settings` is snapshotted
+- reusable domain execution defaults are persisted separately from selector memory in `DomainRunProfile`; fetch/locality/diagnostics defaults still merge into single-URL run creation, while acquisition contracts are re-resolved per URL at runtime for every run type
 - `pipeline/core.py` stays the per-URL orchestrator; direct-record LLM fallback, empty-extraction browser retry decisions, browser diagnostics merge, typed result objects, and public failure-state persistence live in dedicated pipeline helper modules
 - Data Enrichment is separate from the crawl pipeline: it reads persisted ecommerce detail `CrawlRecord` rows, writes `EnrichedProduct` rows, and only updates source-record enrichment status metadata.
 
@@ -230,7 +231,7 @@ Current live behavior:
 - domain cookie memory is intentionally filtered acquisition memory, not a verbatim storage-state cache: challenge-only bot-defense state (for example PerimeterX `_px*`, `pxcts`, PX localStorage) is dropped on load/save, and blocked browser runs do not persist domain memory
 - blocked browser runs also do not rewrite per-run Playwright storage snapshots, so one challenged detail page does not poison later URLs in the same batch run
 - browser-to-HTTP handoff is guarded: only sanitized engine-scoped session state is exported, direct-lane reuse is allowed, proxy-scoped replay is skipped unless proxy affinity is explicit, and drift/challenge re-entry falls back to browser
-- successful acquisition paths can autosave an editable `DomainRunProfile.acquisition_contract`; future runs may try safe curl-cookie handoff first and then the proven browser engine, while repeated quality failures mark the contract stale and return runtime selection to auto policy
+- successful acquisition paths can autosave an editable `DomainRunProfile.acquisition_contract`; future runs may reuse a proven browser engine, mark whether curl-cookie handoff is actually eligible, and record whether rendering, traversal, or network payloads were required. Host memory no longer owns the durable success path; it only biases short-lived protection/backoff choices.
 - browser diagnostics now persist explicit lane identity (`browser_engine`, `browser_profile`, launch mode, native-context flag, stealth-enabled flag) so metrics and audits can distinguish shaped Chromium from native real Chrome without inferring from free-form logs
 - traversal is explicit and separate from browser escalation
 - JSON-expected acquisition now stays in `acquisition/http_client.py`; adapters consume decoded payloads instead of compensating for transport quirks

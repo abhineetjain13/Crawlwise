@@ -158,7 +158,7 @@ def _redirect_tempfile_root(monkeypatch: pytest.MonkeyPatch, workspace_tmp_path:
 
 @pytest.fixture(autouse=True)
 def _stub_public_dns_resolution(monkeypatch: pytest.MonkeyPatch):
-    async def _resolve(_hostname, _port):
+    async def _resolve(_hostname, _port, **_kwargs):
         return ["93.184.216.34"]
 
     monkeypatch.setattr(

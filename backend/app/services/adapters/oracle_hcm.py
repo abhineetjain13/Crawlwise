@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import json
 from html import unescape
+from typing import Optional
 from urllib.parse import urlparse
 
 from app.services.adapters.base import PublicEndpointAdapter
@@ -29,8 +30,8 @@ class OracleHCMAdapter(PublicEndpointAdapter):
     async def _try_public_endpoint(
         self,
         url: str,
-        html: str,
-        surface: str,
+        html: Optional[str],
+        surface: Optional[str],
         *,
         proxy: str | None = None,
     ) -> list[dict]:
@@ -180,7 +181,7 @@ class OracleHCMAdapter(PublicEndpointAdapter):
             if value not in (None, "", [], {})
         }
 
-    def _extract_site_number(self, url: str, html: str) -> str:
+    def _extract_site_number(self, url: str, html: Optional[str]) -> str:
         path_match = ORACLE_HCM_SITE_PATH_RE.search(urlparse(str(url or "")).path)
         if path_match:
             return clean_text(path_match.group(1))
@@ -189,7 +190,7 @@ class OracleHCMAdapter(PublicEndpointAdapter):
         app = app_payload if isinstance(app_payload, dict) else {}
         return clean_text(app.get("siteNumber"))
 
-    def _extract_site_lang(self, url: str, html: str) -> str:
+    def _extract_site_lang(self, url: str, html: Optional[str]) -> str:
         path_match = ORACLE_HCM_LANG_PATH_RE.search(urlparse(str(url or "")).path)
         if path_match:
             return clean_text(path_match.group(1))
@@ -198,7 +199,7 @@ class OracleHCMAdapter(PublicEndpointAdapter):
         app = app_payload if isinstance(app_payload, dict) else {}
         return clean_text(app.get("siteLang"))
 
-    def _extract_site_name(self, html: str) -> str:
+    def _extract_site_name(self, html: Optional[str]) -> str:
         config = self._extract_cx_config(html)
         app_payload = config.get("app")
         app = app_payload if isinstance(app_payload, dict) else {}
@@ -213,7 +214,7 @@ class OracleHCMAdapter(PublicEndpointAdapter):
             soup.title.get_text(" ", strip=True) if soup.title is not None else ""
         )
 
-    def _extract_cx_config(self, html: str) -> dict:
+    def _extract_cx_config(self, html: Optional[str]) -> dict:
         match = ORACLE_HCM_CX_CONFIG_RE.search(str(html or ""))
         raw = (
             unescape(match.group(1)) if match else self._extract_cx_config_object(html)
@@ -232,7 +233,7 @@ class OracleHCMAdapter(PublicEndpointAdapter):
                     return {}
         return parsed if isinstance(parsed, dict) else {}
 
-    def _extract_cx_config_object(self, html: str) -> str:
+    def _extract_cx_config_object(self, html: Optional[str]) -> str:
         source = str(html or "")
         marker = "CX_CONFIG"
         marker_index = source.find(marker)

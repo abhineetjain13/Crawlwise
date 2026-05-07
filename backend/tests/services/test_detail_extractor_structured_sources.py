@@ -153,6 +153,99 @@ def test_extract_ecommerce_detail_from_microdata() -> None:
     assert record["_source"] == "microdata"
 
 
+def test_extract_ecommerce_detail_merges_shopify_available_sizes_over_single_jsonld_variant() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Arrival 5\\" Shorts",
+          "brand": {"@type": "Brand", "name": "Gymshark"},
+          "hasVariant": [
+            {
+              "@type": "Product",
+              "sku": "A2A1M-BBBB",
+              "size": "xs",
+              "offers": {
+                "@type": "Offer",
+                "price": "26.00",
+                "priceCurrency": "USD"
+              }
+            }
+          ]
+        }
+        </script>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "productData": {
+                "product": {
+                  "id": 6804846346442,
+                  "title": "Arrival 5\\" Shorts",
+                  "handle": "gymshark-arrival-5-shorts-black-ss22",
+                  "colour": "Black",
+                  "price": 26,
+                  "currencyCode": "USD",
+                  "availableSizes": [
+                    {
+                      "id": 39786362568906,
+                      "inStock": true,
+                      "inventoryQuantity": 9170,
+                      "price": 26,
+                      "size": "xs",
+                      "sku": "A2A1M-BBBB-XS"
+                    },
+                    {
+                      "id": 39786362601674,
+                      "inStock": true,
+                      "inventoryQuantity": 22988,
+                      "price": 26,
+                      "size": "s",
+                      "sku": "A2A1M-BBBB-S"
+                    },
+                    {
+                      "id": 39786362634442,
+                      "inStock": false,
+                      "inventoryQuantity": 0,
+                      "price": 26,
+                      "size": "m",
+                      "sku": "A2A1M-BBBB-M"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+        </script>
+      </head>
+      <body><main><h1>Arrival 5&quot; Shorts</h1></main></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["variants", "title", "price", "currency"],
+    )
+
+    assert rows
+    record = rows[0]
+    assert record["title"] == 'Arrival 5" Shorts'
+    assert record["variant_count"] == 3
+    assert [variant["size"] for variant in record["variants"]] == ["xs", "s", "m"]
+    assert [variant["sku"] for variant in record["variants"]] == [
+        "A2A1M-BBBB-XS",
+        "A2A1M-BBBB-S",
+        "A2A1M-BBBB-M",
+    ]
+
+
 def test_detail_record_runs_dom_tier_when_variant_dom_cues_exist() -> None:
     html = """
     <html>
@@ -1965,6 +2058,47 @@ def test_extract_ecommerce_detail_recovers_variant_urls_from_dom_choice_links() 
     assert record["variants"][2]["url"] == (
         "https://www.pepperfry.com/product/norton-velvet-recliner-in-brown-2268528.html"
     )
+
+
+def test_extract_ecommerce_detail_recovers_anchor_only_color_swatches() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Arrival 5&quot; Shorts</h1>
+        <div class="color-selector" role="radiogroup" aria-label="Colour">
+          <a
+            href="/products/gymshark-arrival-5-shorts-black-ss22"
+            aria-label='Arrival 5" Shorts in Black'
+          ></a>
+          <a
+            href="/products/gymshark-arrival-5-shorts-white-ss22"
+            aria-label='Arrival 5" Shorts in White'
+          ></a>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_count"] == 2
+    assert [(variant["color"], variant["url"]) for variant in record["variants"]] == [
+        (
+            "Black",
+            "https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+        ),
+        (
+            "White",
+            "https://www.gymshark.com/products/gymshark-arrival-5-shorts-white-ss22",
+        ),
+    ]
 
 
 def test_extract_ecommerce_detail_recovers_variant_urls_from_js_state_option_mapping() -> None:

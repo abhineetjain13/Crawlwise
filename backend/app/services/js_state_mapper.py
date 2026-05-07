@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
@@ -8,7 +9,9 @@ from bs4 import BeautifulSoup
 from glom import glom  # type: ignore[import-untyped]
 
 from app.services.config.js_state_field_specs import (
+    JS_STATE_PRODUCT_PAYLOAD_LIMIT,
     JS_STATE_PRODUCT_FIELD_SPEC,
+    JS_STATE_PRODUCT_VARIANT_LIST_KEYS,
     JS_STATE_VARIANT_FIELD_SPEC,
 )
 from app.services.config.extraction_rules import ECOMMERCE_DESCRIPTION_BLOCK_LIMIT
@@ -41,6 +44,51 @@ from app.services.platform_policy import JSStateExtractorConfig, platform_js_sta
 
 def _as_list(value: object) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _product_variant_rows(product: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key in JS_STATE_PRODUCT_VARIANT_LIST_KEYS:
+        raw_rows = _as_list(product.get(key))
+        if not raw_rows:
+            continue
+        for item in raw_rows:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            if key != "variants":
+                _backfill_nested_variant_context(row, product)
+            rows.append(row)
+    return rows
+
+
+def _backfill_nested_variant_context(
+    variant: dict[str, Any],
+    product: dict[str, Any],
+) -> None:
+    for target_key, product_keys in {
+        "color": ("color", "colour"),
+        "currencyCode": ("currencyCode", "currency", "priceCurrency"),
+        "compareAtPrice": ("compareAtPrice", "compare_at_price"),
+        "featuredImage": ("featuredMedia", "featured_image", "image"),
+        "url": (
+            "url",
+            "href",
+            "onlineStoreUrl",
+            "online_store_url",
+            "productUrl",
+            "product_url",
+            "canonicalUrl",
+            "canonical_url",
+        ),
+    }.items():
+        if variant.get(target_key) not in (None, "", [], {}):
+            continue
+        for product_key in product_keys:
+            value = product.get(product_key)
+            if value not in (None, "", [], {}):
+                variant[target_key] = value
+                break
 
 def map_js_state_to_fields(
     js_state_objects: dict[str, Any],
@@ -177,7 +225,7 @@ def _map_ecommerce_detail_state(
 def _extract_product_payloads_from_normalized(
     state_key: str,
     normalized_payload: Any,
-) -> list[tuple[dict[str, Any], JSStateExtractorConfig | None]]:
+    ) -> list[tuple[dict[str, Any], JSStateExtractorConfig | None]]:
     products: list[tuple[dict[str, Any], JSStateExtractorConfig | None]] = []
     for extractor in platform_js_state_extractors(
         surface="ecommerce_detail",
@@ -210,7 +258,7 @@ def _dedupe_product_payloads(
             continue
         seen.add(key)
         deduped.append((product, extractor))
-    return deduped[:8]
+    return deduped[: int(JS_STATE_PRODUCT_PAYLOAD_LIMIT)]
 
 
 def _merge_same_product_record(
@@ -256,14 +304,103 @@ def _mapped_product_identity_matches(
         base_value = text_or_none(base_record.get(field_name))
         mapped_value = text_or_none(mapped.get(field_name))
         if base_value and mapped_value:
-            return base_value == mapped_value
+            if base_value == mapped_value:
+                return True
     base_url = text_or_none(base_record.get("url"))
     mapped_url = text_or_none(mapped.get("url"))
     if base_url and mapped_url and base_url == mapped_url:
         return True
     base_title = text_or_none(base_record.get("title"))
     mapped_title = text_or_none(mapped.get("title"))
-    return bool(base_title and mapped_title and base_title == mapped_title)
+    if base_title and mapped_title and base_title == mapped_title:
+        return True
+    return _mapped_product_family_matches(base_record, mapped)
+
+
+def _mapped_product_family_matches(
+    base_record: dict[str, Any],
+    mapped: dict[str, Any],
+) -> bool:
+    base_family_tokens = _family_title_tokens(base_record)
+    mapped_family_tokens = _family_title_tokens(mapped)
+    if not _family_title_tokens_match(base_family_tokens, mapped_family_tokens):
+        return False
+    base_brand = _normalized_party_name(base_record.get("brand") or base_record.get("vendor"))
+    mapped_brand = _normalized_party_name(mapped.get("brand") or mapped.get("vendor"))
+    if base_brand and mapped_brand and base_brand != mapped_brand:
+        return False
+    return _record_has_variant_family_signal(base_record) or _record_has_variant_family_signal(
+        mapped
+    )
+
+
+def _normalized_family_title(record: dict[str, Any]) -> str:
+    return " ".join(_family_title_tokens(record))
+
+
+def _family_title_tokens(record: dict[str, Any]) -> list[str]:
+    title = clean_text(record.get("title"))
+    if not title:
+        return []
+    drop_tokens = set()
+    for raw_value in (
+        record.get("brand"),
+        record.get("vendor"),
+        record.get("color"),
+        record.get("size"),
+        record.get("style"),
+        record.get("material"),
+        record.get("finish"),
+        record.get("pattern"),
+        record.get("scent"),
+        record.get("flavor"),
+        record.get("capacity"),
+        record.get("length"),
+        record.get("width"),
+    ):
+        drop_tokens.update(_title_tokens(raw_value))
+    return [token for token in _title_tokens(title) if token not in drop_tokens]
+
+
+def _normalized_party_name(value: object) -> str:
+    tokens = _title_tokens(value)
+    return " ".join(tokens)
+
+
+def _title_tokens(value: object) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[^a-z0-9]+", clean_text(value).lower())
+        if token and (len(token) >= 2 or token.isdigit())
+    ]
+
+
+def _family_title_tokens_match(
+    base_tokens: list[str],
+    mapped_tokens: list[str],
+) -> bool:
+    if len(base_tokens) < 2 or len(mapped_tokens) < 2:
+        return False
+    if base_tokens == mapped_tokens:
+        return True
+    shorter, longer = (
+        (base_tokens, mapped_tokens)
+        if len(base_tokens) <= len(mapped_tokens)
+        else (mapped_tokens, base_tokens)
+    )
+    if len(longer) - len(shorter) > 1:
+        return False
+    return longer[: len(shorter)] == shorter or longer[-len(shorter) :] == shorter
+
+
+def _record_has_variant_family_signal(record: dict[str, Any]) -> bool:
+    variants = record.get("variants")
+    if isinstance(variants, list) and variants:
+        return True
+    return any(
+        record.get(field_name) not in (None, "", [], {})
+        for field_name in ("color", "size", "style", "material", "variant_count")
+    )
 
 def _normalized_state_payload(state_key: str, payload: Any) -> Any:
     if state_key == "__NUXT_DATA__":
@@ -294,10 +431,15 @@ def _revive_nuxt_data_array(payload: Any) -> dict[str, Any] | None:
     return revived or None
 
 def _looks_like_product_payload(value: Any) -> bool:
-    return isinstance(value, dict) and any(
+    if not isinstance(value, dict) or not any(
+        key in value for key in ("title", "name", "pn")
+    ):
+        return False
+    return any(
         key in value
         for key in (
             "variants",
+            "availableSizes",
             "options",
             "colors",
             "sizes",
@@ -313,19 +455,26 @@ def _looks_like_product_payload(value: Any) -> bool:
             "availability",
             "category",
             "type",
-            "id",
-            "product_id",
-            "productId",
-            "pid",
             "mrp",
             "Img",
             "offers",
             "images",
             "image",
+            "media",
+            "featuredImage",
+            "featuredMedia",
+            "description",
+            "body_html",
+            "onlineStoreUrl",
         )
-    ) and any(key in value for key in ("title", "name", "pn"))
+    )
 
-def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict[str, Any] | None:
+def _find_product_payload(
+    value: Any,
+    *,
+    depth: int = 0,
+    limit: int = int(JS_STATE_PRODUCT_PAYLOAD_LIMIT),
+) -> dict[str, Any] | None:
     payloads = _find_product_payloads(value, depth=depth, limit=limit)
     return payloads[0] if payloads else None
 
@@ -334,7 +483,7 @@ def _find_product_payloads(
     value: Any,
     *,
     depth: int = 0,
-    limit: int = 8,
+    limit: int = int(JS_STATE_PRODUCT_PAYLOAD_LIMIT),
 ) -> list[dict[str, Any]]:
     if depth > limit:
         return []
@@ -348,10 +497,10 @@ def _find_product_payloads(
         for item in value[:25]:
             payloads.extend(_find_product_payloads(item, depth=depth + 1, limit=limit))
     payloads.sort(key=_product_payload_score, reverse=True)
-    return payloads[:8]
+    return payloads[: int(JS_STATE_PRODUCT_PAYLOAD_LIMIT)]
 
 def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
-    raw_variants = _as_list(product.get("variants"))
+    raw_variants = _product_variant_rows(product)
     raw_options = _as_list(product.get("options"))
     raw_colors = _as_list(product.get("colors"))
     raw_sizes = _as_list(product.get("sizes"))
@@ -441,7 +590,7 @@ def _map_product_payload(
     shopify_like = _looks_like_shopify_product(product)
     option_names = _option_names(product.get("options"))
     option_value_labels = _option_value_labels(product)
-    raw_variants = _as_list(product.get("variants"))
+    raw_variants = _product_variant_rows(product)
     normalized_variants = [
         normalized
         for variant in raw_variants
@@ -493,7 +642,15 @@ def _map_product_payload(
     if product_stock is None:
         product_stock = stock_quantity(product)
     color = variant_attribute(active_variant, "color")
+    if color in (None, "", [], {}):
+        color = _variant_axis_value(
+            "color",
+            product.get("color") or product.get("colour"),
+            page_url=page_url,
+        )
     size = variant_attribute(active_variant, "size")
+    if size in (None, "", [], {}):
+        size = _variant_axis_value("size", product.get("size"), page_url=page_url)
 
     # Resolve brand/vendor: dict values need name extraction
     brand_raw = base.get("brand")
@@ -757,7 +914,7 @@ def _extract_nested_image_urls(value: Any, *, page_url: str, depth: int = 0) -> 
     return dedupe_image_urls(nested)
 
 def _looks_like_shopify_product(product: dict[str, Any]) -> bool:
-    raw_variants = _as_list(product.get("variants"))
+    raw_variants = _product_variant_rows(product)
     return any(
         key in product
         for key in (
@@ -799,15 +956,20 @@ def _normalize_variant(
     variant_id = text_or_none(
         variant.get("id") or variant.get("variantId") or variant.get("variant_id")
     )
+    explicit_url: str | None = None
     if variant_id:
         row["variant_id"] = variant_id
-        row["url"] = _variant_url(page_url, variant_id)
     try:
         base = glom(variant, JS_STATE_VARIANT_FIELD_SPEC, default=None)
     except Exception:
         base = {}
     if not isinstance(base, dict):
         base = {}
+    explicit_url = text_or_none(base.get("url"))
+    if explicit_url:
+        row["url"] = explicit_url
+    elif variant_id:
+        row["url"] = _variant_url(page_url, variant_id)
     sku = text_or_none(base.get("sku"))
     if sku:
         row["sku"] = sku

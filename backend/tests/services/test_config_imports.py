@@ -9,7 +9,10 @@ import pytest
 
 from app.core import migrations
 from app.models.crawl_settings import CrawlRunSettings
-from app.schemas.crawl import DomainRunAcquisitionContractSuccess
+from app.schemas.crawl import (
+    DomainRunAcquisitionContract,
+    DomainRunAcquisitionContractSuccess,
+)
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.config._export_data import (
     EXPORT_PROVENANCE_KEY,
@@ -178,6 +181,17 @@ def test_runtime_settings_reject_invalid_scroll_bounds() -> None:
         )
 
 
+def test_runtime_settings_reject_inverted_quality_thresholds() -> None:
+    with pytest.raises(
+        ValueError,
+        match="run_quality_threshold_high must be >= run_quality_threshold_medium",
+    ):
+        CrawlerRuntimeSettings(
+            run_quality_threshold_high=0.4,
+            run_quality_threshold_medium=0.5,
+        )
+
+
 def test_selectors_export_does_not_drive_keep_worthy_tags() -> None:
     selectors = importlib.import_module("app.services.config.selectors")
     exports = load_export_data(
@@ -236,6 +250,26 @@ def test_crawl_run_settings_normalizes_zero_source_run_id_to_unset() -> None:
     assert (
         settings.acquisition_contract()["last_quality_success"]["source_run_id"] is None
     )
+
+
+def test_crawl_run_settings_accepts_legacy_handoff_flag() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "acquisition_contract": {
+                "prefer_curl_handoff": True,
+            }
+        }
+    )
+
+    assert settings.acquisition_contract()["handoff_eligible"] is True
+
+
+def test_domain_run_acquisition_contract_accepts_legacy_handoff_flag() -> None:
+    contract = DomainRunAcquisitionContract.model_validate(
+        {"prefer_curl_handoff": True}
+    )
+
+    assert contract.handoff_eligible is True
 
 
 def test_legacy_migration_start_detects_missing_data_enrichment_tables(
@@ -369,6 +403,16 @@ def test_crawl_run_settings_acquisition_profile_keeps_disabled_proxy_profile() -
         "language_hint": None,
         "currency_hint": None,
     }
+
+
+def test_crawl_run_settings_acquisition_profile_exposes_host_memory_ttl() -> None:
+    settings = CrawlRunSettings.from_value(
+        {"fetch_profile": {"host_memory_ttl_seconds": 1800}}
+    )
+
+    profile = settings.acquisition_profile()
+
+    assert profile["host_memory_ttl_seconds"] == 1800
 
 
 def test_crawl_run_settings_infers_sticky_rotation_from_sessionized_proxy_username() -> (

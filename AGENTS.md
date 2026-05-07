@@ -71,16 +71,19 @@ Read these only when relevant:
 5. Delete before adding.
    Remove duplication, dead branches, compat shims, or now-redundant logic as part of the change.
 
-6. Respect explicit user controls.
+6. Add architecture only when it improves generic coverage.
+   Do not add new layers, abstractions, or pipelines for one site unless the user explicitly asks for a site-specific solution.
+
+7. Respect explicit user controls.
    Do not silently rewrite `surface`, traversal intent, proxy settings, or `llm_enabled`.
 
-7. LLM is explicit and degradable.
+8. LLM is explicit and degradable.
    It only runs when enabled by both run settings and active config. It fills gaps; it does not replace deterministic extraction.
 
-8. Do not attach stale docs.
+9. Do not attach stale docs.
    Ignore archived audits and abandoned plans unless the task explicitly asks for historical review.
 
-9. Keep responses terse.
+10. Keep responses terse.
    Prefer caveman-style brevity: less filler, fewer words, same meaning.
 
 ---

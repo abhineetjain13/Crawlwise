@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import type { Route } from 'next';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRightCircle, Copy, ExternalLink, Plus, Trash2 } from 'lucide-react';
@@ -130,7 +131,7 @@ function RunRow({
       <TableCell className="text-right whitespace-nowrap">
         <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
           <Button variant="accent" size="sm" asChild className="h-7 px-3">
-            <Link href={`/crawl/${run.id}`}>
+            <Link href={`/crawl?run_id=${run.id}` as Route}>
               Open
               <ArrowRightCircle className="ml-1 size-3" />
             </Link>

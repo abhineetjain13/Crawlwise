@@ -262,7 +262,7 @@ async def _call_groq(
 
 
 async def _call_chat_completions_endpoint(
-    client,
+    client: httpx.AsyncClient,
     *,
     url: str,
     api_key: str,

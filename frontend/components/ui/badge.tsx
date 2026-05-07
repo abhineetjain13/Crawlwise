@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { cva } from 'class-variance-authority';
 
 import { cn } from '../../lib/utils';
 
@@ -29,6 +30,10 @@ export type BadgeProps = {
   flat?: boolean;
 } & React.HTMLAttributes<HTMLSpanElement>;
 
+export const badgeVariants = cva(
+  'inline-flex min-h-[22px] items-center gap-1.5 text-sm leading-[var(--leading-snug)] font-medium whitespace-nowrap',
+);
+
 export function Badge({
   children,
   tone = 'neutral',
@@ -40,9 +45,9 @@ export function Badge({
     <span
       {...props}
       className={cn(
-        'inline-flex min-h-[22px] items-center gap-1.5 text-sm leading-[var(--leading-snug)] font-medium whitespace-nowrap',
+        badgeVariants(),
         toneText[tone],
-        !flat && 'rounded-[var(--radius-md)] border px-2 py-0.5',
+        !flat && 'rounded-full border px-2.5 py-0.5 shadow-[inset_0_1px_0_color-mix(in_srgb,white_38%,transparent)]',
         !flat && toneBox[tone],
         className,
       )}

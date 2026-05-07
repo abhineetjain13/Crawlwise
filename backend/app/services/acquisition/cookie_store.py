@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path
@@ -12,6 +13,16 @@ from app.core.database import SessionLocal
 from app.core.config import settings
 from app.models.crawl import DomainCookieMemory
 from app.services.config.block_signatures import BLOCK_SIGNATURES
+from app.services.config.cookie_settings import (
+    COOKIE_FIELDS,
+    DEFAULT_STORAGE_STATE_ENGINE,
+    DOMAIN_STORAGE_SCOPE_SEPARATOR,
+    STORAGE_STATE_BROWSER_ENGINE_KEY,
+    STORAGE_STATE_META_KEY,
+    STORAGE_STATE_REPLACE_ATTEMPTS,
+    STORAGE_STATE_REPLACE_RETRY_SECONDS,
+    SUPPORTED_STORAGE_STATE_ENGINES,
+)
 from app.services.domain_utils import normalize_domain
 from app.services.field_value_core import object_list as _object_list
 from sqlalchemy import select
@@ -31,26 +42,6 @@ def validate_cookie_policy_config() -> None:
 
 _RUN_STORAGE_STATE_CACHE: dict[str, dict[str, object]] = {}
 _RUN_STORAGE_STATE_LOCK = asyncio.Lock()
-_STORAGE_STATE_META_KEY = "_crawler"
-_STORAGE_STATE_BROWSER_ENGINE_KEY = "browser_engine"
-_DEFAULT_STORAGE_STATE_ENGINE = "chromium"
-_DOMAIN_STORAGE_SCOPE_SEPARATOR = "::"
-_SUPPORTED_STORAGE_STATE_ENGINES = {
-    "chromium",
-    "patchright",
-    "real_chrome",
-}
-_COOKIE_FIELDS = (
-    "name",
-    "value",
-    "domain",
-    "path",
-    "expires",
-    "httpOnly",
-    "secure",
-    "sameSite",
-    "url",
-)
 _CHALLENGE_ELEMENT_CONFIG = BLOCK_SIGNATURES.get("challenge_elements")
 if not isinstance(_CHALLENGE_ELEMENT_CONFIG, Mapping):
     _CHALLENGE_ELEMENT_CONFIG = {}
@@ -208,12 +199,12 @@ async def persist_storage_state_for_run(
         return
     path = _storage_state_path(normalized_run_id, browser_engine=normalized_engine)
     async with _RUN_STORAGE_STATE_LOCK:
-        _RUN_STORAGE_STATE_CACHE[str(path)] = normalized_state
         await asyncio.to_thread(
             _write_storage_state_file,
             path,
             normalized_state,
         )
+        _RUN_STORAGE_STATE_CACHE[str(path)] = normalized_state
 
 
 async def persist_storage_state_for_domain(
@@ -379,9 +370,9 @@ def _domain_storage_key(
     normalized_engine = _normalized_browser_engine(browser_engine)
     if not normalized_domain:
         return ""
-    if normalized_engine and normalized_engine != _DEFAULT_STORAGE_STATE_ENGINE:
+    if normalized_engine and normalized_engine != DEFAULT_STORAGE_STATE_ENGINE:
         return (
-            f"{normalized_engine}{_DOMAIN_STORAGE_SCOPE_SEPARATOR}"
+            f"{normalized_engine}{DOMAIN_STORAGE_SCOPE_SEPARATOR}"
             f"{normalized_domain}"
         )
     return normalized_domain
@@ -396,7 +387,7 @@ def _domain_storage_lookup_keys(
     if not normalized_domain:
         return ()
     normalized_engine = _normalized_browser_engine(browser_engine)
-    if normalized_engine == _DEFAULT_STORAGE_STATE_ENGINE:
+    if normalized_engine == DEFAULT_STORAGE_STATE_ENGINE:
         return (normalized_domain,)
     if normalized_engine:
         return (_domain_storage_key(normalized_domain, browser_engine=normalized_engine),)
@@ -404,8 +395,8 @@ def _domain_storage_lookup_keys(
         normalized_domain,
         *(
             _domain_storage_key(normalized_domain, browser_engine=engine)
-            for engine in sorted(_SUPPORTED_STORAGE_STATE_ENGINES)
-            if engine != _DEFAULT_STORAGE_STATE_ENGINE
+            for engine in sorted(SUPPORTED_STORAGE_STATE_ENGINES)
+            if engine != DEFAULT_STORAGE_STATE_ENGINE
         ),
     )
 
@@ -416,7 +407,7 @@ def _storage_state_candidate_paths(
     browser_engine: str | None = None,
 ) -> tuple[Path, ...]:
     normalized_engine = _normalized_browser_engine(browser_engine)
-    if normalized_engine == _DEFAULT_STORAGE_STATE_ENGINE:
+    if normalized_engine == DEFAULT_STORAGE_STATE_ENGINE:
         return (
             _storage_state_path(run_id, browser_engine=normalized_engine),
             _storage_state_path(run_id),
@@ -443,10 +434,34 @@ def _read_storage_state_file(path: Path) -> dict[str, object] | None:
 
 def _write_storage_state_file(path: Path, storage_state: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(storage_state, ensure_ascii=True, indent=2, sort_keys=True),
-        encoding="utf-8",
+    tmp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp"
     )
+    payload = json.dumps(storage_state, ensure_ascii=True, indent=2, sort_keys=True)
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        last_error: OSError | None = None
+        for attempt in range(STORAGE_STATE_REPLACE_ATTEMPTS):
+            try:
+                tmp_path.replace(path)
+                last_error = None
+                break
+            except PermissionError as exc:
+                last_error = exc
+                if attempt + 1 >= STORAGE_STATE_REPLACE_ATTEMPTS:
+                    raise
+                time.sleep(STORAGE_STATE_REPLACE_RETRY_SECONDS)
+        if last_error is not None:
+            raise last_error
+    except OSError:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _normalize_storage_state(storage_state: Mapping[str, object]) -> dict[str, object]:
@@ -487,8 +502,8 @@ def _normalize_storage_state_payload(
     if normalized_engine is None:
         normalized_engine = _storage_state_browser_engine(storage_state)
     if normalized_engine is not None:
-        payload[_STORAGE_STATE_META_KEY] = {
-            _STORAGE_STATE_BROWSER_ENGINE_KEY: normalized_engine,
+        payload[STORAGE_STATE_META_KEY] = {
+            STORAGE_STATE_BROWSER_ENGINE_KEY: normalized_engine,
         }
     return payload
 
@@ -516,7 +531,7 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
         if not isinstance(item, Mapping):
             continue
         cookie: dict[str, object] = {}
-        for field_name in _COOKIE_FIELDS:
+        for field_name in COOKIE_FIELDS:
             raw_value = item.get(field_name)
             if raw_value in (None, ""):
                 continue
@@ -540,7 +555,7 @@ def _normalize_cookies(value: object) -> list[dict[str, object]]:
 
 def _normalized_browser_engine(value: object) -> str | None:
     normalized = str(value or "").strip().lower()
-    if normalized in _SUPPORTED_STORAGE_STATE_ENGINES:
+    if normalized in SUPPORTED_STORAGE_STATE_ENGINES:
         return normalized
     return None
 
@@ -548,10 +563,10 @@ def _normalized_browser_engine(value: object) -> str | None:
 def _storage_state_browser_engine(storage_state: Mapping[str, object] | object) -> str | None:
     if not isinstance(storage_state, Mapping):
         return None
-    metadata = storage_state.get(_STORAGE_STATE_META_KEY)
+    metadata = storage_state.get(STORAGE_STATE_META_KEY)
     if not isinstance(metadata, Mapping):
         return None
-    return _normalized_browser_engine(metadata.get(_STORAGE_STATE_BROWSER_ENGINE_KEY))
+    return _normalized_browser_engine(metadata.get(STORAGE_STATE_BROWSER_ENGINE_KEY))
 
 
 def _storage_state_matches_browser_engine(
@@ -564,15 +579,15 @@ def _storage_state_matches_browser_engine(
         return True
     stored_engine = _storage_state_browser_engine(storage_state)
     if stored_engine is None:
-        return normalized_engine == _DEFAULT_STORAGE_STATE_ENGINE
+        return normalized_engine == DEFAULT_STORAGE_STATE_ENGINE
     return stored_engine == normalized_engine
 
 
 def _domain_from_storage_key(value: object) -> str:
     normalized = str(value or "").strip()
-    if _DOMAIN_STORAGE_SCOPE_SEPARATOR not in normalized:
+    if DOMAIN_STORAGE_SCOPE_SEPARATOR not in normalized:
         return normalized
-    engine, domain = normalized.split(_DOMAIN_STORAGE_SCOPE_SEPARATOR, 1)
+    engine, domain = normalized.split(DOMAIN_STORAGE_SCOPE_SEPARATOR, 1)
     if _normalized_browser_engine(engine) is None:
         return normalized
     return domain
@@ -580,9 +595,9 @@ def _domain_from_storage_key(value: object) -> str:
 
 def _storage_key_browser_engine(value: object) -> str | None:
     normalized = str(value or "").strip()
-    if _DOMAIN_STORAGE_SCOPE_SEPARATOR not in normalized:
+    if DOMAIN_STORAGE_SCOPE_SEPARATOR not in normalized:
         return None
-    engine, _domain = normalized.split(_DOMAIN_STORAGE_SCOPE_SEPARATOR, 1)
+    engine, _domain = normalized.split(DOMAIN_STORAGE_SCOPE_SEPARATOR, 1)
     return _normalized_browser_engine(engine)
 
 
@@ -590,7 +605,7 @@ def _storage_row_browser_engine(row: DomainCookieMemory) -> str:
     return (
         _storage_state_browser_engine(row.storage_state)
         or _storage_key_browser_engine(row.domain)
-        or _DEFAULT_STORAGE_STATE_ENGINE
+        or DEFAULT_STORAGE_STATE_ENGINE
     )
 
 

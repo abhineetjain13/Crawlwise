@@ -229,13 +229,15 @@ Detail extraction must also reject collection/category URLs that expose product-
 - Browser-to-HTTP handoff may only reuse sanitized engine-scoped session state on the same proxy identity. If proxy affinity cannot be proven, skip handoff and stay browser-first.
 - Host browser-first memory is for repeated hard blocks, not one noisy challenge hit.
 - Detail browser fetches to hosts with recent challenge history may warm the site origin (e.g., preflight DNS, TCP/TLS handshake, or resource prefetch) before direct PDP navigation; that warmup happens before the target nav, not after a challenge page already landed.
-- Learned acquisition contracts live in editable `DomainRunProfile` memory scoped by normalized `(domain, surface)`. They may prefer a proven browser engine and safe engine-scoped cookie handoff, but explicit run settings always override them.
+- Learned acquisition contracts live in editable `DomainRunProfile` memory scoped by normalized `(domain, surface)`. They own durable engine choice and handoff eligibility; explicit run settings always override them.
 - Future crawls must reuse the successful acquisition/data-extraction path and learned selectors for the domain/surface without fresh experimentation unless the user explicitly changes settings, enables experimentation, resets learned memory, or the contract becomes stale.
-- When safe cookies exist for the saved engine:
+- Only contracts with `handoff_eligible=true` may trigger curl handoff. Browser success alone is not enough; rendered extraction, traversal, or network-payload dependence must disable handoff.
+- When safe cookies exist for a handoff-eligible saved engine:
   1. Try curl handoff first.
   2. On drift/block/empty output, fallback to the proven browser engine.
   3. On further failure, revert to the normal auto policy.
-- After 3 consecutive quality failures the acquisition contract is marked stale. Stale contracts must not keep forcing browser engine or curl handoff choices.
+- Host protection memory is short-TTL block/backoff memory only. It may bias browser-first safety, but it must not become the durable owner of engine preference or handoff eligibility.
+- After the configured acquisition-contract stale threshold of consecutive non-blocked zero-data failures, the contract is marked stale. Stale contracts must not keep forcing browser engine or curl handoff choices.
 
 **Why this is here:**
 Static cleanup advice to persist/reuse more browser state caused a real regression on 2026-04-23. The crawler started replaying PerimeterX challenge state (`_px*`, `pxcts`, PX localStorage) across runs, which poisoned acquisition on multiple sites. Any future "simplification" of cookie memory must preserve this guard and its regression tests.
@@ -256,10 +258,12 @@ Static cleanup advice to persist/reuse more browser state caused a real regressi
 
 ## 11. Codebase Shape
 
-**Rule:** Generic crawler paths stay generic. Pipeline boundaries use typed objects. CPU-bound parsing does not block async hot paths.
+**Rule:** Generic crawler paths stay generic. Pipeline boundaries use typed objects. CPU-bound parsing does not block async hot paths. New architecture must improve reusable coverage across multiple domains or surfaces, not just rescue one site, unless the user explicitly asks for a site-specific path.
 
 **VIOLATION signatures:**
 - `if "shopify" in url` or `if "greenhouse" in host` appears in `crawl_fetch_runtime.py`, `crawl_engine.py`, `_batch_runtime.py`, or any non-adapter file
+- A new shared layer, pipeline branch, or runtime abstraction is added for a bug proven on only one domain, with no evidence it improves broader extractor coverage
+- A generic service module starts owning logic that belongs in an adapter or existing platform-specific mapper just to fix one site's markup
 - A function returns a tuple of 4+ items instead of a typed object
 - A sync `requests.get()` or sync parsing call inside an `async def` function without `run_in_executor`
 

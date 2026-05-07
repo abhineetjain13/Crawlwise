@@ -7,7 +7,14 @@ from datetime import datetime
 from typing import Any, Iterable, Literal
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from app.schemas.selectors import SelectorRecordResponse
 
 _DISPLAY_HIDDEN_RECORD_FIELDS = {"page_markdown", "table_markdown", "record_type"}
@@ -218,6 +225,7 @@ class DomainRunFetchProfile(BaseModel):
     request_delay_ms: int = Field(default=100, ge=0, le=60_000)
     max_pages: int = Field(default=5, ge=1, le=100)
     max_scrolls: int = Field(default=8, ge=0, le=100)
+    host_memory_ttl_seconds: int | None = Field(default=None, ge=1, le=86_400)
 
 
 class DomainRunLocalityProfile(BaseModel):
@@ -251,8 +259,14 @@ class DomainRunAcquisitionContractSuccess(BaseModel):
 class DomainRunAcquisitionContract(BaseModel):
     preferred_browser_engine: Literal["auto", "patchright", "real_chrome"] = "auto"
     prefer_browser: bool = False
-    prefer_curl_handoff: bool = False
+    handoff_eligible: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("handoff_eligible", "prefer_curl_handoff"),
+    )
     handoff_cookie_engine: Literal["auto", "patchright", "real_chrome"] = "auto"
+    required_rendering: bool = False
+    required_traversal: bool = False
+    required_network_payloads: bool = False
     last_quality_success: DomainRunAcquisitionContractSuccess | None = None
     stale_after_failures: DomainRunAcquisitionContractStaleness = Field(
         default_factory=DomainRunAcquisitionContractStaleness

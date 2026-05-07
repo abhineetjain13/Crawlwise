@@ -14,6 +14,8 @@ from app.services.config.variant_policy import (
 from app.services.config.runtime_settings import crawler_runtime_settings
 
 HTML_PARSER = "html.parser"
+AOM_EXPAND_ROLES = frozenset({"button", "tab", "link", "menuitem"})
+DETAIL_AOM_EXPAND_ROLES = frozenset({"button", "tab"})
 
 _EXPORTS_PATH = Path(__file__).with_name("extraction_rules.exports.json")
 _STATIC_EXPORTS = {
@@ -164,6 +166,22 @@ CDN_IMAGE_QUERY_PARAMS = _string_frozenset(
         "width",
     }
 )
+CDN_IMAGE_TRANSFORM_SUFFIX_PATTERN = r"[._](?:AC_)?(?:US|SR|SL|SX|SY|SS|UL)\d+_?"
+CDN_IMAGE_PATH_SUFFIX_PATTERN = (
+    r"(?:"
+    r"_(?:\d+x\d+|pico|icon|thumb|thumbnail|small|compact|medium|large|grande|original)"
+    rf"|{CDN_IMAGE_TRANSFORM_SUFFIX_PATTERN}"
+    r"|/t_(?:default|thumbnail|pdp_\d+_v\d+|web_pdp_\d+_v\d+)"
+    r")(?=\.[a-z0-9]+$|/|$)"
+)
+AMAZON_IMAGE_CDN_HOSTS = frozenset(
+    {"m.media-amazon.com", "images-na.ssl-images-amazon.com"}
+)
+AMAZON_IMAGE_LOW_RES_SUFFIX_PATTERN = (
+    rf"\.?{CDN_IMAGE_TRANSFORM_SUFFIX_PATTERN}(?=\.[a-z0-9]+$)"
+)
+AMAZON_IMAGE_LOW_RES_MAX_DIMENSION = 999
+VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH = 8
 
 EXPORT_IMAGE_URL_SUFFIXES = tuple(_CANDIDATE_IMAGE_FILE_EXTENSIONS)
 BARE_HOST_URL_RE = re.compile(str(_BARE_HOST_URL_PATTERN), re.I)
@@ -689,10 +707,10 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "your cookie settings",
     "cookie settings",
     "accept all cookies",
-    "necessary",
-    "targeting",
+    "necessary cookies",
+    "targeting cookies",
     "search",
-    "close",
+    "close review",
     "compare",
     "previous",
     "next",
@@ -700,12 +718,10 @@ VARIANT_OPTION_VALUE_UI_NOISE_PHRASES = (
     "scroll carousel",
     "keyboard shortcuts",
     "show reviews with",
-    "stars",
     "deliver once",
     "now & every",
     "shipping restrictions",
-    "chat",
-    "email",
+    "chat support",
 )
 VARIANT_PLACEHOLDER_VALUES = frozenset(
     {"default title", "choose", "option", "select", "swatch"}
@@ -809,7 +825,7 @@ SCOPE_SCORE_PRIORITY_WEIGHT = 2000
 SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT = 1000
 MAX_SELECTOR_MATCHES = 12
 VARIANT_CHOICE_OPTION_SELECTOR = (
-    "option, [role='radio'], [role='option'], button, "
+    "option, [role='radio'], [role='option'], button, a[href], "
     "input[type='radio'], input[type='checkbox']"
 )
 VARIANT_CHOICE_OPTION_LIMIT = 24
@@ -1397,7 +1413,11 @@ _EXTRA_EXPORTS = [
     "PRICE_VALUE_FIELDS",
     "PRICE_SOURCE_KEY_FIELDS",
     "CANONICAL_PRICE_FIELDS",
+    "AMAZON_IMAGE_CDN_HOSTS",
+    "AMAZON_IMAGE_LOW_RES_SUFFIX_PATTERN",
     "CDN_IMAGE_QUERY_PARAMS",
+    "CDN_IMAGE_PATH_SUFFIX_PATTERN",
+    "CDN_IMAGE_TRANSFORM_SUFFIX_PATTERN",
     "RATING_RE",
     "REVIEW_COUNT_RE",
     "REVIEW_TITLE_RE",
@@ -1424,6 +1444,7 @@ _EXTRA_EXPORTS = [
     "VARIANT_AXIS_GENERIC_TOKENS",
     "VARIANT_AXIS_TECHNICAL_PATTERNS",
     "VARIANT_OPTION_VALUE_UI_NOISE_PHRASES",
+    "VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH",
     "VARIANT_PLACEHOLDER_PREFIXES",
     "VARIANT_PLACEHOLDER_VALUES",
     "VARIANT_OPTION_TEXT_CHILD_DROP_PATTERNS",

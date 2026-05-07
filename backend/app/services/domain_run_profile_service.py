@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.crawl import DomainRunProfile
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
-from app.models.crawl_settings import _coerce_int as _coerce_int_clamped
+from app.models.crawl_settings import (
+    _coerce_int as _coerce_int_clamped,
+    normalize_crawl_settings,
+)
+from app.services.publish import VERDICT_BLOCKED, VERDICT_EMPTY, VERDICT_LISTING_FAILED
 
 _FETCH_MODE_VALUES = {
     "auto",
@@ -28,14 +32,18 @@ _JS_MODE_VALUES = {"auto", "enabled", "disabled"}
 _TRAVERSAL_MODE_VALUES = {"auto", "scroll", "load_more", "view_all", "paginate"}
 _CAPTURE_NETWORK_VALUES = {"off", "matched_only", "all_small_json"}
 _BROWSER_ENGINE_VALUES = {"auto", "patchright", "real_chrome"}
+_LEGACY_HANDOFF_ELIGIBLE_KEY = "prefer_curl_handoff"
 
 
 def _empty_acquisition_contract() -> dict[str, object]:
     return {
         "preferred_browser_engine": "auto",
         "prefer_browser": False,
-        "prefer_curl_handoff": False,
+        "handoff_eligible": False,
         "handoff_cookie_engine": "auto",
+        "required_rendering": False,
+        "required_traversal": False,
+        "required_network_payloads": False,
         "last_quality_success": None,
         "stale_after_failures": {
             "failure_count": 0,
@@ -64,6 +72,28 @@ def _coerce_nullable_text(value: object) -> str | None:
     return text or None
 
 
+def _coerce_optional_int(
+    value: object,
+    *,
+    minimum: int = 0,
+    maximum: int | None = None,
+) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        result = int(text)
+    except (TypeError, ValueError):
+        return None
+    if result < minimum:
+        return None
+    if maximum is not None:
+        result = min(result, maximum)
+    return result
+
+
 def _coerce_proxy_list(value: object) -> list[str]:
     if value is None:
         return []
@@ -86,6 +116,9 @@ def _coerce_country(value: object) -> str:
 
 def normalize_acquisition_contract(value: object) -> dict[str, object]:
     payload = dict(value or {}) if isinstance(value, Mapping) else {}
+    handoff_eligible = bool(
+        payload.get("handoff_eligible", payload.get(_LEGACY_HANDOFF_ELIGIBLE_KEY, False))
+    )
     last_quality_success = payload.get("last_quality_success")
     if isinstance(last_quality_success, Mapping):
         normalized_success: dict[str, object] | None = {
@@ -124,12 +157,15 @@ def normalize_acquisition_contract(value: object) -> dict[str, object]:
             default="auto",
         ),
         "prefer_browser": bool(payload.get("prefer_browser", False)),
-        "prefer_curl_handoff": bool(payload.get("prefer_curl_handoff", False)),
+        "handoff_eligible": handoff_eligible,
         "handoff_cookie_engine": _coerce_choice(
             payload.get("handoff_cookie_engine"),
             _BROWSER_ENGINE_VALUES,
             default="auto",
         ),
+        "required_rendering": bool(payload.get("required_rendering", False)),
+        "required_traversal": bool(payload.get("required_traversal", False)),
+        "required_network_payloads": bool(payload.get("required_network_payloads", False)),
         "last_quality_success": normalized_success,
         "stale_after_failures": {
             "failure_count": _coerce_int_clamped(
@@ -199,6 +235,11 @@ def normalize_domain_run_profile(
                 default=crawler_runtime_settings.default_max_scrolls,
                 minimum=1,
             ),
+            "host_memory_ttl_seconds": _coerce_optional_int(
+                fetch_profile.get("host_memory_ttl_seconds"),
+                minimum=1,
+                maximum=crawler_runtime_settings.host_memory_ttl_max_seconds,
+            ),
         },
         "locality_profile": {
             "geo_country": _coerce_country(locality_profile.get("geo_country")),
@@ -242,7 +283,11 @@ def apply_acquisition_contract_to_profile(
     acquisition_profile: object,
     contract: object,
 ) -> dict[str, object]:
-    profile = dict(acquisition_profile or {}) if isinstance(acquisition_profile, Mapping) else {}
+    profile = (
+        dict(acquisition_profile or {})
+        if isinstance(acquisition_profile, Mapping)
+        else {}
+    )
     normalized = normalize_acquisition_contract(contract)
     stale_value = normalized.get("stale_after_failures")
     stale = dict(stale_value) if isinstance(stale_value, Mapping) else {}
@@ -256,8 +301,9 @@ def apply_acquisition_contract_to_profile(
         profile.setdefault("browser_reason", "acquisition-contract")
     if engine in {"patchright", "real_chrome"} and not profile.get("forced_browser_engine"):
         profile["forced_browser_engine"] = engine
-    if bool(normalized.get("prefer_curl_handoff")):
+    if bool(normalized.get("handoff_eligible")):
         profile["prefer_curl_handoff"] = True
+        profile["handoff_eligible"] = True
     if cookie_engine in {"patchright", "real_chrome"}:
         profile["handoff_cookie_engine"] = cookie_engine
     elif engine in {"patchright", "real_chrome"}:
@@ -269,24 +315,44 @@ def build_success_acquisition_contract(
     *,
     method: object,
     browser_engine: object,
+    browser_diagnostics: dict[str, object] | None = None,
     record_count: int,
     requested_fields: list[str],
     found_fields: list[str],
     source_run_id: int,
     timestamp: str | None = None,
 ) -> dict[str, object]:
+    diagnostics = dict(browser_diagnostics or {})
     normalized_method = str(method or "").strip().lower()
     normalized_engine = _coerce_optional_choice(browser_engine, _BROWSER_ENGINE_VALUES)
-    preferred_engine = normalized_engine if normalized_engine in {"patchright", "real_chrome"} else "auto"
-    handoff_engine = preferred_engine if preferred_engine != "auto" else "auto"
+    preferred_engine = (
+        normalized_engine
+        if normalized_engine in {"patchright", "real_chrome"}
+        else "auto"
+    )
+    extraction_source = str(diagnostics.get("extraction_source") or "").strip().lower()
+    required_rendering = extraction_source in {"rendered_dom", "rendered_dom_visual"}
+    required_traversal = bool(diagnostics.get("traversal_activated"))
+    required_network_payloads = int(diagnostics.get("network_payload_count") or 0) > 0
+    handoff_eligible = (
+        normalized_method == "browser"
+        and preferred_engine != "auto"
+        and not required_rendering
+        and not required_traversal
+        and not required_network_payloads
+    )
+    handoff_engine = preferred_engine if handoff_eligible else "auto"
     requested_set = set(requested_fields or [])
     covered_fields = [field for field in list(found_fields or []) if field in requested_set]
     return normalize_acquisition_contract(
         {
             "preferred_browser_engine": preferred_engine,
             "prefer_browser": normalized_method == "browser",
-            "prefer_curl_handoff": normalized_method == "browser" and handoff_engine != "auto",
+            "handoff_eligible": handoff_eligible,
             "handoff_cookie_engine": handoff_engine,
+            "required_rendering": required_rendering,
+            "required_traversal": required_traversal,
+            "required_network_payloads": required_network_payloads,
             "last_quality_success": {
                 "method": normalized_method or None,
                 "browser_engine": normalized_engine,
@@ -344,7 +410,7 @@ async def note_acquisition_contract_failure(
     domain: str,
     surface: str,
     threshold: int,
-) -> dict[str, object] | None:
+    ) -> dict[str, object] | None:
     existing = await load_domain_run_profile(
         session,
         domain=domain,
@@ -374,38 +440,185 @@ async def note_acquisition_contract_failure(
     )
 
 
-async def apply_saved_acquisition_contract_for_url(
+def _default_run_settings() -> dict[str, object]:
+    return normalize_crawl_settings({})
+
+
+def _should_apply_explicit_override(
+    explicit_value: object,
+    *,
+    default_value: object,
+    ignore_default_equivalent_values: bool,
+) -> bool:
+    if not ignore_default_equivalent_values:
+        return True
+    return explicit_value != default_value
+
+
+def _merge_profile_section(
+    explicit_settings: dict[str, object],
+    key: str,
+    saved_section: dict[str, object],
+    *,
+    legacy_keys: set[str],
+    legacy_aliases: dict[str, str],
+    default_settings: dict[str, object],
+    ignore_default_equivalent_values: bool,
+) -> dict[str, object]:
+    explicit_section_raw = explicit_settings.get(key)
+    explicit_section = (
+        dict(explicit_section_raw)
+        if isinstance(explicit_section_raw, dict)
+        else {}
+    )
+    default_section_raw = default_settings.get(key)
+    default_section = (
+        dict(default_section_raw)
+        if isinstance(default_section_raw, dict)
+        else {}
+    )
+    merged = dict(saved_section)
+    if not saved_section and explicit_section:
+        return explicit_section
+    for field_name, explicit_value in explicit_section.items():
+        if _should_apply_explicit_override(
+            explicit_value,
+            default_value=default_section.get(field_name),
+            ignore_default_equivalent_values=ignore_default_equivalent_values,
+        ):
+            merged[field_name] = explicit_value
+    for legacy_key in legacy_keys:
+        if legacy_key not in explicit_settings:
+            continue
+        if not _should_apply_explicit_override(
+            explicit_settings[legacy_key],
+            default_value=default_settings.get(legacy_key),
+            ignore_default_equivalent_values=ignore_default_equivalent_values,
+        ):
+            continue
+        target_key = legacy_aliases.get(legacy_key, legacy_key)
+        merged[target_key] = explicit_settings[legacy_key]
+    return merged or explicit_section
+
+
+def _merge_acquisition_contract(
+    explicit_contract: object,
+    saved_contract: object,
+    *,
+    ignore_default_equivalent_values: bool,
+) -> dict[str, object]:
+    normalized_saved = normalize_acquisition_contract(saved_contract)
+    normalized_explicit = normalize_acquisition_contract(explicit_contract)
+    default_contract = _empty_acquisition_contract()
+    if not normalized_saved:
+        return normalized_explicit
+    merged = dict(normalized_saved)
+    for key, explicit_value in normalized_explicit.items():
+        default_value = default_contract.get(key)
+        if _should_apply_explicit_override(
+            explicit_value,
+            default_value=default_value,
+            ignore_default_equivalent_values=ignore_default_equivalent_values,
+        ):
+            merged[key] = explicit_value
+    return normalize_acquisition_contract(merged)
+
+
+def merge_saved_run_profile(
+    explicit_settings: object,
+    saved_profile: object,
+    *,
+    ignore_default_equivalent_values: bool,
+) -> dict[str, object]:
+    merged = (
+        dict(explicit_settings or {})
+        if isinstance(explicit_settings, dict)
+        else {}
+    )
+    saved = dict(saved_profile or {}) if isinstance(saved_profile, dict) else {}
+    if not saved:
+        return merged
+    default_settings = _default_run_settings()
+    merged["fetch_profile"] = _merge_profile_section(
+        merged,
+        "fetch_profile",
+        dict(saved.get("fetch_profile") or {}),
+        legacy_keys={
+            "fetch_mode",
+            "extraction_source",
+            "js_mode",
+            "include_iframes",
+            "traversal_mode",
+            "advanced_mode",
+            "request_delay_ms",
+            "sleep_ms",
+            "max_pages",
+            "max_scrolls",
+        },
+        legacy_aliases={
+            "advanced_mode": "traversal_mode",
+            "sleep_ms": "request_delay_ms",
+            "request_delay_ms": "request_delay_ms",
+            "max_pages": "max_pages",
+            "max_scrolls": "max_scrolls",
+        },
+        default_settings=default_settings,
+        ignore_default_equivalent_values=ignore_default_equivalent_values,
+    )
+    merged["locality_profile"] = _merge_profile_section(
+        merged,
+        "locality_profile",
+        dict(saved.get("locality_profile") or {}),
+        legacy_keys={"geo_country", "language_hint", "currency_hint"},
+        legacy_aliases={},
+        default_settings=default_settings,
+        ignore_default_equivalent_values=ignore_default_equivalent_values,
+    )
+    merged["diagnostics_profile"] = _merge_profile_section(
+        merged,
+        "diagnostics_profile",
+        dict(saved.get("diagnostics_profile") or {}),
+        legacy_keys={
+            "capture_html",
+            "capture_screenshot",
+            "capture_network",
+            "capture_response_headers",
+            "capture_browser_diagnostics",
+        },
+        legacy_aliases={},
+        default_settings=default_settings,
+        ignore_default_equivalent_values=ignore_default_equivalent_values,
+    )
+    saved_contract = dict(saved.get("acquisition_contract") or {})
+    explicit_contract = dict(merged.get("acquisition_contract") or {})
+    if saved_contract or explicit_contract:
+        merged["acquisition_contract"] = _merge_acquisition_contract(
+            explicit_contract,
+            saved_contract,
+            ignore_default_equivalent_values=ignore_default_equivalent_values,
+        )
+    return merged
+
+
+async def resolve_url_acquisition_recipe(
     session: AsyncSession,
     *,
     url: str,
     surface: str,
-    settings_view,
-    acquisition_profile: dict[str, object],
+    explicit_settings: dict[str, object],
 ) -> dict[str, object]:
-    explicit_contract = settings_view.acquisition_contract()
-    if (
-        explicit_contract.get("last_quality_success")
-        or explicit_contract.get("prefer_browser")
-        or explicit_contract.get("prefer_curl_handoff")
-        or str(explicit_contract.get("preferred_browser_engine") or "auto") != "auto"
-    ):
-        return apply_acquisition_contract_to_profile(
-            acquisition_profile,
-            explicit_contract,
-        )
+    normalized_domain = normalize_domain(url)
     saved_profile = await load_domain_run_profile(
         session,
-        domain=normalize_domain(url),
+        domain=normalized_domain,
         surface=surface,
     )
     if saved_profile is None:
-        return acquisition_profile
-    saved_contract = dict(saved_profile.profile or {}).get("acquisition_contract")
-    if not isinstance(saved_contract, dict):
-        return acquisition_profile
-    return apply_acquisition_contract_to_profile(
-        acquisition_profile,
-        saved_contract,
+        return dict(explicit_settings)
+    return merge_saved_run_profile(
+        dict(explicit_settings),
+        saved_profile.profile,
+        ignore_default_equivalent_values=True,
     )
 
 
@@ -417,13 +630,29 @@ async def record_acquisition_contract_outcome(
     source_run_id: int,
     method: object,
     browser_engine: object,
+    browser_diagnostics: dict[str, object] | None = None,
     requested_fields: list[str],
     records: list[dict[str, object]],
     persisted_count: int,
-    quality_success: bool,
-    count_failure: bool = True,
-    stale_threshold: int,
+    verdict: str,
+    blocked: bool,
 ) -> None:
+    stale_threshold = int(
+        crawler_runtime_settings.acquisition_contract_stale_failure_threshold
+    )
+    quality_success = (
+        persisted_count > 0
+        and not blocked
+        and verdict not in {VERDICT_BLOCKED, VERDICT_EMPTY, VERDICT_LISTING_FAILED}
+    )
+    count_failure = not blocked and (
+        verdict == VERDICT_LISTING_FAILED
+        or (
+            verdict == VERDICT_EMPTY
+            and "detail" in str(surface or "")
+            and persisted_count == 0
+        )
+    )
     if quality_success:
         found_fields = sorted(
             {
@@ -442,6 +671,7 @@ async def record_acquisition_contract_outcome(
             contract=build_success_acquisition_contract(
                 method=method,
                 browser_engine=browser_engine,
+                browser_diagnostics=browser_diagnostics,
                 record_count=persisted_count,
                 requested_fields=requested_fields,
                 found_fields=found_fields,

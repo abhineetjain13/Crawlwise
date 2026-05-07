@@ -432,7 +432,7 @@ async def get_shared_http_client(
         if client is None or client.is_closed:
             client = build_async_http_client(
                 follow_redirects=True,
-                timeout=settings.http_timeout_seconds,
+                timeout=crawler_runtime_settings.http_timeout_seconds,
                 limits=httpx.Limits(
                     max_connections=settings.http_max_connections,
                     max_keepalive_connections=settings.http_max_keepalive_connections,

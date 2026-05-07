@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
@@ -79,7 +80,13 @@ class BaseAdapter(ABC):
         ...
 
     @abstractmethod
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+    async def extract(
+        self,
+        url: str,
+        html: str,
+        surface: str,
+        proxy: str | None = None,
+    ) -> AdapterResult:
         """Extract structured records from the page.
 
         ``surface`` is the user-declared surface type so the adapter can
@@ -104,6 +111,14 @@ class BaseAdapter(ABC):
             source_type=source_type or f"{self.name}_adapter",
             adapter_name=self.name,
         )
+
+    def create_result(
+        self,
+        records: AdapterRecords,
+        *,
+        source_type: str | None = None,
+    ) -> AdapterResult:
+        return self._result(records, source_type=source_type)
 
     def _is_detail_surface(self, surface: str | None) -> bool:
         return "detail" in str(surface or "").strip().lower()
@@ -241,8 +256,14 @@ class PublicEndpointAdapter(BaseAdapter):
     async def can_handle(self, url: str, html: str) -> bool:
         return self._matches_platform_family(url, html)
 
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        records = await self.try_public_endpoint(url, html, surface)
+    async def extract(
+        self,
+        url: str,
+        html: str,
+        surface: str,
+        proxy: str | None = None,
+    ) -> AdapterResult:
+        records = await self.try_public_endpoint(url, html, surface, proxy=proxy)
         return self._result(records)
 
     async def try_public_endpoint(
@@ -277,19 +298,46 @@ class SelectolaxJobAdapter(BaseAdapter):
     async def can_handle(self, url: str, html: str) -> bool:
         return self._matches_platform_family(url, html)
 
-    async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+    async def extract(
+        self,
+        url: str,
+        html: str,
+        surface: str,
+        proxy: str | None = None,
+    ) -> AdapterResult:
+        del proxy
         parser = LexborHTMLParser(html)
         records = []
-        if surface in ("job_detail",):
+        if self._is_job_surface(surface) and self._is_detail_surface(surface):
             record = self._extract_detail(parser, url)
+            if inspect.isawaitable(record):
+                record = await record
             if record:
                 records.append(record)
-        elif surface in ("job_listing",):
+        elif self._is_job_surface(surface):
             records = self._extract_listing(parser, url)
+            if inspect.isawaitable(records):
+                records = await records
+        else:
+            logger.warning(
+                "Adapter %s skipped unsupported surface=%r for url=%s; allowed=%s",
+                self.name,
+                surface,
+                url,
+                ("job_detail", "job_listing"),
+            )
         return self._result(records)
 
     @abstractmethod
-    def _extract_detail(self, parser: LexborHTMLParser, url: str) -> dict | None: ...
+    def _extract_detail(
+        self,
+        parser: LexborHTMLParser,
+        url: str,
+    ) -> dict | None | Awaitable[dict | None]: ...
 
     @abstractmethod
-    def _extract_listing(self, parser: LexborHTMLParser, url: str) -> list[dict]: ...
+    def _extract_listing(
+        self,
+        parser: LexborHTMLParser,
+        url: str,
+    ) -> list[dict] | Awaitable[list[dict]]: ...

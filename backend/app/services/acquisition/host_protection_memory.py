@@ -36,16 +36,28 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _ttl_delta() -> timedelta:
+def _ttl_delta(ttl_seconds: int | None = None) -> timedelta:
     return timedelta(
-        seconds=max(1, int(crawler_runtime_settings.pacing_host_cache_ttl_seconds))
+        seconds=max(
+            1,
+            int(
+                ttl_seconds
+                if ttl_seconds is not None
+                else crawler_runtime_settings.pacing_host_cache_ttl_seconds
+            ),
+        )
     )
 
 
-def _is_recent(value: datetime | None, *, now: datetime) -> bool:
+def _is_recent(
+    value: datetime | None,
+    *,
+    now: datetime,
+    ttl_seconds: int | None = None,
+) -> bool:
     if value is None:
         return False
-    return value >= now - _ttl_delta()
+    return value >= now - _ttl_delta(ttl_seconds)
 
 
 def _coerce_method(value: object) -> str:
@@ -54,7 +66,7 @@ def _coerce_method(value: object) -> str:
 
 def _is_browser_method(value: str | None) -> bool:
     return bool(value) and (
-        str(value) == BROWSER_METHOD or str(value).startswith(f"{BROWSER_METHOD}:")
+        value == BROWSER_METHOD or value.startswith(f"{BROWSER_METHOD}:")
     )
 
 
@@ -62,11 +74,10 @@ def _recent_success_overrides_block(
     row: HostProtectionMemory,
     *,
     now: datetime,
+    ttl_seconds: int | None = None,
 ) -> bool:
     last_success_at = row.last_success_at
-    if not _is_recent(last_success_at, now=now):
-        return False
-    if last_success_at is None:
+    if not _is_recent(last_success_at, now=now, ttl_seconds=ttl_seconds):
         return False
     last_blocked_at = row.last_blocked_at
     return last_blocked_at is None or last_success_at >= last_blocked_at
@@ -76,10 +87,11 @@ def _recent_block_method(
     row: HostProtectionMemory,
     *,
     now: datetime,
+    ttl_seconds: int | None = None,
 ) -> str | None:
-    if not _is_recent(row.last_blocked_at, now=now):
+    if not _is_recent(row.last_blocked_at, now=now, ttl_seconds=ttl_seconds):
         return None
-    if _recent_success_overrides_block(row, now=now):
+    if _recent_success_overrides_block(row, now=now, ttl_seconds=ttl_seconds):
         return None
     return _coerce_method(row.last_block_method) or None
 
@@ -88,8 +100,9 @@ def _recent_success_method(
     row: HostProtectionMemory,
     *,
     now: datetime,
+    ttl_seconds: int | None = None,
 ) -> str | None:
-    if not _is_recent(row.last_success_at, now=now):
+    if not _is_recent(row.last_success_at, now=now, ttl_seconds=ttl_seconds):
         return None
     return _coerce_method(getattr(row, "last_success_method", None)) or None
 
@@ -98,19 +111,28 @@ async def load_host_protection_policy(
     value: str | None,
     *,
     session: AsyncSession | None = None,
+    ttl_seconds: int | None = None,
 ) -> HostProtectionPolicy:
     normalized = normalize_host(value or "")
     if not normalized:
         return HostProtectionPolicy(host="")
     if session is None:
         async with SessionLocal() as owned_session:
-            return await load_host_protection_policy(normalized, session=owned_session)
+            return await load_host_protection_policy(
+                normalized,
+                session=owned_session,
+                ttl_seconds=ttl_seconds,
+            )
     row = await _load_row(session, host=normalized)
     now = _now()
     if row is None:
         return HostProtectionPolicy(host=normalized)
-    last_block_method = _recent_block_method(row, now=now)
-    last_success_method = _recent_success_method(row, now=now)
+    last_block_method = _recent_block_method(row, now=now, ttl_seconds=ttl_seconds)
+    last_success_method = _recent_success_method(
+        row,
+        now=now,
+        ttl_seconds=ttl_seconds,
+    )
     return HostProtectionPolicy(
         host=normalized,
         prefer_browser=bool(row.browser_first_until and row.browser_first_until > now),
@@ -127,7 +149,7 @@ async def load_host_protection_policy(
             }
         ),
         chromium_blocked=last_block_method == CHROMIUM_METHOD,
-        patchright_blocked=last_block_method == PATCHRIGHT_METHOD,
+        patchright_blocked=last_block_method in {BROWSER_METHOD, PATCHRIGHT_METHOD},
         real_chrome_blocked=last_block_method == REAL_CHROME_METHOD,
         patchright_success=last_success_method == PATCHRIGHT_METHOD,
         real_chrome_success=last_success_method == REAL_CHROME_METHOD,
@@ -143,6 +165,7 @@ async def note_host_hard_block(
     status_code: int | None = None,
     proxy_used: bool = False,
     session: AsyncSession | None = None,
+    ttl_seconds: int | None = None,
 ) -> HostProtectionPolicy:
     normalized = normalize_host(value or "")
     if not normalized:
@@ -156,6 +179,7 @@ async def note_host_hard_block(
                 status_code=status_code,
                 proxy_used=proxy_used,
                 session=owned_session,
+                ttl_seconds=ttl_seconds,
             )
             await owned_session.commit()
             return policy
@@ -163,7 +187,7 @@ async def note_host_hard_block(
     if row is None:
         return HostProtectionPolicy(host=normalized)
     now = _now()
-    if not _is_recent(row.last_blocked_at, now=now):
+    if not _is_recent(row.last_blocked_at, now=now, ttl_seconds=ttl_seconds):
         row.hard_block_count = 0
         row.browser_first_until = None
     row.hard_block_count = int(row.hard_block_count or 0) + 1
@@ -171,16 +195,17 @@ async def note_host_hard_block(
     row.last_block_status_code = int(status_code) if status_code is not None else None
     row.last_block_method = _coerce_method(method) or None
     row.last_blocked_at = now
-    threshold = max(
-        1,
-        int(getattr(crawler_runtime_settings, "browser_first_host_block_threshold", 2)),
-    )
+    threshold = max(1, int(crawler_runtime_settings.browser_first_host_block_threshold))
     if row.last_block_vendor or row.last_block_status_code in {403, 429}:
-        row.browser_first_until = now + _ttl_delta()
+        row.browser_first_until = now + _ttl_delta(ttl_seconds)
     elif row.hard_block_count >= threshold:
-        row.browser_first_until = now + _ttl_delta()
+        row.browser_first_until = now + _ttl_delta(ttl_seconds)
     await session.flush()
-    return await load_host_protection_policy(normalized, session=session)
+    return await load_host_protection_policy(
+        normalized,
+        session=session,
+        ttl_seconds=ttl_seconds,
+    )
 
 
 async def note_host_usable_fetch(
@@ -189,6 +214,7 @@ async def note_host_usable_fetch(
     method: str | None = None,
     proxy_used: bool = False,
     session: AsyncSession | None = None,
+    ttl_seconds: int | None = None,
 ) -> HostProtectionPolicy:
     normalized = normalize_host(value or "")
     if not normalized:
@@ -200,6 +226,7 @@ async def note_host_usable_fetch(
                 method=method,
                 proxy_used=proxy_used,
                 session=owned_session,
+                ttl_seconds=ttl_seconds,
             )
             await owned_session.commit()
             return policy
@@ -214,7 +241,11 @@ async def note_host_usable_fetch(
         row.browser_first_until = None
     row.hard_block_count = 0
     await session.flush()
-    return await load_host_protection_policy(normalized, session=session)
+    return await load_host_protection_policy(
+        normalized,
+        session=session,
+        ttl_seconds=ttl_seconds,
+    )
 
 
 async def reset_host_protection_memory(

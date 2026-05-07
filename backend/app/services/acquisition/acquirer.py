@@ -231,6 +231,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         browser_reason=browser_reason,
         capture_page_markdown=acquisition_policy.capture_page_markdown,
         capture_screenshot=acquisition_policy.capture_screenshot,
+        host_memory_ttl_seconds=acquisition_policy.host_memory_ttl_seconds,
         prefer_curl_handoff=acquisition_policy.prefer_curl_handoff,
         handoff_cookie_engine=acquisition_policy.handoff_cookie_engine,
         forced_browser_engine=acquisition_policy.forced_browser_engine,

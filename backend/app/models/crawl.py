@@ -24,6 +24,7 @@ from app.services.config.product_intelligence import (
     PRODUCT_INTELLIGENCE_CANDIDATE_STATUS_DISCOVERED,
     PRODUCT_INTELLIGENCE_REVIEW_PENDING,
 )
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.data_enrichment import (
     DATA_ENRICHMENT_STATUS_PENDING,
     DATA_ENRICHMENT_STATUS_UNENRICHED,
@@ -61,7 +62,7 @@ class UpdatedAtMixin(CreatedAtMixin):
 
 class CompletedAtMixin:
     completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        DateTime(timezone=True), nullable=True, default=None
     )
 
 
@@ -438,9 +439,9 @@ def _merge_run_acquisition_metrics(
 
 
 def _quality_level_from_score(score: float) -> str:
-    if score >= 0.8:
+    if score >= crawler_runtime_settings.run_quality_threshold_high:
         return "high"
-    if score >= 0.5:
+    if score >= crawler_runtime_settings.run_quality_threshold_medium:
         return "medium"
     return "low"
 
@@ -478,8 +479,6 @@ def _merge_run_quality_summary(
         if isinstance(url_quality.get("listing_completeness"), dict)
         else {}
     )
-    if not isinstance(listing_completeness, dict):
-        listing_completeness = {}
     if listing_completeness.get("applicable") and not listing_completeness.get(
         "complete", True
     ):
@@ -491,8 +490,6 @@ def _merge_run_quality_summary(
         if isinstance(url_quality.get("variant_completeness"), dict)
         else {}
     )
-    if not isinstance(variant_completeness, dict):
-        variant_completeness = {}
     if variant_completeness.get("applicable") and not variant_completeness.get(
         "complete", True
     ):

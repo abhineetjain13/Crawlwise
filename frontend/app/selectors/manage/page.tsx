@@ -17,6 +17,7 @@ import {
   SurfaceSection,
   TabBar,
 } from '../../../components/ui/patterns';
+import { ConfirmDialog } from '../../../components/ui/dialog';
 import { Badge, Button, Dropdown, Input, Toggle } from '../../../components/ui/primitives';
 import { api } from '../../../lib/api';
 import type {
@@ -29,6 +30,7 @@ import type {
   SelectorRecord,
   SelectorUpdatePayload,
 } from '../../../lib/api/types';
+import { CRAWL_DEFAULTS, CRAWL_LIMITS } from '../../../lib/constants/crawl-defaults';
 import { getNormalizedDomain, isSpecialUseDomain } from '../../../lib/format/domain';
 
 type LocalRecord = SelectorRecord & { _uid: string };
@@ -105,6 +107,7 @@ function defaultDomainRunProfile(): DomainRunProfile {
       include_iframes: false,
       traversal_mode: null,
       request_delay_ms: 500,
+      host_memory_ttl_seconds: null,
     },
     locality_profile: {
       geo_country: 'auto',
@@ -166,6 +169,18 @@ function cloneDomainRunProfile(profile: DomainRunProfile | null | undefined): Do
   };
 }
 
+function parseOptionalClampedNumber(value: string, min: number, max: number) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
 function profileDraftKey(domain: string, surface: string) {
   return `${domain}:${surface}`;
 }
@@ -212,26 +227,15 @@ function isInternalDomainMemoryArtifact(
   return hasCookieMemory && surfaceCount === 0 && learningCount === 0 && completedRunCount === 0;
 }
 
-function DomainMemoryWorkspaceLoading() {
-  return (
-    <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
-      <SurfacePanel className="flex max-h-[calc(100vh-180px)] flex-col space-y-3 p-3">
-        <div className="flex shrink-0 items-center justify-between px-1">
-          <h3 className="type-label">Domains</h3>
-          <span className="text-muted text-xs">—</span>
-        </div>
-        <DataRegionLoading count={6} className="px-0 py-0" />
-      </SurfacePanel>
-      <div className="space-y-4">
-        <SurfacePanel className="space-y-4 p-4">
-          <DataRegionLoading count={2} className="px-0 py-0" />
-        </SurfacePanel>
-        <SurfacePanel className="p-4">
-          <DataRegionLoading count={8} className="px-0 py-0" />
-        </SurfacePanel>
-      </div>
-    </div>
-  );
+function firstUsableDomain(domains: Array<string | null | undefined>) {
+  for (const value of domains) {
+    const normalized = String(value || '').trim();
+    if (!normalized || isSpecialUseDomain(normalized)) {
+      continue;
+    }
+    return normalized;
+  }
+  return '';
 }
 
 export default function DomainMemoryManagePage() {
@@ -241,12 +245,12 @@ export default function DomainMemoryManagePage() {
   const [cookies, setCookies] = useState<DomainCookieMemoryRecord[]>([]);
   const [feedback, setFeedback] = useState<DomainFieldFeedbackRecord[]>([]);
   const [completedRuns, setCompletedRuns] = useState<CrawlRun[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [selectorLoading, setSelectorLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedDomain, setSelectedDomain] = useState('');
   const [loadedSelectorDomain, setLoadedSelectorDomain] = useState('');
-  const [selectorRefreshKey, setSelectorRefreshKey] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<EditDraft | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -254,6 +258,9 @@ export default function DomainMemoryManagePage() {
   const [activeTab, setActiveTab] = useState('selectors');
   const [profileDrafts, setProfileDrafts] = useState<Record<string, DomainRunProfile>>({});
   const [profileSaveKey, setProfileSaveKey] = useState('');
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetPending, setResetPending] = useState(false);
+  const [resetError, setResetError] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
   function toLocalRecords(selectorData: SelectorRecord[]) {
@@ -277,18 +284,30 @@ export default function DomainMemoryManagePage() {
           api.listDomainFieldFeedback({ limit: 100 }),
           api.listCrawls({ status: 'completed', limit: 100 }),
         ]);
+      const preferredDomain = firstUsableDomain([
+        selectedDomain,
+        ...selectorSummaryData.map((row) => row.domain),
+        ...profileData.map((row) => row.domain),
+        ...cookieData.map((row) => row.domain),
+        ...feedbackData.map((row) => row.domain),
+        ...crawlData.items.map((run) => String(run.result_summary?.domain || '').trim() || getNormalizedDomain(run.url)),
+      ]);
+      const selectorData = preferredDomain
+        ? await api.listSelectors({ domain: preferredDomain })
+        : [];
       setSelectorSummaries(selectorSummaryData);
       setProfiles(profileData);
       setCookies(cookieData);
       setFeedback(feedbackData);
       setCompletedRuns(crawlData.items);
-      setRecords([]);
-      setLoadedSelectorDomain('');
-      setSelectorRefreshKey((current) => current + 1);
+      setSelectedDomain(preferredDomain);
+      setRecords(toLocalRecords(selectorData));
+      setLoadedSelectorDomain(preferredDomain);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to load domain memory.');
     } finally {
       setLoading(false);
+      setHasLoadedOnce(true);
     }
   }
 
@@ -300,7 +319,9 @@ export default function DomainMemoryManagePage() {
     const timeoutId = window.setTimeout(() => {
       loadWorkspaceOnMount();
     }, 0);
-    return () => window.clearTimeout(timeoutId);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, []);
 
   const availableSurfaces = useMemo(() => {
@@ -539,7 +560,7 @@ export default function DomainMemoryManagePage() {
     null;
 
   useEffect(() => {
-    if (!resolvedSelectedDomain) {
+    if (!resolvedSelectedDomain || loadedSelectorDomain === resolvedSelectedDomain) {
       return;
     }
     let cancelled = false;
@@ -567,7 +588,7 @@ export default function DomainMemoryManagePage() {
     return () => {
       cancelled = true;
     };
-  }, [resolvedSelectedDomain, selectorRefreshKey]);
+  }, [loadedSelectorDomain, resolvedSelectedDomain]);
 
   function startEdit(record: LocalRecord) {
     setEditingId(record._uid);
@@ -717,22 +738,57 @@ export default function DomainMemoryManagePage() {
       setProfileSaveKey('');
     }
   }
+
+  async function resetDomainMemoryWorkspace() {
+    setResetPending(true);
+    setResetError('');
+    setError('');
+    try {
+      await api.resetDomainMemory();
+      setProfileDrafts({});
+      cancelEdit();
+      await loadWorkspace();
+      setResetDialogOpen(false);
+    } catch (nextError) {
+      setResetError(
+        nextError instanceof Error ? nextError.message : 'Unable to reset domain memory.',
+      );
+    } finally {
+      setResetPending(false);
+    }
+  }
+
   return (
     <div className="page-stack-lg">
       <PageHeader
         title="Domain Memory"
         description="Manage learned selectors, run profiles, cookies, and recent learning by domain."
         actions={
-          <Button
-            type="button"
-            variant="secondary"
-            className="h-[var(--control-height)]"
-            onClick={() => void loadWorkspace()}
-            disabled={loading}
-          >
-            <RefreshCcw className="size-3.5" />
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-[var(--control-height)]"
+              onClick={() => {
+                setResetError('');
+                setResetDialogOpen(true);
+              }}
+              disabled={resetPending}
+            >
+              <Trash2 className="size-3.5" />
+              {resetPending ? 'Resetting...' : 'Reset Domain Memory'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-[var(--control-height)]"
+              onClick={() => void loadWorkspace()}
+              disabled={loading || resetPending}
+            >
+              <RefreshCcw className="size-3.5" />
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </Button>
+          </div>
         }
       />
 
@@ -761,8 +817,11 @@ export default function DomainMemoryManagePage() {
 
       {error ? <InlineAlert message={error} /> : null}
 
-      {loading ? (
-        <DomainMemoryWorkspaceLoading />
+      {!hasLoadedOnce ? (
+        <MutedPanelMessage
+          title="Loading domain memory"
+          description="Fetching saved selectors, run profiles, cookies, and recent learning."
+        />
       ) : !groupedWorkspaces.length ? (
         <EmptyPanel
           title="No domain memory found"
@@ -1219,6 +1278,38 @@ export default function DomainMemoryManagePage() {
                                         />
                                       </label>
                                       <label className="grid gap-1.5">
+                                        <span className="field-label">Host Memory TTL (s)</span>
+                                        <Input
+                                          type="number"
+                                          min={CRAWL_LIMITS.MIN_HOST_MEMORY_TTL_SECONDS}
+                                          max={CRAWL_LIMITS.MAX_HOST_MEMORY_TTL_SECONDS}
+                                          placeholder={String(
+                                            CRAWL_DEFAULTS.HOST_MEMORY_TTL_SECONDS,
+                                          )}
+                                          value={
+                                            profile.fetch_profile.host_memory_ttl_seconds ?? ''
+                                          }
+                                          onChange={(event) =>
+                                            updateProfileDraft(
+                                              selectedWorkspace.domain,
+                                              surface,
+                                              (current) => ({
+                                                ...current,
+                                                fetch_profile: {
+                                                  ...current.fetch_profile,
+                                                  host_memory_ttl_seconds:
+                                                    parseOptionalClampedNumber(
+                                                      event.target.value,
+                                                      CRAWL_LIMITS.MIN_HOST_MEMORY_TTL_SECONDS,
+                                                      CRAWL_LIMITS.MAX_HOST_MEMORY_TTL_SECONDS,
+                                                    ),
+                                                },
+                                              }),
+                                            )
+                                          }
+                                        />
+                                      </label>
+                                      <label className="grid gap-1.5">
                                         <span className="field-label">Geo Country</span>
                                         <Input
                                           value={profile.locality_profile.geo_country}
@@ -1598,6 +1689,24 @@ export default function DomainMemoryManagePage() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={resetDialogOpen}
+        onOpenChange={(open) => {
+          if (!resetPending) {
+            setResetDialogOpen(open);
+            if (!open) {
+              setResetError('');
+            }
+          }
+        }}
+        title="Reset domain memory"
+        description="Delete saved selectors, run profiles, field feedback, saved cookies, host protection memory, and runtime cookie files for a fresh start."
+        confirmLabel="Reset Domain Memory"
+        pending={resetPending}
+        danger
+        error={resetError}
+        onConfirm={() => void resetDomainMemoryWorkspace()}
+      />
     </div>
   );
 }

@@ -86,8 +86,53 @@ def test_build_url_metrics_keeps_failed_browser_attempts_when_final_method_is_ht
     assert metrics["browser_attempted"] is True
     assert metrics["browser_reason"] == "empty-extraction retry"
     assert metrics["browser_outcome"] == "navigation_failed"
+    assert metrics["memory_browser_first"] is False
     assert metrics["html_bytes"] == 49
     assert metrics["browser_phase_timings_ms"] == {"navigation": 1200}
+
+
+def test_build_url_metrics_marks_host_memory_browser_first() -> None:
+    acquisition_result = SimpleNamespace(
+        method="browser",
+        status_code=200,
+        blocked=False,
+        final_url="https://example.com/products/widget",
+        network_payloads=[],
+        adapter_name=None,
+        platform_family=None,
+        browser_diagnostics={
+            "browser_engine": "real_chrome",
+            "browser_reason": "host-preference",
+        },
+    )
+
+    metrics = build_url_metrics(acquisition_result, requested_fields=["title"])
+
+    assert metrics["browser_used"] is True
+    assert metrics["memory_browser_first"] is True
+    assert metrics["browser_reason"] == "host-preference"
+
+
+def test_build_url_metrics_marks_contract_browser_first() -> None:
+    acquisition_result = SimpleNamespace(
+        method="browser",
+        status_code=200,
+        blocked=False,
+        final_url="https://example.com/products/widget",
+        network_payloads=[],
+        adapter_name=None,
+        platform_family=None,
+        browser_diagnostics={
+            "browser_engine": "real_chrome",
+            "browser_reason": "acquisition-contract",
+        },
+    )
+
+    metrics = build_url_metrics(acquisition_result, requested_fields=["title"])
+
+    assert metrics["browser_used"] is True
+    assert metrics["memory_browser_first"] is True
+    assert metrics["browser_reason"] == "acquisition-contract"
 
 
 def test_build_url_metrics_keeps_platform_family_separate_from_adapter_name() -> None:

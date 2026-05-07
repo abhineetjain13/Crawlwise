@@ -3,11 +3,15 @@ from __future__ import annotations
 
 from functools import lru_cache
 from importlib import import_module
+import inspect
 import logging
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition_plan import AcquisitionPlan
-from app.services.platform_policy import configured_adapter_names, is_job_platform_signal
+from app.services.platform_policy import (
+    configured_adapter_names,
+    is_job_platform_signal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +93,11 @@ async def normalize_adapter_acquisition_url(url: str | None) -> str | None:
 
 
 async def run_adapter(
-    url: str, html: str, surface: str | None
+    url: str,
+    html: str,
+    surface: str | None,
+    *,
+    proxy: str | None = None,
 ) -> AdapterResult | None:
     """Convenience: resolve and run adapter in one call."""
     adapter = await resolve_adapter(url, html)
@@ -99,6 +107,8 @@ async def run_adapter(
     if not _surface_allows_adapter(adapter, normalized_surface):
         return None
     try:
+        if proxy is not None and _extract_accepts_proxy(adapter):
+            return await adapter.extract(url, html, normalized_surface, proxy=proxy)
         return await adapter.extract(url, html, normalized_surface)
     except Exception:
         logger.warning(
@@ -109,6 +119,13 @@ async def run_adapter(
             exc_info=True,
         )
         return None
+
+
+def _extract_accepts_proxy(adapter: BaseAdapter) -> bool:
+    try:
+        return "proxy" in inspect.signature(adapter.extract).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _surface_allows_adapter(adapter: BaseAdapter, surface: str | None) -> bool:
@@ -149,11 +166,18 @@ async def try_blocked_adapter_recovery(
     for proxy in proxy_attempts:
         for adapter in recovery_adapters:
             try:
+                recovery_kwargs = (
+                    {"proxy": proxy}
+                    if proxy is not None
+                    and "proxy"
+                    in inspect.signature(adapter.try_public_endpoint).parameters
+                    else {}
+                )
                 records = await adapter.try_public_endpoint(
                     url,
                     html="",
                     surface=plan.surface,
-                    proxy=proxy,
+                    **recovery_kwargs,
                 )
             except (RuntimeError, OSError, ValueError, TypeError) as exc:
                 logger.debug(
@@ -166,7 +190,7 @@ async def try_blocked_adapter_recovery(
                 continue
             if not records:
                 continue
-            return adapter._result(
+            return adapter.create_result(
                 records,
                 source_type=f"{adapter.name}_adapter_recovery",
             )

@@ -326,7 +326,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
 
 function ShellContent({ children, pathname }: Readonly<{ children: ReactNode; pathname: string }>) {
   const header = useTopBarHeader();
-  const topBar = header ?? getFallbackHeader(pathname);
+  const topBar = header?.pathKey === pathname ? header : getFallbackHeader(pathname);
   const router = useRouter();
   const [resetPending, setResetPending] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);

@@ -35,6 +35,7 @@ from app.services.field_value_core import (
     text_or_none,
 )
 from app.services.extract.shared_variant_logic import (
+    merge_variant_rows,
     normalized_variant_axis_key,
     resolve_variants,
 )
@@ -853,14 +854,8 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                     continue
                 seen_rows.add(fingerprint)
                 merged_rows.append(row)
-        rows_with_option_values: list[dict[str, object]] = []
-        for row in merged_rows:
-            option_values = row.get("option_values")
-            has_option_values = isinstance(option_values, dict) and bool(option_values)
-            if has_option_values:
-                rows_with_option_values.append(row)
-        if field_name == "variants" and rows_with_option_values:
-            merged_rows = rows_with_option_values
+        if field_name == "variants":
+            merged_rows = merge_variant_rows(merged_rows)
         return merged_rows or None
     if field_name in STRUCTURED_MULTI_FIELDS:
         rows: list[str] = []

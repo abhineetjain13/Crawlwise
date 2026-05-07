@@ -101,7 +101,6 @@ https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid
 ## Section CE — Commerce Extended
 
 ### Group CE1 — Marketplaces & Sneaker/Streetwear (High JS / Dynamic)
-https://www.goat.com/sneakers/dunk-low-black-white-dd1391-100
 https://stockx.com/nike-dunk-low-retro-white-black-2021
 https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants?g_aidx=Listing_by_listing_quality_production&g_aqid=dcff41da6c7483961c0b500769d4c7bc
 https://www.sneakersnstuff.com/products/dime-soft-rock-crewneck-dime2sp2542blk
@@ -112,7 +111,6 @@ https://www.dtlr.com/collections/men/products/jordan-air-jordan-5-retro-white-me
 https://www.endclothing.com/us/47-ny-yankees-clean-up-cap-b-rgw17gws-vn.html?queryID=92cd67a81343c72b1e7ea4257417a975
 https://www.size.co.uk/product/purple-adidas-originals-sl-72-pt/19738059/
 https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000
-https://www.discogs.com/release/249504
 https://www.backmarket.com/en-us/p/iphone-15-plus
 
 ### Group CE2 — Major Retailers & Big Box (Standard Patterns)
@@ -154,7 +152,6 @@ https://www.patagonia.com/product/mens-nano-puff-insulated-jacket/84213.html
 https://www.vans.com/en-us/p/shoes/icons/old-skool-5205/old-skool-VN000E9TBPG
 https://www.birkenstock.com/us/arizona-birko-flor/arizona-core-birkoflor-0-eva-u_1.html
 https://www.converse.com/shop/p/chuck-taylor-all-star-retro-embroidery-unisex-high-top-shoe/A16914F.html?dwvar_A16914F_color=black%2Fnew%20found%20bloom&dwvar_A16914F_width=standard&styleNo=A16914F&cgid=womens-high-top-shoes
-https://www.urbanoutfitters.com/shop/bdg-cindy-shoulder-bag?color=048
 https://www.anthropologie.com/shop/boho-bangle-bracelets-set-of-3?color=012&type=STANDARD
 https://www.selfridges.com/GB/en/product/creed-aventus-eau-de-parfum_365-83022651-AVENTUS/
 https://www.mytheresa.com/int/en/women/valentino-garavani-loco-small-floral-linen-top-handle-bag-beige-p01155657

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TopBarProvider, useTopBarHeader } from '../layout/top-bar-context';
@@ -11,6 +11,7 @@ const apiMock = vi.hoisted(() => ({
   listDomainCookieMemory: vi.fn(),
   listDomainFieldFeedback: vi.fn(),
   listCrawls: vi.fn(),
+  resetDomainMemory: vi.fn(),
   saveDomainRunProfile: vi.fn(),
   updateSelector: vi.fn(),
   deleteSelector: vi.fn(),
@@ -69,6 +70,7 @@ describe('DomainMemoryManagePage', () => {
             include_iframes: false,
             traversal_mode: 'paginate',
             request_delay_ms: 1200,
+            host_memory_ttl_seconds: 1800,
             max_pages: 8,
             max_scrolls: 12,
           },
@@ -169,6 +171,7 @@ describe('DomainMemoryManagePage', () => {
         include_iframes: false,
         traversal_mode: 'paginate',
         request_delay_ms: 1200,
+        host_memory_ttl_seconds: 600,
         max_pages: 8,
         max_scrolls: 12,
       },
@@ -197,6 +200,14 @@ describe('DomainMemoryManagePage', () => {
       },
       source_run_id: 101,
       saved_at: new Date('2026-04-08T10:05:00Z').toISOString(),
+    });
+    apiMock.resetDomainMemory.mockResolvedValue({
+      domain_memory_deleted: 1,
+      domain_run_profiles_deleted: 1,
+      domain_cookie_memory_deleted: 1,
+      domain_field_feedback_deleted: 1,
+      host_protection_memory_deleted: 1,
+      cookies_removed: 1,
     });
     apiMock.deleteSelector.mockResolvedValue(undefined);
     apiMock.deleteSelectorsByDomain.mockResolvedValue({ deleted: 1 });
@@ -243,6 +254,7 @@ describe('DomainMemoryManagePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Profiles (1)' }));
     fireEvent.click(screen.getByRole('combobox', { name: 'Fetch Mode' }));
     fireEvent.click(await screen.findByRole('option', { name: 'Browser Only' }));
+    fireEvent.change(screen.getByLabelText('Host Memory TTL (s)'), { target: { value: '600' } });
     fireEvent.change(screen.getByDisplayValue('IN'), { target: { value: 'US' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save Profile' }));
 
@@ -251,6 +263,7 @@ describe('DomainMemoryManagePage', () => {
         profile: expect.objectContaining({
           fetch_profile: expect.objectContaining({
             fetch_mode: 'browser_only',
+            host_memory_ttl_seconds: 600,
           }),
           locality_profile: expect.objectContaining({
             geo_country: 'US',
@@ -336,5 +349,24 @@ describe('DomainMemoryManagePage', () => {
       expect(apiMock.listSelectors).toHaveBeenCalledWith({ domain: 'other.com' });
     });
     expect(apiMock.listSelectors).not.toHaveBeenCalledWith({ domain: 'example.com' });
+  });
+
+  it('resets domain memory from the top bar action', async () => {
+    render(
+      <TopBarProvider>
+        <HeaderActions />
+        <DomainMemoryManagePage />
+      </TopBarProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset Domain Memory' }));
+    expect(screen.getByText('Reset domain memory')).toBeInTheDocument();
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Reset Domain Memory' }),
+    );
+
+    await waitFor(() => {
+      expect(apiMock.resetDomainMemory).toHaveBeenCalledTimes(1);
+    });
   });
 });

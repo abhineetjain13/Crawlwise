@@ -17,6 +17,7 @@ class AcquisitionPolicyUpdates(TypedDict, total=False):
     locality_profile: dict[str, object]
     capture_page_markdown: bool
     capture_screenshot: bool
+    host_memory_ttl_seconds: int | None
     prefer_curl_handoff: bool
     handoff_cookie_engine: str | None
     forced_browser_engine: str | None
@@ -31,6 +32,7 @@ class AcquisitionPolicy:
     locality_profile: Mapping[str, object] = field(default_factory=dict)
     capture_page_markdown: bool = False
     capture_screenshot: bool = False
+    host_memory_ttl_seconds: int | None = None
     prefer_curl_handoff: bool = False
     handoff_cookie_engine: str | None = None
     forced_browser_engine: str | None = None
@@ -58,6 +60,9 @@ class AcquisitionPolicy:
             ),
             capture_page_markdown=bool(payload.get("capture_page_markdown", False)),
             capture_screenshot=bool(payload.get("capture_screenshot", False)),
+            host_memory_ttl_seconds=_optional_positive_int(
+                payload.get("host_memory_ttl_seconds")
+            ),
             prefer_curl_handoff=bool(payload.get("prefer_curl_handoff", False)),
             handoff_cookie_engine=_optional_text(payload.get("handoff_cookie_engine")),
             forced_browser_engine=_optional_text(payload.get("forced_browser_engine")),
@@ -111,6 +116,8 @@ class AcquisitionPolicy:
             profile["capture_page_markdown"] = True
         if self.capture_screenshot:
             profile["capture_screenshot"] = True
+        if self.host_memory_ttl_seconds is not None:
+            profile["host_memory_ttl_seconds"] = self.host_memory_ttl_seconds
         if self.prefer_curl_handoff:
             profile["prefer_curl_handoff"] = True
         if self.handoff_cookie_engine:
@@ -159,6 +166,19 @@ def _mapping_value(value: object, *, field_name: str) -> dict[str, object]:
 def _optional_text(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _optional_positive_int(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        result = int(text)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
 
 
 def _normalize_fetch_mode(value: object, *, prefer_browser: bool) -> str:

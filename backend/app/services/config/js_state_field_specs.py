@@ -5,6 +5,19 @@ from __future__ import annotations
 from glom import Coalesce  # type: ignore[import-untyped]
 
 JS_STATE_GLOM_SKIP: tuple[object, ...] = ("", [], {})
+JS_STATE_PRODUCT_PAYLOAD_LIMIT = 24
+JS_STATE_PRODUCT_VARIANT_LIST_KEYS: tuple[str, ...] = ("variants", "availableSizes")
+JS_STATE_VARIANT_AVAILABILITY_BOOL_KEYS: tuple[str, ...] = (
+    "available",
+    "availableForSale",
+    "inStock",
+)
+JS_STATE_VARIANT_STOCK_QUANTITY_KEYS: tuple[str, ...] = (
+    "inventory_quantity",
+    "stock_quantity",
+    "quantity",
+    "inventoryQuantity",
+)
 JS_STATE_PRODUCT_FIELD_SPEC = {
     "title": Coalesce("title", "name", "pn", default=None, skip=JS_STATE_GLOM_SKIP),
     "brand": Coalesce(
@@ -119,6 +132,18 @@ JS_STATE_PRODUCT_FIELD_SPEC = {
     "published_at": Coalesce("published_at", default=None, skip=JS_STATE_GLOM_SKIP),
 }
 JS_STATE_VARIANT_FIELD_SPEC = {
+    "url": Coalesce(
+        "url",
+        "href",
+        "onlineStoreUrl",
+        "online_store_url",
+        "productUrl",
+        "product_url",
+        "canonicalUrl",
+        "canonical_url",
+        default=None,
+        skip=JS_STATE_GLOM_SKIP,
+    ),
     "price": Coalesce(
         "price.amount",
         "price.value",

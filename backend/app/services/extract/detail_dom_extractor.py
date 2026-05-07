@@ -412,11 +412,40 @@ def _coerce_variant_option_value(
     *,
     page_url: str,
 ) -> str:
+    if axis_name == "color":
+        return _coerce_color_option_value(raw_value, page_url=page_url)
     if axis_name in _option_scalar_fields:
         coerced = text_or_none(coerce_field_value(axis_name, raw_value, page_url))
         if coerced:
             return coerced
     return clean_text(raw_value)
+
+
+def _coerce_color_option_value(raw_value: object, *, page_url: str) -> str:
+    cleaned = clean_text(raw_value)
+    if not cleaned:
+        return ""
+    for candidate in _color_option_value_candidates(cleaned):
+        coerced = text_or_none(coerce_field_value("color", candidate, page_url))
+        if coerced:
+            return coerced
+    return cleaned
+
+
+def _color_option_value_candidates(value: str) -> list[str]:
+    candidates: list[str] = []
+    for pattern in (
+        re.compile(r"\b(?:in|colour|color)\s*[:\-]?\s+(.+)$", flags=re.I),
+        re.compile(r"\b(?:colour|color)\s*[:\-]\s*(.+)$", flags=re.I),
+    ):
+        match = pattern.search(value)
+        if match is None:
+            continue
+        candidate = clean_text(match.group(1))
+        if candidate:
+            candidates.append(candidate)
+    candidates.append(value)
+    return list(dict.fromkeys(candidates))
 
 
 def _prefer_axis_inferred_from_values(
@@ -660,6 +689,7 @@ def _collect_variant_choice_entries(
         "[role='radio'], "
         "[role='option'], "
         "button, "
+        "a[href], "
         "[data-value], [data-option-value], "
         "[aria-pressed], [aria-selected], [data-state], [data-selected]"
     )[:24]:
@@ -668,6 +698,7 @@ def _collect_variant_choice_entries(
             _variant_choice_entry_value(
                 container,
                 node,
+                axis_name=coercion_axis,
                 visible_text_cache=visible_text_cache,
             ),
             page_url=page_url,
@@ -698,6 +729,7 @@ def _collect_variant_choice_entries(
             _variant_choice_entry_value(
                 container,
                 input_node,
+                axis_name=coercion_axis,
                 label_node=label_node,
                 visible_text_cache=visible_text_cache,
             ),
@@ -721,12 +753,26 @@ def _variant_choice_entry_value(
     container: Any,
     node: Any,
     *,
+    axis_name: str,
     label_node: Any | None = None,
     visible_text_cache: dict[int, str] | None = None,
 ) -> str:
     resolved_label = label_node or _variant_input_label(container, node)
     label_text = _visible_node_text(resolved_label, cache=visible_text_cache)
     node_text = _visible_node_text(node, cache=visible_text_cache)
+    aria_label = node.get("aria-label") if hasattr(node, "get") else None
+    if axis_name == "color":
+        for raw_value in (
+            node.get("data-swatch-sr") if hasattr(node, "get") else None,
+            aria_label,
+            label_text,
+            node_text,
+        ):
+            cleaned = clean_text(raw_value)
+            if not cleaned:
+                continue
+            if candidate := _color_option_value_candidates(cleaned)[0]:
+                return candidate
     return clean_text(
         node.get("data-attr-displayvalue")
         or node.get("data-displayvalue")
@@ -735,7 +781,7 @@ def _variant_choice_entry_value(
         or label_text
         or node.get("data-value")
         or node.get("data-option-value")
-        or node.get("aria-label")
+        or aria_label
         or node.get("value")
         or node_text
     )

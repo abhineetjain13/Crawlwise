@@ -12,7 +12,6 @@ from bs4 import BeautifulSoup
 
 _COMPANY_RE = re.compile(r"/ta/([^/?#]+)\.careers", re.IGNORECASE)
 SAASHR_DOMAIN = "saashr.com"
-SECURE7_SAASHR_DOMAIN = f"secure7.{SAASHR_DOMAIN}"
 
 
 class SaaSHRAdapter(PublicEndpointAdapter):
@@ -31,6 +30,8 @@ class SaaSHRAdapter(PublicEndpointAdapter):
         *,
         proxy: str | None = None,
     ) -> list[dict]:
+        if not self._is_job_surface(surface):
+            return []
         board_url = self._discover_board_url(url, html)
         if not board_url:
             return []
@@ -48,7 +49,7 @@ class SaaSHRAdapter(PublicEndpointAdapter):
         base_url = f"{parsed.scheme}://{parsed.netloc}"
         records: list[dict] = []
         seen_ids: set[str] = set()
-        size = 50
+        size = int(adapter_runtime_settings.saashr_pagination_size)
         offset = 1
         company_name = ""
         while True:
@@ -75,7 +76,7 @@ class SaaSHRAdapter(PublicEndpointAdapter):
                     lang=lang,
                     proxy=proxy,
                 )
-            rows = payload.get("job_requisitions") if isinstance(payload, dict) else []
+            rows = payload.get("job_requisitions", [])
             if not isinstance(rows, list) or not rows:
                 break
             for row in rows:
@@ -124,7 +125,7 @@ class SaaSHRAdapter(PublicEndpointAdapter):
                 return ""
         except (OSError, RuntimeError, ValueError, TypeError):
             return ""
-        return clean_text(payload.get("comp_name")) if isinstance(payload, dict) else ""
+        return clean_text(payload.get("comp_name"))
 
     def _discover_board_url(self, url: str, html: str) -> str:
         if SAASHR_DOMAIN in str(url or "").lower():

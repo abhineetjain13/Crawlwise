@@ -19,15 +19,29 @@ export function Table({
 export function TableHeader({
   children,
   className,
-}: Readonly<{ children: ReactNode; className?: string }>) {
-  return <thead className={cn('[&_tr]:border-b', className)}>{children}</thead>;
+  ...props
+}: Readonly<
+  { children: ReactNode; className?: string } & React.HTMLAttributes<HTMLTableSectionElement>
+>) {
+  return (
+    <thead {...props} className={cn('[&_tr]:border-b', className)}>
+      {children}
+    </thead>
+  );
 }
 
 export function TableBody({
   children,
   className,
-}: Readonly<{ children: ReactNode; className?: string }>) {
-  return <tbody className={cn('[&_tr:last-child]:border-0', className)}>{children}</tbody>;
+  ...props
+}: Readonly<
+  { children: ReactNode; className?: string } & React.HTMLAttributes<HTMLTableSectionElement>
+>) {
+  return (
+    <tbody {...props} className={cn('[&_tr:last-child]:border-0', className)}>
+      {children}
+    </tbody>
+  );
 }
 
 export function TableRow({
@@ -56,10 +70,14 @@ export function TableRow({
 export function TableHead({
   children,
   className,
-}: Readonly<{ children: ReactNode; className?: string }>) {
+  ...props
+}: Readonly<
+  { children: ReactNode; className?: string } & React.ThHTMLAttributes<HTMLTableCellElement>
+>) {
   // Header: primary sans family with text-xs sizing, semibold, uppercase, wide tracking
   return (
     <th
+      {...props}
       className={cn(
         'text-secondary h-8 px-4 text-left align-middle [font-family:var(--font-primary-family)] text-xs font-semibold tracking-wide uppercase',
         className,
@@ -74,9 +92,13 @@ export function TableCell({
   children,
   className,
   colSpan,
-}: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
+  ...props
+}: Readonly<
+  { children: ReactNode; className?: string; colSpan?: number } & React.TdHTMLAttributes<HTMLTableCellElement>
+>) {
   return (
     <td
+      {...props}
       className={cn(
         'text-primary px-4 py-2 align-middle [font-family:var(--font-primary-family)] text-[length:var(--text-sm)] leading-normal font-normal',
         className,

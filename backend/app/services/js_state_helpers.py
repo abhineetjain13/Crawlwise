@@ -4,6 +4,10 @@ from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 from app.services.extract.shared_variant_logic import normalized_variant_axis_key
+from app.services.config.js_state_field_specs import (
+    JS_STATE_VARIANT_AVAILABILITY_BOOL_KEYS,
+    JS_STATE_VARIANT_STOCK_QUANTITY_KEYS,
+)
 from app.services.field_value_core import text_or_none
 from app.services.normalizers import normalize_decimal_price
 
@@ -179,14 +183,15 @@ def availability_value(value: dict[str, Any] | None) -> str | None:
         if lowered in {"limited stock", "low stock"}:
             return "limited_stock"
         return cleaned
-    available = value.get("available")
-    if isinstance(available, bool):
-        return "in_stock" if available else "out_of_stock"
-    if available not in (None, "", [], {}):
-        normalized_available = str(available).strip().lower()
-        if normalized_available in {"1", "true", "yes", "available", "in-stock"}:
-            return "in_stock"
-        return None
+    for key in JS_STATE_VARIANT_AVAILABILITY_BOOL_KEYS:
+        available = value.get(key)
+        if isinstance(available, bool):
+            return "in_stock" if available else "out_of_stock"
+        if available not in (None, "", [], {}):
+            normalized_available = str(available).strip().lower()
+            if normalized_available in {"1", "true", "yes", "available", "in-stock"}:
+                return "in_stock"
+            return None
     qty = stock_quantity(value)
     if qty is None:
         return None
@@ -196,7 +201,7 @@ def availability_value(value: dict[str, Any] | None) -> str | None:
 def stock_quantity(value: dict[str, Any] | None) -> int | None:
     if not isinstance(value, dict):
         return None
-    for key in ("inventory_quantity", "stock_quantity", "quantity"):
+    for key in JS_STATE_VARIANT_STOCK_QUANTITY_KEYS:
         raw = value.get(key)
         if raw in (None, "", [], {}):
             continue
@@ -227,7 +232,7 @@ def normalize_price(
     )
 
 
-def compact_dict(value: dict[str, Any]) -> dict[str, Any]:
+def compact_dict(value: dict[str, Any] | None) -> dict[str, Any]:
     return {
         key: item
         for key, item in dict(value or {}).items()

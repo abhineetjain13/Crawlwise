@@ -33,7 +33,10 @@ class PaycomAdapter(PublicEndpointAdapter):
             return []
         service_base = str(host_config.get("service_base") or "").rstrip("/")
         auth_token = str(host_config.get("auth_token") or "").strip()
-        locale = str(host_config.get("locale") or "en-US").strip() or "en-US"
+        locale = (
+            str(host_config.get("locale") or adapter_runtime_settings.default_locale).strip()
+            or adapter_runtime_settings.default_locale
+        )
         if not service_base or not auth_token:
             return []
 
@@ -79,7 +82,7 @@ class PaycomAdapter(PublicEndpointAdapter):
         records: list[dict] = []
         seen_ids: set[str] = set()
         skip = 0
-        take = 100
+        take = int(adapter_runtime_settings.paycom_listing_page_size)
         while True:
             payload = {
                 "skip": skip,
@@ -117,7 +120,7 @@ class PaycomAdapter(PublicEndpointAdapter):
                 json.JSONDecodeError,
             ):
                 break
-            previews = body.get("jobPostingPreviews") if isinstance(body, dict) else []
+            previews = body.get("jobPostingPreviews", [])
             if not isinstance(previews, list) or not previews:
                 break
             for preview in previews:
@@ -129,11 +132,7 @@ class PaycomAdapter(PublicEndpointAdapter):
                     continue
                 seen_ids.add(job_id)
                 records.append(normalized)
-            total = (
-                int(body.get("jobPostingPreviewsCount", 0) or 0)
-                if isinstance(body, dict)
-                else 0
-            )
+            total = int(body.get("jobPostingPreviewsCount", 0) or 0)
             skip += take
             if len(previews) < take or (total and skip >= total):
                 break
@@ -167,7 +166,7 @@ class PaycomAdapter(PublicEndpointAdapter):
             json.JSONDecodeError,
         ):
             return None
-        posting = body.get("jobPosting") if isinstance(body, dict) else None
+        posting = body.get("jobPosting")
         if not isinstance(posting, dict):
             return None
         title = clean_text(posting.get("jobTitle"))

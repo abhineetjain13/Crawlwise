@@ -6,7 +6,7 @@ import socket
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import cast
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 from app.services.config.security_rules import (
     ALLOWED_PROXY_SCHEMES,
@@ -253,13 +253,17 @@ def _rebuild_url(original: str, target: ValidatedTarget) -> str:
     port_suffix = ""
     if reparsed.port is None and target.port != _default_port(target.scheme):
         port_suffix = f":{target.port}"
-    hostname = reparsed.hostname or ""
-    if ":" in hostname:  # IPv6 address
-        hostname = f"[{hostname}]"
-    netloc = hostname + port_suffix
+    if reparsed.port is not None:
+        netloc = reparsed.netloc
+    else:
+        hostname = reparsed.hostname or ""
+        if ":" in hostname:  # IPv6 address
+            hostname = f"[{hostname}]"
+        netloc = hostname + port_suffix
     return reparsed._replace(scheme=target.scheme, netloc=netloc).geturl()
 
-def _target_port(parsed) -> int:
+
+def _target_port(parsed: ParseResult) -> int:
     return int(parsed.port or _default_port(parsed.scheme))
 
 

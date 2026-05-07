@@ -149,6 +149,7 @@ describe('CrawlConfigScreen bulk prefill', () => {
           include_iframes: false,
           traversal_mode: null,
           request_delay_ms: 500,
+          host_memory_ttl_seconds: 1800,
           max_pages: 10,
           max_scrolls: 10,
         },
@@ -180,6 +181,7 @@ describe('CrawlConfigScreen bulk prefill', () => {
     await waitFor(() => {
       expect(screen.queryByLabelText('Proxy pool input')).not.toBeInTheDocument();
     });
+    expect(screen.getByLabelText('Host memory TTL seconds')).toHaveValue(1800);
   });
 
   it('refreshes the route after launching a crawl so the new run screen loads immediately', async () => {

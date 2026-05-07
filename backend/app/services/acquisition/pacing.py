@@ -14,18 +14,22 @@ def _normalized_host(value: str) -> str:
     return normalize_host(value)
 
 
-async def wait_for_host_slot(_url: str) -> None:
+async def wait_for_host_slot(_url: str, *, ttl_seconds: int | None = None) -> None:
     host = _normalized_host(_url)
     if not host:
         return
     min_interval_ms = _host_interval_ms(protected=False)
-    ttl_seconds = max(
+    resolved_ttl_seconds = max(
         1,
-        int(crawler_runtime_settings.pacing_host_cache_ttl_seconds),
+        int(
+            ttl_seconds
+            if ttl_seconds is not None
+            else crawler_runtime_settings.pacing_host_cache_ttl_seconds
+        ),
     )
     now = time.monotonic()
     async with _HOST_PACING_LOCK:
-        _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
+        _prune_expired_hosts(now=now, ttl_seconds=resolved_ttl_seconds)
         next_allowed_at = _HOST_NEXT_ALLOWED_AT.get(host, now)
         wait_seconds = max(0.0, next_allowed_at - now)
         _HOST_NEXT_ALLOWED_AT[host] = max(now, next_allowed_at) + (
@@ -41,18 +45,26 @@ async def reset_pacing_state() -> None:
         _HOST_NEXT_ALLOWED_AT.clear()
 
 
-async def apply_protected_host_backoff(_url: str) -> None:
+async def apply_protected_host_backoff(
+    _url: str,
+    *,
+    ttl_seconds: int | None = None,
+) -> None:
     host = _normalized_host(_url)
     if not host:
         return
-    ttl_seconds = max(
+    resolved_ttl_seconds = max(
         1,
-        int(crawler_runtime_settings.pacing_host_cache_ttl_seconds),
+        int(
+            ttl_seconds
+            if ttl_seconds is not None
+            else crawler_runtime_settings.pacing_host_cache_ttl_seconds
+        ),
     )
     now = time.monotonic()
     protected_interval_seconds = _host_interval_ms(protected=True) / 1000.0
     async with _HOST_PACING_LOCK:
-        _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
+        _prune_expired_hosts(now=now, ttl_seconds=resolved_ttl_seconds)
         next_allowed_at = _HOST_NEXT_ALLOWED_AT.get(host, now)
         _HOST_NEXT_ALLOWED_AT[host] = max(next_allowed_at, now + protected_interval_seconds)
         _enforce_host_cache_limit()

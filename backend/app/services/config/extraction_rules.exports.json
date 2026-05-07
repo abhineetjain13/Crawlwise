@@ -1333,6 +1333,8 @@
       "[data-component-id='display-price'] [class*='price' i]",
       "[class*='price' i]",
       "[data-testid*='price' i]",
+      "[data-test-id*='price' i]",
+      "[data-name-id*='price' i]",
       "[data-test*='price' i]",
       "[aria-label*='price' i]"
     ]

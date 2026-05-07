@@ -10,6 +10,7 @@ from app.services.crawl_utils import normalize_target_url, resolve_traversal_mod
 from app.services.config.runtime_settings import crawler_runtime_settings
 
 _BROWSER_ENGINE_VALUES = {"auto", "patchright", "real_chrome"}
+_LEGACY_HANDOFF_ELIGIBLE_KEY = "prefer_curl_handoff"
 
 
 def _coerce_int(
@@ -177,6 +178,11 @@ class CrawlRunSettings:
                 "request_delay_ms": self.sleep_ms(),
                 "max_pages": self.max_pages(),
                 "max_scrolls": self.max_scrolls(),
+                "host_memory_ttl_seconds": _coerce_optional_int(
+                    stored.get("host_memory_ttl_seconds"),
+                    1,
+                    crawler_runtime_settings.host_memory_ttl_max_seconds,
+                ),
             }
         return {
             "fetch_mode": "auto",
@@ -187,6 +193,11 @@ class CrawlRunSettings:
             "request_delay_ms": self.sleep_ms(),
             "max_pages": self.max_pages(),
             "max_scrolls": self.max_scrolls(),
+            "host_memory_ttl_seconds": _coerce_optional_int(
+                stored.get("host_memory_ttl_seconds"),
+                1,
+                crawler_runtime_settings.host_memory_ttl_max_seconds,
+            ),
         }
 
     def locality_profile(self) -> dict[str, object]:
@@ -216,6 +227,9 @@ class CrawlRunSettings:
 
     def acquisition_contract(self) -> dict[str, object]:
         stored = _mapping(self.data.get("acquisition_contract"))
+        handoff_eligible = bool(
+            stored.get("handoff_eligible", stored.get(_LEGACY_HANDOFF_ELIGIBLE_KEY, False))
+        )
         stale = _mapping(stored.get("stale_after_failures"))
         last_quality_success = _mapping(stored.get("last_quality_success"))
         normalized_success: dict[str, object] | None = None
@@ -253,11 +267,16 @@ class CrawlRunSettings:
             .lower()
             or "auto",
             "prefer_browser": bool(stored.get("prefer_browser", False)),
-            "prefer_curl_handoff": bool(stored.get("prefer_curl_handoff", False)),
+            "handoff_eligible": handoff_eligible,
             "handoff_cookie_engine": str(stored.get("handoff_cookie_engine") or "auto")
             .strip()
             .lower()
             or "auto",
+            "required_rendering": bool(stored.get("required_rendering", False)),
+            "required_traversal": bool(stored.get("required_traversal", False)),
+            "required_network_payloads": bool(
+                stored.get("required_network_payloads", False)
+            ),
             "last_quality_success": normalized_success,
             "stale_after_failures": {
                 "failure_count": _coerce_int(
@@ -389,6 +408,10 @@ class CrawlRunSettings:
                 ],
             }
         )
+        if fetch_profile["host_memory_ttl_seconds"] is not None:
+            profile["host_memory_ttl_seconds"] = fetch_profile[
+                "host_memory_ttl_seconds"
+            ]
         proxy_profile = self.proxy_profile()
         profile["proxy_profile"] = proxy_profile
         profile["locality_profile"] = self.locality_profile()

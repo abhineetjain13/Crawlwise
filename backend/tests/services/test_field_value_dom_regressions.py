@@ -1,8 +1,10 @@
 """Regression tests for output-quality fixes applied 2026-05-03."""
+
 from __future__ import annotations
 
 import html
 
+import pytest
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
@@ -79,9 +81,49 @@ def test_dedupe_image_urls_normalizes_repeated_scheme_slashes() -> None:
 
 
 def test_upgrade_low_resolution_amazon_image_url_strips_thumbnail_transform() -> None:
-    assert upgrade_low_resolution_image_url(
-        "https://m.media-amazon.com/images/I/51DRLHAa2AS._AC_US40_.jpg"
-    ) == "https://m.media-amazon.com/images/I/51DRLHAa2AS.jpg"
+    assert (
+        upgrade_low_resolution_image_url(
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS._AC_US40_.jpg"
+        )
+        == "https://m.media-amazon.com/images/I/51DRLHAa2AS.jpg"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS._SL500_.jpg",
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS.jpg",
+            id="sl_transform",
+        ),
+        pytest.param(
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS._SX300_.jpg",
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS.jpg",
+            id="sx_transform",
+        ),
+        pytest.param(
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS._AC_UL320_.jpg",
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS.jpg",
+            id="ac_ul_transform",
+        ),
+        pytest.param(
+            "https://cdn.example.com/images/I/51DRLHAa2AS._SL500_.jpg",
+            "https://cdn.example.com/images/I/51DRLHAa2AS._SL500_.jpg",
+            id="non_amazon_unchanged",
+        ),
+        pytest.param(
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS.jpg",
+            "https://m.media-amazon.com/images/I/51DRLHAa2AS.jpg",
+            id="already_full_size",
+        ),
+    ],
+)
+def test_upgrade_low_resolution_amazon_image_url_transform_cases(
+    value: str,
+    expected: str,
+) -> None:
+    assert upgrade_low_resolution_image_url(value) == expected
 
 
 def test_dash_separated_feature_text_splits_into_rows() -> None:

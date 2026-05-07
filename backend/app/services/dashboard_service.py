@@ -25,8 +25,9 @@ from app.models.crawl import (
     ReviewPromotion,
 )
 from app.models.llm import LLMCostLog
-from app.services.crawl_fetch_runtime import reset_fetch_runtime_state
+from app.services.acquisition.cookie_store import clear_cookie_store_cache
 from app.services.acquisition.pacing import reset_pacing_state
+from app.services.crawl_fetch_runtime import reset_fetch_runtime_state
 from app.services.crawl_state import ACTIVE_STATUSES
 from app.services.robots_policy import reset_robots_policy_cache
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -138,7 +139,11 @@ async def reset_crawl_data(session: AsyncSession) -> dict:
 
 async def reset_domain_memory(session: AsyncSession) -> dict:
     async with _session_transaction(session):
-        return await _reset_domain_memory_db(session)
+        counts = await _reset_domain_memory_db(session)
+    return {
+        **counts,
+        **await _reset_domain_memory_runtime_state(),
+    }
 
 
 async def reset_product_intelligence(session: AsyncSession) -> dict:
@@ -172,13 +177,10 @@ async def _reset_domain_memory_db(session: AsyncSession) -> dict:
         [
             ("domain_memory_deleted", DomainMemory),
             ("domain_run_profiles_deleted", DomainRunProfile),
+            ("domain_cookie_memory_deleted", DomainCookieMemory),
             ("domain_field_feedback_deleted", DomainFieldFeedback),
+            ("host_protection_memory_deleted", HostProtectionMemory),
         ],
-        preserved=[
-            ("domain_cookie_memory_preserved", DomainCookieMemory),
-            ("host_protection_memory_preserved", HostProtectionMemory),
-        ],
-        zeroed=("domain_cookie_memory_deleted", "host_protection_memory_deleted"),
     )
     await _reset_domain_memory_tables(session)
     return counts
@@ -226,6 +228,14 @@ async def _reset_crawl_runtime_state() -> dict:
         "legacy_artifacts_removed": legacy_artifacts_removed,
         "cookies_removed": cookies_removed,
         "knowledge_base_reset": False,
+    }
+
+
+async def _reset_domain_memory_runtime_state() -> dict:
+    await clear_cookie_store_cache()
+    cookies_removed = _reset_directory(settings.cookie_store_dir)
+    return {
+        "cookies_removed": cookies_removed,
     }
 
 
@@ -282,8 +292,16 @@ async def _reset_crawl_data_tables(session: AsyncSession) -> None:
 async def _reset_domain_memory_tables(session: AsyncSession) -> None:
     await _reset_bucket_tables(
         session,
-        [DomainFieldFeedback, DomainRunProfile, DomainMemory],
+        [
+            DomainFieldFeedback,
+            DomainCookieMemory,
+            HostProtectionMemory,
+            DomainRunProfile,
+            DomainMemory,
+        ],
         "domain_field_feedback",
+        "domain_cookie_memory",
+        "host_protection_memory",
         "domain_run_profiles",
         "domain_memory",
     )

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from app.services.config.extraction_rules import (
     BROWSER_DETAIL_EXPAND_KEYWORDS,
+    DETAIL_AOM_EXPAND_ROLES,
     BROWSER_REQUESTED_DETAIL_GENERIC_TOGGLE_LABELS,
     BROWSER_REQUESTED_DETAIL_SELECTOR_PRIORITY,
     DETAIL_BLOCKED_TOKENS,
@@ -25,9 +26,6 @@ _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
     for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
 }
-_AOM_EXPAND_ROLES = {"button", "tab", "link", "menuitem"}
-
-
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, Iterable) or isinstance(value, (str, bytes, dict)):
         return []
@@ -163,10 +161,10 @@ def _finish_expansion_diagnostics(
     expanded_elements: list[str],
     interaction_failures: list[str],
     started_at: float,
-    elapsed_ms,
+    elapsed_ms: Callable[[float], int],
 ) -> dict[str, object]:
-    if diagnostics["status"] == "attempted":
-        diagnostics["status"] = "expanded" if clicked_count > 0 else "no_matches"
+    if diagnostics.get("status") == "attempted" and clicked_count > 0:
+        diagnostics["status"] = "expanded"
     diagnostics["clicked_count"] = clicked_count
     diagnostics["expanded_elements"] = expanded_elements
     diagnostics["interaction_failures"] = interaction_failures
@@ -652,7 +650,7 @@ def accessibility_expand_candidates(
         snapshot,
         surface=surface,
         requested_fields=requested_fields,
-        aom_expand_roles=_AOM_EXPAND_ROLES,
+        aom_expand_roles=set(DETAIL_AOM_EXPAND_ROLES),
         detail_expansion_keywords=detail_expansion_keywords,
     )
 

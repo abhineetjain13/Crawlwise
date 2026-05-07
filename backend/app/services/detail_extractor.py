@@ -672,10 +672,17 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
         )
     )
     confidence_score = float((record.get("_confidence") or {}).get("score") or 0.0)
+    description_text = clean_text(record.get("description"))
+    has_rich_pdp_corroboration = bool(
+        record.get("price") not in (None, "", [], {})
+        and record.get("image_url") not in (None, "", [], {})
+        and len(description_text) >= 160
+    )
     if (
         confidence_score < 0.5
         and not has_strong_detail_fields
         and "url_slug" in title_sources
+        and not has_rich_pdp_corroboration
     ):
         return True
     if (
@@ -1294,7 +1301,13 @@ def detail_record_rejection_reason(
     ):
         return "detail_identity_mismatch"
     if _looks_like_site_shell_record(record, page_url=page_url):
-        return "non_detail_seed"
+        if (
+            _detail_url_has_multiple_product_segments(page_url)
+            or _detail_url_is_collection_like(page_url)
+            or _detail_url_is_utility(page_url)
+        ):
+            return "non_detail_seed"
+        return "detail_shell"
     return None
 
 

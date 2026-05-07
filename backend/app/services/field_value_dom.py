@@ -15,8 +15,12 @@ from lxml import html as lxml_html
 from soupsieve import SelectorSyntaxError
 
 from app.services.config.extraction_rules import (
+    AMAZON_IMAGE_CDN_HOSTS,
+    AMAZON_IMAGE_LOW_RES_MAX_DIMENSION,
+    AMAZON_IMAGE_LOW_RES_SUFFIX_PATTERN,
     CROSS_LINK_CONTAINER_HINTS,
     CDN_IMAGE_QUERY_PARAMS,
+    CDN_IMAGE_PATH_SUFFIX_PATTERN,
     DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS,
     DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS,
@@ -68,6 +72,7 @@ from app.services.xpath_service import validate_xpath_syntax
 
 logger = logging.getLogger(__name__)
 
+
 def _safe_int(value: object, default: int) -> int:
     try:
         parsed = int(str(value).strip())
@@ -75,18 +80,26 @@ def _safe_int(value: object, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
+
 _max_section_blocks = _safe_int(DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS, 8)
 _max_section_chars = _safe_int(DETAIL_LONG_TEXT_MAX_SECTION_CHARS, 1200)
 _cross_product_container_tokens = tuple(
-    clean_text(token).lower() for token in tuple(DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS or ()) if clean_text(token)
+    clean_text(token).lower()
+    for token in tuple(DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS or ())
+    if clean_text(token)
 )
 _scope_product_context_tokens = tuple(
-    clean_text(token).lower() for token in tuple(SCOPE_PRODUCT_CONTEXT_TOKENS or ()) if clean_text(token)
+    clean_text(token).lower()
+    for token in tuple(SCOPE_PRODUCT_CONTEXT_TOKENS or ())
+    if clean_text(token)
 )
 _max_selector_matches = _safe_int(MAX_SELECTOR_MATCHES, 12)
 _scope_score_main_weight = _safe_int(SCOPE_SCORE_MAIN_WEIGHT, 4000)
 _scope_score_priority_weight = _safe_int(SCOPE_SCORE_PRIORITY_WEIGHT, 2000)
-_scope_score_product_context_weight = _safe_int(SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT, 1000)
+_scope_score_product_context_weight = _safe_int(
+    SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT, 1000
+)
+
 
 def _compile_variant_option_child_drop_patterns() -> tuple[re.Pattern[str], ...]:
     compiled: list[re.Pattern[str]] = []
@@ -96,8 +109,11 @@ def _compile_variant_option_child_drop_patterns() -> tuple[re.Pattern[str], ...]
         try:
             compiled.append(re.compile(str(pattern), re.I))
         except re.error:
-            logger.warning("Skipping invalid variant option child-drop pattern: %r", pattern)
+            logger.warning(
+                "Skipping invalid variant option child-drop pattern: %r", pattern
+            )
     return tuple(compiled)
+
 
 _VARIANT_OPTION_CHILD_DROP_RE = _compile_variant_option_child_drop_patterns()
 
@@ -114,12 +130,19 @@ _NON_PRIMARY_IMAGE_SECTION_HINTS = tuple(
 )
 _CDN_IMAGE_QUERY_PARAMS = frozenset(CDN_IMAGE_QUERY_PARAMS or ())
 _CDN_IMAGE_PATH_SUFFIX_RE = regex_lib.compile(
-    r"(?:"
-    r"_(?:\d+x\d+|pico|icon|thumb|thumbnail|small|compact|medium|large|grande|original)"
-    r"|[._](?:AC_)?(?:US|SR|SL|SX|SY|SS)\d+_?"
-    r"|/t_(?:default|thumbnail|pdp_\d+_v\d+|web_pdp_\d+_v\d+)"
-    r")(?=\.[a-z0-9]+$|/|$)",
+    str(CDN_IMAGE_PATH_SUFFIX_PATTERN),
     regex_lib.I,
+)
+_AMAZON_IMAGE_CDN_HOSTS = frozenset(
+    str(host).lower() for host in AMAZON_IMAGE_CDN_HOSTS
+)
+_AMAZON_IMAGE_LOW_RES_SUFFIX_RE = re.compile(
+    str(AMAZON_IMAGE_LOW_RES_SUFFIX_PATTERN),
+    re.I,
+)
+_AMAZON_IMAGE_TRANSFORM_DIMENSION_RE = re.compile(
+    r"\._[A-Z]+_[A-Z]{1,2}(\d{2,4})_",
+    re.I,
 )
 _IMAGE_PATH_DIMENSION_RE = re.compile(
     r"(?:[/?_=-])(?:w|wid|width|h|hei|height|sl|sx|sy|us)?[_=-]?(\d{2,4})(?:x(\d{2,4}))?",
@@ -167,7 +190,9 @@ _FEATURE_SECTION_ALIASES = frozenset(
     for value in tuple(FEATURE_SECTION_ALIASES or ())
     if str(value).strip()
 )
-_feature_section_selector = ", ".join(str(s) for s in tuple(FEATURE_SECTION_SELECTORS or ()) if str(s).strip())
+_feature_section_selector = ", ".join(
+    str(s) for s in tuple(FEATURE_SECTION_SELECTORS or ()) if str(s).strip()
+)
 
 
 def _srcset_urls(value: object) -> list[str]:
@@ -315,14 +340,18 @@ def upgrade_low_resolution_image_url(url: str) -> str:
     normalized_url = _normalize_image_url_text(url)
     parsed = urlparse(normalized_url)
     host = str(parsed.netloc or "").lower()
-    if host not in {"m.media-amazon.com", "images-na.ssl-images-amazon.com"}:
+    if host not in _AMAZON_IMAGE_CDN_HOSTS:
         return normalized_url
-    path = re.sub(
-        r"\._(?:AC_)?(?:US|SR|SL|SX|SY|SS)\d+_?(?=\.[a-z0-9]+$)",
-        "",
-        parsed.path or "",
-        flags=re.I,
+    transform_dimension_match = _AMAZON_IMAGE_TRANSFORM_DIMENSION_RE.search(
+        parsed.path or ""
     )
+    if (
+        transform_dimension_match is not None
+        and int(transform_dimension_match.group(1))
+        > int(AMAZON_IMAGE_LOW_RES_MAX_DIMENSION)
+    ):
+        return normalized_url
+    path = _AMAZON_IMAGE_LOW_RES_SUFFIX_RE.sub("", parsed.path or "")
     return urlunparse(parsed._replace(path=path))
 
 
@@ -352,8 +381,10 @@ def _node_attr_text(node: Tag, *, max_depth: int = 6) -> str:
         depth += 1
     return " ".join(parts).lower()
 
+
 def _field_uses_scoped_text(field_name: str) -> bool:
     return field_name in DETAIL_LONG_TEXT_RANK_FIELDS
+
 
 def _node_within_scope(node: Tag, scope: Tag) -> bool:
     current: Tag | None = node
@@ -367,7 +398,9 @@ def _node_within_scope(node: Tag, scope: Tag) -> bool:
 
 def _node_style_is_hidden(node: Tag) -> bool:
     style = str(node.get("style") or "").strip().lower()
-    return bool(style) and any(token in style for token in _detail_text_hidden_style_tokens)
+    return bool(style) and any(
+        token in style for token in _detail_text_hidden_style_tokens
+    )
 
 
 def _node_is_hidden_or_auxiliary(node: Tag) -> bool:
@@ -399,6 +432,7 @@ def _node_is_hidden_or_auxiliary(node: Tag) -> bool:
         depth += 1
     return False
 
+
 def _node_has_cross_product_cluster(node: Tag, *, page_url: str = "") -> bool:
     if not isinstance(getattr(node, "attrs", None), dict):
         return False
@@ -413,7 +447,10 @@ def _node_has_cross_product_cluster(node: Tag, *, page_url: str = "") -> bool:
     product_links = [
         link
         for link in links
-        if any(marker in urlparse(link).path.lower() for marker in detail_path_hints("ecommerce_detail"))
+        if any(
+            marker in urlparse(link).path.lower()
+            for marker in detail_path_hints("ecommerce_detail")
+        )
     ]
     if len(set(product_links)) >= 2:
         return True
@@ -437,16 +474,16 @@ def _scope_score(node: Tag) -> tuple[int, int]:
     context = _node_attr_text(node, max_depth=2)
     text_len = len(clean_text(node.get_text(" ", strip=True)))
     score = text_len
-    if node.name in {"main", "article"} or str(node.get("role") or "").strip().lower() == "main":
+    if (
+        node.name in {"main", "article"}
+        or str(node.get("role") or "").strip().lower() == "main"
+    ):
         score += _scope_score_main_weight
     if any(token in context for token in _detail_text_scope_priority_tokens):
         score += _scope_score_priority_weight
     if DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR and (
         node.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR) is not None
-        or any(
-            token in context
-            for token in _scope_product_context_tokens
-        )
+        or any(token in context for token in _scope_product_context_tokens)
     ):
         score += _scope_score_product_context_weight
     return score, text_len
@@ -507,8 +544,7 @@ def _pruned_text_scope_root(root: BeautifulSoup | Tag) -> BeautifulSoup | Tag:
 def _is_non_primary_image_context(node: Tag) -> bool:
     context = _node_attr_text(node)
     return any(hint in context for hint in _NON_PRIMARY_IMAGE_SECTION_HINTS) or any(
-        token in context
-        for token in _detail_text_scope_exclude_tokens
+        token in context for token in _detail_text_scope_exclude_tokens
     )
 
 
@@ -542,7 +578,12 @@ def _is_in_product_gallery_context(node: Tag, *, max_depth: int = 6) -> bool:
 
 
 _UNRESOLVED_TEMPLATE_URL_RE = re.compile(
-    "|".join(re.escape(str(token)) for token in tuple(UNRESOLVED_TEMPLATE_URL_TOKENS or ()) if str(token).strip()) or r"(?!)",
+    "|".join(
+        re.escape(str(token))
+        for token in tuple(UNRESOLVED_TEMPLATE_URL_TOKENS or ())
+        if str(token).strip()
+    )
+    or r"(?!)",
     re.IGNORECASE,
 )
 
@@ -725,7 +766,9 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
         _variant_option_node_text(node, field_name)
         if _looks_like_variant_option_node(node, field_name)
         else (
-            html_to_text(str(_clone_visible_only(node) or node), preserve_block_breaks=True)
+            html_to_text(
+                str(_clone_visible_only(node) or node), preserve_block_breaks=True
+            )
             if _field_uses_scoped_text(field_name)
             else (_clone_visible_only(node) or node).get_text(" ", strip=True)
         )
@@ -790,12 +833,16 @@ def extract_selector_values(
     page_url: str,
 ) -> list[object]:
     values: list[object] = []
-    scoped_text_root = _best_text_scope(root) if _field_uses_scoped_text(field_name) else None
+    scoped_text_root = (
+        _best_text_scope(root) if _field_uses_scoped_text(field_name) else None
+    )
     for node in safe_select(root, selector)[:_max_selector_matches]:
         if _field_uses_scoped_text(field_name):
             if _node_is_hidden_or_auxiliary(node):
                 continue
-            if scoped_text_root is not None and not _node_within_scope(node, scoped_text_root):
+            if scoped_text_root is not None and not _node_within_scope(
+                node, scoped_text_root
+            ):
                 continue
         value = extract_node_value(node, field_name, page_url)
         if value in (None, "", [], {}):
@@ -1405,7 +1452,9 @@ def extract_heading_sections(root: BeautifulSoup | Tag) -> dict[str, str]:
         content = _extract_section_content(heading, scoped_root)
         if len(content) >= 12:
             sections.setdefault(heading_text, content)
-    materials = _extract_product_materials(scoped_root) or _extract_product_materials(root)
+    materials = _extract_product_materials(scoped_root) or _extract_product_materials(
+        root
+    )
     if materials:
         sections.setdefault("Composition", materials)
     return sections

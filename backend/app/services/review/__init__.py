@@ -11,6 +11,7 @@ from app.models.crawl import (
     DomainFieldFeedback,
     ReviewPromotion,
 )
+from app.services.config.browser_fingerprint_profiles import BROWSER_REQUIRED_REASONS
 from app.services.config.extraction_rules import EXTRACTION_RULES, REVIEW_CONTAINER_KEYS
 from app.services.db_utils import mapping_or_empty
 from app.services.domain_run_profile_service import (
@@ -330,10 +331,9 @@ async def _promote_review_bucket_fields(
         discovered_data["review_bucket"] = [
             row
             for row in remaining_rows
-            if normalize_field_key(row.get("key")) not in mapped_source_fields
-            or mapping_or_empty(record.data).get(
-                normalized_mapping.get(normalize_field_key(row.get("key")), "")
-            )
+            if (key_norm := normalize_field_key(row.get("key")))
+            not in mapped_source_fields
+            or mapping_or_empty(record.data).get(normalized_mapping.get(key_norm, ""))
             not in (None, "", [], {})
         ]
         record.discovered_data = {
@@ -432,14 +432,11 @@ async def build_domain_recipe_payload(
             )
             if next_browser_reason:
                 browser_reason = next_browser_reason
-        if str(acquisition.get("method") or "").strip().lower() == "browser" and str(
-            browser_diagnostics.get("browser_reason") or ""
-        ).strip().lower() in {
-            "http-escalation",
-            "vendor-block",
-            "traversal-required",
-            "host-preference",
-        }:
+        if (
+            str(acquisition.get("method") or "").strip().lower() == "browser"
+            and str(browser_diagnostics.get("browser_reason") or "").strip().lower()
+            in BROWSER_REQUIRED_REASONS
+        ):
             browser_required = True
         _merge_affordance_candidates(
             affordance_candidates,

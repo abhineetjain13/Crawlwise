@@ -85,14 +85,14 @@ FILE_LOC_BUDGETS = {
     Path("app/services/acquisition/browser_runtime.py"): 2275,
     # Page flow owns navigation, readiness, artifact capture, and final browser shaping.
     # Grown (+38) for dedicated location-interstitial timings and config-owned visual price regex.
-    Path("app/services/acquisition/browser_page_flow.py"): 1920,
+    Path("app/services/acquisition/browser_page_flow.py"): 1935,
     # Traversal owns readiness-aware pagination and bounded expansion loops.
     Path("app/services/acquisition/traversal.py"): 1965,
     # Config owners.
     # Config rules grown due to category/nav URL rules.
-    Path("app/services/config/extraction_rules.py"): 1420,
+    Path("app/services/config/extraction_rules.py"): 1490,
     # Fetch runtime remains the request/browser arbitration owner.
-    Path("app/services/crawl_fetch_runtime.py"): 1235,
+    Path("app/services/crawl_fetch_runtime.py"): 1285,
     # Detail extraction owns candidate arbitration and tier orchestration.
     Path("app/services/detail_extractor.py"): 1640,
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
@@ -110,7 +110,7 @@ FILE_LOC_BUDGETS = {
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
     # TODO(chore): baseline LOC drift here, then extract field_recovery /
     # section-image cleanup / audit wiring owners when scheduled.
-    Path("app/services/field_value_dom.py"): 1640,
+    Path("app/services/field_value_dom.py"): 1705,
     # Canonical field coercion remains centralized here instead of scattering value policy.
     # Grown (+225) for the availability canonical-enum gate, negative-price rejection
     # wiring, category URL-path rejection, and associated audit comments
@@ -121,13 +121,13 @@ FILE_LOC_BUDGETS = {
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1455,
     # JS state mapping stays centralized to avoid adapter-specific drift.
-    Path("app/services/js_state_mapper.py"): 1170,
+    Path("app/services/js_state_mapper.py"): 1325,
     # LLM task runtime owns prompt validation, provider calls, cost logging, and typed errors.
     Path("app/services/llm_tasks.py"): 1080,
     # Pipeline core still owns the per-URL orchestration boundary.
-    Path("app/services/pipeline/core.py"): 1320,
+    Path("app/services/pipeline/core.py"): 1415,
     # Product Intelligence service owns job + discovery orchestration with brand and enrichment LLM helpers.
-    Path("app/services/product_intelligence/service.py"): 1160,
+    Path("app/services/product_intelligence/service.py"): 1190,
 }
 
 

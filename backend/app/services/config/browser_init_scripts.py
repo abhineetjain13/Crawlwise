@@ -7,13 +7,13 @@ from app.services.config.browser_fingerprint_profiles import (
     WEBGL_PROFILE_BY_PLATFORM,
 )
 
-_INIT_WRAPPER_START = "(() => {"
-_TRY_LINE = "  try {"
-_ENUMERABLE_FALSE_LINE = "      enumerable: false,"
-_CONFIGURABLE_TRUE_LINE = "      configurable: true,"
-_DEFINE_PROPERTY_CLOSE_LINE = "    });"
-_CATCH_IGNORE_LINE = "  } catch (_) {}"
-_INIT_WRAPPER_END = "})();"
+INIT_WRAPPER_START = "(() => {"
+TRY_LINE = "  try {"
+ENUMERABLE_FALSE_LINE = "      enumerable: false,"
+CONFIGURABLE_TRUE_LINE = "      configurable: true,"
+DEFINE_PROPERTY_CLOSE_LINE = "    });"
+CATCH_IGNORE_LINE = "  } catch (_) {}"
+INIT_WRAPPER_END = "})();"
 
 
 def _runtime_settings():

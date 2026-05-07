@@ -54,6 +54,9 @@ def _default_fetch_context(
         traversal_required=False,
         fetch_mode="browser_only",
         runtime_policy={},
+        host_memory_ttl_seconds=crawl_fetch_runtime.crawler_runtime_settings.coerce_host_memory_ttl_seconds(
+            None
+        ),
         **overrides,
     )
 
@@ -105,6 +108,9 @@ async def test_real_chrome_success_updates_host_memory(
             "value": "https://example.com/products/widget",
             "method": "browser:real_chrome",
             "proxy_used": False,
+            "ttl_seconds": crawl_fetch_runtime.crawler_runtime_settings.coerce_host_memory_ttl_seconds(
+                None
+            ),
         }
     ]
 
@@ -137,6 +143,9 @@ async def test_patchright_success_updates_host_memory(
             "value": "https://example.com/products/widget",
             "method": "browser:patchright",
             "proxy_used": False,
+            "ttl_seconds": crawl_fetch_runtime.crawler_runtime_settings.coerce_host_memory_ttl_seconds(
+                None
+            ),
         }
     ]
 
@@ -167,7 +176,7 @@ async def test_location_required_diagnostics_do_not_write_hard_block_memory(
     context = _default_fetch_context()
     result = _page_fetch_result(
         "<html><body>Choose your location</body></html>",
-        blocked=False,
+        blocked=True,
         browser_diagnostics={
             "browser_engine": "real_chrome",
             "browser_outcome": "location_required",
@@ -178,13 +187,7 @@ async def test_location_required_diagnostics_do_not_write_hard_block_memory(
     await crawl_fetch_runtime._update_host_result_memory(context, result=result)
 
     assert hard_blocks == []
-    assert usable_fetches == [
-        {
-            "value": "https://example.com/products/widget",
-            "method": "browser:real_chrome",
-            "proxy_used": False,
-        }
-    ]
+    assert usable_fetches == []
 
 
 @pytest.fixture(autouse=True)
@@ -193,8 +196,8 @@ async def _reset_fetch_runtime_state_between_tests(
 ):
     await crawl_fetch_runtime.reset_fetch_runtime_state()
 
-    async def _default_load_policy(url: str, *, session=None):
-        del url, session
+    async def _default_load_policy(url: str, *, session=None, ttl_seconds=None):
+        del url, session, ttl_seconds
         return HostProtectionPolicy(host="")
 
     monkeypatch.setattr(
@@ -208,7 +211,9 @@ async def _reset_fetch_runtime_state_between_tests(
         await crawl_fetch_runtime.reset_fetch_runtime_state()
 
 
-def test_should_capture_network_payload_skips_noise_and_large_declared_payloads() -> None:
+def test_should_capture_network_payload_skips_noise_and_large_declared_payloads() -> (
+    None
+):
     assert not should_capture_network_payload(
         url="https://example.com/telemetry/events",
         content_type="application/json",
@@ -242,7 +247,9 @@ def test_should_capture_network_payload_skips_noise_and_large_declared_payloads(
     )
 
 
-def test_should_capture_network_payload_accepts_chunked_json_without_content_length() -> None:
+def test_should_capture_network_payload_accepts_chunked_json_without_content_length() -> (
+    None
+):
     assert should_capture_network_payload(
         url="https://example.com/api/products",
         content_type="application/json",
@@ -251,7 +258,9 @@ def test_should_capture_network_payload_accepts_chunked_json_without_content_len
     )
 
 
-def test_content_aware_http_blocking_ignores_vendor_headers_when_detail_signals_exist() -> None:
+def test_content_aware_http_blocking_ignores_vendor_headers_when_detail_signals_exist() -> (
+    None
+):
     html = """
     <html>
       <head>
@@ -287,7 +296,9 @@ def test_select_http_fetcher_uses_httpx_when_forced(patch_settings) -> None:
     assert fetcher is crawl_fetch_runtime._http_fetch
 
 
-def test_should_capture_network_payload_ignores_misleading_content_length_when_chunked() -> None:
+def test_should_capture_network_payload_ignores_misleading_content_length_when_chunked() -> (
+    None
+):
     assert should_capture_network_payload(
         url="https://example.com/api/products",
         content_type="application/json",
@@ -299,7 +310,9 @@ def test_should_capture_network_payload_ignores_misleading_content_length_when_c
     )
 
 
-def test_should_capture_network_payload_accepts_react_server_component_streams() -> None:
+def test_should_capture_network_payload_accepts_react_server_component_streams() -> (
+    None
+):
     assert should_capture_network_payload(
         url="https://example.com/products/widget",
         content_type="text/x-component",
@@ -354,9 +367,9 @@ async def test_curl_fetch_uses_runtime_owned_default_request_headers(
     captured_headers: dict[str, str] = {}
     patch_settings(
         http_user_agent=(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/131.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
         )
     )
 
@@ -425,7 +438,12 @@ async def test_fetch_page_waits_for_host_slot_before_http_attempt(
 ) -> None:
     wait_calls: list[str] = []
 
-    async def _fake_wait_for_host_slot(url: str) -> None:
+    async def _fake_wait_for_host_slot(
+        url: str,
+        *,
+        ttl_seconds: int | None = None,
+    ) -> None:
+        del ttl_seconds
         wait_calls.append(url)
 
     async def _fake_curl(url: str, timeout_seconds: float, *, proxy: str | None = None):
@@ -442,7 +460,9 @@ async def test_fetch_page_waits_for_host_slot_before_http_attempt(
             method="curl_cffi",
         )
 
-    monkeypatch.setattr(crawl_fetch_runtime, "wait_for_host_slot", _fake_wait_for_host_slot)
+    monkeypatch.setattr(
+        crawl_fetch_runtime, "wait_for_host_slot", _fake_wait_for_host_slot
+    )
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
 
     result = await crawl_fetch_runtime.fetch_page(
@@ -482,13 +502,19 @@ def test_browser_engine_attempts_uses_real_chrome_after_patchright_when_availabl
 
     attempts = crawl_fetch_runtime._browser_engine_attempts(
         context=context,
-        host_policy=HostProtectionPolicy(host="example.com", patchright_blocked=True),
+        host_policy=HostProtectionPolicy(
+            host="example.com",
+            patchright_blocked=True,
+            prefer_browser=True,
+        ),
     )
 
-    assert attempts == ["patchright", "real_chrome"]
+    assert attempts == ["real_chrome", "patchright"]
 
 
-def test_browser_engine_attempts_keeps_forced_patchright_explicit_when_unavailable() -> None:
+def test_browser_engine_attempts_keeps_forced_patchright_explicit_when_unavailable() -> (
+    None
+):
     context = _default_fetch_context(forced_browser_engine="patchright")
 
     attempts = crawl_fetch_runtime._browser_engine_attempts(
@@ -519,10 +545,11 @@ def test_browser_engine_attempts_escalates_from_patchright_to_real_chrome(
         host_policy=HostProtectionPolicy(
             host="example.com",
             patchright_blocked=True,
+            prefer_browser=True,
         ),
     )
 
-    assert attempts == ["patchright", "real_chrome"]
+    assert attempts == ["real_chrome", "patchright"]
 
 
 def test_saved_real_chrome_contract_skips_patchright(
@@ -533,7 +560,9 @@ def test_saved_real_chrome_contract_skips_patchright(
         "browser_real_chrome_enabled",
         True,
     )
-    monkeypatch.setattr(crawl_fetch_runtime, "real_chrome_browser_available", lambda: True)
+    monkeypatch.setattr(
+        crawl_fetch_runtime, "real_chrome_browser_available", lambda: True
+    )
     context = _default_fetch_context(forced_browser_engine="real_chrome")
 
     attempts = crawl_fetch_runtime._browser_engine_attempts(
@@ -542,6 +571,21 @@ def test_saved_real_chrome_contract_skips_patchright(
     )
 
     assert attempts == ["real_chrome"]
+
+
+def test_durable_vendor_block_limits_browser_engine_attempts() -> None:
+    attempts = crawl_fetch_runtime._durable_vendor_block_engine_attempts(
+        engine_attempts=["real_chrome", "patchright"],
+        host_policy=HostProtectionPolicy(
+            host="example.com",
+            prefer_browser=True,
+            last_block_vendor="datadome",
+            last_block_method="browser:real_chrome",
+        ),
+        forced_engine=None,
+    )
+
+    assert attempts == ["patchright"]
 
 
 @pytest.mark.asyncio
@@ -556,7 +600,9 @@ async def test_real_chrome_cookie_contract_tries_curl_cffi_handoff_first(
         calls.append({"url": request_url, "engine": kwargs.get("browser_engine")})
         return "session=ok"
 
-    async def _curl_fetch(request_url, timeout_seconds, *, proxy=None, cookie_header=None):
+    async def _curl_fetch(
+        request_url, timeout_seconds, *, proxy=None, cookie_header=None
+    ):
         return PageFetchResult(
             url=request_url,
             final_url=request_url,
@@ -611,7 +657,9 @@ async def test_curl_handoff_failure_falls_back_to_real_chrome(
     async def _export_cookie_header_for_domain(*_args, **_kwargs):
         return "session=bad"
 
-    async def _curl_fetch(request_url, timeout_seconds, *, proxy=None, cookie_header=None):
+    async def _curl_fetch(
+        request_url, timeout_seconds, *, proxy=None, cookie_header=None
+    ):
         return PageFetchResult(
             url=request_url,
             final_url=request_url,
@@ -688,7 +736,14 @@ async def test_fetch_page_preserves_requested_fields_on_http_to_browser_escalati
         proxies: list[str | None] | None = None,
         **_kwargs,
     ):
-        del context, reason, listing_recovery_mode, capture_page_markdown, proxies, _kwargs
+        del (
+            context,
+            reason,
+            listing_recovery_mode,
+            capture_page_markdown,
+            proxies,
+            _kwargs,
+        )
         nonlocal captured_requested_fields
         captured_requested_fields = list(requested_fields or [])
         return PageFetchResult(
@@ -736,7 +791,14 @@ async def test_fetch_page_preserves_requested_fields_on_browser_first_path(
         proxies: list[str | None] | None = None,
         **_kwargs,
     ):
-        del context, reason, listing_recovery_mode, capture_page_markdown, proxies, _kwargs
+        del (
+            context,
+            reason,
+            listing_recovery_mode,
+            capture_page_markdown,
+            proxies,
+            _kwargs,
+        )
         nonlocal captured_requested_fields
         captured_requested_fields = list(requested_fields or [])
         return PageFetchResult(
@@ -767,8 +829,12 @@ async def test_fetch_page_preserves_requested_fields_on_browser_first_path(
 async def test_fetch_page_browser_only_skips_http_fetchers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _unexpected_curl(url: str, timeout_seconds: float, *, proxy: str | None = None):
-        raise AssertionError(f"curl should not run for browser_only: {url} {timeout_seconds} {proxy}")
+    async def _unexpected_curl(
+        url: str, timeout_seconds: float, *, proxy: str | None = None
+    ):
+        raise AssertionError(
+            f"curl should not run for browser_only: {url} {timeout_seconds} {proxy}"
+        )
 
     async def _fake_browser(url, timeout, **kwargs):
         del timeout, kwargs
@@ -812,10 +878,14 @@ async def test_fetch_page_http_only_disables_browser_escalation(
         return True
 
     async def _unexpected_browser(url, timeout, **kwargs):
-        raise AssertionError(f"browser should not run for http_only: {url} {timeout} {kwargs}")
+        raise AssertionError(
+            f"browser should not run for http_only: {url} {timeout} {kwargs}"
+        )
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
-    monkeypatch.setattr(crawl_fetch_runtime, "_should_escalate_to_browser_async", _fake_should_escalate)
+    monkeypatch.setattr(
+        crawl_fetch_runtime, "_should_escalate_to_browser_async", _fake_should_escalate
+    )
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _unexpected_browser)
 
     result = await crawl_fetch_runtime.fetch_page(
@@ -858,7 +928,9 @@ async def test_fetch_page_http_then_browser_escalates_after_http_result(
         )
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
-    monkeypatch.setattr(crawl_fetch_runtime, "_should_escalate_to_browser_async", _fake_should_escalate)
+    monkeypatch.setattr(
+        crawl_fetch_runtime, "_should_escalate_to_browser_async", _fake_should_escalate
+    )
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
 
     result = await crawl_fetch_runtime.fetch_page(
@@ -874,11 +946,15 @@ async def test_fetch_page_http_then_browser_escalates_after_http_result(
 async def test_fetch_page_prefers_browser_from_learned_host_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _unexpected_curl(url: str, timeout_seconds: float, *, proxy: str | None = None):
-        raise AssertionError(f"http should be skipped for learned browser-first host: {url} {timeout_seconds} {proxy}")
+    async def _unexpected_curl(
+        url: str, timeout_seconds: float, *, proxy: str | None = None
+    ):
+        raise AssertionError(
+            f"http should be skipped for learned browser-first host: {url} {timeout_seconds} {proxy}"
+        )
 
-    async def _fake_load_policy(url: str, *, session=None):
-        del session
+    async def _fake_load_policy(url: str, *, session=None, ttl_seconds=None):
+        del session, ttl_seconds
         return HostProtectionPolicy(host="example.com", prefer_browser=True)
 
     async def _fake_browser(url, timeout, **kwargs):
@@ -923,7 +999,14 @@ async def test_fetch_page_preserves_proxy_list_on_browser_first_path(
         proxies: list[str | None] | None = None,
         **_kwargs,
     ):
-        del context, reason, requested_fields, listing_recovery_mode, capture_page_markdown, _kwargs
+        del (
+            context,
+            reason,
+            requested_fields,
+            listing_recovery_mode,
+            capture_page_markdown,
+            _kwargs,
+        )
         nonlocal captured_proxies
         captured_proxies = list(proxies or [])
         return PageFetchResult(
@@ -968,16 +1051,11 @@ def test_resolve_proxy_attempts_preserves_order_and_deduplicates() -> None:
 
 
 def test_attach_proxy_run_session_replaces_existing_session_marker() -> None:
-    proxy = (
-        "socks5://user-session-oldvalue:pass@rp.scrapegw.com:6060"
-    )
+    proxy = "socks5://user-session-oldvalue:pass@rp.scrapegw.com:6060"
 
     resolved = crawl_fetch_runtime._attach_proxy_run_session(proxy, run_id=42)
 
-    assert (
-        resolved
-        == "socks5://user-session-r42:pass@rp.scrapegw.com:6060"
-    )
+    assert resolved == "socks5://user-session-r42:pass@rp.scrapegw.com:6060"
 
 
 def test_resolve_proxy_attempts_does_not_rewrite_proxy_session_by_default() -> None:
@@ -995,7 +1073,9 @@ def test_resolve_proxy_attempts_does_not_rewrite_proxy_session_by_default() -> N
     ]
 
 
-def test_resolve_proxy_attempts_rewrites_proxy_session_when_explicitly_enabled() -> None:
+def test_resolve_proxy_attempts_rewrites_proxy_session_when_explicitly_enabled() -> (
+    None
+):
     proxies = crawl_fetch_runtime._resolve_proxy_attempts(
         [
             "socks5://user-session-oldvalue:pass@rp.scrapegw.com:6060",
@@ -1161,10 +1241,12 @@ async def test_fetch_page_browser_only_escalates_to_real_chrome_after_patchright
         fetch_mode="browser_only",
     )
 
-    assert attempted_engines == ["patchright"]
-    assert result.browser_diagnostics["browser_engine"] == "patchright"
+    assert attempted_engines == ["real_chrome"]
+    assert result.browser_diagnostics["browser_engine"] == "real_chrome"
     assert result.browser_diagnostics["escalation_lane"] == "browser_only"
-    assert result.browser_diagnostics["host_policy_snapshot"]["patchright_blocked"] is True
+    assert (
+        result.browser_diagnostics["host_policy_snapshot"]["patchright_blocked"] is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1224,7 +1306,11 @@ async def test_run_browser_attempts_replans_to_real_chrome_after_same_proxy_patc
         "load_host_protection_policy",
         AsyncMock(
             side_effect=[
-                HostProtectionPolicy(host="example.com", patchright_blocked=True),
+                HostProtectionPolicy(
+                    host="example.com",
+                    patchright_blocked=True,
+                    prefer_browser=True,
+                ),
             ]
         ),
     )
@@ -1466,7 +1552,9 @@ async def test_read_network_payload_body_rejects_oversized_body_before_decode() 
 
 
 @pytest.mark.asyncio
-async def test_read_network_payload_body_accepts_small_body_when_content_length_too_large() -> None:
+async def test_read_network_payload_body_accepts_small_body_when_content_length_too_large() -> (
+    None
+):
     response = FakeBodyResponse(
         b"x",
         headers={"content-length": "3500000"},
@@ -1491,7 +1579,9 @@ async def test_read_network_payload_body_accepts_large_but_in_budget_body() -> N
 
 
 @pytest.mark.asyncio
-async def test_read_network_payload_body_accepts_high_value_large_body_with_scaled_budget() -> None:
+async def test_read_network_payload_body_accepts_high_value_large_body_with_scaled_budget() -> (
+    None
+):
     response = FakeBodyResponse(
         b"x" * 3_500_000,
         url="https://example.com/products/widget/product.js",
@@ -1505,7 +1595,9 @@ async def test_read_network_payload_body_accepts_high_value_large_body_with_scal
 
 
 @pytest.mark.asyncio
-async def test_read_network_payload_body_marks_closed_page_failures_explicitly() -> None:
+async def test_read_network_payload_body_marks_closed_page_failures_explicitly() -> (
+    None
+):
     response = FakeBodyResponse(error=RuntimeError("Target closed"))
 
     result = await read_network_payload_body(response)
@@ -1516,7 +1608,9 @@ async def test_read_network_payload_body_marks_closed_page_failures_explicitly()
 
 
 @pytest.mark.asyncio
-async def test_read_network_payload_body_marks_generic_read_failures_explicitly() -> None:
+async def test_read_network_payload_body_marks_generic_read_failures_explicitly() -> (
+    None
+):
     response = FakeBodyResponse(error=RuntimeError("socket reset"))
 
     result = await read_network_payload_body(response)
@@ -1556,7 +1650,9 @@ async def test_should_escalate_to_browser_async_uses_thread_offload(
         calls.append(func.__name__)
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("app.services.acquisition.runtime.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        "app.services.acquisition.runtime.asyncio.to_thread", _fake_to_thread
+    )
 
     result = await should_escalate_to_browser_async(
         PageFetchResult(
@@ -1632,15 +1728,17 @@ async def test_http_fetch_accepts_legacy_client_builder_keyword() -> None:
 
 
 @pytest.mark.asyncio
-async def test_detail_surface_without_signals_escalates_even_when_html_is_not_a_js_shell() -> None:
+async def test_detail_surface_without_signals_escalates_even_when_html_is_not_a_js_shell() -> (
+    None
+):
     listing_shell_html = (
         "<html><body><h1>Careers</h1>"
         + "<ul>"
-        + "".join(
-            f"<li><a href='#'>Job {index}</a></li>" for index in range(20)
-        )
+        + "".join(f"<li><a href='#'>Job {index}</a></li>" for index in range(20))
         + "</ul>"
-        + "<p>" + ("Lots of visible non-detail copy. " * 30) + "</p>"
+        + "<p>"
+        + ("Lots of visible non-detail copy. " * 30)
+        + "</p>"
         + "</body></html>"
     )
     result = PageFetchResult(
@@ -1653,7 +1751,9 @@ async def test_detail_surface_without_signals_escalates_even_when_html_is_not_a_
     )
 
     assert await should_escalate_to_browser_async(result, surface="job_detail") is True
-    assert await should_escalate_to_browser_async(result, surface="job_listing") is False
+    assert (
+        await should_escalate_to_browser_async(result, surface="job_listing") is False
+    )
 
 
 @pytest.mark.asyncio
@@ -1681,7 +1781,9 @@ async def test_should_escalate_to_browser_async_uses_runtime_policy_for_missing_
             + "<ul>"
             + "".join(f"<li><a href='#'>Job {index}</a></li>" for index in range(20))
             + "</ul>"
-            + "<p>" + ("Lots of visible non-detail copy. " * 30) + "</p>"
+            + "<p>"
+            + ("Lots of visible non-detail copy. " * 30)
+            + "</p>"
             + "</body></html>"
         ),
         status_code=200,
@@ -1707,7 +1809,10 @@ async def test_listing_hash_router_shell_escalates_to_browser() -> None:
         blocked=False,
     )
 
-    assert await should_escalate_to_browser_async(result, surface="ecommerce_listing") is True
+    assert (
+        await should_escalate_to_browser_async(result, surface="ecommerce_listing")
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1726,7 +1831,10 @@ async def test_listing_202_shell_escalates_to_browser() -> None:
         blocked=False,
     )
 
-    assert await should_escalate_to_browser_async(result, surface="ecommerce_listing") is True
+    assert (
+        await should_escalate_to_browser_async(result, surface="ecommerce_listing")
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1749,7 +1857,10 @@ async def test_listing_single_product_json_ld_shell_escalates_to_browser() -> No
         blocked=False,
     )
 
-    assert await should_escalate_to_browser_async(result, surface="ecommerce_listing") is True
+    assert (
+        await should_escalate_to_browser_async(result, surface="ecommerce_listing")
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1769,7 +1880,10 @@ async def test_detail_shell_copy_with_detail_words_still_escalates_to_browser() 
         blocked=False,
     )
 
-    assert await should_escalate_to_browser_async(result, surface="ecommerce_detail") is True
+    assert (
+        await should_escalate_to_browser_async(result, surface="ecommerce_detail")
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1787,7 +1901,10 @@ async def test_js_disabled_placeholder_shell_escalates_to_browser() -> None:
         blocked=False,
     )
 
-    assert await should_escalate_to_browser_async(result, surface="ecommerce_detail") is True
+    assert (
+        await should_escalate_to_browser_async(result, surface="ecommerce_detail")
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1871,6 +1988,7 @@ async def test_fetch_page_falls_back_to_httpx_after_curl_transport_errors(
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _failing_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _http_success)
+
     async def _no_browser_escalation(*args, **kwargs):
         del args, kwargs
         return False
@@ -1925,6 +2043,7 @@ async def test_fetch_page_retries_curl_before_httpx_fallback(
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _failing_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _http_success)
+
     async def _no_browser_escalation(*args, **kwargs):
         del args, kwargs
         return False
@@ -2011,7 +2130,9 @@ async def test_fetch_page_returns_non_retryable_404_without_browser_fallback(
         )
 
     async def _unexpected_browser(url, timeout, **kwargs):
-        raise AssertionError(f"browser fallback should not run for non-retryable status {url} {timeout} {kwargs}")
+        raise AssertionError(
+            f"browser fallback should not run for non-retryable status {url} {timeout} {kwargs}"
+        )
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _unexpected_browser)
@@ -2081,7 +2202,9 @@ async def test_fetch_page_stops_http_waterfall_after_vendor_confirmed_block(
     curl_proxies: list[str | None] = []
     browser_proxies: list[str | None] = []
 
-    async def _vendor_blocked_curl(url: str, timeout: float, *, proxy: str | None = None):
+    async def _vendor_blocked_curl(
+        url: str, timeout: float, *, proxy: str | None = None
+    ):
         del timeout
         curl_proxies.append(proxy)
         return PageFetchResult(
@@ -2095,7 +2218,9 @@ async def test_fetch_page_stops_http_waterfall_after_vendor_confirmed_block(
         )
 
     async def _unexpected_http(url: str, timeout: float, *, proxy: str | None = None):
-        raise AssertionError(f"http fallback should not run after vendor-confirmed block: {url} {timeout} {proxy}")
+        raise AssertionError(
+            f"http fallback should not run after vendor-confirmed block: {url} {timeout} {proxy}"
+        )
 
     async def _failing_browser(url, timeout, **kwargs):
         del timeout
@@ -2176,8 +2301,8 @@ async def test_fetch_page_learns_browser_first_after_vendor_blocked_http_recover
             blocked=False,
         )
 
-    async def _fake_load_policy(url: str, *, session=None):
-        del url, session
+    async def _fake_load_policy(url: str, *, session=None, ttl_seconds=None):
+        del url, session, ttl_seconds
         return learned_policy
 
     async def _fake_note_host_hard_block(value: str | None, **kwargs):
@@ -2250,8 +2375,8 @@ async def test_fetch_page_learns_browser_first_after_rate_limit_http_recovery(
             browser_diagnostics={"browser_engine": "real_chrome"},
         )
 
-    async def _fake_load_policy(url: str, *, session=None):
-        del url, session
+    async def _fake_load_policy(url: str, *, session=None, ttl_seconds=None):
+        del url, session, ttl_seconds
         return learned_policy
 
     async def _fake_note_host_hard_block(value: str | None, **kwargs):
@@ -2262,7 +2387,9 @@ async def test_fetch_page_learns_browser_first_after_rate_limit_http_recovery(
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _rate_limited_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _browser_ok)
-    monkeypatch.setattr(crawl_fetch_runtime, "_try_browser_http_handoff", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        crawl_fetch_runtime, "_try_browser_http_handoff", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(
         crawl_fetch_runtime,
         "load_host_protection_policy",
@@ -2467,8 +2594,8 @@ async def test_fetch_page_prefers_browser_after_hard_blocked_fetch(
             blocked=True,
         )
 
-    async def _fake_load_policy(url: str, *, session=None):
-        del url, session
+    async def _fake_load_policy(url: str, *, session=None, ttl_seconds=None):
+        del url, session, ttl_seconds
         return learned_policy
 
     async def _fake_note_host_hard_block(value: str | None, **kwargs):
@@ -2523,7 +2650,9 @@ async def test_http_fetch_surfaces_dns_failure_without_hidden_ipv4_retry(
         del proxy
         return _SharedClient()
 
-    monkeypatch.setattr(crawl_fetch_runtime, "_get_shared_http_client", _fake_get_shared_http_client)
+    monkeypatch.setattr(
+        crawl_fetch_runtime, "_get_shared_http_client", _fake_get_shared_http_client
+    )
 
     with pytest.raises(OSError, match="getaddrinfo failed"):
         await crawl_fetch_runtime._http_fetch("https://example.com/jobs", 10.0)
@@ -2561,8 +2690,6 @@ async def test_fetch_page_reraises_latest_transport_error_when_browser_also_fail
     assert excinfo.value.browser_diagnostics["browser_attempted"] is True
     assert excinfo.value.browser_diagnostics["browser_outcome"] == "navigation_failed"
     assert excinfo.value.browser_diagnostics["failure_kind"] == "navigation_error"
-
-
 
 
 @pytest.mark.asyncio
@@ -2616,7 +2743,13 @@ async def test_reset_fetch_runtime_state_closes_adapter_and_runtime_http_clients
 
     await crawl_fetch_runtime.reset_fetch_runtime_state()
 
-    assert calls == ["browser", "cookie_store", "pacing", "runtime_http", "adapter_http"]
+    assert calls == [
+        "browser",
+        "cookie_store",
+        "pacing",
+        "runtime_http",
+        "adapter_http",
+    ]
 
 
 def test_build_playwright_context_options_reuses_identity_within_run(
@@ -2687,7 +2820,11 @@ def test_browser_identity_for_run_uses_single_creation_under_concurrency(
     monkeypatch.setattr(browser_identity, "create_browser_identity", _fake_create)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        identities = list(executor.map(lambda _: browser_identity.browser_identity_for_run(303), range(4)))
+        identities = list(
+            executor.map(
+                lambda _: browser_identity.browser_identity_for_run(303), range(4)
+            )
+        )
 
     assert created_count == 1
     assert {identity.user_agent for identity in identities} == {"ua-1"}
@@ -2728,4 +2865,3 @@ def test_create_browser_identity_builds_generator_lazily(
 
     assert identity.locale == "en-US"
     assert captured["locale"] == ["fr-FR"]
-

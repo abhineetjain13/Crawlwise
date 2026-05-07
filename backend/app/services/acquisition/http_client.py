@@ -9,6 +9,7 @@ import re
 import httpx
 
 from app.core.config import settings
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.runtime import (
     close_shared_http_client as close_runtime_shared_http_client,
     copy_headers,
@@ -47,7 +48,7 @@ async def request_result(
     # but service all requests through the shared HTTP client.
     del prefer_browser
 
-    timeout = timeout_seconds or settings.http_timeout_seconds
+    timeout = timeout_seconds or crawler_runtime_settings.http_timeout_seconds
     try:
         response = await _request_with_httpx(
             url,
@@ -100,7 +101,7 @@ async def _request_with_httpx(
     if force_ipv4:
         async with build_async_http_client(
             follow_redirects=True,
-            timeout=settings.http_timeout_seconds,
+            timeout=crawler_runtime_settings.http_timeout_seconds,
             limits=httpx.Limits(
                 max_connections=settings.http_max_connections,
                 max_keepalive_connections=settings.http_max_keepalive_connections,

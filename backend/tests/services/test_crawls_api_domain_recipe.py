@@ -158,9 +158,12 @@ async def test_crawls_domain_recipe_routes_round_trip(
                 "acquisition_contract": {
                     "preferred_browser_engine": "real_chrome",
                     "prefer_browser": True,
-                    "prefer_curl_handoff": True,
+                    "handoff_eligible": True,
                     "handoff_cookie_engine": "real_chrome",
                     "last_quality_success": None,
+                    "required_rendering": False,
+                    "required_traversal": False,
+                    "required_network_payloads": False,
                     "stale_after_failures": {"failure_count": 0, "stale": False},
                 },
                 "proxy_profile": {
@@ -177,7 +180,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
     saved_profile = save_profile_response.json()
     assert saved_profile["fetch_profile"]["fetch_mode"] == "http_then_browser"
     assert saved_profile["acquisition_contract"]["preferred_browser_engine"] == "real_chrome"
-    assert saved_profile["acquisition_contract"]["prefer_curl_handoff"] is True
+    assert saved_profile["acquisition_contract"]["handoff_eligible"] is True
     assert saved_profile["locality_profile"]["geo_country"] == "IN"
     assert saved_profile["source_run_id"] == run.id
     assert "proxy_profile" not in saved_profile
@@ -357,8 +360,11 @@ async def test_domain_run_profile_contract_autosaves_real_chrome_success(
     contract = lookup.json()["saved_run_profile"]["acquisition_contract"]
     assert contract["preferred_browser_engine"] == "real_chrome"
     assert contract["prefer_browser"] is True
-    assert contract["prefer_curl_handoff"] is True
+    assert contract["handoff_eligible"] is True
     assert contract["handoff_cookie_engine"] == "real_chrome"
+    assert contract["required_rendering"] is False
+    assert contract["required_traversal"] is False
+    assert contract["required_network_payloads"] is False
     assert contract["last_quality_success"]["field_coverage"] == {
         "requested": ["title", "price", "image_url"],
         "found": ["title"],

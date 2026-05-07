@@ -97,6 +97,164 @@ def test_map_js_state_to_fields_recovers_next_data_shopify_product_fields() -> N
     )
 
 
+def test_map_js_state_to_fields_recovers_shopify_available_sizes_rows() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "productData": {
+                            "product": {
+                                "id": 6804846346442,
+                                "title": 'Arrival 5" Shorts',
+                                "handle": "gymshark-arrival-5-shorts-black-ss22",
+                                "colour": "Black",
+                                "price": 26,
+                                "currencyCode": "USD",
+                                "availableSizes": [
+                                    {
+                                        "id": 39786362568906,
+                                        "inStock": True,
+                                        "inventoryQuantity": 9170,
+                                        "price": 26,
+                                        "size": "xs",
+                                        "sku": "A2A1M-BBBB-XS",
+                                        "barcode": "5057913931872",
+                                    },
+                                    {
+                                        "id": 39786362601674,
+                                        "inStock": False,
+                                        "inventoryQuantity": 0,
+                                        "price": 26,
+                                        "size": "s",
+                                        "sku": "A2A1M-BBBB-S",
+                                        "barcode": "5057913931865",
+                                    },
+                                ],
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+    )
+
+    assert mapped["title"] == 'Arrival 5" Shorts'
+    assert mapped["variant_count"] == 2
+    assert [variant["size"] for variant in mapped["variants"]] == ["xs", "s"]
+    assert [variant["sku"] for variant in mapped["variants"]] == [
+        "A2A1M-BBBB-XS",
+        "A2A1M-BBBB-S",
+    ]
+    assert mapped["variants"][0]["availability"] == "in_stock"
+    assert mapped["variants"][0]["stock_quantity"] == 9170
+    assert mapped["variants"][1]["availability"] == "out_of_stock"
+    assert mapped["variants"][1]["stock_quantity"] == 0
+
+
+def test_map_js_state_to_fields_merges_same_family_sibling_product_urls() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "productData": {
+                            "product": {
+                                "id": 6804846346442,
+                                "title": 'Arrival 5" Shorts',
+                                "handle": "gymshark-arrival-5-shorts-black-ss22",
+                                "colour": "Black",
+                                "price": 26,
+                                "currencyCode": "USD",
+                                "onlineStoreUrl": "https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+                                "availableSizes": [
+                                    {
+                                        "id": 101,
+                                        "inStock": True,
+                                        "inventoryQuantity": 9,
+                                        "price": 26,
+                                        "size": "s",
+                                        "sku": "A2A1M-BBBB-S",
+                                    },
+                                    {
+                                        "id": 102,
+                                        "inStock": True,
+                                        "inventoryQuantity": 7,
+                                        "price": 26,
+                                        "size": "m",
+                                        "sku": "A2A1M-BBBB-M",
+                                    },
+                                ],
+                            },
+                            "variants": [
+                                {
+                                    "id": 6804846117066,
+                                    "title": 'Gymshark Arrival 5" Shorts - White',
+                                    "handle": "gymshark-arrival-5-shorts-white-ss22",
+                                    "colour": "White",
+                                    "price": 26,
+                                    "currencyCode": "USD",
+                                    "onlineStoreUrl": "https://www.gymshark.com/products/gymshark-arrival-5-shorts-white-ss22",
+                                    "availableSizes": [
+                                        {
+                                            "id": 201,
+                                            "inStock": True,
+                                            "inventoryQuantity": 6,
+                                            "price": 26,
+                                            "size": "s",
+                                            "sku": "A2A1M-WWWW-S",
+                                        },
+                                        {
+                                            "id": 202,
+                                            "inStock": False,
+                                            "inventoryQuantity": 0,
+                                            "price": 26,
+                                            "size": "m",
+                                            "sku": "A2A1M-WWWW-M",
+                                        },
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+    )
+
+    assert mapped["title"] == 'Arrival 5" Shorts'
+    assert mapped["variant_count"] == 4
+    assert {
+        (variant["color"], variant["size"], variant["url"])
+        for variant in mapped["variants"]
+    } == {
+        (
+            "Black",
+            "s",
+            "https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+        ),
+        (
+            "Black",
+            "m",
+            "https://www.gymshark.com/products/gymshark-arrival-5-shorts-black-ss22",
+        ),
+        (
+            "White",
+            "s",
+            "https://www.gymshark.com/products/gymshark-arrival-5-shorts-white-ss22",
+        ),
+        (
+            "White",
+            "m",
+            "https://www.gymshark.com/products/gymshark-arrival-5-shorts-white-ss22",
+        ),
+    }
+
+
 def test_map_js_state_to_fields_reads_variant_attributes_axes() -> None:
     mapped = map_js_state_to_fields(
         {

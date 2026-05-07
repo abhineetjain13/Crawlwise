@@ -155,8 +155,11 @@ class CrawlerRuntimeSettings(BaseSettings):
     acquire_host_min_interval_ms: int = 250
     protected_host_additional_interval_ms: int = 2000
     pacing_host_cache_max_entries: int = 1024
-    pacing_host_cache_ttl_seconds: int = 3600
+    pacing_host_cache_ttl_seconds: int = 900
+    host_memory_ttl_max_seconds: int = 86400
     browser_first_host_block_threshold: int = 2
+    run_quality_threshold_high: float = 0.8
+    run_quality_threshold_medium: float = 0.5
     stealth_prefer_ttl_hours: int = 24
     challenge_wait_max_seconds: int | None = 15
     challenge_poll_interval_ms: int = 1000
@@ -266,6 +269,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     fingerprint_hardware_concurrency: int = 0
     fingerprint_device_memory_gb: float = 0.0
     browser_identity_min_chrome_version: int = 120
+    fingerprint_coherence_max_retries: int = 3
     browser_identity_cache_max_entries: int = 1024
     browser_identity_cache_ttl_seconds: int = 3600
     browser_desktop_viewport_reserved_height_px: int = 100
@@ -462,11 +466,16 @@ class CrawlerRuntimeSettings(BaseSettings):
         for field_name in (
             "acquisition_artifact_ttl_seconds",
             "acquisition_artifact_cleanup_interval_seconds",
+            "host_memory_ttl_max_seconds",
         ):
             _require_non_negative(field_name, getattr(self, field_name))
         _require_unit_interval(
             "llm_confidence_threshold", self.llm_confidence_threshold
         )
+        if self.run_quality_threshold_high < self.run_quality_threshold_medium:
+            raise ValueError(
+                "run_quality_threshold_high must be >= run_quality_threshold_medium"
+            )
         _require_unit_interval(
             "selector_self_heal_min_confidence",
             self.selector_self_heal_min_confidence,
@@ -498,6 +507,22 @@ class CrawlerRuntimeSettings(BaseSettings):
             max(timeout, acquisition_timeout + buffer_seconds),
             float(self.max_url_process_timeout_seconds),
         )
+
+    def coerce_host_memory_ttl_seconds(self, value: object) -> int:
+        default_ttl = max(1, int(self.pacing_host_cache_ttl_seconds))
+        max_ttl = max(default_ttl, int(self.host_memory_ttl_max_seconds))
+        if value is None:
+            return default_ttl
+        text = str(value).strip()
+        if not text:
+            return default_ttl
+        try:
+            ttl = int(text)
+        except (TypeError, ValueError):
+            return default_ttl
+        if ttl <= 0:
+            return default_ttl
+        return min(ttl, max_ttl)
 
 
 crawler_runtime_settings = CrawlerRuntimeSettings()

@@ -1341,6 +1341,7 @@ async def browser_fetch(
                     surface=normalized_surface,
                     browser_engine=runtime_engine,
                     browser_reason=browser_reason,
+                    host_policy_snapshot=host_policy_snapshot,
                     proxy_profile=proxy_profile,
                     timeout_seconds=_remaining(),
                     phase_timings_ms=phase_timings_ms,
@@ -1579,6 +1580,7 @@ async def _maybe_warm_origin_before_navigation(
     surface: str,
     browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
     browser_reason: str | None,
+    host_policy_snapshot: dict[str, object] | None,
     proxy_profile: dict[str, object] | None,
     timeout_seconds: float,
     phase_timings_ms: dict[str, int],
@@ -1593,6 +1595,11 @@ async def _maybe_warm_origin_before_navigation(
         reason in WARMUP_ELIGIBLE_BROWSER_REASONS
         or reason.startswith(WARMUP_VENDOR_BLOCK_PREFIX)
     ):
+        return
+    host_policy = dict(host_policy_snapshot or {})
+    if bool(host_policy.get("prefer_browser")) and str(
+        host_policy.get("last_block_vendor") or ""
+    ).strip():
         return
     warm_pause_ms = max(0, int(crawler_runtime_settings.origin_warm_pause_ms or 0))
     if warm_pause_ms <= 0:

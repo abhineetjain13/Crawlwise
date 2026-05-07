@@ -21,7 +21,7 @@ from app.services.listing_extractor import extract_listing_records
 from tests.fixtures.loader import read_optional_artifact_text
 
 
-def test_listing_raw_json_max_records_does_not_trim_page_overshoot() -> None:
+def test_listing_raw_json_honors_max_records() -> None:
     html = (
         "["
         + ",".join(
@@ -43,8 +43,6 @@ def test_listing_raw_json_max_records_does_not_trim_page_overshoot() -> None:
         "Product 1",
         "Product 2",
         "Product 3",
-        "Product 4",
-        "Product 5",
     ]
 
 
@@ -134,6 +132,32 @@ def test_detail_price_backfill_keeps_existing_parent_price_for_variants_when_hos
     assert record["price"] == "1800"
     assert record["variants"][0]["price"] == "1800"
     assert record["variants"][0]["currency"] == "INR"
+
+
+def test_detail_price_backfill_reads_data_test_id_price_display() -> None:
+    record = {
+        "url": "https://www.wayfair.com/furniture/pdp/widget.html",
+        "description": "A" * 200,
+        "image_url": "https://assets.example.com/widget.jpg",
+        "_field_sources": {},
+    }
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Widget</h1>
+          <span data-test-id="PriceDisplay" data-name-id="PriceDisplay">$850.00</span>
+          <s data-test-id="PriceDisplay">$930.00</s>
+        </main>
+      </body>
+    </html>
+    """
+
+    backfill_detail_price_from_html(record, html=html)
+
+    assert record["price"] == "850.00"
+    assert record["original_price"] == "930.00"
+    assert "dom_text" in record["_field_sources"]["price"]
 
 
 def test_select_variant_falls_back_to_partial_axis_match() -> None:
@@ -3480,6 +3504,94 @@ def test_detail_rejection_does_not_claim_identity_mismatch_when_same_url_never_r
     )
 
 
+def test_detail_rejection_labels_product_shell_as_detail_shell_not_non_detail_seed() -> None:
+    requested_url = (
+        "https://www.wayfair.com/furniture/pdp/"
+        "flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html"
+        "?piid=94673717"
+    )
+    record = {
+        "title": "flexsteel bryce power reclining sofa with power headrest xtya1522",
+        "url": requested_url,
+        "_field_sources": {"title": ["dom_h1", "url_slug"]},
+        "_source": "dom_h1",
+        "_confidence": {
+            "score": 0.1217,
+            "level": "low",
+        },
+    }
+
+    assert (
+        detail_extractor.detail_record_rejection_reason(
+            record,
+            page_url=requested_url,
+            requested_page_url=requested_url,
+        )
+        == "detail_shell"
+    )
+
+
+def test_infer_detail_failure_reason_labels_wayfair_pdp_shell_as_detail_shell() -> None:
+    url = (
+        "https://www.wayfair.com/furniture/pdp/"
+        "flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html"
+        "?piid=94673717"
+    )
+    html = """
+    <html>
+      <head>
+        <title>Flexsteel Bryce Power Reclining Sofa with Power Headrest &amp; Reviews | Wayfair</title>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    assert (
+        detail_extractor.infer_detail_failure_reason(
+            html,
+            url,
+            "ecommerce_detail",
+            [],
+            requested_page_url=url,
+        )
+        == "detail_shell"
+    )
+
+
+def test_detail_rejection_keeps_rich_pdp_without_strong_identity_fields() -> None:
+    requested_url = (
+        "https://www.wayfair.com/furniture/pdp/"
+        "flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html"
+        "?piid=94673717"
+    )
+    record = {
+        "title": "flexsteel bryce power reclining sofa with power headrest xtya1522",
+        "url": requested_url,
+        "price": "850.00",
+        "currency": "USD",
+        "image_url": "https://assets.wfcdn.com/im/widget.jpg",
+        "description": "A" * 220,
+        "_field_sources": {
+            "title": ["dom_h1", "url_slug"],
+            "price": ["dom_text"],
+        },
+        "_source": "dom_h1",
+        "_confidence": {
+            "score": 0.2883,
+            "level": "low",
+        },
+    }
+
+    assert (
+        detail_extractor.detail_record_rejection_reason(
+            record,
+            page_url=requested_url,
+            requested_page_url=requested_url,
+        )
+        is None
+    )
+
+
 def test_extract_ecommerce_detail_rejects_search_results_shell_with_sort_filter_controls() -> None:
     html = """
     <html>
@@ -4429,6 +4541,28 @@ def test_extract_records_emits_xml_sitemap_listing_records() -> None:
     assert rows[0]["_source"] == "xml_sitemap"
     assert rows[0]["url"] == "https://example.com/products/widget-prime"
     assert rows[0]["title"] == "widget prime"
+
+
+def test_extract_records_limits_xml_sitemap_listing_records() -> None:
+    xml = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://example.com/products/widget-prime</loc></url>
+      <url><loc>https://example.com/products/widget-pro</loc></url>
+    </urlset>
+    """
+
+    rows = extract_records(
+        xml,
+        "https://example.com/media/sitemap-products.xml",
+        "ecommerce_listing",
+        max_records=1,
+        content_type="application/xml; charset=utf-8",
+    )
+
+    assert [row["url"] for row in rows] == [
+        "https://example.com/products/widget-prime"
+    ]
 
 
 def test_extract_records_emits_rss_listing_records_from_link_nodes() -> None:

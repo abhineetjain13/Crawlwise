@@ -124,6 +124,7 @@ function defaultRunProfile(): DomainRunProfile {
       include_iframes: false,
       traversal_mode: null,
       request_delay_ms: CRAWL_DEFAULTS.REQUEST_DELAY_MS,
+      host_memory_ttl_seconds: null,
     },
     locality_profile: {
       geo_country: 'auto',
@@ -204,6 +205,14 @@ function applyDiagnosticsPreset(
     ...profile,
     diagnostics_profile: { ...DIAGNOSTICS_PRESETS[preset] },
   };
+}
+
+function parseOptionalClampedNumber(value: string, min: number, max: number) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return clampNumber(trimmed, min, max, min);
 }
 
 function isSingleUrlMode(crawlTab: CrawlTab, mode: CategoryMode | PdpMode) {
@@ -1414,6 +1423,37 @@ export function CrawlConfigScreen({
                     onChange={setMaxRecords}
                     onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
                   />
+                  <div className={ADVANCED_CONTROL_ROW_CLASS}>
+                    <div className="flex items-center gap-2">
+                      <div className="type-control">Host Memory TTL</div>
+                      <Tooltip
+                        content={`Blank uses default ${CRAWL_DEFAULTS.HOST_MEMORY_TTL_SECONDS}s. Lower TTL forgets host block and pacing memory sooner.`}
+                      >
+                        <Info className="text-muted hover:text-secondary size-3 cursor-help transition-colors" />
+                      </Tooltip>
+                    </div>
+                    <Input
+                      type="number"
+                      min={CRAWL_LIMITS.MIN_HOST_MEMORY_TTL_SECONDS}
+                      max={CRAWL_LIMITS.MAX_HOST_MEMORY_TTL_SECONDS}
+                      placeholder={String(CRAWL_DEFAULTS.HOST_MEMORY_TTL_SECONDS)}
+                      value={runProfile.fetch_profile.host_memory_ttl_seconds ?? ''}
+                      onChange={(event) =>
+                        markProfileDirty((current) => ({
+                          ...current,
+                          fetch_profile: {
+                            ...current.fetch_profile,
+                            host_memory_ttl_seconds: parseOptionalClampedNumber(
+                              event.target.value,
+                              CRAWL_LIMITS.MIN_HOST_MEMORY_TTL_SECONDS,
+                              CRAWL_LIMITS.MAX_HOST_MEMORY_TTL_SECONDS,
+                            ),
+                          },
+                        }))
+                      }
+                      aria-label="Host memory TTL seconds"
+                    />
+                  </div>
                 </div>
                 <div className={ADVANCED_SUBSECTION_CLASS}>
                   <div className={ADVANCED_CONTROL_ROW_CLASS}>
@@ -1665,6 +1705,15 @@ export function buildDispatch(
         CRAWL_LIMITS.MAX_REQUEST_DELAY_MS,
         CRAWL_DEFAULTS.REQUEST_DELAY_MS,
       ),
+      host_memory_ttl_seconds:
+        runProfile.fetch_profile.host_memory_ttl_seconds == null
+          ? null
+          : clampNumber(
+              runProfile.fetch_profile.host_memory_ttl_seconds,
+              CRAWL_LIMITS.MIN_HOST_MEMORY_TTL_SECONDS,
+              CRAWL_LIMITS.MAX_HOST_MEMORY_TTL_SECONDS,
+              CRAWL_DEFAULTS.HOST_MEMORY_TTL_SECONDS,
+            ),
     },
     locality_profile: { ...runProfile.locality_profile },
     diagnostics_profile: { ...runProfile.diagnostics_profile },

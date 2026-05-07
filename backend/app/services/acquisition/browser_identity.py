@@ -20,21 +20,27 @@ import pytz  # type: ignore[import-untyped]
 from tzlocal import get_localzone_name as _get_localzone_name
 
 from app.services.config.browser_fingerprint_profiles import (
+    CHROME_CLIENT_HINT_BRANDS,
+    CHROME_CLIENT_HINT_GREASE_BRAND,
+    CHROME_CLIENT_HINT_GREASE_FULL_VERSION,
+    CHROME_CLIENT_HINT_GREASE_VERSION,
+    CHROME_RUNTIME_VERSION_FALLBACK,
     DEVICE_MEMORY_BUCKETS,
     HOST_OS_PLATFORM_LABELS,
     HOST_OS_UA_TOKENS,
     NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL,
+    PLATFORM_VERSION_BY_LABEL,
     TIMEZONE_ALIASES,
     USER_AGENT_PLATFORM_LABELS,
 )
 from app.services.config.browser_init_scripts import (
-    _CATCH_IGNORE_LINE,
-    _CONFIGURABLE_TRUE_LINE,
-    _DEFINE_PROPERTY_CLOSE_LINE,
-    _ENUMERABLE_FALSE_LINE,
-    _INIT_WRAPPER_END,
-    _INIT_WRAPPER_START,
-    _TRY_LINE,
+    CATCH_IGNORE_LINE,
+    CONFIGURABLE_TRUE_LINE,
+    DEFINE_PROPERTY_CLOSE_LINE,
+    ENUMERABLE_FALSE_LINE,
+    INIT_WRAPPER_END,
+    INIT_WRAPPER_START,
+    TRY_LINE,
     build_audio_fingerprint_init_script,
     build_canvas_fingerprint_init_script,
     build_chrome_runtime_init_script,
@@ -57,7 +63,9 @@ except Exception:  # pragma: no cover - optional dependency contract
 _BrowserforgeFingerprint: Any | None = _BrowserforgeFingerprintType
 
 try:
-    from browserforge.injectors.utils import InjectFunction as _BrowserforgeInjectFunctionType
+    from browserforge.injectors.utils import (
+        InjectFunction as _BrowserforgeInjectFunctionType,
+    )
 except Exception:  # pragma: no cover - optional dependency contract
     _BrowserforgeInjectFunctionType = None  # type: ignore[assignment]
 _BrowserforgeInjectFunction: Any | None = _BrowserforgeInjectFunctionType
@@ -74,11 +82,14 @@ def _host_os_fingerprint_arg() -> str:
 
 _HOST_OS = _host_os_fingerprint_arg()
 _FINGERPRINT_GENERATOR: FingerprintGenerator | None = None
-_FINGERPRINT_GENERATOR_CONFIG: tuple[
-    tuple[str, ...],
-    tuple[str, ...],
-    tuple[str, ...],
-] | None = None
+_FINGERPRINT_GENERATOR_CONFIG: (
+    tuple[
+        tuple[str, ...],
+        tuple[str, ...],
+        tuple[str, ...],
+    ]
+    | None
+) = None
 _FINGERPRINT_GENERATOR_LOCK = _threading.Lock()
 _HEADER_DROP_KEYS = {
     "accept-encoding",
@@ -136,9 +147,9 @@ def _normalize_browser_engine_label(value: object) -> str:
 
 
 def _context_color_scheme() -> str | None:
-    normalized = str(
-        crawler_runtime_settings.fingerprint_color_scheme or ""
-    ).strip().lower()
+    normalized = (
+        str(crawler_runtime_settings.fingerprint_color_scheme or "").strip().lower()
+    )
     if normalized in {"light", "dark", "no-preference"}:
         return normalized
     return None
@@ -146,7 +157,10 @@ def _context_color_scheme() -> str | None:
 
 def _should_use_legacy_init_script(browser_engine: str) -> bool:
     normalized_engine = _normalize_browser_engine_label(browser_engine)
-    return normalized_engine != _PATCHRIGHT_BROWSER_ENGINE
+    return not (
+        normalized_engine == _REAL_CHROME_BROWSER_ENGINE
+        and bool(crawler_runtime_settings.browser_real_chrome_native_context)
+    )
 
 
 def _viewport_from_screen(
@@ -158,11 +172,7 @@ def _viewport_from_screen(
     screen_height = max(1, int(getattr(screen, "height", 0) or 0))
     avail_width = int(getattr(screen, "availWidth", 0) or 0)
     avail_height = int(getattr(screen, "availHeight", 0) or 0)
-    viewport_width = (
-        avail_width
-        if 0 < avail_width <= screen_width
-        else screen_width
-    )
+    viewport_width = avail_width if 0 < avail_width <= screen_width else screen_width
     viewport_height = (
         avail_height
         if 0 < avail_height < screen_height
@@ -206,6 +216,7 @@ def _positive_float(value: object) -> float | None:
 def _host_total_memory_bytes() -> int | None:
     if _HOST_OS == "windows":
         try:
+
             class _MemoryStatusEx(_ctypes.Structure):
                 _fields_ = [
                     ("dwLength", _ctypes.c_ulong),
@@ -294,20 +305,28 @@ def _navigator_platform_from_user_agent(
 ) -> str:
     platform_label = _platform_label_from_user_agent(user_agent)
     fallback_value = str(fallback or "").strip()
-    return NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL.get(platform_label) or fallback_value or "Win32"
+    return (
+        NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL.get(platform_label)
+        or fallback_value
+        or "Win32"
+    )
 
 
 def _platform_version_for_platform_label(platform_label: str) -> str:
-    if platform_label == "Windows":
-        return "15.0.0"
-    if platform_label == "macOS":
-        return "14.0.0"
-    return "6.0.0"
+    return PLATFORM_VERSION_BY_LABEL.get(
+        platform_label,
+        PLATFORM_VERSION_BY_LABEL["Linux"],
+    )
 
 
 def _ua_bitness_from_user_agent(user_agent: str) -> str:
     lowered = str(user_agent or "").lower()
-    if "x86_64" in lowered or "win64" in lowered or "x64" in lowered or "amd64" in lowered:
+    if (
+        "x86_64" in lowered
+        or "win64" in lowered
+        or "x64" in lowered
+        or "amd64" in lowered
+    ):
         return "64"
     return "32"
 
@@ -329,7 +348,9 @@ def _safely_clone_fingerprint(raw_fingerprint: Any) -> Any:
         return cloned_fingerprint
 
 
-def _align_raw_fingerprint_to_user_agent_platform(raw_fingerprint: Any | None) -> Any | None:
+def _align_raw_fingerprint_to_user_agent_platform(
+    raw_fingerprint: Any | None,
+) -> Any | None:
     if raw_fingerprint is None:
         return None
     aligned_fingerprint = _safely_clone_fingerprint(raw_fingerprint)
@@ -365,7 +386,9 @@ def _align_raw_fingerprint_to_user_agent_platform(raw_fingerprint: Any | None) -
     return aligned_fingerprint
 
 
-def _align_raw_fingerprint_to_runtime_hardware(raw_fingerprint: Any | None) -> Any | None:
+def _align_raw_fingerprint_to_runtime_hardware(
+    raw_fingerprint: Any | None,
+) -> Any | None:
     if raw_fingerprint is None:
         return None
     aligned_fingerprint = _safely_clone_fingerprint(raw_fingerprint)
@@ -452,9 +475,7 @@ def _harmonize_fingerprint_screen_geometry(
 
 def create_browser_identity() -> BrowserIdentity:
     fingerprint = _align_raw_fingerprint_to_user_agent_platform(
-        _align_raw_fingerprint_to_runtime_hardware(
-            _generate_coherent_fingerprint()
-        )
+        _align_raw_fingerprint_to_runtime_hardware(_generate_coherent_fingerprint())
     )
     if fingerprint is None:
         raise RuntimeError("Browser fingerprint generation returned no identity")
@@ -471,7 +492,9 @@ def create_browser_identity() -> BrowserIdentity:
         if isinstance(navigator.userAgentData, dict)
         else {}
     )
-    if _should_replace_client_hint_headers(headers, user_agent=user_agent, user_agent_data=user_agent_data):
+    if _should_replace_client_hint_headers(
+        headers, user_agent=user_agent, user_agent_data=user_agent_data
+    ):
         headers.update(
             _coherent_sec_ch_headers(
                 _coherent_client_hints_from_user_agent(
@@ -486,7 +509,9 @@ def create_browser_identity() -> BrowserIdentity:
             )
         )
     locale = str(navigator.language or "en-US")
-    if not _accept_language_matches_locale(headers.get("Accept-Language"), locale=locale):
+    if not _accept_language_matches_locale(
+        headers.get("Accept-Language"), locale=locale
+    ):
         headers["Accept-Language"] = _accept_language_for_locale(locale)
     is_mobile = (
         bool(navigator.userAgentData.get("mobile"))
@@ -553,32 +578,22 @@ def _normalize_fingerprint_setting(value: object) -> tuple[str, ...]:
 
 def _fingerprint_generator() -> FingerprintGenerator:
     global _FINGERPRINT_GENERATOR, _FINGERPRINT_GENERATOR_CONFIG
+    # Tests may install a duck-typed generator in _FINGERPRINT_GENERATOR;
+    # return it without rebuilding the real FingerprintGenerator.
     if _FINGERPRINT_GENERATOR is not None and not isinstance(
         _FINGERPRINT_GENERATOR,
         FingerprintGenerator,
     ):
         return _FINGERPRINT_GENERATOR
     config = (
-        _normalize_fingerprint_setting(
-            crawler_runtime_settings.fingerprint_browser
-        ),
-        _normalize_fingerprint_setting(
-            crawler_runtime_settings.fingerprint_device
-        ),
-        _normalize_fingerprint_setting(
-            crawler_runtime_settings.fingerprint_locale
-        ),
+        _normalize_fingerprint_setting(crawler_runtime_settings.fingerprint_browser),
+        _normalize_fingerprint_setting(crawler_runtime_settings.fingerprint_device),
+        _normalize_fingerprint_setting(crawler_runtime_settings.fingerprint_locale),
     )
-    if (
-        _FINGERPRINT_GENERATOR is not None
-        and _FINGERPRINT_GENERATOR_CONFIG == config
-    ):
+    if _FINGERPRINT_GENERATOR is not None and _FINGERPRINT_GENERATOR_CONFIG == config:
         return _FINGERPRINT_GENERATOR
     with _FINGERPRINT_GENERATOR_LOCK:
-        if (
-            _FINGERPRINT_GENERATOR is None
-            or _FINGERPRINT_GENERATOR_CONFIG != config
-        ):
+        if _FINGERPRINT_GENERATOR is None or _FINGERPRINT_GENERATOR_CONFIG != config:
             _FINGERPRINT_GENERATOR = FingerprintGenerator(
                 browser=list(config[0]),
                 os=[_HOST_OS],
@@ -637,14 +652,18 @@ def _is_version_coherent(fingerprint) -> bool:
 def _generate_coherent_fingerprint() -> Any:
     expected_token = HOST_OS_UA_TOKENS[_HOST_OS]
     fallback_fingerprint = None
-    for _ in range(3):
+    max_retries = max(
+        1, int(crawler_runtime_settings.fingerprint_coherence_max_retries)
+    )
+    for _ in range(max_retries):
         fingerprint = _fingerprint_generator().generate()
         fallback_fingerprint = fingerprint
         ua = str(fingerprint.navigator.userAgent or "").lower()
         if expected_token in ua and _is_version_coherent(fingerprint):
             return fingerprint
     _logger.warning(
-        "Failed to generate coherent fingerprint after 3 attempts, repairing client hints from fallback fingerprint"
+        "Failed to generate coherent fingerprint after %s attempts, repairing client hints from fallback fingerprint",
+        max_retries,
     )
     if fallback_fingerprint is None:
         raise RuntimeError("Fingerprint generator returned no candidates")
@@ -714,19 +733,33 @@ def _coherent_client_hints_from_user_agent(
     major_version = _chrome_major_version(user_agent)
     if major_version is None:
         return None
-    resolved_mobile = bool(mobile) if mobile is not None else bool(_MOBILE_UA_RE.search(user_agent))
+    resolved_mobile = (
+        bool(mobile) if mobile is not None else bool(_MOBILE_UA_RE.search(user_agent))
+    )
     full_version = f"{major_version}.0.0.0"
     platform_label = _platform_label_from_user_agent(user_agent)
     return {
         "brands": [
-            {"brand": "Not:A-Brand", "version": "99"},
-            {"brand": "Google Chrome", "version": str(major_version)},
-            {"brand": "Chromium", "version": str(major_version)},
+            {
+                "brand": brand,
+                "version": (
+                    CHROME_CLIENT_HINT_GREASE_VERSION
+                    if brand == CHROME_CLIENT_HINT_GREASE_BRAND
+                    else str(major_version)
+                ),
+            }
+            for brand in CHROME_CLIENT_HINT_BRANDS
         ],
         "fullVersionList": [
-            {"brand": "Not:A-Brand", "version": "99.0.0.0"},
-            {"brand": "Google Chrome", "version": full_version},
-            {"brand": "Chromium", "version": full_version},
+            {
+                "brand": brand,
+                "version": (
+                    CHROME_CLIENT_HINT_GREASE_FULL_VERSION
+                    if brand == CHROME_CLIENT_HINT_GREASE_BRAND
+                    else full_version
+                ),
+            }
+            for brand in CHROME_CLIENT_HINT_BRANDS
         ],
         "mobile": resolved_mobile,
         "platform": platform_label,
@@ -745,7 +778,7 @@ def _coherent_sec_ch_headers(user_agent_data: dict[str, object]) -> dict[str, st
         else []
     )
     sec_ch_ua = ", ".join(
-        f'"{str(item.get("brand") or "").replace("\"", "")}";v="{str(item.get("version") or "").replace("\"", "")}"'
+        f'"{str(item.get("brand") or "").replace('"', "")}";v="{str(item.get("version") or "").replace('"', "")}"'
         for item in brands
         if isinstance(item, dict) and item.get("brand") and item.get("version")
     )
@@ -758,12 +791,10 @@ def _coherent_sec_ch_headers(user_agent_data: dict[str, object]) -> dict[str, st
     }
     platform_version = str(user_agent_data.get("platformVersion") or "").strip()
     if platform_version:
-        headers["sec-ch-ua-platform-version"] = (
-            f'"{platform_version.replace("\"", "")}"'
-        )
+        headers["sec-ch-ua-platform-version"] = f'"{platform_version.replace('"', "")}"'
     bitness = str(user_agent_data.get("bitness") or "").strip()
     if bitness:
-        headers["sec-ch-ua-bitness"] = f'"{bitness.replace("\"", "")}"'
+        headers["sec-ch-ua-bitness"] = f'"{bitness.replace('"', "")}"'
     return headers
 
 
@@ -948,7 +979,9 @@ def _chrome_major_version(user_agent: str) -> int | None:
 
 
 def _replace_chrome_major_version(user_agent: str, major_version: int) -> str:
-    return _UA_VERSION_RE.sub(f"Chrome/{int(major_version)}.", str(user_agent or ""), count=1)
+    return _UA_VERSION_RE.sub(
+        f"Chrome/{int(major_version)}.", str(user_agent or ""), count=1
+    )
 
 
 def _drop_sec_ch_headers(headers: Mapping[str, object]) -> dict[str, str]:
@@ -972,7 +1005,9 @@ def _align_identity_to_browser_major(
         return identity
     if current_major == resolved_major:
         return identity
-    aligned_user_agent = _replace_chrome_major_version(identity.user_agent, resolved_major)
+    aligned_user_agent = _replace_chrome_major_version(
+        identity.user_agent, resolved_major
+    )
     aligned_headers = _drop_sec_ch_headers(identity.extra_http_headers)
     coherent_hints = _coherent_client_hints_from_user_agent(
         aligned_user_agent,
@@ -1075,15 +1110,18 @@ def _resolve_locale(
     if explicit_locale:
         return _locale_with_region(
             explicit_locale,
-            _country_code(locality_profile.get("geo_country") if locality_profile else None),
+            _country_code(
+                locality_profile.get("geo_country") if locality_profile else None
+            ),
             replace_region=False,
         )
     locale = _normalized_locale(identity.locale) or _normalized_locale(
         crawler_runtime_settings.fingerprint_locale
     )
-    if not bool(
-        crawler_runtime_settings.fingerprint_locale_auto_align_timezone_region
-    ) or timezone_id is None:
+    if (
+        not bool(crawler_runtime_settings.fingerprint_locale_auto_align_timezone_region)
+        or timezone_id is None
+    ):
         return locale
     return _locale_with_region(
         locale,
@@ -1164,11 +1202,13 @@ def _playwright_context_options_from_identity(
 def playwright_masking_init_script() -> str:
     globals_to_mask = [
         str(value or "").strip()
-        for value in tuple(crawler_runtime_settings.browser_mask_playwright_globals or ())
+        for value in tuple(
+            crawler_runtime_settings.browser_mask_playwright_globals or ()
+        )
         if str(value or "").strip()
     ]
     lines = [
-        _INIT_WRAPPER_START,
+        INIT_WRAPPER_START,
         "  const roots = [globalThis];",
         "  if (typeof window !== 'undefined' && window !== globalThis) {",
         "    roots.push(window);",
@@ -1185,7 +1225,7 @@ def playwright_masking_init_script() -> str:
         "      } catch (_) {}",
         "    }",
         "  };",
-        f"  const pwKeys = {globals_to_mask!r};",
+        f"  const pwKeys = {_json.dumps(globals_to_mask)};",
         "  for (const key of pwKeys) {",
         "    maskGlobal(key);",
         "  }",
@@ -1195,17 +1235,17 @@ def playwright_masking_init_script() -> str:
             [
                 "  maskGlobal('Worker');",
                 "  maskGlobal('SharedWorker');",
-                _TRY_LINE,
+                TRY_LINE,
                 "    Object.defineProperty(Navigator.prototype, 'serviceWorker', {",
                 "      get: () => undefined,",
                 "      set: () => true,",
-                _ENUMERABLE_FALSE_LINE,
-                _CONFIGURABLE_TRUE_LINE,
-                _DEFINE_PROPERTY_CLOSE_LINE,
-                _CATCH_IGNORE_LINE,
+                ENUMERABLE_FALSE_LINE,
+                CONFIGURABLE_TRUE_LINE,
+                DEFINE_PROPERTY_CLOSE_LINE,
+                CATCH_IGNORE_LINE,
             ]
         )
-    lines.append(_INIT_WRAPPER_END)
+    lines.append(INIT_WRAPPER_END)
     return "\n".join(lines)
 
 
@@ -1250,9 +1290,7 @@ def _playwright_init_script_from_identity(
         return None
 
     def _bundle_init_scripts(*parts: str) -> str:
-        return "\n;\n".join(
-            part for part in parts if str(part or "").strip()
-        )
+        return "\n;\n".join(part for part in parts if str(part or "").strip())
 
     masking_script = playwright_masking_init_script()
     raw_fingerprint = identity.raw_fingerprint
@@ -1264,21 +1302,23 @@ def _playwright_init_script_from_identity(
     chrome_runtime_version = (
         f"{int(user_agent_version_match.group(1))}.0.0.0"
         if user_agent_version_match is not None
-        else "145.0.0.0"
+        else CHROME_RUNTIME_VERSION_FALLBACK
     )
-    color_scheme = str(
-        crawler_runtime_settings.fingerprint_color_scheme or ""
-    ).strip().lower()
+    color_scheme = (
+        str(crawler_runtime_settings.fingerprint_color_scheme or "").strip().lower()
+    )
     permissions_script = build_permissions_coherence_init_script(
         granted_permissions=tuple(
             str(value).strip().lower()
-            for value in tuple(crawler_runtime_settings.browser_context_permissions or ())
+            for value in tuple(
+                crawler_runtime_settings.browser_context_permissions or ()
+            )
             if str(value).strip()
         ),
     )
     runtime_hardware_script = "\n".join(
         [
-            _INIT_WRAPPER_START,
+            INIT_WRAPPER_START,
             f"  const hardwareConcurrency = {_json.dumps(_resolved_hardware_concurrency(getattr(getattr(raw_fingerprint, 'navigator', None), 'hardwareConcurrency', None)))};",
             f"  const deviceMemory = {_json.dumps(_resolved_device_memory_gb(getattr(getattr(raw_fingerprint, 'navigator', None), 'deviceMemory', None)))};",
             "  const installNavigatorValue = (key, value) => {",
@@ -1295,7 +1335,7 @@ def _playwright_init_script_from_identity(
             "  };",
             "  installNavigatorValue('hardwareConcurrency', hardwareConcurrency);",
             "  installNavigatorValue('deviceMemory', deviceMemory);",
-            _INIT_WRAPPER_END,
+            INIT_WRAPPER_END,
         ]
     )
     chrome_runtime_script = build_chrome_runtime_init_script(
@@ -1331,7 +1371,7 @@ def _playwright_init_script_from_identity(
     )
     color_scheme_script = "\n".join(
         [
-            _INIT_WRAPPER_START,
+            INIT_WRAPPER_START,
             f"  const preferredColorScheme = {_json.dumps(color_scheme)};",
             "  if (!preferredColorScheme || typeof window.matchMedia !== 'function') {",
             "    return;",
@@ -1356,15 +1396,15 @@ def _playwright_init_script_from_identity(
             "        enumerable: true,",
             "        configurable: true,",
             "      });",
-            _CATCH_IGNORE_LINE,
+            CATCH_IGNORE_LINE,
             "    return wrapped;",
             "  };",
-            _INIT_WRAPPER_END,
+            INIT_WRAPPER_END,
         ]
     )
     webrtc_mask_script = "\n".join(
         [
-            _INIT_WRAPPER_START,
+            INIT_WRAPPER_START,
             f"  const enabled = {_json.dumps(bool(crawler_runtime_settings.browser_mask_webrtc_local_ips))};",
             "  if (!enabled) {",
             "    return;",
@@ -1475,9 +1515,9 @@ def _playwright_init_script_from_identity(
             "  }",
             "  MaskedRTCPeerConnection.prototype.createDTMFSender = noop;",
             "  MaskedRTCPeerConnection.generateCertificate = () => Promise.resolve({});",
-            _TRY_LINE,
+            TRY_LINE,
             "    Object.defineProperty(MaskedRTCPeerConnection, 'name', { value: 'RTCPeerConnection' });",
-            _CATCH_IGNORE_LINE,
+            CATCH_IGNORE_LINE,
             "  globalThis.RTCPeerConnection = MaskedRTCPeerConnection;",
             "  if (globalThis.webkitRTCPeerConnection) {",
             "    globalThis.webkitRTCPeerConnection = MaskedRTCPeerConnection;",
@@ -1485,38 +1525,38 @@ def _playwright_init_script_from_identity(
             "  if (globalThis.mozRTCPeerConnection) {",
             "    globalThis.mozRTCPeerConnection = MaskedRTCPeerConnection;",
             "  }",
-            _INIT_WRAPPER_END,
+            INIT_WRAPPER_END,
         ]
     )
     locality_script = "\n".join(
         [
-            _INIT_WRAPPER_START,
+            INIT_WRAPPER_START,
             f"  const locale = {_json.dumps(identity.locale)};",
             f"  const languages = {_json.dumps(_locale_languages(identity.locale))};",
             f"  const navigatorPlatform = {_json.dumps(_navigator_platform_from_user_agent(identity.user_agent))};",
             f"  const uaPlatform = {_json.dumps(_platform_label_from_user_agent(identity.user_agent))};",
-            _TRY_LINE,
+            TRY_LINE,
             "    Object.defineProperty(Navigator.prototype, 'language', {",
             "      get: () => locale,",
-            _ENUMERABLE_FALSE_LINE,
-            _CONFIGURABLE_TRUE_LINE,
-            _DEFINE_PROPERTY_CLOSE_LINE,
-            _CATCH_IGNORE_LINE,
-            _TRY_LINE,
+            ENUMERABLE_FALSE_LINE,
+            CONFIGURABLE_TRUE_LINE,
+            DEFINE_PROPERTY_CLOSE_LINE,
+            CATCH_IGNORE_LINE,
+            TRY_LINE,
             "    Object.defineProperty(Navigator.prototype, 'languages', {",
             "      get: () => Array.from(languages),",
-            _ENUMERABLE_FALSE_LINE,
-            _CONFIGURABLE_TRUE_LINE,
-            _DEFINE_PROPERTY_CLOSE_LINE,
-            _CATCH_IGNORE_LINE,
-            _TRY_LINE,
+            ENUMERABLE_FALSE_LINE,
+            CONFIGURABLE_TRUE_LINE,
+            DEFINE_PROPERTY_CLOSE_LINE,
+            CATCH_IGNORE_LINE,
+            TRY_LINE,
             "    Object.defineProperty(Navigator.prototype, 'platform', {",
             "      get: () => navigatorPlatform,",
-            _ENUMERABLE_FALSE_LINE,
-            _CONFIGURABLE_TRUE_LINE,
-            _DEFINE_PROPERTY_CLOSE_LINE,
-            _CATCH_IGNORE_LINE,
-            _TRY_LINE,
+            ENUMERABLE_FALSE_LINE,
+            CONFIGURABLE_TRUE_LINE,
+            DEFINE_PROPERTY_CLOSE_LINE,
+            CATCH_IGNORE_LINE,
+            TRY_LINE,
             "    const nativeUaData = Navigator.prototype.userAgentData || navigator.userAgentData;",
             "    if (nativeUaData) {",
             "      const patchedUaData = new Proxy(nativeUaData, {",
@@ -1539,8 +1579,8 @@ def _playwright_init_script_from_identity(
             "        configurable: true,",
             "      });",
             "    }",
-            _CATCH_IGNORE_LINE,
-            "})();",
+            CATCH_IGNORE_LINE,
+            INIT_WRAPPER_END,
         ]
     )
     base_scripts = [
@@ -1563,9 +1603,8 @@ def _playwright_init_script_from_identity(
     ]
     if raw_fingerprint is None or _BrowserforgeInjectFunction is None:
         return _bundle_init_scripts(*base_scripts, *tail_scripts)
-    if (
-        _BrowserforgeFingerprint is not None
-        and not isinstance(raw_fingerprint, _BrowserforgeFingerprint)
+    if _BrowserforgeFingerprint is not None and not isinstance(
+        raw_fingerprint, _BrowserforgeFingerprint
     ):
         return _bundle_init_scripts(*base_scripts, *tail_scripts)
     if not callable(getattr(raw_fingerprint, "dumps", None)):

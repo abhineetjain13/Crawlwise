@@ -95,7 +95,7 @@ def extract_records(
     )
     if json_records:
         if "listing" in surface:
-            return _finalize_listing_rows(json_records)
+            return json_records
         return _postprocess_detail_records(
             json_records[:max_records],
             html=html,
@@ -528,7 +528,10 @@ def _extract_xml_sitemap_records(
         return []
     records: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    limit = max(0, int(max_records or 0))
     for loc_text in _xml_sitemap_locations(root):
+        if limit and len(records) >= limit:
+            break
         url = absolute_url(page_url, loc_text)
         if not url or url in seen_urls:
             continue
@@ -611,7 +614,10 @@ def _extract_raw_json_records(
         return []
     records: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str]] = set()
+    limit = max(0, int(max_records or 0))
     for index, item in enumerate(items, start=1):
+        if limit and len(records) >= limit:
+            break
         record = _raw_json_record(
             item,
             page_url,

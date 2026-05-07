@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 
 from app.core.config import settings
 from app.services.acquisition.browser_proxy_config import display_proxy, proxy_scheme
 from app.services.config.runtime_settings import crawler_runtime_settings
+
+logger = logging.getLogger(__name__)
 
 CHROMIUM_BROWSER_ENGINE = "chromium"
 PATCHRIGHT_BROWSER_ENGINE = "patchright"
@@ -72,16 +75,36 @@ def _normalized_optional_lower(value: str | None) -> str | None:
 
 def _merge_phase_timings(
     payload: dict[str, object],
-    phase_timings_ms: Mapping[str, object] | None,
+    phase_timings_ms: object | None,
 ) -> dict[str, object]:
     phase_timings_payload = payload.get("phase_timings_ms")
-    existing_timings: dict[str, object] = (
-        dict(phase_timings_payload)
-        if isinstance(phase_timings_payload, Mapping)
-        else {}
-    )
-    if isinstance(phase_timings_ms, Mapping):
+    existing_timings: dict[str, object] = {}
+    timing_errors: list[str] = []
+    if isinstance(phase_timings_payload, Mapping):
+        existing_timings = dict(phase_timings_payload)
+    elif phase_timings_payload is not None:
+        timing_errors.append("existing")
+    if phase_timings_ms is None:
+        if timing_errors:
+            payload["phase_timings_error"] = "invalid_existing_phase_timings_ms"
+            logger.warning(
+                "Invalid existing browser phase timings payload: %r",
+                phase_timings_payload,
+            )
+        return existing_timings
+    try:
         existing_timings.update(dict(phase_timings_ms))
+    except (TypeError, ValueError):
+        timing_errors.append("incoming")
+    if timing_errors:
+        payload["phase_timings_error"] = "invalid_phase_timings_ms:" + ",".join(
+            timing_errors
+        )
+        logger.warning(
+            "Invalid browser phase timings payload existing=%r incoming=%r",
+            phase_timings_payload,
+            phase_timings_ms,
+        )
     return existing_timings
 
 
@@ -109,7 +132,7 @@ def build_browser_diagnostics_contract(
     browser_binary: str | None = None,
     failure_reason: str | None = None,
     retry_reason: str | None = None,
-    phase_timings_ms: Mapping[str, object] | None = None,
+    phase_timings_ms: object | None = None,
 ) -> dict[str, object]:
     normalized_engine = normalize_browser_engine(browser_engine)
     payload = dict(diagnostics or {})
@@ -146,8 +169,7 @@ def browser_failure_kind(exc: Exception) -> str:
     if "patchright package is not available" in message:
         return "engine_unavailable"
     if (
-        isinstance(exc, ValueError)
-        and "browser proxy" in message
+        isinstance(exc, ValueError) and "browser proxy" in message
     ) or "socks5 proxy authentication" in message:
         return "unsupported_proxy"
     if is_timeout_error(exc):
@@ -169,7 +191,9 @@ def build_failed_browser_diagnostics(
 ) -> dict[str, object]:
     outcome = "render_timeout" if is_timeout_error(exc) else "navigation_failed"
     failure_kind = browser_failure_kind(exc)
-    failure_stage = str(getattr(exc, "browser_failure_stage", "navigation") or "navigation")
+    failure_stage = str(
+        getattr(exc, "browser_failure_stage", "navigation") or "navigation"
+    )
     normalized_engine = normalize_browser_engine(browser_engine)
     diagnostics = {
         "failure_kind": failure_kind,

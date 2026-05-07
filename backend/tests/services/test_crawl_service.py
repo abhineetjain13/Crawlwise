@@ -11,6 +11,7 @@ from app.core import database as database_module
 from app.core.config import settings
 from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.crawl_domain import CONTROL_REQUEST_KILL, CONTROL_REQUEST_PAUSE
+from app.models.crawl_settings import normalize_crawl_settings
 from app.services import crawl_service
 from app.services.crawl_crud import (
     commit_selected_fields,
@@ -20,8 +21,10 @@ from app.services.crawl_crud import (
 from app.services.domain_run_profile_service import (
     load_domain_run_profile,
     note_acquisition_contract_failure,
+    normalize_acquisition_contract,
     normalize_domain_run_profile,
     record_acquisition_contract_outcome,
+    resolve_url_acquisition_recipe,
     save_domain_run_profile,
 )
 from app.services.crawl_state import get_control_request, update_run_status
@@ -169,7 +172,7 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
             "acquisition_contract": {
                 "preferred_browser_engine": "real_chrome",
                 "prefer_browser": True,
-                "prefer_curl_handoff": True,
+                "handoff_eligible": True,
                 "handoff_cookie_engine": "real_chrome",
             },
             "proxy_profile": {
@@ -201,11 +204,8 @@ async def test_create_crawl_run_merges_saved_domain_run_profile_for_single_url(
     assert run.settings["fetch_profile"]["request_delay_ms"] == 900
     assert run.settings["locality_profile"]["geo_country"] == "IN"
     assert run.settings["diagnostics_profile"]["capture_network"] == "matched_only"
-    assert (
-        run.settings["acquisition_contract"]["preferred_browser_engine"]
-        == "real_chrome"
-    )
-    assert run.settings["acquisition_contract"]["prefer_curl_handoff"] is True
+    assert run.settings["acquisition_contract"]["preferred_browser_engine"] == "auto"
+    assert run.settings["acquisition_contract"]["handoff_eligible"] is False
     assert run.settings["proxy_enabled"] is False
     assert run.settings["proxy_list"] == []
     assert run.settings["proxy_profile"] == {
@@ -227,7 +227,7 @@ async def test_explicit_forced_engine_overrides_saved_contract(
             "acquisition_contract": {
                 "preferred_browser_engine": "real_chrome",
                 "prefer_browser": True,
-                "prefer_curl_handoff": True,
+                "handoff_eligible": True,
                 "handoff_cookie_engine": "real_chrome",
             },
         },
@@ -246,7 +246,7 @@ async def test_explicit_forced_engine_overrides_saved_contract(
                 "acquisition_contract": {
                     "preferred_browser_engine": "patchright",
                     "prefer_browser": True,
-                    "prefer_curl_handoff": False,
+                    "handoff_eligible": False,
                     "handoff_cookie_engine": "patchright",
                 },
             },
@@ -255,8 +255,14 @@ async def test_explicit_forced_engine_overrides_saved_contract(
 
     contract = run.settings["acquisition_contract"]
     assert contract["preferred_browser_engine"] == "patchright"
-    assert contract["prefer_curl_handoff"] is False
+    assert contract["handoff_eligible"] is False
     assert contract["handoff_cookie_engine"] == "patchright"
+
+
+def test_normalize_acquisition_contract_accepts_legacy_handoff_flag() -> None:
+    contract = normalize_acquisition_contract({"prefer_curl_handoff": True})
+
+    assert contract["handoff_eligible"] is True
 
 
 @pytest.mark.asyncio
@@ -297,7 +303,7 @@ async def test_contract_marks_stale_after_repeated_quality_failures(
             "acquisition_contract": {
                 "preferred_browser_engine": "real_chrome",
                 "prefer_browser": True,
-                "prefer_curl_handoff": True,
+                "handoff_eligible": True,
                 "handoff_cookie_engine": "real_chrome",
                 "last_quality_success": {
                     "method": "browser",
@@ -352,7 +358,7 @@ async def test_contract_outcome_can_skip_non_acquisition_failures(
             "acquisition_contract": {
                 "preferred_browser_engine": "real_chrome",
                 "prefer_browser": True,
-                "prefer_curl_handoff": True,
+                "handoff_eligible": True,
                 "handoff_cookie_engine": "real_chrome",
                 "last_quality_success": {
                     "method": "browser",
@@ -379,12 +385,12 @@ async def test_contract_outcome_can_skip_non_acquisition_failures(
         source_run_id=13,
         method="browser",
         browser_engine="real_chrome",
+        browser_diagnostics={},
         requested_fields=["title"],
         records=[],
         persisted_count=0,
-        quality_success=False,
-        count_failure=False,
-        stale_threshold=1,
+        verdict="blocked",
+        blocked=True,
     )
 
     row = await load_domain_run_profile(
@@ -395,6 +401,110 @@ async def test_contract_outcome_can_skip_non_acquisition_failures(
     assert row is not None
     assert row.profile["acquisition_contract"]["stale_after_failures"] == {
         "failure_count": 0,
+        "stale": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_url_acquisition_recipe_reuses_saved_profile_for_batch_defaults(
+    db_session: AsyncSession,
+) -> None:
+    await save_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        profile={
+            "fetch_profile": {
+                "fetch_mode": "browser_only",
+                "request_delay_ms": 1200,
+            },
+            "locality_profile": {
+                "geo_country": "IN",
+            },
+            "diagnostics_profile": {
+                "capture_network": "matched_only",
+            },
+            "acquisition_contract": {
+                "preferred_browser_engine": "real_chrome",
+                "prefer_browser": True,
+                "handoff_eligible": True,
+                "handoff_cookie_engine": "real_chrome",
+            },
+        },
+        source_run_id=91,
+    )
+    await db_session.commit()
+
+    resolved = await resolve_url_acquisition_recipe(
+        db_session,
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        explicit_settings=normalize_crawl_settings({}),
+    )
+
+    assert resolved["fetch_profile"]["fetch_mode"] == "browser_only"
+    assert resolved["fetch_profile"]["request_delay_ms"] == 1200
+    assert resolved["locality_profile"]["geo_country"] == "IN"
+    assert resolved["diagnostics_profile"]["capture_network"] == "matched_only"
+    assert resolved["acquisition_contract"]["preferred_browser_engine"] == "real_chrome"
+    assert resolved["acquisition_contract"]["handoff_eligible"] is True
+
+
+@pytest.mark.asyncio
+async def test_record_acquisition_contract_outcome_counts_empty_detail_failure(
+    db_session: AsyncSession,
+) -> None:
+    await save_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        profile={
+            "acquisition_contract": {
+                "preferred_browser_engine": "real_chrome",
+                "prefer_browser": True,
+                "handoff_eligible": True,
+                "handoff_cookie_engine": "real_chrome",
+                "last_quality_success": {
+                    "method": "browser",
+                    "browser_engine": "real_chrome",
+                    "record_count": 1,
+                    "field_coverage": {
+                        "requested": ["title"],
+                        "found": ["title"],
+                        "missing": [],
+                    },
+                    "source_run_id": 12,
+                    "timestamp": "2026-04-30T00:00:00+00:00",
+                },
+            },
+        },
+        source_run_id=12,
+    )
+    await db_session.commit()
+
+    await record_acquisition_contract_outcome(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+        source_run_id=13,
+        method="browser",
+        browser_engine="real_chrome",
+        browser_diagnostics={},
+        requested_fields=["title"],
+        records=[],
+        persisted_count=0,
+        verdict="empty",
+        blocked=False,
+    )
+
+    row = await load_domain_run_profile(
+        db_session,
+        domain="example.com",
+        surface="ecommerce_detail",
+    )
+    assert row is not None
+    assert row.profile["acquisition_contract"]["stale_after_failures"] == {
+        "failure_count": 1,
         "stale": False,
     }
 

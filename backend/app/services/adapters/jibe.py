@@ -48,7 +48,7 @@ class JibeAdapter(PublicEndpointAdapter):
             TypeError,
         ):
             return []
-        jobs = payload.get("jobs") if isinstance(payload, dict) else []
+        jobs = payload.get("jobs", [])
         if not isinstance(jobs, list):
             return []
         normalized = [
@@ -81,8 +81,14 @@ class JibeAdapter(PublicEndpointAdapter):
             if normalized and key not in merged:
                 merged[key] = normalized
         if "listing" in str(surface or "").lower():
-            merged.setdefault("limit", merged.get("limit") or "100")
-            merged.setdefault("page", merged.get("page") or "1")
+            merged.setdefault(
+                "limit",
+                merged.get("limit") or adapter_runtime_settings.jibe_listing_default_limit,
+            )
+            merged.setdefault(
+                "page",
+                merged.get("page") or adapter_runtime_settings.jibe_listing_default_page,
+            )
         return [(key, value) for key, value in merged.items() if value]
 
     def _extract_search_config(self, html: str) -> dict:

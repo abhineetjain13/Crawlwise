@@ -103,6 +103,93 @@ def test_location_interstitial_diagnostics_marks_location_required() -> None:
     assert diagnostics["interstitial"]["location_required"] is True
 
 
+@pytest.mark.asyncio
+async def test_finalize_browser_fetch_marks_location_interstitial_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html = (
+        "<html><body><div role='dialog' class='location-modal'>"
+        "<h2>Choose your location</h2><button>Continue</button>"
+        "</div></body></html>"
+    )
+
+    async def _capture_rendered_listing_fragments(*_args, **_kwargs):
+        return []
+
+    async def _capture_listing_visual_elements(*_args, **_kwargs):
+        return []
+
+    async def _classify_blocked_page_async(*_args, **_kwargs):
+        return browser_page_flow.BlockPageClassification(blocked=False, outcome="ok")
+
+    async def _emit_browser_event(*_args, **_kwargs):
+        return None
+
+    class _PayloadCapture:
+        async def close(self, _page):
+            return SimpleNamespace(
+                network_payload_count=0,
+                malformed_network_payloads=0,
+                network_payload_read_failures=0,
+                network_payload_read_timeouts=0,
+                closed_network_payloads=0,
+                skipped_oversized_network_payloads=0,
+                dropped_payload_events=0,
+                payloads=[],
+            )
+
+    monkeypatch.setattr(
+        browser_page_flow,
+        "capture_rendered_listing_fragments",
+        _capture_rendered_listing_fragments,
+    )
+    monkeypatch.setattr(
+        browser_page_flow,
+        "_capture_listing_visual_elements",
+        _capture_listing_visual_elements,
+    )
+    payload = browser_page_flow.BrowserFinalizeInput(
+        page=SimpleNamespace(url="https://example.com/products/widget"),
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_reason="http-escalation",
+        on_event=None,
+        response=SimpleNamespace(status=200, headers={}),
+        navigation_strategy="domcontentloaded",
+        readiness_probes=[],
+        networkidle_timed_out=False,
+        networkidle_skip_reason=None,
+        readiness_policy={},
+        readiness_diagnostics={},
+        expansion_diagnostics={},
+        listing_recovery_diagnostics={},
+        payload_capture=_PayloadCapture(),
+        html=html,
+        traversal_result=None,
+        rendered_html=html,
+        page_markdown="",
+        phase_timings_ms={},
+        started_at=0.0,
+    )
+
+    result = await browser_page_flow.finalize_browser_fetch(
+        payload,
+        blocked_html_checker=lambda *_args, **_kwargs: False,
+        classify_blocked_page_async=_classify_blocked_page_async,
+        classify_low_content_reason=lambda *_args, **_kwargs: None,
+        classify_browser_outcome=lambda **_kwargs: "usable_content",
+        capture_browser_screenshot=lambda _page: "",
+        emit_browser_event=_emit_browser_event,
+        elapsed_ms=lambda _started_at: 0,
+    )
+
+    assert result["blocked"] is True
+    assert result["diagnostics"]["browser_outcome"] == "location_required"
+    assert result["diagnostics"]["failure_reason"] == "location_required"
+    assert result["diagnostics"]["low_content_reason"] == "location_required"
+    assert "location_interstitial" in result["diagnostics"]["challenge_evidence"]
+
+
 def test_location_interstitial_detects_text_only_fallback() -> None:
     html = """
     <html><body>
@@ -1270,6 +1357,35 @@ async def test_expand_detail_content_if_needed_skips_aom_when_page_is_already_re
     assert diagnostics["clicked_count"] == 0
     assert diagnostics["aom"]["status"] == "skipped"
     assert diagnostics["aom"]["reason"] == "not_needed"
+
+
+def test_accessibility_expand_candidates_ignores_navigation_roles() -> None:
+    candidates = browser_detail.accessibility_expand_candidates(
+        {
+            "role": "document",
+            "children": [
+                {"role": "link", "name": "Product details"},
+                {"role": "menuitem", "name": "Materials"},
+                {"role": "button", "name": "Product details"},
+            ],
+        },
+        surface="ecommerce_detail",
+    )
+
+    assert candidates == [("button", "product details")]
+
+
+def test_finish_expansion_diagnostics_preserves_attempted_status_without_clicks() -> None:
+    diagnostics = browser_detail._finish_expansion_diagnostics(
+        {"status": "attempted"},
+        clicked_count=0,
+        expanded_elements=[],
+        interaction_failures=[],
+        started_at=0.0,
+        elapsed_ms=lambda _started_at: 0,
+    )
+
+    assert diagnostics["status"] == "attempted"
 
 
 @pytest.mark.asyncio
@@ -3778,14 +3894,24 @@ def test_browser_diagnostics_preserves_existing_retry_reason_when_unspecified() 
 
 def test_build_failed_browser_diagnostics_tolerates_non_mapping_phase_timings() -> None:
     exc = RuntimeError("broken timings payload")
-    setattr(exc, "browser_phase_timings_ms", object())
+    setattr(exc, "browser_phase_timings_ms", [("navigation", 42)])
 
     diagnostics = browser_runtime.build_failed_browser_diagnostics(
         browser_reason="http-escalation",
         exc=exc,
     )
 
-    assert diagnostics["phase_timings_ms"] == {}
+    assert diagnostics["phase_timings_ms"] == {"navigation": 42}
+
+
+def test_browser_diagnostics_marks_invalid_phase_timing_payload() -> None:
+    diagnostics = browser_runtime.build_browser_diagnostics_contract(
+        diagnostics={"phase_timings_ms": {"navigation": 120}},
+        phase_timings_ms=["broken"],
+    )
+
+    assert diagnostics["phase_timings_ms"] == {"navigation": 120}
+    assert diagnostics["phase_timings_error"] == "invalid_phase_timings_ms:incoming"
 
 
 def test_browser_diagnostics_contract_clears_stale_nested_outcome_fields() -> None:
@@ -3891,6 +4017,7 @@ async def test_origin_warmup_uses_sibling_page_not_active_page() -> None:
         url="https://example.com/products/widget",
         surface="ecommerce_detail",
         browser_reason="http-escalation",
+        host_policy_snapshot=None,
         proxy_profile=None,
         timeout_seconds=5,
         phase_timings_ms={},
@@ -3911,6 +4038,7 @@ async def test_origin_warmup_runs_for_job_detail() -> None:
         url="https://example.com/jobs/123",
         surface="job_detail",
         browser_reason="http-escalation",
+        host_policy_snapshot=None,
         proxy_profile=None,
         timeout_seconds=5,
         phase_timings_ms={},
@@ -3929,6 +4057,7 @@ async def test_origin_warmup_skips_for_listing_surface() -> None:
         url="https://example.com/category/widgets",
         surface="ecommerce_listing",
         browser_reason="http-escalation",
+        host_policy_snapshot=None,
         proxy_profile=None,
         timeout_seconds=5,
         phase_timings_ms={},
@@ -3947,6 +4076,7 @@ async def test_origin_warmup_skips_for_rotating_proxy_profile() -> None:
         url="https://example.com/products/widget",
         surface="ecommerce_detail",
         browser_reason="http-escalation",
+        host_policy_snapshot=None,
         proxy_profile={"rotation": "rotating"},
         timeout_seconds=5,
         phase_timings_ms={},
@@ -3966,12 +4096,32 @@ async def test_origin_warmup_runs_without_stealth_layer() -> None:
         surface="ecommerce_detail",
         browser_engine="real_chrome",
         browser_reason="http-escalation",
+        host_policy_snapshot=None,
         proxy_profile=None,
         timeout_seconds=5,
         phase_timings_ms={},
     )
 
     assert page.spawned_pages
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_skips_for_known_vendor_block_memory() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_reason="host-preference",
+        host_policy_snapshot={"prefer_browser": True, "last_block_vendor": "datadome"},
+        proxy_profile=None,
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert page.goto_calls == []
+    assert page.spawned_pages == []
 
 
 def test_browser_runtime_snapshot_uses_capacity_fallback_for_pooled_runtimes(

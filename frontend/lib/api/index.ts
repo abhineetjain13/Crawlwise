@@ -59,6 +59,8 @@ export const api = {
   dashboard: () => apiClient.get<Dashboard>('/api/dashboard'),
   resetApplicationData: () =>
     apiClient.post<Record<string, number | boolean>>('/api/dashboard/reset-data', {}),
+  resetDomainMemory: () =>
+    apiClient.post<Record<string, number | boolean>>('/api/dashboard/reset-domain-memory', {}),
   createCrawl: (payload: CrawlCreatePayload) =>
     apiClient.post<{ run_id: number }>('/api/crawls', payload),
   createCsvCrawl: (payload: {

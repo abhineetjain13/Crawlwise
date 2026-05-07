@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from functools import partial
+import inspect
 import logging
 import secrets
 from dataclasses import dataclass, field
@@ -58,7 +59,10 @@ from app.services.acquisition.runtime import (
     should_escalate_to_browser,
 )
 from app.services.acquisition.traversal import should_run_traversal
-from app.services.config.runtime_settings import crawler_runtime_settings, proxy_rotation_mode
+from app.services.config.runtime_settings import (
+    crawler_runtime_settings,
+    proxy_rotation_mode,
+)
 from app.services.platform_policy import resolve_platform_runtime_policy
 
 logger = logging.getLogger(__name__)
@@ -94,6 +98,7 @@ class _FetchRuntimeContext:
     runtime_policy: dict[str, object]
     capture_screenshot: bool = False
     forced_browser_engine: str | None = None
+    host_memory_ttl_seconds: int = 0
     prefer_curl_handoff: bool = False
     handoff_cookie_engine: str | None = None
     locality_profile: dict[str, object] = field(default_factory=dict)
@@ -229,6 +234,7 @@ async def fetch_page(
     listing_recovery_mode: str | None = None,
     capture_page_markdown: bool = False,
     capture_screenshot: bool = False,
+    host_memory_ttl_seconds: int | None = None,
     prefer_curl_handoff: bool = False,
     handoff_cookie_engine: str | None = None,
     forced_browser_engine: str | None = None,
@@ -262,6 +268,9 @@ async def fetch_page(
         requested_fields=list(requested_fields or []),
         listing_recovery_mode=str(listing_recovery_mode or "").strip() or None,
         capture_screenshot=bool(capture_screenshot),
+        host_memory_ttl_seconds=crawler_runtime_settings.coerce_host_memory_ttl_seconds(
+            host_memory_ttl_seconds
+        ),
         prefer_curl_handoff=bool(prefer_curl_handoff),
         handoff_cookie_engine=str(handoff_cookie_engine or "").strip().lower() or None,
         proxies=_resolve_proxy_attempts(
@@ -278,7 +287,12 @@ async def fetch_page(
         runtime_policy=resolve_platform_runtime_policy(url, surface=surface),
         forced_browser_engine=str(forced_browser_engine or "").strip().lower() or None,
     )
-    learned_host_policy = await load_host_protection_policy(url)
+    host_policy_kwargs = (
+        {"ttl_seconds": context.host_memory_ttl_seconds}
+        if "ttl_seconds" in inspect.signature(load_host_protection_policy).parameters
+        else {}
+    )
+    learned_host_policy = await load_host_protection_policy(url, **host_policy_kwargs)
     host_preference_enabled = bool(learned_host_policy.prefer_browser)
     browser_first = _browser_first_decision(
         context=context,
@@ -318,6 +332,18 @@ async def fetch_page(
         )
         return browser_result
 
+    if context.prefer_curl_handoff:
+        handoff_result = await _try_browser_http_handoff(
+            context,
+            host_policy=learned_host_policy,
+        )
+        if handoff_result is not None:
+            await _update_host_result_memory(
+                context,
+                result=handoff_result,
+            )
+            return handoff_result
+
     http_result, vendor_block_confirmed = await _run_http_fetch_chain(context)
     if http_result is not None:
         return http_result
@@ -330,7 +356,10 @@ async def fetch_page(
             type(context.last_error).__name__,
         )
         try:
-            browser_host_policy = await load_host_protection_policy(context.url)
+            browser_host_policy = await load_host_protection_policy(
+                context.url,
+                ttl_seconds=context.host_memory_ttl_seconds,
+            )
             return await _invoke_run_browser_attempts(
                 context,
                 reason=browser_reason or "http-escalation",
@@ -448,7 +477,6 @@ def _browser_first_decision(
         return _hard_browser_requirement(context=context)
     return (
         prefer_browser
-        or context.prefer_curl_handoff
         or host_preference_enabled
         or _hard_browser_requirement(context=context)
     )
@@ -496,6 +524,11 @@ async def _run_browser_attempts(
             context=context,
             host_policy=active_host_policy,
         )
+        engine_attempts = _durable_vendor_block_engine_attempts(
+            engine_attempts=engine_attempts,
+            host_policy=active_host_policy,
+            forced_engine=context.forced_browser_engine,
+        )
         escalation_lane = _browser_escalation_lane(
             context=context,
             reason=reason,
@@ -508,7 +541,10 @@ async def _run_browser_attempts(
             engine_index += 1
             host_policy_snapshot = _host_policy_snapshot(active_host_policy)
             try:
-                await wait_for_host_slot(context.url)
+                await wait_for_host_slot(
+                    context.url,
+                    ttl_seconds=context.host_memory_ttl_seconds,
+                )
                 result = await _browser_fetch(
                     context.url,
                     context.resolved_timeout,
@@ -547,7 +583,8 @@ async def _run_browser_attempts(
                         result=result,
                     )
                     active_host_policy = await load_host_protection_policy(
-                        result.final_url or result.url or context.url
+                        result.final_url or result.url or context.url,
+                        ttl_seconds=context.host_memory_ttl_seconds,
                     )
                     engine_attempts = _extend_browser_engine_attempts_after_block(
                         engine_attempts=engine_attempts,
@@ -570,16 +607,18 @@ async def _run_browser_attempts(
                 return result
             except Exception as exc:
                 last_browser_error = exc
-                context.last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
-                    browser_reason=reason,
-                    exc=exc,
-                    proxy=proxy,
-                    proxy_attempt_index=proxy_attempt_index,
-                    browser_engine=browser_engine,
-                    browser_binary=browser_engine,
-                    bridge_used=proxy_scheme(proxy) in {"socks5", "socks5h"},
-                    escalation_lane=escalation_lane,
-                    host_policy_snapshot=host_policy_snapshot,
+                context.last_browser_attempt_diagnostics = (
+                    build_failed_browser_diagnostics(
+                        browser_reason=reason,
+                        exc=exc,
+                        proxy=proxy,
+                        proxy_attempt_index=proxy_attempt_index,
+                        browser_engine=browser_engine,
+                        browser_binary=browser_engine,
+                        bridge_used=proxy_scheme(proxy) in {"socks5", "socks5h"},
+                        escalation_lane=escalation_lane,
+                        host_policy_snapshot=host_policy_snapshot,
+                    )
                 )
                 _attach_exception_browser_diagnostics(
                     exc,
@@ -662,8 +701,6 @@ async def _try_browser_http_handoff(
         return None
     if not (
         host_policy.prefer_browser
-        or host_policy.patchright_success
-        or host_policy.real_chrome_success
         or context.prefer_curl_handoff
     ):
         return None
@@ -713,7 +750,10 @@ async def _try_browser_http_handoff(
                 ),
             ):
                 return result
-            await apply_protected_host_backoff(result.final_url or result.url or context.url)
+            await apply_protected_host_backoff(
+                result.final_url or result.url or context.url,
+                ttl_seconds=context.host_memory_ttl_seconds,
+            )
             context.last_browser_attempt_diagnostics = dict(result.browser_diagnostics)
             return None
     return None
@@ -726,17 +766,15 @@ def _handoff_cookie_engines(
 ) -> tuple[str, ...]:
     configured = tuple(
         str(engine or "").strip().lower()
-        for engine in tuple(crawler_runtime_settings.browser_http_handoff_cookie_engines or ())
+        for engine in tuple(
+            crawler_runtime_settings.browser_http_handoff_cookie_engines or ()
+        )
         if str(engine or "").strip()
     )
     preferred: list[str] = []
     normalized_preferred = str(preferred_engine or "").strip().lower()
     if normalized_preferred in {"real_chrome", "patchright"}:
         preferred.append(normalized_preferred)
-    if host_policy.real_chrome_success and "real_chrome" not in preferred:
-        preferred.append("real_chrome")
-    if host_policy.patchright_success and "patchright" not in preferred:
-        preferred.append("patchright")
     for engine in configured:
         if engine in {"real_chrome", "patchright"} and engine not in preferred:
             preferred.append(engine)
@@ -780,7 +818,13 @@ async def _run_http_fetcher_attempts(
         retries = 0
     max_attempts = max(1, retries + 1)
     for attempt in range(1, max_attempts + 1):
-        result = await _attempt_http_fetch(context, fetcher=fetcher, proxy=proxy, attempt=attempt, max_attempts=max_attempts)
+        result = await _attempt_http_fetch(
+            context,
+            fetcher=fetcher,
+            proxy=proxy,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
         if not isinstance(result, PageFetchResult):
             if attempt < max_attempts:
                 continue
@@ -814,7 +858,10 @@ async def _attempt_http_fetch(
 ) -> PageFetchResult | object:
     http_timeout = _resolve_http_timeout(context)
     try:
-        await wait_for_host_slot(context.url)
+        await wait_for_host_slot(
+            context.url,
+            ttl_seconds=context.host_memory_ttl_seconds,
+        )
         if proxy is not None:
             return await fetcher(context.url, http_timeout, proxy=proxy)
         return await fetcher(context.url, http_timeout)
@@ -854,7 +901,10 @@ async def _handle_http_result(
 ) -> tuple[PageFetchResult | object | None, bool]:
     vendor = _vendor_confirmed_block(result)
     if vendor or bool(result.blocked):
-        await apply_protected_host_backoff(result.final_url or result.url or context.url)
+        await apply_protected_host_backoff(
+            result.final_url or result.url or context.url,
+            ttl_seconds=context.host_memory_ttl_seconds,
+        )
     result_runtime_policy = resolve_platform_runtime_policy(
         result.final_url or result.url,
         result.html,
@@ -872,6 +922,7 @@ async def _handle_http_result(
             vendor=vendor,
             status_code=result.status_code,
             proxy_used=proxy is not None,
+            ttl_seconds=context.host_memory_ttl_seconds,
         )
     if (
         _retryable_status_for_http_fetch(result.status_code)
@@ -885,9 +936,8 @@ async def _handle_http_result(
         context=context,
         runtime_policy=result_runtime_policy,
     ):
-        browser_reason = (
-            context.browser_reason
-            or (f"vendor-block:{vendor}" if vendor else "http-escalation")
+        browser_reason = context.browser_reason or (
+            f"vendor-block:{vendor}" if vendor else "http-escalation"
         )
         browser_proxies = _browser_escalation_proxies(
             context=context,
@@ -903,7 +953,8 @@ async def _handle_http_result(
             capture_screenshot=context.capture_screenshot,
             proxies=browser_proxies,
             host_policy=await load_host_protection_policy(
-                result.final_url or result.url or context.url
+                result.final_url or result.url or context.url,
+                ttl_seconds=context.host_memory_ttl_seconds,
             ),
         )
         await _update_host_result_memory(
@@ -988,6 +1039,11 @@ def _append_engine_once(engine_attempts: list[str], engine: str) -> list[str]:
     return list(engine_attempts)
 
 
+def _prefer_engine_first(engine_attempts: list[str], engine: str) -> list[str]:
+    remaining = [candidate for candidate in engine_attempts if candidate != engine]
+    return [engine, *remaining]
+
+
 def _browser_escalation_lane(
     *,
     context: _FetchRuntimeContext,
@@ -1038,9 +1094,16 @@ def _browser_engine_attempts(
         or not real_chrome_browser_available()
     ):
         return engines
-    if host_policy.real_chrome_success:
-        return ["real_chrome"]
-    if host_policy.patchright_blocked or host_policy.request_blocked or host_policy.prefer_browser or host_policy.last_block_vendor:
+    if host_policy.patchright_blocked and host_policy.prefer_browser:
+        return _prefer_engine_first(
+            _append_engine_once(engines, "real_chrome"),
+            "real_chrome",
+        )
+    if (
+        host_policy.request_blocked
+        or host_policy.prefer_browser
+        or host_policy.last_block_vendor
+    ):
         return _append_engine_once(engines, "real_chrome")
     return engines
 
@@ -1064,6 +1127,28 @@ def _extend_browser_engine_attempts_after_block(
     return appended
 
 
+def _durable_vendor_block_engine_attempts(
+    *,
+    engine_attempts: list[str],
+    host_policy: HostProtectionPolicy,
+    forced_engine: str | None,
+) -> list[str]:
+    if forced_engine or not host_policy.prefer_browser or not host_policy.last_block_vendor:
+        return list(engine_attempts)
+    prioritized = list(engine_attempts)
+    last_block_method = str(host_policy.last_block_method or "").strip().lower()
+    blocked_engine = (
+        last_block_method.split(":", 1)[1]
+        if last_block_method.startswith("browser:")
+        else None
+    )
+    if blocked_engine and blocked_engine in prioritized and len(prioritized) > 1:
+        prioritized = [
+            candidate for candidate in prioritized if candidate != blocked_engine
+        ] + [blocked_engine]
+    return prioritized[:1]
+
+
 def _browser_escalation_proxies(
     *,
     context: _FetchRuntimeContext,
@@ -1073,11 +1158,7 @@ def _browser_escalation_proxies(
     attempts = list(context.proxies)
     if not vendor_blocked:
         return attempts
-    remaining = [
-        candidate
-        for candidate in attempts
-        if candidate != current_proxy
-    ]
+    remaining = [candidate for candidate in attempts if candidate != current_proxy]
     return remaining or attempts
 
 
@@ -1111,12 +1192,19 @@ async def _update_host_result_memory(
 ) -> None:
     target_url = result.final_url or result.url or context.url
     browser_diagnostics = dict(result.browser_diagnostics or {})
-    browser_engine = str(browser_diagnostics.get("browser_engine") or "").strip().lower()
+    browser_engine = (
+        str(browser_diagnostics.get("browser_engine") or "").strip().lower()
+    )
     method_label = str(result.method or "").strip().lower()
     if method_label == "browser" and browser_engine:
         method_label = f"browser:{browser_engine}"
     proxy_used = bool(browser_diagnostics.get("proxy_scheme"))
     if bool(result.blocked):
+        browser_outcome = (
+            str(browser_diagnostics.get("browser_outcome") or "").strip().lower()
+        )
+        if browser_outcome == "location_required":
+            return
         await apply_protected_host_backoff(target_url)
         await note_host_hard_block(
             target_url,
@@ -1124,12 +1212,14 @@ async def _update_host_result_memory(
             vendor=_vendor_confirmed_block(result),
             status_code=result.status_code,
             proxy_used=proxy_used,
+            ttl_seconds=context.host_memory_ttl_seconds,
         )
         return
     await note_host_usable_fetch(
         target_url,
         method=method_label or result.method,
         proxy_used=proxy_used,
+        ttl_seconds=context.host_memory_ttl_seconds,
     )
 
 

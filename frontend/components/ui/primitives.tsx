@@ -29,7 +29,11 @@ export function Title({
 }: Readonly<{ children: ReactNode; kicker?: string; className?: string }>) {
   return (
     <div className={cn('space-y-1', className)}>
-      {kicker ? <p className="text-accent m-0 mb-1.5 text-sm font-medium">{kicker}</p> : null}
+      {kicker ? (
+        <p className="text-accent m-0 mb-1.5 font-mono text-[11px] font-semibold tracking-[0.14em] uppercase">
+          {kicker}
+        </p>
+      ) : null}
       <h1 className="text-foreground type-heading m-0 text-[clamp(1.75rem,1.45rem+0.8vw,2rem)] leading-[var(--leading-tight)] font-semibold">
         {children}
       </h1>
@@ -231,7 +235,7 @@ export function Dropdown<T extends string>({
         disabled={disabled}
         onKeyDown={handleKeyDown}
         className={cn(
-          'focus-ring border-border-strong bg-background-elevated text-foreground hover:bg-background-alt focus:border-accent flex h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-md)] border px-3 text-sm leading-[1.4] font-medium shadow-sm transition-[background-color,border-color,box-shadow] focus:shadow-[0_0_0_3px_var(--accent-subtle)]',
+          'focus-ring border-border-strong bg-background text-foreground hover:bg-background-alt focus:border-accent flex h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-md)] border px-3 text-sm leading-[1.4] font-medium transition-[background-color,border-color,box-shadow] focus:shadow-[0_0_0_3px_var(--accent-subtle)]',
           align === 'center' ? 'justify-center text-center' : 'justify-between text-left',
         )}
       >
@@ -319,7 +323,7 @@ export function Toggle({
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={cn(
-        'focus-ring relative inline-flex h-[20px] w-[36px] shrink-0 cursor-pointer items-center rounded-full transition-colors',
+        'focus-ring relative inline-flex h-[20px] w-[36px] shrink-0 cursor-pointer items-center rounded-full transition-[background-color,box-shadow]',
         checked ? 'bg-accent' : 'bg-border-strong',
       )}
     >

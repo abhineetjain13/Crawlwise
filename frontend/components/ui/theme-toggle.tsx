@@ -22,7 +22,7 @@ export function ThemeToggle({ compact }: Readonly<{ compact?: boolean }>) {
       type="button"
       onClick={toggleTheme}
       className={cn(
-        'focus-ring border-border-strong bg-background-elevated text-foreground hover:bg-subtle-panel inline-flex items-center justify-center rounded-[var(--radius-md)] border shadow-xs transition-[background-color,color,border-color,box-shadow,opacity,transform] hover:-translate-y-px',
+        'focus-ring border-border-strong bg-background-elevated text-foreground hover:bg-subtle-panel inline-flex items-center justify-center rounded-[var(--radius-md)] border shadow-xs transition-[background-color,color,border-color,box-shadow,opacity,transform] hover:-translate-y-px hover:shadow-[0_10px_20px_color-mix(in_srgb,var(--accent)_12%,transparent)]',
         compact ? 'size-[26px]' : 'size-9',
       )}
       aria-label="Toggle color theme"

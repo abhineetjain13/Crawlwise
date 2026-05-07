@@ -14,6 +14,7 @@ from app.services.config.security_rules import (
 
 @pytest.fixture(autouse=True)
 def _stub_public_dns_resolution():
+    # Shadows the global DNS stub so this module can exercise url_safety resolution.
     yield
 
 
@@ -79,6 +80,20 @@ def test_raise_if_non_public_ip_rejects_cgnat_range() -> None:
         match="Target host resolves to a non-public IP address",
     ):
         url_safety._raise_if_non_public_ip(ip_value, "cgnat.example", "Target")
+
+
+def test_rebuild_url_preserves_explicit_ipv6_port() -> None:
+    target = url_safety.ValidatedTarget(
+        hostname="::1",
+        scheme="http",
+        port=8080,
+        resolved_ips=("::1",),
+    )
+
+    assert (
+        url_safety._rebuild_url("[::1]:8080/products", target)
+        == "http://[::1]:8080/products"
+    )
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ Each test targets one audit finding that was verified as a real bug against
 the current code (not just the audit text). Sources live in
 ``docs/audits/extraction_quality_audit_2026-05-03.md``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -86,27 +87,32 @@ class TestMarketingBannerAndSeoDescriptions:
     @pytest.mark.parametrize(
         "value",
         [
-            (
+            pytest.param(
                 "Read reviews and buy Tobago Stripe Blue Twin/Twin XL Duvet Cover "
                 "Set - Levtex Home. Choose from contactless Same Day Delivery, "
-                "Drive Up and more."
+                "Drive Up and more.",
+                id="contactless_delivery_copy",
             ),
-            (
+            pytest.param(
                 "Shop Apple Refurbished Excellent AirPods Pro 2. Find low everyday "
                 "prices and buy online for delivery or in-store pick-up. Price "
-                "Match Guarantee."
+                "Match Guarantee.",
+                id="price_match_seo_copy",
             ),
-            (
+            pytest.param(
                 "info: If the item details above aren't accurate or complete, "
-                "we want to know about it. Report incorrect product info"
+                "we want to know about it. Report incorrect product info",
+                id="incorrect_product_info_copy",
             ),
-            (
+            pytest.param(
                 "DTLR wants you to be fully satisfied with your purchase. "
-                "You can view our Returns Policy here."
+                "You can view our Returns Policy here.",
+                id="returns_policy_copy",
             ),
-            (
+            pytest.param(
                 "Unlock unlimited free international shipping, 30-day returns, "
-                "and exclusive member-only deals for your order."
+                "and exclusive member-only deals for your order.",
+                id="membership_shipping_copy",
             ),
         ],
     )

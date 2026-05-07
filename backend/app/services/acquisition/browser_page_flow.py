@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import inspect
 import logging
 import re
@@ -171,7 +171,18 @@ class BrowserAcquisitionResultBuilder:
             traversal_result=payload.traversal_result,
         )
         if location_interstitial_present:
+            blocked = True
             browser_outcome = "location_required"
+            low_content_reason = "location_required"
+            blocked_classification = replace(
+                blocked_classification,
+                blocked=True,
+                outcome="location_required",
+                evidence=list(
+                    dict.fromkeys([*challenge_evidence, "location_interstitial"])
+                ),
+            )
+            challenge_evidence = list(blocked_classification.evidence)
         await self._emit_events(browser_outcome=browser_outcome, blocked=blocked)
         screenshot_path = await self._capture_screenshot(
             browser_outcome=browser_outcome

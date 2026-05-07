@@ -38,7 +38,7 @@ export function ConfirmDialog({
       onOpenChange={(nextOpen) => !pending && onOpenChange(nextOpen)}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-black/35 backdrop-blur-[2px]" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-[color-mix(in_srgb,var(--bg-base)_34%,black)] backdrop-blur-[3px]" />
         <DialogPrimitive.Content
           className={cn(
             'fixed top-1/2 left-1/2 z-[101] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2',

@@ -395,6 +395,7 @@ export type DomainRunProfile = {
     include_iframes: boolean;
     traversal_mode: 'auto' | 'scroll' | 'load_more' | 'view_all' | 'paginate' | null;
     request_delay_ms: number;
+    host_memory_ttl_seconds?: number | null;
     max_pages?: number;
     max_scrolls?: number;
   };

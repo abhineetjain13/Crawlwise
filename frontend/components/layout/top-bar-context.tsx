@@ -4,6 +4,7 @@ import { createContext, useContext, useMemo, useRef, useSyncExternalStore } from
 import type { ReactNode } from 'react';
 
 export type TopBarState = {
+  pathKey?: string;
   title?: ReactNode;
   description?: string;
   actions?: ReactNode;

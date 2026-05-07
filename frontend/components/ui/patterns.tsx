@@ -3,6 +3,7 @@
 import { Award, CheckCircle2, Clock, LucideIcon } from 'lucide-react';
 import { Children, isValidElement, useEffectEvent, useLayoutEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
+import { usePathname } from 'next/navigation';
 
 import { useTopBarStore } from '../layout/top-bar-context';
 import { cn } from '../../lib/utils';
@@ -49,17 +50,17 @@ export function PageHeader({
   actions?: ReactNode;
 }>) {
   const { setHeader } = useTopBarStore();
+  const pathname = usePathname();
   const signature = useMemo(
     () => `${stableNodeSignature(title)}::${description ?? ''}::${stableNodeSignature(actions)}`,
     [title, description, actions],
   );
   const syncHeader = useEffectEvent(() => {
-    setHeader({ title, description, actions });
+    setHeader({ pathKey: pathname, title, description, actions });
   });
   useLayoutEffect(() => {
     syncHeader();
-  }, [signature]);
-  useLayoutEffect(() => () => setHeader(null), [setHeader]);
+  }, [pathname, signature]);
   return null;
 }
 

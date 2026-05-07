@@ -484,6 +484,79 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
 
 
 @pytest.mark.asyncio
+async def test_post_extraction_detail_shell_retries_real_chrome(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://www.wayfair.com/pdp/widget",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    attempted_engines: list[str] = []
+
+    async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
+        forced_engine = str(
+            request.acquisition_profile.get("forced_browser_engine") or "patchright"
+        )
+        attempted_engines.append(forced_engine)
+        return _fake_acquire_result(
+            request,
+            html=f"<html><body>{forced_engine}</body></html>",
+            method="browser",
+            blocked=False,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_engine": forced_engine,
+                "browser_outcome": "usable_content",
+            },
+        )
+
+    def _fake_extract_records(html: str, *_args, **_kwargs):
+        if "real_chrome" not in html:
+            return []
+        return [
+            {
+                "title": "Wayfair Widget",
+                "url": "https://www.wayfair.com/pdp/widget",
+                "price": "850.00",
+                "image_url": "https://assets.example.com/widget.jpg",
+                "description": "A" * 220,
+            }
+        ]
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records", _fake_extract_records
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.real_chrome_browser_available",
+        lambda: True,
+    )
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.infer_detail_failure_reason",
+        lambda html, *_args, **_kwargs: (
+            "detail_shell" if "real_chrome" not in html else None
+        ),
+    )
+
+    result = await process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert attempted_engines == ["patchright", "real_chrome"]
+    assert result.verdict == "success"
+    assert total == 1
+    assert rows[0].data["title"] == "Wayfair Widget"
+
+
+@pytest.mark.asyncio
 async def test_usable_detail_with_active_provider_evidence_does_not_retry_real_chrome(
     db_session: AsyncSession,
     test_user,

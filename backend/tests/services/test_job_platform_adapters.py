@@ -4,7 +4,12 @@ import httpx
 import pytest
 
 from app.services.acquisition.http_client import HttpFetchResult, request_result
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import (
+    AdapterResult,
+    BaseAdapter,
+    PublicEndpointAdapter,
+    SelectolaxJobAdapter,
+)
 from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.registry import registered_adapters, run_adapter
@@ -53,6 +58,94 @@ class _ExplodingAdapter(BaseAdapter):
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         del url, html, surface
         raise RuntimeError("adapter failure")
+
+
+class _ProxyPublicEndpointAdapter(PublicEndpointAdapter):
+    name = "proxy_public"
+    platform_family = "workday"
+
+    async def can_handle(self, url: str, html: str) -> bool:
+        del url, html
+        return True
+
+    async def _try_public_endpoint(
+        self,
+        url: str,
+        html: str,
+        surface: str,
+        *,
+        proxy: str | None = None,
+    ) -> list[dict]:
+        self.captured_proxy = proxy
+        return [{"url": url, "surface": surface}]
+
+
+class _AsyncSelectolaxAdapter(SelectolaxJobAdapter):
+    async def can_handle(self, url: str, html: str) -> bool:
+        return True
+
+    async def _extract_detail(self, parser, url: str) -> dict | None:
+        return {"url": url, "title": parser.css_first("h1").text(strip=True)}
+
+    async def _extract_listing(self, parser, url: str) -> list[dict]:
+        return [
+            {"url": url, "title": node.text(strip=True)} for node in parser.css(".job")
+        ]
+
+
+class _SyncSelectolaxAdapter(SelectolaxJobAdapter):
+    async def can_handle(self, url: str, html: str) -> bool:
+        return True
+
+    def _extract_detail(self, parser, url: str) -> dict | None:
+        return {"url": url, "title": parser.css_first("h1").text(strip=True)}
+
+    def _extract_listing(self, parser, url: str) -> list[dict]:
+        return [
+            {"url": url, "title": node.text(strip=True)} for node in parser.css(".job")
+        ]
+
+
+@pytest.mark.asyncio
+async def test_selectolax_job_adapter_awaits_async_hooks() -> None:
+    adapter = _AsyncSelectolaxAdapter()
+
+    detail = await adapter.extract(
+        "https://example.com/jobs/1",
+        "<h1>Engineer</h1>",
+        "job_detail",
+    )
+    listing = await adapter.extract(
+        "https://example.com/jobs",
+        "<div class='job'>Engineer</div>",
+        "job_listing",
+    )
+
+    assert detail.records == [
+        {"url": "https://example.com/jobs/1", "title": "Engineer"}
+    ]
+    assert listing.records == [{"url": "https://example.com/jobs", "title": "Engineer"}]
+
+
+@pytest.mark.asyncio
+async def test_selectolax_job_adapter_keeps_sync_hooks_supported() -> None:
+    adapter = _SyncSelectolaxAdapter()
+
+    detail = await adapter.extract(
+        "https://example.com/jobs/1",
+        "<h1>Engineer</h1>",
+        "job_detail",
+    )
+    listing = await adapter.extract(
+        "https://example.com/jobs",
+        "<div class='job'>Engineer</div>",
+        "job_listing",
+    )
+
+    assert detail.records == [
+        {"url": "https://example.com/jobs/1", "title": "Engineer"}
+    ]
+    assert listing.records == [{"url": "https://example.com/jobs", "title": "Engineer"}]
 
 
 @pytest.mark.asyncio
@@ -124,6 +217,30 @@ async def test_run_adapter_fails_open_when_adapter_raises(
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_run_adapter_forwards_proxy_to_public_endpoint_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _ProxyPublicEndpointAdapter()
+    monkeypatch.setattr(
+        "app.services.adapters.registry.registered_adapters",
+        lambda: (adapter,),
+    )
+
+    result = await run_adapter(
+        "https://example.com/jobs",
+        "<html></html>",
+        "job_listing",
+        proxy="http://proxy.example:8080",
+    )
+
+    assert result is not None
+    assert result.records == [
+        {"url": "https://example.com/jobs", "surface": "job_listing"}
+    ]
+    assert adapter.captured_proxy == "http://proxy.example:8080"
 
 
 @pytest.mark.asyncio

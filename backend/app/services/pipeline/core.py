@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
 from dataclasses import dataclass, field
 
 from app.models.crawl import CrawlRun
+from app.models.crawl_settings import CrawlRunSettings
 from app.services.acquisition.acquirer import AcquisitionRequest
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.acquirer import PageEvidence
@@ -27,8 +29,9 @@ from app.services.domain_memory_service import (
 from app.services.db_utils import mapping_or_empty
 from app.services.domain_utils import normalize_domain
 from app.services.domain_run_profile_service import (
-    apply_saved_acquisition_contract_for_url,
+    apply_acquisition_contract_to_profile,
     record_acquisition_contract_outcome,
+    resolve_url_acquisition_recipe,
 )
 from app.services.field_policy import repair_target_fields_for_surface
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -373,18 +376,38 @@ async def _run_robots_gate(
 async def _build_acquisition_request(
     context: _URLProcessingContext,
 ) -> AcquisitionRequest:
-    plan = context.config.resolved_acquisition_plan(surface=context.surface)
-    acquisition_profile = dict(build_acquisition_profile(context.run.settings_view))
-    acquisition_profile = await apply_saved_acquisition_contract_for_url(
+    current_settings_view = context.run.settings_view
+    resolved_recipe = await resolve_url_acquisition_recipe(
         context.session,
         url=context.url,
         surface=context.surface,
-        settings_view=context.run.settings_view,
-        acquisition_profile=acquisition_profile,
+        explicit_settings=current_settings_view.as_dict(),
+    )
+    resolved_settings_view = CrawlRunSettings.from_value(resolved_recipe)
+    plan = resolved_settings_view.acquisition_plan(
+        surface=context.surface,
+        max_records=context.config.max_records,
+        adapter_recovery_enabled=context.config.resolved_acquisition_plan(
+            surface=context.surface
+        ).adapter_recovery_enabled,
+    )
+    if context.config.proxy_list != current_settings_view.proxy_list():
+        plan = plan.with_updates(proxy_list=tuple(context.config.proxy_list))
+    if context.config.traversal_mode != current_settings_view.traversal_mode():
+        plan = plan.with_updates(traversal_mode=context.config.traversal_mode)
+    if context.config.max_pages != current_settings_view.max_pages():
+        plan = plan.with_updates(max_pages=context.config.max_pages)
+    if context.config.max_scrolls != current_settings_view.max_scrolls():
+        plan = plan.with_updates(max_scrolls=context.config.max_scrolls)
+    if context.config.sleep_ms != current_settings_view.sleep_ms():
+        plan = plan.with_updates(sleep_ms=context.config.sleep_ms)
+    acquisition_profile = apply_acquisition_contract_to_profile(
+        build_acquisition_profile(resolved_settings_view),
+        resolved_settings_view.acquisition_contract(),
     )
     acquisition_profile.setdefault(
         "capture_page_markdown",
-        bool(context.run.settings_view.llm_enabled()),
+        bool(resolved_settings_view.llm_enabled()),
     )
     acquisition_policy = AcquisitionPolicy.from_profile(acquisition_profile)
     return AcquisitionRequest(
@@ -519,6 +542,12 @@ async def _run_extraction_stage(
         fetched,
         rejection_reason=rejection_reason,
     )
+    if retry_stage is None:
+        retry_stage = await _retry_patchright_detail_shell_with_real_chrome(
+            context,
+            fetched,
+            rejection_reason=rejection_reason,
+        )
     if retry_stage is not None:
         return retry_stage
     await _log_extraction_outcome(context, acquisition_result, records)
@@ -581,6 +610,75 @@ async def _retry_detail_challenge_shell_with_real_chrome(
     _merge_browser_diagnostics(
         retry_result,
         {"retry_reason": "post_extraction_challenge_shell"},
+    )
+    fetched.acquisition_result = retry_result
+    retry_records, retry_selector_rules = await _extract_records_for_acquisition(
+        context,
+        fetched,
+    )
+    retry_records, retry_selector_rules = await _apply_extraction_post_processing(
+        context,
+        acquisition_result=retry_result,
+        records=retry_records,
+        selector_rules=retry_selector_rules,
+    )
+    retry_records, retry_rejection_reason = _apply_detail_rejection_guard(
+        context,
+        fetched,
+        records=retry_records,
+        selector_rules=retry_selector_rules,
+    )
+    if retry_rejection_reason:
+        await _log_pipeline_event(
+            context,
+            "warning",
+            f"Rejected detail extraction for {context.url}: {retry_rejection_reason}",
+        )
+    else:
+        await _log_extraction_outcome(context, retry_result, retry_records)
+    return _ExtractedURLStage(fetched=fetched, records=retry_records)
+
+
+async def _retry_patchright_detail_shell_with_real_chrome(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+    *,
+    rejection_reason: str | None,
+) -> _ExtractedURLStage | None:
+    if rejection_reason != "detail_shell":
+        return None
+    if str(context.surface or "").strip().lower() != "ecommerce_detail":
+        return None
+    acquisition_result = fetched.acquisition_result
+    diagnostics = mapping_or_empty(
+        getattr(acquisition_result, "browser_diagnostics", {})
+    )
+    browser_engine = str(diagnostics.get("browser_engine") or "").strip().lower()
+    browser_outcome = str(diagnostics.get("browser_outcome") or "").strip().lower()
+    if (
+        getattr(acquisition_result, "method", "") != "browser"
+        or browser_engine != "patchright"
+        or browser_outcome != "usable_content"
+    ):
+        return None
+    if not real_chrome_browser_available():
+        return None
+
+    await _log_pipeline_event(
+        context,
+        "info",
+        f"Patchright detail rejected as detail_shell; retrying real Chrome for {context.url}",
+    )
+
+    retry_result = await _acquire_browser_retry_result(
+        context,
+        fetched,
+        retry_reason="post_extraction_detail_shell",
+        forced_browser_engine="real_chrome",
+    )
+    _merge_browser_diagnostics(
+        retry_result,
+        {"retry_reason": "post_extraction_detail_shell"},
     )
     fetched.acquisition_result = retry_result
     retry_records, retry_selector_rules = await _extract_records_for_acquisition(
@@ -962,14 +1060,29 @@ async def _populate_adapter_records(
     acquisition_result.adapter_source_type = None
 
     adapter_results = []
+    adapter_proxy = next(
+        (
+            str(proxy).strip()
+            for proxy in context.config.proxy_list or []
+            if str(proxy).strip()
+        ),
+        None,
+    )
     for html in [
         str(acquisition_result.html or ""),
         *_adapter_browser_artifact_htmls(acquisition_result),
     ]:
+        adapter_kwargs = (
+            {"proxy": adapter_proxy}
+            if adapter_proxy
+            and "proxy" in inspect.signature(run_adapter).parameters
+            else {}
+        )
         adapter_result = await run_adapter(
             acquisition_result.final_url,
             html,
             context.surface,
+            **adapter_kwargs,
         )
         if adapter_result is not None and list(adapter_result.records or []):
             adapter_results.append(adapter_result)
@@ -1287,19 +1400,13 @@ async def _update_acquisition_contract_memory(
         source_run_id=int(context.run.id),
         method=getattr(acquisition_result, "method", None),
         browser_engine=str(diagnostics.get("browser_engine") or "").strip().lower(),
+        browser_diagnostics=dict(diagnostics),
         requested_fields=repair_target_fields_for_surface(
             context.surface,
             list(context.requested_fields),
         ),
         records=records,
         persisted_count=persisted_count,
-        quality_success=(
-            persisted_count > 0
-            and not _effective_blocked(acquisition_result)
-            and verdict not in {VERDICT_BLOCKED, VERDICT_EMPTY}
-        ),
-        count_failure=verdict == VERDICT_LISTING_FAILED,
-        stale_threshold=int(
-            crawler_runtime_settings.acquisition_contract_stale_failure_threshold
-        ),
+        verdict=verdict,
+        blocked=_effective_blocked(acquisition_result),
     )

@@ -21,6 +21,11 @@ class AdapterRuntimeSettings(BaseSettings):
     icims_page_size: int = 100
     icims_max_offset: int = 1000
     icims_title_min_length: int = 3
+    default_locale: str = "en-US"
+    jibe_listing_default_limit: str = "100"
+    jibe_listing_default_page: str = "1"
+    paycom_listing_page_size: int = 100
+    saashr_pagination_size: int = 50
 
     @model_validator(mode="after")
     def _validate(self) -> AdapterRuntimeSettings:
@@ -46,6 +51,10 @@ class AdapterRuntimeSettings(BaseSettings):
             raise ValueError("icims_title_min_length must be > 0")
         if self.icims_max_offset < self.icims_page_size:
             raise ValueError("icims_max_offset must be >= icims_page_size")
+        if self.paycom_listing_page_size <= 0:
+            raise ValueError("paycom_listing_page_size must be > 0")
+        if self.saashr_pagination_size <= 0:
+            raise ValueError("saashr_pagination_size must be > 0")
         return self
 
 

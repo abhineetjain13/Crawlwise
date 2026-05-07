@@ -117,7 +117,11 @@ def backfill_detail_price_from_html(
 
     currency = (
         text_or_none(record.get("currency"))
-        or (expected_currency if html_currency_conflicts_with_host else None)
+        or (
+            expected_currency
+            if html_currency_conflicts_with_host and visible_price
+            else None
+        )
         or html_currency
     )
     if currency and record.get("currency") in (None, "", [], {}):
