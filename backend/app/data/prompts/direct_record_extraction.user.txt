@@ -9,8 +9,5 @@ $requested_fields_json
 Already extracted records:
 $existing_records_json
 
-Rendered page markdown:
-$page_markdown
-
 HTML snippet:
 $html_snippet

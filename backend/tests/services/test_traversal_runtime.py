@@ -1060,6 +1060,7 @@ async def test_execute_listing_traversal_rejects_auto_mode() -> None:
     )
 
     assert result.selected_mode is None
+    assert result.activated is False
     assert result.stop_reason == "unsupported_mode"
     assert result.scroll_iterations == 0
 

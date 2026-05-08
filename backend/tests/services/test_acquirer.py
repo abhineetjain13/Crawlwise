@@ -187,7 +187,6 @@ async def test_acquire_translates_policy_to_fetch_runtime_knobs(
                 "retry_reason": "thin-listing retry",
                 "proxy_profile": {"rotation": "session"},
                 "locality_profile": {"country": "US"},
-                "capture_page_markdown": True,
                 "capture_screenshot": True,
                 "prefer_curl_handoff": True,
                 "handoff_cookie_engine": "real_chrome",
@@ -202,7 +201,6 @@ async def test_acquire_translates_policy_to_fetch_runtime_knobs(
     assert captured["listing_recovery_mode"] == "thin_listing"
     assert captured["proxy_profile"] == {"rotation": "session"}
     assert captured["locality_profile"] == {"country": "US"}
-    assert captured["capture_page_markdown"] is True
     assert captured["capture_screenshot"] is True
     assert captured["prefer_curl_handoff"] is True
     assert captured["handoff_cookie_engine"] == "real_chrome"

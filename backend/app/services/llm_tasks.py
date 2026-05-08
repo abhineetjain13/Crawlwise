@@ -30,7 +30,6 @@ from app.services.llm_errors import ERROR_PREFIX, LLMErrorCategory, classify_err
 from app.services.llm_types import LLMTaskResult
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 from bs4 import BeautifulSoup, Tag
-from app.services.record_export_service import render_markdown_block
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -481,7 +480,6 @@ async def extract_records_directly(
     url: str,
     surface: str,
     html_text: str,
-    markdown_text: str,
     requested_fields: list[str] | None,
     existing_records: list[dict[str, object]] | None,
 ) -> tuple[list[dict[str, object]], str | None]:
@@ -497,11 +495,6 @@ async def extract_records_directly(
             "existing_records_json": _truncate_json_literal(
                 _safe_truncate_for_prompt(list(existing_records or [])),
                 llm_runtime_settings.candidate_evidence_max_chars,
-            ),
-            "page_markdown": _trim_prompt_section_body(
-                str(markdown_text or ""),
-                llm_runtime_settings.html_snippet_max_chars,
-                "[TRUNCATED]",
             ),
             "html_snippet": _truncate_html(
                 html_text,
@@ -797,43 +790,54 @@ def _truncate_html(
 ) -> str:
     if limit <= 0:
         return ""
-    pruned = render_markdown_block(_prune_html_for_llm(html_text))
+    pruned = _render_html_text(_prune_html_for_llm(html_text))
     if len(pruned) <= limit:
         return pruned
-    focused = _focus_markdown_context(pruned, anchors or [])
+    focused = _focus_html_context(pruned, anchors or [])
     return (focused or pruned)[:limit]
 
 
-def _focus_html_context(html_text: str, anchors: list[str]) -> str:
-    normalized_anchors = _normalize_html_anchor_terms(anchors)
-    if not normalized_anchors:
-        return ""
-    focused_lines: list[str] = []
+def _render_html_text(value: str) -> str:
+    soup = BeautifulSoup(str(value or ""), "html.parser")
+    for node in soup.find_all("br"):
+        node.replace_with("\n")
+    lines: list[str] = []
     seen: set[str] = set()
-    for raw_line in html_text.splitlines():
-        line = raw_line.rstrip()
-        if not line:
+    block_tags = [
+        tag.strip()
+        for tag in llm_runtime_settings.html_render_block_tags.split(",")
+        if tag.strip()
+    ]
+    for node in soup.find_all(block_tags):
+        text = "\n".join(
+            line.strip()
+            for line in node.get_text(separator="\n", strip=True).splitlines()
+            if line.strip()
+        ).strip()
+        if not text:
             continue
-        lowered = line.lower()
-        if any(anchor in lowered for anchor in normalized_anchors):
-            if line not in seen:
-                focused_lines.append(line)
-                seen.add(line)
+        lowered = " ".join(text.lower().split())
+        if lowered in seen:
             continue
-        if focused_lines and line not in seen:
-            focused_lines.append(line)
-            seen.add(line)
-    return "\n".join(focused_lines)
+        seen.add(lowered)
+        lines.append(text)
+    if lines:
+        return "\n".join(lines)
+    return "\n".join(
+        line.strip()
+        for line in soup.get_text(separator="\n", strip=True).splitlines()
+        if line.strip()
+    ).strip()
 
 
-def _focus_markdown_context(markdown_text: str, anchors: list[str]) -> str:
+def _focus_html_context(rendered_text: str, anchors: list[str]) -> str:
     normalized_anchors = _normalize_html_anchor_terms(anchors)
     if not normalized_anchors:
         return ""
     focused_lines: list[str] = []
     seen: set[str] = set()
     previous_line = ""
-    for raw_line in markdown_text.splitlines():
+    for raw_line in rendered_text.splitlines():
         line = raw_line.strip()
         if not line:
             continue

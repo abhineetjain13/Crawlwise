@@ -157,6 +157,8 @@ class CrawlerRuntimeSettings(BaseSettings):
     protected_host_additional_interval_ms: int = 2000
     pacing_host_cache_max_entries: int = 1024
     pacing_host_cache_ttl_seconds: int = 900
+    host_protection_policy_cache_ttl_seconds: int = 30
+    host_protection_policy_cache_max_entries: int = 256
     host_memory_ttl_min_seconds: int = 1
     host_memory_ttl_max_seconds: int = 86400
     browser_first_host_block_threshold: int = 2
@@ -190,6 +192,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_error_retry_delay_ms: int = 1000
     browser_post_block_cooldown_ms: int = 500
     low_quality_browser_retry_methods: tuple[str, ...] = ("curl_cffi", "httpx")
+    post_extraction_detail_shell_real_chrome_retry_enabled: bool = False
     browser_navigation_networkidle_timeout_ms: int = 30000
     browser_navigation_networkidle_primary_budget_ratio: float = 0.4
     browser_navigation_load_timeout_ms: int = 15000
@@ -219,6 +222,12 @@ class CrawlerRuntimeSettings(BaseSettings):
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
         "--window-size=1920,1080",
         "--disable-search-engine-choice-screen",
+        "--disable-background-networking",
+        "--disable-client-side-phishing-detection",
+        "--disable-component-update",
+        "--disable-domain-reliability",
+        "--disable-sync",
+        "--no-first-run",
     )
     browser_use_new_headless: bool = True
     browser_runtime_pool_max_entries: int = 8
@@ -324,7 +333,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     traversal_click_timeout_ms: int = 3000
     traversal_force_probe_min_advance_px: int = 600
     infinite_scroll_container_overflow_threshold_px: int = 500
-    infinite_scroll_tall_page_ratio: int = 3
+
     infinite_scroll_positive_signal_min: int = 2
     cookie_consent_prewait_ms: int = 400
     cookie_consent_postclick_wait_ms: int = 600
@@ -348,7 +357,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     selector_synthesis_max_html_chars: int = 200000
     raw_json_surface_field_overlap_ratio: float = 0.25
     raw_json_surface_field_overlap_absolute: int = 2
-    low_quality_browser_retry_min_remaining_seconds: float = 85.0
+    low_quality_browser_retry_min_remaining_seconds: float = 20.0
     acquisition_contract_stale_failure_threshold: int = 2
     detail_max_variant_axes: int = 3
     detail_max_variant_rows: int = 0

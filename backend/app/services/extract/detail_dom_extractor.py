@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from itertools import product
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 from collections.abc import Callable
 from typing import Any
 
@@ -14,8 +14,14 @@ from app.services.config.extraction_rules import (
     DOM_VARIANT_CARTESIAN_COMBO_LIMIT,
     DOM_VARIANT_GROUP_LIMIT,
     DETAIL_DOM_SCALAR_SIZE_PATTERN,
+    DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
 )
+from app.services.config.field_mappings import (
+    DOM_HIGH_VALUE_FIELDS,
+    DOM_OPTIONAL_CUE_FIELDS,
+)
+from app.services.field_policy import exact_requested_field_key, normalize_field_key
 from app.services.field_value_core import (
     RATING_RE,
     REVIEW_COUNT_RE,
@@ -40,6 +46,9 @@ from app.services.field_value_dom import (
 from app.services.extract.detail_raw_signals import (
     breadcrumb_category_from_dom,
     gender_from_detail_context,
+)
+from app.services.extract.detail_state_variant_targets import (
+    state_variant_targets as _state_variant_targets,
 )
 from app.services.js_state_helpers import select_variant
 from app.services.extract.shared_variant_logic import (
@@ -74,6 +83,30 @@ _VARIANT_TRANSPORT_FIELDS = (
     "availability",
     "stock_quantity",
 )
+
+
+def _dom_section_target_fields(
+    surface: str,
+    requested_fields: list[str] | None,
+) -> set[str]:
+    normalized_surface = str(surface or "").strip().lower()
+    targets = {
+        str(field_name).strip()
+        for field_name in {
+            *set(DETAIL_LONG_TEXT_RANK_FIELDS),
+            *set(DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ()),
+            *set(DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ()),
+        }
+        if str(field_name).strip()
+    }
+    canonical_fields = set(surface_fields(surface, None))
+    for raw_field_name in list(requested_fields or []):
+        normalized_field = exact_requested_field_key(raw_field_name) or normalize_field_key(
+            raw_field_name
+        )
+        if normalized_field and normalized_field not in canonical_fields:
+            targets.add(normalized_field)
+    return targets
 
 
 def record_has_rich_existing_variants(record: dict[str, Any]) -> bool:
@@ -111,8 +144,8 @@ def primary_dom_context(
         DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR
     ) or cleaned_soup.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR):
         return cleaned_parser, cleaned_soup
-    original_parser = LexborHTMLParser(context.original_html)
-    original_soup = BeautifulSoup(context.original_html, "html.parser")
+    original_parser = context.original_dom_parser
+    original_soup = context.original_soup
     if not (
         original_parser.css_first(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR)
         or original_soup.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR)
@@ -214,7 +247,16 @@ def apply_dom_fallbacks(
             source="dom_images",
         )
     alias_lookup = surface_alias_lookup(surface, requested_fields)
-    for field_name, value in collect_inline_scalar_rows(soup, alias_lookup):
+    inline_scalar_target_fields = {
+        field_name
+        for field_name in ("color", "size")
+        if field_name in fields and not candidates.get(field_name)
+    }
+    for field_name, value in collect_inline_scalar_rows(
+        soup,
+        alias_lookup,
+        allowed_fields=inline_scalar_target_fields,
+    ):
         if field_name not in fields or candidates.get(field_name):
             continue
         add_sourced_candidate(
@@ -225,7 +267,16 @@ def apply_dom_fallbacks(
             coerce_field_value(field_name, value, page_url),
             source="dom_text",
         )
-    for label, value in extract_heading_sections(soup).items():
+    dom_section_fields = _dom_section_target_fields(
+        surface,
+        requested_fields,
+    )
+    section_target_fields = {field for field in fields if field in dom_section_fields}
+    for label, value in extract_heading_sections(
+        soup,
+        alias_lookup=alias_lookup,
+        allowed_fields=section_target_fields,
+    ).items():
         normalized = alias_lookup.get(label.lower()) or alias_lookup.get(
             re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
         )
@@ -276,10 +327,23 @@ def apply_dom_fallbacks(
                 gender,
                 source="dom_text",
             )
-    body_node = dom_parser.body
-    body_text = (
-        clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""
+    normalized_surface = str(surface or "")
+    body_text = ""
+    body_text_needed = (
+        ("size" in fields and not candidates.get("size"))
+        or ("review_count" in fields and not candidates.get("review_count"))
+        or ("rating" in fields and not candidates.get("rating"))
+        or (
+            normalized_surface.startswith("job_")
+            and "remote" in fields
+            and not candidates.get("remote")
+        )
     )
+    if body_text_needed:
+        body_node = dom_parser.body
+        body_text = (
+            clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""
+        )
     if "size" in fields and not candidates.get("size"):
         size_match = re.search(str(DETAIL_DOM_SCALAR_SIZE_PATTERN), body_text, re.I)
         if size_match:
@@ -327,7 +391,6 @@ def apply_dom_fallbacks(
                 rating_match.group(1),
                 source="dom_text",
             )
-    normalized_surface = str(surface or "")
     if (
         normalized_surface.startswith("job_")
         and "remote" in fields
@@ -862,166 +925,6 @@ def _expand_compound_option_group(
     ]
 
 
-def _variant_query_url(
-    page_url: str, *, query_key: str, query_value: str
-) -> str | None:
-    normalized_key = text_or_none(query_key)
-    normalized_value = text_or_none(query_value)
-    if not normalized_key or not normalized_value:
-        return None
-    parsed = urlsplit(str(page_url or "").strip())
-    query_pairs = [
-        (key, value)
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if key != normalized_key
-    ]
-    query_pairs.append((normalized_key, normalized_value))
-    return urlunsplit(parsed._replace(query=urlencode(query_pairs, doseq=True)))
-
-
-def _iter_variant_mapping_payloads(
-    value: Any, *, depth: int = 0, limit: int = 8
-) -> list[dict[str, Any]]:
-    if depth > limit:
-        return []
-    matches: list[dict[str, Any]] = []
-    if isinstance(value, dict):
-        if isinstance(value.get("options"), list):
-            matches.append(value)
-        for item in value.values():
-            matches.extend(
-                _iter_variant_mapping_payloads(item, depth=depth + 1, limit=limit)
-            )
-    elif isinstance(value, list):
-        for item in value[:25]:
-            matches.extend(
-                _iter_variant_mapping_payloads(item, depth=depth + 1, limit=limit)
-            )
-    return matches
-
-
-def _state_variant_targets(
-    js_state_objects: dict[str, Any] | None,
-    *,
-    page_url: str,
-) -> tuple[
-    dict[str, dict[str, dict[str, object]]],
-    dict[tuple[tuple[str, str], ...], dict[str, object]],
-]:
-    axis_targets: dict[str, dict[str, dict[str, object]]] = {}
-    combo_targets: dict[tuple[tuple[str, str], ...], dict[str, object]] = {}
-    if not isinstance(js_state_objects, dict):
-        return axis_targets, combo_targets
-    mapping_row_id_keys = (
-        "productId",
-        "product_id",
-        "variantId",
-        "variant_id",
-        "sku",
-        "id",
-    )
-    url_keys = ("url", "href", "productUrl", "product_url", "targetUrl", "target_url")
-    for payload in _iter_variant_mapping_payloads(js_state_objects):
-        raw_options = payload.get("options")
-        if not isinstance(raw_options, list):
-            continue
-        option_definitions: list[dict[str, object]] = []
-        for option in raw_options:
-            if not isinstance(option, dict):
-                continue
-            axis_field = text_or_none(
-                option.get("id") or option.get("key") or option.get("name")
-            )
-            axis_key = normalized_variant_axis_key(option.get("label") or axis_field)
-            option_list = (
-                option.get("optionList")
-                if isinstance(option.get("optionList"), list)
-                else None
-            )
-            if not axis_field or not axis_key or not option_list:
-                continue
-            value_by_id: dict[str, str] = {}
-            for item in option_list:
-                if not isinstance(item, dict):
-                    continue
-                option_id = text_or_none(item.get("id") or item.get("value"))
-                option_value = text_or_none(
-                    item.get("title") or item.get("label") or item.get("value")
-                )
-                if (
-                    option_id
-                    and option_value
-                    and not variant_option_value_is_noise(option_value)
-                ):
-                    value_by_id[option_id] = option_value
-            if value_by_id:
-                option_definitions.append(
-                    {
-                        "axis_field": axis_field,
-                        "axis_key": axis_key,
-                        "value_by_id": value_by_id,
-                    }
-                )
-        if not option_definitions:
-            continue
-        mapping_lists = [
-            item
-            for item in payload.values()
-            if isinstance(item, list)
-            and item
-            and all(isinstance(row, dict) for row in item)
-        ]
-        for mapping_rows in mapping_lists:
-            for mapping_row in mapping_rows:
-                option_values: dict[str, str] = {}
-                for option_definition in option_definitions:
-                    axis_field = str(option_definition["axis_field"])
-                    axis_key = str(option_definition["axis_key"])
-                    mapping_value_by_id = _object_dict(
-                        option_definition.get("value_by_id")
-                    )
-                    option_id = text_or_none(mapping_row.get(axis_field))
-                    mapped_option_value = mapping_value_by_id.get(option_id or "")
-                    if mapped_option_value:
-                        option_values[axis_key] = str(mapped_option_value)
-                if not option_values:
-                    continue
-                row_metadata: dict[str, object] = {}
-                explicit_url = next(
-                    (
-                        text_or_none(mapping_row.get(key))
-                        for key in url_keys
-                        if text_or_none(mapping_row.get(key))
-                    ),
-                    None,
-                )
-                if explicit_url:
-                    row_metadata["url"] = absolute_url(page_url, explicit_url)
-                for key in mapping_row_id_keys:
-                    raw_value = text_or_none(mapping_row.get(key))
-                    if not raw_value:
-                        continue
-                    row_metadata.setdefault("variant_id", raw_value)
-                    if "url" not in row_metadata:
-                        inferred_url = _variant_query_url(
-                            page_url,
-                            query_key=key,
-                            query_value=raw_value,
-                        )
-                        if inferred_url:
-                            row_metadata["url"] = inferred_url
-                    break
-                if not row_metadata:
-                    continue
-                if len(option_values) == 1:
-                    axis_key, option_value = next(iter(option_values.items()))
-                    axis_targets.setdefault(axis_key, {}).setdefault(
-                        option_value, {}
-                    ).update(row_metadata)
-                combo_targets[tuple(sorted(option_values.items()))] = row_metadata
-    return axis_targets, combo_targets
-
-
 def extract_variants_from_dom(
     soup: BeautifulSoup,
     *,
@@ -1407,6 +1310,8 @@ def backfill_variants_from_dom_if_missing(
     ]
     if record_has_rich_existing_variants(record):
         return
+    if existing_variant_cluster_has_transport_signal(existing_variants):
+        return
     if not variant_dom_cues_present(soup):
         return
     dom_variants = extract_variants_from_dom(
@@ -1466,3 +1371,22 @@ def backfill_variants_from_dom_if_missing(
             variant["price"] = price
         if currency and variant.get("currency") in (None, "", [], {}):
             variant["currency"] = currency
+
+
+def existing_variant_cluster_has_transport_signal(
+    variants: list[dict[str, Any]],
+) -> bool:
+    if len(variants) < 2:
+        return False
+    rows_with_transport = 0
+    for row in variants:
+        if not isinstance(row, dict):
+            continue
+        has_identity = any(
+            text_or_none(row.get(field_name))
+            for field_name in ("sku", "variant_id", "url", "image_url")
+        )
+        has_price = text_or_none(row.get("price")) is not None
+        if has_identity and has_price:
+            rows_with_transport += 1
+    return rows_with_transport >= 2

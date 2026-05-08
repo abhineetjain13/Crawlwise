@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+import logging
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, select
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import SessionLocal
 from app.models.crawl import HostProtectionMemory
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_host
+
+logger = logging.getLogger(__name__)
 
 BROWSER_METHOD = "browser"
 CHROMIUM_METHOD = "browser:chromium"
@@ -30,6 +36,27 @@ class HostProtectionPolicy:
     patchright_success: bool = False
     real_chrome_success: bool = False
     last_block_method: str | None = None
+
+
+@dataclass(slots=True)
+class _PolicyCacheEntry:
+    cached_at: float
+    last_accessed_at: float
+    policy: HostProtectionPolicy
+
+
+_POLICY_CACHE: dict[str, _PolicyCacheEntry] = {}
+_POLICY_CACHE_LOCK = asyncio.Lock()
+
+
+@contextmanager
+def _suppress_all():
+    try:
+        yield
+    except MemoryError:
+        raise
+    except Exception:
+        logger.warning("Suppressed host protection memory cleanup failure", exc_info=True)
 
 
 def _now() -> datetime:
@@ -62,6 +89,24 @@ def _is_recent(
 
 def _coerce_method(value: object) -> str:
     return str(value or "").strip().lower()
+
+
+def _policy_cache_ttl_seconds() -> float:
+    return max(
+        1.0,
+        float(crawler_runtime_settings.host_protection_policy_cache_ttl_seconds),
+    )
+
+
+def _policy_cache_max_entries() -> int:
+    return max(
+        1,
+        int(crawler_runtime_settings.host_protection_policy_cache_max_entries),
+    )
+
+
+def _copy_policy(policy: HostProtectionPolicy) -> HostProtectionPolicy:
+    return replace(policy)
 
 
 def _is_browser_method(value: str | None) -> bool:
@@ -107,6 +152,59 @@ def _recent_success_method(
     return _coerce_method(getattr(row, "last_success_method", None)) or None
 
 
+async def _policy_cache_get(host: str) -> HostProtectionPolicy | None:
+    now = time.time()
+    async with _POLICY_CACHE_LOCK:
+        entry = _POLICY_CACHE.get(host)
+        if entry is None:
+            return None
+        if now - entry.cached_at >= _policy_cache_ttl_seconds():
+            _POLICY_CACHE.pop(host, None)
+            return None
+        entry.last_accessed_at = now
+        return _copy_policy(entry.policy)
+
+
+def _evict_policy_cache_entries(*, now: float) -> None:
+    ttl_seconds = _policy_cache_ttl_seconds()
+    expired_hosts = [
+        host
+        for host, entry in _POLICY_CACHE.items()
+        if now - entry.cached_at >= ttl_seconds
+    ]
+    for host in expired_hosts:
+        _POLICY_CACHE.pop(host, None)
+    overflow = len(_POLICY_CACHE) - _policy_cache_max_entries()
+    if overflow <= 0:
+        return
+    for host, _entry in sorted(
+        _POLICY_CACHE.items(),
+        key=lambda item: item[1].last_accessed_at,
+    )[:overflow]:
+        _POLICY_CACHE.pop(host, None)
+
+
+async def _policy_cache_put(host: str, policy: HostProtectionPolicy) -> None:
+    now = time.time()
+    async with _POLICY_CACHE_LOCK:
+        _POLICY_CACHE[host] = _PolicyCacheEntry(
+            cached_at=now,
+            last_accessed_at=now,
+            policy=_copy_policy(policy),
+        )
+        _evict_policy_cache_entries(now=now)
+
+
+async def _policy_cache_invalidate(host: str) -> None:
+    async with _POLICY_CACHE_LOCK:
+        _POLICY_CACHE.pop(host, None)
+
+
+async def _policy_cache_clear() -> None:
+    async with _POLICY_CACHE_LOCK:
+        _POLICY_CACHE.clear()
+
+
 async def load_host_protection_policy(
     value: str | None,
     *,
@@ -117,12 +215,17 @@ async def load_host_protection_policy(
     if not normalized:
         return HostProtectionPolicy(host="")
     if session is None:
+        cached = await _policy_cache_get(normalized)
+        if cached is not None:
+            return cached
         async with SessionLocal() as owned_session:
-            return await load_host_protection_policy(
+            policy = await load_host_protection_policy(
                 normalized,
                 session=owned_session,
                 ttl_seconds=ttl_seconds,
             )
+        await _policy_cache_put(normalized, policy)
+        return policy
     row = await _load_row(session, host=normalized)
     now = _now()
     if row is None:
@@ -172,16 +275,22 @@ async def note_host_hard_block(
         return HostProtectionPolicy(host="")
     if session is None:
         async with SessionLocal() as owned_session:
-            policy = await note_host_hard_block(
-                normalized,
-                method=method,
-                vendor=vendor,
-                status_code=status_code,
-                proxy_used=proxy_used,
-                session=owned_session,
-                ttl_seconds=ttl_seconds,
-            )
-            await owned_session.commit()
+            try:
+                policy = await note_host_hard_block(
+                    normalized,
+                    method=method,
+                    vendor=vendor,
+                    status_code=status_code,
+                    proxy_used=proxy_used,
+                    session=owned_session,
+                    ttl_seconds=ttl_seconds,
+                )
+                await owned_session.commit()
+            except (IntegrityError, OperationalError, ProgrammingError):
+                with _suppress_all():
+                    await owned_session.rollback()
+                return HostProtectionPolicy(host=normalized)
+            await _policy_cache_invalidate(normalized)
             return policy
     row = await _ensure_row(session, host=normalized)
     if row is None:
@@ -221,14 +330,20 @@ async def note_host_usable_fetch(
         return HostProtectionPolicy(host="")
     if session is None:
         async with SessionLocal() as owned_session:
-            policy = await note_host_usable_fetch(
-                normalized,
-                method=method,
-                proxy_used=proxy_used,
-                session=owned_session,
-                ttl_seconds=ttl_seconds,
-            )
-            await owned_session.commit()
+            try:
+                policy = await note_host_usable_fetch(
+                    normalized,
+                    method=method,
+                    proxy_used=proxy_used,
+                    session=owned_session,
+                    ttl_seconds=ttl_seconds,
+                )
+                await owned_session.commit()
+            except (IntegrityError, OperationalError, ProgrammingError):
+                with _suppress_all():
+                    await owned_session.rollback()
+                return HostProtectionPolicy(host=normalized)
+            await _policy_cache_invalidate(normalized)
             return policy
     row = await _ensure_row(session, host=normalized)
     now = _now()
@@ -252,15 +367,20 @@ async def reset_host_protection_memory(
     *,
     session: AsyncSession | None = None,
 ) -> None:
+    await _policy_cache_clear()
     if session is None:
         async with SessionLocal() as owned_session:
-            await reset_host_protection_memory(session=owned_session)
-            await owned_session.commit()
+            try:
+                await reset_host_protection_memory(session=owned_session)
+                await owned_session.commit()
+            except Exception:
+                with _suppress_all():
+                    await owned_session.rollback()
             return
     try:
         await session.execute(delete(HostProtectionMemory))
         await session.flush()
-    except (OperationalError, ProgrammingError) as exc:
+    except (IntegrityError, OperationalError, ProgrammingError) as exc:
         if "host_protection_memory" not in str(exc).lower():
             raise
         await session.rollback()
@@ -279,7 +399,7 @@ async def _load_row(
             .order_by(HostProtectionMemory.updated_at.desc(), HostProtectionMemory.id.desc())
             .limit(1)
         )
-    except (OperationalError, ProgrammingError) as exc:
+    except (IntegrityError, OperationalError, ProgrammingError) as exc:
         if "host_protection_memory" not in str(exc).lower():
             raise
         await session.rollback()
@@ -292,16 +412,22 @@ async def _ensure_row(
     *,
     host: str,
 ) -> HostProtectionMemory | None:
-    row = await _load_row(session, host=host)
-    if row is not None:
-        return row
-    row = HostProtectionMemory(host=host)
-    session.add(row)
-    try:
-        await session.flush()
-    except (OperationalError, ProgrammingError) as exc:
-        if "host_protection_memory" not in str(exc).lower():
-            raise
-        await session.rollback()
-        return None
-    return row
+    for attempt in range(2):
+        row = await _load_row(session, host=host)
+        if row is not None:
+            return row
+        row = HostProtectionMemory(host=host)
+        session.add(row)
+        try:
+            await session.flush()
+            return row
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            if "host_protection_memory" not in str(exc).lower():
+                raise
+            await session.rollback()
+            row = await _load_row(session, host=host)
+            if row is not None:
+                return row
+            if attempt == 0:
+                await asyncio.sleep(0)
+    return None

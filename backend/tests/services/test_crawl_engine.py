@@ -47,76 +47,6 @@ def test_listing_raw_json_honors_max_records() -> None:
     ]
 
 
-def test_extract_records_warns_when_listing_surface_hits_detail_page(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    html = """
-    <html>
-      <body>
-        <main class="product-detail">
-          <h1>Trail Runner</h1>
-          <div class="price">$89.99</div>
-          <p>Lightweight shoe for daily runs.</p>
-        </main>
-      </body>
-    </html>
-    """
-
-    with caplog.at_level("WARNING", logger=extraction_runtime.logger.name):
-        rows = extract_records(
-            html,
-            "https://example.com/products/trail-runner",
-            "ecommerce_listing",
-            max_records=5,
-        )
-
-    assert rows == []
-    assert any(
-        "surface_mismatch_suspected surface=ecommerce_listing page_shape=detail"
-        in record.message
-        for record in caplog.records
-    )
-
-
-def test_extract_records_warns_when_detail_surface_hits_listing_page(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    html = """
-    <html>
-      <body>
-        <main>
-          <article class="product-card">
-            <a href="/products/alpha-shoe">
-              <h2>Alpha Shoe</h2>
-              <span>$19.99</span>
-            </a>
-          </article>
-          <article class="product-card">
-            <a href="/products/beta-shoe">
-              <h2>Beta Shoe</h2>
-              <span>$29.99</span>
-            </a>
-          </article>
-        </main>
-      </body>
-    </html>
-    """
-
-    with caplog.at_level("WARNING", logger=extraction_runtime.logger.name):
-        rows = extract_records(
-            html,
-            "https://example.com/collections/shoes",
-            "ecommerce_detail",
-            max_records=5,
-        )
-
-    assert rows == []
-    assert any(
-        "surface_mismatch_suspected surface=ecommerce_detail page_shape=listing"
-        in record.message
-        for record in caplog.records
-    )
-
 
 def test_detail_product_url_with_support_slug_is_not_utility() -> None:
     assert (
@@ -3632,6 +3562,88 @@ def test_infer_detail_failure_reason_labels_wayfair_pdp_shell_as_detail_shell() 
     )
 
 
+def test_build_detail_record_keeps_real_wayfair_pdp_title_instead_of_url_slug() -> None:
+    url = (
+        "https://www.wayfair.com/furniture/pdp/"
+        "flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html"
+        "?piid=94673717"
+    )
+    description = " ".join(["Traditional comfort with power reclining and headrest support."] * 8)
+    html = f"""
+    <html>
+      <head>
+        <title>Flexsteel Bryce Power Reclining Sofa with Power Headrest &amp; Reviews | Wayfair</title>
+        <meta property="og:title" content="Flexsteel Bryce Power Reclining Sofa with Power Headrest &amp; Reviews | Wayfair" />
+        <meta property="og:description" content="{description}" />
+        <meta property="og:image" content="https://assets.wfcdn.com/im/widget.jpg" />
+        <link rel="canonical" href="{url}" />
+      </head>
+      <body>
+        <main>
+          <h1>Bryce Power Reclining Sofa with Power Headrest</h1>
+          <div>$2,499.99</div>
+          <img src="https://assets.wfcdn.com/im/widget.jpg" />
+          <section>
+            <h2>About This Product</h2>
+            <p>{description}</p>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    record = detail_extractor.build_detail_record(
+        html,
+        url,
+        "ecommerce_detail",
+        [],
+        requested_page_url=url,
+    )
+
+    assert record.get("title") == (
+        "Flexsteel Bryce Power Reclining Sofa with Power Headrest & Reviews | Wayfair"
+    )
+    assert "url_slug" not in (record.get("_field_sources", {}).get("title") or [])
+
+
+def test_detail_rejection_keeps_rich_wayfair_pdp_with_promotional_title() -> None:
+    requested_url = (
+        "https://www.wayfair.com/furniture/pdp/"
+        "flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html"
+        "?piid=94673717"
+    )
+    record = {
+        "title": (
+            "Flexsteel Bryce Power Reclining Sofa with Power Headrest & Reviews | Wayfair"
+        ),
+        "url": requested_url,
+        "price": "2499.99",
+        "currency": "USD",
+        "image_url": "https://assets.wfcdn.com/im/widget.jpg",
+        "description": "A" * 220,
+        "_field_sources": {
+            "title": ["opengraph", "dom_h1"],
+            "price": ["dom_text"],
+            "image_url": ["opengraph"],
+            "description": ["opengraph"],
+        },
+        "_source": "opengraph",
+        "_confidence": {
+            "score": 0.5113,
+            "level": "low",
+        },
+    }
+
+    assert (
+        detail_extractor.detail_record_rejection_reason(
+            record,
+            page_url=requested_url,
+            requested_page_url=requested_url,
+        )
+        is None
+    )
+
+
 def test_detail_rejection_keeps_rich_pdp_without_strong_identity_fields() -> None:
     requested_url = (
         "https://www.wayfair.com/furniture/pdp/"
@@ -4564,6 +4576,75 @@ def test_extract_records_rejects_low_overlap_nested_raw_json_list_items() -> Non
     )
 
     assert rows == []
+
+
+def test_has_surface_field_overlap_short_circuits_after_required_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+    original = extraction_runtime._payload_has_surface_field_overlap
+    items = [
+        {"title": f"Product {index}", "id": index} if index <= 5 else {"id": index}
+        for index in range(1, 21)
+    ]
+
+    def _counting_overlap(payload, canonical, *, overlap_cache=None):
+        calls.append(int(payload.get("id", 0)))
+        return original(payload, canonical, overlap_cache=overlap_cache)
+
+    monkeypatch.setattr(
+        extraction_runtime,
+        "_payload_has_surface_field_overlap",
+        _counting_overlap,
+    )
+
+    assert (
+        extraction_runtime._has_surface_field_overlap(
+            items,
+            surface="ecommerce_listing",
+        )
+        is True
+    )
+    assert calls == [1, 2, 3, 4, 5]
+
+
+def test_best_nested_listing_items_skips_variant_descendants_for_strong_products_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    overlap_calls: list[int] = []
+    original = extraction_runtime._has_surface_field_overlap
+    payload = {
+        "products": [
+            {
+                "title": "Trail Runner",
+                "price": "109.95",
+                "variants": [{"size": "M"}, {"size": "L"}],
+            },
+            {
+                "title": "Commuter Backpack",
+                "price": "89.50",
+                "variants": [{"size": "One Size"}],
+            },
+        ]
+    }
+
+    def _counting_overlap(items, *, surface):
+        overlap_calls.append(len(items))
+        return original(items, surface=surface)
+
+    monkeypatch.setattr(
+        extraction_runtime,
+        "_has_surface_field_overlap",
+        _counting_overlap,
+    )
+
+    result = extraction_runtime._best_nested_listing_items(
+        payload,
+        surface="ecommerce_listing",
+    )
+
+    assert result == payload["products"]
+    assert overlap_calls == [2]
 
 
 def test_extract_records_emits_nested_graphql_listing_items() -> None:

@@ -14,7 +14,7 @@ from app.services.acquisition.acquirer import (
 )
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
-from app.services.pipeline.core import (
+from app.services.pipeline.extraction_loop import (
     _URLProcessingContext,
     _best_adapter_result,
     _empty_extraction_browser_retry_decision,
@@ -28,6 +28,7 @@ from app.services.pipeline.extraction_retry_decision import (
 )
 from app.services.pipeline.persistence import persist_acquisition_artifacts
 from app.services.pipeline.types import URLProcessingConfig
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.robots_policy import RobotsPolicyResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -307,13 +308,13 @@ async def test_process_single_url_skips_low_quality_browser_retry_when_budget_lo
     def _fake_extract_records(*_args, **_kwargs):
         return [{"title": "Widget Prime"}]
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _fake_run_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _fake_run_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", _fake_extract_records
+        "app.services.pipeline.extraction_loop.extract_records", _fake_extract_records
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core._remaining_url_budget_seconds",
+        "app.services.pipeline.extraction_loop._remaining_url_budget_seconds",
         lambda _context: 4.5,
     )
 
@@ -353,8 +354,8 @@ async def test_process_single_url_blocks_before_acquire_when_robots_disallows(
     async def _unexpected_acquire(request):
         raise AssertionError(f"acquire should not run for {request.url}")
 
-    monkeypatch.setattr("app.services.pipeline.core.check_url_crawlability", _disallow)
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _unexpected_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.check_url_crawlability", _disallow)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _unexpected_acquire)
 
     result = await process_single_url(db_session, run, run.url)
     logs = await get_run_logs(db_session, run.id)
@@ -388,7 +389,7 @@ async def test_process_single_url_prefetch_only_returns_metrics_without_persisti
     async def _fake_acquire(request):
         return _fake_acquire_result(request)
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     result = await process_single_url(
         db_session,
@@ -460,19 +461,19 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
     async def _fake_note_host_hard_block(value: str | None, **kwargs):
         hard_blocks.append({"value": value, **kwargs})
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", _fake_extract_records
+        "app.services.pipeline.extraction_loop.extract_records", _fake_extract_records
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.real_chrome_browser_available",
+        "app.services.pipeline.extraction_loop.real_chrome_browser_available",
         lambda: True,
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.note_host_hard_block",
+        "app.services.pipeline.extraction_loop.note_host_hard_block",
         _fake_note_host_hard_block,
     )
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
 
     result = await process_single_url(db_session, run, run.url)
     rows, total = await get_run_records(db_session, run.id, 1, 20)
@@ -485,7 +486,94 @@ async def test_post_extraction_challenge_shell_retries_real_chrome(
 
 
 @pytest.mark.asyncio
-async def test_post_extraction_detail_shell_retries_real_chrome(
+async def test_post_extraction_detail_shell_retries_real_chrome_when_enabled(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://www.wayfair.com/pdp/widget",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    attempted_engines: list[str] = []
+    hard_blocks: list[dict[str, object]] = []
+
+    async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
+        forced_engine = str(
+            request.acquisition_profile.get("forced_browser_engine") or "patchright"
+        )
+        attempted_engines.append(forced_engine)
+        return _fake_acquire_result(
+            request,
+            html=f"<html><body>{forced_engine}</body></html>",
+            method="browser",
+            blocked=False,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_engine": forced_engine,
+                "browser_outcome": "usable_content",
+            },
+        )
+
+    def _fake_extract_records(html: str, *_args, **_kwargs):
+        if "real_chrome" not in html:
+            return []
+        return [
+            {
+                "title": "Wayfair Widget",
+                "url": "https://www.wayfair.com/pdp/widget",
+                "price": "850.00",
+                "image_url": "https://assets.example.com/widget.jpg",
+                "description": "A" * 220,
+            }
+        ]
+
+    async def _fake_note_host_hard_block(value: str | None, **kwargs):
+        hard_blocks.append({"value": value, **kwargs})
+
+    monkeypatch.setattr(
+        crawler_runtime_settings,
+        "post_extraction_detail_shell_real_chrome_retry_enabled",
+        True,
+    )
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.extract_records", _fake_extract_records
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.real_chrome_browser_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.note_host_hard_block",
+        _fake_note_host_hard_block,
+    )
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.infer_detail_failure_reason",
+        lambda html, *_args, **_kwargs: (
+            "detail_shell" if "real_chrome" not in html else None
+        ),
+    )
+
+    result = await process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert attempted_engines == ["patchright", "real_chrome"]
+    assert hard_blocks == []
+    assert result.verdict == "success"
+    assert total == 1
+    assert rows[0].data["title"] == "Wayfair Widget"
+
+
+@pytest.mark.asyncio
+async def test_post_extraction_detail_shell_skips_real_chrome_when_disabled(
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
@@ -519,42 +607,112 @@ async def test_post_extraction_detail_shell_retries_real_chrome(
             },
         )
 
-    def _fake_extract_records(html: str, *_args, **_kwargs):
-        if "real_chrome" not in html:
-            return []
-        return [
-            {
-                "title": "Wayfair Widget",
-                "url": "https://www.wayfair.com/pdp/widget",
-                "price": "850.00",
-                "image_url": "https://assets.example.com/widget.jpg",
-                "description": "A" * 220,
-            }
-        ]
-
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", _fake_extract_records
+        crawler_runtime_settings,
+        "post_extraction_detail_shell_real_chrome_retry_enabled",
+        False,
+    )
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.extract_records",
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.real_chrome_browser_available",
+        "app.services.pipeline.extraction_loop.real_chrome_browser_available",
         lambda: True,
     )
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.infer_detail_failure_reason",
-        lambda html, *_args, **_kwargs: (
-            "detail_shell" if "real_chrome" not in html else None
-        ),
+        "app.services.pipeline.extraction_loop.infer_detail_failure_reason",
+        lambda *_args, **_kwargs: "detail_shell",
     )
 
     result = await process_single_url(db_session, run, run.url)
-    rows, total = await get_run_records(db_session, run.id, 1, 20)
+    logs = await get_run_logs(db_session, run.id)
 
-    assert attempted_engines == ["patchright", "real_chrome"]
-    assert result.verdict == "success"
-    assert total == 1
-    assert rows[0].data["title"] == "Wayfair Widget"
+    assert attempted_engines == ["patchright"]
+    assert result.records == []
+    assert any(
+        "Skipping detail_shell Chrome retry" in log.message
+        and "disabled by runtime setting" in log.message
+        for log in logs
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_extraction_detail_shell_skips_real_chrome_when_budget_below_browser_render_timeout(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://www.wayfair.com/pdp/widget",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    attempted_engines: list[str] = []
+    hard_blocks: list[dict[str, object]] = []
+
+    async def _fake_acquire(request: AcquisitionRequest) -> AcquisitionResult:
+        forced_engine = str(
+            request.acquisition_profile.get("forced_browser_engine") or "patchright"
+        )
+        attempted_engines.append(forced_engine)
+        return _fake_acquire_result(
+            request,
+            html=f"<html><body>{forced_engine}</body></html>",
+            method="browser",
+            blocked=False,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_engine": forced_engine,
+                "browser_outcome": "usable_content",
+            },
+        )
+
+    async def _fake_note_host_hard_block(value: str | None, **kwargs):
+        hard_blocks.append({"value": value, **kwargs})
+
+    monkeypatch.setattr(
+        crawler_runtime_settings,
+        "post_extraction_detail_shell_real_chrome_retry_enabled",
+        True,
+    )
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.extract_records",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.real_chrome_browser_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.note_host_hard_block",
+        _fake_note_host_hard_block,
+    )
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop.infer_detail_failure_reason",
+        lambda *_args, **_kwargs: "detail_shell",
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.extraction_loop._remaining_url_budget_seconds",
+        lambda _context: 25.0,
+    )
+
+    result = await process_single_url(db_session, run, run.url)
+    logs = await get_run_logs(db_session, run.id)
+
+    assert attempted_engines == ["patchright"]
+    assert hard_blocks == []
+    assert result.records == []
+    assert any("Skipping detail_shell Chrome retry" in log.message for log in logs)
 
 
 @pytest.mark.asyncio
@@ -594,9 +752,9 @@ async def test_usable_detail_with_active_provider_evidence_does_not_retry_real_c
             },
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *_args, **_kwargs: [
             {
                 "title": "Nike Widget",
@@ -606,10 +764,10 @@ async def test_usable_detail_with_active_provider_evidence_does_not_retry_real_c
         ],
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.real_chrome_browser_available",
+        "app.services.pipeline.extraction_loop.real_chrome_browser_available",
         lambda: True,
     )
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
 
     result = await process_single_url(db_session, run, run.url)
 
@@ -655,20 +813,20 @@ async def test_patchright_challenge_shell_updates_host_memory(
     async def _fake_note_host_hard_block(value: str | None, **kwargs):
         hard_blocks.append({"value": value, **kwargs})
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.real_chrome_browser_available",
+        "app.services.pipeline.extraction_loop.real_chrome_browser_available",
         lambda: True,
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.note_host_hard_block",
+        "app.services.pipeline.extraction_loop.note_host_hard_block",
         _fake_note_host_hard_block,
     )
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
 
     await process_single_url(db_session, run, run.url)
 
@@ -739,16 +897,16 @@ async def test_process_single_url_runs_adapter_against_browser_artifact_fragment
         del kwargs
         return "artifacts/belk.html"
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _fake_run_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _fake_run_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", _fake_extract_records
+        "app.services.pipeline.extraction_loop.extract_records", _fake_extract_records
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -819,16 +977,16 @@ async def test_process_single_url_prefers_richer_adapter_artifact_rows(
         del kwargs
         return "artifacts/belk.html"
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _fake_run_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _fake_run_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", _fake_extract_records
+        "app.services.pipeline.extraction_loop.extract_records", _fake_extract_records
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -987,15 +1145,15 @@ async def test_process_single_url_marks_empty_listing_as_listing_detection_faile
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
 
     result = await process_single_url(db_session, run, run.url)
@@ -1044,18 +1202,18 @@ async def test_process_single_url_preserves_proxy_list_for_detail_surface(
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [{"title": "Widget Prime"}],
     )
 
@@ -1064,7 +1222,7 @@ async def test_process_single_url_preserves_proxy_list_for_detail_surface(
         return "artifacts/widget-prime.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1110,18 +1268,18 @@ async def test_process_single_url_repairs_missing_proxy_list_from_run_settings_w
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [{"title": "Widget Prime"}],
     )
 
@@ -1130,7 +1288,7 @@ async def test_process_single_url_repairs_missing_proxy_list_from_run_settings_w
         return "artifacts/widget-prime.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1188,13 +1346,13 @@ async def test_process_single_url_does_not_duplicate_block_warning_after_browser
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", lambda *args, **kwargs: []
+        "app.services.pipeline.extraction_loop.extract_records", lambda *args, **kwargs: []
     )
 
     async def _persist_artifacts(**kwargs):
@@ -1202,7 +1360,7 @@ async def test_process_single_url_does_not_duplicate_block_warning_after_browser
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1260,31 +1418,31 @@ async def test_process_single_url_persists_detail_records_after_self_heal_and_ll
         record["price"] = "19.99"
         return [record]
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     async def _no_selector_rules(*args, **kwargs):
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [{"title": "Widget Prime", "_source": "extraction"}],
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.apply_selector_self_heal", _fake_self_heal
+        "app.services.pipeline.extraction_loop.apply_selector_self_heal", _fake_self_heal
     )
-    monkeypatch.setattr("app.services.pipeline.core.apply_llm_fallback", _fake_llm)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.apply_llm_fallback", _fake_llm)
 
     async def _persist_artifacts(**kwargs):
         del kwargs
         return "artifacts/widget-prime.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1358,19 +1516,19 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
             ]
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
-    monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.extract_records", _extract_records)
 
     async def _persist_artifacts(**kwargs):
         del kwargs
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1416,13 +1574,13 @@ async def test_process_single_url_persists_listing_page_source_separately_from_r
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [
             {
                 "title": "Widget Prime",
@@ -1438,7 +1596,7 @@ async def test_process_single_url_persists_listing_page_source_separately_from_r
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1483,13 +1641,13 @@ async def test_process_single_url_log_uses_generic_extraction_label_when_no_adap
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [
             {
                 "title": "Widget Prime",
@@ -1505,7 +1663,7 @@ async def test_process_single_url_log_uses_generic_extraction_label_when_no_adap
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1549,10 +1707,10 @@ async def test_process_single_url_upserts_duplicate_run_identity_records(
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     extracted_prices = iter(["19.99", "24.99"])
 
@@ -1568,14 +1726,14 @@ async def test_process_single_url_upserts_duplicate_run_identity_records(
             }
         ]
 
-    monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.extract_records", _extract_records)
 
     async def _persist_artifacts(**kwargs):
         del kwargs
         return "artifacts/widget-prime.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1626,12 +1784,12 @@ async def test_process_single_url_offloads_extract_records_to_thread(
         to_thread_calls.append(getattr(func, "__name__", type(func).__name__))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
-    monkeypatch.setattr("app.services.pipeline.core.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.asyncio.to_thread", _fake_to_thread)
 
     result = await process_single_url(db_session, run, run.url)
 
@@ -1673,21 +1831,21 @@ async def test_process_single_url_keeps_platform_family_separate_from_adapter_pr
         del kwargs
         return "artifacts/widget-prime.html"
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
     monkeypatch.setattr(
-        "app.services.pipeline.core.detect_platform_family",
+        "app.services.pipeline.extraction_loop.detect_platform_family",
         lambda *args, **kwargs: "shopify",
     )
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [{"title": "Widget Prime", "_source": "extraction"}],
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1838,18 +1996,18 @@ async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
     monkeypatch.setattr(
         "app.services.pipeline.direct_record_fallback.extract_missing_fields",
         _fake_extract_missing_fields,
     )
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules",
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules",
         _no_selector_rules,
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [
             {
                 "title": "Widget Prime",
@@ -1864,7 +2022,7 @@ async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_
         return "artifacts/widget-prime.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1910,14 +2068,14 @@ async def test_process_single_url_strips_schema_type_mismatches_during_normaliza
         del kwargs
         return "artifacts/widget-prime.html"
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules",
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules",
         _no_selector_rules,
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [
             {
                 "title": "Widget Prime",
@@ -1928,7 +2086,7 @@ async def test_process_single_url_strips_schema_type_mismatches_during_normaliza
         ],
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -1989,13 +2147,13 @@ async def test_process_single_url_persists_browser_diagnostics_and_screenshot_ar
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", lambda *args, **kwargs: []
+        "app.services.pipeline.extraction_loop.extract_records", lambda *args, **kwargs: []
     )
 
     await process_single_url(db_session, run, run.url)
@@ -2130,13 +2288,13 @@ async def test_process_single_url_does_not_retry_browser_after_empty_browser_acq
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", lambda *args, **kwargs: []
+        "app.services.pipeline.extraction_loop.extract_records", lambda *args, **kwargs: []
     )
 
     async def _persist_artifacts(**kwargs):
@@ -2144,7 +2302,7 @@ async def test_process_single_url_does_not_retry_browser_after_empty_browser_acq
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2180,7 +2338,6 @@ async def test_process_single_url_skips_llm_on_low_content_browser_listing(
             html="<html><head><title>Belk Spa</title></head><body>Be Right Back!</body></html>",
             method="browser",
             status_code=200,
-            page_markdown="# Belk Spa\n\nBe Right Back!",
             browser_diagnostics={
                 "browser_attempted": True,
                 "browser_reason": "http-escalation",
@@ -2202,20 +2359,20 @@ async def test_process_single_url_skips_llm_on_low_content_browser_listing(
         del kwargs
         return "artifacts/widgets.html"
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", lambda *args, **kwargs: []
+        "app.services.pipeline.extraction_loop.extract_records", lambda *args, **kwargs: []
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.apply_direct_record_llm_fallback_impl",
+        "app.services.pipeline.extraction_loop.apply_direct_record_llm_fallback_impl",
         _unexpected_direct_llm,
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2252,7 +2409,6 @@ async def test_process_single_url_does_not_use_direct_llm_as_primary_listing_ext
             html="<html><body><main>Category shell</main></body></html>",
             method="browser",
             status_code=200,
-            page_markdown="# Widgets\n\nCategory shell",
             browser_diagnostics={
                 "browser_attempted": True,
                 "browser_reason": "http-escalation",
@@ -2272,19 +2428,19 @@ async def test_process_single_url_does_not_use_direct_llm_as_primary_listing_ext
         del kwargs
         return "artifacts/widgets.html"
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", lambda *args, **kwargs: []
+        "app.services.pipeline.extraction_loop.extract_records", lambda *args, **kwargs: []
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.resolve_run_config", _unexpected_resolve_run_config
+        "app.services.pipeline.extraction_loop.resolve_run_config", _unexpected_resolve_run_config
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2332,13 +2488,13 @@ async def test_process_single_url_ignores_extracted_placeholder_records_from_low
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [
             {"title": "JavaScript is disabled", "_source": "extraction"}
         ],
@@ -2349,7 +2505,7 @@ async def test_process_single_url_ignores_extracted_placeholder_records_from_low
         return "artifacts/mixer-truck.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2401,13 +2557,13 @@ async def test_process_single_url_does_not_retry_browser_after_prior_challenge_a
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", lambda *args, **kwargs: []
+        "app.services.pipeline.extraction_loop.extract_records", lambda *args, **kwargs: []
     )
 
     async def _persist_artifacts(**kwargs):
@@ -2415,7 +2571,7 @@ async def test_process_single_url_does_not_retry_browser_after_prior_challenge_a
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2467,13 +2623,13 @@ async def test_process_single_url_marks_low_content_listing_with_challenge_signa
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", lambda *args, **kwargs: []
+        "app.services.pipeline.extraction_loop.extract_records", lambda *args, **kwargs: []
     )
 
     async def _persist_artifacts(**kwargs):
@@ -2481,7 +2637,7 @@ async def test_process_single_url_marks_low_content_listing_with_challenge_signa
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2529,19 +2685,19 @@ async def test_process_single_url_rejects_detail_non_detail_seed_with_failure_re
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [
             {"title": "Search Results", "url": "https://example.com/search?q=widget"}
         ],
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.detail_record_rejection_reason",
+        "app.services.pipeline.extraction_loop.detail_record_rejection_reason",
         lambda *args, **kwargs: "non_detail_seed",
     )
 
@@ -2550,7 +2706,7 @@ async def test_process_single_url_rejects_detail_non_detail_seed_with_failure_re
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2601,13 +2757,13 @@ async def test_process_single_url_rejects_detail_challenge_shell_and_marks_block
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [
             {
                 "title": "Sorry, you have been blocked",
@@ -2621,7 +2777,7 @@ async def test_process_single_url_rejects_detail_challenge_shell_and_marks_block
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2677,13 +2833,13 @@ async def test_process_single_url_raises_when_browser_retry_fails(
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records", lambda *args, **kwargs: []
+        "app.services.pipeline.extraction_loop.extract_records", lambda *args, **kwargs: []
     )
 
     with pytest.raises(TimeoutError, match="browser retry timed out"):
@@ -2737,13 +2893,13 @@ async def test_process_single_url_persists_live_acquisition_events(
         del args, kwargs
         return []
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
     monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
+        "app.services.pipeline.extraction_loop.extract_records",
         lambda *args, **kwargs: [
             {
                 "title": "Widget Prime",
@@ -2757,7 +2913,7 @@ async def test_process_single_url_persists_live_acquisition_events(
         return "artifacts/widgets.html"
 
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 
@@ -2836,14 +2992,14 @@ async def test_extract_records_for_acquisition_recovers_from_zero_record_travers
         del kwargs
         return "artifacts/widgets.html"
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
-    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.run_adapter", _no_adapter)
     monkeypatch.setattr(
-        "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
+        "app.services.pipeline.extraction_loop.load_domain_selector_rules", _no_selector_rules
     )
-    monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.extract_records", _extract_records)
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_acquisition_artifacts",
+        "app.services.pipeline.extraction_loop.persist_acquisition_artifacts",
         _persist_artifacts,
     )
 

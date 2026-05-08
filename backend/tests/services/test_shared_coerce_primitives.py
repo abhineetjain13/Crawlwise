@@ -5,6 +5,7 @@ from app.services.shared.coerce_primitives import (
     object_dict,
     object_list,
     safe_int,
+    string_list,
 )
 
 
@@ -31,3 +32,11 @@ def test_object_container_helpers_only_accept_expected_shapes() -> None:
     assert object_list(("x",)) == []
     assert object_dict({"a": 1}) == {"a": 1}
     assert object_dict([("a", 1)]) == {}
+
+
+def test_string_list_supports_legacy_call_shapes() -> None:
+    assert string_list([" a ", None], strip=True, none_as_empty=True) == ["a", ""]
+    assert string_list(("a", 2), accept_iterable=True) == ["a", "2"]
+    assert string_list(("a", 2)) == []
+    assert string_list("abc", accept_iterable=True) == []
+    assert string_list({"a": 1}, accept_iterable=True) == []

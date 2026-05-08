@@ -29,6 +29,8 @@ class ExtractionContext:
     cleaned_html: str
     dom_parser: LexborHTMLParser
     _soup: BeautifulSoup | None = None
+    _original_soup: BeautifulSoup | None = None
+    _original_dom_parser: LexborHTMLParser | None = None
 
     @property
     def soup(self) -> BeautifulSoup:
@@ -36,6 +38,22 @@ class ExtractionContext:
         if current is None:
             current = BeautifulSoup(self.cleaned_html, "html.parser")
             object.__setattr__(self, "_soup", current)
+        return current
+
+    @property
+    def original_soup(self) -> BeautifulSoup:
+        current = self._original_soup
+        if current is None:
+            current = BeautifulSoup(self.original_html, "html.parser")
+            object.__setattr__(self, "_original_soup", current)
+        return current
+
+    @property
+    def original_dom_parser(self) -> LexborHTMLParser:
+        current = self._original_dom_parser
+        if current is None:
+            current = LexborHTMLParser(self.original_html)
+            object.__setattr__(self, "_original_dom_parser", current)
         return current
 
 

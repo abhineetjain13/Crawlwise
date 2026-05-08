@@ -5,7 +5,6 @@
     "invariant": "Static selector export. Public keys must not start with underscore; selectors.py filters metadata keys."
   },
   "ANCHOR_SELECTOR": "a[href]",
-  "DETAIL_MARKDOWN_HEADING_SELECTOR": "h1, h2, h3, h4, summary, button, [role='tab']",
   "LISTING_CAPTURE_STRUCTURAL_ANCESTOR_SELECTORS": {
     "__type__": "list",
     "items": [

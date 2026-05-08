@@ -337,3 +337,23 @@ def test_classify_blocked_page_blocks_robot_gate_title_without_extractable_conte
     assert classification.outcome == "challenge_page"
     assert "you're not a robot" in classification.strong_hits
     assert bool(classification.title_matches) is True
+
+
+def test_classify_blocked_page_blocks_human_verification_title_without_extractable_content() -> None:
+    html = """
+    <html>
+      <head><title>Human Verification</title></head>
+      <body>
+        <main>
+          <h1>Human Verification</h1>
+        </main>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is True
+    assert classification.outcome == "challenge_page"
+    assert "human verification" in classification.strong_hits
+    assert bool(classification.title_matches) is True

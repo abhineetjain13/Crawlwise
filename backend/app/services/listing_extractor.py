@@ -38,6 +38,9 @@ from app.services.extract.detail_identity import (
 from app.services.extract.listing_card_fragments import (
     listing_node_attr,
     listing_node_css,
+    listing_node_html as _node_html,
+    listing_node_signature as _node_signature,
+    listing_node_tag as _node_tag,
     listing_node_text,
     select_listing_fragment_nodes,
 )
@@ -300,41 +303,6 @@ def _listing_card_html_fragments(
         surface="job_listing" if is_job else "ecommerce_listing",
         limit=max(1, fragment_limit),
     )
-
-
-def _node_html(node) -> str:
-    try:
-        return str(getattr(node, "html", "") or "").strip()
-    except Exception:
-        return ""
-
-
-def _node_signature(node) -> str:
-    return " ".join(
-        [
-            listing_node_attr(node, "class"),
-            listing_node_attr(node, "id"),
-            listing_node_attr(node, "role"),
-            listing_node_attr(node, "aria-label"),
-            listing_node_attr(node, "title"),
-        ]
-    ).lower()
-
-
-def _node_tag(node) -> str:
-    return str(getattr(node, "tag", "") or "").strip().lower()
-
-
-def _meaningful_anchor_texts(card) -> list[str]:
-    texts: list[str] = []
-    seen: set[str] = set()
-    for link in listing_node_css(card, "a[href]"):
-        text = clean_text(listing_node_attr(link, "title") or listing_node_text(link))
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        texts.append(text)
-    return texts
 
 
 def _same_url_anchor_text_candidates(card, url: str) -> list[str]:
@@ -1029,7 +997,7 @@ def extract_listing_records(
         is_job=is_job_surface,
         limit=max_records,
     ):
-        original_parser = LexborHTMLParser(context.original_html)
+        original_parser = context.original_dom_parser
         if _listing_card_html_fragments(
             original_parser,
             is_job=is_job_surface,
@@ -1094,7 +1062,7 @@ def extract_listing_records(
     )
     original_dom_records: list[dict[str, Any]] = []
     if context.original_html and context.original_html != context.cleaned_html:
-        original_parser = LexborHTMLParser(context.original_html)
+        original_parser = context.original_dom_parser
         cleaned_detail_anchor_count = _detail_anchor_count(
             dom_parser,
             page_url=page_url,

@@ -155,12 +155,7 @@ def _set_stop_reason(
 
 def should_run_traversal(surface: str | None, traversal_mode: str | None) -> bool:
     normalized_mode = str(traversal_mode or "").strip().lower()
-    if normalized_mode in {"single", "sitemap", "crawl"} or not normalized_mode:
-        return False
-    if normalized_mode not in {"scroll", "load_more", "paginate"}:
-        return False
-    normalized_surface = str(surface or "").strip().lower()
-    return "listing" in normalized_surface
+    return normalized_mode in {"scroll", "load_more", "paginate"}
 
 
 async def execute_listing_traversal(
@@ -175,11 +170,16 @@ async def execute_listing_traversal(
     on_event=None,
 ) -> TraversalResult:
     normalized_mode = str(traversal_mode or "").strip().lower()
+    normalized_surface = str(surface or "").strip().lower()
     result = TraversalResult(requested_mode=normalized_mode)
-    if normalized_mode not in {"scroll", "load_more", "paginate"}:
+    if not should_run_traversal(surface, normalized_mode):
         _set_stop_reason(
             result,
-            "unsupported_mode",
+            (
+                "unsupported_mode"
+                if "listing" in normalized_surface and normalized_mode
+                else "not_listing_or_disabled"
+            ),
             surface=surface,
             traversal_mode=normalized_mode,
         )
@@ -187,12 +187,9 @@ async def execute_listing_traversal(
             (await get_page_html(page, flatten_shadow=False), True)
         ]
         return result
-    if not should_run_traversal(surface, normalized_mode):
-        _set_stop_reason(result, "not_listing_or_disabled", surface=surface, traversal_mode=normalized_mode)
-        result.html_fragments = [
-            (await get_page_html(page, flatten_shadow=False), True)
-        ]
-        return result
+
+    selected_mode = normalized_mode
+    result.selected_mode = selected_mode
 
     timeout_value: float | None = None
     if timeout_seconds is not None:
@@ -206,8 +203,7 @@ async def execute_listing_traversal(
         else None
     )
     result.activated = True
-    result.selected_mode = normalized_mode
-    if normalized_mode == "scroll":
+    if selected_mode == "scroll":
         await _run_scroll_traversal(
             page,
             surface=surface,
@@ -217,7 +213,7 @@ async def execute_listing_traversal(
             deadline_at=deadline_at,
             on_event=on_event,
         )
-    elif normalized_mode == "load_more":
+    elif selected_mode == "load_more":
         await _run_load_more_traversal(
             page,
             surface=surface,
@@ -227,7 +223,7 @@ async def execute_listing_traversal(
             deadline_at=deadline_at,
             on_event=on_event,
         )
-    elif normalized_mode == "paginate":
+    elif selected_mode == "paginate":
         await _run_paginate_traversal(
             page,
             surface=surface,
@@ -1745,18 +1741,6 @@ def _content_signature(html: str) -> str:
         text.encode("utf-8"),
         usedforsecurity=False,
     ).hexdigest()
-
-
-async def _has_scroll_signals(page, *, surface: str) -> bool:
-    snapshot = await _page_snapshot(page, surface=surface)
-    scroll_height = int(snapshot.get("scroll_height", 0))
-    client_height = max(1, int(snapshot.get("client_height", 0)))
-    overflow_containers = int(snapshot.get("overflow_containers", 0))
-    if overflow_containers >= 1:
-        return True
-    return scroll_height >= (
-        client_height * int(crawler_runtime_settings.infinite_scroll_tall_page_ratio)
-    )
 
 
 async def _settle_after_action(

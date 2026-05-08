@@ -71,7 +71,7 @@ export type PendingDispatch = {
   additionalFields: string[];
   csvFile: File | null;
 };
-export type OutputTabKey = 'table' | 'json' | 'markdown' | 'logs' | 'learning' | 'run_config';
+export type OutputTabKey = 'table' | 'json' | 'logs' | 'learning' | 'run_config';
 type IconElementProps = {
   className?: string;
 };

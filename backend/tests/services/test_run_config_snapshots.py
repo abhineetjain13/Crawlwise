@@ -136,7 +136,7 @@ async def test_process_run_uses_stamped_selector_self_heal_snapshot(
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
     rows, total = await get_run_records(db_session, run.id, 1, 20)

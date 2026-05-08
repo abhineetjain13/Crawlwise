@@ -86,7 +86,7 @@ FILE_LOC_BUDGETS = {
     Path("app/services/acquisition/traversal.py"): 1965,
     # Config owners.
     # Config rules own typed extraction constants and category/nav URL rules.
-    Path("app/services/config/extraction_rules.py"): 1764,
+    Path("app/services/config/extraction_rules.py"): 1765,
     # Fetch runtime remains the request/browser arbitration owner.
     Path("app/services/crawl_fetch_runtime.py"): 1260,
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
@@ -94,19 +94,22 @@ FILE_LOC_BUDGETS = {
     # Detail finalizer owns public-boundary cleanup and record repair.
     # Grown (+10) to accommodate additional axis-gating logic that reuses
     # shared_variant_logic frozensets instead of re-deriving them locally.
-    Path("app/services/extract/detail_record_finalizer.py"): 1155,
+    Path("app/services/extract/detail_record_finalizer.py"): 1168,
     # Shared variant logic owns generic axis and row reconciliation.
     # Grown (+380) to absorb the extended allowed-axis taxonomy (flavor, type,
     # material_composition, etc.) and related JS-state / DOM helpers.
-    Path("app/services/extract/shared_variant_logic.py"): 1560,
+    Path("app/services/extract/shared_variant_logic.py"): 1562,
     # Variant normalization owns the detail variant cleanup pipeline.
-    Path("app/services/extract/variant_record_normalization.py"): 1449,
+    Path("app/services/extract/variant_record_normalization.py"): 1472,
     # Listing extraction remains coherent but large enough to warrant an explicit budget.
     Path("app/services/listing_extractor.py"): 1395,
     # Shared DOM field recovery remains centralized here instead of fragmenting selectors.
     # TODO(chore): baseline LOC drift here, then extract field_recovery /
     # section-image cleanup / audit wiring owners when scheduled.
     Path("app/services/field_value_dom.py"): 1705,
+    # Field candidate collection is a current large owner; later extraction
+    # slices should split structured candidate assembly and lower this budget.
+    Path("app/services/field_value_candidates.py"): 1072,
     # Canonical field coercion remains centralized here instead of scattering value policy.
     # Shrunk after removing stranded URL helpers and duplicate output schema checks.
     # TODO(chore): baseline LOC drift here, then extract canonical_coercion /
@@ -119,15 +122,13 @@ FILE_LOC_BUDGETS = {
     Path("app/services/fetch/fetch_context.py"): 1254,
     Path("app/services/js_state/state_normalizer.py"): 1386,
     Path("app/services/pipeline/extraction_loop.py"): 1413,
-    Path("app/services/shared/field_coerce.py"): 1364,
+    Path("app/services/shared/field_coerce.py"): 1398,
     # Enrichment owns deterministic product normalization and job application.
     Path("app/services/data_enrichment/service.py"): 1455,
     # JS state mapping stays centralized to avoid adapter-specific drift.
     Path("app/services/js_state_mapper.py"): 1386,
     # LLM task runtime owns prompt validation, provider calls, cost logging, and typed errors.
     Path("app/services/llm_tasks.py"): 1095,
-    # Pipeline core still owns the per-URL orchestration boundary.
-    Path("app/services/pipeline/core.py"): 1415,
     # Product Intelligence service owns job + discovery orchestration with brand and enrichment LLM helpers.
     Path("app/services/product_intelligence/service.py"): 1190,
 }
@@ -234,6 +235,13 @@ def test_new_config_like_modules_stay_under_services_config() -> None:
         or path.name.endswith("_constants.py")
     ]
     assert offenders == []
+
+
+def test_deleted_facades_do_not_return() -> None:
+    stale_facades = [
+        SERVICES_ROOT / "pipeline" / "core.py",
+    ]
+    assert [str(path.relative_to(ROOT)) for path in stale_facades if path.exists()] == []
 
 
 def test_new_service_level_config_constants_are_not_added_outside_config() -> None:

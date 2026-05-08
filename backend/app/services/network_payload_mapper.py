@@ -49,6 +49,8 @@ def map_network_payloads_to_fields(
 ) -> list[dict[str, Any]]:
     normalized_surface = str(surface or "").strip().lower()
     surface_specs = NETWORK_PAYLOAD_SPECS.get(normalized_surface, ())
+    # Cache identity codes once for all payloads instead of per-payload.
+    cached_identity_codes = _page_identity_codes(page_url) if normalized_surface == SURFACE_ECOMMERCE_DETAIL else set()
     rows: list[dict[str, Any]] = []
     for payload in _ordered_payloads(payloads, surface=normalized_surface):
         if not isinstance(payload, dict):
@@ -70,6 +72,7 @@ def map_network_payloads_to_fields(
             body,
             surface=normalized_surface,
             page_url=page_url,
+            identity_codes=cached_identity_codes,
         )
         if availability_mapped and _mapped_detail_result_matches_page(
             availability_mapped,
@@ -100,6 +103,7 @@ def _availability_payload_detail_result(
     *,
     surface: str,
     page_url: str,
+    identity_codes: set[str] | None = None,
 ) -> dict[str, Any] | None:
     if str(surface or "").strip().lower() != SURFACE_ECOMMERCE_DETAIL:
         return None
@@ -108,14 +112,14 @@ def _availability_payload_detail_result(
     product_id = text_or_none(_first_present(body, PRODUCT_ID_KEYS))
     if not product_id:
         return None
-    requested_codes = _page_identity_codes(page_url)
+    variation_list = _first_present(body, VARIATION_KEYS)
+    if not isinstance(variation_list, list) or not variation_list:
+        return None
+    requested_codes = identity_codes if identity_codes is not None else _page_identity_codes(page_url)
     normalized_product_id = _normalized_identity_code(product_id)
     if requested_codes and (
         normalized_product_id is None or normalized_product_id not in requested_codes
     ):
-        return None
-    variation_list = _first_present(body, VARIATION_KEYS)
-    if not isinstance(variation_list, list) or not variation_list:
         return None
     variants: list[dict[str, Any]] = []
     for item in variation_list:

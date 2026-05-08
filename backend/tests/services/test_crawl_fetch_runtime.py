@@ -525,7 +525,7 @@ def test_browser_engine_attempts_keeps_forced_patchright_explicit_when_unavailab
     assert attempts == ["patchright"]
 
 
-def test_browser_engine_attempts_escalates_from_patchright_to_real_chrome(
+def test_browser_engine_attempts_does_not_escalate_from_patchright_block_memory_alone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -545,11 +545,11 @@ def test_browser_engine_attempts_escalates_from_patchright_to_real_chrome(
         host_policy=HostProtectionPolicy(
             host="example.com",
             patchright_blocked=True,
-            prefer_browser=True,
+            prefer_browser=False,
         ),
     )
 
-    assert attempts == ["real_chrome", "patchright"]
+    assert attempts == ["patchright"]
 
 
 def test_saved_real_chrome_contract_skips_patchright(

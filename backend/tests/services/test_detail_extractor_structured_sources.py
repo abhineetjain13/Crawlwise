@@ -21,6 +21,7 @@ from app.services.extract.detail_record_finalizer import (
 )
 from app.services.extract import detail_raw_signals
 from app.services.extract import detail_dom_extractor
+from app.services.extract import detail_materializer
 from app.services.extract.variant_record_normalization import normalize_variant_record
 from app.services.extraction_runtime import extract_records
 from tests.fixtures.loader import read_optional_artifact_text
@@ -1994,6 +1995,469 @@ def test_extract_ecommerce_detail_keeps_supported_dom_variant_axes_and_drops_unk
     }
     assert all("color" not in variant for variant in record["variants"])
     assert all("shipping" not in variant for variant in record["variants"])
+
+
+def test_extract_ecommerce_detail_keeps_fit_dom_variants() -> None:
+    html = """
+    <html>
+      <body>
+        <main class="product-detail">
+          <h1>Nordstrom Rack Solid Notch Lapel Linen Sport Coat</h1>
+          <fieldset>
+            <legend>Fit</legend>
+            <label><input checked type="radio" name="fit" value="Short" />Short</label>
+            <label><input type="radio" name="fit" value="Regular" />Regular</label>
+            <label><input type="radio" name="fit" value="Long" />Long</label>
+          </fieldset>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.nordstromrack.com/s/example/8050407",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["variants"],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_count"] == 3
+    assert [row["fit"] for row in record["variants"]] == ["Short", "Regular", "Long"]
+
+
+def test_extract_ecommerce_detail_drops_addon_variant_noise_and_keeps_real_axes() -> None:
+    html = """
+    <html>
+      <body>
+        <main class="product-detail">
+          <h1>Keychron V1 Max QMK/VIA Wireless Custom Mechanical Keyboard</h1>
+          <form class="product-form">
+            <fieldset>
+              <legend>Type</legend>
+              <label><input checked type="radio" name="type" value="Fully Assembled Knob" />Fully Assembled Knob</label>
+              <label><input type="radio" name="type" value="Barebone Knob" />Barebone Knob</label>
+            </fieldset>
+            <fieldset>
+              <legend>Color</legend>
+              <label><input checked type="radio" name="color" value="Carbon Black" />Carbon Black</label>
+            </fieldset>
+            <fieldset>
+              <legend>Switches</legend>
+              <label><input checked type="radio" name="switches" value="Gateron Jupiter Red" />Gateron Jupiter Red</label>
+              <label><input type="radio" name="switches" value="Gateron Jupiter Brown" />Gateron Jupiter Brown</label>
+              <label><input type="radio" name="switches" value="Gateron Jupiter Banana" />Gateron Jupiter Banana</label>
+            </fieldset>
+          </form>
+          <div class="convx__addons-panel" data-addon-title="Palm Rest">
+            <label class="addons-option">
+              <input type="checkbox" value="1" />
+              <span class="addons-title">Keychron Resin Palm Rest</span>
+              <span class="addons-variant">Resin / Q1 / V1 Max / Black Myth Wukong</span>
+            </label>
+            <label class="addons-option">
+              <input type="checkbox" value="2" />
+              <span class="addons-title">Keychron Silicone Palm Rest</span>
+              <span class="addons-variant">Black / 75%/65% / 317mm</span>
+            </label>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.keychron.com/products/keychron-v1-max-qmk-via-wireless-custom-mechanical-keyboard",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_count"] == 6
+    assert {row["type"] for row in record["variants"]} == {
+        "Fully Assembled Knob",
+        "Barebone Knob",
+    }
+    assert {row["switches"] for row in record["variants"]} == {
+        "Gateron Jupiter Red",
+        "Gateron Jupiter Brown",
+        "Gateron Jupiter Banana",
+    }
+    assert all("Palm Rest" not in str(row) for row in record["variants"])
+
+
+def test_extract_ecommerce_detail_prefers_priced_adapter_variants_over_dom_cartesian_guess() -> None:
+    html = """
+    <html>
+      <body>
+        <main class="product-detail">
+          <h1>Keychron V1 Max QMK/VIA Wireless Custom Mechanical Keyboard</h1>
+          <form class="product-form">
+            <fieldset>
+              <legend>Type</legend>
+              <label><input checked type="radio" name="type" value="Fully Assembled Knob" />Fully Assembled Knob</label>
+              <label><input type="radio" name="type" value="Barebone Knob" />Barebone Knob</label>
+            </fieldset>
+            <fieldset>
+              <legend>Color</legend>
+              <label><input checked type="radio" name="color" value="Carbon Black" />Carbon Black</label>
+            </fieldset>
+            <fieldset>
+              <legend>Switches</legend>
+              <label><input checked type="radio" name="switches" value="Gateron Jupiter Red" />Gateron Jupiter Red</label>
+              <label><input type="radio" name="switches" value="Gateron Jupiter Brown" />Gateron Jupiter Brown</label>
+              <label><input type="radio" name="switches" value="Gateron Jupiter Banana" />Gateron Jupiter Banana</label>
+            </fieldset>
+          </form>
+        </main>
+      </body>
+    </html>
+    """
+
+    adapter_records = [
+        {
+            "title": "Keychron V1 Max QMK/VIA Wireless Custom Mechanical Keyboard",
+            "price": "104.99",
+            "currency": "USD",
+            "color": "Carbon Black",
+            "variants": [
+                {
+                    "type": "Fully Assembled Knob",
+                    "color": "Carbon Black",
+                    "switches": "Gateron Jupiter Red",
+                    "sku": "V1M-D1",
+                    "price": "104.99",
+                    "currency": "USD",
+                },
+                {
+                    "type": "Fully Assembled Knob",
+                    "color": "Carbon Black",
+                    "switches": "Gateron Jupiter Brown",
+                    "sku": "V1M-D2",
+                    "price": "104.99",
+                    "currency": "USD",
+                },
+                {
+                    "type": "Fully Assembled Knob",
+                    "color": "Carbon Black",
+                    "switches": "Gateron Jupiter Banana",
+                    "sku": "V1M-D3",
+                    "price": "104.99",
+                    "currency": "USD",
+                },
+                {
+                    "type": "Barebone Knob",
+                    "color": "Carbon Black",
+                    "switches": "Barebone",
+                    "sku": "V1M-B1",
+                    "price": "94.99",
+                    "currency": "USD",
+                },
+            ],
+            "variant_count": 4,
+        }
+    ]
+
+    rows = extract_records(
+        html,
+        "https://www.keychron.com/products/keychron-v1-max-qmk-via-wireless-custom-mechanical-keyboard",
+        "ecommerce_detail",
+        max_records=1,
+        adapter_records=adapter_records,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_count"] == 4
+    assert record["color"] == "Carbon Black"
+    assert {
+        (row["type"], row["switches"], row["price"])
+        for row in record["variants"]
+    } == {
+        ("Fully Assembled Knob", "Gateron Jupiter Red", "104.99"),
+        ("Fully Assembled Knob", "Gateron Jupiter Brown", "104.99"),
+        ("Fully Assembled Knob", "Gateron Jupiter Banana", "104.99"),
+        ("Barebone Knob", "Barebone", "94.99"),
+    }
+
+
+def test_extract_ecommerce_detail_prefers_structured_shopify_variants_over_dom_guess() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Keychron V1 Max QMK/VIA Wireless Custom Mechanical Keyboard",
+          "offers": {"priceCurrency": "USD"},
+          "options": [
+            {"name": "Type"},
+            {"name": "Color"},
+            {"name": "Switches"}
+          ],
+          "variants": [
+            {
+              "id": "40637899669593",
+              "sku": "V1M-D1",
+              "price": "10499",
+              "option1": "Fully Assembled Knob",
+              "option2": "Carbon Black",
+              "option3": "Gateron Jupiter Red",
+              "url": "https://www.keychron.com/products/keychron-v1-max-qmk-via-wireless-custom-mechanical-keyboard?variant=40637899669593"
+            },
+            {
+              "id": "40637899735129",
+              "sku": "V1M-D3",
+              "price": "10499",
+              "option1": "Fully Assembled Knob",
+              "option2": "Carbon Black",
+              "option3": "Gateron Jupiter Brown",
+              "url": "https://www.keychron.com/products/keychron-v1-max-qmk-via-wireless-custom-mechanical-keyboard?variant=40637899735129"
+            },
+            {
+              "id": "40637899800665",
+              "sku": "V1M-D4",
+              "price": "10499",
+              "option1": "Fully Assembled Knob",
+              "option2": "Carbon Black",
+              "option3": "Gateron Jupiter Banana",
+              "url": "https://www.keychron.com/products/keychron-v1-max-qmk-via-wireless-custom-mechanical-keyboard?variant=40637899800665"
+            },
+            {
+              "id": "40637966221401",
+              "sku": "V1M-Z4",
+              "price": "9499",
+              "option1": "Barebone Knob",
+              "option2": "Carbon Black",
+              "option3": "Barebone",
+              "url": "https://www.keychron.com/products/keychron-v1-max-qmk-via-wireless-custom-mechanical-keyboard?variant=40637966221401"
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body>
+        <main class="product-detail">
+          <h1>Keychron V1 Max QMK/VIA Wireless Custom Mechanical Keyboard</h1>
+          <form class="product-form">
+            <fieldset>
+              <legend>Type</legend>
+              <label><input checked type="radio" name="type" value="Fully Assembled Knob" />Fully Assembled Knob</label>
+              <label><input type="radio" name="type" value="Barebone Knob" />Barebone Knob</label>
+            </fieldset>
+            <fieldset>
+              <legend>Color</legend>
+              <label><input checked type="radio" name="color" value="Carbon Black" />Carbon Black</label>
+            </fieldset>
+            <fieldset>
+              <legend>Switches</legend>
+              <label><input checked type="radio" name="switches" value="Gateron Jupiter Red" />Gateron Jupiter Red</label>
+              <label><input type="radio" name="switches" value="Gateron Jupiter Brown" />Gateron Jupiter Brown</label>
+              <label><input type="radio" name="switches" value="Gateron Jupiter Banana" />Gateron Jupiter Banana</label>
+              <label><input type="radio" name="switches" value="Barebone" />Barebone</label>
+            </fieldset>
+          </form>
+          <div class="convx__addons-panel">
+            <label class="addons-option">
+              <input type="checkbox" value="1" />
+              <span class="addons-title">Keychron Resin Palm Rest</span>
+              <span class="addons-variant">Resin / Q1 / V1 Max / Black Myth Wukong</span>
+            </label>
+            <label class="addons-option">
+              <input type="checkbox" value="2" />
+              <span class="addons-title">Keychron Silicone Palm Rest</span>
+              <span class="addons-variant">Black / 75%/65% / 317mm</span>
+            </label>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.keychron.com/products/keychron-v1-max-qmk-via-wireless-custom-mechanical-keyboard",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_count"] == 4
+    assert record["color"] == "Carbon Black"
+    assert {
+        (row["type"], row["switches"], row["price"])
+        for row in record["variants"]
+    } == {
+        ("Fully Assembled Knob", "Gateron Jupiter Red", "104.99"),
+        ("Fully Assembled Knob", "Gateron Jupiter Brown", "104.99"),
+        ("Fully Assembled Knob", "Gateron Jupiter Banana", "104.99"),
+        ("Barebone Knob", "Barebone", "94.99"),
+    }
+
+
+def test_should_collect_dom_variants_keeps_priced_shopify_rows_over_unpriced_dom_guess() -> None:
+    candidates = {
+        "variants": [
+            [
+                {
+                    "sku": "V1M-D1",
+                    "price": "10499",
+                    "option1": "Fully Assembled Knob",
+                    "option2": "Carbon Black",
+                    "option3": "Gateron Jupiter Red",
+                    "url": "https://example.com/products/keychron?variant=1",
+                },
+                {
+                    "sku": "V1M-D2",
+                    "price": "10499",
+                    "option1": "Fully Assembled Knob",
+                    "option2": "Carbon Black",
+                    "option3": "Gateron Jupiter Brown",
+                    "url": "https://example.com/products/keychron?variant=2",
+                },
+                {
+                    "sku": "V1M-D3",
+                    "price": "10499",
+                    "option1": "Fully Assembled Knob",
+                    "option2": "Carbon Black",
+                    "option3": "Gateron Jupiter Banana",
+                    "url": "https://example.com/products/keychron?variant=3",
+                },
+                {
+                    "sku": "V1M-B1",
+                    "price": "9499",
+                    "option1": "Barebone Knob",
+                    "option2": "Carbon Black",
+                    "option3": "Barebone",
+                    "url": "https://example.com/products/keychron?variant=4",
+                },
+            ]
+        ]
+    }
+    dom_variants = {
+        "variants": [
+            {"type": "Fully Assembled Knob", "switches": "Gateron Jupiter Red"},
+            {"type": "Fully Assembled Knob", "switches": "Gateron Jupiter Brown"},
+            {"type": "Fully Assembled Knob", "switches": "Gateron Jupiter Banana"},
+            {"type": "Fully Assembled Knob", "switches": "Barebone"},
+            {"type": "Barebone Knob", "switches": "Gateron Jupiter Red"},
+            {"type": "Barebone Knob", "switches": "Gateron Jupiter Brown"},
+            {"type": "Barebone Knob", "switches": "Gateron Jupiter Banana"},
+            {"type": "Barebone Knob", "switches": "Barebone"},
+        ]
+    }
+
+    assert (
+        detail_materializer._should_collect_dom_variants(candidates, dom_variants)
+        is False
+    )
+
+
+def test_build_detail_record_keeps_raw_priced_variant_rows_over_dom_backfill_guess() -> None:
+    html = """
+    <html>
+      <body>
+        <main class="product-detail">
+          <h1>Keychron V1 Max QMK/VIA Wireless Custom Mechanical Keyboard</h1>
+          <form class="product-form">
+            <fieldset>
+              <legend>Type</legend>
+              <label><input checked type="radio" name="type" value="Fully Assembled Knob" />Fully Assembled Knob</label>
+              <label><input type="radio" name="type" value="Barebone Knob" />Barebone Knob</label>
+            </fieldset>
+            <fieldset>
+              <legend>Color</legend>
+              <label><input checked type="radio" name="color" value="Carbon Black" />Carbon Black</label>
+            </fieldset>
+            <fieldset>
+              <legend>Switches</legend>
+              <label><input checked type="radio" name="switches" value="Gateron Jupiter Red" />Gateron Jupiter Red</label>
+              <label><input type="radio" name="switches" value="Gateron Jupiter Brown" />Gateron Jupiter Brown</label>
+              <label><input type="radio" name="switches" value="Gateron Jupiter Banana" />Gateron Jupiter Banana</label>
+              <label><input type="radio" name="switches" value="Barebone" />Barebone</label>
+            </fieldset>
+          </form>
+          <div class="convx__addons-panel">
+            <label class="addons-option">
+              <input type="checkbox" value="1" />
+              <span class="addons-title">Keychron Resin Palm Rest</span>
+              <span class="addons-variant">Resin / Q1 / V1 Max / Black Myth Wukong</span>
+            </label>
+            <label class="addons-option">
+              <input type="checkbox" value="2" />
+              <span class="addons-title">Keychron Silicone Palm Rest</span>
+              <span class="addons-variant">Black / 75%/65% / 317mm</span>
+            </label>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://www.keychron.com/products/keychron-v1-max-qmk-via-wireless-custom-mechanical-keyboard",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Keychron V1 Max QMK/VIA Wireless Custom Mechanical Keyboard",
+                "variants": [
+                    {
+                        "sku": "V1M-D1",
+                        "price": "10499",
+                        "option1": "Fully Assembled Knob",
+                        "option2": "Carbon Black",
+                        "option3": "Gateron Jupiter Red",
+                        "url": "https://example.com/products/keychron?variant=1",
+                    },
+                    {
+                        "sku": "V1M-D2",
+                        "price": "10499",
+                        "option1": "Fully Assembled Knob",
+                        "option2": "Carbon Black",
+                        "option3": "Gateron Jupiter Brown",
+                        "url": "https://example.com/products/keychron?variant=2",
+                    },
+                    {
+                        "sku": "V1M-D3",
+                        "price": "10499",
+                        "option1": "Fully Assembled Knob",
+                        "option2": "Carbon Black",
+                        "option3": "Gateron Jupiter Banana",
+                        "url": "https://example.com/products/keychron?variant=3",
+                    },
+                    {
+                        "sku": "V1M-B1",
+                        "price": "9499",
+                        "option1": "Barebone Knob",
+                        "option2": "Carbon Black",
+                        "option3": "Barebone",
+                        "url": "https://example.com/products/keychron?variant=4",
+                    },
+                ],
+                "variant_count": 4,
+            }
+        ],
+    )
+
+    assert record["variant_count"] == 4
+    assert record["color"] == "Carbon Black"
+    assert {
+        (row["type"], row["switches"], row["price"])
+        for row in record["variants"]
+    } == {
+        ("Fully Assembled Knob", "Gateron Jupiter Red", "104.99"),
+        ("Fully Assembled Knob", "Gateron Jupiter Brown", "104.99"),
+        ("Fully Assembled Knob", "Gateron Jupiter Banana", "104.99"),
+        ("Barebone Knob", "Barebone", "94.99"),
+    }
 
 
 def test_extract_ecommerce_detail_keeps_ifixit_variant_group_local_and_drops_pdp_chrome() -> None:

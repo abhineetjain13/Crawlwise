@@ -1,6 +1,5 @@
 from __future__ import annotations
 import asyncio
-from copy import deepcopy
 from dataclasses import dataclass, replace
 import inspect
 import logging
@@ -26,20 +25,18 @@ from app.services.acquisition.runtime import (
     copy_headers,
 )
 from app.services.config.extraction_rules import (
-    DETAIL_MARKDOWN_LINE_NOISE,
-    DETAIL_MARKDOWN_SECTION_NOISE_TOKENS,
     ECOMMERCE_DETAIL_SURFACE,
     HTML_PARSER,
     LISTING_VISUAL_PRICE_REGEX_PATTERN,
     LISTING_BRAND_SELECTORS,
     LISTING_UTILITY_URL_TOKENS,
-    MARKDOWN_NOISE_SELECTORS,
-    MARKDOWN_NOISE_TOKENS,
-    MARKDOWN_ROOT_SELECTORS,
+)
+from app.services.config.field_mappings import (
+    DOM_HIGH_VALUE_FIELDS,
+    DOM_OPTIONAL_CUE_FIELDS,
 )
 from app.services.config.selectors import (
     ANCHOR_SELECTOR,
-    DETAIL_MARKDOWN_HEADING_SELECTOR,
     LOCATION_INTERSTITIAL_CONTAINER_SELECTORS,
     LOCATION_INTERSTITIAL_DISMISS_SELECTORS,
     LOCATION_INTERSTITIAL_DISMISS_TEXT_TOKENS,
@@ -57,20 +54,6 @@ from app.services.platform_policy import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _accessibility_snapshot_timeout_seconds() -> float:
-    try:
-        timeout = float(
-            crawler_runtime_settings.browser_accessibility_snapshot_timeout_seconds
-        )
-    except (TypeError, ValueError):
-        timeout = float(
-            crawler_runtime_settings.__class__.model_fields[
-                "browser_accessibility_snapshot_timeout_seconds"
-            ].default
-        )
-    return max(0.0, timeout)
 
 
 @dataclass(slots=True)
@@ -93,7 +76,6 @@ class BrowserFinalizeInput:
     html: str
     traversal_result: Any
     rendered_html: str
-    page_markdown: str
     phase_timings_ms: dict[str, int]
     started_at: float
     interstitial_diagnostics: dict[str, object] | None = None
@@ -286,7 +268,6 @@ class BrowserAcquisitionResultBuilder:
                 if payload.response is not None
                 else "text/html"
             ),
-            "page_markdown": payload.page_markdown,
             "platform_family": resolve_platform_runtime_policy(
                 payload.page.url,
                 payload.html,
@@ -363,19 +344,27 @@ class BrowserAcquisitionResultBuilder:
         dict[str, object],
     ]:
         payload = self.payload
-        (
-            rendered_listing_fragments,
-            rendered_listing_fragment_capture,
-        ) = await self._capture_timed_listing_artifact(
-            capture_rendered_listing_fragments(
-                payload.page,
-                surface=payload.surface,
-                limit=int(crawler_runtime_settings.rendered_listing_card_capture_limit),
-            ),
-            stage="rendered_listing_fragment_capture",
-            item_kind="text",
-        )
-        if "listing" in str(payload.surface or "").lower():
+        is_listing = "listing" in str(payload.surface or "").lower()
+        if is_listing:
+            (
+                rendered_listing_fragments,
+                rendered_listing_fragment_capture,
+            ) = await self._capture_timed_listing_artifact(
+                capture_rendered_listing_fragments(
+                    payload.page,
+                    surface=payload.surface,
+                    limit=int(crawler_runtime_settings.rendered_listing_card_capture_limit),
+                ),
+                stage="rendered_listing_fragment_capture",
+                item_kind="text",
+            )
+        else:
+            payload.phase_timings_ms["rendered_listing_fragment_capture"] = 0
+            rendered_listing_fragments, rendered_listing_fragment_capture = [], {
+                "status": "skipped",
+                "reason": "non_listing_surface",
+            }
+        if is_listing:
             (
                 listing_visual_elements,
                 listing_visual_capture,
@@ -576,6 +565,7 @@ async def navigate_browser_page_impl(
     page: Any,
     *,
     url: str,
+    browser_engine: str | None = None,
     timeout_seconds: float,
     phase_timings_ms: dict[str, int],
     readiness_policy: dict[str, object] | None,
@@ -676,6 +666,7 @@ async def navigate_browser_page_impl(
         page,
         url=url,
         response=response,
+        browser_engine=browser_engine,
         timeout_seconds=timeout_seconds,
         phase_timings_ms=phase_timings_ms,
         challenge_wait_max_seconds=float(
@@ -768,9 +759,11 @@ async def settle_browser_page_impl(
     networkidle_skip_reason = None
     explicit_require_networkidle = bool(readiness_policy.get("require_networkidle"))
     is_listing_surface = "listing" in str(surface or "").lower()
+    is_detail_surface = "detail" in str(surface or "").lower()
     implicit_networkidle_attempt = bool(
         not current_probe["is_ready"]
         and not explicit_require_networkidle
+        and not is_detail_surface
         and (is_listing_surface or not current_probe.get("structured_data_present"))
     )
     if not current_probe["is_ready"] and (
@@ -830,7 +823,7 @@ async def settle_browser_page_impl(
                 else "no_platform_override"
             ),
         }
-    if "detail" not in str(surface or "").lower():
+    if not is_detail_surface:
         expansion_diagnostics = {
             "status": "skipped",
             "reason": "non_detail_surface",
@@ -913,7 +906,6 @@ async def serialize_browser_page_content_impl(
     max_records: int | None = None,
     prefetched_html: str | None = None,
     prefetched_analysis: HtmlAnalysis | None = None,
-    capture_page_markdown: bool,
     phase_timings_ms: dict[str, int],
     execute_listing_traversal,
     recover_listing_page_content,
@@ -988,29 +980,11 @@ async def serialize_browser_page_content_impl(
             )
         rendered_html = html
     phase_timings_ms["content_serialization"] = elapsed_ms(serialization_started_at)
-    if capture_page_markdown:
-        markdown_started_at = time.perf_counter()
-        markdown_analysis = (
-            prefetched_analysis
-            if traversal_result is None and rendered_html == str(prefetched_html or "")
-            else None
-        )
-        page_markdown = await _generate_page_markdown(
-            page,
-            html=rendered_html or html,
-            surface=surface,
-            analysis=markdown_analysis or analyze_html(rendered_html or html),
-        )
-        phase_timings_ms["page_markdown"] = elapsed_ms(markdown_started_at)
-    else:
-        page_markdown = ""
-        phase_timings_ms["page_markdown"] = 0
     return (
         html,
         traversal_result,
         rendered_html,
         listing_recovery_diagnostics,
-        page_markdown,
     )
 
 
@@ -1442,235 +1416,6 @@ def _select_primary_browser_html(
     return traversal_html
 
 
-async def _generate_page_markdown(
-    page: Any,
-    *,
-    html: str,
-    surface: str | None = None,
-    analysis: HtmlAnalysis | None = None,
-) -> str:
-    detail_surface = "detail" in str(surface or "").strip().lower()
-    soup = _prepare_markdown_soup(
-        html,
-        detail_surface=detail_surface,
-        soup=deepcopy(analysis.soup) if analysis is not None else None,
-    )
-    markdown, _link_lines = _choose_markdown_payload(
-        soup,
-        detail_surface=detail_surface,
-    )
-    markdown = await _append_accessibility_markdown(page, markdown)
-    return markdown.strip()
-
-
-def _prepare_markdown_soup(
-    html: str,
-    *,
-    detail_surface: bool,
-    soup: BeautifulSoup | None = None,
-) -> BeautifulSoup:
-    soup = soup if soup is not None else BeautifulSoup(str(html or ""), HTML_PARSER)
-    for node in list(soup.find_all(True)):
-        if not isinstance(getattr(node, "attrs", None), dict):
-            node.attrs = {}
-    for selector in MARKDOWN_NOISE_SELECTORS:
-        for node in soup.select(selector):
-            node.decompose()
-    for node in list(soup.find_all(True)):
-        attrs = getattr(node, "attrs", None)
-        if not isinstance(attrs, dict):
-            continue
-        attr_text = " ".join(
-            [
-                " ".join(str(item) for item in attrs.get("class", []) if item),
-                str(attrs.get("id") or ""),
-                str(attrs.get("data-testid") or ""),
-                str(attrs.get("data-qa-id") or ""),
-                str(attrs.get("data-qa-action") or ""),
-            ]
-        ).lower()
-        if any(token in attr_text for token in MARKDOWN_NOISE_TOKENS):
-            node.decompose()
-    if detail_surface:
-        _prune_detail_markdown_noise(soup)
-    return soup
-
-
-def _choose_markdown_payload(
-    soup: BeautifulSoup,
-    *,
-    detail_surface: bool,
-) -> tuple[str, list[str]]:
-    content_root = _select_markdown_root(soup)
-    body_or_soup = soup.body if soup.body is not None else soup
-    markdown, link_lines = _serialize_markdown_root(content_root)
-    if content_root is not body_or_soup:
-        full_markdown, full_link_lines = _serialize_markdown_root(body_or_soup)
-        if len(full_markdown) >= len(markdown) + 120 or len(full_link_lines) > len(
-            link_lines
-        ):
-            markdown, link_lines = full_markdown, full_link_lines
-    if detail_surface:
-        markdown, link_lines = _filter_detail_markdown_payload(markdown, link_lines)
-        if not markdown:
-            link_lines = []
-    if link_lines and not detail_surface:
-        markdown = (
-            f"{markdown}\n\nVisible links:\n" + "\n".join(link_lines[:120])
-            if markdown
-            else "Visible links:\n" + "\n".join(link_lines[:120])
-        )
-    return markdown, link_lines
-
-
-async def _append_accessibility_markdown(page: Any, markdown: str) -> str:
-    accessibility = getattr(page, "accessibility", None)
-    snapshot_fn = getattr(accessibility, "snapshot", None)
-    if snapshot_fn is None:
-        return markdown
-    try:
-        async with asyncio.timeout(_accessibility_snapshot_timeout_seconds()):
-            snapshot = await snapshot_fn()
-    except asyncio.CancelledError:
-        raise
-    except (asyncio.TimeoutError, PlaywrightTimeoutError):
-        return markdown
-    except PlaywrightError as exc:
-        if is_response_closed_error(exc):
-            return markdown
-        raise
-    aria_text = _serialize_accessibility_snapshot(snapshot)
-    if not aria_text:
-        return markdown
-    return (
-        f"{markdown}\n\n=== SEMANTIC ACCESSIBILITY SNAPSHOT ===\n{aria_text}"
-        if markdown
-        else f"=== SEMANTIC ACCESSIBILITY SNAPSHOT ===\n{aria_text}"
-    )
-
-
-def _serialize_markdown_root(root: BeautifulSoup | Any) -> tuple[str, list[str]]:
-    text = root.get_text("\n", strip=True)
-    lines = [
-        " ".join(str(line or "").split()).strip()
-        for line in text.splitlines()
-        if str(line or "").strip()
-    ]
-    link_lines: list[str] = []
-    for anchor in root.select(ANCHOR_SELECTOR):
-        attrs = getattr(anchor, "attrs", None)
-        if not isinstance(attrs, dict):
-            continue
-        href = " ".join(str(attrs.get("href") or "").split()).strip()
-        label = " ".join(anchor.get_text(" ", strip=True).split()).strip()
-        if href and label and len(label) >= 3:
-            link_lines.append(f"- {label} -> {href}")
-    return "\n".join(lines), link_lines
-
-
-def _node_markdown_probe(node: Tag) -> str:
-    attrs = getattr(node, "attrs", None)
-    attr_text = ""
-    if isinstance(attrs, dict):
-        attr_text = " ".join(
-            [
-                " ".join(str(item) for item in attrs.get("class", []) if item),
-                str(attrs.get("id") or ""),
-                str(attrs.get("data-testid") or ""),
-                str(attrs.get("data-qa-id") or ""),
-                str(attrs.get("data-qa-action") or ""),
-                str(attrs.get("aria-label") or ""),
-            ]
-        )
-    headings: list[str] = []
-    for candidate in node.select(DETAIL_MARKDOWN_HEADING_SELECTOR)[:4]:
-        headings.append(candidate.get_text(" ", strip=True))
-    return " ".join([attr_text, *headings]).lower()
-
-
-def _prune_detail_markdown_noise(soup: BeautifulSoup) -> None:
-    for node in list(soup.find_all(["section", "div", "aside", "article", "details"])):
-        if not isinstance(node, Tag):
-            continue
-        if node.name in {"body", "main"}:
-            continue
-        if not _detail_markdown_probe_is_noise(node):
-            continue
-        node.decompose()
-
-
-def _detail_markdown_line_is_noise(line: str) -> bool:
-    compact = " ".join(str(line or "").split()).strip()
-    lowered = compact.lower()
-    if not lowered:
-        return True
-    if lowered == ">":
-        return True
-    if any(
-        _detail_markdown_line_matches_noise_token(lowered, token)
-        for token in DETAIL_MARKDOWN_LINE_NOISE
-    ):
-        return True
-    if compact.isupper() and len(compact) <= 24:
-        return True
-    return False
-
-
-def _detail_markdown_line_matches_noise_token(line: str, token: str) -> bool:
-    normalized_line = " ".join(str(line or "").split()).strip().lower()
-    normalized_token = " ".join(str(token or "").split()).strip().lower()
-    if not normalized_line or not normalized_token:
-        return False
-    pattern = (
-        r"^"
-        + re.escape(normalized_token).replace(r"\ ", r"[\s_-]+")
-        + r"(?:[\s!?,./|()-]*)$"
-    )
-    return bool(re.match(pattern, normalized_line))
-
-
-def _normalize_detail_markdown_line(line: str) -> str | None:
-    compact = " ".join(str(line or "").split()).strip()
-    if _detail_markdown_line_is_noise(compact):
-        return None
-    return compact
-
-
-def _detail_markdown_probe_is_noise(node: Tag) -> bool:
-    attr_probe = _node_markdown_attr_text(node)
-    heading_probe = _node_markdown_heading_text(node)
-    if not attr_probe and not heading_probe:
-        return False
-    attr_hits = {
-        _detail_markdown_token_key(token)
-        for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
-        if _detail_markdown_contains_token(attr_probe, token)
-    }
-    heading_hits = {
-        _detail_markdown_token_key(token)
-        for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
-        if _detail_markdown_contains_token(heading_probe, token)
-    }
-    if any(" " in token or "&" in token for token in attr_hits | heading_hits):
-        return True
-    return bool(attr_hits and heading_hits)
-
-
-def _detail_markdown_contains_token(text: str, token: str) -> bool:
-    normalized_token = str(token or "").strip().lower()
-    if not normalized_token:
-        return False
-    pattern = r"\b" + re.escape(normalized_token).replace(r"\ ", r"[\s_-]+") + r"\b"
-    return bool(re.search(pattern, text))
-
-
-def _detail_markdown_token_key(token: str) -> str:
-    normalized_token = str(token or "").strip().lower()
-    if normalized_token.endswith("s") and " " not in normalized_token:
-        return normalized_token[:-1]
-    return normalized_token
-
-
 def _listing_html_detail_anchor_count(html: str) -> int:
     soup = BeautifulSoup(str(html or ""), HTML_PARSER)
     count = 0
@@ -1689,98 +1434,6 @@ def _listing_html_detail_anchor_count(html: str) -> int:
         ):
             count += 1
     return count
-
-
-def _node_markdown_attr_text(node: Tag) -> str:
-    attrs = getattr(node, "attrs", None)
-    if not isinstance(attrs, dict):
-        return ""
-    return " ".join(
-        [
-            " ".join(str(item) for item in attrs.get("class", []) if item),
-            str(attrs.get("id") or ""),
-            str(attrs.get("data-testid") or ""),
-            str(attrs.get("data-qa-id") or ""),
-            str(attrs.get("data-qa-action") or ""),
-            str(attrs.get("aria-label") or ""),
-        ]
-    ).lower()
-
-
-def _node_markdown_heading_text(node: Tag) -> str:
-    headings: list[str] = []
-    for candidate in node.select(DETAIL_MARKDOWN_HEADING_SELECTOR)[:4]:
-        headings.append(candidate.get_text(" ", strip=True))
-    return " ".join(headings).lower()
-
-
-def _filter_detail_markdown_payload(
-    markdown: str,
-    link_lines: list[str],
-) -> tuple[str, list[str]]:
-    filtered_lines: list[str] = []
-    for line in str(markdown or "").splitlines():
-        normalized = _normalize_detail_markdown_line(line)
-        if normalized:
-            filtered_lines.append(normalized)
-    filtered_links = [
-        line for line in link_lines if not _detail_markdown_link_is_noise(line)
-    ]
-    return "\n".join(filtered_lines), filtered_links
-
-
-def _detail_markdown_link_is_noise(line: str) -> bool:
-    lowered = " ".join(str(line or "").split()).strip().lower()
-    if not lowered:
-        return True
-    if "-> #main" in lowered or "-> #" in lowered:
-        return True
-    if any(token in lowered for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS):
-        return True
-    return any(token in lowered for token in DETAIL_MARKDOWN_LINE_NOISE)
-
-
-def _select_markdown_root(soup: BeautifulSoup) -> BeautifulSoup | Any:
-    body = soup.body
-    body_text = ""
-    if body is not None:
-        body_text = " ".join(body.get_text(" ", strip=True).split()).strip()
-    for selector in MARKDOWN_ROOT_SELECTORS:
-        candidate = soup.select_one(selector)
-        if candidate is None:
-            continue
-        text = " ".join(candidate.get_text(" ", strip=True).split()).strip()
-        if len(text) >= 80:
-            if body is not None and candidate is not body and body_text:
-                if len(text) < max(80, int(len(body_text) * 0.4)):
-                    continue
-            return candidate
-    return body if body is not None else soup
-
-
-def _serialize_accessibility_snapshot(
-    node: dict[str, object] | None,
-    *,
-    depth: int = 0,
-) -> str:
-    if not isinstance(node, dict) or depth > 8:
-        return ""
-    lines: list[str] = []
-    name = " ".join(str(node.get("name") or "").split()).strip()
-    lowered_name = name.lower()
-    if any(token in lowered_name for token in DETAIL_MARKDOWN_SECTION_NOISE_TOKENS):
-        return ""
-    if name:
-        role = " ".join(str(node.get("role") or "element").split()).strip() or "element"
-        lines.append(f"{'  ' * depth}[{role}] {name}")
-    raw_children = node.get("children")
-    children = raw_children if isinstance(raw_children, list) else []
-    for child in children:
-        if isinstance(child, dict):
-            child_text = _serialize_accessibility_snapshot(child, depth=depth + 1)
-            if child_text:
-                lines.append(child_text)
-    return "\n".join(lines)
 
 
 def _normalize_listing_recovery_mode(value: object) -> str | None:
@@ -1807,8 +1460,29 @@ def _detail_expansion_extractability(
     if soup is None:
         soup = BeautifulSoup(str(html or ""), HTML_PARSER)
     return requested_content_extractability(
-        soup, surface=surface, requested_fields=requested_fields
+        soup,
+        surface=surface,
+        requested_fields=requested_fields,
+        probe_fields=_detail_expansion_probe_fields(
+            surface=surface,
+            requested_fields=requested_fields,
+        ),
     )
+
+
+def _detail_expansion_probe_fields(
+    *,
+    surface: str,
+    requested_fields: list[str] | None,
+) -> list[str] | None:
+    if requested_fields:
+        return sorted({str(field_name).strip() for field_name in requested_fields if str(field_name).strip()}) or None
+    normalized_surface = str(surface or "").strip().lower()
+    probe_fields = {
+        *set(DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ()),
+        *set(DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ()),
+    }
+    return sorted(probe_fields) or None
 
 
 def _detail_expansion_can_skip(

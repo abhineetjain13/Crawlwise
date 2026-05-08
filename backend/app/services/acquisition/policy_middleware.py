@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from app.services.acquisition.rate_limiter import record_fetch_outcome, wait_for_host_slot
+from app.services.acquisition.rate_limiter import record_fetch_outcome
+from app.services.acquisition.rate_limiter import wait_for_host_slot
 
 if TYPE_CHECKING:
     from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult

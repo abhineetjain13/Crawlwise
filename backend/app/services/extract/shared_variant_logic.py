@@ -8,12 +8,6 @@ from typing import Any
 
 from app.services.config.extraction_rules import (
     DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS,
-    DETAIL_VARIANT_CONTEXT_NOISE_TOKENS,
-    DETAIL_VARIANT_SCOPE_SELECTOR,
-    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH,
-    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT,
-    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK,
-    VARIANT_SCOPE_MAX_ROOTS,
     VARIANT_AXIS_LABEL_NOISE_PATTERNS,
     VARIANT_AXIS_LABEL_NOISE_TOKENS,
     VARIANT_AXIS_ALIASES,
@@ -57,6 +51,11 @@ from app.services.config.extraction_rules import (
     VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH,
 )
 from app.services.config.variant_policy import OPTION_SCALAR_FIELDS, PUBLIC_VARIANT_AXIS_FIELDS
+from app.services.extract.variant_dom_cues import (
+    select_variant_nodes as _select_variant_nodes,
+    variant_context_noise_tokens as _variant_context_noise_tokens,
+    variant_node_in_noise_context,
+)
 from app.services.field_value_core import clean_text, text_or_none
 
 logger = logging.getLogger(__name__)
@@ -133,12 +132,6 @@ _variant_option_noise_phrases = tuple(
     for token in tuple(VARIANT_OPTION_NOISE_PHRASES or ())
     if (cleaned := clean_text(token))
 )
-_variant_context_noise_tokens = frozenset(
-    str(token).strip().lower()
-    for token in tuple(DETAIL_VARIANT_CONTEXT_NOISE_TOKENS or ())
-    if str(token).strip()
-)
-_variant_scope_selector = str(DETAIL_VARIANT_SCOPE_SELECTOR or "").strip()
 _variant_size_alias_suffixes = tuple(
     str(token).strip().lower()
     for token in tuple(VARIANT_SIZE_ALIAS_SUFFIXES or ())
@@ -243,76 +236,6 @@ def normalized_variant_axis_display_name(value: object) -> str:
 
 def variant_dom_cues_present(soup: Any) -> bool:
     return bool(iter_variant_select_groups(soup) or iter_variant_choice_groups(soup))
-
-
-def _variant_node_in_noise_context(node: Any) -> bool:
-    try:
-        depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH))
-    except (TypeError, ValueError):
-        try:
-            depth = max(0, int(VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK))
-        except (TypeError, ValueError):
-            depth = VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT
-    current = node
-    for _ in range(depth):
-        if current is None or not hasattr(current, "get"):
-            return False
-        parts: list[str] = []
-        for attr_name in ("id", "class", "aria-label", "data-testid", "role"):
-            value = current.get(attr_name)
-            if isinstance(value, list):
-                parts.extend(str(item) for item in value if item)
-            elif value not in (None, "", [], {}):
-                parts.append(str(value))
-        probe = clean_text(" ".join(parts)).lower()
-        if probe and any(token in probe for token in _variant_context_noise_tokens):
-            return True
-        current = getattr(current, "parent", None)
-    return False
-
-
-def _variant_scope_roots(soup: Any) -> list[Any]:
-    if not hasattr(soup, "select") or not _variant_scope_selector:
-        return [soup]
-    # Defensive coercion: treat missing/invalid limit as "no limit".
-    try:
-        max_roots = (
-            int(VARIANT_SCOPE_MAX_ROOTS)
-            if VARIANT_SCOPE_MAX_ROOTS is not None
-            else None
-        )
-    except (TypeError, ValueError):
-        max_roots = None
-    roots: list[Any] = []
-    seen: set[int] = set()
-    for node in soup.select(_variant_scope_selector):
-        if id(node) in seen or _variant_node_in_noise_context(node):
-            continue
-        if not (
-            node.select(VARIANT_SELECT_GROUP_SELECTOR)
-            or node.select(VARIANT_CHOICE_GROUP_SELECTOR)
-            or node.select("input[type='radio'], input[type='checkbox']")
-        ):
-            continue
-        roots.append(node)
-        seen.add(id(node))
-        if max_roots is not None and len(roots) >= max_roots:
-            break
-    return roots or [soup]
-
-
-def _select_variant_nodes(soup: Any, selector: str) -> list[Any]:
-    nodes: list[Any] = []
-    seen: set[int] = set()
-    for root in _variant_scope_roots(soup):
-        if not hasattr(root, "select"):
-            continue
-        for node in root.select(selector):
-            if id(node) in seen or _variant_node_in_noise_context(node):
-                continue
-            nodes.append(node)
-            seen.add(id(node))
-    return nodes
 
 
 def infer_variant_group_name(node: Any) -> str:
@@ -1049,8 +972,14 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
         return groups
     # discovery of variant choice containers for input elements and specific buttons
     for node in soup.select("select, input[type='radio'], input[type='checkbox']"):
+        if variant_node_in_noise_context(node):
+            continue
         candidate = _variant_choice_container_for_input(node)
-        if candidate is not None and id(candidate) not in seen_ids:
+        if (
+            candidate is not None
+            and not variant_node_in_noise_context(candidate)
+            and id(candidate) not in seen_ids
+        ):
             groups.append(candidate)
             seen_ids.add(id(candidate))
             if len(groups) >= int(VARIANT_CHOICE_GROUP_MAX):
@@ -1059,6 +988,8 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
         for node in soup.select(
             "button[data-variant], button.variant-option, button.size-option, button.color-option"
         ):
+            if variant_node_in_noise_context(node):
+                continue
             if id(node) not in seen_ids:
                 groups.append(node)
                 seen_ids.add(id(node))
@@ -1080,6 +1011,10 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
                 depth = 0
                 while parent is not None and depth < int(VARIANT_SWATCH_PARENT_DEPTH):
                     if not hasattr(parent, "select"):
+                        parent = getattr(parent, "parent", None)
+                        depth += 1
+                        continue
+                    if variant_node_in_noise_context(parent):
                         parent = getattr(parent, "parent", None)
                         depth += 1
                         continue
@@ -1157,9 +1092,15 @@ def _variant_choice_container_for_input(
 ) -> Any | None:
     if axis_name is None:
         axis_name = resolve_variant_group_name(node)
+    input_type = (
+        str(node.get("type") or "").strip().lower() if hasattr(node, "get") else ""
+    )
     parent = getattr(node, "parent", None)
     while parent is not None:
         if not hasattr(parent, "find_all"):
+            parent = getattr(parent, "parent", None)
+            continue
+        if variant_node_in_noise_context(parent):
             parent = getattr(parent, "parent", None)
             continue
         if _variant_choice_container_is_overbroad(parent):
@@ -1180,9 +1121,6 @@ def _variant_choice_container_for_input(
             ]
         else:
             matching_inputs = candidate_inputs
-        if len(matching_inputs) < 2:
-            parent = getattr(parent, "parent", None)
-            continue
         class_attr = parent.get("class") if hasattr(parent, "get") else None
         class_probe = (
             " ".join(str(value) for value in class_attr)
@@ -1191,12 +1129,8 @@ def _variant_choice_container_for_input(
         ).lower()
         tag_name = str(getattr(parent, "name", "") or "").lower()
         role = str(parent.get("role") or "").lower() if hasattr(parent, "get") else ""
-        inferred_from_values = (
-            infer_variant_group_name_from_values(_choice_option_texts(parent))
-            if _node_supports_value_only_axis_inference(parent)
-            else ""
-        )
-        if (
+        parent_group_name = ""
+        parent_has_axis_hint = (
             role == "radiogroup"
             or tag_name in {"fieldset", "ul", "ol"}
             or any(
@@ -1209,14 +1143,39 @@ def _variant_choice_container_for_input(
                     *_variant_axis_allowed_single_tokens,
                 )
             )
-            or resolve_variant_group_name(parent)
-            or inferred_from_values
+        )
+        parent_is_axis_container = parent_has_axis_hint
+        if not parent_is_axis_container:
+            parent_group_name = resolve_variant_group_name(parent)
+            parent_is_axis_container = bool(parent_group_name)
+        if (
+            len(matching_inputs) == 1
+            and axis_name in {"color", *_variant_axis_allowed_single_tokens}
+            and parent_has_axis_hint
         ):
             return parent
-        if len(matching_inputs) <= int(VARIANT_MATCHING_INPUT_LIMIT) and tag_name in {
-            "div",
-            "section",
-        }:
+        if len(matching_inputs) < 2:
+            parent = getattr(parent, "parent", None)
+            continue
+        if input_type == "checkbox" and not (
+            axis_name
+            or parent_has_axis_hint
+            or parent_group_name
+        ):
+            parent = getattr(parent, "parent", None)
+            continue
+        inferred_from_values = (
+            infer_variant_group_name_from_values(_choice_option_texts(parent))
+            if input_type != "checkbox" and _node_supports_value_only_axis_inference(parent)
+            else ""
+        )
+        if parent_is_axis_container or inferred_from_values:
+            return parent
+        if (
+            axis_name
+            and len(matching_inputs) <= int(VARIANT_MATCHING_INPUT_LIMIT)
+            and tag_name in {"div", "section"}
+        ):
             return parent
         parent = getattr(parent, "parent", None)
     return None

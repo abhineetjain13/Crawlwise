@@ -38,7 +38,6 @@ PUBLIC_RECORD_CANONICAL_URL_FIELDS = frozenset(
 PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS = frozenset(
     {"page_markdown", "table_markdown", "record_type"}
 )
-PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS = frozenset({"product_attributes", VARIANTS_FIELD})
 PUBLIC_RECORD_ECOMMERCE_DROPPED_FIELDS = frozenset({"tags"})
 PUBLIC_RECORD_LEGACY_VARIANT_FIELDS = frozenset(
     {

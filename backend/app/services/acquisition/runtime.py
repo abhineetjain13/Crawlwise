@@ -69,7 +69,6 @@ class PageFetchResult:
     network_payloads: list[dict[str, object]] = field(default_factory=list)
     browser_diagnostics: dict[str, object] = field(default_factory=dict)
     artifacts: dict[str, object] = field(default_factory=dict)
-    page_markdown: str = ""
 
 
 @dataclass(frozen=True, slots=True)

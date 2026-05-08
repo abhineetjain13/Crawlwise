@@ -211,6 +211,13 @@ def _empty_detail_extraction_has_static_evidence(
         surface=surface,
         requested_fields=requested_fields,
         selector_rules=selector_rules,
+        probe_fields=sorted(
+            {
+                *set(requested_fields or []),
+                *set(PRICE_FIELDS),
+                *set(DETAIL_IDENTITY_FIELDS),
+            }
+        ),
     )
     raw_extractable_fields = extractability.get("extractable_fields")
     extractable_field_values = (
@@ -296,6 +303,13 @@ def _missing_fields_have_static_html_evidence(
         surface=surface,
         requested_fields=missing_fields,
         selector_rules=[],
+        probe_fields=sorted(
+            {
+                *set(missing_fields or []),
+                *set(PRICE_FIELDS),
+                *set(VARIANT_FIELDS),
+            }
+        ),
     )
     raw_matched_requested = extractability.get("matched_requested_fields")
     matched_requested_values = (

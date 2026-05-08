@@ -1521,12 +1521,7 @@ async def test_persist_storage_state_for_run_replaces_existing_state(
                 "path": "/",
             }
         ],
-        "origins": [
-            {
-                "origin": "https://example.com",
-                "localStorage": [{"name": "new", "value": "2"}],
-            }
-        ],
+        "origins": [],
     }
 
 
@@ -1874,6 +1869,12 @@ async def test_shared_browser_runtime_uses_socks5_auth_bridge_and_keeps_context_
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
                 "--window-size=1920,1080",
                 "--disable-search-engine-choice-screen",
+                "--disable-background-networking",
+                "--disable-client-side-phishing-detection",
+                "--disable-component-update",
+                "--disable-domain-reliability",
+                "--disable-sync",
+                "--no-first-run",
                 "--headless=new",
             ],
             "proxy": {
@@ -1954,6 +1955,12 @@ async def test_shared_browser_runtime_launches_http_proxy_directly(
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
                 "--window-size=1920,1080",
                 "--disable-search-engine-choice-screen",
+                "--disable-background-networking",
+                "--disable-client-side-phishing-detection",
+                "--disable-component-update",
+                "--disable-domain-reliability",
+                "--disable-sync",
+                "--no-first-run",
                 "--headless=new",
             ],
             "proxy": {
@@ -2047,6 +2054,12 @@ async def test_shared_browser_runtime_launches_real_chrome_headful_for_fallback(
                 "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
                 "--window-size=1920,1080",
                 "--disable-search-engine-choice-screen",
+                "--disable-background-networking",
+                "--disable-client-side-phishing-detection",
+                "--disable-component-update",
+                "--disable-domain-reliability",
+                "--disable-sync",
+                "--no-first-run",
             ],
             "executable_path": "C:/Chrome/chrome.exe",
             "ignore_default_args": [
@@ -3226,7 +3239,7 @@ async def test_persist_storage_state_for_domain_strips_null_bytes(db_session) ->
     assert saved is True
     assert loaded is not None
     assert loaded["cookies"][0]["value"] == "abcdef"
-    assert loaded["origins"][0]["localStorage"][0]["value"] == '{"id":"123"}'
+    assert loaded["origins"] == []
 
 
 @pytest.mark.asyncio
@@ -3380,7 +3393,7 @@ async def test_persist_storage_state_for_domain_accepts_iterable_storage_rows(
     assert saved is True
     assert len(rows) == 1
     assert rows[0]["cookie_count"] == 1
-    assert rows[0]["origin_count"] == 1
+    assert rows[0]["origin_count"] == 0
     assert loaded == {
         "cookies": [
             {
@@ -3390,14 +3403,7 @@ async def test_persist_storage_state_for_domain_accepts_iterable_storage_rows(
                 "path": "/",
             }
         ],
-        "origins": [
-            {
-                "origin": f"https://{domain}",
-                "localStorage": [
-                    {"name": "consent", "value": "accepted"},
-                ],
-            }
-        ],
+        "origins": [],
     }
 
 
@@ -3676,14 +3682,7 @@ async def test_load_storage_state_for_domain_filters_existing_challenge_state(
                 "path": "/",
             }
         ],
-        "origins": [
-            {
-                "origin": f"https://{domain}",
-                "localStorage": [
-                    {"name": "consent", "value": "accepted"},
-                ],
-            }
-        ],
+        "origins": [],
     }
 
 
@@ -3772,7 +3771,7 @@ async def test_persist_storage_state_for_domain_rejects_challenge_only_state(
 
 
 @pytest.mark.asyncio
-async def test_load_storage_state_for_domain_keeps_origin_when_local_storage_filters_empty(
+async def test_load_storage_state_for_domain_drops_origin_shell_when_local_storage_filters_empty(
     db_session,
 ) -> None:
     domain = f"origin-shell-{uuid4().hex}.example.com"
@@ -3815,10 +3814,5 @@ async def test_load_storage_state_for_domain_keeps_origin_when_local_storage_fil
                 "path": "/",
             }
         ],
-        "origins": [
-            {
-                "origin": f"https://{domain}",
-                "localStorage": [],
-            }
-        ],
+        "origins": [],
     }

@@ -1,7 +1,3 @@
-# PHASE-3 DELETE TARGETS:
-# _safe_int -> replaced by shared.coerce_primitives.safe_int (DELETE this function in Phase 3)
-# clean_text, slug_tokens -> replaced by shared.text_coerce (DELETE in Phase 3)
-# absolute_url, same_host -> replaced by shared.url_utils (DELETE in Phase 3)
 """Shared DOM field recovery, DOM text cleanup, and image/section normalization."""
 
 from __future__ import annotations
@@ -55,9 +51,11 @@ from app.services.config.extraction_rules import (
 from app.services.config.surface_hints import detail_path_hints
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.field_mappings import ADDITIONAL_IMAGES_FIELD
+from app.services.dom.content_extractability import (
+    requested_content_extractability_impl,
+)
 from app.services.extraction_html_helpers import html_to_text
 from app.services.field_policy import (
-    exact_requested_field_key,
     normalize_field_key,
     normalize_requested_field,
 )
@@ -73,21 +71,14 @@ from app.services.field_value_core import (
     surface_alias_lookup,
     surface_fields,
 )
+from app.services.shared.coerce_primitives import safe_int as _safe_int
 from app.services.xpath_service import validate_xpath_syntax
 
 logger = logging.getLogger(__name__)
 
 
-def _safe_int(value: object, default: int) -> int:
-    try:
-        parsed = int(str(value).strip())
-        return parsed if parsed >= 0 else default
-    except (TypeError, ValueError):
-        return default
-
-
-_max_section_blocks = _safe_int(DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS, 8)
-_max_section_chars = _safe_int(DETAIL_LONG_TEXT_MAX_SECTION_CHARS, 1200)
+_max_section_blocks = _safe_int(DETAIL_LONG_TEXT_MAX_SECTION_BLOCKS, default=8)
+_max_section_chars = _safe_int(DETAIL_LONG_TEXT_MAX_SECTION_CHARS, default=1200)
 _cross_product_container_tokens = tuple(
     clean_text(token).lower()
     for token in tuple(DETAIL_CROSS_PRODUCT_CONTAINER_TOKENS or ())
@@ -98,11 +89,11 @@ _scope_product_context_tokens = tuple(
     for token in tuple(SCOPE_PRODUCT_CONTEXT_TOKENS or ())
     if clean_text(token)
 )
-_max_selector_matches = _safe_int(MAX_SELECTOR_MATCHES, 12)
-_scope_score_main_weight = _safe_int(SCOPE_SCORE_MAIN_WEIGHT, 4000)
-_scope_score_priority_weight = _safe_int(SCOPE_SCORE_PRIORITY_WEIGHT, 2000)
+_max_selector_matches = _safe_int(MAX_SELECTOR_MATCHES, default=12)
+_scope_score_main_weight = _safe_int(SCOPE_SCORE_MAIN_WEIGHT, default=4000)
+_scope_score_priority_weight = _safe_int(SCOPE_SCORE_PRIORITY_WEIGHT, default=2000)
 _scope_score_product_context_weight = _safe_int(
-    SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT, 1000
+    SCOPE_SCORE_PRODUCT_CONTEXT_WEIGHT, default=1000
 )
 
 
@@ -1443,10 +1434,20 @@ def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
     return ""
 
 
-def extract_heading_sections(root: BeautifulSoup | Tag) -> dict[str, str]:
+def extract_heading_sections(
+    root: BeautifulSoup | Tag,
+    *,
+    alias_lookup: dict[str, str] | None = None,
+    allowed_fields: set[str] | None = None,
+) -> dict[str, str]:
     scoped_root = _pruned_text_scope_root(root)
     sections: dict[str, str] = {}
     seen: set[int] = set()
+    normalized_allowed_fields = {
+        normalize_field_key(field_name)
+        for field_name in list(allowed_fields or ())
+        if normalize_field_key(field_name)
+    }
     for heading in safe_select(scoped_root, _SECTION_LABEL_SELECTOR):
         if id(heading) in seen:
             continue
@@ -1454,13 +1455,22 @@ def extract_heading_sections(root: BeautifulSoup | Tag) -> dict[str, str]:
         heading_text = _section_label_text(heading)
         if not _is_section_label(heading_text):
             continue
+        if normalized_allowed_fields and alias_lookup is not None:
+            canonical_field = alias_lookup.get(normalize_field_key(heading_text))
+            if canonical_field not in normalized_allowed_fields:
+                continue
         content = _extract_section_content(heading, scoped_root)
         if len(content) >= 12:
             sections.setdefault(heading_text, content)
     materials = _extract_product_materials(scoped_root) or _extract_product_materials(
         root
     )
-    if materials:
+    if materials and (
+        not normalized_allowed_fields
+        or alias_lookup is None
+        or alias_lookup.get(normalize_field_key("Composition"))
+        in normalized_allowed_fields
+    ):
         sections.setdefault("Composition", materials)
     return sections
 
@@ -1529,70 +1539,18 @@ def requested_content_extractability(
     surface: str,
     requested_fields: list[str] | None,
     selector_rules: list[dict[str, object]] | None = None,
+    probe_fields: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> dict[str, object]:
-    requested = {
-        normalized
-        for value in list(requested_fields or [])
-        for normalized in (
-            exact_requested_field_key(value),
-            normalize_requested_field(value),
-        )
-        if normalized
-    }
-    alias_lookup = surface_alias_lookup(surface, requested_fields)
-    section_fields = {
-        normalized
-        for label in extract_heading_sections(root).keys()
-        for normalized in (alias_lookup.get(normalize_field_key(label)),)
-        if normalized
-    }
-    fields = surface_fields(surface, requested_fields)
-    dom_patterns_raw = EXTRACTION_RULES.get("dom_patterns")
-    dom_patterns = dict(dom_patterns_raw) if isinstance(dom_patterns_raw, dict) else {}
-    dom_pattern_fields = {
-        field_name
-        for field_name in fields
-        if (selector := str(dom_patterns.get(field_name) or "").strip())
-        and _dom_pattern_has_extractable_content(safe_select(root, selector))
-    }
-    selector_backed_fields = {
-        normalize_field_key(str(row.get("field_name") or ""))
-        for row in list(selector_rules or [])
-        if isinstance(row, dict)
-        and bool(row.get("is_active", True))
-        and (
-            str(row.get("css_selector") or "").strip()
-            or str(row.get("xpath") or "").strip()
-            or str(row.get("regex") or "").strip()
-        )
-    }
-    extractable_fields = section_fields | dom_pattern_fields | selector_backed_fields
-    matched_requested_fields = sorted(requested & extractable_fields)
-    return {
-        "verified": bool(
-            matched_requested_fields or (not requested and section_fields)
-        ),
-        "matched_requested_fields": matched_requested_fields,
-        "extractable_fields": sorted(extractable_fields),
-        "section_fields": sorted(section_fields),
-        "dom_pattern_fields": sorted(dom_pattern_fields),
-        "selector_backed_fields": sorted(
-            field for field in selector_backed_fields if field
-        ),
-    }
-
-
-def _dom_pattern_has_extractable_content(nodes: list[Tag]) -> bool:
-    for node in list(nodes or [])[:_max_selector_matches]:
-        if clean_text(node.get_text(" ", strip=True)):
-            return True
-        attrs = getattr(node, "attrs", None)
-        if not isinstance(attrs, dict):
-            continue
-        for key in ("content", "value", "src", "href", "alt", "title", "aria-label"):
-            if clean_text(attrs.get(key)):
-                return True
-    return False
+    return requested_content_extractability_impl(
+        root,
+        surface=surface,
+        requested_fields=requested_fields,
+        selector_rules=selector_rules,
+        probe_fields=probe_fields,
+        extract_heading_sections=extract_heading_sections,
+        safe_select=safe_select,
+        max_selector_matches=_max_selector_matches,
+    )
 
 
 def apply_selector_fallbacks(

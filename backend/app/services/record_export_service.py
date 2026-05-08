@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 from collections.abc import AsyncIterator, Callable
-from functools import lru_cache
-from html import unescape
 from io import StringIO
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.models.user import User
 from app.services.crawl_access_service import (
@@ -21,18 +17,12 @@ from app.services.crawl_crud import get_run_records
 from app.services.config.extraction_rules import (
     DISCOVERIST_SCHEMA,
     EXPORT_IMAGE_URL_SUFFIXES,
-    MARKDOWN_VIEW,
 )
 from app.services.config.export_settings import (
     EXPORT_PAGING_HEADER,
     EXPORT_PARTIAL_HEADER,
     EXPORT_TOTAL_HEADER,
-    MARKDOWN_EXCERPT_MAX_LENGTH,
-    MARKDOWN_LONG_FORM_THRESHOLD,
     MAX_RECORD_PAGE_SIZE,
-)
-from app.services.config.public_record_policy import (
-    PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS,
 )
 from app.services.export.schema import (
     clean_export_data as _clean_export_data,
@@ -59,7 +49,6 @@ RECORD_NOT_FOUND_RESPONSE = {
 RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
     404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
 }
-_HTML_FRAGMENT_RE = re.compile(r"<[a-zA-Z][^>]*>")
 CSV_MEDIA_TYPE = "text/csv"
 
 ExportStreamer = Callable[[AsyncSession, int], AsyncIterator[str]]
@@ -150,20 +139,6 @@ async def build_tables_csv_export_response(
         filename=f"run-{run_id}-tables.csv",
         media_type=CSV_MEDIA_TYPE,
         streamer=stream_export_tables_csv,
-    )
-
-
-async def build_markdown_export_response(
-    session: AsyncSession,
-    *,
-    run_id: int,
-) -> StreamingResponse:
-    return await build_export_response(
-        session,
-        run_id=run_id,
-        filename=f"run-{run_id}.md",
-        media_type="text/markdown; charset=utf-8",
-        streamer=stream_export_markdown,
     )
 
 
@@ -312,15 +287,6 @@ async def stream_export_discoverist(session: AsyncSession, run_id: int):
         buffer.truncate(0)
 
 
-async def stream_export_markdown(session: AsyncSession, run_id: int):
-    first = True
-    async for row in _stream_export_rows(session, run_id):
-        if not first:
-            yield "\n\n---\n\n"
-        yield record_to_markdown(row)
-        first = False
-
-
 async def stream_export_artifacts_json(session: AsyncSession, run_id: int):
     yield "[\n"
     first = True
@@ -383,7 +349,7 @@ def artifact_table_rows(row: CrawlRecord) -> list[dict]:
 
 
 def record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
-    raw_data = _record_markdown_source(row)
+    raw_data = _record_export_source(row)
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
     manifest_trace = _object_dict(source_trace.get("manifest_trace"))
     cleaned = clean_export_data(raw_data)
@@ -394,10 +360,6 @@ def record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
         "source_url": row.source_url,
         "title": cleaned.get("title") or raw_data.get("title"),
         "fallback_type": source_trace.get("type"),
-        "markdown_excerpt": stringify_markdown_value(raw_data.get("page_markdown"))[
-            :MARKDOWN_EXCERPT_MAX_LENGTH
-        ]
-        or None,
     }
     evidence_refs = {
         "json_ld_count": len(json_ld_rows),
@@ -412,12 +374,6 @@ def record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
             k: v for k, v in page_summary.items() if v not in (None, "", [], {})
         }
         or None,
-        "markdown": {
-            "page_markdown": raw_data.get("page_markdown"),
-            "table_markdown": raw_data.get("table_markdown"),
-        }
-        if raw_data.get("page_markdown") or raw_data.get("table_markdown")
-        else None,
         "evidence_refs": evidence_refs,
     }
 
@@ -430,116 +386,16 @@ def export_headers(metadata: dict[str, int | bool]) -> dict[str, str]:
     }
 
 
-def record_to_markdown(row: CrawlRecord) -> str:
-    raw_data = _record_markdown_source(row)
-    structured_data = row.data if isinstance(row.data, dict) else {}
-    data = _sanitize_markdown_export_data(clean_export_data(structured_data))
-    source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
-    semantic = _object_dict(source_trace.get("semantic"))
-    semantic_sections = _object_dict(semantic.get("sections"))
-    semantic_specs = _object_dict(semantic.get("specifications"))
-
-    if str(source_trace.get("type") or "") == "listing_fallback":
-        title = (
-            stringify_markdown_value(raw_data.get("title"))
-            or row.source_url
-            or f"Record {row.id}"
-        )
-        page_markdown = stringify_markdown_value(raw_data.get("page_markdown"))
-        if page_markdown:
-            return (
-                page_markdown
-                if page_markdown.lstrip().startswith("#")
-                else f"# {title}\n\n{page_markdown}"
-            )
-
-    title = (
-        stringify_markdown_value(data.get("title"))
-        or row.source_url
-        or f"Record {row.id}"
-    )
-    lines: list[str] = [f"# {title}"]
-    if row.source_url and not _looks_like_image_asset_url(row.source_url):
-        lines.extend(["", f"Source: <{row.source_url}>"])
-    record_url = stringify_markdown_value(data.get("url"))
-    if record_url and record_url != row.source_url:
-        lines.append(f"Record URL: <{record_url}>")
-
-    rendered_section_keys: set[str] = set()
-    scalar_rows: list[tuple[str, object]] = []
-    for field_name, raw_value in data.items():
-        normalized_field = str(field_name).strip().lower()
-        if normalized_field in {"title", "url", "source_url"} | PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS:
-            continue
-        rendered_value = stringify_markdown_value(raw_value)
-        if not rendered_value:
-            continue
-        if is_markdown_long_form(field_name, rendered_value):
-            lines.extend(
-                [
-                    "",
-                    f"## {humanize_field_name(field_name)}",
-                    "",
-                    render_markdown_block(rendered_value),
-                ]
-            )
-            rendered_section_keys.add(normalized_field)
-            continue
-        scalar_rows.append((humanize_field_name(field_name), raw_value))
-        rendered_section_keys.add(normalized_field)
-
-    if scalar_rows:
-        lines.extend(["", "## Core Fields", ""])
-        for label, value in scalar_rows:
-            lines.append(f"- **{label}:** {render_markdown_inline(value)}")
-
-    for field_name, raw_value in semantic_sections.items():
-        normalized_field = str(field_name).strip().lower()
-        if normalized_field in rendered_section_keys:
-            continue
-        rendered_value = stringify_markdown_value(raw_value)
-        if not rendered_value:
-            continue
-        lines.extend(
-            [
-                "",
-                f"## {humanize_field_name(field_name)}",
-                "",
-                render_markdown_block(rendered_value),
-            ]
-        )
-        rendered_section_keys.add(normalized_field)
-
-    spec_rows = [
-        (humanize_field_name(field_name), raw_value)
-        for field_name, raw_value in sorted(
-            semantic_specs.items(),
-            key=lambda item: humanize_field_name(item[0]).lower(),
-        )
-        if stringify_markdown_value(raw_value)
-    ]
-    if spec_rows:
-        lines.extend(["", "## Specifications", ""])
-        for label, value in spec_rows:
-            lines.append(f"- **{label}:** {render_markdown_inline(value)}")
-
-    page_markdown = stringify_markdown_value(raw_data.get("page_markdown"))
-    if page_markdown and str(source_trace.get("type") or "") != "listing_fallback":
-        lines.extend(["", render_markdown_block(page_markdown)])
-
-    return "\n".join(lines).strip()
-
-
-def _record_markdown_source(row: CrawlRecord) -> dict[str, object]:
+def _record_export_source(row: CrawlRecord) -> dict[str, object]:
     raw = row.raw_data if isinstance(row.raw_data, dict) else {}
     if raw:
         return dict(raw)
     return dict(row.data) if isinstance(row.data, dict) else {}
 
 
-def _sanitize_markdown_export_data(data: dict[str, object]) -> dict[str, object]:
+def _sanitize_export_data(data: dict[str, object]) -> dict[str, object]:
     sanitized = dict(data)
-    primary_image = stringify_markdown_value(sanitized.get("image_url"))
+    primary_image = _stringify_export_value(sanitized.get("image_url"))
     additional_images = _dedupe_image_values(
         sanitized.get("additional_images"),
         primary_image=primary_image,
@@ -593,117 +449,13 @@ def _looks_like_image_asset_url(value: object) -> bool:
     return path.endswith(EXPORT_IMAGE_URL_SUFFIXES)
 
 
-def stringify_markdown_value(value: object) -> str:
+def _stringify_export_value(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
         text = value
     else:
         text = json.dumps(value, ensure_ascii=False)
-    text = unescape(text).replace("\r\n", "\n").replace("\u00a0", " ")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def is_markdown_long_form(field_name: object, value: str) -> bool:
-    normalized = str(field_name or "").strip().lower()
-    if normalized in markdown_long_form_fields():
-        return True
-    return "\n" in value or len(value) > MARKDOWN_LONG_FORM_THRESHOLD
-
-
-def render_markdown_inline(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        text = stringify_markdown_value(value)
-        if re.fullmatch(r"https?://\S+", text):
-            return f"<{text}>"
-        return text
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    text = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    return f"`{text}`"
-
-
-def render_markdown_block(value: str) -> str:
-    normalized_value = _normalize_markdown_block_value(value)
-    rendered: list[str] = []
-    for raw_line in normalized_value.split("\n"):
-        line = raw_line.strip()
-        if not line:
-            if rendered and rendered[-1] != "":
-                rendered.append("")
-            continue
-        bullet_match = re.match(r"^(?:[•*-]|\d+\.)\s+(.*)$", line)
-        if bullet_match:
-            rendered.append(f"- {bullet_match.group(1).strip()}")
-        else:
-            rendered.append(line)
-    return "\n".join(rendered)
-
-
-def _normalize_markdown_block_value(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    if not _looks_like_html_fragment(text):
-        return text
-    return _html_fragment_to_markdown_text(text)
-
-
-def _looks_like_html_fragment(value: str) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    return bool(_HTML_FRAGMENT_RE.search(text))
-
-
-def _html_fragment_to_markdown_text(value: str) -> str:
-    soup = BeautifulSoup(str(value or ""), "html.parser")
-    for node in soup.find_all("br"):
-        node.replace_with("\n")
-
-    lines: list[str] = []
-    seen: set[str] = set()
-    for node in soup.find_all(
-        ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "dt", "dd"]
-    ):
-        text = " ".join(node.get_text(" ", strip=True).split()).strip()
-        if not text:
-            continue
-        if node.name == "li":
-            text = f"- {text}"
-        lowered = text.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        lines.append(text)
-    if lines:
-        return "\n".join(lines)
-    return " ".join(soup.get_text(" ", strip=True).split()).strip()
-
-
-def humanize_field_name(value: object) -> str:
-    normalized = str(value or "").replace("_", " ").replace("-", " ")
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    if not normalized:
-        return ""
-    return normalized[:1].upper() + normalized[1:]
-
-
-@lru_cache(maxsize=1)
-def markdown_long_form_fields() -> frozenset[str]:
-    rows = (
-        MARKDOWN_VIEW.get("long_form_fields") if isinstance(MARKDOWN_VIEW, dict) else []
-    )
-    return frozenset(
-        str(value).strip().lower()
-        for value in (rows if isinstance(rows, list) else [])
-        if str(value).strip()
-    )
+    return text.replace("\r\n", "\n").replace("\u00a0", " ").strip()
 
 

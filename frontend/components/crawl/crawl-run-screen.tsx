@@ -17,8 +17,6 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 import { HistoryDrawer, type HistoryItem } from '../ui/history-drawer';
 
@@ -130,16 +128,6 @@ function llmTouchedFieldNames(record: CrawlRecord): string[] {
     }
   }
   return Array.from(touched);
-}
-
-function isSafeHref(href: string) {
-  try {
-    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
-    const url = new URL(href, base);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 type ProductIntelligencePrefillPayload = {
@@ -266,7 +254,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const shouldFetchTableRecords = Boolean(run) && effectiveOutputTab === 'table';
   const shouldFetchJsonRecords = Boolean(run) && effectiveOutputTab === 'json';
   const shouldFetchLogs = Boolean(run) && (live || effectiveOutputTab === 'logs');
-  const shouldFetchMarkdown = Boolean(run) && terminal && effectiveOutputTab === 'markdown';
 
   useEffect(() => {
     if (!live) return;
@@ -300,13 +287,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     refetchInterval: false,
   });
   const { refetch: refetchLogsQuery } = logsQuery;
-  const markdownQuery = useQuery({
-    queryKey: ['crawl-markdown', runId],
-    queryFn: () => api.getMarkdown(runId),
-    enabled: shouldFetchMarkdown,
-    refetchInterval: false,
-  });
-  const { refetch: refetchMarkdownQuery } = markdownQuery;
   const domainRecipeQuery = useQuery({
     queryKey: ['crawl-domain-recipe', runId],
     queryFn: () => api.getDomainRecipe(runId),
@@ -358,7 +338,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     [logsQuery.data, socketLogItems],
   );
   const logCursorAfterId = logs.at(-1)?.id;
-  const markdown = markdownQuery.data ?? '';
   const domainRecipe = domainRecipeQuery.data;
   const logSocketOnline = shouldFetchLogs && logSocketConnected;
   const elapsedLabel = useMemo(() => {
@@ -410,12 +389,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
           refetch: refetchLogsQuery,
         },
         {
-          key: 'markdown',
-          label: 'markdown',
-          error: markdownQuery.error,
-          refetch: refetchMarkdownQuery,
-        },
-        {
           key: 'domain-recipe',
           label: 'domain recipe',
           error: domainRecipeQuery.error,
@@ -427,13 +400,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       tableRecordsQuery.error,
       jsonRecordsQuery.error,
       logsQuery.error,
-      markdownQuery.error,
       domainRecipeQuery.error,
       refetchRunQuery,
       refetchTableRecords,
       refetchJsonRecords,
       refetchLogsQuery,
-      refetchMarkdownQuery,
       refetchDomainRecipeQuery,
     ],
   );
@@ -443,7 +414,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     tableRecordsQuery,
     jsonRecordsQuery,
     logsQuery,
-    markdownQuery,
   ]);
 
   useEffect(() => {
@@ -503,9 +473,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       if (shouldFetchLogs && !logSocketOnline) {
         tasks.push(refetchLogsQuery());
       }
-      if (shouldFetchMarkdown) {
-        tasks.push(refetchMarkdownQuery());
-      }
       void Promise.allSettled(tasks);
     };
 
@@ -516,13 +483,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     logSocketOnline,
     shouldFetchLogs,
     shouldFetchJsonRecords,
-    shouldFetchMarkdown,
     shouldFetchTableRecords,
     refetchRunQuery,
     refetchTableRecords,
     refetchJsonRecords,
     refetchLogsQuery,
-    refetchMarkdownQuery,
   ]);
 
   useEffect(() => {
@@ -742,16 +707,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     return () => window.clearInterval(intervalId);
   }, [refetchJsonRecords, refetchTableRecords, terminalRecordsNeedSync]);
 
-  function downloadExport(kind: 'csv' | 'json' | 'markdown') {
+  function downloadExport(kind: 'csv' | 'json') {
     setRunActionError('');
-    const filename = `run-${runId}.${kind === 'markdown' ? 'md' : kind}`;
+    const filename = `run-${runId}.${kind}`;
     try {
-      const href =
-        kind === 'csv'
-          ? api.exportCsv(runId)
-          : kind === 'json'
-            ? api.exportJson(runId)
-            : api.exportMarkdown(runId);
+      const href = kind === 'csv' ? api.exportCsv(runId) : api.exportJson(runId);
       const anchor = document.createElement('a');
       anchor.href = href;
       anchor.download = filename;
@@ -774,7 +734,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         logsQuery.refetch(),
         tableRecordsQuery.refetch(),
         jsonRecordsQuery.refetch(),
-        markdownQuery.refetch(),
       ]);
     } catch (error) {
       setRunActionError(error instanceof Error ? error.message : 'Unable to kill crawl.');
@@ -1101,14 +1060,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   <Button
                     variant="secondary"
                     type="button"
-                    onClick={() => void downloadExport('markdown')}
-                  >
-                    <Download className="size-3.5" />
-                    Markdown
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    type="button"
                     onClick={() => setHistoryOpen(true)}
                     className="h-[var(--control-height)] px-3"
                   >
@@ -1125,7 +1076,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   options={[
                     { value: 'table', label: `Table (${summary.records})` },
                     { value: 'json', label: 'JSON' },
-                    { value: 'markdown', label: 'Markdown' },
                     { value: 'logs', label: 'Logs' },
                     ...(showRunLearningTab ? [{ value: 'learning', label: 'Learning' }] : []),
                   ]}
@@ -1252,54 +1202,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           message={`JSON preview capped at ${records.length} records for performance. Use JSON export for all ${recordsTotal} records.`}
                         />
                       ) : null}
-                    </div>
-                  ) : null}
-
-                  {effectiveOutputTab === 'markdown' ? (
-                    <div className="relative min-h-[55vh]">
-                      <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          type="button"
-                          onClick={() => void navigator.clipboard.writeText(markdown)}
-                          disabled={!markdown}
-                        >
-                          <Copy className="size-3.5" />
-                          Copy
-                        </Button>
-                      </div>
-                      {markdownQuery.isLoading && !markdown ? (
-                        <div className="surface-muted space-y-2 rounded-[var(--radius-lg)] px-3 pt-12 pb-3">
-                          {Array.from({ length: 8 }, (_, index) => (
-                            <div
-                              key={index}
-                              className="skeleton h-5 w-full rounded-[var(--radius-md)]"
-                            />
-                          ))}
-                        </div>
-                      ) : markdown ? (
-                        <div className="surface-muted max-h-[72vh] min-h-[55vh] overflow-y-auto rounded-[var(--radius-md)] px-3 pt-12 pb-3">
-                          <article className="markdown-document max-w-none">
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={{
-                                a: ({ node: _node, ...props }) =>
-                                  props.href && isSafeHref(props.href) ? (
-                                    <a {...props} target="_blank" rel="noopener noreferrer" />
-                                  ) : (
-                                    <span>{props.children}</span>
-                                  ),
-                              }}
-                            >
-                              {markdown}
-                            </ReactMarkdown>
-                          </article>
-                        </div>
-                      ) : (
-                        <div className="surface-muted text-muted type-body grid min-h-40 place-items-center rounded-[var(--radius-lg)] border-dashed">
-                          No markdown is available for this run.
-                        </div>
-                      )}
                     </div>
                   ) : null}
 

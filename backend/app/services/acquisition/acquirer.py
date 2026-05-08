@@ -86,7 +86,6 @@ class AcquisitionResult:
     network_payloads: list[dict[str, object]] = field(default_factory=list)
     browser_diagnostics: dict[str, object] = field(default_factory=dict)
     artifacts: dict[str, object] = field(default_factory=dict)
-    page_markdown: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +232,6 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         max_scrolls=request.max_scrolls,
         max_records=request.max_records,
         browser_reason=browser_reason,
-        capture_page_markdown=acquisition_policy.capture_page_markdown,
         capture_screenshot=acquisition_policy.capture_screenshot,
         host_memory_ttl_seconds=acquisition_policy.host_memory_ttl_seconds,
         prefer_curl_handoff=acquisition_policy.prefer_curl_handoff,
@@ -254,7 +252,6 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         network_payloads=list(getattr(result, "network_payloads", []) or []),
         browser_diagnostics=dict(getattr(result, "browser_diagnostics", {}) or {}),
         artifacts=dict(getattr(result, "artifacts", {}) or {}),
-        page_markdown=str(getattr(result, "page_markdown", "") or ""),
     )
     await policy_middleware.after_fetch(acquisition_result)
     return acquisition_result

@@ -5,7 +5,6 @@ import inspect
 import json
 import logging
 import time
-from dataclasses import dataclass, field
 
 from app.models.crawl import CrawlRun
 from app.models.crawl_settings import CrawlRunSettings
@@ -92,6 +91,12 @@ from .runtime_helpers import (
     set_stage,
 )
 from .types import URLProcessingConfig, URLProcessingResult
+from .url_processing_context import (
+    ExtractedURLStage as _ExtractedURLStage,
+    FetchedURLStage as _FetchedURLStage,
+    URLProcessingContext as _URLProcessingContext,
+    resolved_url_processing_config as _resolved_url_processing_config,
+)
 
 logger = logging.getLogger(__name__)
 __all__ = [
@@ -104,131 +109,6 @@ __all__ = [
 ]
 
 acquire = _acquire
-
-
-@dataclass(slots=True)
-class _URLProcessingContext:
-    session: AsyncSession
-    run: CrawlRun
-    url: str
-    config: URLProcessingConfig
-    url_timeout_seconds: float
-    started_at_monotonic: float
-    requested_fields: list[str] = field(default_factory=list)
-    surface: str = ""
-
-
-@dataclass(slots=True)
-class _FetchedURLStage:
-    context: _URLProcessingContext
-    acquisition_result: AcquisitionResult
-    url_metrics: dict[str, object]
-
-
-@dataclass(slots=True)
-class _ExtractedURLStage:
-    fetched: _FetchedURLStage
-    records: list[dict[str, object]]
-
-
-def _resolve_run_param(
-    plan_value: object | None,
-    config_value: object | None,
-    default_value: int,
-    *,
-    min_value: int = 1,
-) -> int:
-    for candidate in (plan_value, config_value):
-        if candidate is None:
-            continue
-        try:
-            resolved = int(
-                float(candidate)
-                if isinstance(candidate, (int, float))
-                else float(str(candidate))
-            )
-        except (TypeError, ValueError):
-            continue
-        if resolved >= int(min_value):
-            return resolved
-    return int(default_value)
-
-
-def _resolved_url_processing_config(
-    config: URLProcessingConfig | None,
-    *,
-    surface: str,
-    proxy_list: list[str] | None,
-    traversal_mode: str | None,
-    max_pages: int,
-    max_scrolls: int,
-    max_records: int,
-    sleep_ms: int,
-    update_run_state: bool,
-    persist_logs: bool,
-) -> URLProcessingConfig:
-    if config is not None:
-        plan = config.resolved_acquisition_plan(surface=surface)
-        resolved_proxy_list = list(
-            plan.proxy_list or config.proxy_list or proxy_list or []
-        )
-        resolved_traversal_mode = (
-            plan.traversal_mode
-            if plan.traversal_mode is not None
-            else config.traversal_mode
-            if config.traversal_mode is not None
-            else traversal_mode
-        )
-        safety_iteration_cap = int(
-            crawler_runtime_settings.traversal_max_iterations_cap
-        )
-        resolved_max_pages = min(
-            _resolve_run_param(plan.max_pages, config.max_pages, max_pages),
-            safety_iteration_cap,
-        )
-        resolved_max_scrolls = min(
-            _resolve_run_param(plan.max_scrolls, config.max_scrolls, max_scrolls),
-            safety_iteration_cap,
-        )
-        resolved_max_records = _resolve_run_param(
-            plan.max_records,
-            config.max_records,
-            max_records,
-        )
-        resolved_sleep_ms = _resolve_run_param(
-            plan.sleep_ms,
-            config.sleep_ms,
-            sleep_ms,
-            min_value=0,
-        )
-        return URLProcessingConfig.from_acquisition_plan(
-            AcquisitionPlan(
-                surface=surface,
-                proxy_list=tuple(resolved_proxy_list),
-                traversal_mode=resolved_traversal_mode,
-                max_pages=resolved_max_pages,
-                max_scrolls=resolved_max_scrolls,
-                max_records=resolved_max_records,
-                sleep_ms=resolved_sleep_ms,
-            ),
-            update_run_state=config.update_run_state,
-            persist_logs=config.persist_logs,
-            prefetch_only=config.prefetch_only,
-            record_writer=config.record_writer,
-        )
-    return URLProcessingConfig.from_acquisition_plan(
-        AcquisitionPlan(
-            surface=surface,
-            proxy_list=tuple(list(proxy_list or [])),
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
-            max_records=max_records,
-            sleep_ms=sleep_ms,
-        ),
-        update_run_state=update_run_state,
-        persist_logs=persist_logs,
-    )
 
 
 async def process_single_url(
@@ -404,10 +284,6 @@ async def _build_acquisition_request(
     acquisition_profile = apply_acquisition_contract_to_profile(
         build_acquisition_profile(resolved_settings_view),
         resolved_settings_view.acquisition_contract(),
-    )
-    acquisition_profile.setdefault(
-        "capture_page_markdown",
-        bool(resolved_settings_view.llm_enabled()),
     )
     acquisition_policy = AcquisitionPolicy.from_profile(acquisition_profile)
     return AcquisitionRequest(
@@ -588,6 +464,18 @@ async def _retry_detail_challenge_shell_with_real_chrome(
     if not real_chrome_browser_available():
         return None
 
+    remaining_budget_seconds = _remaining_url_budget_seconds(context)
+    min_remaining_seconds = _post_extraction_browser_retry_min_remaining_seconds()
+    if remaining_budget_seconds < min_remaining_seconds:
+        await _log_pipeline_event(
+            context,
+            "info",
+            "Skipping challenge_shell Chrome retry for "
+            f"{context.url}: remaining URL budget {remaining_budget_seconds:.1f}s"
+            f" < required {min_remaining_seconds:.1f}s",
+        )
+        return None
+
     await note_host_hard_block(
         acquisition_result.final_url or context.url,
         method="browser:patchright",
@@ -649,6 +537,15 @@ async def _retry_patchright_detail_shell_with_real_chrome(
         return None
     if str(context.surface or "").strip().lower() != "ecommerce_detail":
         return None
+    if not bool(
+        crawler_runtime_settings.post_extraction_detail_shell_real_chrome_retry_enabled
+    ):
+        await _log_pipeline_event(
+            context,
+            "info",
+            f"Skipping detail_shell Chrome retry for {context.url}: disabled by runtime setting",
+        )
+        return None
     acquisition_result = fetched.acquisition_result
     diagnostics = mapping_or_empty(
         getattr(acquisition_result, "browser_diagnostics", {})
@@ -664,6 +561,17 @@ async def _retry_patchright_detail_shell_with_real_chrome(
     if not real_chrome_browser_available():
         return None
 
+    remaining_budget_seconds = _remaining_url_budget_seconds(context)
+    min_remaining_seconds = _post_extraction_browser_retry_min_remaining_seconds()
+    if remaining_budget_seconds < min_remaining_seconds:
+        await _log_pipeline_event(
+            context,
+            "info",
+            "Skipping detail_shell Chrome retry for "
+            f"{context.url}: remaining URL budget {remaining_budget_seconds:.1f}s"
+            f" < required {min_remaining_seconds:.1f}s",
+        )
+        return None
     await _log_pipeline_event(
         context,
         "info",
@@ -886,9 +794,7 @@ async def _retry_low_quality_extraction_with_browser(
     if not missing_fields:
         return records, selector_rules
     remaining_budget_seconds = _remaining_url_budget_seconds(context)
-    min_remaining_seconds = float(
-        crawler_runtime_settings.low_quality_browser_retry_min_remaining_seconds
-    )
+    min_remaining_seconds = _browser_retry_min_remaining_seconds()
     if remaining_budget_seconds < min_remaining_seconds:
         await _log_pipeline_event(
             context,
@@ -919,6 +825,17 @@ def _remaining_url_budget_seconds(context: _URLProcessingContext) -> float:
         float(context.url_timeout_seconds)
         - max(0.0, time.monotonic() - float(context.started_at_monotonic)),
     )
+
+
+def _browser_retry_min_remaining_seconds() -> float:
+    return max(
+        float(crawler_runtime_settings.low_quality_browser_retry_min_remaining_seconds),
+        float(crawler_runtime_settings.browser_render_timeout_seconds),
+    )
+
+
+def _post_extraction_browser_retry_min_remaining_seconds() -> float:
+    return _browser_retry_min_remaining_seconds()
 
 
 async def _acquire_browser_retry_result(
@@ -993,7 +910,6 @@ async def _apply_extraction_post_processing(
         run=context.run,
         page_url=acquisition_result.final_url,
         html=acquisition_result.html,
-        page_markdown=str(getattr(acquisition_result, "page_markdown", "") or ""),
         records=records,
         resolve_run_config_fn=resolve_run_config,
         extract_records_fn=extract_records_directly_with_llm,

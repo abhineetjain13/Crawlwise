@@ -20,7 +20,6 @@ const apiMock = vi.hoisted(() => ({
   getCrawl: vi.fn(),
   getRecords: vi.fn(),
   getCrawlLogs: vi.fn(),
-  getMarkdown: vi.fn(),
   killCrawl: vi.fn(),
   getDomainRecipe: vi.fn(),
   promoteDomainRecipeSelectors: vi.fn(),
@@ -28,7 +27,6 @@ const apiMock = vi.hoisted(() => ({
   deleteSelector: vi.fn(),
   exportCsv: vi.fn(() => '/export.csv'),
   exportJson: vi.fn(() => '/export.json'),
-  exportMarkdown: vi.fn(() => '/export.md'),
 }));
 
 vi.mock('../../lib/api', () => ({
@@ -277,7 +275,6 @@ describe('CrawlRunScreen', () => {
       },
     );
     apiMock.getCrawlLogs.mockResolvedValue([]);
-    apiMock.getMarkdown.mockResolvedValue('# markdown');
     apiMock.killCrawl.mockResolvedValue({ run_id: 101, status: 'killed' });
     apiMock.getDomainRecipe.mockResolvedValue(makeDomainRecipe());
     apiMock.promoteDomainRecipeSelectors.mockResolvedValue([]);
@@ -391,33 +388,6 @@ describe('CrawlRunScreen', () => {
     }
   });
 
-  it('prefetches markdown before the Markdown tab is opened', async () => {
-    renderRunScreen();
-
-    const markdownButtons = await screen.findAllByRole('button', { name: 'Markdown' });
-    const markdownTabButton = markdownButtons.at(-1);
-    expect(markdownTabButton).toBeTruthy();
-    expect(apiMock.getMarkdown).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(markdownTabButton!);
-
-    await waitFor(() => {
-      expect(apiMock.getMarkdown).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it('renders markdown from the existing export endpoint in the Markdown tab', async () => {
-    apiMock.getMarkdown.mockResolvedValue('# Widget Prime\n\nBuilt for long mileage.');
-
-    renderRunScreen();
-
-    const markdownButtons = await screen.findAllByRole('button', { name: 'Markdown' });
-    fireEvent.click(markdownButtons.at(-1)!);
-
-    expect(await screen.findByText('Widget Prime')).toBeInTheDocument();
-    expect(screen.getByText('Built for long mileage.')).toBeInTheDocument();
-  });
-
   it('reports when no reusable cookie state was observed for a browser run', async () => {
     apiMock.getDomainRecipe.mockResolvedValue({
       ...makeDomainRecipe(),
@@ -507,8 +477,6 @@ describe('CrawlRunScreen', () => {
     );
 
     renderRunScreen();
-    await screen.findAllByRole('button', { name: 'Markdown' });
-
     await waitFor(() => {
       expect(apiMock.getRecords).toHaveBeenCalledWith(101, { page: 1, limit: 100 });
     });
@@ -780,7 +748,6 @@ describe('CrawlRunScreen', () => {
           },
           raw_data: {
             _confidence: { score: 0.4 },
-            page_markdown: 'hidden markdown',
           },
           source_trace: {
             acquisition: { final_url: 'https://example.com/p/1' },

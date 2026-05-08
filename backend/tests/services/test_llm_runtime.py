@@ -20,6 +20,16 @@ def test_estimate_cost_usd_uses_configured_groq_rates() -> None:
     assert estimate_cost_usd("groq", MODEL_GROQ, None, None) == Decimal("0.0000")
 
 
+def test_render_html_text_preserves_br_newlines_and_uses_configured_block_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(llm_tasks.llm_runtime_settings, "html_render_block_tags", "p")
+    assert (
+        llm_tasks._render_html_text("<div><p>Line 1<br>Line 2</p><h1>Ignored</h1></div>")
+        == "Line 1\nLine 2"
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_prompt_task_returns_validated_payload(
     db_session: AsyncSession,
@@ -300,7 +310,7 @@ async def test_run_prompt_task_validates_direct_record_extraction_array_payload(
         task_type="direct_record_extraction",
         run_id=None,
         domain="example.com",
-        variables={"page_markdown": "Widget Prime"},
+        variables={"html_snippet": "Widget Prime"},
     )
 
     assert result.payload == [
@@ -440,7 +450,7 @@ def test_trim_prompt_section_body_skips_expensive_large_json_reparse() -> None:
     assert len(trimmed) <= 120
 
 
-def test_truncate_html_prefers_markdown_dense_anchor_context() -> None:
+def test_truncate_html_prefers_dense_anchor_context() -> None:
     html = """
     <html><body>
     <h1>Senior Python Engineer</h1>
@@ -459,11 +469,11 @@ def test_truncate_html_prefers_markdown_dense_anchor_context() -> None:
     assert len(rendered) <= 80
 
 
-def test_truncate_html_renders_markdown_like_blocks() -> None:
+def test_truncate_html_renders_plain_text_blocks() -> None:
     html = (
         "<h1>Product Title</h1><p>Short description.</p><ul><li>Free shipping</li></ul>"
     )
 
     rendered = llm_tasks._truncate_html(html, 200)
 
-    assert rendered == "Product Title\nShort description.\n- Free shipping"
+    assert rendered == "Product Title\nShort description.\nFree shipping"

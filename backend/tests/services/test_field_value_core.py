@@ -298,6 +298,53 @@ def test_public_record_firewall_preserves_flat_variant_style_axis() -> None:
     assert rejected == {}
 
 
+def test_public_record_firewall_preserves_type_switches_fit_and_length_axes() -> None:
+    data, rejected = public_record_data_for_surface(
+        {
+            "title": "Variant Widget",
+            "variants": [
+                {
+                    "option_values": {
+                        "Type": "Fully Assembled Knob",
+                        "Color": "Carbon Black",
+                        "Switches": "Gateron Jupiter Red",
+                    },
+                    "sku": "V1M-D1",
+                },
+                {
+                    "option_values": {
+                        "Fit": "Short",
+                        "Length": "Regular",
+                    },
+                    "sku": "COAT-SHORT",
+                },
+            ],
+            "variant_count": 2,
+        },
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/variant-widget",
+    )
+
+    assert data == {
+        "title": "Variant Widget",
+        "variants": [
+            {
+                "type": "Fully Assembled Knob",
+                "color": "Carbon Black",
+                "switches": "Gateron Jupiter Red",
+                "sku": "V1M-D1",
+            },
+            {
+                "fit": "Short",
+                "length": "Regular",
+                "sku": "COAT-SHORT",
+            },
+        ],
+        "variant_count": 2,
+    }
+    assert rejected == {}
+
+
 def test_public_record_firewall_drops_parent_shared_variant_fields() -> None:
     data, rejected = public_record_data_for_surface(
         {

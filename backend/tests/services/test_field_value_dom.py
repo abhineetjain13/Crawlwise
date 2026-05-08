@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
 from bs4 import BeautifulSoup
 
+from app.services.dom import selector_engine
 from app.services.field_value_dom import (
     extract_heading_sections,
     extract_page_images,
@@ -458,6 +460,104 @@ def test_requested_content_extractability_keeps_explicit_requested_section_label
 
     assert extractability["matched_requested_fields"] == ["features_benefits"]
     assert "features_benefits" in extractability["extractable_fields"]
+
+
+def test_requested_content_extractability_probe_fields_limit_dom_pattern_scans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <div class="brand">Acme</div>
+            <div class="price">$19.99</div>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    monkeypatch.setitem(
+        selector_engine.EXTRACTION_RULES,
+        "dom_patterns",
+        {
+            "brand": ".brand",
+            "price": ".price",
+        },
+    )
+
+    extractability = requested_content_extractability(
+        soup,
+        surface="ecommerce_detail",
+        requested_fields=None,
+        probe_fields=["price"],
+    )
+
+    assert "price" in extractability["dom_pattern_fields"]
+    assert "brand" not in extractability["dom_pattern_fields"]
+
+
+def test_requested_content_extractability_probe_fields_limit_heading_section_scans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <section>
+              <h2>Description</h2>
+              <p>General copy.</p>
+            </section>
+            <section>
+              <h2>Materials</h2>
+              <p>Full-grain leather.</p>
+            </section>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+    scanned_labels: list[str] = []
+    original = selector_engine._extract_section_content
+
+    def _tracking_extract_section_content(node, root):
+        scanned_labels.append(selector_engine._section_label_text(node))
+        return original(node, root)
+
+    monkeypatch.setattr(
+        selector_engine,
+        "_extract_section_content",
+        _tracking_extract_section_content,
+    )
+
+    extractability = requested_content_extractability(
+        soup,
+        surface="ecommerce_detail",
+        requested_fields=None,
+        probe_fields=["materials"],
+    )
+
+    assert extractability["section_fields"] == ["materials"]
+    assert scanned_labels == ["Materials"]
+
+
+def test_requested_content_extractability_probe_fields_limit_selector_backed_fields() -> (
+    None
+):
+    soup = BeautifulSoup("<html><body></body></html>", "html.parser")
+
+    extractability = requested_content_extractability(
+        soup,
+        surface="ecommerce_detail",
+        requested_fields=None,
+        selector_rules=[
+            {"field_name": "brand", "css_selector": ".brand"},
+            {"field_name": "price", "css_selector": ".price"},
+        ],
+        probe_fields=["price"],
+    )
+
+    assert extractability["selector_backed_fields"] == ["price"]
 
 
 def test_extract_heading_sections_does_not_map_action_labels_to_product_title() -> None:

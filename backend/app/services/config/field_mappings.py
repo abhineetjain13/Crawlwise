@@ -79,6 +79,9 @@ ECOMMERCE_DETAIL_JS_STATE_PRIORITY_FIELDS = frozenset(
 VARIANT_AXIS_FIELD_NAMES = (
     COLOR_FIELD,
     SIZE_FIELD,
+    "type",
+    "switches",
+    "fit",
     "style",
     "material",
     "finish",

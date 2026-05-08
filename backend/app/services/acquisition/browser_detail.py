@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -30,6 +30,7 @@ from app.services.field_policy import (
     normalize_requested_field,
 )
 from app.services.field_value_core import coerce_int as _coerce_int
+from app.services.shared.coerce_primitives import string_list
 
 _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
@@ -49,12 +50,6 @@ def _accessibility_snapshot_timeout_seconds() -> float:
             ].default
         )
     return max(0.0, timeout)
-
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, Iterable) or isinstance(value, (str, bytes, dict)):
-        return []
-    return [str(item) for item in value]
 
 
 def detail_expansion_skip(reason: str) -> dict[str, object]:
@@ -167,12 +162,12 @@ async def expand_detail_content_if_needed_impl(
         "clicked_count": _coerce_int(dom.get("clicked_count"), default=0)
         + _coerce_int(aom.get("clicked_count"), default=0),
         "expanded_elements": [
-            *_string_list(dom.get("expanded_elements")),
-            *_string_list(aom.get("expanded_elements")),
+            *string_list(dom.get("expanded_elements"), accept_iterable=True),
+            *string_list(aom.get("expanded_elements"), accept_iterable=True),
         ],
         "interaction_failures": [
-            *_string_list(dom.get("interaction_failures")),
-            *_string_list(aom.get("interaction_failures")),
+            *string_list(dom.get("interaction_failures"), accept_iterable=True),
+            *string_list(aom.get("interaction_failures"), accept_iterable=True),
         ],
         "dom": dom,
         "aom": aom,

@@ -43,7 +43,18 @@ _NON_TEXT_STRING_NODES = (
 def collect_inline_scalar_rows(
     soup: BeautifulSoup,
     alias_lookup: dict[str, str],
+    *,
+    allowed_fields: set[str] | None = None,
 ) -> list[tuple[str, str]]:
+    normalized_allowed_fields = {
+        str(field_name).strip()
+        for field_name in list(allowed_fields or ())
+        if str(field_name).strip()
+    }
+    if normalized_allowed_fields and not (
+        normalized_allowed_fields & set(INLINE_SCALAR_ALLOWED_FIELDS)
+    ):
+        return []
     rows: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
     root = soup.select_one(DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR) or soup
@@ -61,6 +72,8 @@ def collect_inline_scalar_rows(
             re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
         )
         if normalized not in INLINE_SCALAR_ALLOWED_FIELDS:
+            continue
+        if normalized_allowed_fields and normalized not in normalized_allowed_fields:
             continue
         key = (normalized, value.casefold())
         if key in seen:

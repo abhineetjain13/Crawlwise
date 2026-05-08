@@ -2,13 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from bs4 import BeautifulSoup
+from selectolax.lexbor import LexborHTMLParser
 
+from app.services.extract import detail_dom_extractor
 from app.services.extract.detail_materializer import (
+    _prune_irrelevant_detail_structured_payload,
     _materialize_image_fields,
     _requires_dom_completion,
 )
 from app.services.config._export_data import load_export_data
+from app.services.extraction_context import prepare_extraction_context
 from app.services.extraction_runtime import extract_records
 from app.services.selector_self_heal import (
     _validated_xpath_rules,
@@ -71,6 +76,9 @@ def test_requires_dom_completion_uses_raw_variant_cues_after_pruning() -> None:
 
 
 def test_requires_dom_completion_ignores_logo_only_image_cue() -> None:
+    """When image_url is missing and any img exists in DOM, DOM completion is
+    attempted.  Logo filtering is handled downstream by the image extraction
+    pipeline, not at the DOM completion gate."""
     soup = BeautifulSoup("<main><h1>Widget</h1></main>", "html.parser")
     raw_soup = BeautifulSoup(
         """
@@ -81,7 +89,9 @@ def test_requires_dom_completion_ignores_logo_only_image_cue() -> None:
         "html.parser",
     )
 
-    assert not _requires_dom_completion(
+    # DOM completion is correctly triggered — the extractor will discard
+    # non-product images downstream via dedupe_image_urls / tracking filters.
+    assert _requires_dom_completion(
         record={"title": "Widget"},
         surface="ecommerce_detail",
         requested_fields=None,
@@ -89,6 +99,114 @@ def test_requires_dom_completion_ignores_logo_only_image_cue() -> None:
         soup=soup,
         breadcrumb_soup=raw_soup,
     )
+
+
+def test_prepare_extraction_context_caches_original_dom_objects() -> None:
+    context = prepare_extraction_context(
+        "<html><body><main><h1>Widget</h1></main></body></html>"
+    )
+
+    assert context.original_soup is context.original_soup
+    assert context.original_dom_parser is context.original_dom_parser
+
+
+def test_apply_dom_fallbacks_limits_heading_section_targets_to_section_like_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, set[str]] = {}
+
+    def _fake_extract_heading_sections(
+        _soup,
+        *,
+        alias_lookup=None,
+        allowed_fields=None,
+    ) -> dict[str, str]:
+        captured["allowed_fields"] = set(allowed_fields or ())
+        return {}
+
+    monkeypatch.setattr(
+        detail_dom_extractor,
+        "extract_heading_sections",
+        _fake_extract_heading_sections,
+    )
+
+    html = "<html><body><main><h1>Widget</h1></main></body></html>"
+    detail_dom_extractor.apply_dom_fallbacks(
+        LexborHTMLParser(html),
+        BeautifulSoup(html, "html.parser"),
+        page_url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        requested_fields=["brand", "product_story"],
+        candidates={},
+        candidate_sources={},
+        field_sources={},
+        selector_trace_candidates={},
+        selector_rules=None,
+        add_sourced_candidate=lambda *args, **kwargs: None,
+    )
+
+    assert "description" in captured["allowed_fields"]
+    assert "materials" in captured["allowed_fields"]
+    assert "product_story" in captured["allowed_fields"]
+    assert "brand" not in captured["allowed_fields"]
+
+
+def test_prune_irrelevant_detail_structured_payload_reuses_requested_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"title": 0, "tokens": 0, "codes": 0}
+
+    def _fake_title_from_url(_url: str) -> str:
+        calls["title"] += 1
+        return "widget"
+
+    def _fake_identity_tokens(_value: object) -> set[str]:
+        calls["tokens"] += 1
+        return {"widget"}
+
+    def _fake_identity_codes_from_url(_url: str) -> set[str]:
+        calls["codes"] += 1
+        return {"sku123"}
+
+    monkeypatch.setattr(
+        "app.services.extract.detail_materializer._detail_title_from_url",
+        _fake_title_from_url,
+    )
+    monkeypatch.setattr(
+        "app.services.extract.detail_materializer._detail_identity_tokens",
+        _fake_identity_tokens,
+    )
+    monkeypatch.setattr(
+        "app.services.extract.detail_materializer._detail_identity_codes_from_url",
+        _fake_identity_codes_from_url,
+    )
+
+    payload = {
+        "offers": [
+            {"@type": "Offer", "price": "19.99"},
+            {
+                "@type": "Product",
+                "name": "Other Widget",
+                "url": "https://example.com/products/other-widget",
+                "sku": "OTHER123",
+            },
+            {
+                "@type": "Product",
+                "name": "Widget",
+                "url": "https://example.com/products/widget",
+                "sku": "SKU123",
+            },
+        ]
+    }
+
+    pruned = _prune_irrelevant_detail_structured_payload(
+        payload,
+        page_url="https://example.com/products/widget",
+        requested_page_url="https://example.com/products/widget",
+    )
+
+    assert pruned is not None
+    assert calls == {"title": 1, "tokens": 1, "codes": 1}
 
 
 def test_materialize_image_fields_merges_raw_soup_gallery_when_structured_is_single() -> None:

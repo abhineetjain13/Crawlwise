@@ -6,6 +6,9 @@ from types import MappingProxyType
 from typing import TypedDict, Unpack
 
 from app.services.acquisition_plan import AcquisitionPlan
+from app.services.config.browser_fingerprint_profiles import (
+    RETRY_REASON_BROWSER_LABELS,
+)
 from app.services.config.runtime_settings import VALID_FETCH_MODES
 
 
@@ -15,7 +18,6 @@ class AcquisitionPolicyUpdates(TypedDict, total=False):
     retry_reason: str | None
     proxy_profile: dict[str, object]
     locality_profile: dict[str, object]
-    capture_page_markdown: bool
     capture_screenshot: bool
     host_memory_ttl_seconds: int | None
     prefer_curl_handoff: bool
@@ -31,7 +33,6 @@ class AcquisitionPolicy:
     retry_reason: str | None = None
     proxy_profile: Mapping[str, object] = field(default_factory=dict)
     locality_profile: Mapping[str, object] = field(default_factory=dict)
-    capture_page_markdown: bool = False
     capture_screenshot: bool = False
     host_memory_ttl_seconds: int | None = None
     prefer_curl_handoff: bool = False
@@ -60,7 +61,6 @@ class AcquisitionPolicy:
                 payload.get("locality_profile"),
                 field_name="locality_profile",
             ),
-            capture_page_markdown=bool(payload.get("capture_page_markdown", False)),
             capture_screenshot=bool(payload.get("capture_screenshot", False)),
             host_memory_ttl_seconds=_optional_positive_int(
                 payload.get("host_memory_ttl_seconds")
@@ -96,6 +96,8 @@ class AcquisitionPolicy:
             return "empty-extraction retry"
         if self.retry_reason == "thin_listing":
             return "thin-listing retry"
+        if self.retry_reason:
+            return RETRY_REASON_BROWSER_LABELS.get(self.retry_reason)
         return None
 
     @property
@@ -115,8 +117,6 @@ class AcquisitionPolicy:
             profile["proxy_profile"] = dict(self.proxy_profile)
         if self.locality_profile:
             profile["locality_profile"] = dict(self.locality_profile)
-        if self.capture_page_markdown:
-            profile["capture_page_markdown"] = True
         if self.capture_screenshot:
             profile["capture_screenshot"] = True
         if self.host_memory_ttl_seconds is not None:

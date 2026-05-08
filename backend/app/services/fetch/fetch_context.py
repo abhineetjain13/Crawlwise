@@ -237,7 +237,6 @@ async def fetch_page(
     traversal_mode: str | None = None,
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
-    capture_page_markdown: bool = False,
     capture_screenshot: bool = False,
     host_memory_ttl_seconds: int | None = None,
     prefer_curl_handoff: bool = False,
@@ -329,7 +328,6 @@ async def fetch_page(
             reason=resolved_browser_reason,
             requested_fields=context.requested_fields,
             listing_recovery_mode=context.listing_recovery_mode,
-            capture_page_markdown=bool(capture_page_markdown),
             capture_screenshot=context.capture_screenshot,
             proxies=context.proxies,
         )
@@ -365,7 +363,6 @@ async def fetch_page(
                 reason=browser_reason or "http-escalation",
                 requested_fields=context.requested_fields,
                 listing_recovery_mode=context.listing_recovery_mode,
-                capture_page_markdown=bool(capture_page_markdown),
                 capture_screenshot=context.capture_screenshot,
                 proxies=context.proxies,
             )
@@ -499,7 +496,6 @@ async def _run_browser_attempts(
     reason: str,
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
-    capture_page_markdown: bool = False,
     capture_screenshot: bool = False,
     proxies: list[str | None] | None = None,
     host_policy: HostProtectionPolicy | None = None,
@@ -566,7 +562,6 @@ async def _run_browser_attempts(
                     traversal_mode=context.traversal_mode,
                     requested_fields=browser_requested_fields,
                     listing_recovery_mode=recovery_mode,
-                    capture_page_markdown=capture_page_markdown,
                     capture_screenshot=capture_screenshot,
                     max_pages=context.max_pages,
                     max_scrolls=context.max_scrolls,
@@ -958,7 +953,6 @@ async def _handle_http_result(
             reason=browser_reason,
             requested_fields=context.requested_fields,
             listing_recovery_mode=context.listing_recovery_mode,
-            capture_page_markdown=False,
             capture_screenshot=context.capture_screenshot,
             proxies=browser_proxies,
         )
@@ -1100,6 +1094,11 @@ def _browser_engine_attempts(
     ):
         return engines
     if host_policy.patchright_blocked and host_policy.prefer_browser:
+        return _prefer_engine_first(
+            _append_engine_once(engines, "real_chrome"),
+            "real_chrome",
+        )
+    if host_policy.real_chrome_success and host_policy.prefer_browser:
         return _prefer_engine_first(
             _append_engine_once(engines, "real_chrome"),
             "real_chrome",

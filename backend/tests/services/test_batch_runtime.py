@@ -68,7 +68,7 @@ async def test_process_run_persists_detail_records(
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
     await db_session.refresh(run)
@@ -107,7 +107,7 @@ async def test_process_run_marks_empty_listing_as_listing_detection_failed(
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
     await db_session.refresh(run)
@@ -278,8 +278,8 @@ async def test_process_run_blocks_disallowed_url_before_acquire(
     async def _unexpected_acquire(request):
         raise AssertionError(f"acquire should not run for {request.url}")
 
-    monkeypatch.setattr("app.services.pipeline.core.check_url_crawlability", _disallow)
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _unexpected_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.check_url_crawlability", _disallow)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _unexpected_acquire)
 
     await process_run(db_session, run.id)
     await db_session.refresh(run)
@@ -328,8 +328,8 @@ async def test_process_run_ignores_robots_when_disabled_in_settings(
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.check_url_crawlability", _disallow)
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.check_url_crawlability", _disallow)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
     await db_session.refresh(run)
@@ -380,8 +380,8 @@ async def test_process_run_continues_when_robots_allows_or_fails_open(
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.check_url_crawlability", _allow)
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.check_url_crawlability", _allow)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
     await db_session.refresh(run)
@@ -505,7 +505,7 @@ async def test_process_batch_run_preserves_requested_fields_for_every_url(
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
 
@@ -550,7 +550,7 @@ async def test_process_batch_run_preserves_proxy_list_for_every_url(
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
 
@@ -591,7 +591,7 @@ async def test_process_batch_run_preserves_exact_requested_section_labels_for_ev
             status_code=200,
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
 

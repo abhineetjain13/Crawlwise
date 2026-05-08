@@ -1,22 +1,22 @@
 # Active Plan
 
-**Current:** Productionization Phase 4 Output Layer And Operations -> `docs/plans/productionization-phase-4-output-ops-plan.md`
-**Status:** READY
+**Current:** Architecture Audit Remediation -> `docs/plans/architecture-audit-plan.md`
+**Status:** IN PROGRESS
 **Started:** 2026-05-08
-**Last slice completed:** Productionization Phase 3 God-File Decomposition
-**Current execution focus:** Start Phase 4 in a new session
+**Last slice completed:** Slice 3
+**Current execution focus:** Slice 4 acquisition flow split and Slice 5 extraction owner split
 
 ## Previous
-- Productionization Phase 1 Safety Net (COMPLETE) -> `docs/plans/productionization-phase-1-safety-net-plan.md`
-- Productionization Phase 2 Foundation Layer (COMPLETE) -> `docs/plans/productionization-phase-2-foundation-plan.md`
-- Productionization Phase 3 God-File Decomposition (COMPLETE) -> `docs/plans/productionization-phase-3-god-file-decomposition-plan.md`
-- Extraction Architecture Deepening (COMPLETE) -> `docs/plans/extraction-architecture-deepening-plan.md`
-- Commerce Extraction Refactor (COMPLETE) -> `docs/plans/commerce-extraction-refactor-plan.md`
-- Audit 3 Regression + Persistent Fixes (COMPLETE) -> `docs/plans/audit3-regression-and-persistent-fixes-plan.md`
-- Data Quality Extraction Hardening (COMPLETE) -> `docs/plans/data-quality-extraction-hardening-plan.md`
-- Acquisition & Parsing Deduplication (COMPLETE) -> `docs/plans/parsing-deduplication-plan.md`
-- Data Enrichment (COMPLETE) -> `docs/plans/data-enrichment-plan.md`
-- Data Enrichment Bug Fixes (COMPLETE) -> `docs/plans/data-enrichment-bugfix-plan.md`
+- Productionization Phase 1 Safety Net (COMPLETE) -> `docs/archive/plans/productionization-phase-1-safety-net-plan.md`
+- Productionization Phase 2 Foundation Layer (COMPLETE) -> `docs/archive/plans/productionization-phase-2-foundation-plan.md`
+- Productionization Phase 3 God-File Decomposition (COMPLETE) -> `docs/archive/plans/productionization-phase-3-god-file-decomposition-plan.md`
+- Productionization Phase 4 Output Layer And Operations (ARCHIVED) -> `docs/archive/plans/productionization-phase-4-output-ops-plan.md`
+- Extraction Architecture Deepening (COMPLETE) -> `docs/archive/plans/extraction-architecture-deepening-plan.md`
+- Commerce Extraction Refactor (COMPLETE) -> `docs/archive/plans/commerce-extraction-refactor-plan.md`
+- Audit 3 Regression + Persistent Fixes (COMPLETE) -> `docs/archive/plans/audit3-regression-and-persistent-fixes-plan.md`
+- Data Quality Extraction Hardening (COMPLETE) -> `docs/archive/plans/data-quality-extraction-hardening-plan.md`
+- Data Enrichment (COMPLETE) -> `docs/archive/plans/data-enrichment-plan.md`
+- Data Enrichment Bug Fixes (COMPLETE) -> `docs/archive/plans/data-enrichment-bugfix-plan.md`
 
 ## Superseded
 - Zyte Delta Architectural Fixes -> `docs/plans/zyte-delta-architectural-fixes-plan.md`

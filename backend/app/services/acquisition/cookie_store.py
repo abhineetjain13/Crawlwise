@@ -17,6 +17,7 @@ from app.services.config.cookie_settings import (
     COOKIE_FIELDS,
     DEFAULT_STORAGE_STATE_ENGINE,
     DOMAIN_STORAGE_SCOPE_SEPARATOR,
+    INCLUDE_ORIGIN_STATE_IN_STORAGE,
     STORAGE_STATE_BROWSER_ENGINE_KEY,
     STORAGE_STATE_META_KEY,
     STORAGE_STATE_REPLACE_ATTEMPTS,
@@ -467,7 +468,13 @@ def _write_storage_state_file(path: Path, storage_state: Mapping[str, object]) -
 def _normalize_storage_state(storage_state: Mapping[str, object]) -> dict[str, object]:
     return {
         "cookies": _normalize_cookies(storage_state.get("cookies")),
-        "origins": _normalize_origins(storage_state.get("origins")),
+        # Replaying origin-scoped state causes headful Chrome to wake stale site state
+        # before the requested URL. Keep reusable memory cookie-only.
+        "origins": (
+            _object_list(storage_state.get("origins"))
+            if INCLUDE_ORIGIN_STATE_IN_STORAGE
+            else []
+        ),
     }
 
 
@@ -509,14 +516,7 @@ def _normalize_storage_state_payload(
 
 
 def _has_reusable_storage_state(storage_state: Mapping[str, object]) -> bool:
-    if _object_list(storage_state.get("cookies")):
-        return True
-    for origin in _object_list(storage_state.get("origins")):
-        if not isinstance(origin, Mapping):
-            continue
-        if _object_list(origin.get("localStorage")):
-            return True
-    return False
+    return bool(_object_list(storage_state.get("cookies")))
 
 
 def _normalize_cookies(value: object) -> list[dict[str, object]]:

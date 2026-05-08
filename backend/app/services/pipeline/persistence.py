@@ -235,14 +235,6 @@ async def persist_extracted_records(
         identity_key = _record_identity_key(identity_source_url)
         if rejected_public_fields:
             raw_record["_rejected_public_fields"] = rejected_public_fields
-        page_markdown = str(getattr(acquisition_result, "page_markdown", "") or "").strip()
-        record_url = str(data.get("url") or "").strip()
-        if (
-            page_markdown
-            and not str(raw_record.get("page_markdown") or "").strip()
-            and (not record_url or record_url == record_source_url)
-        ):
-            raw_record["page_markdown"] = page_markdown
         content_fingerprint = _record_content_fingerprint(
             data,
             identity_source_url=identity_source_url,

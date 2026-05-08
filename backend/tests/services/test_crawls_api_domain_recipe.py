@@ -110,7 +110,7 @@ async def test_crawls_domain_recipe_routes_round_trip(
             browser_diagnostics={"browser_reason": "http-escalation"},
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
 
@@ -345,7 +345,7 @@ async def test_domain_run_profile_contract_autosaves_real_chrome_success(
             },
         )
 
-    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.extraction_loop.acquire", _fake_acquire)
 
     await process_run(db_session, run.id)
 

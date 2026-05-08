@@ -43,6 +43,10 @@ VARIANT_AXIS_CANONICAL_MAPPING: dict[frozenset[str], str] = {
         }
     ): COLOR_FIELD,
     frozenset({SIZE_FIELD, "sizes", "frame size", "frame_size"}): SIZE_FIELD,
+    frozenset({"type", "types"}): "type",
+    frozenset({"switch", "switches", "switch type", "switch_type"}): "switches",
+    frozenset({"fit", "fits"}): "fit",
+    frozenset({"length", "lengths"}): "length",
     frozenset(
         {
             "dimensions",
@@ -86,6 +90,10 @@ VARIANT_AXIS_CANONICAL_MAPPING: dict[frozenset[str], str] = {
 PUBLIC_VARIANT_AXIS_FIELDS: tuple[str, ...] = (
     COLOR_FIELD,
     SIZE_FIELD,
+    "type",
+    "switches",
+    "fit",
+    "length",
     "flavor",
     "material",
     "pattern",

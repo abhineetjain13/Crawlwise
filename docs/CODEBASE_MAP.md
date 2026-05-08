@@ -76,7 +76,8 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `data_enrichment/*` | On-demand enrichment job setup for ecommerce detail records |
 | `_batch_runtime.py` | URL loop, progress, pause, kill checks |
 | `tasks.py` | Celery task entry |
-| `pipeline/core.py` | Per-URL orchestration: acquire -> extract -> normalize -> persist |
+| `pipeline/extraction_loop.py` | Per-URL orchestration: acquire -> extract -> normalize -> persist |
+| `pipeline/url_processing_context.py` | Per-URL acquisition config and run-context resolution |
 | `pipeline/persistence.py` | `CrawlRecord` writes, dedupe, summaries |
 | `pipeline/runtime_helpers.py` | Typed stage helpers, browser diagnostics merge, failure-state persistence |
 | `pipeline/direct_record_fallback.py` | Direct-record and explicit LLM gap-fill fallback |
@@ -84,7 +85,7 @@ If a file is not listed, assume it is a helper under a listed owner.
 | `pipeline/types.py` | Pipeline typed objects |
 
 Flow:
-`POST /api/crawls -> crawl_ingestion_service -> crawl_crud -> crawl_service -> tasks/_batch_runtime -> pipeline/core`
+`POST /api/crawls -> crawl_ingestion_service -> crawl_crud -> crawl_service -> tasks/_batch_runtime -> pipeline/extraction_loop`
 
 ---
 
@@ -135,6 +136,8 @@ Canonical config owner:
 | `network_payload_mapper.py` | Network payload to field mapping |
 | `field_value_core.py` | Canonical field coercion |
 | `field_url_normalization.py` | Tracking URL cleanup and query stripping |
+| `dom/content_extractability.py` | Visible text/link/image extractability checks used by selector extraction |
+| `dom/selector_engine.py` | DOM selector extraction, image URL ranking, and selector result assembly |
 | `public_record_firewall.py` | Final public persisted-data schema/value firewall |
 | `field_value_*.py` | Per-field normalization helpers |
 | `field_policy.py` | Field eligibility by surface |
@@ -144,12 +147,17 @@ Canonical config owner:
 | `extract/listing_candidate_ranking.py` | Listing candidate admission, support signals, utility rejection, dedupe, and set ranking |
 | `extract/detail_tiers.py` | Detail tier execution order, DOM skip decision, and finalization transitions |
 | `extract/detail_dom_extractor.py` | Detail DOM context selection, DOM fallback fields, and DOM variant recovery |
+| `extract/detail_image_dedupe.py` | Primary/additional detail image merge and dedupe helper |
+| `extract/detail_numbered_options.py` | DOM-axis hydration for raw numbered option variant rows |
 | `extract/detail_raw_signals.py` | Raw detail breadcrumb category and deterministic gender signal helpers |
 | `extract/detail_price_extractor.py` | Detail price, currency reconciliation, and visible PDP price backfill |
-| `extract/detail_record_finalizer.py` | Detail record image dedupe, field cleanup, DOM variant backfill sequencing, variant row repair, and final quality normalization |
+| `extract/detail_record_finalizer.py` | Detail field cleanup, DOM variant backfill sequencing, variant row repair, and final quality normalization |
+| `extract/detail_shell_filter.py` | Site-shell and utility-page detail rejection helpers |
+| `extract/detail_state_variant_targets.py` | JS-state target maps for DOM variant URL/id enrichment |
 | `extract/detail_text_sanitizer.py` | Detail long-text pollution filters, fulfillment copy cleanup, and low-signal scalar checks |
 | `extract/detail_title_scorer.py` | Detail title promotion and shell-title scoring |
-| `extract/shared_variant_logic.py` | Canonical variant identity, merge, richness, DOM cue, and axis helpers |
+| `extract/shared_variant_logic.py` | Canonical variant identity, merge, richness, grouping, and axis helpers |
+| `extract/variant_dom_cues.py` | Variant DOM cue and sibling-signal helpers |
 | `extract/variant_record_normalization.py` | Variant axis/value normalization delegated by detail record finalization before public variant flattening |
 | `extract/*` | Other extraction helpers |
 

@@ -28,7 +28,6 @@ from app.services.record_export_service import (
     build_csv_export_response,
     build_discoverist_export_response,
     build_json_export_response,
-    build_markdown_export_response,
     build_tables_csv_export_response,
     export_record_provenance,
 )
@@ -180,22 +179,6 @@ async def export_tables_csv(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
     return await build_tables_csv_export_response(session, run_id=run_id)
-
-
-@router.get(
-    "/api/crawls/{run_id}/export/markdown",
-    responses=_route_responses(RUN_NOT_FOUND_RESPONSE),
-)
-async def export_markdown(
-    run_id: int,
-    session: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> StreamingResponse:
-    try:
-        await require_accessible_run(session, run_id=run_id, user=current_user)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
-    return await build_markdown_export_response(session, run_id=run_id)
 
 
 @router.get(

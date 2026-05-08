@@ -109,7 +109,6 @@ def browser_finalize_support(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace
             "html": html,
             "traversal_result": None,
             "rendered_html": html,
-            "page_markdown": "",
             "phase_timings_ms": {},
             "started_at": 0.0,
         }
@@ -488,7 +487,7 @@ async def test_serialize_browser_page_content_reuses_prefetched_html_without_pag
         raise AssertionError("analyze_html should not run for prefetched analysis")
 
     monkeypatch.setattr(browser_page_flow, "analyze_html", _unexpected_analyze_html)
-    html, traversal_result, rendered_html, listing_recovery_diagnostics, page_markdown = (
+    html, traversal_result, rendered_html, listing_recovery_diagnostics = (
         await browser_page_flow.serialize_browser_page_content_impl(
             page,
             surface="ecommerce_detail",
@@ -501,7 +500,6 @@ async def test_serialize_browser_page_content_reuses_prefetched_html_without_pag
             max_records=1,
             prefetched_html=html,
             prefetched_analysis=prefetched_analysis,
-            capture_page_markdown=True,
             phase_timings_ms={},
             execute_listing_traversal=None,
             recover_listing_page_content=None,
@@ -514,7 +512,6 @@ async def test_serialize_browser_page_content_reuses_prefetched_html_without_pag
     assert html == rendered_html
     assert traversal_result is None
     assert listing_recovery_diagnostics["status"] == "skipped"
-    assert "Widget Prime" in page_markdown
 
 
 def test_detail_expansion_extractability_reuses_supplied_soup_without_reparse(
@@ -537,6 +534,70 @@ def test_detail_expansion_extractability_reuses_supplied_soup_without_reparse(
     )
 
     assert extractability["matched_requested_fields"] == ["materials"]
+
+
+def test_detail_expansion_extractability_limits_probe_fields_to_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_probe_fields: list[str] | None = None
+
+    def _fake_extractability(*_args, **kwargs):
+        nonlocal seen_probe_fields
+        raw_probe_fields = kwargs.get("probe_fields")
+        seen_probe_fields = list(raw_probe_fields) if isinstance(raw_probe_fields, list) else None
+        return {
+            "verified": True,
+            "matched_requested_fields": ["materials"],
+            "extractable_fields": ["materials"],
+            "section_fields": ["materials"],
+        }
+
+    monkeypatch.setattr(
+        browser_page_flow,
+        "requested_content_extractability",
+        _fake_extractability,
+    )
+
+    browser_page_flow._detail_expansion_extractability(
+        html="<html></html>",
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+    )
+
+    assert seen_probe_fields == ["materials"]
+
+
+def test_detail_expansion_extractability_uses_default_dom_probe_fields_without_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_probe_fields: list[str] | None = None
+
+    def _fake_extractability(*_args, **kwargs):
+        nonlocal seen_probe_fields
+        raw_probe_fields = kwargs.get("probe_fields")
+        seen_probe_fields = list(raw_probe_fields) if isinstance(raw_probe_fields, list) else None
+        return {
+            "verified": False,
+            "matched_requested_fields": [],
+            "extractable_fields": [],
+            "section_fields": [],
+        }
+
+    monkeypatch.setattr(
+        browser_page_flow,
+        "requested_content_extractability",
+        _fake_extractability,
+    )
+
+    browser_page_flow._detail_expansion_extractability(
+        html="<html></html>",
+        surface="ecommerce_detail",
+        requested_fields=None,
+    )
+
+    assert seen_probe_fields is not None
+    assert "description" in seen_probe_fields
+    assert "materials" in seen_probe_fields
 
 
 @dataclass
@@ -971,30 +1032,6 @@ class _FakeRuntime:
     @asynccontextmanager
     async def page(self, **_kwargs):
         yield self._page
-
-
-async def _page_markdown_via_browser_fetch(
-    html: str | None = None,
-    *,
-    page: _FakeExpansionPage | None = None,
-    surface: str = "ecommerce_detail",
-    accessibility_snapshot: dict[str, object] | None = None,
-) -> str:
-    page = page or _FakeExpansionPage(
-        base_html=str(html or ""),
-        accessibility_snapshot=accessibility_snapshot,
-    )
-
-    async def _fake_runtime(**_kwargs):
-        return _FakeRuntime(page)
-
-    result = await browser_runtime.browser_fetch(
-        "https://example.com/products/widget",
-        5,
-        surface=surface,
-        runtime_provider=_fake_runtime,
-    )
-    return result.page_markdown
 
 
 @pytest.mark.asyncio
@@ -1689,9 +1726,7 @@ async def test_browser_fetch_flattens_shadow_dom_before_serializing_html() -> No
 
 
 @pytest.mark.asyncio
-async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view() -> (
-    None
-):
+async def test_browser_fetch_keeps_markdown_removed() -> None:
     page = _FakeExpansionPage(
         base_html="""
         <html>
@@ -1705,13 +1740,6 @@ async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view(
           </body>
         </html>
         """,
-        accessibility_snapshot={
-            "role": "document",
-            "children": [
-                {"role": "heading", "name": "Widget Prime"},
-                {"role": "link", "name": "View specs"},
-            ],
-        },
     )
 
     async def _fake_runtime(**_kwargs):
@@ -1724,10 +1752,7 @@ async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view(
         runtime_provider=_fake_runtime,
     )
 
-    assert "Widget Prime" in result.page_markdown
-    assert "Built for long mileage." in result.page_markdown
-    assert "Visible links:" not in result.page_markdown
-    assert "SEMANTIC ACCESSIBILITY SNAPSHOT" in result.page_markdown
+    assert hasattr(result, "page_markdown") is False
 
 
 @pytest.mark.asyncio
@@ -1846,180 +1871,6 @@ async def test_browser_fetch_keeps_empty_successful_listing_artifacts(
 
     assert result.artifacts["rendered_listing_fragments"] == []
     assert result.artifacts["listing_visual_elements"] == []
-
-
-@pytest.mark.asyncio
-async def test_generate_page_markdown_tolerates_nodes_with_missing_attrs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    original_beautifulsoup = browser_page_flow.BeautifulSoup
-
-    def _broken_attr_soup(*args, **kwargs):
-        soup = original_beautifulsoup(*args, **kwargs)
-        broken = soup.select_one("div")
-        assert broken is not None
-        broken.attrs = None
-        return soup
-
-    monkeypatch.setattr(browser_page_flow, "BeautifulSoup", _broken_attr_soup)
-    page = _FakeExpansionPage(
-        base_html="<html><body><div class='hero'>Widget Prime</div></body></html>"
-    )
-
-    async def _fake_runtime(**_kwargs):
-        return _FakeRuntime(page)
-
-    async def _skip_settle(*args, **kwargs):
-        del args, kwargs
-        html = "<html><body><div><span>Widget Prime</span></div></body></html>"
-        return (
-            {"is_ready": True},
-            [],
-            False,
-            "test_override",
-            {},
-            {"status": "skipped", "reason": "test_override", "clicked_count": 0},
-            html,
-            browser_page_flow.analyze_html(html),
-        )
-
-    monkeypatch.setattr(browser_runtime, "_settle_browser_page", _skip_settle)
-    result = await browser_runtime.browser_fetch(
-        "https://example.com/products/widget",
-        5,
-        surface="ecommerce_detail",
-        runtime_provider=_fake_runtime,
-    )
-    markdown = result.page_markdown
-
-    assert "Widget Prime" in markdown
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("html", "surface", "accessibility_snapshot", "present", "absent"),
-    [
-        (
-            """
-            <html><body><div role="dialog" aria-label="Category menu"><p>WOMAN MAN KIDS BEST SELLERS TOPS SHIRTS</p></div><main><h1>Widget Prime</h1><p>Built for long mileage.</p></main></body></html>
-            """,
-            "ecommerce_detail",
-            None,
-            ("Widget Prime", "Built for long mileage."),
-            ("BEST SELLERS",),
-        ),
-        (
-            """
-            <html><body><main><h1>Widget Prime</h1><p>Built for long mileage with a stable midsole and grippy outsole.</p></main><section><p>Support, returns, and care instructions live outside the main container.</p><a href="/support/returns">Returns and exchanges</a></section></body></html>
-            """,
-            "ecommerce_detail",
-            None,
-            (
-                "Widget Prime",
-                "Support, returns, and care instructions live outside the main container.",
-                "Returns and exchanges",
-            ),
-            (),
-        ),
-        (
-            """
-            <html><body><main><h1>Widget Prime</h1><p>Built for long mileage with a stable midsole and grippy outsole.</p><p>Breathable mesh upper with protective rand and reinforced heel counter.</p></main><aside><p>Support and care guidance lives outside the main container.</p><a href="/support/care">Care instructions</a></aside></body></html>
-            """,
-            "ecommerce_detail",
-            None,
-            (
-                "Support and care guidance lives outside the main container.",
-                "Care instructions",
-            ),
-            (),
-        ),
-        (
-            """
-            <html><body><main><h1>7 Cup Food Processor</h1><p>Elevate your everyday meals with 3 speed options.</p><section class="reviews-panel"><h2>Reviews</h2><p>Review this product</p></section><section class="questions-panel"><h2>Questions &amp; Answers</h2><p>Will this shred cooked pork?</p></section></main><aside class="secure-payment"><p>100% secure payment</p><p>Affirm available</p></aside></body></html>
-            """,
-            "ecommerce_detail",
-            {
-                "role": "document",
-                "children": [
-                    {"role": "heading", "name": "7 Cup Food Processor"},
-                    {"role": "heading", "name": "Reviews"},
-                    {"role": "text", "name": "100% secure payment"},
-                ],
-            },
-            (
-                "7 Cup Food Processor",
-                "Elevate your everyday meals with 3 speed options.",
-            ),
-            ("Reviews", "Questions & Answers", "100% secure payment"),
-        ),
-        (
-            """
-            <html><body><main><a href="#main">Skip to main content</a><h1>RUSTIC T-SHIRT WITH BUTTONS</h1><p>Put it in your basket</p><p>Add</p><p>Product Measurements</p><p>Check in-store availability</p><p>Shipping, exchanges and returns</p><p>Composition : 60% cotton, 40% polyester</p></main></body></html>
-            """,
-            "ecommerce_detail",
-            None,
-            ("RUSTIC T-SHIRT WITH BUTTONS", "Composition : 60% cotton, 40% polyester"),
-            (
-                "Skip to main content",
-                "Put it in your basket",
-                "Product Measurements",
-                "Check in-store availability",
-                "Shipping, exchanges and returns",
-                "Visible links:",
-            ),
-        ),
-        (
-            """
-            <html><body><main><h1>Widget Prime</h1><p>Product Measurements: Chest 40 in, Length 28 in</p><p>Shipping, exchanges and returns: Free returns within 30 days</p></main></body></html>
-            """,
-            "ecommerce_detail",
-            None,
-            (
-                "Product Measurements: Chest 40 in, Length 28 in",
-                "Shipping, exchanges and returns: Free returns within 30 days",
-            ),
-            (),
-        ),
-        (
-            """
-            <html><body><main><h1>Widget Prime</h1><section class="faq-panel"><h2>Sizing questions</h2><p>Questions about fit are answered in the size guide below.</p></section></main></body></html>
-            """,
-            "ecommerce_detail",
-            None,
-            (
-                "Sizing questions",
-                "Questions about fit are answered in the size guide below.",
-            ),
-            (),
-        ),
-    ],
-    ids=[
-        "prefers-main-content",
-        "falls-back-when-main-too-narrow",
-        "falls-back-when-links-live-outside-main",
-        "skips-review-and-payment-noise",
-        "skips-detail-noise",
-        "keeps-label-value-lines",
-        "preserves-legitimate-faq-content",
-    ],
-)
-async def test_browser_fetch_page_markdown_contract(
-    html: str,
-    surface: str,
-    accessibility_snapshot: dict[str, object] | None,
-    present: tuple[str, ...],
-    absent: tuple[str, ...],
-) -> None:
-    markdown = await _page_markdown_via_browser_fetch(
-        html,
-        surface=surface,
-        accessibility_snapshot=accessibility_snapshot,
-    )
-
-    for snippet in present:
-        assert snippet in markdown
-    for snippet in absent:
-        assert snippet not in markdown
 
 
 @pytest.mark.asyncio
@@ -2699,7 +2550,6 @@ async def test_finalize_browser_fetch_keeps_blocked_html_checker_fallback(
         html="<html><body><h1>Widget Prime</h1></body></html>",
         traversal_result=None,
         rendered_html="",
-        page_markdown="",
         phase_timings_ms={},
         started_at=0.0,
     )
@@ -3279,40 +3129,6 @@ async def test_count_matching_selectors_ignores_timeout_misses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_page_markdown_tolerates_slow_accessibility_snapshots() -> None:
-    page = _FakeExpansionPage(
-        base_html="<html><body><h1>Widget Prime</h1></body></html>",
-        accessibility_snapshot={"role": "document", "children": []},
-    )
-
-    async def _slow_snapshot() -> dict[str, object]:
-        await asyncio.sleep(1)
-        return {"role": "document", "children": []}
-
-    page.accessibility = SimpleNamespace(snapshot=_slow_snapshot)
-
-    markdown = await _page_markdown_via_browser_fetch(page=page)
-
-    assert "Widget Prime" in markdown
-
-
-@pytest.mark.asyncio
-async def test_generate_page_markdown_raises_unexpected_accessibility_errors() -> None:
-    page = _FakeExpansionPage(
-        base_html="<html><body><h1>Widget Prime</h1></body></html>",
-        accessibility_snapshot={"role": "document", "children": []},
-    )
-
-    async def _broken_snapshot() -> dict[str, object]:
-        raise PlaywrightError("locator crashed unexpectedly")
-
-    page.accessibility = SimpleNamespace(snapshot=_broken_snapshot)
-
-    with pytest.raises(PlaywrightError, match="locator crashed unexpectedly"):
-        await _page_markdown_via_browser_fetch(page=page)
-
-
-@pytest.mark.asyncio
 async def test_expand_all_interactive_elements_respects_small_interaction_cap(
     patch_settings,
 ) -> None:
@@ -3874,6 +3690,26 @@ async def test_emit_browser_behavior_activity_adds_scroll_physics(
     assert wait_calls
 
 
+def test_should_run_behavior_realism_skips_detail_shell_retry_for_real_chrome() -> None:
+    assert (
+        browser_runtime._should_run_behavior_realism(
+            "real_chrome",
+            browser_reason="detail-shell retry",
+        )
+        is False
+    )
+
+
+def test_should_run_behavior_realism_skips_vendor_block_for_real_chrome() -> None:
+    assert (
+        browser_runtime._should_run_behavior_realism(
+            "real_chrome",
+            browser_reason="vendor-block:akamai",
+        )
+        is False
+    )
+
+
 @pytest.mark.asyncio
 async def test_type_text_like_human_types_one_character_at_a_time(
     monkeypatch: pytest.MonkeyPatch,
@@ -3955,6 +3791,52 @@ async def test_recover_browser_challenge_keeps_original_response_when_retry_stay
 
     assert result is original_response
     assert page.goto_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_browser_challenge_skips_retry_for_real_chrome() -> None:
+    original_response = SimpleNamespace(
+        status=403, headers={"content-type": "text/html"}
+    )
+
+    class _Page:
+        mouse = None
+
+        def __init__(self) -> None:
+            self.goto_calls = 0
+
+        async def goto(self, *_args, **_kwargs):
+            self.goto_calls += 1
+            return original_response
+
+        async def wait_for_timeout(self, _ms: int) -> None:
+            return None
+
+    page = _Page()
+
+    async def _get_page_html(_page: Any) -> str:
+        raise AssertionError("real chrome challenge recovery should not read HTML")
+
+    async def _classify_blocked_page(_html: str, _status_code: int):
+        raise AssertionError("real chrome challenge recovery should not classify")
+
+    result = await browser_recovery.recover_browser_challenge(
+        page,
+        url="https://example.com/products/widget",
+        response=original_response,
+        browser_engine="real_chrome",
+        timeout_seconds=5,
+        phase_timings_ms={},
+        challenge_wait_max_seconds=1,
+        challenge_poll_interval_ms=100,
+        navigation_timeout_ms=1000,
+        elapsed_ms=lambda _started_at: 0,
+        classify_blocked_page=_classify_blocked_page,
+        get_page_html=_get_page_html,
+    )
+
+    assert result is original_response
+    assert page.goto_calls == 0
 
 
 @pytest.mark.asyncio
@@ -4370,7 +4252,7 @@ async def test_origin_warmup_skips_for_rotating_proxy_profile() -> None:
 
 
 @pytest.mark.asyncio
-async def test_origin_warmup_runs_without_stealth_layer() -> None:
+async def test_origin_warmup_skips_for_real_chrome() -> None:
     page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
 
     await browser_runtime._maybe_warm_origin_before_navigation(
@@ -4385,7 +4267,7 @@ async def test_origin_warmup_runs_without_stealth_layer() -> None:
         phase_timings_ms={},
     )
 
-    assert page.spawned_pages
+    assert page.spawned_pages == []
 
 
 @pytest.mark.asyncio

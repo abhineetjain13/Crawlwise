@@ -201,6 +201,7 @@ def normalize_variant_record(record: dict[str, Any], *, finalize_contract: bool 
     _sanitize_variant_axes(record)
     _dedupe_and_prune_variant_rows(record)
     _backfill_variant_context(record)
+    _backfill_parent_scalar_axes_from_variants(record)
     _drop_polluted_parent_scalar_axes(record)
     if finalize_contract:
         _finalize_variant_contract(record)
@@ -238,6 +239,28 @@ def _backfill_variant_context(record: dict[str, Any]) -> None:
     _backfill_variant_shared_fields_from_record(record)
     _prune_low_signal_numeric_only_variants(record)
     _drop_parent_sku_alias_variant_rows(record)
+
+
+def _backfill_parent_scalar_axes_from_variants(record: dict[str, Any]) -> None:
+    variants = record.get("variants")
+    if not isinstance(variants, list) or len(variants) < 2:
+        return
+    variant_rows = [variant for variant in variants if isinstance(variant, dict)]
+    if len(variant_rows) < 2:
+        return
+    for field_name in ("color", "size"):
+        if clean_text(record.get(field_name)):
+            continue
+        values = [
+            clean_text(variant.get(field_name))
+            for variant in variant_rows
+            if clean_text(variant.get(field_name))
+        ]
+        if len(values) != len(variant_rows):
+            continue
+        first_value = values[0]
+        if all(value.casefold() == first_value.casefold() for value in values[1:]):
+            record[field_name] = first_value
 
 
 def _finalize_variant_contract(record: dict[str, Any]) -> None:

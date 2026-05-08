@@ -29,6 +29,7 @@ from app.services.config.data_enrichment import (
     DATA_ENRICHMENT_STATUS_UNENRICHED,
 )
 from app.services.run_summary import as_int, merge_run_summary_patch
+from app.services.shared.coerce_primitives import string_list
 
 CRAWL_RUN_FK = "crawl_runs.id"
 USERS_FK = "users.id"
@@ -62,12 +63,6 @@ class UpdatedAtMixin(CreatedAtMixin):
 class CompletedAtMixin:
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
-    )
-
-
-def _string_list(value: object) -> list[str]:
-    return (
-        [str(item or "").strip() for item in value] if isinstance(value, list) else []
     )
 
 
@@ -212,7 +207,9 @@ class BatchRunProgressState:
         persisted_record_count: int,
     ) -> "BatchRunProgressState":
         summary = mapping_or_empty(current_summary)
-        raw_verdicts = _string_list(summary.get("url_verdicts"))[:total_urls]
+        raw_verdicts = string_list(
+            summary.get("url_verdicts"), strip=True, none_as_empty=True
+        )[:total_urls]
         completed_count = min(as_int(summary.get("completed_urls", 0)), total_urls)
         if raw_verdicts:
             completed_count = 0

@@ -47,6 +47,30 @@ def listing_node_attr(node, name: str) -> str:
     return str(attrs.get(name) or "").strip()
 
 
+def listing_node_html(node) -> str:
+    try:
+        return str(getattr(node, "html", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def listing_node_signature(node, *, include_title: bool = True) -> str:
+    attrs = getattr(node, "attributes", {}) or {}
+    values = [
+        str(attrs.get("class") or ""),
+        str(attrs.get("id") or ""),
+        str(attrs.get("role") or ""),
+        str(attrs.get("aria-label") or ""),
+    ]
+    if include_title:
+        values.append(str(attrs.get("title") or ""))
+    return " ".join(values).lower()
+
+
+def listing_node_tag(node) -> str:
+    return str(getattr(node, "tag", "") or "").strip().lower()
+
+
 def listing_node_css(node, selector: str) -> list[object]:
     if not selector:
         return []
@@ -301,15 +325,7 @@ def _node_contains_nested_listing_candidates(node, *, surface: str) -> bool:
 
 
 def _listing_node_signature(node) -> str:
-    attrs = getattr(node, "attributes", {}) or {}
-    return " ".join(
-        [
-            str(attrs.get("class") or ""),
-            str(attrs.get("id") or ""),
-            str(attrs.get("role") or ""),
-            str(attrs.get("aria-label") or ""),
-        ]
-    ).lower()
+    return listing_node_signature(node, include_title=False)
 
 
 def _node_text_has_price(node) -> bool:

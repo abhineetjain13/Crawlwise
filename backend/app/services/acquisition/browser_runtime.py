@@ -110,6 +110,7 @@ from app.services.config.extraction_rules import (
     DETAIL_EXPAND_KEYWORD_EXTENSIONS,
 )
 from app.services.config.browser_fingerprint_profiles import (
+    BEHAVIOR_REALISM_ELIGIBLE_BROWSER_REASONS,
     NATIVE_REAL_CHROME_CONTEXT_OPTIONS,
     REAL_CHROME_IGNORE_DEFAULT_ARGS,
     WARMUP_ELIGIBLE_BROWSER_REASONS,
@@ -137,13 +138,15 @@ logger = logging.getLogger(__name__)
 _RUN_STORAGE_PERSIST_ATTR = "_crawler_persist_run_storage_state"
 _DOMAIN_STORAGE_PERSIST_ATTR = "_crawler_persist_domain_storage_state"
 _BROWSERFORGE_ACTIVE_ATTR = "_crawler_browserforge_active"
-_BROWSER_PREFERRED_HOST_TTL_SECONDS = 1800.0
-_BROWSER_PREFERRED_HOSTS: dict[str, float] = {}
-_BROWSER_PREFERRED_HOST_SUCCESSES: dict[str, tuple[int, float]] = {}
-_DIRECT_BROWSER_RUNTIMES: dict[str, SharedBrowserRuntime] = {}
-_PROXIED_BROWSER_RUNTIMES: dict[tuple[str, str], SharedBrowserRuntime] = {}
-_BROWSER_RUNTIME_LOCK = asyncio.Lock()
-_POPUP_GUARD_TASKS: set[asyncio.Task[Any]] = set()
+class BrowserRuntimePool:
+    def __init__(self) -> None:
+        self.direct: dict[str, SharedBrowserRuntime] = {}
+        self.proxied: dict[tuple[str, str], SharedBrowserRuntime] = {}
+        self.lock = asyncio.Lock()
+        self.popup_guard_tasks: set[asyncio.Task[Any]] = set()
+
+
+_BROWSER_POOL = BrowserRuntimePool()
 _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
     for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
@@ -200,12 +203,21 @@ def real_chrome_browser_available() -> bool:
     return real_chrome_executable_path() is not None
 
 
-def _should_run_behavior_realism(engine: str) -> bool:
+def _should_run_behavior_realism(engine: str, *, browser_reason: str | None) -> bool:
     if not bool(crawler_runtime_settings.browser_behavior_realism_enabled):
         return False
     normalized_engine = _normalize_browser_engine(engine)
-    return normalized_engine == _REAL_CHROME_BROWSER_ENGINE or not bool(
+    if normalized_engine == _REAL_CHROME_BROWSER_ENGINE:
+        return False
+    if normalized_engine != _REAL_CHROME_BROWSER_ENGINE and bool(
         crawler_runtime_settings.browser_behavior_real_chrome_only
+    ):
+        return False
+    reason = str(browser_reason or "").strip().lower()
+    if not reason:
+        return False
+    return reason in BEHAVIOR_REALISM_ELIGIBLE_BROWSER_REASONS or reason.startswith(
+        WARMUP_VENDOR_BLOCK_PREFIX
     )
 
 
@@ -719,8 +731,8 @@ async def _evict_idle_browser_runtimes_locked() -> None:
     )
     max_entries = max(1, int(crawler_runtime_settings.browser_runtime_pool_max_entries))
     pools = (
-        ("direct", _DIRECT_BROWSER_RUNTIMES),
-        ("proxied", _PROXIED_BROWSER_RUNTIMES),
+        ("direct", _BROWSER_POOL.direct),
+        ("proxied", _BROWSER_POOL.proxied),
     )
     candidates: list[tuple[str, str | tuple[str, str], SharedBrowserRuntime]] = []
     for pool_name, pool in pools:
@@ -759,11 +771,11 @@ async def _evict_idle_browser_runtimes_locked() -> None:
         candidates.append(remaining[0])
     for pool_name, key, runtime in candidates:
         if pool_name == "direct":
-            _DIRECT_BROWSER_RUNTIMES.pop(str(key), None)
+            _BROWSER_POOL.direct.pop(str(key), None)
         else:
             proxied_key = key if isinstance(key, tuple) and len(key) == 2 else None
             if proxied_key is not None:
-                _PROXIED_BROWSER_RUNTIMES.pop(proxied_key, None)
+                _BROWSER_POOL.proxied.pop(proxied_key, None)
         await runtime.close()
 
 
@@ -772,57 +784,55 @@ async def get_browser_runtime(
     proxy: str | None = None,
     browser_engine: str = _CHROMIUM_BROWSER_ENGINE,
 ) -> SharedBrowserRuntime:
-    global _DIRECT_BROWSER_RUNTIMES, _PROXIED_BROWSER_RUNTIMES
     normalized_proxy = _normalized_proxy_value(proxy)
     normalized_engine = _normalize_browser_engine(browser_engine)
     if normalized_proxy is None:
-        runtime = _DIRECT_BROWSER_RUNTIMES.get(normalized_engine)
+        runtime = _BROWSER_POOL.direct.get(normalized_engine)
         if runtime is not None:
             runtime.touch()
             return runtime
     else:
-        runtime = _PROXIED_BROWSER_RUNTIMES.get((normalized_engine, normalized_proxy))
+        runtime = _BROWSER_POOL.proxied.get((normalized_engine, normalized_proxy))
         if runtime is not None:
             runtime.touch()
             return runtime
-    async with _BROWSER_RUNTIME_LOCK:
+    async with _BROWSER_POOL.lock:
         if normalized_proxy is None:
-            runtime = _DIRECT_BROWSER_RUNTIMES.get(normalized_engine)
+            runtime = _BROWSER_POOL.direct.get(normalized_engine)
             if runtime is None:
                 await _evict_idle_browser_runtimes_locked()
                 runtime = SharedBrowserRuntime(
                     max_contexts=settings.browser_pool_size,
                     browser_engine=normalized_engine,
                 )
-                _DIRECT_BROWSER_RUNTIMES[normalized_engine] = runtime
+                _BROWSER_POOL.direct[normalized_engine] = runtime
             runtime.touch()
             return runtime
         await _evict_idle_browser_runtimes_locked()
-        runtime = _PROXIED_BROWSER_RUNTIMES.get((normalized_engine, normalized_proxy))
+        runtime = _BROWSER_POOL.proxied.get((normalized_engine, normalized_proxy))
         if runtime is None:
             runtime = SharedBrowserRuntime(
                 max_contexts=settings.browser_pool_size,
                 launch_proxy=normalized_proxy,
                 browser_engine=normalized_engine,
             )
-            _PROXIED_BROWSER_RUNTIMES[(normalized_engine, normalized_proxy)] = runtime
+            _BROWSER_POOL.proxied[(normalized_engine, normalized_proxy)] = runtime
         runtime.touch()
         return runtime
 
 
 async def shutdown_browser_runtime() -> None:
-    global _DIRECT_BROWSER_RUNTIMES, _PROXIED_BROWSER_RUNTIMES
-    async with _BROWSER_RUNTIME_LOCK:
+    async with _BROWSER_POOL.lock:
         runtimes = [
             runtime
             for runtime in (
-                *_DIRECT_BROWSER_RUNTIMES.values(),
-                *_PROXIED_BROWSER_RUNTIMES.values(),
+                *_BROWSER_POOL.direct.values(),
+                *_BROWSER_POOL.proxied.values(),
             )
             if runtime is not None
         ]
-        _DIRECT_BROWSER_RUNTIMES = {}
-        _PROXIED_BROWSER_RUNTIMES = {}
+        _BROWSER_POOL.direct.clear()
+        _BROWSER_POOL.proxied.clear()
     for runtime in runtimes:
         await runtime.close()
     clear_browser_identity_cache()
@@ -857,8 +867,8 @@ def browser_runtime_snapshot() -> dict[str, int | bool]:
     runtimes = [
         runtime
         for runtime in (
-            *_DIRECT_BROWSER_RUNTIMES.values(),
-            *_PROXIED_BROWSER_RUNTIMES.values(),
+            *_BROWSER_POOL.direct.values(),
+            *_BROWSER_POOL.proxied.values(),
         )
         if runtime is not None
     ]
@@ -1223,7 +1233,6 @@ async def browser_fetch(
     traversal_mode: str | None = None,
     requested_fields: list[str] | None = None,
     listing_recovery_mode: str | None = None,
-    capture_page_markdown: bool = True,
     capture_screenshot: bool = False,
     max_pages: int = 1,
     max_scrolls: int = 1,
@@ -1357,6 +1366,7 @@ async def browser_fetch(
                     operation=lambda: navigate_browser_page_impl(
                         page,
                         url=url,
+                        browser_engine=runtime_engine,
                         timeout_seconds=_remaining(),
                         phase_timings_ms=phase_timings_ms,
                         readiness_policy=readiness_policy,
@@ -1394,7 +1404,10 @@ async def browser_fetch(
                         ),
                     )
                 behavior_diagnostics: dict[str, object] = {}
-                if _should_run_behavior_realism(runtime_engine):
+                if _should_run_behavior_realism(
+                    runtime_engine,
+                    browser_reason=browser_reason,
+                ):
                     behavior_started_at = time.perf_counter()
                     behavior_diagnostics = await emit_browser_behavior_activity(page)
                     phase_timings_ms["behavior_realism"] = _elapsed_ms(
@@ -1430,7 +1443,6 @@ async def browser_fetch(
                     traversal_result,
                     rendered_html,
                     listing_recovery_diagnostics,
-                    page_markdown,
                 ) = await _run_browser_stage(
                     stage="serialize",
                     page=page,
@@ -1453,7 +1465,6 @@ async def browser_fetch(
                         max_records=max_records,
                         prefetched_html=prefetched_html,
                         prefetched_analysis=prefetched_analysis,
-                        capture_page_markdown=capture_page_markdown,
                         phase_timings_ms=phase_timings_ms,
                         execute_listing_traversal=execute_listing_traversal,
                         recover_listing_page_content=recover_listing_page_content,
@@ -1494,7 +1505,6 @@ async def browser_fetch(
                             else None,
                             traversal_result=traversal_result,
                             rendered_html=rendered_html,
-                            page_markdown=page_markdown,
                             interstitial_diagnostics=interstitial_diagnostics,
                             phase_timings_ms=phase_timings_ms,
                             started_at=started_at,
@@ -1555,7 +1565,6 @@ async def browser_fetch(
                     ),
                     browser_diagnostics=diagnostics,
                     artifacts=_mapping_value(finalized.get("artifacts")),
-                    page_markdown=str(finalized.get("page_markdown") or ""),
                 )
             finally:
                 _remove_popup_guard(popup_guard_registrations)
@@ -1602,7 +1611,15 @@ async def _maybe_warm_origin_before_navigation(
         return
     if _proxy_requires_fresh_browser_state(proxy_profile):
         return
+    if _normalize_browser_engine(browser_engine) == _REAL_CHROME_BROWSER_ENGINE:
+        return
     reason = str(browser_reason or "").strip().lower()
+    if reason in {
+        "detail-shell retry",
+        "challenge-shell retry",
+        "low-quality-extraction retry",
+    }:
+        return
     if not (
         reason in WARMUP_ELIGIBLE_BROWSER_REASONS
         or reason.startswith(WARMUP_VENDOR_BLOCK_PREFIX)
@@ -1653,6 +1670,7 @@ async def _maybe_warm_origin_before_navigation(
             warm_page,
             url=warm_url,
             response=warm_response,
+            browser_engine=browser_engine,
             timeout_seconds=max(1.0, warm_budget_ms / 1000),
             phase_timings_ms=warm_phase_timings_ms,
             challenge_wait_max_seconds=min(
@@ -1669,12 +1687,7 @@ async def _maybe_warm_origin_before_navigation(
             classify_blocked_page=classify_blocked_page_async,
             get_page_html=get_page_html,
         )
-        if _should_run_behavior_realism(browser_engine):
-            warm_behavior_started_at = time.perf_counter()
-            await emit_browser_behavior_activity(warm_page)
-            phase_timings_ms["origin_warmup_behavior"] = _elapsed_ms(
-                warm_behavior_started_at
-            )
+        phase_timings_ms["origin_warmup_behavior"] = 0
         await warm_page.wait_for_timeout(min(warm_pause_ms, warm_budget_ms))
         if warm_phase_timings_ms.get("challenge_wait"):
             phase_timings_ms["origin_warmup_challenge_wait"] = int(
@@ -1926,8 +1939,8 @@ def _remove_popup_guard(registrations: list[tuple[Any, str, Any]]) -> None:
 
 def _schedule_popup_close(page: Any, *, on_event=None) -> None:
     task = asyncio.create_task(_close_unexpected_popup(page, on_event=on_event))
-    _POPUP_GUARD_TASKS.add(task)
-    task.add_done_callback(_POPUP_GUARD_TASKS.discard)
+    _BROWSER_POOL.popup_guard_tasks.add(task)
+    task.add_done_callback(_BROWSER_POOL.popup_guard_tasks.discard)
 
 
 async def _close_unexpected_popup(page: Any, *, on_event=None) -> None:

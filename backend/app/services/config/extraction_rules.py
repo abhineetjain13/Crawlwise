@@ -7,10 +7,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app.services.config._export_data import load_export_data
-from app.services.config.variant_policy import (
-    AXIS_NAME_ALIASES,
-    PUBLIC_VARIANT_AXIS_FIELDS,
-)
+from app.services.config.variant_policy import AXIS_NAME_ALIASES, PUBLIC_VARIANT_AXIS_FIELDS
 from app.services.config.runtime_settings import crawler_runtime_settings
 
 HTML_PARSER = "html.parser"
@@ -60,19 +57,8 @@ ECOMMERCE_DESCRIPTION_BLOCK_LIMIT = 40
 DETAIL_PAYLOAD_LIST_LIMIT = 50
 DETAIL_PAYLOAD_MAX_DEPTH = 12
 DETAIL_PRODUCT_IMAGE_CUE_SELECTOR = (
-    "main [class*='product'] img, "
-    "main [id*='product'] img, "
-    "main [class*='gallery'] img, "
-    "main [id*='gallery'] img, "
-    "article [class*='product'] img, "
-    "article [id*='product'] img, "
-    "article [class*='gallery'] img, "
-    "article [id*='gallery'] img, "
-    "[role='main'] [class*='product'] img, "
-    "[role='main'] [id*='product'] img, "
-    "[role='main'] [class*='gallery'] img, "
-    "[role='main'] [id*='gallery'] img, "
-    "img:not([class*='logo']):not([class*='icon']):not([src*='logo']):not([src*='icon'])"
+    "main img, article img, [role='main'] img, "
+    "[class*='product' i] img, [id*='product' i] img, [data-testid*='product' i] img"
 )
 LISTING_VISUAL_PRICE_REGEX_PATTERN = r"(?:₹|Rs\.?|INR|\$|€|£)\s?[\d,.]+"
 TRACKING_PIXEL_PATTERNS = (
@@ -525,6 +511,8 @@ DETAIL_TEXT_HIDDEN_STYLE_TOKENS = (
 )
 DETAIL_VARIANT_CONTEXT_NOISE_TOKENS = (
     "account",
+    "addon",
+    "addons",
     "carousel",
     "cross-sell",
     "footer",
@@ -545,12 +533,8 @@ DETAIL_VARIANT_CONTEXT_NOISE_TOKENS = (
     "report",
 )
 VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH = 6
-# Used when runtime config is invalid; 3 keeps noise pruning local to variant UI.
 VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK = 3
-# Last-resort parse default after configured depth and fallback both fail.
-VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = (
-    VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK
-)
+VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_DEFAULT = VARIANT_CONTEXT_NOISE_ANCESTOR_DEPTH_FALLBACK
 DETAIL_VARIANT_SCOPE_SELECTOR = (
     "form[action*='cart' i], "
     "form[id*='product' i], "
@@ -1250,14 +1234,8 @@ LISTING_PRICE_NODE_SELECTORS = (
     "[data-price]",
     "[aria-label*='price']",
 )
-LISTING_PROMINENT_TITLE_TAGS = frozenset(
-    {"strong", "b", "h1", "h2", "h3", "h4", "h5", "h6"}
-)
+LISTING_PROMINENT_TITLE_TAGS = frozenset({"strong", "b", "h1", "h2", "h3", "h4", "h5", "h6"})
 LISTING_CHROME_TEXT_LIMIT = 800
-# Path prefixes that indicate a category/collection listing page (not a
-# product detail page).  When both the listing page URL and a candidate URL
-# share one of these prefixes the candidate is a sibling category link and
-# should be treated as structural navigation, not a product record.
 LISTING_CATEGORY_PATH_PREFIXES = (
     "/c/",
     "/category/",

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-from urllib.parse import urlparse
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -19,8 +18,6 @@ from app.services.config.field_mappings import (
     VARIANT_DOM_FIELD_NAMES,
 )
 from app.services.config.extraction_rules import (
-    DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
-    DETAIL_BRAND_SHELL_TITLE_TOKENS,
     DETAIL_CATEGORY_SOURCE_RANKS,
     DETAIL_PRODUCT_IMAGE_CUE_SELECTOR,
     DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES,
@@ -32,7 +29,6 @@ from app.services.config.extraction_rules import (
     DETAIL_PAYLOAD_MAX_DEPTH,
     DETAIL_TITLE_SOURCE_RANKS,
     SOURCE_PRIORITY,
-    TRACKING_PIXEL_PATTERNS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extraction_context import (
@@ -76,6 +72,10 @@ from app.services.extract.detail_dom_extractor import (
 from app.services.extract.detail_raw_signals import (
     breadcrumb_category_from_dom,
 )
+from app.services.extract.detail_shell_filter import (
+    detail_url_has_multiple_product_segments as _detail_url_has_multiple_product_segments,
+    looks_like_site_shell_record as _looks_like_site_shell_record,
+)
 from app.services.extract.detail_identity import (
     detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
     detail_identity_codes_from_url as _detail_identity_codes_from_url,
@@ -91,10 +91,9 @@ from app.services.extract.detail_identity import (
     record_matches_requested_detail_identity as _record_matches_requested_detail_identity,
 )
 from app.services.extract.detail_record_finalizer import (
-    dedupe_primary_and_additional_images,
-    detail_title_looks_like_placeholder,
     repair_ecommerce_detail_record_quality,
 )
+from app.services.extract.detail_image_dedupe import dedupe_primary_and_additional_images
 from app.services.extract.detail_text_sanitizer import detail_candidate_is_valid
 from app.services.extract.detail_price_extractor import (
     drop_low_signal_zero_detail_price,
@@ -117,6 +116,11 @@ from app.services.extract.detail_tiers import (
 )
 
 logger = logging.getLogger(__name__)
+
+try:
+    DETAIL_PAYLOAD_MAX_DEPTH_INT = int(DETAIL_PAYLOAD_MAX_DEPTH)
+except (TypeError, ValueError):
+    DETAIL_PAYLOAD_MAX_DEPTH_INT = 10
 
 _EARLY_PRICE_REPAIR_REQUIRED_FIELDS = (TITLE_FIELD, IMAGE_URL_FIELD, URL_FIELD)
 
@@ -535,12 +539,17 @@ def _prune_irrelevant_detail_structured_payload(
     page_url: str,
     requested_page_url: str,
     depth: int = 0,
+    requested_title: str | None = None,
+    requested_tokens: set[str] | None = None,
+    requested_codes: set[str] | None = None,
 ) -> object | None:
-    try:
-        max_depth = int(DETAIL_PAYLOAD_MAX_DEPTH)
-    except (TypeError, ValueError):
-        max_depth = 12
-    if depth >= max_depth:
+    if depth == 0:
+        requested_title = requested_title or _detail_title_from_url(requested_page_url)
+        requested_tokens = requested_tokens or _detail_identity_tokens(requested_title)
+        requested_codes = requested_codes or _detail_identity_codes_from_url(
+            requested_page_url
+        )
+    if depth >= DETAIL_PAYLOAD_MAX_DEPTH_INT:
         return None
     if isinstance(payload, list):
         cleaned_items = [
@@ -549,6 +558,9 @@ def _prune_irrelevant_detail_structured_payload(
                 page_url=page_url,
                 requested_page_url=requested_page_url,
                 depth=depth + 1,
+                requested_title=requested_title,
+                requested_tokens=requested_tokens,
+                requested_codes=requested_codes,
             )
             for item in payload[: int(DETAIL_PAYLOAD_LIST_LIMIT or 50)]
         ]
@@ -559,6 +571,9 @@ def _prune_irrelevant_detail_structured_payload(
         payload,
         page_url=page_url,
         requested_page_url=requested_page_url,
+        requested_title=requested_title,
+        requested_tokens=requested_tokens,
+        requested_codes=requested_codes,
     ):
         return None
     cleaned: dict[str, object] = {}
@@ -568,6 +583,9 @@ def _prune_irrelevant_detail_structured_payload(
             page_url=page_url,
             requested_page_url=requested_page_url,
             depth=depth + 1,
+            requested_title=requested_title,
+            requested_tokens=requested_tokens,
+            requested_codes=requested_codes,
         )
         if cleaned_value in (None, "", [], {}):
             continue
@@ -580,6 +598,9 @@ def _detail_structured_payload_is_irrelevant_product(
     *,
     page_url: str,
     requested_page_url: str,
+    requested_title: str | None = None,
+    requested_tokens: set[str] | None = None,
+    requested_codes: set[str] | None = None,
 ) -> bool:
     raw_type = payload.get("@type")
     normalized_type = (
@@ -623,9 +644,8 @@ def _detail_structured_payload_is_irrelevant_product(
         return False
     if not text_or_none(raw_candidate_url):
         return False
-    requested_title = _detail_title_from_url(requested_page_url)
     candidate_title = clean_text(candidate_record.get("title"))
-    requested_tokens = _detail_identity_tokens(requested_title)
+    requested_tokens = requested_tokens or _detail_identity_tokens(requested_title)
     candidate_tokens = _detail_identity_tokens(candidate_title)
     if (
         requested_tokens
@@ -633,7 +653,6 @@ def _detail_structured_payload_is_irrelevant_product(
         and requested_tokens.isdisjoint(candidate_tokens)
     ):
         return True
-    requested_codes = _detail_identity_codes_from_url(requested_page_url)
     candidate_codes = _detail_identity_codes_from_record_fields(candidate_record)
     if (
         requested_codes
@@ -644,255 +663,30 @@ def _detail_structured_payload_is_irrelevant_product(
     return False
 
 
-def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> bool:
-    title = text_or_none(record.get("title")) or ""
-    field_sources = _object_dict(record.get("_field_sources"))
-    title_field_sources = _object_list(field_sources.get("title"))
-    title_sources = {
-        str(source).strip() for source in title_field_sources if str(source).strip()
-    }
-    if _detail_url_has_multiple_product_segments(page_url):
-        return True
-    if is_title_noise(title):
-        return True
-    if _detail_url_is_collection_like(page_url):
-        return True
-    generic_detail_fields = (
-        "price",
-        "currency",
-        "brand",
-        "category",
-    )
-    strong_detail_fields = (
-        "brand",
-        "sku",
-        "part_number",
-        "barcode",
-        "availability",
-        "variants",
-    )
-    has_generic_detail_fields = any(
-        record.get(field_name) not in (None, "", [], {})
-        for field_name in generic_detail_fields
-    )
-    has_strong_detail_fields = any(
-        record.get(field_name) not in (None, "", [], {})
-        for field_name in strong_detail_fields
-    )
-    has_identity_fields = any(
-        record.get(field_name) not in (None, "", [], {})
-        for field_name in (
-            "price",
-            "original_price",
-            "currency",
-            "brand",
-            "sku",
-            "part_number",
-            "barcode",
-            "description",
-            "image_url",
-        )
-    )
-    confidence_score = float((record.get("_confidence") or {}).get("score") or 0.0)
-    description_text = clean_text(record.get("description"))
-    has_rich_pdp_corroboration = bool(
-        record.get("price") not in (None, "", [], {})
-        and record.get("image_url") not in (None, "", [], {})
-        and len(description_text) >= 160
-    )
-    if (
-        confidence_score < 0.2
-        and bool(record.get("_irrelevant_detail_structured_product"))
-        and title_sources == {"dom_h1"}
-        and not any(
-            value not in (None, "", [], {})
-            for key, value in record.items()
-            if not str(key).startswith("_")
-            and key not in {"source_url", "url", "title"}
-        )
-        and not has_generic_detail_fields
-        and not has_strong_detail_fields
-        and not has_identity_fields
-    ):
-        return True
-    if (
-        confidence_score < 0.5
-        and not has_strong_detail_fields
-        and "url_slug" in title_sources
-        and not has_rich_pdp_corroboration
-    ):
-        return True
-    if (
-        confidence_score < 0.5
-        and _description_looks_like_shell_copy(record.get("description"))
-        and not has_generic_detail_fields
-        and not has_strong_detail_fields
-    ):
-        return True
-    if (
-        confidence_score < 0.5
-        and _description_looks_like_shell_copy(record.get("description"))
-        and _title_looks_like_brand_shell(title, page_url=page_url)
-        and not any(
-            record.get(field_name) not in (None, "", [], {})
-            for field_name in (
-                "price",
-                "original_price",
-                "currency",
-                "brand",
-                "availability",
-                "variants",
-            )
-        )
-    ):
-        return True
-    if (
-        confidence_score < 0.4
-        and "url_slug" in title_sources
-        and has_strong_detail_fields
-        and not has_identity_fields
-    ):
-        return True
-    if detail_title_looks_like_placeholder(title) and not any(
-        record.get(field_name) not in (None, "", [], {})
-        for field_name in (
-            "price",
-            "original_price",
-            "image_url",
-            "sku",
-            "part_number",
-            "barcode",
-            "brand",
-        )
-    ):
-        return True
-    if (
-        "url_slug" in title_sources
-        and confidence_score < 0.5
-        and str(record.get("_source") or "").strip()
-        in {"opengraph", "json_ld_page_level", "microdata"}
-        and not any(
-            record.get(field_name) not in (None, "", [], {})
-            for field_name in strong_detail_fields
-        )
-    ):
-        return True
-    if (
-        detail_title_looks_like_placeholder(title)
-        and not has_generic_detail_fields
-        and not any(
-            record.get(field_name) not in (None, "", [], {})
-            for field_name in strong_detail_fields
-        )
-    ):
-        return True
-    if not title_needs_promotion(title, page_url=page_url):
-        if (
-            _title_looks_like_brand_shell(title, page_url=page_url)
-            and not has_generic_detail_fields
-            and not any(
-                record.get(field_name) not in (None, "", [], {})
-                for field_name in strong_detail_fields
-            )
-            and (
-                _description_looks_like_shell_copy(record.get("description"))
-                or _detail_image_looks_like_tracking_or_shell(record.get("image_url"))
-                or len(clean_text(record.get("description"))) <= 120
-            )
-        ):
-            return True
-        if not _detail_url_is_utility(page_url):
-            return False
-        record_url = text_or_none(record.get("url")) or ""
-        return not has_strong_detail_fields or _detail_url_is_utility(record_url)
-    if str(record.get("_source") or "").strip() in {
-        "adapter",
-        "network_payload",
-        "json_ld",
-        "microdata",
-        "embedded_json",
-        "js_state",
-    }:
-        return False
-    if (
-        _title_looks_like_brand_shell(title, page_url=page_url)
-        and not has_generic_detail_fields
-        and _description_looks_like_shell_copy(record.get("description"))
-    ):
-        return True
-    return not any(
-        record.get(field_name) not in (None, "", [], {})
-        for field_name in strong_detail_fields
-    )
-
-
-def _detail_url_has_multiple_product_segments(url: str) -> bool:
-    path = str(urlparse(url).path or "").lower()
-    return any(path.count(segment) > 1 for segment in ("/prd/", "/dp/", "/products/"))
-
-
-def _detail_image_looks_like_tracking_or_shell(value: object) -> bool:
-    image_url = text_or_none(value)
-    if not image_url:
-        return False
-    lowered = image_url.lower()
-    return any(token in lowered for token in tuple(TRACKING_PIXEL_PATTERNS or ()))
-
-
-_ALNUM_SPLIT_PATTERN = r"[^a-z0-9]+"
-
-
-def _title_looks_like_brand_shell(title: str, *, page_url: str) -> bool:
-    normalized_title = str(title or "").strip().lower()
-    if not normalized_title:
-        return False
-    host = str(urlparse(page_url).hostname or "").strip().lower()
-    host_label = host.removeprefix("www.").split(".", 1)[0]
-    compact_title = re.sub(_ALNUM_SPLIT_PATTERN, "", normalized_title)
-    compact_host = re.sub(_ALNUM_SPLIT_PATTERN, "", host_label)
-    if compact_title and compact_host and compact_title == compact_host:
-        return True
-    host_tokens = {
-        token for token in re.split(_ALNUM_SPLIT_PATTERN, host_label) if len(token) >= 3
-    }
-    if not host_tokens:
-        return False
-    title_tokens = {
-        token
-        for token in re.split(_ALNUM_SPLIT_PATTERN, normalized_title)
-        if len(token) >= 3
-    }
-    if not title_tokens or not (title_tokens & host_tokens):
-        return False
-    extra_tokens = title_tokens - host_tokens
-    return bool(extra_tokens) and (
-        extra_tokens <= set(DETAIL_BRAND_SHELL_TITLE_TOKENS)
-        or (len(extra_tokens) <= 3 and len(title_tokens) <= 5)
-    )
-
-
-def _description_looks_like_shell_copy(description: object) -> bool:
-    normalized_description = str(text_or_none(description) or "").strip().lower()
-    if not normalized_description:
-        return False
-    return any(
-        phrase in normalized_description
-        for phrase in DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES
-    )
-
-
-def _variant_signal_strength(variants: object) -> tuple[int, int, int]:
+def _variant_signal_strength(variants: object) -> tuple[int, int, int, int]:
     if not isinstance(variants, list):
-        return (0, 0, 0)
+        return (0, 0, 0, 0)
     rows = [row for row in variants if isinstance(row, dict)]
+    axis_coverage = _variant_axis_coverage(rows)
     return (
-        len(rows),
         sum(
             1
             for row in rows
-            if text_or_none(row.get("color")) or text_or_none(row.get("size"))
+            if text_or_none(row.get("price"))
         ),
-        sum(1 for row in rows if text_or_none(row.get("price"))),
+        sum(
+            1
+            for row in rows
+            if (
+                any(text_or_none(row.get(axis_name)) for axis_name in VARIANT_AXIS_FIELD_NAMES)
+                or (
+                    isinstance(row.get("option_values"), dict)
+                    and any(text_or_none(value) for value in row["option_values"].values())
+                )
+            )
+        ),
+        len(axis_coverage),
+        len(rows),
     )
 
 
@@ -923,13 +717,15 @@ def _should_collect_dom_variants(
     existing_variants = finalize_candidate_value(
         "variants", list(candidates.get("variants") or [])
     )
+    existing_strength = _variant_signal_strength(existing_variants)
     if dom_variants:
         existing_axes = _variant_axis_coverage(existing_variants)
         dom_axes = _variant_axis_coverage(dom_variants.get("variants"))
-        if dom_axes - existing_axes:
+        if dom_axes - existing_axes and existing_strength[0] == 0 and existing_strength[1] == 0:
             return True
-    existing_strength = _variant_signal_strength(existing_variants)
-    if existing_strength[0] == 0 or existing_strength[1] == 0:
+    if existing_strength[3] == 0:
+        return True
+    if existing_strength[0] == 0 and existing_strength[1] == 0:
         return True
     dom_strength = _variant_signal_strength(dom_variants.get("variants"))
     return dom_strength > existing_strength
@@ -1075,7 +871,10 @@ def _requires_dom_completion(
     if (
         normalized_surface == "ecommerce_detail"
         and record.get("image_url") in (None, "", [], {})
-        and raw_soup.select_one(DETAIL_PRODUCT_IMAGE_CUE_SELECTOR) is not None
+        and (
+            raw_soup.select_one(DETAIL_PRODUCT_IMAGE_CUE_SELECTOR) is not None
+            or raw_soup.select_one("img") is not None
+        )
     ):
         return True
     if (
@@ -1089,18 +888,27 @@ def _requires_dom_completion(
         )
     ):
         return False
+    high_value_fields = set(DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
+    optional_probe_fields = set(DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ())
+    probe_fields = sorted(
+        {
+            *high_value_fields,
+            *optional_probe_fields,
+            *requested_missing_fields,
+        }
+    )
     extractability = requested_content_extractability(
         soup,
         surface=surface,
         requested_fields=requested_fields,
         selector_rules=selector_rules,
+        probe_fields=probe_fields or None,
     )
     extractable_fields = {
         str(field_name).strip()
         for field_name in _object_list(extractability.get("extractable_fields"))
         if str(field_name).strip()
     }
-    high_value_fields = set(DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
     advertised_high_value_fields = extractable_fields & high_value_fields
     missing_high_value_fields = {
         field_name
@@ -1196,14 +1004,7 @@ def _promote_dom_detail_title(
     preferred_title = text_or_none(js_state_record.get("title"))
     if preferred_title:
         record["title"] = preferred_title
-        return
-    fallback_title = _detail_title_from_url(page_url)
-    if not fallback_title:
-        return
-    record["title"] = fallback_title
-    title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
-    if "url_slug" not in title_sources:
-        title_sources.append("url_slug")
+    return
 
 
 def _fill_missing_dom_detail_title(record: dict[str, Any], *, page_url: str) -> None:
@@ -1261,7 +1062,7 @@ def _prepare_detail_extraction(
 ) -> PreparedDetailExtraction:
     context = prepare_extraction_context(html)
     dom_parser, soup = primary_dom_context(context, page_url=page_url)
-    raw_soup = BeautifulSoup(context.original_html, "html.parser")
+    raw_soup = context.original_soup
     if str(surface or "").strip().lower() == "ecommerce_detail":
         soup = BeautifulSoup(str(soup), "html.parser")
         prune_irrelevant_detail_dom_nodes(

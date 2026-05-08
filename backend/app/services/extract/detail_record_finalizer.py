@@ -56,7 +56,13 @@ from app.services.extract.detail_identity import (
     record_matches_requested_detail_identity as _record_matches_requested_detail_identity,
     semantic_detail_identity_tokens as _semantic_detail_identity_tokens,
 )
-from app.services.extract.detail_dom_extractor import backfill_variants_from_dom_if_missing
+from app.services.extract.detail_dom_extractor import (
+    backfill_variants_from_dom_if_missing,
+    existing_variant_cluster_has_transport_signal,
+)
+from app.services.extract.detail_numbered_options import (
+    hydrate_numbered_variant_options_from_dom,
+)
 from app.services.extract.detail_raw_signals import detail_breadcrumb_is_root_label
 from app.services.extract.detail_price_extractor import (
     backfill_detail_price_from_html,
@@ -129,34 +135,6 @@ _ORG_SUFFIX_PATTERN = (
 )
 
 
-def dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
-    raw_additional_images = record.get("additional_images")
-    additional_images = (
-        list(raw_additional_images)
-        if isinstance(raw_additional_images, (list, tuple, set))
-        else (
-            [raw_additional_images]
-            if raw_additional_images not in (None, "", [], {})
-            else []
-        )
-    )
-    values: list[str] = []
-    for raw_value in (record.get("image_url"), *additional_images):
-        image = text_or_none(raw_value)
-        if image:
-            values.append(image)
-    merged = dedupe_image_urls(values)
-    if not merged:
-        record.pop("image_url", None)
-        record.pop("additional_images", None)
-        return
-    record["image_url"] = merged[0]
-    if len(merged) > 1:
-        record["additional_images"] = merged[1:]
-        return
-    record.pop("additional_images", None)
-
-
 def _sanitize_ecommerce_detail_record(
     record: dict[str, Any],
     *,
@@ -168,7 +146,14 @@ def _sanitize_ecommerce_detail_record(
     identity_url = text_or_none(requested_page_url) or page_url
     _sanitize_detail_placeholder_scalars(record, identity_url=identity_url)
     _sanitize_detail_identity_scalars(record, identity_url=identity_url)
-    if soup is not None:
+    hydrate_numbered_variant_options_from_dom(record, soup=soup)
+    existing_variants = [
+        row for row in list(record.get("variants") or []) if isinstance(row, dict)
+    ]
+    if (
+        soup is not None
+        and not existing_variant_cluster_has_transport_signal(existing_variants)
+    ):
         backfill_variants_from_dom_if_missing(
             record, soup=soup, page_url=page_url, js_state_objects=js_state_objects
         )
@@ -258,11 +243,13 @@ def _sanitize_detail_identity_scalars(
             record["part_number"] = preferred_code
     placeholder_title_removed = bool(record.pop("_placeholder_title_removed", False))
     if not text_or_none(record.get("title")):
-        if placeholder_title_removed and not _detail_title_fallback_is_safe(record):
+        fallback_is_safe = _detail_title_fallback_is_safe(record)
+        description_backed = bool(text_or_none(record.get("description")))
+        if placeholder_title_removed and not fallback_is_safe and not description_backed:
             return
         fallback_title = _detail_title_from_url(identity_url)
         if fallback_title:
-            record["title"] = fallback_title.title()
+            record["title"] = fallback_title.title() if fallback_is_safe else fallback_title
             field_sources = record.setdefault("_field_sources", {})
             field_sources["title"] = ["url_slug"]
 
@@ -522,6 +509,12 @@ def sanitize_variant_row(
         and not _variant_title_can_be_option_label(variant, title=title)
     ):
         return False
+    image_url = text_or_none(variant.get("image_url"))
+    if image_url:
+        normalized_image = upgrade_low_resolution_image_url(image_url)
+        if normalized_image.lower().startswith("http://"):
+            normalized_image = "https://" + normalized_image[7:]
+        variant["image_url"] = normalized_image
     return any(
         variant.get(field_name) not in (None, "", [], {})
         for field_name in (

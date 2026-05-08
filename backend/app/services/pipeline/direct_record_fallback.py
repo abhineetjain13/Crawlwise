@@ -25,17 +25,13 @@ from app.services.field_value_core import (
     strip_html_tags,
 )
 from app.services.llm_runtime import extract_missing_fields
+from app.services.shared.coerce_primitives import string_list
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 ResolveRunConfigFn = Callable[..., Awaitable[dict[str, object] | None]]
 ExtractRecordsFn = Callable[..., Awaitable[tuple[list[dict[str, object]] | None, str | None]]]
 
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value]
 
 def _sanitize_llm_existing_values(record: dict[str, object]) -> dict[str, object]:
     sanitized: dict[str, object] = {}
@@ -81,7 +77,6 @@ async def apply_direct_record_llm_fallback(
     run: CrawlRun,
     page_url: str,
     html: str,
-    page_markdown: str,
     records: list[dict[str, object]],
     resolve_run_config_fn: ResolveRunConfigFn,
     extract_records_fn: ExtractRecordsFn,
@@ -89,7 +84,7 @@ async def apply_direct_record_llm_fallback(
     if not _should_run_direct_record_llm_fallback(
         run,
         records=records,
-        page_markdown=page_markdown,
+        html=html,
     ):
         return records
     config = await resolve_run_config_fn(
@@ -106,7 +101,6 @@ async def apply_direct_record_llm_fallback(
         url=page_url,
         surface=run.surface,
         html_text=html,
-        markdown_text=page_markdown,
         requested_fields=repair_target_fields_for_surface(
             run.surface,
             run.requested_fields or [],
@@ -145,9 +139,9 @@ def _should_run_direct_record_llm_fallback(
     run: CrawlRun,
     *,
     records: list[dict[str, object]],
-    page_markdown: str,
+    html: str,
 ) -> bool:
-    if not str(page_markdown or "").strip():
+    if not str(html or "").strip():
         return False
     if "listing" in str(run.surface or "").strip().lower() and not records:
         return False
@@ -340,7 +334,7 @@ async def apply_llm_fallback(
                     continue
                 next_record[normalized_field] = coerced
                 applied_llm_fields.append(normalized_field)
-                current_sources = _string_list(field_sources.get(normalized_field))
+                current_sources = string_list(field_sources.get(normalized_field))
                 if "llm_missing_field_extraction" not in current_sources:
                     current_sources.append("llm_missing_field_extraction")
                 field_sources[normalized_field] = current_sources

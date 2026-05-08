@@ -1,14 +1,4 @@
-# PHASE-3 DELETE TARGETS:
-# _safe_int -> replaced by shared.coerce_primitives.safe_int (DELETE this function in Phase 3)
-# clean_text, slug_tokens -> replaced by shared.text_coerce (DELETE in Phase 3)
-# absolute_url, same_host -> replaced by shared.url_utils (DELETE in Phase 3)
-"""Shared field coercion, normalization, and public-record shaping helpers.
-
-TODO(chore): split canonical coercion, field recovery, availability canonical-enum
-gate, negative-price rejection, category URL-path rejection, and audit comment
-wiring into narrower owners once LOC budgets are reduced.
-"""
-
+"""Shared field coercion, normalization, and public-record shaping helpers."""
 from __future__ import annotations
 
 import ast
@@ -16,7 +6,6 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 from urllib.parse import urlparse
-
 from app.services.extraction_html_helpers import html_to_text
 from app.services.config.extraction_rules import (
     AVAILABILITY_URL_MAP,
@@ -87,7 +76,7 @@ from app.services.field_policy import (
     get_surface_field_aliases,
     normalize_field_key,
 )
-from app.services.normalizers import normalize_record_fields
+from app.services.normalizers import normalize_decimal_price, normalize_record_fields
 from app.services.shared.coerce_primitives import (
     coerce_int as _coerce_int,
     object_dict as _object_dict,
@@ -715,6 +704,35 @@ def _coerce_variant_axis_value(
     return None
 
 
+def _variant_row_looks_like_shopify_raw(raw_variant: dict[str, Any]) -> bool:
+    if any(
+        raw_variant.get(field_name) not in (None, "", [], {})
+        for field_name in ("option1", "compare_at_price", "inventory_quantity")
+    ):
+        return True
+    variant_url = text_or_none(raw_variant.get("url")) or ""
+    return "?variant=" in variant_url and any(
+        raw_variant.get(f"option{index}") not in (None, "", [], {})
+        for index in range(1, 4)
+    )
+
+
+def _coerce_variant_transport_value(
+    field_name: str,
+    value: object,
+    *,
+    raw_variant: dict[str, Any],
+    page_url: str,
+) -> object | None:
+    if field_name in {PRICE_FIELD, "original_price"} and _variant_row_looks_like_shopify_raw(
+        raw_variant
+    ):
+        normalized = normalize_decimal_price(value, interpret_integral_as_cents=True)
+        if normalized not in (None, ""):
+            return normalized
+    return coerce_field_value(field_name, value, page_url)
+
+
 def flatten_variants_for_public_output(
     value: object,
     *,
@@ -765,7 +783,12 @@ def flatten_variants_for_public_output(
             candidate = raw_variant.get(key)
             if candidate in (None, "", [], {}):
                 continue
-            coerced = coerce_field_value(key, candidate, page_url)
+            coerced = _coerce_variant_transport_value(
+                key,
+                candidate,
+                raw_variant=raw_variant,
+                page_url=page_url,
+            )
             if coerced in (None, "", [], {}):
                 continue
             merged[key] = coerced

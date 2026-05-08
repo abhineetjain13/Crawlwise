@@ -19,7 +19,7 @@ from app.services.crawl_state import (
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls_async
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
-from app.services.pipeline.core import process_single_url
+from app.services.pipeline.extraction_loop import process_single_url
 from app.services.pipeline.runtime_helpers import (
     STAGE_ACQUIRE,
     log_event,

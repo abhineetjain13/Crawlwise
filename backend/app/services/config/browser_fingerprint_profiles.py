@@ -57,6 +57,15 @@ WARMUP_ELIGIBLE_BROWSER_REASONS: frozenset[str] = frozenset(
         "thin-listing retry",
     }
 )
+RETRY_REASON_BROWSER_LABELS: dict[str, str] = {
+    "post_extraction_detail_shell": "detail-shell retry",
+    "post_extraction_challenge_shell": "challenge-shell retry",
+}
+BEHAVIOR_REALISM_ELIGIBLE_BROWSER_REASONS: frozenset[str] = frozenset(
+    {
+        "challenge-shell retry",
+    }
+)
 WARMUP_VENDOR_BLOCK_PREFIX: str = "vendor-block:"
 BROWSER_REQUIRED_REASONS: frozenset[str] = frozenset(
     {
@@ -321,6 +330,7 @@ __all__ = [
     "NATIVE_REAL_CHROME_CONTEXT_OPTIONS",
     "NAVIGATOR_PLATFORM_BY_PLATFORM_LABEL",
     "REAL_CHROME_IGNORE_DEFAULT_ARGS",
+    "RETRY_REASON_BROWSER_LABELS",
     "TIMEZONE_ALIASES",
     "USER_AGENT_PLATFORM_LABELS",
     "WARMUP_ELIGIBLE_BROWSER_REASONS",

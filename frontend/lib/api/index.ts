@@ -155,13 +155,10 @@ export const api = {
       `/api/product-intelligence/jobs/${jobId}/matches/${matchId}/review`,
       payload,
     ),
-  getMarkdown: (runId: number) => apiClient.getText(`/api/crawls/${runId}/export/markdown`),
   downloadCsv: (runId: number) => apiClient.getBlob(`/api/crawls/${runId}/export/csv`),
   downloadJson: (runId: number) => apiClient.getBlob(`/api/crawls/${runId}/export/json`),
-  downloadMarkdown: (runId: number) => apiClient.getBlob(`/api/crawls/${runId}/export/markdown`),
   exportCsv: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/csv`,
   exportJson: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/json`,
-  exportMarkdown: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/markdown`,
   getReview: (runId: number) => apiClient.get<ReviewPayload>(`/api/review/${runId}`),
   reviewHtml: (runId: number) => `${getApiBaseUrl()}/api/review/${runId}/artifact-html`,
   saveReview: (runId: number, payload: { selections: ReviewSelection[]; extra_fields: string[] }) =>

@@ -38,6 +38,7 @@ from app.services.field_value_core import (
 from app.services.extract.shared_variant_logic import (
     merge_variant_rows,
     normalized_variant_axis_key,
+    public_variant_axis_fields,
     resolve_variants,
 )
 from app.services.normalizers import normalize_decimal_price
@@ -374,6 +375,96 @@ def _variation_attribute_labels(
     return labels
 
 
+def _public_variant_axis_key(value: object) -> str:
+    axis_key = normalized_variant_axis_key(value)
+    return axis_key if axis_key in public_variant_axis_fields else ""
+
+
+def _structured_product_option_names(payload: dict[str, object]) -> list[str]:
+    raw_options = payload.get("options")
+    if not isinstance(raw_options, list):
+        return []
+    names: list[str] = []
+    for item in raw_options:
+        if isinstance(item, dict):
+            name = text_or_none(item.get("name") or item.get("title") or item.get("label"))
+        else:
+            name = text_or_none(item)
+        if name:
+            names.append(name)
+    return names
+
+
+def _structured_selected_option_values(
+    item: dict[str, object],
+    *,
+    labels: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    raw_selected = item.get("selectedOptions")
+    if not isinstance(raw_selected, list):
+        raw_selected = item.get("selected_options")
+    if not isinstance(raw_selected, list):
+        return {}
+    option_values: dict[str, str] = {}
+    for selected in raw_selected:
+        if not isinstance(selected, dict):
+            continue
+        axis_key = _public_variant_axis_key(
+            selected.get("name") or selected.get("option") or selected.get("label")
+        )
+        cleaned = text_or_none(
+            selected.get("value") or selected.get("displayValue") or selected.get("label")
+        )
+        if not axis_key or not cleaned:
+            continue
+        option_values[axis_key] = labels.get(axis_key, {}).get(cleaned, cleaned)
+    return option_values
+
+
+def _structured_option_index_values(
+    item: dict[str, object],
+    *,
+    option_names: list[str],
+) -> dict[str, str]:
+    if not option_names:
+        return {}
+    option_values: dict[str, str] = {}
+    for index, option_name in enumerate(option_names, start=1):
+        axis_key = _public_variant_axis_key(option_name)
+        cleaned = text_or_none(item.get(f"option{index}"))
+        if not axis_key or not cleaned:
+            continue
+        option_values[axis_key] = cleaned
+    return option_values
+
+
+def _structured_variant_option_values(
+    item: dict[str, object],
+    *,
+    payload: dict[str, object],
+    labels: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    variation_values = item.get("variationValues")
+    if not isinstance(variation_values, dict):
+        variation_values = item.get("variation_values")
+    if isinstance(variation_values, dict):
+        option_values: dict[str, str] = {}
+        for axis_name, raw_value in variation_values.items():
+            axis_key = _public_variant_axis_key(axis_name)
+            cleaned = text_or_none(raw_value)
+            if not axis_key or not cleaned:
+                continue
+            option_values[axis_key] = labels.get(axis_key, {}).get(cleaned, cleaned)
+        if option_values:
+            return option_values
+    if option_values := _structured_selected_option_values(item, labels=labels):
+        return option_values
+    return _structured_option_index_values(
+        item,
+        option_names=_structured_product_option_names(payload),
+    )
+
+
 def _structured_variants_from_product_payload(
     payload: dict[str, object],
     page_url: str,
@@ -386,18 +477,11 @@ def _structured_variants_from_product_payload(
     for item in raw_variants:
         if not isinstance(item, dict):
             continue
-        variation_values = item.get("variationValues")
-        if not isinstance(variation_values, dict):
-            variation_values = item.get("variation_values")
-        if not isinstance(variation_values, dict):
-            continue
-        option_values: dict[str, str] = {}
-        for axis_name, raw_value in variation_values.items():
-            axis_key = normalized_variant_axis_key(axis_name)
-            cleaned = text_or_none(raw_value)
-            if not axis_key or not cleaned:
-                continue
-            option_values[axis_key] = labels.get(axis_key, {}).get(cleaned, cleaned)
+        option_values = _structured_variant_option_values(
+            item,
+            payload=payload,
+            labels=labels,
+        )
         if not option_values:
             continue
         row: dict[str, object] = {"option_values": option_values}
@@ -420,8 +504,31 @@ def _structured_variants_from_product_payload(
         )
         if price not in (None, "", [], {}):
             row["price"] = price
+        availability = coerce_field_value(
+            "availability",
+            item.get("availability")
+            if item.get("availability") not in (None, "", [], {})
+            else item.get("available")
+            if item.get("available") not in (None, "", [], {})
+            else item.get("availableForSale"),
+            page_url,
+        )
+        if availability not in (None, "", [], {}):
+            row["availability"] = availability
+        image_url = coerce_field_value(
+            "image_url",
+            item.get("image") or item.get("featured_image") or item.get("featuredImage"),
+            page_url,
+        )
+        if image_url not in (None, "", [], {}):
+            row["image_url"] = image_url
+        variant_url = coerce_field_value("url", item.get("url"), page_url)
+        if variant_url in (None, "", [], {}) and variant_id:
+            variant_url = absolute_url(page_url, f"{page_url}?variant={variant_id}")
+        if variant_url not in (None, "", [], {}):
+            row["url"] = variant_url
         for axis_key, axis_value in option_values.items():
-            if axis_key in {"color", "size"}:
+            if axis_key in public_variant_axis_fields:
                 row[axis_key] = axis_value
         rows.append(row)
     return rows
