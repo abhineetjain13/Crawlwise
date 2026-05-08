@@ -204,10 +204,18 @@ docs/
 
 ## ⚠️ Disclaimer
 
-This tool is for **educational and research purposes only**. Users must comply with the Terms of Service of any target website and respect `robots.txt` when enforcement is enabled.
+This tool is for **educational and research purposes only**. Users are solely responsible for ensuring their use complies with:
+
+- **Terms of Service** of any target website
+- **robots.txt** directives and crawl-delay policies
+- **Rate limiting** and respectful access patterns
+- **Data privacy** regulations (GDPR, CCPA, etc.)
+- **Copyright** and intellectual property laws
+
+The authors assume no liability for misuse. Always obtain explicit permission before scraping at scale.
 
 ---
 
 ## 📜 License
 
-See repository for license details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
