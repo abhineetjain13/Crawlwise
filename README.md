@@ -48,25 +48,38 @@ We believe structured data should be extracted with **surgical precision**, not 
 ## 🏗️ Architecture
 
 ```mermaid
-  URL
-   │
-   ├─► HTTP (curl-cffi) ──────────────┐
-   │      Blocked / JS needed?          │
-   │         └─► Playwright (stealth)  │
-   │                                    ▼
-   ├─► Adapter (known platform) ──► candidates
-   ├─► Structured Sources ───────► candidates
-   │      JSON-LD / Microdata / OG / Payload
-   ├─► JS State Mapper ──────────► candidates
-   ├─► DOM Selectors ────────────► candidates
-   │                                    │
-   ▼                                    ▼
-  Confidence Scoring ◄────────── field-by-field winner
-   │
-   ├─► LLM Backfill (opt-in, gaps only)
-   │
-   ▼
-  Persist → Export → Enrich → Review
+graph TD
+    A[URL Input] --> B{HTTP Acquisition<br/>curl-cffi}
+    B -->|Blocked / JS Needed| C[Playwright<br/>patchright + BrowserForge]
+    B -->|Success| D[Acquisition Result]
+    C --> D
+    
+    D --> E[Extraction Pipeline]
+    
+    E --> F1[Platform Adapter<br/>Known Platforms]
+    E --> F2[Structured Sources<br/>JSON-LD / Microdata / OG / Network Payloads]
+    E --> F3[JS State Mapper<br/>Nuxt / React State]
+    E --> F4[DOM Selectors<br/>XPath / CSS]
+    
+    F1 --> G[Field Candidates]
+    F2 --> G
+    F3 --> G
+    F4 --> G
+    
+    G --> H[Confidence Scoring<br/>Field-by-Field Winner]
+    
+    H --> I{Gaps Remain?}
+    I -->|Yes & LLM Enabled| J[LLM Backfill<br/>Opt-In Only]
+    I -->|No / LLM Disabled| K[Final Record]
+    J --> K
+    
+    K --> L[Persist<br/>CrawlRecord]
+    L --> M[Export<br/>JSON / CSV / Markdown]
+    M --> N[Enrich<br/>Product Intelligence]
+    N --> O[Review<br/>Selector Promotion]
+    
+    O -.->|Selector Memory| F4
+    O -.->|Domain Profile| B
 ```
 
 ### Tech Stack
