@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import DomainMemory
+from app.services.config.domain_profiles import DEFAULT_FALLBACK_SURFACE
 from app.services.field_value_core import safe_int as _safe_int
 
 
@@ -141,7 +142,13 @@ async def load_domain_selector_rules(
 ) -> list[dict[str, object]]:
     rules: list[dict[str, object]] = []
     seen: set[tuple[str, str, str, str]] = set()
-    for candidate_surface in [str(surface or "").strip().lower(), "generic"]:
+    normalized = str(surface or "").strip().lower()
+    candidate_surfaces = (
+        (DEFAULT_FALLBACK_SURFACE,)
+        if normalized == DEFAULT_FALLBACK_SURFACE
+        else (normalized, DEFAULT_FALLBACK_SURFACE)
+    )
+    for candidate_surface in candidate_surfaces:
         if not candidate_surface:
             continue
         memory = await load_domain_memory(

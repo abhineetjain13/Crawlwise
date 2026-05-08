@@ -739,6 +739,7 @@ export const STAGE_CONFIG: Record<LogStage, LogStageConfig> = {
 export const TERMINAL_STRINGS = {
   FIELDS: 'Fields',
   CONFIDENCE: 'Confidence',
+  TIME: 'Time',
   RUN_EVENTS: 'Run Events',
   PENDING: 'Pending...',
   SITE_PAYLOAD: 'Site payload',
@@ -1043,6 +1044,50 @@ function groupConfidence(group: LogSiteGroup): { score: number; level: string } 
   };
 }
 
+function numberOrNull(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function groupDurationMs(group: LogSiteGroup, activeNowMs?: number): number | null {
+  const recordDurations = group.records
+    .map((record) => {
+      const acquisition =
+        record.source_trace?.acquisition && typeof record.source_trace.acquisition === 'object'
+          ? (record.source_trace.acquisition as Record<string, unknown>)
+          : null;
+      const browserDiagnostics =
+        acquisition?.browser_diagnostics && typeof acquisition.browser_diagnostics === 'object'
+          ? (acquisition.browser_diagnostics as Record<string, unknown>)
+          : null;
+      const phaseTimings =
+        browserDiagnostics?.phase_timings_ms && typeof browserDiagnostics.phase_timings_ms === 'object'
+          ? (browserDiagnostics.phase_timings_ms as Record<string, unknown>)
+          : null;
+      return numberOrNull(phaseTimings?.total);
+    })
+    .filter((value): value is number => value !== null);
+  const startedAt = group.logs[0]?.created_at;
+  if (!startedAt) {
+    return null;
+  }
+  const startedMs = parseApiDate(startedAt).getTime();
+  if (!Number.isFinite(startedMs)) {
+    return null;
+  }
+  const lastLog = group.logs.at(-1);
+  const endCandidatesMs = [
+    activeNowMs,
+    lastLog?.created_at ? parseApiDate(lastLog.created_at).getTime() : null,
+    ...group.records.map((record) => parseApiDate(record.created_at).getTime()),
+    ...recordDurations.map((durationMs) => startedMs + durationMs),
+  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (!endCandidatesMs.length) {
+    return null;
+  }
+  return Math.max(0, Math.max(...endCandidatesMs) - startedMs);
+}
+
 function groupFieldCoverage(group: LogSiteGroup, requestedFields: string[]) {
   const requested = uniqueRequestedFields(requestedFields);
   const normalizedRequested = requested.map(normalizeField);
@@ -1099,6 +1144,7 @@ function buildExpandedRows(
   group: LogSiteGroup,
   coverage: ReturnType<typeof groupFieldCoverage>,
   confidence: ReturnType<typeof groupConfidence>,
+  durationMs: number | null,
 ): ExpandedLogRow[] {
   const rows: ExpandedLogRow[] = group.logs.map((log) => ({
     key: `log-${log.id}`,
@@ -1120,6 +1166,9 @@ function buildExpandedRows(
     }
     if (confidence) {
       parts.push(`${TERMINAL_STRINGS.CONFIDENCE} ${Math.round(confidence.score * 100)}%`);
+    }
+    if (durationMs !== null) {
+      parts.push(`${TERMINAL_STRINGS.TIME} ${formatDurationMs(durationMs)}`);
     }
     rows.push({
       key: `${group.key}-fields`,
@@ -1233,6 +1282,7 @@ export const LogTerminal = memo(function LogTerminal({
 }>) {
   const ref = useLogViewport(logs.length, viewportRef);
   const peekPanelRef = useRef<HTMLDivElement | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [peekedGroupKey, setPeekedGroupKey] = useState<string | null>(null);
   const [peekedRecordIndex, setPeekedRecordIndex] = useState(0);
   const [expandedGroupPreference, setExpandedGroupPreference] = useState<
@@ -1275,6 +1325,14 @@ export const LogTerminal = memo(function LogTerminal({
     ? Math.min(peekedRecordIndex, Math.max(peekedGroup.records.length - 1, 0))
     : 0;
   const safeTriageCursor = issueGroups.length ? Math.min(triageCursor, issueGroups.length - 1) : 0;
+
+  useEffect(() => {
+    if (!live) {
+      return;
+    }
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [live]);
 
   useEffect(() => {
     if (!activePeekedGroupKey) {
@@ -1420,11 +1478,13 @@ export const LogTerminal = memo(function LogTerminal({
             const payload = payloadSnapshot(group);
             const confidence = groupConfidence(group);
             const coverage = groupFieldCoverage(group, requestedFields);
+            const activeGroup = live && groups.length > 0 && group.key === groups[groups.length - 1].key;
+            const durationMs = groupDurationMs(group, activeGroup ? nowMs : undefined);
             const lastLog = group.logs.at(-1);
             const summaryLog =
               [...group.logs].reverse().find((log) => !isPersistenceSummaryLog(log.message)) ??
               lastLog;
-            const expandedRows = buildExpandedRows(group, coverage, confidence);
+            const expandedRows = buildExpandedRows(group, coverage, confidence, durationMs);
             return (
               <section key={group.key} id={siteDomId(group.key)} className="overflow-hidden">
                 <div
@@ -1440,7 +1500,7 @@ export const LogTerminal = memo(function LogTerminal({
                     }
                   }}
                   className={cn(
-                    'group/row grid w-full cursor-pointer grid-cols-[32px_minmax(280px,2fr)_80px_100px_auto_minmax(200px,1.2fr)_80px_60px] items-center gap-3 px-4 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset',
+                    'group/row grid w-full cursor-pointer grid-cols-[32px_minmax(280px,2fr)_80px_100px_100px_auto_minmax(200px,1.2fr)_80px_60px] items-center gap-3 px-4 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset',
                     severityTone(group, index),
                   )}
                 >
@@ -1486,6 +1546,12 @@ export const LogTerminal = memo(function LogTerminal({
                     >
                       {confidence ? `${Math.round(confidence.score * 100)}%` : '--'}
                     </span>
+                  </div>
+                  <div className="type-body text-secondary font-medium whitespace-nowrap">
+                    <span className="text-muted mr-1.5 font-sans text-sm font-bold tracking-wider uppercase">
+                      T:
+                    </span>
+                    {durationMs !== null ? formatDurationMs(durationMs) : '--'}
                   </div>
                   <div className="flex items-center justify-center">
                     {group.lastStage !== 'system' && (

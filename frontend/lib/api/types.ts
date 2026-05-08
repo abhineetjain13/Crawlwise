@@ -23,7 +23,7 @@ export type CrawlDomain = 'commerce' | 'jobs';
 export type CrawlSurface = 'ecommerce_listing' | 'ecommerce_detail' | 'job_listing' | 'job_detail';
 
 export type CrawlMode = 'single' | 'sitemap' | 'bulk' | 'batch' | 'csv';
-export type AdvancedCrawlMode = 'auto' | 'scroll' | 'load_more' | 'paginate' | 'view_all';
+export type AdvancedCrawlMode = 'scroll' | 'load_more' | 'paginate' | 'view_all';
 
 export type ResultSummaryQualityLevel = 'high' | 'medium' | 'low' | 'unknown';
 
@@ -393,7 +393,7 @@ export type DomainRunProfile = {
       | 'network_payload_first';
     js_mode: 'auto' | 'enabled' | 'disabled';
     include_iframes: boolean;
-    traversal_mode: 'auto' | 'scroll' | 'load_more' | 'view_all' | 'paginate' | null;
+    traversal_mode: AdvancedCrawlMode | null;
     request_delay_ms: number;
     host_memory_ttl_seconds?: number | null;
     max_pages?: number;

@@ -15,7 +15,7 @@ from app.services.acquisition import cookie_store
 from app.services.acquisition import host_protection_memory
 from app.services.acquisition.browser_proxy_config import build_browser_proxy_config
 from app.services.acquisition import browser_runtime as acquisition_browser_runtime
-from app.services.domain_utils import is_special_use_domain
+from app.services.domain_utils import is_special_use_domain, normalize_domain
 
 
 def _context_spec(
@@ -285,6 +285,30 @@ def test_build_playwright_context_options_prefers_available_screen_height(
 def test_is_special_use_domain_ignores_ports() -> None:
     assert is_special_use_domain("localhost:3000") is True
     assert is_special_use_domain("http://localhost:3000/products/widget") is True
+
+
+def test_is_special_use_domain_treats_test_suffix_as_special_use() -> None:
+    assert is_special_use_domain("https://api.example.test/path") is True
+
+
+def test_normalize_domain_strips_credentials() -> None:
+    assert normalize_domain("https://user:pass@example.com/path") == "example.com"
+
+
+def test_normalize_domain_preserves_non_standard_port() -> None:
+    assert normalize_domain("https://example.com:8443/path") == "example.com:8443"
+
+
+def test_normalize_domain_strips_standard_https_port() -> None:
+    assert normalize_domain("https://example.com:443/path") == "example.com"
+
+
+def test_normalize_domain_handles_domain_only_input() -> None:
+    assert normalize_domain("example.com") == "example.com"
+
+
+def test_normalize_domain_strips_credentials_without_password() -> None:
+    assert normalize_domain("https://user@example.com/path") == "example.com"
 
 
 def test_build_playwright_context_options_keeps_security_invariants(

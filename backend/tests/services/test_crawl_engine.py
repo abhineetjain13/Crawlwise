@@ -3,9 +3,10 @@ from __future__ import annotations
 import pytest
 
 from app.services import crawl_fetch_runtime
+from app.services import extraction_runtime
 from app.services.acquisition.host_protection_memory import HostProtectionPolicy
-from app.services import detail_extractor
 from app.services.adapters.belk import BelkAdapter
+from app.services.extract import detail_materializer as detail_extractor
 from app.services.extract.detail_identity import (
     detail_identity_codes_from_url,
     detail_title_from_url,
@@ -44,6 +45,77 @@ def test_listing_raw_json_honors_max_records() -> None:
         "Product 2",
         "Product 3",
     ]
+
+
+def test_extract_records_warns_when_listing_surface_hits_detail_page(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    html = """
+    <html>
+      <body>
+        <main class="product-detail">
+          <h1>Trail Runner</h1>
+          <div class="price">$89.99</div>
+          <p>Lightweight shoe for daily runs.</p>
+        </main>
+      </body>
+    </html>
+    """
+
+    with caplog.at_level("WARNING", logger=extraction_runtime.logger.name):
+        rows = extract_records(
+            html,
+            "https://example.com/products/trail-runner",
+            "ecommerce_listing",
+            max_records=5,
+        )
+
+    assert rows == []
+    assert any(
+        "surface_mismatch_suspected surface=ecommerce_listing page_shape=detail"
+        in record.message
+        for record in caplog.records
+    )
+
+
+def test_extract_records_warns_when_detail_surface_hits_listing_page(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <article class="product-card">
+            <a href="/products/alpha-shoe">
+              <h2>Alpha Shoe</h2>
+              <span>$19.99</span>
+            </a>
+          </article>
+          <article class="product-card">
+            <a href="/products/beta-shoe">
+              <h2>Beta Shoe</h2>
+              <span>$29.99</span>
+            </a>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    with caplog.at_level("WARNING", logger=extraction_runtime.logger.name):
+        rows = extract_records(
+            html,
+            "https://example.com/collections/shoes",
+            "ecommerce_detail",
+            max_records=5,
+        )
+
+    assert rows == []
+    assert any(
+        "surface_mismatch_suspected surface=ecommerce_detail page_shape=listing"
+        in record.message
+        for record in caplog.records
+    )
 
 
 def test_detail_product_url_with_support_slug_is_not_utility() -> None:
@@ -4427,6 +4499,25 @@ def test_extract_records_emits_raw_json_array_items() -> None:
     assert rows[0]["_source"] == "raw_json"
 
 
+def test_extract_records_rejects_low_overlap_raw_json_array_items() -> None:
+    raw_json = """
+    [
+      {"id": 1, "label": "Fjallraven Backpack", "permalink": "/products/fjallraven-backpack"},
+      {"id": 2, "label": "Mens Casual Tee", "permalink": "/products/mens-casual-tee"}
+    ]
+    """
+
+    rows = extract_records(
+        raw_json,
+        "https://store.example.com/api/products",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/json; charset=utf-8",
+    )
+
+    assert rows == []
+
+
 def test_extract_records_emits_nested_raw_json_list_items() -> None:
     raw_json = """
     {
@@ -4450,6 +4541,29 @@ def test_extract_records_emits_nested_raw_json_list_items() -> None:
     assert rows[0]["title"] == "Essence Mascara Lash Princess"
     assert rows[0]["description"] == "Popular mascara"
     assert rows[0]["brand"] == "Essence"
+
+
+def test_extract_records_rejects_low_overlap_nested_raw_json_list_items() -> None:
+    raw_json = """
+    {
+      "data": {
+        "entries": [
+          {"id": 1, "label": "Trail Runner", "permalink": "/products/trail-runner"},
+          {"id": 2, "label": "Commuter Backpack", "permalink": "/products/commuter-backpack"}
+        ]
+      }
+    }
+    """
+
+    rows = extract_records(
+        raw_json,
+        "https://store.example.com/api/search",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/json; charset=utf-8",
+    )
+
+    assert rows == []
 
 
 def test_extract_records_emits_nested_graphql_listing_items() -> None:

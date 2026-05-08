@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 from app.schemas.selectors import SelectorRecordResponse
+from app.services.config.domain_profiles import AUTO_TRAVERSAL
 from app.services.publish.verdict import run_health_verdict
 
 _DISPLAY_HIDDEN_RECORD_FIELDS = {"page_markdown", "table_markdown", "record_type"}
@@ -47,7 +48,7 @@ class CrawlRunResponse(BaseModel):
     settings: dict
     requested_fields: list[str]
     result_summary: dict
-    run_health: dict = Field(default_factory=dict)
+    run_health: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None = None
@@ -55,7 +56,12 @@ class CrawlRunResponse(BaseModel):
     @model_validator(mode="after")
     def _sanitize_settings(self) -> CrawlRunResponse:
         self.settings = _sanitize_crawl_settings(self.settings)
-        self.run_health = run_health_verdict(self.result_summary)
+        if "run_health" not in self.model_fields_set:
+            self.run_health = run_health_verdict(self.result_summary)
+        elif not isinstance(self.run_health, Mapping):
+            self.run_health = run_health_verdict(self.result_summary)
+        else:
+            self.run_health = dict(self.run_health)
         return self
 
 
@@ -218,7 +224,6 @@ class DomainRunFetchProfile(BaseModel):
     js_mode: Literal["auto", "enabled", "disabled"] = "auto"
     include_iframes: bool = False
     traversal_mode: Literal[
-        "auto",
         "scroll",
         "load_more",
         "view_all",
@@ -228,6 +233,14 @@ class DomainRunFetchProfile(BaseModel):
     max_pages: int = Field(default=5, ge=1, le=100)
     max_scrolls: int = Field(default=8, ge=0, le=100)
     host_memory_ttl_seconds: int | None = Field(default=None, ge=1, le=86_400)
+
+    @field_validator("traversal_mode", mode="before")
+    @classmethod
+    def _coerce_legacy_auto_traversal(cls, value: object) -> object:
+        normalized = str(value or "").strip().lower()
+        if normalized == AUTO_TRAVERSAL:
+            raise ValueError('traversal_mode "auto" is legacy and unsupported')
+        return value
 
 
 class DomainRunLocalityProfile(BaseModel):

@@ -26,6 +26,7 @@ class AdapterRuntimeSettings(BaseSettings):
     jibe_listing_default_page: str = "1"
     paycom_listing_page_size: int = 100
     saashr_pagination_size: int = 50
+    saashr_job_reqs_sort: str = "desc"
 
     @model_validator(mode="after")
     def _validate(self) -> AdapterRuntimeSettings:
@@ -55,6 +56,8 @@ class AdapterRuntimeSettings(BaseSettings):
             raise ValueError("paycom_listing_page_size must be > 0")
         if self.saashr_pagination_size <= 0:
             raise ValueError("saashr_pagination_size must be > 0")
+        if not str(self.saashr_job_reqs_sort or "").strip():
+            raise ValueError("saashr_job_reqs_sort must not be empty")
         return self
 
 

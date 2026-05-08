@@ -8,6 +8,7 @@ from typing import Any
 from app.services.config.extraction_rules import (
     DETAIL_ARTIFACT_IDENTIFIER_VALUES,
     DETAIL_ARTIFACT_PRICE_VALUES,
+    DETAIL_ARTIFACT_PRODUCT_TYPE_PATTERNS,
     DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES,
     DETAIL_ARTIFACT_SKU_PREFIXES,
     DETAIL_BRACKET_PROSE_MIN_WORDS,
@@ -98,6 +99,11 @@ low_signal_product_type_values = frozenset(
     clean_text(value).lower()
     for value in tuple(DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES or ())
     if clean_text(value)
+)
+detail_artifact_product_type_patterns = tuple(
+    re.compile(str(pattern), re.I)
+    for pattern in tuple(DETAIL_ARTIFACT_PRODUCT_TYPE_PATTERNS or ())
+    if str(pattern).strip()
 )
 cross_product_text_type_tokens = frozenset(
     clean_text(value).lower()
@@ -263,9 +269,18 @@ def _identifier_candidate_is_artifact(field_name: str, value: object) -> bool:
 
 
 def _product_type_candidate_is_artifact(field_name: str, value: object) -> bool:
-    return (
-        field_name == "product_type"
-        and clean_text(value).lower() in DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES
+    if field_name != "product_type":
+        return False
+    cleaned = clean_text(value).lower()
+    return bool(
+        cleaned
+        and (
+            cleaned in DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES
+            or any(
+                pattern.fullmatch(cleaned)
+                for pattern in detail_artifact_product_type_patterns
+            )
+        )
     )
 
 

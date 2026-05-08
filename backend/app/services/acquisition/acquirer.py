@@ -214,9 +214,8 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     if browser_reason is None and bool(runtime_policy.get("requires_browser")):
         browser_reason = "platform-required"
     policy_middleware = PolicyMiddleware()
-    await policy_middleware.before_fetch(
-        request.with_profile_updates(**acquisition_policy.to_profile())
-    )
+    await policy_middleware.before_fetch(request)
+    request = request.with_profile_updates(**acquisition_policy.to_profile())
     await _emit_event(request.on_event, "info", f"Acquiring {effective_url}")
     result = await fetch_page(
         effective_url,

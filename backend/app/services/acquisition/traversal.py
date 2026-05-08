@@ -157,9 +157,8 @@ def should_run_traversal(surface: str | None, traversal_mode: str | None) -> boo
     normalized_mode = str(traversal_mode or "").strip().lower()
     if normalized_mode in {"single", "sitemap", "crawl"} or not normalized_mode:
         return False
-    if normalized_mode in {"scroll", "load_more", "paginate"}:
-        return True
-    # "auto" mode: require listing surface
+    if normalized_mode not in {"scroll", "load_more", "paginate"}:
+        return False
     normalized_surface = str(surface or "").strip().lower()
     return "listing" in normalized_surface
 
@@ -177,34 +176,23 @@ async def execute_listing_traversal(
 ) -> TraversalResult:
     normalized_mode = str(traversal_mode or "").strip().lower()
     result = TraversalResult(requested_mode=normalized_mode)
+    if normalized_mode not in {"scroll", "load_more", "paginate"}:
+        _set_stop_reason(
+            result,
+            "unsupported_mode",
+            surface=surface,
+            traversal_mode=normalized_mode,
+        )
+        result.html_fragments = [
+            (await get_page_html(page, flatten_shadow=False), True)
+        ]
+        return result
     if not should_run_traversal(surface, normalized_mode):
         _set_stop_reason(result, "not_listing_or_disabled", surface=surface, traversal_mode=normalized_mode)
         result.html_fragments = [
             (await get_page_html(page, flatten_shadow=False), True)
         ]
         return result
-
-    selected_mode: str | None = normalized_mode
-    if normalized_mode == "auto":
-        selected_mode = await _detect_auto_mode(page, surface=surface)
-        if not selected_mode:
-            if await _has_scroll_signals(page, surface=surface):
-                selected_mode = "scroll"
-                logger.info(
-                    "auto mode: no controls found, falling back to scroll for surface=%s",
-                    surface,
-                )
-            else:
-                result.selected_mode = selected_mode
-                _set_stop_reason(result, "no_mode_detected", surface=surface, traversal_mode=normalized_mode)
-                result.card_count = (await _page_snapshot(page, surface=surface))["card_count"]
-                result.html_fragments = [
-                    (await get_page_html(page, flatten_shadow=False), True)
-                ]
-                return result
-        result.selected_mode = selected_mode
-    else:
-        result.selected_mode = normalized_mode
 
     timeout_value: float | None = None
     if timeout_seconds is not None:
@@ -218,7 +206,8 @@ async def execute_listing_traversal(
         else None
     )
     result.activated = True
-    if selected_mode == "scroll":
+    result.selected_mode = normalized_mode
+    if normalized_mode == "scroll":
         await _run_scroll_traversal(
             page,
             surface=surface,
@@ -228,7 +217,7 @@ async def execute_listing_traversal(
             deadline_at=deadline_at,
             on_event=on_event,
         )
-    elif selected_mode == "load_more":
+    elif normalized_mode == "load_more":
         await _run_load_more_traversal(
             page,
             surface=surface,
@@ -238,7 +227,7 @@ async def execute_listing_traversal(
             deadline_at=deadline_at,
             on_event=on_event,
         )
-    elif selected_mode == "paginate":
+    elif normalized_mode == "paginate":
         await _run_paginate_traversal(
             page,
             surface=surface,
@@ -256,22 +245,6 @@ async def execute_listing_traversal(
             (await get_page_html(page, flatten_shadow=False), True)
         ]
     return result
-
-
-async def _detect_auto_mode(page, *, surface: str) -> str | None:
-    load_more_locator = await _find_actionable_locator(page, "load_more")
-    next_page_locator = await _find_actionable_locator(page, "next_page")
-    scroll_signals = await _has_scroll_signals(page, surface=surface)
-    if load_more_locator is not None:
-        return "load_more"
-    if next_page_locator is not None:
-        if await looks_like_paginate_control(next_page_locator) or await _looks_like_next_page_control(next_page_locator):
-            return "paginate"
-        if not scroll_signals:
-            return "paginate"
-    if scroll_signals:
-        return "scroll"
-    return None
 
 
 async def _run_scroll_traversal(

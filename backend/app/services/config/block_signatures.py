@@ -10,6 +10,8 @@ BLOCK_SIGNATURES = {
         "robot or human",
         "are you a robot",
         "are you human",
+        "not a robot",
+        "you're not a robot",
         "please verify you are a human",
         "verify you are human",
         "complete the security check",
@@ -72,6 +74,7 @@ BLOCK_SIGNATURES = {
     ],
     "browser_challenge_strong_markers": {
         "captcha": "captcha",
+        "you're not a robot": "robot_gate",
         "verify you are human": "verification_text",
         "checking your browser": "browser_check",
         "cf-browser-verification": "cloudflare_verification",
@@ -93,6 +96,7 @@ BLOCK_SIGNATURES = {
     "title_regexes": [
         r"access\s+denied",
         r"robot\s+or\s+human",
+        r"you(?:'|’)?re\s+not\s+a\s+robot",
         r"just\s+a\s+moment",
         r"attention\s+required",
         r"you\s+have\s+been\s+blocked",

@@ -58,6 +58,22 @@ SHIPPING_INVENTORY_PAYLOAD_HINT_FIELDS = frozenset(
 )
 ECOMMERCE_DESCRIPTION_BLOCK_LIMIT = 40
 DETAIL_PAYLOAD_LIST_LIMIT = 50
+DETAIL_PAYLOAD_MAX_DEPTH = 12
+DETAIL_PRODUCT_IMAGE_CUE_SELECTOR = (
+    "main [class*='product'] img, "
+    "main [id*='product'] img, "
+    "main [class*='gallery'] img, "
+    "main [id*='gallery'] img, "
+    "article [class*='product'] img, "
+    "article [id*='product'] img, "
+    "article [class*='gallery'] img, "
+    "article [id*='gallery'] img, "
+    "[role='main'] [class*='product'] img, "
+    "[role='main'] [id*='product'] img, "
+    "[role='main'] [class*='gallery'] img, "
+    "[role='main'] [id*='gallery'] img, "
+    "img:not([class*='logo']):not([class*='icon']):not([src*='logo']):not([src*='icon'])"
+)
 LISTING_VISUAL_PRICE_REGEX_PATTERN = r"(?:₹|Rs\.?|INR|\$|€|£)\s?[\d,.]+"
 TRACKING_PIXEL_PATTERNS = (
     "facebook.com/tr?",
@@ -232,6 +248,9 @@ DETAIL_LOW_SIGNAL_TITLE_VALUES = frozenset(
 DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES = frozenset({"criteoproductrail"})
 DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES = frozenset(
     {"brightcove video", "criteoproductrail", "default", "tag", "inline"}
+)
+DETAIL_ARTIFACT_PRODUCT_TYPE_PATTERNS = (
+    r"^(?=.*\d)[a-z0-9]+(?:_[a-z0-9]+){2,}$",
 )
 DETAIL_ARTIFACT_IDENTIFIER_VALUES = frozenset(
     {"description", "details", "product details", "specification", "specifications"}
@@ -948,6 +967,7 @@ COMMON_WORD_SIZE_VALUES = frozenset(
         "full queen",
         "cal king",
         "california king",
+        "super single",
         "regular",
         "tall",
         "petite",
@@ -1355,6 +1375,7 @@ VARIANT_SIZE_VALUE_PATTERNS = tuple(
     dict.fromkeys(
         (
             *tuple(_STATIC_EXPORTS.get("VARIANT_SIZE_VALUE_PATTERNS", ()) or ()),
+            r"^(?:(?:eu|uk|us|cm|mm)[-\s]?)?\d{1,3}(?:\.\d+)?(?:/\d{1,3}(?:\.\d+)?)?$",
             r"^m\s*\d+(?:\.\d+)?\s*/\s*w\s*\d+(?:\.\d+)?$",
             r"^\d+(?:\.\d+)?/\d+(?:\.\d+)?\s+us\s+\(\d+\s+eu\)$",
         )
@@ -1553,6 +1574,8 @@ _EXTRA_EXPORTS = [
     "DETAIL_LOW_SIGNAL_LONG_TEXT_VALUES",
     "DETAIL_LOW_SIGNAL_NUMERIC_SIZE_MAX",
     "DETAIL_LOW_SIGNAL_PRODUCT_TYPE_VALUES",
+    "DETAIL_ARTIFACT_PRODUCT_TYPE_VALUES",
+    "DETAIL_ARTIFACT_PRODUCT_TYPE_PATTERNS",
     "DETAIL_ARTIFACT_IDENTIFIER_VALUES",
     "DETAIL_ARTIFACT_PRICE_VALUES",
     "DETAIL_AUTHORITATIVE_PRICE_SOURCES",

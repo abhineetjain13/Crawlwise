@@ -1262,14 +1262,14 @@ export default function DomainMemoryManagePage() {
                                                 ...current,
                                                 fetch_profile: {
                                                   ...current.fetch_profile,
-                                                  traversal_mode: value ? value : null,
+                                                  traversal_mode:
+                                                    value === 'auto' ? 'scroll' : value ? value : null,
                                                 },
                                               }),
                                             )
                                           }
                                           options={[
                                             { value: '', label: 'Off' },
-                                            { value: 'auto', label: 'Auto' },
                                             { value: 'scroll', label: 'Scroll' },
                                             { value: 'load_more', label: 'Load More' },
                                             { value: 'view_all', label: 'View All' },

@@ -17,6 +17,11 @@ def test_clean_text_normalizes_entities_whitespace_and_css_noise() -> None:
     assert clean_text(False) == ""
     assert clean_text("A\t\tB\r\nC") == "A B C"
     assert clean_text(".x{display:none} Product") == "Product"
+    assert clean_text('Sleep Number Ultimate 12\\" Mattress') == 'Sleep Number Ultimate 12" Mattress'
+    assert clean_text("SleepIQ\\u00ae score") == "SleepIQ® score"
+    assert clean_text(r"Line 1\nLine 2") == "Line 1 Line 2"
+    assert clean_text(r"Path\\to\\file") == r"Path\to\file"
+    assert clean_text(r"Line 1\\nLine 2") == r"Line 1\nLine 2"
 
 
 def test_strip_and_coerce_html_text() -> None:

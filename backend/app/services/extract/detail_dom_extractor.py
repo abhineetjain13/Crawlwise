@@ -164,7 +164,6 @@ def apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
-            selector_trace_candidates,
             "title",
             title,
             source="dom_h1",
@@ -187,7 +186,6 @@ def apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
-            selector_trace_candidates,
             "url",
             absolute_url(page_url, canonical_href),
             source="dom_canonical",
@@ -203,7 +201,6 @@ def apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
-            selector_trace_candidates,
             "image_url",
             images[0],
             source="dom_images",
@@ -212,7 +209,6 @@ def apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
-            selector_trace_candidates,
             "additional_images",
             images[1:],
             source="dom_images",
@@ -225,7 +221,6 @@ def apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
-            selector_trace_candidates,
             field_name,
             coerce_field_value(field_name, value, page_url),
             source="dom_text",
@@ -239,7 +234,6 @@ def apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
-                selector_trace_candidates,
                 normalized,
                 coerce_field_value(normalized, value, page_url),
                 source="dom_sections",
@@ -251,7 +245,6 @@ def apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
-                selector_trace_candidates,
                 "features",
                 feature_rows,
                 source="dom_sections",
@@ -266,7 +259,6 @@ def apply_dom_fallbacks(
             candidates,
             candidate_sources,
             field_sources,
-            selector_trace_candidates,
             "category",
             breadcrumb_category,
             source="dom_breadcrumb",
@@ -280,7 +272,6 @@ def apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
-                selector_trace_candidates,
                 "gender",
                 gender,
                 source="dom_text",
@@ -296,7 +287,6 @@ def apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
-                selector_trace_candidates,
                 "size",
                 coerce_field_value("size", size_match.group(1), page_url),
                 source="dom_text",
@@ -310,7 +300,6 @@ def apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
-                selector_trace_candidates,
                 "currency",
                 currency_code,
                 source="dom_text",
@@ -323,7 +312,6 @@ def apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
-                selector_trace_candidates,
                 "review_count",
                 review_match.group(1),
                 source="dom_text",
@@ -335,7 +323,6 @@ def apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
-                selector_trace_candidates,
                 "rating",
                 rating_match.group(1),
                 source="dom_text",
@@ -352,7 +339,6 @@ def apply_dom_fallbacks(
                 candidates,
                 candidate_sources,
                 field_sources,
-                selector_trace_candidates,
                 "remote",
                 "remote",
                 source="dom_text",
@@ -1458,6 +1444,7 @@ def backfill_variants_from_dom_if_missing(
         record["variant_count"] = len(merged_rows)
     currency = text_or_none(record.get("currency"))
     price = text_or_none(record.get("price"))
+    parent_availability = text_or_none(record.get("availability"))
     variants = record.get("variants")
     if not isinstance(variants, list) or not variants:
         return
@@ -1469,6 +1456,12 @@ def backfill_variants_from_dom_if_missing(
     for variant in variants:
         if not isinstance(variant, dict):
             continue
+        if (
+            parent_availability == "in_stock"
+            and variant.get("availability") in (None, "", [], {})
+            and variant.get("stock_quantity") in (None, "", [], {})
+        ):
+            variant["availability"] = parent_availability
         if price:
             variant["price"] = price
         if currency and variant.get("currency") in (None, "", [], {}):

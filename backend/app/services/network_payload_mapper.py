@@ -13,8 +13,17 @@ from app.services.config.network_payload_specs import (
     NETWORK_PAYLOAD_JOB_SIGNATURE,
     NETWORK_PAYLOAD_LIST_COLLECTION_KEYS,
     NETWORK_PAYLOAD_PRODUCT_SIGNATURE,
+    NETWORK_PAYLOAD_HTML_EXT_RE,
+    NETWORK_PAYLOAD_ID_MIN_LENGTH,
     NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH,
     NETWORK_PAYLOAD_SPECS,
+    PRODUCT_ID_KEYS,
+    SKU_KEYS,
+    SURFACE_ECOMMERCE_DETAIL,
+    VARIATION_KEYS,
+)
+from app.services.extract.detail_identity import (
+    detail_identity_codes_from_url,
 )
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.field_value_candidates import (
@@ -24,8 +33,10 @@ from app.services.field_value_candidates import (
 from app.services.field_policy import normalize_field_key
 from app.services.field_value_core import (
     STRUCTURED_MULTI_FIELDS,
+    coerce_field_value,
     surface_alias_lookup,
     surface_fields,
+    text_or_none,
 )
 
 
@@ -45,6 +56,7 @@ def map_network_payloads_to_fields(
         body = payload.get("body")
         if not isinstance(body, (dict, list)):
             continue
+        payload_matched = False
         if surface_specs:
             mapped = _map_payload_body(body, surface_specs=surface_specs)
             if mapped and _mapped_detail_result_matches_page(
@@ -53,7 +65,21 @@ def map_network_payloads_to_fields(
                 page_url=page_url,
             ):
                 rows.append(mapped)
-                continue
+                payload_matched = True
+        availability_mapped = _availability_payload_detail_result(
+            body,
+            surface=normalized_surface,
+            page_url=page_url,
+        )
+        if availability_mapped and _mapped_detail_result_matches_page(
+            availability_mapped,
+            surface=normalized_surface,
+            page_url=page_url,
+        ):
+            rows.append(availability_mapped)
+            payload_matched = True
+        if payload_matched:
+            continue
         ghost_mapped = _ghost_route_payload(
             body,
             surface=normalized_surface,
@@ -67,6 +93,128 @@ def map_network_payloads_to_fields(
         ):
             rows.append(ghost_mapped)
     return rows
+
+
+def _availability_payload_detail_result(
+    body: object,
+    *,
+    surface: str,
+    page_url: str,
+) -> dict[str, Any] | None:
+    if str(surface or "").strip().lower() != SURFACE_ECOMMERCE_DETAIL:
+        return None
+    if not isinstance(body, dict):
+        return None
+    product_id = text_or_none(_first_present(body, PRODUCT_ID_KEYS))
+    if not product_id:
+        return None
+    requested_codes = _page_identity_codes(page_url)
+    normalized_product_id = _normalized_identity_code(product_id)
+    if requested_codes and (
+        normalized_product_id is None or normalized_product_id not in requested_codes
+    ):
+        return None
+    variation_list = _first_present(body, VARIATION_KEYS)
+    if not isinstance(variation_list, list) or not variation_list:
+        return None
+    variants: list[dict[str, Any]] = []
+    for item in variation_list:
+        if not isinstance(item, dict):
+            continue
+        size = text_or_none(coerce_field_value("size", item.get("size"), page_url))
+        color = text_or_none(
+            coerce_field_value(
+                "color",
+                item.get("color") or item.get("colour"),
+                page_url,
+            )
+        )
+        if not size and not color:
+            continue
+        row: dict[str, Any] = {}
+        option_values: dict[str, str] = {}
+        if size:
+            row["size"] = size
+            option_values["size"] = size
+        if color:
+            row["color"] = color
+            option_values["color"] = color
+        if option_values:
+            row["option_values"] = option_values
+        sku = text_or_none(_first_present(item, SKU_KEYS))
+        if sku:
+            row["sku"] = sku
+        row["product_id"] = product_id
+        status_candidate = item.get("availability_status") or body.get(
+            "availability_status"
+        )
+        availability = coerce_field_value(
+            "availability",
+            status_candidate,
+            page_url,
+        )
+        if availability not in (None, "", [], {}):
+            row["availability"] = availability
+        raw_quantity = item.get("availability")
+        try:
+            stock_quantity = int(str(raw_quantity).strip())
+        except (TypeError, ValueError):
+            stock_quantity = None
+        if stock_quantity is not None:
+            row["stock_quantity"] = stock_quantity
+            if row.get("availability") in (None, "", [], {}):
+                row["availability"] = (
+                    "in_stock" if stock_quantity > 0 else "out_of_stock"
+                )
+        variants.append(row)
+    if not variants:
+        return None
+    record: dict[str, Any] = {
+        "product_id": product_id,
+        "variants": variants,
+        "variant_count": len(variants),
+    }
+    parent_availability = coerce_field_value(
+        "availability",
+        body.get("availability_status"),
+        page_url,
+    )
+    if parent_availability not in (None, "", [], {}):
+        record["availability"] = parent_availability
+    return record
+
+
+def _page_identity_codes(page_url: str) -> set[str]:
+    codes = set(detail_identity_codes_from_url(page_url))
+    parsed = urlparse(str(page_url or ""))
+    terminal = str(parsed.path or "").rstrip("/").split("/")[-1]
+    terminal = NETWORK_PAYLOAD_HTML_EXT_RE.sub("", terminal)
+    normalized = _normalized_identity_code(terminal)
+    if normalized is not None:
+        codes.add(normalized)
+    return codes
+
+
+def _normalized_identity_code(value: object) -> str | None:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).upper()
+    if (
+        len(normalized) >= NETWORK_PAYLOAD_ID_MIN_LENGTH
+        and re.search(r"[A-Z]", normalized)
+        and re.search(r"\d", normalized)
+    ):
+        return normalized
+    return None
+
+
+def _first_present(payload: dict[str, Any], keys: tuple[str, ...]) -> object:
+    return next(
+        (
+            payload[key]
+            for key in keys
+            if key in payload and payload[key] not in (None, "", [], {})
+        ),
+        None,
+    )
 
 
 def _ordered_payloads(

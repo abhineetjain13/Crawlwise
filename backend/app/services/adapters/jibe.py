@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import ast
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
@@ -12,7 +13,7 @@ from app.services.extraction_html_helpers import html_to_text
 from app.services.field_value_core import clean_text
 
 
-_SEARCH_CONFIG_RE = re.compile(r"window\.searchConfig\s*=\s*(\{.*?\});", re.DOTALL)
+_SEARCH_CONFIG_RE = re.compile(r"window\.searchConfig\s*=", re.DOTALL)
 
 
 class JibeAdapter(PublicEndpointAdapter):
@@ -95,14 +96,49 @@ class JibeAdapter(PublicEndpointAdapter):
         match = _SEARCH_CONFIG_RE.search(str(html or ""))
         if not match:
             return {}
-        raw = match.group(1)
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
+        raw = self._extract_object_literal(str(html or ""), match.end())
+        if not raw:
             return {}
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(raw)
+            except (ValueError, SyntaxError, TypeError, json.JSONDecodeError):
+                continue
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    def _extract_object_literal(self, html: str, start: int) -> str:
+        object_start = html.find("{", start)
+        if object_start < 0:
+            return ""
+        depth = 0
+        in_string = ""
+        escaped = False
+        for index in range(object_start, len(html)):
+            char = html[index]
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if in_string:
+                if char == in_string:
+                    in_string = ""
+                continue
+            if char in {"'", '"'}:
+                in_string = char
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return html[object_start : index + 1]
+        return ""
 
     def _normalize_query_value(self, value: object) -> str:
-        text = str(value or "").strip()
+        text = "" if value is None else str(value).strip()
         return unescape(text)
 
     def _normalize_job(self, row: object, *, base_url: str) -> dict | None:

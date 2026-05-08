@@ -128,7 +128,7 @@ async def persist_acquisition_artifacts(
         return raw_html_path
 
     diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
-    artifacts = mapping_or_empty(getattr(acquisition_result, "artifacts", {}))
+    artifacts = dict(mapping_or_empty(getattr(acquisition_result, "artifacts", {})))
     screenshot_path_source = str(artifacts.pop("browser_screenshot_path", "") or "").strip()
     screenshot_bytes = artifacts.pop("browser_screenshot_png", b"")
     screenshot_path = ""

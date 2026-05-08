@@ -5,6 +5,7 @@ Alias consumers prefer exact canonical field keys before alias fallbacks.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +21,6 @@ _STATIC_EXPORTS = {
 for _name, _value in _STATIC_EXPORTS.items():
     globals()[_name] = _value if _value is not None else ()
 
-NORMALIZER_LIST_TEXT_FIELDS = frozenset(
-    {*_STATIC_EXPORTS.get("NORMALIZER_LIST_TEXT_FIELDS", ()), "features"}
-)
-
 COLOR_FIELD = "color"
 TITLE_FIELD = "title"
 SIZE_FIELD = "size"
@@ -36,6 +33,7 @@ APPLY_URL_FIELD = "apply_url"
 CANONICAL_URL_FIELD = "canonical_url"
 IMAGE_URL_FIELD = "image_url"
 ADDITIONAL_IMAGES_FIELD = "additional_images"
+PRODUCT_ID_FIELD = "product_id"
 AVAILABILITY_FIELD = "availability"
 STOCK_QUANTITY_FIELD = "stock_quantity"
 VARIANTS_FIELD = "variants"
@@ -55,6 +53,42 @@ TITLE_STRUCTURED_VALUE_KEYS = (
     "text",
     "value",
 )
+PRICE_DICT_PREFERRED_KEYS = (
+    "formattedPrice",
+    "displayPrice",
+    "price",
+    "amount",
+    "currentValue",
+    "lowPrice",
+    "minPrice",
+    "minValue",
+    "highPrice",
+    "maxPrice",
+    "maxValue",
+    "value",
+)
+UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+NORMALIZER_LIST_TEXT_FIELDS = frozenset(
+    {*_STATIC_EXPORTS.get("NORMALIZER_LIST_TEXT_FIELDS", ()), "features"}
+)
+ECOMMERCE_DETAIL_JS_STATE_PRIORITY_FIELDS = frozenset(
+    field_name
+    for field_name in _STATIC_EXPORTS.get("ECOMMERCE_DETAIL_JS_STATE_FIELDS", ())
+    if field_name not in {PRODUCT_ID_FIELD, IMAGE_URL_FIELD, ADDITIONAL_IMAGES_FIELD}
+)
+VARIANT_AXIS_FIELD_NAMES = (
+    COLOR_FIELD,
+    SIZE_FIELD,
+    "style",
+    "material",
+    "finish",
+    "pattern",
+    "scent",
+    "flavor",
+    "capacity",
+    "length",
+    WIDTH_FIELD,
+)
 _EXTRA_EXPORTS = [
     "AVAILABLE_SIZES_FIELD",
     "APPLY_URL_FIELD",
@@ -64,9 +98,12 @@ _EXTRA_EXPORTS = [
     "CANONICAL_URL_FIELD",
     "COLOR_FIELD",
     "CURRENCY_FIELD",
+    "ECOMMERCE_DETAIL_JS_STATE_PRIORITY_FIELDS",
     "IMAGE_URL_FIELD",
     "NORMALIZER_LIST_TEXT_FIELDS",
     "PRICE_FIELD",
+    "PRICE_DICT_PREFERRED_KEYS",
+    "PRODUCT_ID_FIELD",
     "ROUTE_BARCODE_TO_SKU",
     "SELECTED_VARIANT_FIELD",
     "SIZE_FIELD",
@@ -74,9 +111,11 @@ _EXTRA_EXPORTS = [
     "STOCK_QUANTITY_FIELD",
     "TITLE_FIELD",
     "TITLE_STRUCTURED_VALUE_KEYS",
+    "UNICODE_ESCAPE_RE",
     "URL_FIELD",
     "VARIANTS_FIELD",
     "VARIANT_AXES_FIELD",
+    "VARIANT_AXIS_FIELD_NAMES",
     "WEIGHT_FIELD",
     "WIDTH_FIELD",
 ]

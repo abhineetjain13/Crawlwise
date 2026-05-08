@@ -9,7 +9,10 @@ from app.services.adapters.ebay import EbayAdapter
 from app.services.adapters.indeed import IndeedAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
 from app.services.adapters.nike import NikeAdapter
-from app.services.detail_extractor import build_detail_record, extract_detail_records
+from app.services.extract.detail_materializer import (
+    build_detail_record,
+    extract_detail_records,
+)
 from app.services.extraction_html_helpers import extract_job_sections
 from app.services.listing_extractor import extract_listing_records
 from app.services.xpath_service import extract_selector_value
@@ -1492,6 +1495,50 @@ async def test_nike_adapter_maps_nested_next_data_price_objects() -> None:
     assert record["original_price"] == "130"
     assert record["variants"][0]["price"] == "115"
     assert "original_price" not in record["variants"][0]
+
+
+@pytest.mark.asyncio
+async def test_nike_adapter_does_not_infer_empty_sizes_as_out_of_stock() -> None:
+    result = await NikeAdapter().extract(
+        "https://www.nike.fr/t/example-product/ABC123",
+        """
+        <html>
+          <body>
+            <script id="__NEXT_DATA__" type="application/json">
+            {
+              "props": {
+                "pageProps": {
+                  "selectedProduct": {
+                    "id": "13071857",
+                    "styleColor": "CW2288-111",
+                    "colorDescription": "White/White",
+                    "prices": {
+                      "currentPrice": 115,
+                      "initialPrice": 130
+                    },
+                    "productInfo": {
+                      "title": "Nike Air Force 1 '07",
+                      "subtitle": "Men's Shoes",
+                      "path": "/t/example-product/ABC123"
+                    },
+                    "sizes": []
+                  }
+                }
+              }
+            }
+            </script>
+          </body>
+        </html>
+        """,
+        "ecommerce_detail",
+    )
+
+    record = result.records[0]
+    assert record["title"] == "Nike Air Force 1 '07 Men's Shoes"
+    assert record["price"] == "115"
+    assert record["availability"] == "in_stock"
+    assert record["currency"] == "EUR"
+    assert len(record.get("variants", [])) == 0
 
 
 @pytest.mark.asyncio

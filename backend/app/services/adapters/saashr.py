@@ -51,11 +51,21 @@ class SaaSHRAdapter(PublicEndpointAdapter):
         seen_ids: set[str] = set()
         size = int(adapter_runtime_settings.saashr_pagination_size)
         offset = 1
-        company_name = ""
+        company_name: str | None = None
         while True:
-            endpoint = (
-                f"{base_url}/ta/rest/ui/recruitment/companies/%7C{company_code}/job-requisitions"
-                f"?offset={offset}&size={size}&sort=desc&ein_id={ein_id}&lang={lang}&career_portal_id={career_portal_id}"
+            endpoint = "{}?{}".format(
+                f"{base_url}/ta/rest/ui/recruitment/companies/%7C{company_code}/job-requisitions",
+                urlencode(
+                    {
+                        "offset": offset,
+                        "size": size,
+                        "sort": str(adapter_runtime_settings.saashr_job_reqs_sort).strip()
+                        or "desc",
+                        "ein_id": ein_id,
+                        "lang": lang,
+                        "career_portal_id": career_portal_id,
+                    }
+                ),
             )
             try:
                 payload = await self._request_json(
@@ -67,7 +77,7 @@ class SaaSHRAdapter(PublicEndpointAdapter):
                     break
             except (OSError, RuntimeError, ValueError, TypeError):
                 break
-            if not company_name:
+            if company_name is None:
                 company_name = await self._fetch_company_name(
                     base_url=base_url,
                     company_code=company_code,
@@ -111,9 +121,15 @@ class SaaSHRAdapter(PublicEndpointAdapter):
         lang: str,
         proxy: str | None = None,
     ) -> str:
-        endpoint = (
-            f"{base_url}/ta/rest/ui/recruitment/companies/%7C{company_code}/job-search/config"
-            f"?ein_id={ein_id}&career_portal_id={career_portal_id}&lang={lang}"
+        endpoint = "{}?{}".format(
+            f"{base_url}/ta/rest/ui/recruitment/companies/%7C{company_code}/job-search/config",
+            urlencode(
+                {
+                    "ein_id": ein_id,
+                    "career_portal_id": career_portal_id,
+                    "lang": lang,
+                }
+            ),
         )
         try:
             payload = await self._request_json(
@@ -128,7 +144,8 @@ class SaaSHRAdapter(PublicEndpointAdapter):
         return clean_text(payload.get("comp_name"))
 
     def _discover_board_url(self, url: str, html: str) -> str:
-        if SAASHR_DOMAIN in str(url or "").lower():
+        host = (urlparse(str(url or "")).hostname or "").lower()
+        if host == SAASHR_DOMAIN or host.endswith(f".{SAASHR_DOMAIN}"):
             return url
         soup = BeautifulSoup(str(html or ""), "html.parser")
         iframe = soup.select_one(f"iframe[src*='{SAASHR_DOMAIN}/ta/'][src*='.careers']")
@@ -142,7 +159,7 @@ class SaaSHRAdapter(PublicEndpointAdapter):
         return clean_text(match.group(1)) if match else ""
 
     def _normalize_row(
-        self, row: object, *, board_url: str, company_name: str
+        self, row: object, *, board_url: str, company_name: str | None
     ) -> dict | None:
         if not isinstance(row, dict):
             return None
@@ -169,7 +186,7 @@ class SaaSHRAdapter(PublicEndpointAdapter):
             "url": detail_url,
             "apply_url": detail_url,
             "location": location or None,
-            "company": company_name or None,
+            "company": clean_text(company_name) or None,
             "description": clean_text(row.get("job_description")),
         }
         return {

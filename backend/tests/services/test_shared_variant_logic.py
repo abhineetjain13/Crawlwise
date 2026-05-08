@@ -5,6 +5,8 @@ import pytest
 from bs4 import BeautifulSoup
 
 from app.services.extract.shared_variant_logic import (
+    _variant_choice_container_for_input,
+    _variant_choice_container_is_overbroad,
     iter_variant_choice_groups,
     iter_variant_select_groups,
     normalized_variant_axis_key,
@@ -533,6 +535,33 @@ def test_variant_choice_groups_skip_overbroad_parent_and_keep_fieldsets() -> Non
     assert not any(group.get("id") == "attribute-accordion" for group in groups)
 
 
+def test_variant_choice_groups_ignore_navigation_link_lists() -> None:
+    soup = BeautifulSoup(
+        """
+        <main>
+          <fieldset>
+            <legend>Size</legend>
+            <button>4</button>
+            <button>4.5</button>
+          </fieldset>
+        </main>
+        <nav>
+          <ul>
+            <li><a href="/us/bags">Bags & Backpacks</a></li>
+            <li><a href="/us/soccer">Soccer</a></li>
+            <li><a href="/us/tennis">Tennis</a></li>
+          </ul>
+        </nav>
+        """,
+        "html.parser",
+    )
+
+    groups = list(iter_variant_choice_groups(soup))
+
+    assert len(groups) == 1
+    assert resolve_variant_group_name(groups[0]) == "Size"
+
+
 def test_dom_variant_extraction_trusts_size_values_over_color_container_label() -> None:
     soup = BeautifulSoup(
         """
@@ -591,3 +620,68 @@ def test_dom_variant_extraction_filters_fulfillment_noise_from_color_group() -> 
         "210 Satin Corset - rose gold shimmer",
     ]
     assert all(set(row) <= {"color"} for row in record["variants"])
+
+
+def test_variant_choice_container_is_overbroad_avoids_css_select_scans() -> None:
+    class FakeNode:
+        name = "div"
+
+        def find_all(self, name=None, attrs=None, limit=None):  # type: ignore[no-untyped-def]
+            if name == "fieldset":
+                return [object(), object()]
+            return []
+
+        def select(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("slow CSS select path should not run")
+
+    assert _variant_choice_container_is_overbroad(FakeNode()) is True
+
+
+def test_variant_choice_container_for_input_avoids_css_select_scans() -> None:
+    class FakeInput:
+        name = "input"
+
+        def __init__(
+            self,
+            attrs: dict[str, str] | None = None,
+            *,
+            parent=None,
+        ) -> None:
+            self.attrs = dict(attrs or {})
+            self.parent = parent
+
+        def get(self, key: str) -> str | None:
+            return self.attrs.get(key)
+
+    class FakeParent:
+        name = "div"
+
+        def __init__(self) -> None:
+            self.attrs = {"class": ["size-selector"]}
+            self.children = [
+                FakeInput({"type": "radio", "name": "size"}, parent=self),
+                FakeInput({"type": "radio", "name": "size"}, parent=self),
+            ]
+            self.parent = None
+
+        def get(self, key: str):  # type: ignore[no-untyped-def]
+            return self.attrs.get(key)
+
+        def find_all(self, name=None, attrs=None, limit=None):  # type: ignore[no-untyped-def]
+            if name == "fieldset":
+                return []
+            if name == ["input", "button"] or name == ("input", "button"):
+                return list(self.children)
+            if name == "select":
+                return []
+            if attrs == {"role": "radiogroup"} or attrs == {"aria-label": True}:
+                return []
+            return []
+
+        def select(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("slow CSS select path should not run")
+
+    parent = FakeParent()
+    node = parent.children[0]
+
+    assert _variant_choice_container_for_input(node, axis_name="size") is parent

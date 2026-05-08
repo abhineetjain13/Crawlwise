@@ -6,7 +6,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from app.services.adapters.myntra import MyntraAdapter
-from app.services.detail_extractor import (
+from app.services.extract.detail_materializer import (
     build_detail_record,
 )
 from app.services.extract.detail_dom_extractor import variant_option_availability
@@ -154,7 +154,6 @@ def test_extract_ecommerce_detail_from_microdata() -> None:
     assert record["currency"] == "USD"
     assert record["availability"] == "in_stock"
     assert record["_source"] == "microdata"
-
 
 def test_extract_ecommerce_detail_merges_shopify_available_sizes_over_single_jsonld_variant() -> None:
     html = """
@@ -4241,7 +4240,6 @@ def test_build_detail_record_drops_v6_target_fulfillment_description() -> None:
 
     assert "description" not in record
 
-
 def test_build_detail_record_rejects_audit_artifact_candidates_before_selection() -> None:
     record = build_detail_record(
         "<html><body><main><h1>Audit Widget</h1><img src='/widget.jpg'></main></body></html>",
@@ -5000,7 +4998,6 @@ def test_build_detail_record_backfills_shared_variant_image_and_availability() -
     assert "image_url" not in record["variants"][0]
     assert record["variants"][1]["availability"] == "out_of_stock"
 
-
 def test_build_detail_record_repairs_nike_uuid_variant_skus_and_empty_prices() -> None:
     record = build_detail_record(
         "<html><body><main><h1>Nike Air Force 1 '07 Men's Shoes</h1></main></body></html>",
@@ -5351,7 +5348,6 @@ def test_extract_detail_backfills_current_price_variants_and_strips_unavailable_
     assert record["price"] == "100.00"
     assert record["variants"][0]["size"] == "12.5"
     assert "price" not in record["variants"][0]
-
 
 def test_extract_detail_rejects_asos_mixed_product_identity_record() -> None:
     html = """

@@ -266,7 +266,7 @@ def test_normalize_acquisition_contract_accepts_legacy_handoff_flag() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_crawl_run_disables_auto_traversal_when_advanced_mode_is_off(
+async def test_create_crawl_run_preserves_auto_traversal_when_advanced_enabled(
     db_session: AsyncSession,
     test_user,
 ) -> None:
@@ -278,7 +278,7 @@ async def test_create_crawl_run_disables_auto_traversal_when_advanced_mode_is_of
             "url": "https://example.com/collections/widgets",
             "surface": "ecommerce_listing",
             "settings": {
-                "advanced_enabled": False,
+                "advanced_enabled": True,
                 "fetch_profile": {
                     "traversal_mode": "auto",
                 },
@@ -286,9 +286,9 @@ async def test_create_crawl_run_disables_auto_traversal_when_advanced_mode_is_of
         },
     )
 
-    assert run.settings["advanced_enabled"] is False
-    assert run.settings["traversal_mode"] is None
-    assert run.settings["fetch_profile"]["traversal_mode"] is None
+    assert run.settings["advanced_enabled"] is True
+    assert run.settings["traversal_mode"] == "auto"
+    assert run.settings["fetch_profile"]["traversal_mode"] == "auto"
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,7 @@ class AcquisitionPolicyUpdates(TypedDict, total=False):
     prefer_curl_handoff: bool
     handoff_cookie_engine: str | None
     forced_browser_engine: str | None
+    requires_browser: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,7 @@ class AcquisitionPolicy:
     prefer_curl_handoff: bool = False
     handoff_cookie_engine: str | None = None
     forced_browser_engine: str | None = None
+    requires_browser: bool = False
 
     @classmethod
     def from_profile(
@@ -66,6 +68,7 @@ class AcquisitionPolicy:
             prefer_curl_handoff=bool(payload.get("prefer_curl_handoff", False)),
             handoff_cookie_engine=_optional_text(payload.get("handoff_cookie_engine")),
             forced_browser_engine=_optional_text(payload.get("forced_browser_engine")),
+            requires_browser=bool(payload.get("requires_browser", False)),
         )
 
     def with_updates(
@@ -85,7 +88,7 @@ class AcquisitionPolicy:
     ) -> "AcquisitionPolicy":
         if not requires_browser:
             return self
-        return replace(self, prefer_browser=True)
+        return replace(self, prefer_browser=True, requires_browser=True)
 
     @property
     def browser_reason(self) -> str | None:
@@ -124,6 +127,8 @@ class AcquisitionPolicy:
             profile["handoff_cookie_engine"] = self.handoff_cookie_engine
         if self.forced_browser_engine:
             profile["forced_browser_engine"] = self.forced_browser_engine
+        if self.requires_browser:
+            profile["requires_browser"] = self.requires_browser
         return profile
 
     def __post_init__(self) -> None:

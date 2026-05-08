@@ -1043,6 +1043,7 @@ def extract_listing_records(
         for source_name, source_payloads in collect_structured_source_payloads(
             context,
             page_url=page_url,
+            surface=surface,
         ):
             if source_name == "js_state":
                 continue

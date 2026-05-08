@@ -7,7 +7,10 @@ from typing import Any
 from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
-from app.services.config.extraction_rules import NOISE_CONTAINER_REMOVAL_SELECTOR
+from app.services.config.domain_profiles import LISTING_SURFACE_IDENTIFIER
+from app.services.config.extraction_rules import (
+    NOISE_CONTAINER_REMOVAL_SELECTOR,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.structured_sources import (
     harvest_js_state_objects,
@@ -62,9 +65,13 @@ def collect_structured_source_payloads(
     context: ExtractionContext,
     *,
     page_url: str,
+    surface: str = "",
 ) -> tuple[tuple[str, list[dict[str, Any]]], ...]:
     json_ld_payloads = _dict_payloads(parse_json_ld(context.soup))
-    skip_extruct_fallbacks = _json_ld_listing_confident(json_ld_payloads)
+    is_listing_surface = LISTING_SURFACE_IDENTIFIER in str(surface or "").strip().lower()
+    skip_extruct_fallbacks = is_listing_surface and _json_ld_listing_confident(
+        json_ld_payloads
+    )
     js_state_objects = harvest_js_state_objects(None, context.cleaned_html)
     js_state_payloads: list[dict[str, Any]] = []
     for payload in js_state_objects.values():

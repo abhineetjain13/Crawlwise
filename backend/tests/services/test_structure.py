@@ -10,7 +10,6 @@ EXTRACTION_MODULES = [
     SERVICES_ROOT / "extraction_runtime.py",
     SERVICES_ROOT / "extraction_context.py",
     SERVICES_ROOT / "crawl_fetch_runtime.py",
-    SERVICES_ROOT / "detail_extractor.py",
     SERVICES_ROOT / "listing_extractor.py",
     SERVICES_ROOT / "structured_sources.py",
     SERVICES_ROOT / "field_value_core.py",
@@ -90,8 +89,6 @@ FILE_LOC_BUDGETS = {
     Path("app/services/config/extraction_rules.py"): 1764,
     # Fetch runtime remains the request/browser arbitration owner.
     Path("app/services/crawl_fetch_runtime.py"): 1260,
-    # Detail extraction owns candidate arbitration and tier orchestration.
-    Path("app/services/detail_extractor.py"): 1640,
     # Detail DOM extraction owns DOM fallback fields plus DOM variant recovery.
     Path("app/services/extract/detail_dom_extractor.py"): 1448,
     # Detail finalizer owns public-boundary cleanup and record repair.

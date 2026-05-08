@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Final
 
 from app.services.config._export_data import load_export_data
@@ -95,6 +96,15 @@ GHOST_ROUTE_COMPATIBLE_SURFACES: Final[frozenset[str]] = frozenset(
 DETAIL_URL_IGNORE_TOKENS: Final[frozenset[str]] = frozenset(
     _tuple_of_strings(_EXPORTS.get("DETAIL_URL_IGNORE_TOKENS"))
 )
+PRODUCT_ID_KEYS: Final[tuple[str, ...]] = ("id", "productId", "product_id")
+VARIATION_KEYS: Final[tuple[str, ...]] = ("variation_list", "variations")
+SKU_KEYS: Final[tuple[str, ...]] = ("sku", "id", "variantId", "variant_id")
+SURFACE_ECOMMERCE_DETAIL: Final[str] = "ecommerce_detail"
+NETWORK_PAYLOAD_ID_MIN_LENGTH: Final[int] = 5
+NETWORK_PAYLOAD_HTML_EXT_RE: Final[re.Pattern[str]] = re.compile(
+    r"\.(?:html?|htm)$",
+    re.I,
+)
 NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = _SURFACE_SPECS
 
 
@@ -125,7 +135,13 @@ __all__ = [
     "NETWORK_PAYLOAD_LIST_COLLECTION_KEYS",
     "NETWORK_PAYLOAD_PRODUCT_SIGNATURE",
     "NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH",
+    "NETWORK_PAYLOAD_HTML_EXT_RE",
+    "NETWORK_PAYLOAD_ID_MIN_LENGTH",
     "NETWORK_PAYLOAD_SPECS",
     "PayloadMappingSpec",
+    "PRODUCT_ID_KEYS",
+    "SKU_KEYS",
+    "SURFACE_ECOMMERCE_DETAIL",
+    "VARIATION_KEYS",
     "endpoint_type_path_tokens",
 ]

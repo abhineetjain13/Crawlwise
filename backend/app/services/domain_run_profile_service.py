@@ -8,6 +8,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import DomainRunProfile
+from app.services.config.domain_profiles import AUTO_TRAVERSAL, TRAVERSAL_MODE_VALUES
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
 from app.models.crawl_settings import (
@@ -29,7 +30,6 @@ _EXTRACTION_SOURCE_VALUES = {
     "network_payload_first",
 }
 _JS_MODE_VALUES = {"auto", "enabled", "disabled"}
-_TRAVERSAL_MODE_VALUES = {"auto", "scroll", "load_more", "view_all", "paginate"}
 _CAPTURE_NETWORK_VALUES = {"off", "matched_only", "all_small_json"}
 _BROWSER_ENGINE_VALUES = {"auto", "patchright", "real_chrome"}
 _LEGACY_HANDOFF_ELIGIBLE_KEY = "prefer_curl_handoff"
@@ -65,6 +65,13 @@ def _coerce_choice(value: object, allowed: set[str], *, default: str) -> str:
 def _coerce_optional_choice(value: object, allowed: set[str]) -> str | None:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in allowed else None
+
+
+def _normalize_traversal_mode(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized == AUTO_TRAVERSAL:
+        return "scroll"
+    return normalized if normalized in TRAVERSAL_MODE_VALUES else None
 
 
 def _coerce_nullable_text(value: object) -> str | None:
@@ -215,9 +222,8 @@ def normalize_domain_run_profile(
                 default="auto",
             ),
             "include_iframes": bool(fetch_profile.get("include_iframes", False)),
-            "traversal_mode": _coerce_optional_choice(
+            "traversal_mode": _normalize_traversal_mode(
                 fetch_profile.get("traversal_mode"),
-                _TRAVERSAL_MODE_VALUES,
             ),
             "request_delay_ms": _coerce_int_clamped(
                 fetch_profile.get("request_delay_ms"),

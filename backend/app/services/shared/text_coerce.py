@@ -19,6 +19,7 @@ from app.services.config.extraction_rules import (
     RATING_RE,
     REVIEW_TITLE_RE,
 )
+from app.services.config.field_mappings import UNICODE_ESCAPE_RE
 from app.services.extraction_html_helpers import html_to_text
 
 __all__ = [
@@ -44,10 +45,31 @@ _LISTING_UTILITY_TITLE_REGEXES = tuple(
 
 
 def clean_text(value: object) -> str:
-    text = unescape(str(value or "")).strip()
+    text = _decode_common_escaped_text(unescape(str(value or "")).strip())
     if text.startswith(".") and _CSS_NOISE_RE.search(text[:256]):
         text = _LEADING_CSS_BLOCK_RE.sub("", text).strip()
     return whitespace_re.sub(" ", text)
+
+
+def _decode_common_escaped_text(value: str) -> str:
+    text = str(value or "")
+    if "\\" not in text:
+        return text
+    backslash_marker = "\0BACKSLASH\0"
+    text = text.replace("\\\\", backslash_marker)
+    text = UNICODE_ESCAPE_RE.sub(
+        lambda match: chr(int(match.group(1), 16)),
+        text,
+    )
+    text = (
+        text.replace("\\/", "/")
+        .replace('\\"', '"')
+        .replace("\\'", "'")
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+    )
+    return text.replace(backslash_marker, "\\")
 
 
 def is_title_noise(title: object) -> bool:

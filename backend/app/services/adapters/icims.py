@@ -55,22 +55,30 @@ class ICIMSAdapter(BaseAdapter):
         return self._result(records)
 
     async def _extract_listing(self, url: str, html: str) -> list[dict]:
-        parsed = urlparse(url)
+        current_url = url
+        parsed = urlparse(current_url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
+        original_endpoint = self._discover_ajax_endpoint(url, html)
 
         embedded_board_url = self._discover_embedded_board_url(url, html)
         if embedded_board_url:
             html = await self._fetch_embedded_content(
                 url=embedded_board_url, fallback_html=html
             )
+            current_url = embedded_board_url
+            parsed = urlparse(current_url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         inline_records = self._extract_from_listing_html(html, base_url)
         if inline_records:
             return inline_records
 
-        endpoint = self._discover_ajax_endpoint(url, html)
+        endpoint = original_endpoint or self._discover_ajax_endpoint(current_url, html)
         if not endpoint:
             return []
+        endpoint_parsed = urlparse(endpoint)
+        if endpoint_parsed.scheme and endpoint_parsed.netloc:
+            base_url = f"{endpoint_parsed.scheme}://{endpoint_parsed.netloc}"
 
         records: list[dict] = []
         seen_urls: set[str] = set()
@@ -88,15 +96,6 @@ class ICIMSAdapter(BaseAdapter):
             except _ICIMS_PAGINATION_ERRORS as exc:
                 logger.warning(
                     "Failed to fetch iCIMS pagination URL %s (offset=%s, endpoint=%s): %s",
-                    page_url,
-                    offset,
-                    endpoint,
-                    exc,
-                )
-                break
-            except (OSError, TimeoutError, ValueError, RuntimeError) as exc:
-                logger.exception(
-                    "Unexpected error fetching iCIMS pagination URL %s (offset=%s, endpoint=%s): %s",
                     page_url,
                     offset,
                     endpoint,
@@ -163,7 +162,7 @@ class ICIMSAdapter(BaseAdapter):
                 url,
                 timeout_seconds=adapter_runtime_settings.icims_pagination_timeout_seconds,
             )
-        except (OSError, TimeoutError, ValueError, RuntimeError):
+        except _ICIMS_PAGINATION_ERRORS:
             logger.exception("Failed to fetch embedded iCIMS content URL: %s", url)
             return fallback_html
         return response_text or fallback_html

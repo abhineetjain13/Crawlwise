@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -7,13 +8,15 @@ from typing import Any
 
 import jmespath
 from bs4 import BeautifulSoup
-from glom import glom  # type: ignore[import-untyped]
+from glom import GlomError, glom  # type: ignore[import-untyped]
 
 from app.services.config.js_state_field_specs import (
     JS_STATE_PRODUCT_PAYLOAD_LIMIT,
+    JS_STATE_LIST_ITERATION_LIMIT,
     JS_STATE_PRODUCT_FIELD_SPEC,
     JS_STATE_PRODUCT_VARIANT_LIST_KEYS,
     JS_STATE_VARIANT_FIELD_SPEC,
+    VARIANT_AXIS_KEYS,
 )
 from app.services.config.extraction_rules import ECOMMERCE_DESCRIPTION_BLOCK_LIMIT
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
@@ -42,6 +45,10 @@ from app.services.js_state_helpers import (
     variant_axes,
 )
 from app.services.platform_policy import JSStateExtractorConfig, platform_js_state_extractors
+
+logger = logging.getLogger(__name__)
+PRODUCT_FIELD_SPEC = JS_STATE_PRODUCT_FIELD_SPEC
+_VARIANT_FIELD_SPEC = JS_STATE_VARIANT_FIELD_SPEC
 
 def _as_list(value: object) -> list[Any]:
     return value if isinstance(value, list) else []
@@ -104,6 +111,11 @@ def map_js_state_to_fields(
         return _map_job_detail_state(js_state_objects)
     if normalized_surface == "ecommerce_detail":
         return _map_ecommerce_detail_state(js_state_objects, page_url=page_url)
+    logger.warning(
+        "Unsupported JS-state surface: surface=%s page_url=%s",
+        normalized_surface,
+        page_url,
+    )
     return {}
 
 def _map_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
@@ -215,6 +227,20 @@ def _map_ecommerce_detail_state(
             if mapped:
                 if not base_record:
                     base_record = mapped
+                elif (
+                    _mapped_product_family_matches(base_record, mapped)
+                    and _mapped_record_matches_page_url(mapped, page_url)
+                    and not _mapped_record_matches_page_url(base_record, page_url)
+                ):
+                    base_record = _merge_same_product_record(
+                        mapped,
+                        base_record,
+                        page_url=page_url,
+                    )
+                    if mapped.get("variants"):
+                        for field_name in VARIANT_AXIS_KEYS:
+                            if mapped.get(field_name) in (None, "", [], {}):
+                                base_record.pop(field_name, None)
                 elif _mapped_product_identity_matches(base_record, mapped, page_url=page_url):
                     base_record = _merge_same_product_record(
                         base_record,
@@ -370,10 +396,6 @@ def _mapped_product_family_matches(
     )
 
 
-def _normalized_family_title(record: dict[str, Any]) -> str:
-    return " ".join(_family_title_tokens(record))
-
-
 def _family_title_tokens(record: dict[str, Any]) -> list[str]:
     title = clean_text(record.get("title"))
     if not title:
@@ -505,16 +527,6 @@ def _looks_like_product_payload(value: Any) -> bool:
         )
     )
 
-def _find_product_payload(
-    value: Any,
-    *,
-    depth: int = 0,
-    limit: int = int(JS_STATE_PRODUCT_PAYLOAD_LIMIT),
-) -> dict[str, Any] | None:
-    payloads = _find_product_payloads(value, depth=depth, limit=limit)
-    return payloads[0] if payloads else None
-
-
 def _find_product_payloads(
     value: Any,
     *,
@@ -530,7 +542,7 @@ def _find_product_payloads(
         for item in value.values():
             payloads.extend(_find_product_payloads(item, depth=depth + 1, limit=limit))
     elif isinstance(value, list):
-        for item in value[:25]:
+        for item in value[: int(JS_STATE_LIST_ITERATION_LIMIT)]:
             payloads.extend(_find_product_payloads(item, depth=depth + 1, limit=limit))
     payloads.sort(key=_product_payload_score, reverse=True)
     return payloads[: int(JS_STATE_PRODUCT_PAYLOAD_LIMIT)]
@@ -568,28 +580,11 @@ def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
         "images",
         "image",
     }
-    variant_axis_keys = {
-        "color",
-        "size",
-        "style",
-        "material",
-        "flavor",
-        "scent",
-        "capacity",
-        "length",
-        "width",
-        "condition",
-        "grade",
-        "storage",
-        "memory",
-        "finish",
-        "model",
-    }
     axis_signal_count = sum(
         1
         for variant in raw_variants
         if isinstance(variant, dict)
-        and any(key in variant for key in variant_axis_keys)
+        and any(key in variant for key in VARIANT_AXIS_KEYS)
     )
     product_identifier_count = sum(
         1
@@ -710,6 +705,7 @@ def _map_product_payload(
             "title": base.get("title"),
             "brand": brand,
             "vendor": vendor,
+            "url": base.get("url"),
             "handle": base.get("handle"),
             "description": description_fields.get("description"),
             "product_id": base.get("product_id"),
@@ -831,7 +827,7 @@ def _discounted_percentage_price(product: dict[str, Any]) -> str | None:
         return None
     try:
         discounted = float(list_price) * (100.0 - float(discount_percent)) / 100.0
-    except (TypeError, ValueError, ZeroDivisionError):
+    except (TypeError, ValueError):
         return None
     if discounted <= 0:
         return None
@@ -915,7 +911,8 @@ def _product_base_fields(
 def _glom_product_base_fields(product: dict[str, Any]) -> dict[str, Any]:
     try:
         base = glom(product, JS_STATE_PRODUCT_FIELD_SPEC, default=None)
-    except Exception:
+    except (GlomError, RuntimeError, TypeError):
+        logger.debug("Failed to glom JS-state product payload", exc_info=True)
         base = {}
     if not isinstance(base, dict):
         return {}
@@ -975,7 +972,7 @@ def _extract_nested_image_urls(value: Any, *, page_url: str, depth: int = 0) -> 
                 _extract_nested_image_urls(item, page_url=page_url, depth=depth + 1)
             )
     elif isinstance(value, list):
-        for item in value[:25]:
+        for item in value[: int(JS_STATE_LIST_ITERATION_LIMIT)]:
             nested.extend(
                 _extract_nested_image_urls(item, page_url=page_url, depth=depth + 1)
             )
@@ -1029,7 +1026,8 @@ def _normalize_variant(
         row["variant_id"] = variant_id
     try:
         base = glom(variant, JS_STATE_VARIANT_FIELD_SPEC, default=None)
-    except Exception:
+    except (GlomError, RuntimeError, TypeError):
+        logger.debug("Failed to glom JS-state variant payload", exc_info=True)
         base = {}
     if not isinstance(base, dict):
         base = {}
@@ -1267,12 +1265,7 @@ def _variant_option_values(
 
     # Fallback: non-Shopify sites use direct axis keys (Magento, SFCC, custom React, etc.)
     if not option_values:
-        for possible_axis in (
-            "color", "size", "style", "material", "flavor",
-            "scent", "capacity", "length", "width",
-            "condition", "grade", "storage", "memory",
-            "finish", "model",
-        ):
+        for possible_axis in VARIANT_AXIS_KEYS:
             val = variant.get(possible_axis)
             cleaned = _variant_axis_value(possible_axis, val, page_url="")
             if cleaned:

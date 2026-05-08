@@ -7,7 +7,6 @@ from app.services.js_state_mapper import (
 )
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 
-
 def test_map_js_state_to_fields_recovers_next_data_shopify_product_fields() -> None:
     js_state_objects = {
         "__NEXT_DATA__": {
@@ -292,7 +291,6 @@ def test_map_js_state_to_fields_merges_same_family_sibling_product_urls() -> Non
             "https://www.gymshark.com/products/gymshark-arrival-5-shorts-white-ss22",
         ),
     }
-
 
 def test_map_js_state_to_fields_reads_variant_attributes_axes() -> None:
     mapped = map_js_state_to_fields(

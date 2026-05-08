@@ -19,7 +19,7 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
             "navigation_strategy": "domcontentloaded",
             "network_payload_count": 1,
             "malformed_network_payloads": 0,
-            "requested_traversal_mode": "auto",
+            "requested_traversal_mode": "paginate",
             "selected_traversal_mode": "paginate",
             "traversal_activated": True,
             "traversal_stop_reason": "next_page_not_found",

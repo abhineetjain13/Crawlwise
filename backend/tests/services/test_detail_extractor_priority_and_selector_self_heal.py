@@ -4,7 +4,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-from app.services.detail_extractor import (
+from app.services.extract.detail_materializer import (
     _materialize_image_fields,
     _requires_dom_completion,
 )
@@ -62,6 +62,27 @@ def test_requires_dom_completion_uses_raw_variant_cues_after_pruning() -> None:
 
     assert _requires_dom_completion(
         record={"title": "Widget", "image_url": "https://example.com/widget.jpg"},
+        surface="ecommerce_detail",
+        requested_fields=None,
+        selector_rules=None,
+        soup=soup,
+        breadcrumb_soup=raw_soup,
+    )
+
+
+def test_requires_dom_completion_ignores_logo_only_image_cue() -> None:
+    soup = BeautifulSoup("<main><h1>Widget</h1></main>", "html.parser")
+    raw_soup = BeautifulSoup(
+        """
+        <header>
+          <img class="site-logo" src="/logo.png" />
+        </header>
+        """,
+        "html.parser",
+    )
+
+    assert not _requires_dom_completion(
+        record={"title": "Widget"},
         surface="ecommerce_detail",
         requested_fields=None,
         selector_rules=None,

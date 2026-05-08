@@ -922,6 +922,68 @@ async def test_jibe_adapter_matches_detail_records_by_slug_like_job_id(
     assert records[0]["job_id"] == "REQ-1"
 
 
+def test_jibe_extract_search_config_rejects_non_mapping_json() -> None:
+    adapter = JibeAdapter()
+
+    assert adapter._extract_search_config('<script>window.searchConfig = [];</script>') == {}
+
+
+def test_jibe_normalize_query_value_preserves_falsy_scalars() -> None:
+    adapter = JibeAdapter()
+
+    assert adapter._normalize_query_value(0) == "0"
+    assert adapter._normalize_query_value(False) == "False"
+
+
+def test_jibe_normalize_job_preserves_job_id_in_fallback_url() -> None:
+    adapter = JibeAdapter()
+
+    record = adapter._normalize_job(
+        {"data": {"title": "Telemetry Nurse", "req_id": "REQ 1/2"}},
+        base_url="https://jobs.example.com",
+    )
+
+    assert record is not None
+    assert record["url"] == "https://jobs.example.com/jobs/REQ 1/2"
+
+
+@pytest.mark.asyncio
+async def test_saashr_fetches_company_name_once_even_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = SaaSHRAdapter()
+    calls = {"company": 0}
+
+    async def _fake_request_json(url: str, **kwargs):
+        del kwargs
+        if "job-requisitions" in url:
+            return {
+                "job_requisitions": [
+                    {
+                        "id": 1,
+                        "job_title": "Behavioral Health Technician",
+                    }
+                ]
+            }
+        return {}
+
+    async def _fake_fetch_company_name(**kwargs):
+        del kwargs
+        calls["company"] += 1
+        return ""
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+    monkeypatch.setattr(adapter, "_fetch_company_name", _fake_fetch_company_name)
+
+    records = await adapter.try_public_endpoint(
+        "https://secure7.saashr.com/ta/6208610.careers?ein_id=118959061&career_portal_id=6062087",
+        surface="job_listing",
+    )
+
+    assert len(records) == 1
+    assert calls["company"] == 1
+
+
 @pytest.mark.asyncio
 async def test_oracle_hcm_adapter_uses_shared_request_json_contract(
     monkeypatch: pytest.MonkeyPatch,

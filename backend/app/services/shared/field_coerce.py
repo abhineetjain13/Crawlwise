@@ -51,6 +51,7 @@ from app.services.config.field_mappings import (
     BRAND_LIKE_FIELDS,
     FIELD_ALIASES,
     PRICE_FIELD,
+    PRICE_DICT_PREFERRED_KEYS,
     TITLE_FIELD,
     TITLE_STRUCTURED_VALUE_KEYS,
     URL_FIELD,
@@ -481,6 +482,33 @@ def _price_text_is_negative(value: object) -> bool:
         return False
     marker = rf"(?:{_CURRENCY_SYMBOL_PATTERN}|\b(?:{_CURRENCY_CODE_PATTERN})\b)?"
     return re.match(rf"^\s*-\s*{marker}\s*\d", text, re.I) is not None
+
+
+def _price_candidate_has_money_signal(value: str) -> bool:
+    text = clean_text(value)
+    return (
+        "." in text
+        or "," in text
+        or extract_currency_code(text) is not None
+        or PRICE_RE.search(text) is not None
+        or _CODED_PRICE_RE.search(text.upper()) is not None
+    )
+
+
+def _coerce_price_from_dict(value: dict[str, object]) -> str | None:
+    fallback: str | None = None
+    for key in PRICE_DICT_PREFERRED_KEYS:
+        candidate = value.get(key)
+        if candidate in (None, "", [], {}):
+            continue
+        text = coerce_text(candidate)
+        if not text or _price_text_is_negative(text):
+            continue
+        if fallback is None:
+            fallback = text
+        if _price_candidate_has_money_signal(text):
+            return text
+    return fallback
 
 
 def extract_currency_code(value: object) -> str | None:
@@ -1090,24 +1118,7 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         "original_price",
         "discount_amount",
     } and isinstance(value, dict):
-        for key in (
-            "price",
-            "amount",
-            "value",
-            "currentValue",
-            "lowPrice",
-            "minPrice",
-            "minValue",
-            "highPrice",
-            "maxPrice",
-            "maxValue",
-            "displayPrice",
-            "formattedPrice",
-        ):
-            if value.get(key) not in (None, "", [], {}):
-                text = coerce_text(value.get(key))
-                return None if _price_text_is_negative(text) else text
-        return None
+        return _coerce_price_from_dict(value)
     if field_name in {"currency", "salary_currency"} and isinstance(value, dict):
         for key in ("currency", "currencyCode", "priceCurrency", "salaryCurrency"):
             if value.get(key) not in (None, "", [], {}):

@@ -207,3 +207,50 @@ async def test_acquire_translates_policy_to_fetch_runtime_knobs(
     assert captured["prefer_curl_handoff"] is True
     assert captured["handoff_cookie_engine"] == "real_chrome"
     assert captured["forced_browser_engine"] == "real_chrome"
+
+
+@pytest.mark.asyncio
+async def test_acquire_persists_runtime_policy_updates_on_result_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_fetch_page(url: str, *args, **kwargs):
+        del args, kwargs
+        return type(
+            "FetchResult",
+            (),
+            {
+                "final_url": url,
+                "html": "<html></html>",
+                "method": "browser",
+                "status_code": 200,
+                "content_type": "text/html",
+                "blocked": False,
+                "headers": {},
+                "network_payloads": [],
+                "browser_diagnostics": {},
+                "artifacts": {},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.acquisition.acquirer.fetch_page",
+        _fake_fetch_page,
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.acquirer.resolve_platform_runtime_policy",
+        lambda *_args, **_kwargs: {"requires_browser": True},
+    )
+
+    result = await acquire(
+        AcquisitionRequest(
+            run_id=9,
+            url="https://example.com/products/widget",
+            plan=AcquisitionPlan(surface="ecommerce_detail"),
+        )
+    )
+
+    assert result.request.policy is not None
+    assert result.request.policy.prefer_browser is True
+    assert result.request.policy.requires_browser is True
+    assert result.request.acquisition_profile["prefer_browser"] is True
+    assert result.request.acquisition_profile["requires_browser"] is True

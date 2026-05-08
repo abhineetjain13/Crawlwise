@@ -11,6 +11,7 @@ from html import unescape
 from typing import Any, Protocol
 
 import regex as regex_lib
+from app.services.config.domain_profiles import AUTO_TRAVERSAL
 from app.services.exceptions import CrawlerConfigurationError
 from app.services.xpath_service import validate_xpath_syntax
 
@@ -140,8 +141,8 @@ def resolve_traversal_mode(settings: object) -> str | None:
         fetch_profile_mode = str(fetch_profile.get("traversal_mode") or "").strip().lower()
         if fetch_profile_mode in {"", "none"}:
             return None
-        if fetch_profile_mode == "auto":
-            return "auto" if (advanced_enabled or not advanced_flag_present) else None
+        if fetch_profile_mode == AUTO_TRAVERSAL:
+            return AUTO_TRAVERSAL if advanced_enabled else None
         if fetch_profile_mode == "pagination":
             fetch_profile_mode = "paginate"
         if fetch_profile_mode == "infinite_scroll":
@@ -156,8 +157,6 @@ def resolve_traversal_mode(settings: object) -> str | None:
         )
     if advanced_flag_present and not advanced_enabled:
         return None
-    # Preserve user-owned advanced mode semantics from the unified crawl UI.
-    # `auto` means the app must detect the effective listing traversal mode.
     mode = (
         str(
             settings_view.get("traversal_mode")
@@ -169,8 +168,8 @@ def resolve_traversal_mode(settings: object) -> str | None:
     )
     if mode in {"", "none"}:
         return None
-    if mode == "auto":
-        return "auto" if advanced_enabled else None
+    if mode == AUTO_TRAVERSAL:
+        return AUTO_TRAVERSAL if advanced_enabled else None
     if mode == "pagination":
         mode = "paginate"
     if mode == "infinite_scroll":

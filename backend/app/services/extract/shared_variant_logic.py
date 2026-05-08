@@ -482,19 +482,67 @@ def _descendant_variant_group_name(node: Any) -> str:
 
 
 def _node_supports_value_only_axis_inference(node: Any) -> bool:
-    return hasattr(node, "select") and bool(
-        node.select(
-            "select, input[type='radio'], input[type='checkbox'], [data-option-name], a[href]"
-        )
-    )
+    if not hasattr(node, "find"):
+        return False
+    if node.find("select") is not None:
+        return True
+    if node.find(attrs={"data-option-name": True}) is not None:
+        return True
+    if node.find("a", href=True) is not None:
+        return True
+    for input_type in ("radio", "checkbox"):
+        if node.find("input", attrs={"type": input_type}) is not None:
+            return True
+    return False
+
+
+def _descendant_variant_choice_inputs(node: Any, *, limit: int) -> list[Any]:
+    if not hasattr(node, "find_all"):
+        return []
+    normalized_limit = max(1, int(limit))
+    inputs: list[Any] = []
+    for child in node.find_all(["input", "button"], limit=normalized_limit):
+        tag_name = str(getattr(child, "name", "") or "").strip().lower()
+        if tag_name == "button":
+            inputs.append(child)
+            continue
+        input_type = str(child.get("type") or "").strip().lower() if hasattr(child, "get") else ""
+        if input_type in {"radio", "checkbox"}:
+            inputs.append(child)
+    return inputs
+
+
+def _descendant_group_label_nodes(node: Any, *, limit: int) -> list[Any]:
+    if not hasattr(node, "find_all"):
+        return []
+    normalized_limit = max(1, int(limit))
+    groups: list[Any] = []
+    seen_ids: set[int] = set()
+    for child in node.find_all(attrs={"role": "radiogroup"}, limit=normalized_limit):
+        groups.append(child)
+        seen_ids.add(id(child))
+    if len(groups) >= normalized_limit:
+        return groups
+    remaining = normalized_limit - len(groups)
+    if remaining <= 0:
+        return groups
+    for child in node.find_all(attrs={"aria-label": True}, limit=remaining):
+        child_id = id(child)
+        if child_id in seen_ids:
+            continue
+        groups.append(child)
+        seen_ids.add(child_id)
+        if len(groups) >= normalized_limit:
+            break
+    return groups
 
 
 def _variant_choice_container_is_overbroad(node: Any) -> bool:
-    if not hasattr(node, "select"):
+    if not hasattr(node, "find_all"):
         return False
     if str(getattr(node, "name", "") or "").strip().lower() == "fieldset":
         return False
-    if len(node.select("fieldset")) >= 2:
+    if len(node.find_all("fieldset", limit=2)) >= 2:
         return True
     raw_names = {
         text_or_none(
@@ -502,16 +550,20 @@ def _variant_choice_container_is_overbroad(node: Any) -> bool:
             or child.get("data-option-name")
             or child.get("data-testid")
         )
-        for child in node.select("input[type='radio'], input[type='checkbox'], button")[
-            : int(VARIANT_CHOICE_CONTAINER_OPTION_LIMIT)
-        ]
+        for child in _descendant_variant_choice_inputs(
+            node,
+            limit=int(VARIANT_CHOICE_CONTAINER_OPTION_LIMIT),
+        )
     }
     distinct_names = {
         normalized_variant_axis_key(raw_name) or clean_text(raw_name).casefold()
         for raw_name in raw_names
         if raw_name
     }
-    for select in node.select("select")[: int(VARIANT_CHOICE_CONTAINER_SELECT_LIMIT)]:
+    for select in node.find_all(
+        "select",
+        limit=int(VARIANT_CHOICE_CONTAINER_SELECT_LIMIT),
+    ):
         raw_name = text_or_none(
             select.get("name")
             or select.get("aria-label")
@@ -521,9 +573,10 @@ def _variant_choice_container_is_overbroad(node: Any) -> bool:
             distinct_names.add(
                 normalized_variant_axis_key(raw_name) or clean_text(raw_name).casefold()
             )
-    for group_node in node.select("[role='radiogroup'], [aria-label]")[
-        : int(VARIANT_CHOICE_CONTAINER_GROUP_LIMIT)
-    ]:
+    for group_node in _descendant_group_label_nodes(
+        node,
+        limit=int(VARIANT_CHOICE_CONTAINER_GROUP_LIMIT),
+    ):
         if str(getattr(group_node, "name", "") or "").strip().lower() in {
             "button",
             "a",
@@ -1106,14 +1159,18 @@ def _variant_choice_container_for_input(
         axis_name = resolve_variant_group_name(node)
     parent = getattr(node, "parent", None)
     while parent is not None:
-        if not hasattr(parent, "select"):
+        if not hasattr(parent, "find_all"):
             parent = getattr(parent, "parent", None)
             continue
         if _variant_choice_container_is_overbroad(parent):
             parent = getattr(parent, "parent", None)
             continue
-        candidate_inputs = parent.select(
-            "input[type='radio'], input[type='checkbox'], button"
+        candidate_inputs = _descendant_variant_choice_inputs(
+            parent,
+            limit=max(
+                int(VARIANT_CHOICE_CONTAINER_OPTION_LIMIT),
+                int(VARIANT_MATCHING_INPUT_LIMIT),
+            ),
         )
         if axis_name:
             matching_inputs = [

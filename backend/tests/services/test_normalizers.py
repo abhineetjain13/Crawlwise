@@ -754,6 +754,55 @@ def test_detail_record_quality_repairs_invalid_original_prices_and_selected_vari
     assert all("original_price" not in variant for variant in record["variants"])
 
 
+def test_normalize_variant_record_does_not_invent_color_size_cross_product() -> None:
+    record = {
+        "color": "Cloud White / Core White / Green",
+        "variants": [
+            {
+                "size": "4",
+                "sku": "M20324_530",
+                "availability": "in_stock",
+                "option_values": {"size": "4"},
+            },
+            {
+                "size": "4.5",
+                "sku": "M20324_540",
+                "availability": "out_of_stock",
+                "option_values": {"size": "4.5"},
+            },
+            {
+                "color": "Cloud White / Core White / Green",
+                "url": "https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+                "option_values": {"color": "Cloud White / Core White / Green"},
+            },
+            {
+                "color": "Cloud White / Core Black / Green",
+                "url": "https://www.adidas.com/us/stan-smith-shoes/M20325.html",
+                "option_values": {"color": "Cloud White / Core Black / Green"},
+            },
+        ],
+    }
+
+    normalize_variant_record(record)
+
+    assert all(
+        not (variant.get("size") and variant.get("color"))
+        for variant in record["variants"]
+    )
+    assert record.get("variant_count") == 4
+    sizes = {variant.get("size") for variant in record["variants"] if variant.get("size")}
+    assert sizes == {"4", "4.5"}
+    color_only_values = {
+        variant.get("color")
+        for variant in record["variants"]
+        if variant.get("color") and not variant.get("size")
+    }
+    assert color_only_values == {
+        "Cloud White / Core White / Green",
+        "Cloud White / Core Black / Green",
+    }
+
+
 def test_normalize_variant_record_drops_numeric_shade_code_size_duplicate() -> None:
     record = {
         "title": "Colorful Eyeshadow",

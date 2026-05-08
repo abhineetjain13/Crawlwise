@@ -6,6 +6,7 @@ from glom import Coalesce  # type: ignore[import-untyped]
 
 JS_STATE_GLOM_SKIP: tuple[object, ...] = ("", [], {})
 JS_STATE_PRODUCT_PAYLOAD_LIMIT = 24
+JS_STATE_LIST_ITERATION_LIMIT = 25
 JS_STATE_PRODUCT_VARIANT_LIST_KEYS: tuple[str, ...] = ("variants", "availableSizes")
 JS_STATE_VARIANT_AVAILABILITY_BOOL_KEYS: tuple[str, ...] = (
     "available",
@@ -18,6 +19,23 @@ JS_STATE_VARIANT_STOCK_QUANTITY_KEYS: tuple[str, ...] = (
     "quantity",
     "inventoryQuantity",
 )
+VARIANT_AXIS_KEYS = (
+    "color",
+    "size",
+    "style",
+    "material",
+    "flavor",
+    "scent",
+    "capacity",
+    "length",
+    "width",
+    "condition",
+    "grade",
+    "storage",
+    "memory",
+    "finish",
+    "model",
+)
 JS_STATE_PRODUCT_FIELD_SPEC = {
     "title": Coalesce("title", "name", "pn", default=None, skip=JS_STATE_GLOM_SKIP),
     "brand": Coalesce(
@@ -29,6 +47,18 @@ JS_STATE_PRODUCT_FIELD_SPEC = {
         skip=JS_STATE_GLOM_SKIP,
     ),
     "vendor": Coalesce("vendor.name", "vendor", default=None, skip=JS_STATE_GLOM_SKIP),
+    "url": Coalesce(
+        "url",
+        "href",
+        "onlineStoreUrl",
+        "online_store_url",
+        "productUrl",
+        "product_url",
+        "canonicalUrl",
+        "canonical_url",
+        default=None,
+        skip=JS_STATE_GLOM_SKIP,
+    ),
     "handle": Coalesce("handle", "slug", default=None, skip=JS_STATE_GLOM_SKIP),
     "description": Coalesce(
         "description",

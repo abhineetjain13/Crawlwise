@@ -748,8 +748,10 @@ async def settle_browser_page_impl(
         try:
             await page.wait_for_function(
                 "({visibleTextMin}) => String((document.body && (document.body.innerText || document.body.textContent)) || '').trim().length >= Number(visibleTextMin || 0)",
-                {
-                    "visibleTextMin": crawler_runtime_settings.browser_readiness_visible_text_min,
+                arg={
+                    "visibleTextMin": int(
+                        crawler_runtime_settings.browser_readiness_visible_text_min
+                    ),
                 },
                 timeout=wait_ms,
             )

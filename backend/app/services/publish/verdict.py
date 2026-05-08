@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 VERDICT_SUCCESS: str = "success"
 VERDICT_PARTIAL: str = "partial"
 VERDICT_BLOCKED: str = "blocked"
@@ -34,13 +36,21 @@ def _aggregate_verdict(verdicts: list[str]) -> str:
 def run_health_verdict(summary: dict[str, object] | object) -> dict[str, object]:
     from app.services.config.runtime_settings import crawler_runtime_settings
 
-    payload = dict(summary) if isinstance(summary, dict) else {}
+    payload = dict(summary) if isinstance(summary, Mapping) else {}
+    raw_verdicts = payload.get("url_verdicts")
     verdicts = [
         str(value or "").strip()
-        for value in list(payload.get("url_verdicts") or [])
+        for value in list(raw_verdicts or [])
         if str(value or "").strip()
     ]
-    total = max(int(payload.get("url_count") or 0), len(verdicts))
+    try:
+        url_count = int(payload.get("url_count") or 0)
+    except (TypeError, ValueError):
+        url_count = 0
+    if isinstance(raw_verdicts, list):
+        total = max(url_count, len(verdicts)) if verdicts else 0
+    else:
+        total = url_count
     failures = sum(
         1 for verdict in verdicts if verdict not in {VERDICT_SUCCESS, VERDICT_PARTIAL}
     )
@@ -53,6 +63,8 @@ def run_health_verdict(summary: dict[str, object] | object) -> dict[str, object]
             status = "degraded"
         else:
             status = "healthy"
+    elif isinstance(raw_verdicts, list):
+        status = "healthy"
     return {
         "status": status,
         "url_count": total,

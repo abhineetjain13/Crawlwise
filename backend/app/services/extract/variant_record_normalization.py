@@ -1101,7 +1101,7 @@ def _color_only_rows_match_selected_parent_color(
     parent_color = clean_text(record.get("color")).casefold()
     if not parent_color:
         return False
-    return any(
+    return all(
         clean_text(row.get("color")).casefold() == parent_color
         for row in color_only_rows
     )

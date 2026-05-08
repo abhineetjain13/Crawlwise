@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -8,6 +9,12 @@ from urllib.parse import unquote, urlsplit
 from defusedxml import ElementTree as ET  # type: ignore[import-untyped]
 
 from app.services.acquisition.runtime import classify_blocked_page
+from app.services.config.domain_profiles import (
+    ALTERNATE_MAX_RECORDS,
+    ALTERNATE_MIN_RECORDS,
+    ALTERNATE_MISMATCH_WARNING_THRESHOLD,
+    SURFACE_PAIRS,
+)
 from app.services.config.extraction_rules import (
     JSON_RECORD_LIST_KEYS,
     LISTING_NETWORK_BACKFILL_FIELDS,
@@ -20,7 +27,7 @@ from app.services.config.extraction_rules import (
     LISTING_NETWORK_PRIMARY_PRICE_KEYS,
     LISTING_NETWORK_TITLE_KEYS,
 )
-from app.services.detail_extractor import (
+from app.services.extract.detail_materializer import (
     extract_detail_records,
     repair_ecommerce_detail_record_quality,
 )
@@ -55,6 +62,8 @@ from app.services.listing_extractor import extract_listing_records
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.normalizers import normalize_decimal_price
 
+logger = logging.getLogger(__name__)
+
 
 def extract_records(
     html: str,
@@ -71,10 +80,13 @@ def extract_records(
     extraction_runtime_snapshot: dict[str, object] | None = None,
     content_type: str | None = None,
 ) -> list[dict]:
+    normalized_surface = str(surface or "").strip().lower()
+    if not normalized_surface or normalized_surface == "auto":
+        raise ValueError(f"Surface must be explicit, got: {surface!r}")
     xml_records = _extract_xml_sitemap_records(
         html,
         page_url,
-        surface,
+        normalized_surface,
         max_records=max_records,
         content_type=content_type,
     )
@@ -83,13 +95,13 @@ def extract_records(
     json_records = _extract_raw_json_records(
         html,
         page_url,
-        surface,
+        normalized_surface,
         max_records=max_records,
         requested_fields=requested_fields,
         content_type=content_type,
     )
     if json_records:
-        if "listing" in surface:
+        if "listing" in normalized_surface:
             return json_records
         return _postprocess_detail_records(
             json_records[:max_records],
@@ -99,7 +111,7 @@ def extract_records(
         )
     if _html_is_blocked_extraction_shell(html):
         return []
-    if "listing" in surface:
+    if "listing" in normalized_surface:
         adapter_rows: list[dict[str, Any]] = []
         if adapter_records:
             for record in list(adapter_records or []):
@@ -107,7 +119,7 @@ def extract_records(
                     continue
                 shaped = direct_record_to_surface_fields(
                     record,
-                    surface=surface,
+                    surface=normalized_surface,
                     page_url=page_url,
                     requested_fields=requested_fields,
                     base_fields={
@@ -120,7 +132,7 @@ def extract_records(
         listing_rows = extract_listing_records(
             html,
             page_url,
-            surface,
+            normalized_surface,
             max_records=max_records,
             artifacts=artifacts,
             selector_rules=selector_rules,
@@ -148,13 +160,13 @@ def extract_records(
                     ("generic_plus_adapter", [*listing_rows, *adapter_rows]),
                 ],
                 page_url=page_url,
-                surface=surface,
+                surface=normalized_surface,
                 max_records=max_records,
                 title_is_noise=is_title_noise,
                 url_is_structural=listing_url_is_structural,
                 detail_like_url=lambda candidate_url: listing_detail_like_path(
                     candidate_url,
-                    is_job=str(surface or "").startswith("job_"),
+                    is_job=str(normalized_surface or "").startswith("job_"),
                 ),
             )
             return candidate_rows
@@ -162,12 +174,26 @@ def extract_records(
             return listing_rows
         if adapter_rows:
             return adapter_rows
+        _warn_if_surface_mismatch(
+            html=html,
+            page_url=page_url,
+            surface=normalized_surface,
+            max_records=max_records,
+            requested_page_url=requested_page_url,
+            requested_fields=requested_fields,
+            adapter_records=adapter_records,
+            network_payloads=network_payloads,
+            artifacts=artifacts,
+            selector_rules=selector_rules,
+            extraction_runtime_snapshot=extraction_runtime_snapshot,
+            records=[],
+        )
         return []
-    return _postprocess_detail_records(
+    detail_rows = _postprocess_detail_records(
         extract_detail_records(
             html,
             page_url,
-            surface,
+            normalized_surface,
             requested_page_url=requested_page_url,
             requested_fields=requested_fields,
             adapter_records=adapter_records,
@@ -180,6 +206,22 @@ def extract_records(
         requested_page_url=requested_page_url,
         repair_quality=False,
     )
+    if not detail_rows:
+        _warn_if_surface_mismatch(
+            html=html,
+            page_url=page_url,
+            surface=normalized_surface,
+            max_records=max_records,
+            requested_page_url=requested_page_url,
+            requested_fields=requested_fields,
+            adapter_records=adapter_records,
+            network_payloads=network_payloads,
+            artifacts=artifacts,
+            selector_rules=selector_rules,
+            extraction_runtime_snapshot=extraction_runtime_snapshot,
+            records=detail_rows,
+        )
+    return detail_rows
 
 
 def _html_is_blocked_extraction_shell(html: str) -> bool:
@@ -196,6 +238,71 @@ def _html_is_blocked_extraction_shell(html: str) -> bool:
             or classification.title_matches
         )
     )
+
+
+def _paired_surface(surface: str) -> str:
+    return str(SURFACE_PAIRS.get(surface, ""))
+
+
+def _warn_if_surface_mismatch(
+    *,
+    html: str,
+    page_url: str,
+    surface: str,
+    max_records: int,
+    requested_page_url: str | None,
+    requested_fields: list[str] | None,
+    adapter_records: list[dict] | None,
+    network_payloads: list[dict[str, object]] | None,
+    artifacts: dict[str, object] | None,
+    selector_rules: list[dict[str, object]] | None,
+    extraction_runtime_snapshot: dict[str, object] | None,
+    records: list[dict],
+) -> None:
+    if records or not str(html or "").strip() or _html_is_blocked_extraction_shell(html):
+        return
+    alternate_surface = _paired_surface(surface)
+    if not alternate_surface:
+        return
+    if "listing" in surface:
+        alternate_records = extract_detail_records(
+            html,
+            page_url,
+            alternate_surface,
+            requested_page_url=requested_page_url,
+            requested_fields=requested_fields,
+            adapter_records=adapter_records,
+            network_payloads=network_payloads,
+            selector_rules=selector_rules,
+            extraction_runtime_snapshot=extraction_runtime_snapshot,
+        )[:1]
+        if alternate_records:
+            logger.warning(
+                "surface_mismatch_suspected surface=%s page_shape=detail page_url=%s alternate_record_count=%d",
+                surface,
+                page_url,
+                len(alternate_records),
+            )
+        return
+    alternate_records = extract_listing_records(
+        html,
+        page_url,
+        alternate_surface,
+        max_records=max(
+            ALTERNATE_MIN_RECORDS,
+            min(int(max_records or 0), ALTERNATE_MAX_RECORDS),
+        ),
+        artifacts=artifacts,
+        selector_rules=selector_rules,
+        network_payloads=network_payloads,
+    )
+    if len(alternate_records) >= ALTERNATE_MISMATCH_WARNING_THRESHOLD:
+        logger.warning(
+            "surface_mismatch_suspected surface=%s page_shape=listing page_url=%s alternate_record_count=%d",
+            surface,
+            page_url,
+            len(alternate_records),
+        )
 
 
 def _finalize_listing_rows(rows: list[dict]) -> list[dict[str, Any]]:
@@ -657,7 +764,7 @@ def _has_surface_field_overlap(items: list[object], *, surface: str) -> bool:
         return True
     matching = 0
     for item in dict_items:
-        item_keys = {normalize_field_key(k) for k in item if k}
+        item_keys = _structured_surface_overlap_keys(item)
         if item_keys & canonical:
             matching += 1
     ratio = matching / len(dict_items) if dict_items else 0
@@ -667,12 +774,27 @@ def _has_surface_field_overlap(items: list[object], *, surface: str) -> bool:
     )
 
 
+def _structured_surface_overlap_keys(payload: dict[str, object]) -> set[str]:
+    keys = {normalize_field_key(k) for k in payload if k}
+    if keys:
+        for value in payload.values():
+            if not isinstance(value, dict) or not value:
+                continue
+            keys.update(normalize_field_key(k) for k in value if k)
+    return keys
+
+
 def _raw_json_items(payload: object, *, surface: str) -> list[object]:
     is_listing_surface = "listing" in str(surface or "").lower()
     if isinstance(payload, list):
         if is_listing_surface and not _has_surface_field_overlap(
             payload, surface=surface
         ):
+            _log_raw_json_overlap_warning(
+                payload,
+                surface=surface,
+                location="root_list",
+            )
             return []
         return list(payload)
     if not isinstance(payload, dict):
@@ -683,6 +805,11 @@ def _raw_json_items(payload: object, *, surface: str) -> list[object]:
             if is_listing_surface and not _has_surface_field_overlap(
                 value, surface=surface
             ):
+                _log_raw_json_overlap_warning(
+                    value,
+                    surface=surface,
+                    location=f"record_list_key:{key}",
+                )
                 continue
             return value
     if is_listing_surface:
@@ -700,6 +827,16 @@ def _best_nested_listing_items(
         for key, value in payload.items():
             if isinstance(value, list):
                 score = _listing_items_score(key, value)
+                if score > 0:
+                    if surface and not _has_surface_field_overlap(
+                        value, surface=surface
+                    ):
+                        _log_raw_json_overlap_warning(
+                            value,
+                            surface=surface,
+                            location=f"nested_dict_key:{key}_depth:{depth}",
+                        )
+                        score = 0
                 if score > 0:
                     candidates.append((score, value))
                 for item in value[:10]:
@@ -720,6 +857,11 @@ def _best_nested_listing_items(
         score = _listing_items_score("list", payload)
         if score > 0:
             if surface and not _has_surface_field_overlap(payload, surface=surface):
+                _log_raw_json_overlap_warning(
+                    payload,
+                    surface=surface,
+                    location=f"nested_list_depth:{depth}",
+                )
                 score = 0
         if score > 0:
             candidates.append((score, payload))
@@ -751,6 +893,20 @@ def _listing_items_score(key: str, items: list[object]) -> int:
     ):
         score += 5
     return score
+
+
+def _log_raw_json_overlap_warning(
+    items: list[object],
+    *,
+    surface: str,
+    location: str,
+) -> None:
+    logger.warning(
+        "raw_json_surface_field_overlap_failed surface=%s location=%s item_count=%d skipping_items",
+        surface,
+        location,
+        len(items),
+    )
 
 
 def _raw_json_record(

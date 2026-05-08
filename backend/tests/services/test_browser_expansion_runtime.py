@@ -895,10 +895,11 @@ class _FakeExpansionPage:
     async def wait_for_function(
         self,
         _script: str,
-        _arg: object | None = None,
         *,
+        arg: object | None = None,
         timeout: int | None = None,
     ) -> None:
+        del arg
         self.wait_function_calls.append(int(timeout or 0))
         if self.wait_html_sequence:
             next_html = self.wait_html_sequence.pop(0)

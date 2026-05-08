@@ -264,7 +264,7 @@ def _card_selectors(surface: str) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_auto_traversal_prefers_paginate_and_collects_multiple_pages() -> None:
+async def test_paginate_traversal_collects_multiple_pages() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
         initial_state=_State(
@@ -294,7 +294,7 @@ async def test_auto_traversal_prefers_paginate_and_collects_multiple_pages() -> 
     result = await execute_listing_traversal(
         page,
         surface="ecommerce_listing",
-        traversal_mode="auto",
+        traversal_mode="paginate",
         max_pages=3,
         max_scrolls=2,
     )
@@ -525,7 +525,7 @@ async def test_paginate_traversal_waits_for_navigation_transition() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_traversal_prefers_paginate_for_spa_next_button() -> None:
+async def test_paginate_traversal_handles_spa_next_button() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
         initial_state=_State(
@@ -574,7 +574,7 @@ async def test_auto_traversal_prefers_paginate_for_spa_next_button() -> None:
     result = await execute_listing_traversal(
         page,
         surface="ecommerce_listing",
-        traversal_mode="auto",
+        traversal_mode="paginate",
         max_pages=2,
         max_scrolls=2,
     )
@@ -586,7 +586,7 @@ async def test_auto_traversal_prefers_paginate_for_spa_next_button() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_traversal_prefers_paginate_for_numeric_arrow_button() -> None:
+async def test_paginate_traversal_handles_numeric_arrow_button() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
         initial_state=_State(
@@ -639,7 +639,7 @@ async def test_auto_traversal_prefers_paginate_for_numeric_arrow_button() -> Non
     result = await execute_listing_traversal(
         page,
         surface="ecommerce_listing",
-        traversal_mode="auto",
+        traversal_mode="paginate",
         max_pages=2,
         max_scrolls=2,
     )
@@ -729,7 +729,7 @@ async def test_paginate_traversal_stops_before_recording_block_challenge() -> No
 
 
 @pytest.mark.asyncio
-async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
+async def test_load_more_traversal_runs_when_button_present() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
         initial_state=_State(
@@ -747,7 +747,7 @@ async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
     result = await execute_listing_traversal(
         page,
         surface="ecommerce_listing",
-        traversal_mode="auto",
+        traversal_mode="load_more",
         max_pages=2,
         max_scrolls=2,
     )
@@ -897,7 +897,7 @@ async def test_paginate_uses_max_records_as_page_stop_not_page_limit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
+async def test_scroll_traversal_runs_when_explicitly_requested() -> None:
     page = _FakePage(
         surface="job_listing",
         initial_state=_State(
@@ -917,7 +917,7 @@ async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     result = await execute_listing_traversal(
         page,
         surface="job_listing",
-        traversal_mode="auto",
+        traversal_mode="scroll",
         max_pages=2,
         max_scrolls=3,
     )
@@ -1035,9 +1035,7 @@ async def test_execute_listing_traversal_ignores_invalid_timeout_value() -> None
 
 
 @pytest.mark.asyncio
-async def test_auto_traversal_falls_back_to_scroll_when_auto_detection_returns_none(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_execute_listing_traversal_rejects_auto_mode() -> None:
     page = _FakePage(
         surface="job_listing",
         initial_state=_State(
@@ -1053,17 +1051,6 @@ async def test_auto_traversal_falls_back_to_scroll_when_auto_detection_returns_n
         ],
     )
 
-    async def _detect_none(*args, **kwargs):
-        del args, kwargs
-        return None
-
-    async def _scroll_signals(*args, **kwargs):
-        del args, kwargs
-        return True
-
-    monkeypatch.setattr(traversal_module, "_detect_auto_mode", _detect_none)
-    monkeypatch.setattr(traversal_module, "_has_scroll_signals", _scroll_signals)
-
     result = await execute_listing_traversal(
         page,
         surface="job_listing",
@@ -1072,9 +1059,9 @@ async def test_auto_traversal_falls_back_to_scroll_when_auto_detection_returns_n
         max_scrolls=2,
     )
 
-    assert result.selected_mode == "scroll"
-    assert result.stop_reason != "no_mode_detected"
-    assert result.scroll_iterations >= 1
+    assert result.selected_mode is None
+    assert result.stop_reason == "unsupported_mode"
+    assert result.scroll_iterations == 0
 
 
 @pytest.mark.asyncio

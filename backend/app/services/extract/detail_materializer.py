@@ -11,22 +11,25 @@ from app.services.confidence import score_record_confidence
 from app.services.config.field_mappings import (
     DOM_HIGH_VALUE_FIELDS,
     DOM_OPTIONAL_CUE_FIELDS,
-    ECOMMERCE_DETAIL_JS_STATE_FIELDS,
+    ECOMMERCE_DETAIL_JS_STATE_PRIORITY_FIELDS,
     IMAGE_URL_FIELD,
     TITLE_FIELD,
     URL_FIELD,
+    VARIANT_AXIS_FIELD_NAMES,
     VARIANT_DOM_FIELD_NAMES,
 )
 from app.services.config.extraction_rules import (
     DETAIL_BRAND_SHELL_DESCRIPTION_PHRASES,
     DETAIL_BRAND_SHELL_TITLE_TOKENS,
-    DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES,
-    DETAIL_PAYLOAD_LIST_LIMIT,
     DETAIL_CATEGORY_SOURCE_RANKS,
+    DETAIL_PRODUCT_IMAGE_CUE_SELECTOR,
+    DETAIL_IMAGE_RAW_SOUP_FALLBACK_MAX_WINNING_IMAGES,
     DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_LONG_TEXT_SOURCE_RANKS,
     DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS,
     DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS,
+    DETAIL_PAYLOAD_LIST_LIMIT,
+    DETAIL_PAYLOAD_MAX_DEPTH,
     DETAIL_TITLE_SOURCE_RANKS,
     SOURCE_PRIORITY,
     TRACKING_PIXEL_PATTERNS,
@@ -144,7 +147,10 @@ def _field_source_rank(surface: str, field_name: str, source: str | None) -> int
             return DETAIL_TITLE_SOURCE_RANKS.get(str(source or ""), 20)
         if field_name in DETAIL_LONG_TEXT_RANK_FIELDS:
             return DETAIL_LONG_TEXT_SOURCE_RANKS.get(str(source or ""), 20)
-        if field_name in ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
+        if (
+            field_name in ECOMMERCE_DETAIL_JS_STATE_PRIORITY_FIELDS
+            and source == "js_state"
+        ):
             return 2
     return 100 + _SOURCE_PRIORITY_RANK.get(
         str(source or ""), len(_SOURCE_PRIORITY_RANK)
@@ -155,7 +161,6 @@ def _add_sourced_candidate(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
-    selector_trace_candidates: dict[str, list[dict[str, object]]],
     field_name: str,
     value: object,
     *,
@@ -198,7 +203,6 @@ def _collect_record_candidates(
             candidates,
             candidate_sources,
             field_sources,
-            selector_trace_candidates,
             normalized_field,
             coerce_field_value(normalized_field, value, page_url),
             source=source,
@@ -530,13 +534,21 @@ def _prune_irrelevant_detail_structured_payload(
     *,
     page_url: str,
     requested_page_url: str,
+    depth: int = 0,
 ) -> object | None:
+    try:
+        max_depth = int(DETAIL_PAYLOAD_MAX_DEPTH)
+    except (TypeError, ValueError):
+        max_depth = 12
+    if depth >= max_depth:
+        return None
     if isinstance(payload, list):
         cleaned_items = [
             _prune_irrelevant_detail_structured_payload(
                 item,
                 page_url=page_url,
                 requested_page_url=requested_page_url,
+                depth=depth + 1,
             )
             for item in payload[: int(DETAIL_PAYLOAD_LIST_LIMIT or 50)]
         ]
@@ -555,6 +567,7 @@ def _prune_irrelevant_detail_structured_payload(
             value,
             page_url=page_url,
             requested_page_url=requested_page_url,
+            depth=depth + 1,
         )
         if cleaned_value in (None, "", [], {}):
             continue
@@ -883,6 +896,24 @@ def _variant_signal_strength(variants: object) -> tuple[int, int, int]:
     )
 
 
+def _variant_axis_coverage(variants: object) -> set[str]:
+    if not isinstance(variants, list):
+        return set()
+    coverage: set[str] = set()
+    for row in variants:
+        if not isinstance(row, dict):
+            continue
+        option_values = row.get("option_values")
+        if isinstance(option_values, dict):
+            for axis_name, axis_value in option_values.items():
+                if text_or_none(axis_value):
+                    coverage.add(str(axis_name).strip().lower())
+        for axis_name in VARIANT_AXIS_FIELD_NAMES:
+            if text_or_none(row.get(axis_name)):
+                coverage.add(axis_name)
+    return coverage
+
+
 def _should_collect_dom_variants(
     candidates: dict[str, list[object]],
     dom_variants: dict[str, object],
@@ -892,8 +923,13 @@ def _should_collect_dom_variants(
     existing_variants = finalize_candidate_value(
         "variants", list(candidates.get("variants") or [])
     )
+    if dom_variants:
+        existing_axes = _variant_axis_coverage(existing_variants)
+        dom_axes = _variant_axis_coverage(dom_variants.get("variants"))
+        if dom_axes - existing_axes:
+            return True
     existing_strength = _variant_signal_strength(existing_variants)
-    if 0 in existing_strength:
+    if existing_strength[0] == 0 or existing_strength[1] == 0:
         return True
     dom_strength = _variant_signal_strength(dom_variants.get("variants"))
     return dom_strength > existing_strength
@@ -1039,7 +1075,7 @@ def _requires_dom_completion(
     if (
         normalized_surface == "ecommerce_detail"
         and record.get("image_url") in (None, "", [], {})
-        and raw_soup.select_one("main img, article img, [role='main'] img, img") is not None
+        and raw_soup.select_one(DETAIL_PRODUCT_IMAGE_CUE_SELECTOR) is not None
     ):
         return True
     if (

@@ -4,6 +4,10 @@ from app.core.telemetry import generate_correlation_id, get_correlation_id
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
 from app.models.crawl_settings import CrawlRunSettings
 from app.services.crawl_events import append_log_event
+from app.services.config.domain_profiles import (
+    INVALID_SURFACE_VALUES,
+    SURFACE_VALIDATION_ERROR,
+)
 from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE
 from app.services.domain_run_profile_service import (
     merge_saved_run_profile,
@@ -43,6 +47,8 @@ async def create_crawl_run(
     normalized_surface = str(payload.get("surface") or "").strip().lower()
     if not normalized_surface:
         raise ValueError("surface is required")
+    if normalized_surface in INVALID_SURFACE_VALUES:
+        raise ValueError(SURFACE_VALIDATION_ERROR)
     settings_payload = dict(payload.get("settings") or {})
     run_type = payload.get("run_type")
     if not run_type:

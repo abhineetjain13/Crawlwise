@@ -28,6 +28,9 @@ from app.services.config.extraction_rules import (
     VARIANT_OPTION_LABEL_MAX_WORDS,
     WAF_QUEUE_PATTERNS,
 )
+from app.services.config.variant_policy import (
+    DETAIL_VARIANT_SIZE_MIN_FOR_NUMERIC_PARENT_DROP,
+)
 from app.services.field_value_core import (
     clean_text,
     enforce_flat_variant_public_contract,
@@ -854,6 +857,15 @@ def _drop_variant_derived_parent_axis_scalars(record: dict[str, Any]) -> None:
             for row in variants
             if clean_text(row.get(field_name))
         }
+        if (
+            field_name == "size"
+            and len(variant_values) >= DETAIL_VARIANT_SIZE_MIN_FOR_NUMERIC_PARENT_DROP
+            and re.fullmatch(r"\d+(?:\.\d+)?", parent_value)
+            and not _numeric_size_value_in_variants(parent_value, variant_values)
+            and parent_value.casefold() not in variant_values
+        ):
+            record.pop(field_name, None)
+            continue
         # Drop parent axis strings that are just a dump of child variant values.
         if field_name in ("color", "size") and _parent_axis_value_looks_like_variant_dump(
             parent_value,
@@ -895,6 +907,20 @@ def _parent_axis_value_looks_like_variant_dump(
         or "−" in normalized_parent
         or "/" in normalized_parent
     )
+
+
+def _numeric_size_value_in_variants(parent_value: str, variant_values: set[str]) -> bool:
+    try:
+        parent_number = Decimal(parent_value).normalize()
+    except Exception:
+        return False
+    normalized_values: set[str] = set()
+    for value in variant_values:
+        try:
+            normalized_values.add(str(Decimal(value).normalize()))
+        except Exception:
+            continue
+    return str(parent_number) in normalized_values
 
 
 def _sanitize_detail_images(record: dict[str, Any], *, identity_url: str) -> None:

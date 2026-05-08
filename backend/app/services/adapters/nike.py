@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from app.services.adapters.base import AdapterResult, BaseAdapter, adapter_host_matches
+from app.services.config.nike_config import NIKE_CURRENCY_BY_HOST
 from app.services.field_value_core import (
     absolute_url,
     clean_text,
@@ -16,7 +17,6 @@ from app.services.field_value_core import (
 )
 from app.services.extraction_html_helpers import html_to_text
 from app.services.js_state_helpers import (
-    availability_value,
     compact_dict,
     normalize_price,
     select_variant,
@@ -24,21 +24,18 @@ from app.services.js_state_helpers import (
 )
 
 
-_NIKE_CURRENCY_BY_HOST = {
-    "nike.com": "USD",
-    "nike.in": "INR",
-    "nike.co.in": "INR",
-    "nike.co.uk": "GBP",
-    "nike.com.au": "AUD",
-    "nike.ca": "CAD",
-}
-
-
 def _currency_for(page_url: str) -> str:
     host = (urlparse(str(page_url or "")).hostname or "").lower().lstrip(".")
     if host.startswith("www."):
         host = host[4:]
-    return _NIKE_CURRENCY_BY_HOST.get(host, "USD")
+    return next(
+        (
+            currency
+            for known_host, currency in NIKE_CURRENCY_BY_HOST.items()
+            if adapter_host_matches(host, known_host)
+        ),
+        "USD",
+    )
 
 
 class NikeAdapter(BaseAdapter):
@@ -48,14 +45,13 @@ class NikeAdapter(BaseAdapter):
     async def can_handle(self, url: str, html: str) -> bool:
         host = (urlparse(str(url or "")).hostname or "").lower()
         raw_html = str(html or "")
-        return (
-            adapter_host_matches(host, "nike.com")
-            or adapter_host_matches(host, "nike.in")
-            or adapter_host_matches(host, "nike.co.in")
-            or adapter_host_matches(host, "nike.co.uk")
-            or adapter_host_matches(host, "nike.com.au")
-            or adapter_host_matches(host, "nike.ca")
-            or ("__PRELOADED_STATE__" in raw_html and "skuData" in raw_html)
+        return any(
+            adapter_host_matches(host, known_host)
+            for known_host in NIKE_CURRENCY_BY_HOST
+        ) and (
+            "__PRELOADED_STATE__" in raw_html
+            or "__NEXT_DATA__" in raw_html
+            or "skuData" in raw_html
         )
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
@@ -142,6 +138,21 @@ def _next_data_product(html: str) -> dict[str, Any] | None:
         if isinstance(option, dict)
         and text_or_none(option.get("label") or option.get("localizedLabel"))
     ]
+    explicit_out_of_stock = product.get("isOutOfStock")
+    derived_out_of_stock = (
+        not any(
+            _next_data_size_is_in_stock(option)
+            for option in sizes
+            if isinstance(option, dict)
+        )
+        if sizes
+        else None
+    )
+    is_out_of_stock = (
+        bool(explicit_out_of_stock)
+        if explicit_out_of_stock is not None
+        else derived_out_of_stock
+    )
     return compact_dict(
         {
             "id": product.get("id") or product.get("merchProductId") or product.get("globalProductId"),
@@ -153,7 +164,7 @@ def _next_data_product(html: str) -> dict[str, Any] | None:
             "action_url": product_info.get("path") or product_info.get("url"),
             "title": product_info.get("title") or product.get("displayStyle"),
             "subTitle": product_info.get("subtitle"),
-            "isOutOfStock": not any(_next_data_size_is_in_stock(option) for option in sizes if isinstance(option, dict)),
+            "isOutOfStock": is_out_of_stock,
             "product_summary": (
                 {"description": product_info.get("productDescription")}
                 if text_or_none(product_info.get("productDescription"))
@@ -358,9 +369,9 @@ def _variants(product: dict[str, Any], *, page_url: str) -> list[dict[str, Any]]
                     "price": _preserve_numeric_price(product.get("discountedPrice")),
                     "original_price": _preserve_numeric_price(product.get("price")),
                     "currency": _currency_for(page_url),
-                    "availability": availability_value(
-                        {"available": not product.get("isOutOfStock")}
-                    ),
+                    "availability": "out_of_stock"
+                    if product.get("isOutOfStock")
+                    else "in_stock",
                     "url": absolute_url(page_url, product.get("action_url"))
                     or page_url,
                     "option_values": compact_dict({"size": size, "color": color}),

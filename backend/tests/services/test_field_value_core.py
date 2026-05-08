@@ -575,6 +575,54 @@ def test_literal_list_text_uses_readable_delimiters() -> None:
     ) == "Digital max resolution; Real boost clock: 1800 MHz"
 
 
+def test_price_dict_prefers_formatted_money_over_low_signal_scalar() -> None:
+    assert (
+        coerce_field_value(
+            "price",
+            {
+                "value": 1,
+                "formattedPrice": "2299.99",
+                "priceCurrency": "USD",
+            },
+            "https://www.costco.com/p/example",
+        )
+        == "2299.99"
+    )
+
+
+def test_price_dict_prefers_formatted_money_when_value_is_close() -> None:
+    assert (
+        coerce_field_value(
+            "price",
+            {"value": 100, "formattedPrice": "$100.00", "priceCurrency": "USD"},
+            "https://example.com/p/widget",
+        )
+        == "$100.00"
+    )
+
+
+def test_price_dict_uses_value_when_formatted_missing() -> None:
+    assert (
+        coerce_field_value(
+            "price",
+            {"value": 100, "formattedPrice": "", "priceCurrency": "USD"},
+            "https://example.com/p/widget",
+        )
+        == "100"
+    )
+
+
+def test_price_dict_handles_missing_currency() -> None:
+    assert (
+        coerce_field_value(
+            "price",
+            {"value": 100, "formattedPrice": "100.00"},
+            "https://example.com/p/widget",
+        )
+        == "100.00"
+    )
+
+
 def test_option_scalars_coerce_dict_like_labels_and_reject_null_tokens() -> None:
     assert coerce_field_value(
         "color",

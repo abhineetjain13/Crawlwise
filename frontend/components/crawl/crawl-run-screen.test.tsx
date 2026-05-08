@@ -807,6 +807,44 @@ describe('CrawlRunScreen', () => {
     expect(screen.queryByText(/_internal_metric/)).not.toBeInTheDocument();
   });
 
+  it('keeps final per-url duration from the latest persisted record timestamp', async () => {
+    apiMock.getRecords.mockResolvedValue({
+      items: [
+        {
+          ...makeRecord(1),
+          data: {
+            title: 'Item 1',
+            url: 'https://example.com/p/1',
+          },
+          raw_data: {
+            _confidence: { score: 0.4 },
+          },
+          source_trace: {
+            acquisition: {
+              final_url: 'https://example.com/p/1',
+              browser_diagnostics: {
+                phase_timings_ms: { total: 9000 },
+              },
+            },
+          },
+          created_at: new Date('2026-04-08T10:00:42Z').toISOString(),
+        },
+      ],
+      meta: { page: 1, limit: 100, total: 1 },
+    });
+    apiMock.getCrawlLogs.mockResolvedValue([
+      makeLog(1, 'Starting crawl run for https://example.com/p/1 (1/1)'),
+      makeLog(2, 'Persisted 1 record(s) for https://example.com/p/1'),
+    ]);
+
+    renderRunScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Logs' }));
+
+    expect(await screen.findByText('40%')).toBeInTheDocument();
+    expect(screen.getByText('0m 42s')).toBeInTheDocument();
+  });
+
   it('prefills batch crawl with the originating jobs domain from listing runs', async () => {
     apiMock.getCrawl.mockResolvedValue({
       ...terminalRun(101),

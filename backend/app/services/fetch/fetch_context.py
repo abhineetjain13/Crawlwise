@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import asyncio
-from functools import partial
 import inspect
+from functools import partial
 import logging
 import secrets
 from dataclasses import dataclass, field
@@ -292,12 +292,18 @@ async def fetch_page(
         runtime_policy=resolve_platform_runtime_policy(url, surface=surface),
         forced_browser_engine=str(forced_browser_engine or "").strip().lower() or None,
     )
-    host_policy_kwargs = (
-        {"ttl_seconds": context.host_memory_ttl_seconds}
-        if "ttl_seconds" in inspect.signature(load_host_protection_policy).parameters
-        else {}
-    )
-    context.host_policy = await load_host_protection_policy(url, **host_policy_kwargs)
+    signature = inspect.signature(load_host_protection_policy)
+    if "ttl_seconds" in signature.parameters:
+        context.host_policy = await load_host_protection_policy(
+            url,
+            ttl_seconds=context.host_memory_ttl_seconds,
+        )
+    else:
+        logger.warning(
+            "load_host_protection_policy lacks ttl_seconds; dropping host_memory_ttl_seconds=%s",
+            context.host_memory_ttl_seconds,
+        )
+        context.host_policy = await load_host_protection_policy(url)
     host_preference_enabled = bool(context.host_policy.prefer_browser)
     browser_first = _browser_first_decision(
         context=context,
@@ -505,11 +511,12 @@ async def _run_browser_attempts(
         if requested_fields is None
         else list(requested_fields)
     )
-    recovery_mode = (
-        str(context.listing_recovery_mode or "").strip() or None
-        if listing_recovery_mode is None
-        else str(listing_recovery_mode or "").strip() or None
+    recovery_mode_source = (
+        listing_recovery_mode
+        if listing_recovery_mode is not None
+        else context.listing_recovery_mode
     )
+    recovery_mode = str(recovery_mode_source or "").strip() or None
     active_host_policy = host_policy or context.host_policy
     if active_host_policy is None:
         active_host_policy = await load_host_protection_policy(
@@ -1238,12 +1245,6 @@ async def _sleep_before_retry(attempt: int) -> None:
 __all__ = [
     "PageFetchResult",
     "SharedBrowserRuntime",
-    "_classify_network_endpoint",
-    "_curl_fetch",
-    "_http_fetch",
-    "_read_network_payload_body",
-    "_should_capture_network_payload",
-    "_should_escalate_to_browser_async",
     "browser_runtime_snapshot",
     "close_shared_http_client",
     "expand_all_interactive_elements",

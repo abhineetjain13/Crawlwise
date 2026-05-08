@@ -213,6 +213,171 @@ def test_map_network_payloads_to_fields_prioritizes_late_high_signal_product_pay
     assert rows[0]["price"] == "89.50"
 
 
+def test_map_network_payloads_to_fields_maps_current_variant_availability_payload() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://www.adidas.com/api/products/M20324/cached/availability",
+                "endpoint_type": "product_api",
+                "body": {
+                    "id": "M20324",
+                    "availability_status": "IN_STOCK",
+                    "variation_list": [
+                        {
+                            "sku": "M20324_530",
+                            "size": "4",
+                            "availability": 15,
+                            "availability_status": "IN_STOCK",
+                        },
+                        {
+                            "sku": "M20324_540",
+                            "size": "4.5",
+                            "availability": 0,
+                            "availability_status": "OUT_OF_STOCK",
+                        },
+                    ],
+                },
+            },
+            {
+                "url": "https://www.adidas.com/api/products/M20325/cached/availability",
+                "endpoint_type": "product_api",
+                "body": {
+                    "id": "M20325",
+                    "availability_status": "IN_STOCK",
+                    "variation_list": [
+                        {
+                            "sku": "M20325_530",
+                            "size": "4",
+                            "availability": 12,
+                            "availability_status": "IN_STOCK",
+                        }
+                    ],
+                },
+            },
+        ],
+        surface="ecommerce_detail",
+        page_url="https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+    )
+
+    assert rows == [
+        {
+            "product_id": "M20324",
+            "availability": "in_stock",
+            "variants": [
+                {
+                    "size": "4",
+                    "option_values": {"size": "4"},
+                    "sku": "M20324_530",
+                    "product_id": "M20324",
+                    "availability": "in_stock",
+                    "stock_quantity": 15,
+                },
+                {
+                    "size": "4.5",
+                    "option_values": {"size": "4.5"},
+                    "sku": "M20324_540",
+                    "product_id": "M20324",
+                    "availability": "out_of_stock",
+                    "stock_quantity": 0,
+                },
+            ],
+            "variant_count": 2,
+        }
+    ]
+
+
+def test_map_network_payloads_to_fields_matches_hyphenated_availability_product_id() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://www.nike.com/api/product/CV8836-100/availability",
+                "endpoint_type": "product_api",
+                "body": {
+                    "id": "CV8836-100",
+                    "availability_status": "IN_STOCK",
+                    "variation_list": [
+                        {
+                            "sku": "CV8836-100",
+                            "size": "10",
+                            "availability": 3,
+                            "availability_status": "IN_STOCK",
+                        }
+                    ],
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://www.nike.com/t/air-force-1-07/CV8836-100",
+    )
+
+    assert rows == [
+        {
+            "product_id": "CV8836-100",
+            "availability": "in_stock",
+            "variants": [
+                {
+                    "size": "10",
+                    "option_values": {"size": "10"},
+                    "sku": "CV8836-100",
+                    "product_id": "CV8836-100",
+                    "availability": "in_stock",
+                    "stock_quantity": 3,
+                }
+            ],
+            "variant_count": 1,
+        }
+    ]
+
+
+def test_map_network_payloads_to_fields_keeps_richer_product_fields_alongside_availability_rows() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://www.adidas.com/api/products/M20324/cached/availability",
+                "endpoint_type": "product_api",
+                "body": {
+                    "id": "M20324",
+                    "name": "Stan Smith Shoes",
+                    "price": {"formattedPrice": "$100.00", "priceCurrency": "USD"},
+                    "availability_status": "IN_STOCK",
+                    "variation_list": [
+                        {
+                            "sku": "M20324_530",
+                            "size": "4",
+                            "availability": 15,
+                            "availability_status": "IN_STOCK",
+                        }
+                    ],
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://www.adidas.com/us/stan-smith-shoes/M20324.html",
+    )
+
+    assert rows == [
+        {
+            "title": "Stan Smith Shoes",
+            "price": {"formattedPrice": "$100.00", "priceCurrency": "USD"},
+        },
+        {
+            "product_id": "M20324",
+            "variants": [
+                {
+                    "size": "4",
+                    "option_values": {"size": "4"},
+                    "sku": "M20324_530",
+                    "product_id": "M20324",
+                    "availability": "in_stock",
+                    "stock_quantity": 15,
+                }
+            ],
+            "variant_count": 1,
+            "availability": "in_stock",
+        },
+    ]
+
+
 # ------------------------------------------------------------------
 # Ghost-routing tests
 # ------------------------------------------------------------------

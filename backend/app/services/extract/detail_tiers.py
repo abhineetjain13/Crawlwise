@@ -204,6 +204,7 @@ class DetailTierExecutor:
         for source_name, payloads in self._runtime.collect_structured_source_payloads(
             context,
             page_url=state.page_url,
+            surface=state.surface,
         ):
             if source_name == "js_state":
                 continue
@@ -291,7 +292,6 @@ class DetailTierExecutor:
                     state.candidates,
                     state.candidate_sources,
                     state.field_sources,
-                    state.selector_trace_candidates,
                     field_name,
                     value,
                     source="dom_selector",

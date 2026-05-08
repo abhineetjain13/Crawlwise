@@ -317,3 +317,23 @@ def test_classify_blocked_page_blocks_captcha_provider_page_without_extractable_
     assert classification.blocked is True
     assert classification.strong_hits == ["captcha"]
     assert "recaptcha" in classification.provider_hits
+
+
+def test_classify_blocked_page_blocks_robot_gate_title_without_extractable_content() -> None:
+    html = """
+    <html>
+      <head><title>Let us know you're not a robot - Sam's Club</title></head>
+      <body>
+        <main>
+          <h1>Let us know you're not a robot</h1>
+        </main>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is True
+    assert classification.outcome == "challenge_page"
+    assert "you're not a robot" in classification.strong_hits
+    assert bool(classification.title_matches) is True

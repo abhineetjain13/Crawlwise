@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 from json import loads as parse_json
+from urllib.parse import urljoin, urlparse
 
-from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.base import AdapterResult, BaseAdapter, adapter_host_matches
 from bs4 import BeautifulSoup
 
 
@@ -13,7 +14,8 @@ class WalmartAdapter(BaseAdapter):
     domains = ["walmart.com", "walmart.ca"]
 
     async def can_handle(self, url: str, html: str) -> bool:
-        return any(d in url for d in self.domains)
+        host = (urlparse(str(url or "")).hostname or "").lower()
+        return any(adapter_host_matches(host, domain) for domain in self.domains)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         soup = BeautifulSoup(html, "html.parser")
@@ -25,7 +27,7 @@ class WalmartAdapter(BaseAdapter):
             if record:
                 records.append(record)
         elif surface in ("ecommerce_listing",):
-            records = self._extract_listing(soup, next_data, url)
+            records = self._extract_listing(next_data, url)
         return self._result(records)
 
     def _get_next_data(self, soup: BeautifulSoup) -> dict:
@@ -46,24 +48,19 @@ class WalmartAdapter(BaseAdapter):
         product = initial_data.get("product", {})
         if product:
             price_info = product.get("priceInfo", {}).get("currentPrice", {})
+            raw_price = price_info.get("price")
+            availability = str(product.get("availabilityStatus") or "").strip()
+            category_path = product.get("category", {}).get("path") or [{}]
             return {
                 "title": product.get("name"),
                 "brand": product.get("brand"),
-                "price": str(price_info.get("price", ""))
-                if price_info.get("price")
-                else None,
+                "price": str(raw_price) if raw_price is not None else None,
                 "image_url": product.get("imageInfo", {}).get("thumbnailUrl"),
                 "description": product.get("shortDescription"),
                 "rating": product.get("averageRating"),
                 "review_count": product.get("numberOfReviews"),
-                "availability": "in_stock"
-                if product.get("availabilityStatus") == "IN_STOCK"
-                else product.get("availabilityStatus"),
-                "category": product.get("category", {})
-                .get("path", [{}])[-1]
-                .get("name")
-                if product.get("category")
-                else None,
+                "availability": availability.lower().replace(" ", "_") or None,
+                "category": category_path[-1].get("name") if category_path else None,
                 "url": url,
             }
         # Fallback to DOM
@@ -79,10 +76,10 @@ class WalmartAdapter(BaseAdapter):
             }
         return None
 
-    def _extract_listing(
-        self, soup: BeautifulSoup, next_data: dict, url: str
-    ) -> list[dict]:
+    def _extract_listing(self, next_data: dict, url: str) -> list[dict]:
         records = []
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
         # Try __NEXT_DATA__ search results
         props = next_data.get("props", {}).get("pageProps", {})
         initial_data = props.get("initialData", {}).get("searchResult", {})
@@ -92,14 +89,14 @@ class WalmartAdapter(BaseAdapter):
                 if item.get("__typename") != "Product":
                     continue
                 price_info = item.get("priceInfo", {}).get("currentPrice", {})
+                raw_price = price_info.get("price")
+                canonical_url = str(item.get("canonicalUrl") or "").strip()
                 records.append(
                     {
                         "title": item.get("name"),
-                        "price": str(price_info.get("price", ""))
-                        if price_info.get("price")
-                        else None,
+                        "price": str(raw_price) if raw_price is not None else None,
                         "image_url": item.get("imageInfo", {}).get("thumbnailUrl"),
-                        "url": f"https://www.walmart.com{item.get('canonicalUrl', '')}",
+                        "url": urljoin(base_url, canonical_url),
                         "rating": item.get("averageRating"),
                         "review_count": item.get("numberOfReviews"),
                     }

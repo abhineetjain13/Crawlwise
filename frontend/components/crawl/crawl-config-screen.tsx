@@ -68,7 +68,6 @@ const EXTRACTION_SOURCE_OPTIONS = new Set<ExtractionSource>([
 ]);
 const JS_MODE_OPTIONS = new Set<JsMode>(['auto', 'enabled', 'disabled']);
 const TRAVERSAL_MODE_OPTIONS = new Set<TraversalMode>([
-  'auto',
   'scroll',
   'load_more',
   'view_all',
@@ -1341,7 +1340,6 @@ export function CrawlConfigScreen({
                       }}
                       options={[
                         { value: 'off', label: 'Off' },
-                        { value: 'auto', label: 'Auto' },
                         { value: 'paginate', label: 'Paginate' },
                         { value: 'scroll', label: 'Scroll' },
                         { value: 'load_more', label: 'Load More' },

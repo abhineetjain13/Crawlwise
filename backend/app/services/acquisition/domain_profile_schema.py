@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.services.config.domain_profiles import (
     ACQUISITION_CONTRACT_MAX_FAILURES,
+    AUTO_TRAVERSAL,
     DOMAIN_PROFILE_SCHEMA_VERSION,
     FALLBACK_SURFACE,
     SELECTOR_RULE_STALE_AFTER_DAYS,
@@ -43,12 +44,11 @@ class FetchProfile(BaseModel):
     ] = "raw_html"
     js_mode: Literal["auto", "enabled", "disabled"] = "auto"
     include_iframes: bool = False
-    traversal_mode: Literal["auto", "scroll", "load_more", "view_all", "paginate"] | None = None
+    traversal_mode: Literal["scroll", "load_more", "view_all", "paginate"] | None = None
     request_delay_ms: int = Field(default=0, ge=0)
     max_pages: int = Field(default=1, ge=1)
     max_scrolls: int = Field(default=1, ge=1)
     host_memory_ttl_seconds: int | None = Field(default=None, ge=0)
-
 
 class SelectorRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -152,9 +152,11 @@ def _datetime_or_now(value: object) -> datetime:
 def _legacy_fetch_profile(value: object) -> FetchProfile:
     payload = dict(value or {}) if isinstance(value, dict) else {}
     allowed = set(FetchProfile.model_fields)
-    return FetchProfile.model_validate(
-        {key: item for key, item in payload.items() if key in allowed}
-    )
+    filtered = {key: item for key, item in payload.items() if key in allowed}
+    normalized = str(filtered.get("traversal_mode") or "").strip().lower()
+    if normalized == AUTO_TRAVERSAL:
+        filtered["traversal_mode"] = None
+    return FetchProfile.model_validate(filtered)
 
 
 def _legacy_selector_rules(value: object) -> list[SelectorRule]:

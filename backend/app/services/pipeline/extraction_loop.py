@@ -35,7 +35,7 @@ from app.services.domain_run_profile_service import (
 )
 from app.services.field_policy import repair_target_fields_for_surface
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.detail_extractor import (
+from app.services.extract.detail_materializer import (
     detail_record_rejection_reason,
     infer_detail_failure_reason,
 )

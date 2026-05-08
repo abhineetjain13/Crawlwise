@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.config import settings
@@ -205,7 +205,7 @@ async def append_log_event(
         normalized_level, formatted_message, should_persist = await prepare_log_event(
             run_id, level, message
         )
-    created_at = datetime.now()
+    created_at = datetime.now(UTC)
     try:
         _append_log_file_line(
             run_id=run_id,
@@ -237,6 +237,7 @@ async def append_log_event(
     if session is not None:
         session.add(row)
         await session.flush()
+        await session.refresh(row)
         return serialize_log_event(row)
 
     async with get_detached_log_write_semaphore():

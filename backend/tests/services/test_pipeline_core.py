@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from pathlib import Path
 
 import pytest
@@ -2049,6 +2050,47 @@ async def test_persist_acquisition_artifacts_treats_none_artifacts_as_empty_mapp
     assert (
         acquisition_result.browser_diagnostics["artifact_paths"]["screenshot"] is None
     )
+
+
+@pytest.mark.asyncio
+async def test_persist_acquisition_artifacts_does_not_mutate_source_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setattr(
+        "app.services.artifact_store.settings.artifacts_dir", artifacts_dir
+    )
+
+    artifacts = {
+        "browser_screenshot_path": "",
+        "browser_screenshot_png": b"png",
+        "keep": "value",
+    }
+    expected_artifacts = copy.deepcopy(artifacts)
+    acquisition_result = AcquisitionResult(
+        request=AcquisitionRequest(
+            run_id=7,
+            url="https://example.com/products/widget-prime",
+            plan=AcquisitionPlan(surface="ecommerce_detail"),
+        ),
+        final_url="https://example.com/products/widget-prime",
+        html="<html><body>Widget Prime</body></html>",
+        method="browser",
+        status_code=200,
+        browser_diagnostics={"browser_attempted": True},
+        artifacts=artifacts,
+    )
+
+    await persist_acquisition_artifacts(
+        run_id=7,
+        acquisition_result=acquisition_result,
+        browser_attempted=True,
+        screenshot_required=True,
+    )
+
+    assert acquisition_result.artifacts == expected_artifacts
+    assert artifacts == expected_artifacts
 
 
 @pytest.mark.asyncio
