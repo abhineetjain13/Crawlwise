@@ -1,5 +1,7 @@
 <div align="center">
 
+![CrawlerAI Logo](image.png)
+
 # 🤖 CrawlerAI
 
 **Deterministic Web Acquisition, Extraction & Review Engine**
