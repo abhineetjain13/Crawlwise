@@ -178,6 +178,7 @@ def extract_records(
         html=html,
         page_url=page_url,
         requested_page_url=requested_page_url,
+        repair_quality=False,
     )
 
 
@@ -211,17 +212,19 @@ def _postprocess_detail_records(
     html: str,
     page_url: str,
     requested_page_url: str | None,
+    repair_quality: bool = True,
 ) -> list[dict]:
     rows: list[dict] = []
     for record in list(records or []):
         if not isinstance(record, dict):
             continue
-        repair_ecommerce_detail_record_quality(
-            record,
-            html=html,
-            page_url=page_url,
-            requested_page_url=requested_page_url,
-        )
+        if repair_quality:
+            repair_ecommerce_detail_record_quality(
+                record,
+                html=html,
+                page_url=page_url,
+                requested_page_url=requested_page_url,
+            )
         drop_low_signal_zero_detail_price(record)
         rows.append(finalize_record(record, surface="ecommerce_detail"))
     return rows

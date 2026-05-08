@@ -79,7 +79,7 @@ def test_crawl_run_response_sanitizes_nested_sensitive_settings() -> None:
             "items": [{"secret": "hidden", "name": "kept"}],
         },
         requested_fields=[],
-        result_summary={},
+        result_summary={"url_count": 4, "url_verdicts": ["success", "error"]},
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -88,3 +88,4 @@ def test_crawl_run_response_sanitizes_nested_sensitive_settings() -> None:
         "nested": {"keep": "visible"},
         "items": [{"name": "kept"}],
     }
+    assert run.run_health["status"] == "failed"

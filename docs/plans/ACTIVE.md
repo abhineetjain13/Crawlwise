@@ -23,4 +23,5 @@
   Reason: Plan notes and current code disagree on legacy variant cleanup state.
 
 ## Queue
-1. Docker Compose evaluation setup - not yet started
+1. Webhook delivery implementation for export/run gates - not yet started
+2. Docker Compose evaluation setup - not yet started

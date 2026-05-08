@@ -12,6 +12,9 @@ from app.services.config.field_mappings import (
     DOM_HIGH_VALUE_FIELDS,
     DOM_OPTIONAL_CUE_FIELDS,
     ECOMMERCE_DETAIL_JS_STATE_FIELDS,
+    IMAGE_URL_FIELD,
+    TITLE_FIELD,
+    URL_FIELD,
     VARIANT_DOM_FIELD_NAMES,
 )
 from app.services.config.extraction_rules import (
@@ -65,6 +68,7 @@ from app.services.extract.detail_dom_extractor import (
     apply_dom_fallbacks,
     extract_variants_from_dom as _extract_variants_from_dom,
     primary_dom_context,
+    record_has_rich_existing_variants,
 )
 from app.services.extract.detail_raw_signals import (
     breadcrumb_category_from_dom,
@@ -110,6 +114,8 @@ from app.services.extract.detail_tiers import (
 )
 
 logger = logging.getLogger(__name__)
+
+_EARLY_PRICE_REPAIR_REQUIRED_FIELDS = (TITLE_FIELD, IMAGE_URL_FIELD, URL_FIELD)
 
 try:
     DETAIL_LONG_TEXT_THIN_DESCRIPTION_WORDS_INT = int(
@@ -1022,8 +1028,12 @@ def _requires_dom_completion(
         dom_category = _normalized_category_path(breadcrumb_category)
         if dom_category and record_category != dom_category:
             return True
-    if normalized_surface == "ecommerce_detail" and (
-        variant_dom_cues_present(soup) or variant_dom_cues_present(raw_soup)
+    if (
+        normalized_surface == "ecommerce_detail"
+        and not record_has_rich_existing_variants(record)
+        and (
+            variant_dom_cues_present(soup) or variant_dom_cues_present(raw_soup)
+        )
     ):
         return True
     if (
@@ -1032,6 +1042,17 @@ def _requires_dom_completion(
         and raw_soup.select_one("main img, article img, [role='main'] img, img") is not None
     ):
         return True
+    if (
+        normalized_surface == "ecommerce_detail"
+        and not requested_fields
+        and not selector_rules
+        and record_has_rich_existing_variants(record)
+        and all(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in _EARLY_PRICE_REPAIR_REQUIRED_FIELDS
+        )
+    ):
+        return False
     extractability = requested_content_extractability(
         soup,
         surface=surface,

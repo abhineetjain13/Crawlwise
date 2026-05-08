@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.services.db_utils import mapping_or_empty
 from app.services.field_value_core import object_list as _object_list
 from app.services.public_record_firewall import public_record_data_for_surface
+from app.services.export.schema import build_source_trace
 from app.services.artifact_store import (
     persist_html_artifact,
     persist_json_artifact,
@@ -16,11 +18,6 @@ from app.services.artifact_store import (
 from app.services.publish.metadata import refresh_record_commit_metadata
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value]
 
 
 def _merge_browser_diagnostics(
@@ -39,51 +36,79 @@ def _record_identity_key(source_url: str) -> str | None:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[str, object]:
-    field_discovery: dict[str, object] = {}
-    field_sources = mapping_or_empty(record.get("_field_sources"))
-    selector_traces = mapping_or_empty(record.get("_selector_traces"))
-    rejected_public_fields = mapping_or_empty(record.get("_rejected_public_fields"))
-    for key, value in record.items():
-        if str(key).startswith("_"):
-            continue
-        discovery: dict[str, object] = {
-            "status": "found",
-            "value": str(value),
-            "sources": _string_list(
-                field_sources.get(str(key), [str(record.get("_source") or "extraction")])
-            ),
-        }
-        selector_trace = selector_traces.get(str(key))
-        if isinstance(selector_trace, dict):
-            discovery["selector_trace"] = {
-                **dict(selector_trace),
-                "survived_to_final_record": True,
-            }
-        field_discovery[str(key)] = discovery
-    return {
-        "acquisition": {
-            "method": acquisition_result.method,
-            "status_code": acquisition_result.status_code,
-            "final_url": acquisition_result.final_url,
-            "blocked": acquisition_result.blocked,
-            "adapter_name": acquisition_result.adapter_name,
-            "adapter_source_type": acquisition_result.adapter_source_type,
-            "network_payload_count": len(list(acquisition_result.network_payloads or [])),
-            "browser_diagnostics": mapping_or_empty(acquisition_result.browser_diagnostics),
-        },
-        "extraction": {
-            "source": str(record.get("_source") or "extraction"),
-            "confidence": mapping_or_empty(record.get("_confidence")),
-            "self_heal": mapping_or_empty(record.get("_self_heal")),
-            "field_repair": mapping_or_empty(record.get("_field_repair")),
-            "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
-            "review_bucket": _object_list(record.get("_review_bucket")),
-            "semantic": mapping_or_empty(record.get("_semantic")),
-            "rejected_public_fields": rejected_public_fields,
-        },
-        "field_discovery": field_discovery,
+def _record_content_fingerprint(
+    data: dict[str, object],
+    *,
+    identity_source_url: str,
+) -> str | None:
+    identity_fields = ("gtin", "barcode", "sku", "mpn", "brand", "title")
+    values = {
+        field_name: _fingerprint_value(data.get(field_name))
+        for field_name in identity_fields
+        if _fingerprint_value(data.get(field_name)) not in (None, "", [], {})
     }
+    if not values:
+        values = {"url": _fingerprint_value(identity_source_url)}
+    payload = json.dumps(values, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _fingerprint_value(value: object) -> object:
+    if isinstance(value, str):
+        return " ".join(value.casefold().split())
+    if isinstance(value, list):
+        return [
+            item
+            for item in (_fingerprint_value(item) for item in value)
+            if item not in (None, "", [], {})
+        ]
+    if isinstance(value, dict):
+        return {
+            str(key): item
+            for key, raw_item in sorted(value.items())
+            if (item := _fingerprint_value(raw_item)) not in (None, "", [], {})
+        }
+    return value
+
+
+def _stored_record_matches(
+    row: CrawlRecord,
+    *,
+    source_url: str,
+    data: dict[str, object],
+    raw_data: dict[str, object],
+    source_trace: dict[str, object],
+    raw_html_path: str | None,
+    content_fingerprint: str | None,
+) -> bool:
+    return (
+        row.source_url == source_url
+        and row.data == data
+        and row.raw_data == raw_data
+        and row.source_trace == source_trace
+        and row.raw_html_path == raw_html_path
+        and row.content_fingerprint == content_fingerprint
+    )
+
+
+def _update_stored_record(
+    row: CrawlRecord,
+    *,
+    source_url: str,
+    data: dict[str, object],
+    raw_data: dict[str, object],
+    discovered_data: dict[str, object],
+    source_trace: dict[str, object],
+    raw_html_path: str | None,
+    content_fingerprint: str | None,
+) -> None:
+    row.source_url = source_url
+    row.data = data
+    row.raw_data = raw_data
+    row.discovered_data = discovered_data
+    row.source_trace = source_trace
+    row.raw_html_path = raw_html_path
+    row.content_fingerprint = content_fingerprint
 
 
 async def persist_acquisition_artifacts(
@@ -173,21 +198,21 @@ async def persist_extracted_records(
         )
         if identity_key
     }
-    existing_identities: set[str] = set()
+    existing_records_by_identity: dict[str, CrawlRecord] = {}
     if candidate_identity_keys:
-        existing_identities = {
-            str(identity_key)
-            for identity_key in (
+        existing_records_by_identity = {
+            str(row.url_identity_key): row
+            for row in (
                 await session.scalars(
-                    select(CrawlRecord.url_identity_key).where(
+                    select(CrawlRecord).where(
                         CrawlRecord.run_id == run.id,
                         CrawlRecord.url_identity_key.in_(candidate_identity_keys),
                     )
                 )
             )
-            if identity_key
+            if row.url_identity_key
         }
-    seen_identities: set[str] = set(existing_identities)
+    seen_identities: set[str] = set(existing_records_by_identity)
     for record in records:
         raw_record = dict(record)
         preliminary_source_url = str(
@@ -208,10 +233,6 @@ async def persist_extracted_records(
         )
         identity_source_url = str(data.get("url") or record_source_url)
         identity_key = _record_identity_key(identity_source_url)
-        if identity_key and identity_key in seen_identities:
-            continue
-        if identity_key is not None:
-            seen_identities.add(identity_key)
         if rejected_public_fields:
             raw_record["_rejected_public_fields"] = rejected_public_fields
         page_markdown = str(getattr(acquisition_result, "page_markdown", "") or "").strip()
@@ -222,24 +243,70 @@ async def persist_extracted_records(
             and (not record_url or record_url == record_source_url)
         ):
             raw_record["page_markdown"] = page_markdown
+        content_fingerprint = _record_content_fingerprint(
+            data,
+            identity_source_url=identity_source_url,
+        )
+        discovered_data = {
+            key: value
+            for key, value in {
+                "confidence": mapping_or_empty(record.get("_confidence")),
+                "field_repair": mapping_or_empty(record.get("_field_repair")),
+                "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
+                "semantic": mapping_or_empty(record.get("_semantic")),
+                "review_bucket": _object_list(record.get("_review_bucket")),
+            }.items()
+            if value not in (None, "", [], {})
+        }
+        source_trace = build_source_trace(
+            acquisition_result,
+            raw_record,
+            data=data,
+        )
+        existing_record = existing_records_by_identity.get(identity_key or "")
+        if identity_key and identity_key in seen_identities:
+            if existing_record and not _stored_record_matches(
+                existing_record,
+                source_url=record_source_url,
+                data=data,
+                raw_data=raw_record,
+                source_trace=source_trace,
+                raw_html_path=raw_html_path,
+                content_fingerprint=content_fingerprint,
+            ):
+                _update_stored_record(
+                    existing_record,
+                    source_url=record_source_url,
+                    data=data,
+                    raw_data=raw_record,
+                    discovered_data=discovered_data,
+                    source_trace=source_trace,
+                    raw_html_path=raw_html_path,
+                    content_fingerprint=content_fingerprint,
+                )
+                for field_name, value in data.items():
+                    refresh_record_commit_metadata(
+                        existing_record,
+                        run=run,
+                        field_name=field_name,
+                        value=value,
+                        source_label=str(record.get("_source") or "extraction"),
+                        preserve_existing_sources=True,
+                    )
+                await session.flush()
+                persisted += 1
+            continue
+        if identity_key is not None:
+            seen_identities.add(identity_key)
         crawl_record = CrawlRecord(
             run_id=run.id,
             source_url=record_source_url,
             url_identity_key=identity_key,
+            content_fingerprint=content_fingerprint,
             data=data,
             raw_data=raw_record,
-            discovered_data={
-                key: value
-                for key, value in {
-                    "confidence": mapping_or_empty(record.get("_confidence")),
-                    "field_repair": mapping_or_empty(record.get("_field_repair")),
-                    "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
-                    "semantic": mapping_or_empty(record.get("_semantic")),
-                    "review_bucket": _object_list(record.get("_review_bucket")),
-                }.items()
-                if value not in (None, "", [], {})
-            },
-            source_trace=_build_source_trace(acquisition_result, raw_record),
+            discovered_data=discovered_data,
+            source_trace=source_trace,
             raw_html_path=raw_html_path,
         )
         session.add(crawl_record)

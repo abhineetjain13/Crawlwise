@@ -1,4 +1,3 @@
-# Crawl run, record, log, and promotion models.
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -531,6 +530,7 @@ class CrawlRecord(CreatedAtMixin, Base):
             unique=True,
             postgresql_where=text("url_identity_key IS NOT NULL"),
         ),
+        Index("ix_crawl_records_run_content_fp", "run_id", "content_fingerprint"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -539,6 +539,7 @@ class CrawlRecord(CreatedAtMixin, Base):
     )
     source_url: Mapped[str] = mapped_column(Text)
     url_identity_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     data: Mapped[dict] = mapped_column(JSONB, default=dict)
     raw_data: Mapped[dict] = mapped_column(JSONB, default=dict)
     discovered_data: Mapped[dict] = mapped_column(JSONB, default=dict)

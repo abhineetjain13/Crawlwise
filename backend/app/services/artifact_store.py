@@ -1,22 +1,14 @@
-from __future__ import annotations
-
-import hashlib
-import json
-import shutil
 from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
+from app.services.storage.factory import get_artifact_storage
 
 
 def persist_html_artifact(*, run_id: int, source_url: str, html: str) -> str:
-    if not html:
-        return ""
-    artifact_path = _artifact_base_path(run_id=run_id, source_url=source_url).with_suffix(
-        ".html"
+    return get_artifact_storage(root_dir=settings.artifacts_dir).persist_html_artifact(
+        run_id=run_id, source_url=source_url, html=html
     )
-    artifact_path.write_text(str(html), encoding="utf-8")
-    return str(artifact_path)
 
 
 def persist_json_artifact(
@@ -26,19 +18,9 @@ def persist_json_artifact(
     suffix: str,
     payload: dict[str, Any],
 ) -> str:
-    if not payload:
-        return ""
-    normalized_suffix = str(suffix or "").strip().lower()
-    if not normalized_suffix:
-        return ""
-    artifact_path = _artifact_base_path(run_id=run_id, source_url=source_url).with_name(
-        f"{_artifact_base_path(run_id=run_id, source_url=source_url).name}.{normalized_suffix}.json"
+    return get_artifact_storage(root_dir=settings.artifacts_dir).persist_json_artifact(
+        run_id=run_id, source_url=source_url, suffix=suffix, payload=payload
     )
-    artifact_path.write_text(
-        json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    return str(artifact_path)
 
 
 def persist_png_artifact(
@@ -48,16 +30,9 @@ def persist_png_artifact(
     suffix: str,
     content: bytes,
 ) -> str:
-    if not content:
-        return ""
-    normalized_suffix = str(suffix or "").strip().lower()
-    if not normalized_suffix:
-        return ""
-    artifact_path = _artifact_base_path(run_id=run_id, source_url=source_url).with_name(
-        f"{_artifact_base_path(run_id=run_id, source_url=source_url).name}.{normalized_suffix}.png"
+    return get_artifact_storage(root_dir=settings.artifacts_dir).persist_png_artifact(
+        run_id=run_id, source_url=source_url, suffix=suffix, content=content
     )
-    artifact_path.write_bytes(bytes(content))
-    return str(artifact_path)
 
 
 def persist_png_artifact_from_file(
@@ -67,26 +42,6 @@ def persist_png_artifact_from_file(
     suffix: str,
     file_path: str | Path,
 ) -> str:
-    source = Path(file_path)
-    if not source.is_file():
-        return ""
-    normalized_suffix = str(suffix or "").strip().lower()
-    if not normalized_suffix:
-        return ""
-    artifact_path = _artifact_base_path(run_id=run_id, source_url=source_url).with_name(
-        f"{_artifact_base_path(run_id=run_id, source_url=source_url).name}.{normalized_suffix}.png"
+    return get_artifact_storage(root_dir=settings.artifacts_dir).persist_png_artifact_from_file(
+        run_id=run_id, source_url=source_url, suffix=suffix, file_path=file_path
     )
-    try:
-        source.replace(artifact_path)
-    except OSError:
-        shutil.copyfile(source, artifact_path)
-        source.unlink(missing_ok=True)
-    return str(artifact_path)
-
-
-def _artifact_base_path(*, run_id: int, source_url: str) -> Path:
-    safe_run_id = max(int(run_id or 0), 0)
-    artifact_dir = Path(settings.artifacts_dir) / "runs" / str(safe_run_id) / "pages"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    url_hash = hashlib.sha256(str(source_url or "").encode("utf-8")).hexdigest()[:16]
-    return artifact_dir / url_hash

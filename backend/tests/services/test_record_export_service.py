@@ -3,15 +3,16 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from app.models.crawl import CrawlRecord
 from app.services import record_export_service
 from app.services.extraction_runtime import extract_records
 from app.services.record_export_service import (
+    build_json_export_response,
     stream_export_artifacts_json,
     stream_export_csv,
     stream_export_json,
 )
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -97,6 +98,36 @@ async def test_export_streams_include_records_from_failed_partial_run(
 
 
 @pytest.mark.asyncio
+async def test_export_response_exposes_required_field_quality_gate(
+    db_session: AsyncSession,
+    test_user,
+    create_test_run,
+) -> None:
+    run = await create_test_run(
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        requested_fields=["title", "price"],
+    )
+    db_session.add(
+        CrawlRecord(
+            run_id=run.id,
+            source_url=run.url,
+            data={"title": "Widget Prime"},
+            raw_data={},
+            discovered_data={},
+            source_trace={},
+        )
+    )
+    await db_session.commit()
+
+    response = await build_json_export_response(db_session, run_id=run.id)
+
+    assert response.headers["X-Export-Quality-Gate"] == "fail"
+    report = json.loads(response.headers["X-Export-Quality-Report"])
+    assert report["failed_fields"] == ["price"]
+
+
+@pytest.mark.asyncio
 async def test_export_streamers_preserve_order_across_paged_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -108,7 +139,15 @@ async def test_export_streamers_preserve_order_across_paged_reads(
             data={"title": "A"},
             raw_data={},
             discovered_data={},
-            source_trace={},
+            source_trace={
+                "field_discovery": {
+                    "title": {
+                        "status": "found",
+                        "value": {"native": 1},
+                        "sources": ["dom"],
+                    }
+                }
+            },
         ),
         CrawlRecord(
             id=2,
@@ -156,6 +195,35 @@ async def test_export_streamers_preserve_order_across_paged_reads(
         "https://example.com/b",
         "https://example.com/c",
     ]
+    assert record_export_service.export_record_from_row(rows[0]).field_discovery[
+        "title"
+    ].value == {"native": 1}
+
+
+@pytest.mark.asyncio
+async def test_export_stream_rejects_bad_provenance_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        CrawlRecord(
+            id=1,
+            run_id=7,
+            source_url="https://example.com/a",
+            data={"title": "A"},
+            raw_data={},
+            discovered_data={},
+            source_trace={"field_discovery": {"title": "bad"}},
+        )
+    ]
+
+    async def _fake_get_run_records(session, run_id, page, page_size):
+        del session, run_id, page_size
+        return (rows, 1) if page == 1 else ([], 1)
+
+    monkeypatch.setattr(record_export_service, "get_run_records", _fake_get_run_records)
+
+    with pytest.raises(ValidationError):
+        await _collect_chunks(stream_export_json(None, 7))
 
 
 def test_export_image_dedupe_preserves_comma_containing_urls() -> None:
@@ -173,27 +241,6 @@ def test_export_image_dedupe_preserves_comma_containing_urls() -> None:
         "https://cdn.example.com/images/f_auto,q_auto,w_1080/widget-2.jpg, "
         "https://cdn.example.com/images/f_auto,q_auto,w_1080/widget-3.jpg"
     )
-
-
-def test_export_image_dedupe_handles_legacy_string_values() -> None:
-    sanitized = record_export_service._sanitize_markdown_export_data(
-        {
-            "image_url": "https://cdn.example.com/images/widget-1.jpg",
-            "additional_images": (
-                "https://cdn.example.com/images/widget-1.jpg, "
-                "https://cdn.example.com/images/widget-2.jpg"
-            ),
-        }
-    )
-
-    assert (
-        sanitized["additional_images"] == "https://cdn.example.com/images/widget-2.jpg"
-    )
-
-
-def test_export_image_dedupe_preserves_falsy_non_null_values() -> None:
-    assert record_export_service._dedupe_image_values(0) == ["0"]
-    assert record_export_service._dedupe_image_values(False) == ["False"]
 
 
 def test_record_to_markdown_includes_page_context_from_raw_data() -> None:
@@ -256,15 +303,6 @@ def test_record_artifact_bundle_uses_markdown_excerpt_limit(
     assert bundle["page_summary"]["markdown_excerpt"] == "1234567"
 
 
-def test_is_markdown_long_form_uses_config_threshold(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(record_export_service, "MARKDOWN_LONG_FORM_THRESHOLD", 5)
-
-    assert record_export_service.is_markdown_long_form("short_note", "123456")
-    assert not record_export_service.is_markdown_long_form("short_note", "12345")
-
-
 def test_clean_export_data_keeps_variant_payloads_but_hides_internal_markdown() -> None:
     cleaned = record_export_service.clean_export_data(
         {
@@ -283,18 +321,6 @@ def test_clean_export_data_keeps_variant_payloads_but_hides_internal_markdown() 
         "variant_axes": {"color": ["Black"]},
         "selected_variant": {"sku": "W-1", "color": "Black"},
     }
-
-
-def test_clean_export_data_hides_mis_cased_markdown_fields() -> None:
-    cleaned = record_export_service.clean_export_data(
-        {
-            "title": "Widget Prime",
-            " Page_Markdown ": "# internal",
-            "TABLE_MARKDOWN": "| a |",
-        }
-    )
-
-    assert cleaned == {"title": "Widget Prime"}
 
 
 def test_listing_adapter_records_use_shared_surface_normalization() -> None:

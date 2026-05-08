@@ -18,10 +18,10 @@ from app.services.publish.verdict import (
     VERDICT_ERROR,
     VERDICT_LISTING_FAILED,
     VERDICT_PARTIAL,
-    VERDICT_SCHEMA_MISS,
     VERDICT_SUCCESS,
     _aggregate_verdict,
     compute_verdict,
+    run_health_verdict,
 )
 
 __all__ = [
@@ -30,7 +30,6 @@ __all__ = [
     "VERDICT_ERROR",
     "VERDICT_LISTING_FAILED",
     "VERDICT_PARTIAL",
-    "VERDICT_SCHEMA_MISS",
     "VERDICT_SUCCESS",
     "_aggregate_verdict",
     "build_acquisition_profile",
@@ -42,4 +41,5 @@ __all__ = [
     "load_domain_field_mapping",
     "load_domain_requested_fields",
     "refresh_record_commit_metadata",
+    "run_health_verdict",
 ]

@@ -10,7 +10,7 @@ from io import StringIO
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
-from app.models.crawl import CrawlRecord
+from app.models.crawl import CrawlRecord, CrawlRun
 from app.models.user import User
 from app.services.crawl_access_service import (
     RECORD_NOT_FOUND_DETAIL,
@@ -32,12 +32,19 @@ from app.services.config.export_settings import (
     MAX_RECORD_PAGE_SIZE,
 )
 from app.services.config.public_record_policy import (
-    PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS,
     PUBLIC_RECORD_MARKDOWN_HIDDEN_FIELDS,
+)
+from app.services.export.schema import (
+    clean_export_data as _clean_export_data,
+    export_record_from_row,
 )
 from app.services.field_value_core import (
     object_dict as _object_dict,
     object_list as _object_list,
+)
+from app.services.publish.quality_gate import (
+    export_quality_headers,
+    export_quality_report,
 )
 from app.schemas.crawl import CrawlRecordProvenanceResponse
 from fastapi.responses import StreamingResponse
@@ -82,23 +89,6 @@ async def collect_export_rows(
     }
 
 
-async def collect_export_metadata(
-    session: AsyncSession, run_id: int
-) -> dict[str, int | bool]:
-    _, total = await get_run_records(session, run_id, 1, 1)
-    pages_used = (
-        (int(total) + MAX_RECORD_PAGE_SIZE - 1) // MAX_RECORD_PAGE_SIZE
-        if total > 0
-        else 0
-    )
-    return {
-        "pages_used": max(1, pages_used),
-        "total": int(total),
-        "returned": int(total),
-        "truncated": False,
-    }
-
-
 async def build_export_response(
     session: AsyncSession,
     *,
@@ -107,13 +97,16 @@ async def build_export_response(
     media_type: str,
     streamer: ExportStreamer,
 ) -> StreamingResponse:
-    metadata = await collect_export_metadata(session, run_id)
+    rows, metadata = await collect_export_rows(session, run_id)
+    run = await session.get(CrawlRun, run_id)
+    quality_report = export_quality_report(run, rows)
     return StreamingResponse(
         streamer(session, run_id),
         media_type=media_type,
         headers={
             "Content-Disposition": f"attachment; filename={filename}",
             **export_headers(metadata),
+            **export_quality_headers(quality_report),
         },
     )
 
@@ -233,10 +226,8 @@ async def stream_export_json(session: AsyncSession, run_id: int):
     async for row in _stream_export_rows(session, run_id):
         if not first:
             yield ",\n"
-        yield json.dumps(
-            clean_export_data(row.data if isinstance(row.data, dict) else {}),
-            indent=2,
-        )
+        export_record = export_record_from_row(row)
+        yield json.dumps(export_record.data, indent=2)
         first = False
     yield "\n]"
 
@@ -244,10 +235,10 @@ async def stream_export_json(session: AsyncSession, run_id: int):
 async def stream_export_csv(session: AsyncSession, run_id: int):
     fieldnames: set[str] = set()
     async for row in _stream_export_rows(session, run_id):
-        cleaned = clean_export_data(row.data if isinstance(row.data, dict) else {})
-        if not cleaned:
+        export_record = export_record_from_row(row)
+        if not export_record.data:
             continue
-        fieldnames.update(cleaned.keys())
+        fieldnames.update(export_record.data.keys())
     if not fieldnames:
         return
     ordered_fieldnames = sorted(fieldnames)
@@ -260,10 +251,10 @@ async def stream_export_csv(session: AsyncSession, run_id: int):
     buffer.seek(0)
     buffer.truncate(0)
     async for row in _stream_export_rows(session, run_id):
-        cleaned = clean_export_data(row.data if isinstance(row.data, dict) else {})
-        if not cleaned:
+        export_record = export_record_from_row(row)
+        if not export_record.data:
             continue
-        writer.writerow(cleaned)
+        writer.writerow(export_record.data)
         yield buffer.getvalue()
         buffer.seek(0)
         buffer.truncate(0)
@@ -342,16 +333,7 @@ async def stream_export_artifacts_json(session: AsyncSession, run_id: int):
 
 
 def clean_export_data(data: dict) -> dict:
-    """Strip empty/null values and internal keys from export data."""
-    return {
-        k: v
-        for k, v in data.items()
-        if (
-            v not in (None, "", [], {})
-            and not str(k).strip().startswith("_")
-            and str(k).strip().lower() not in PUBLIC_RECORD_FALLBACK_INTERNAL_FIELDS
-        )
-    }
+    return _clean_export_data(data)
 
 
 def artifact_table_rows(row: CrawlRecord) -> list[dict]:

@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.acquisition.policy import AcquisitionPolicy
+from app.services.acquisition.policy_middleware import PolicyMiddleware
 from app.services.adapters.registry import normalize_adapter_acquisition_url
 from app.services.crawl_fetch_runtime import fetch_page
 from app.services.platform_policy import resolve_platform_runtime_policy
@@ -212,6 +213,10 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     browser_reason = acquisition_policy.browser_reason
     if browser_reason is None and bool(runtime_policy.get("requires_browser")):
         browser_reason = "platform-required"
+    policy_middleware = PolicyMiddleware()
+    await policy_middleware.before_fetch(
+        request.with_profile_updates(**acquisition_policy.to_profile())
+    )
     await _emit_event(request.on_event, "info", f"Acquiring {effective_url}")
     result = await fetch_page(
         effective_url,
@@ -237,7 +242,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         forced_browser_engine=acquisition_policy.forced_browser_engine,
         on_event=request.on_event,
     )
-    return AcquisitionResult(
+    acquisition_result = AcquisitionResult(
         request=request,
         final_url=result.final_url,
         html=result.html,
@@ -252,17 +257,8 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         artifacts=dict(getattr(result, "artifacts", {}) or {}),
         page_markdown=str(getattr(result, "page_markdown", "") or ""),
     )
-
-
-def _resolve_fetch_mode(
-    request: AcquisitionRequest,
-    *,
-    acquisition_profile: Mapping[str, object] | None = None,
-) -> str:
-    return _resolve_acquisition_policy(
-        request,
-        acquisition_profile=acquisition_profile,
-    ).fetch_mode
+    await policy_middleware.after_fetch(acquisition_result)
+    return acquisition_result
 
 
 def _resolve_acquisition_policy(
@@ -283,32 +279,3 @@ def _headers_to_dict(headers: Mapping[str, object] | Any) -> dict[str, str]:
     return {
         str(key): str(value) for key, value in getattr(headers, "items", lambda: [])()
     }
-
-
-def _resolve_browser_reason(
-    *,
-    request: AcquisitionRequest,
-    acquisition_profile: Mapping[str, object] | None = None,
-    requires_browser: bool,
-) -> str | None:
-    policy = _resolve_acquisition_policy(
-        request,
-        acquisition_profile=acquisition_profile,
-    )
-    retry_reason = policy.browser_reason
-    if retry_reason:
-        return retry_reason
-    if requires_browser:
-        return "platform-required"
-    return None
-
-
-def _resolve_listing_recovery_mode(
-    request: AcquisitionRequest,
-    *,
-    acquisition_profile: Mapping[str, object] | None = None,
-) -> str | None:
-    return _resolve_acquisition_policy(
-        request,
-        acquisition_profile=acquisition_profile,
-    ).listing_recovery_mode

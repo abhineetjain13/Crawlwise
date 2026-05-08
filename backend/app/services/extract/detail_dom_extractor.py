@@ -64,6 +64,31 @@ from app.services.extract.detail_inline_scalar import collect_inline_scalar_rows
 
 logger = logging.getLogger(__name__)
 
+
+_VARIANT_TRANSPORT_FIELDS = (
+    "sku",
+    "price",
+    "currency",
+    "url",
+    "image_url",
+    "availability",
+    "stock_quantity",
+)
+
+
+def record_has_rich_existing_variants(record: dict[str, Any]) -> bool:
+    variants = [
+        row for row in _object_list(record.get("variants")) if isinstance(row, dict)
+    ]
+    if len(variants) < 2:
+        return False
+    return all(
+        any(text_or_none(row.get(axis)) for axis in public_variant_axis_fields)
+        and any(text_or_none(row.get(field)) for field in _VARIANT_TRANSPORT_FIELDS)
+        for row in variants
+    )
+
+
 def _dom_variant_axis_allowed(axis_name: str) -> bool:
     return axis_name in public_variant_axis_fields or axis_name == "style"
 
@@ -1394,6 +1419,8 @@ def backfill_variants_from_dom_if_missing(
     existing_variants = [
         row for row in list(record.get("variants") or []) if isinstance(row, dict)
     ]
+    if record_has_rich_existing_variants(record):
+        return
     if not variant_dom_cues_present(soup):
         return
     dom_variants = extract_variants_from_dom(

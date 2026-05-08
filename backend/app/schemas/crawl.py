@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 from app.schemas.selectors import SelectorRecordResponse
+from app.services.publish.verdict import run_health_verdict
 
 _DISPLAY_HIDDEN_RECORD_FIELDS = {"page_markdown", "table_markdown", "record_type"}
 
@@ -25,12 +26,11 @@ def _dict_payload(value: object) -> dict:
 
 
 class CrawlCreate(BaseModel):
-    run_type: str  # "crawl", "batch", "csv"
+    run_type: str
     url: str | None = None
     urls: list[str] = Field(default_factory=list)
-    surface: str  # "ecommerce_listing", "ecommerce_detail", "job_listing", "job_detail", "automobile_listing", "automobile_detail", "tabular"
+    surface: str
     settings: dict = Field(default_factory=dict)
-    # settings may include traversal controls; backend preserves user-selected controls.
     requested_fields: list[str] = Field(default_factory=list)
     additional_fields: list[str] = Field(default_factory=list)
 
@@ -47,6 +47,7 @@ class CrawlRunResponse(BaseModel):
     settings: dict
     requested_fields: list[str]
     result_summary: dict
+    run_health: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None = None
@@ -54,6 +55,7 @@ class CrawlRunResponse(BaseModel):
     @model_validator(mode="after")
     def _sanitize_settings(self) -> CrawlRunResponse:
         self.settings = _sanitize_crawl_settings(self.settings)
+        self.run_health = run_health_verdict(self.result_summary)
         return self
 
 

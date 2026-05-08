@@ -21,6 +21,7 @@ _APP_TABLES = frozenset(
 _QUEUE_LEASE_BASELINE = "20260406_0007"
 _CRAWL_RECORDS_INDEX_BASELINE = "20260410_0009"
 _DATA_ENRICHMENT_BASELINE = "20260426_0018"
+_CONTENT_FINGERPRINT_BASELINE = "20260501_0021"
 
 
 def build_alembic_config() -> Config:
@@ -69,6 +70,8 @@ def _resolve_legacy_start_revision_sync(connection) -> str | None:
         or {"data_enrichment_jobs", "enriched_products"} - tables
     ):
         return _DATA_ENRICHMENT_BASELINE
+    if "content_fingerprint" not in crawl_records_columns:
+        return _CONTENT_FINGERPRINT_BASELINE
     return "head"
 
 

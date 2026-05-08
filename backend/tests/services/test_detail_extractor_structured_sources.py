@@ -2564,6 +2564,60 @@ def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fall
     assert len(rows) == 1
 
 
+def test_extract_ecommerce_detail_skips_dom_variant_scan_for_rich_structured_variants() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Trail Runner</h1>
+        <label>
+          Size
+          <select name="size">
+            <option value="">Choose size</option>
+            <option value="s">S</option>
+            <option value="m">M</option>
+          </select>
+        </label>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        None,
+        adapter_records=[
+            {
+                "title": "Trail Runner",
+                "price": "99.00",
+                "currency": "USD",
+                "image_url": "https://example.com/trail-runner.jpg",
+                "variants": [
+                    {
+                        "sku": "TRAIL-S",
+                        "size": "S",
+                        "image_url": "https://example.com/s.jpg",
+                    },
+                    {
+                        "sku": "TRAIL-M",
+                        "size": "M",
+                        "image_url": "https://example.com/m.jpg",
+                    },
+                ],
+            }
+        ],
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.55}
+        },
+    )
+
+    assert record["_extraction_tiers"]["early_exit"] == "js_state"
+    assert record["variants"] == [
+        {"size": "S", "sku": "TRAIL-S", "image_url": "https://example.com/s.jpg"},
+        {"size": "M", "sku": "TRAIL-M", "image_url": "https://example.com/m.jpg"},
+    ]
+
+
 def test_extract_ecommerce_detail_backfills_selected_variant_price_from_record_when_dom_variants_are_sparse() -> None:
     html = """
     <html>

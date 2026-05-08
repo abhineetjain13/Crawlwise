@@ -20,10 +20,11 @@ async def test_apply_protected_host_backoff_extends_wait_window(
 
     monkeypatch.setattr(pacing.asyncio, "sleep", _fake_sleep)
     await pacing.reset_pacing_state()
+    url = "https://example.com/products/widget"
     try:
-        await pacing.wait_for_host_slot("https://example.com/products/widget")
-        await pacing.apply_protected_host_backoff("https://example.com/products/widget")
-        await pacing.wait_for_host_slot("https://example.com/products/widget")
+        await pacing.wait_for_host_slot(url)
+        await pacing.record_fetch_outcome(url, status_code=429, blocked=False)
+        await pacing.wait_for_host_slot(url)
     finally:
         await pacing.reset_pacing_state()
 

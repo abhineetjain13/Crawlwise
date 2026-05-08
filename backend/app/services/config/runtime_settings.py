@@ -160,8 +160,10 @@ class CrawlerRuntimeSettings(BaseSettings):
     host_memory_ttl_min_seconds: int = 1
     host_memory_ttl_max_seconds: int = 86400
     browser_first_host_block_threshold: int = 2
-    run_quality_threshold_high: float = 0.8
-    run_quality_threshold_medium: float = 0.5
+    run_health_degraded_error_rate: float = 0.05
+    run_health_failed_error_rate: float = 0.25
+    run_quality_threshold_high: float = 0.80
+    run_quality_threshold_medium: float = 0.50
     stealth_prefer_ttl_hours: int = 24
     challenge_wait_max_seconds: int | None = 15
     challenge_poll_interval_ms: int = 1000
@@ -488,6 +490,16 @@ class CrawlerRuntimeSettings(BaseSettings):
         if self.run_quality_threshold_high < self.run_quality_threshold_medium:
             raise ValueError(
                 "run_quality_threshold_high must be >= run_quality_threshold_medium"
+            )
+        for field_name in (
+            "run_health_degraded_error_rate",
+            "run_health_failed_error_rate",
+        ):
+            _require_unit_interval(field_name, getattr(self, field_name))
+        if self.run_health_failed_error_rate < self.run_health_degraded_error_rate:
+            raise ValueError(
+                "run_health_failed_error_rate must be >= "
+                "run_health_degraded_error_rate"
             )
         for field_name in (
             "selector_self_heal_min_confidence",

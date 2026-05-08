@@ -1,113 +1,22 @@
 from __future__ import annotations
 
-import asyncio
-import time
+import app.services.acquisition.rate_limiter as _rate_limiter
+from app.services.acquisition.rate_limiter import (
+    apply_protected_host_backoff,
+    record_fetch_outcome,
+    reset_pacing_state,
+    wait_for_host_slot,
+)
 
-from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.domain_utils import normalize_host
+asyncio = _rate_limiter.asyncio
+crawler_runtime_settings = _rate_limiter.crawler_runtime_settings
 
-_HOST_NEXT_ALLOWED_AT: dict[str, float] = {}
-_HOST_PACING_LOCK = asyncio.Lock()
-
-
-def _normalized_host(value: str) -> str:
-    return normalize_host(value)
-
-
-async def wait_for_host_slot(_url: str, *, ttl_seconds: int | None = None) -> None:
-    host = _normalized_host(_url)
-    if not host:
-        return
-    min_interval_ms = _host_interval_ms(protected=False)
-    resolved_ttl_seconds = max(
-        1,
-        int(
-            ttl_seconds
-            if ttl_seconds is not None
-            else crawler_runtime_settings.pacing_host_cache_ttl_seconds
-        ),
-    )
-    now = time.monotonic()
-    async with _HOST_PACING_LOCK:
-        _prune_expired_hosts(now=now, ttl_seconds=resolved_ttl_seconds)
-        next_allowed_at = _HOST_NEXT_ALLOWED_AT.get(host, now)
-        wait_seconds = max(0.0, next_allowed_at - now)
-        _HOST_NEXT_ALLOWED_AT[host] = max(now, next_allowed_at) + (
-            min_interval_ms / 1000.0
-        )
-        _enforce_host_cache_limit()
-    if wait_seconds > 0:
-        await asyncio.sleep(wait_seconds)
-
-
-async def reset_pacing_state() -> None:
-    async with _HOST_PACING_LOCK:
-        _HOST_NEXT_ALLOWED_AT.clear()
-
-
-async def apply_protected_host_backoff(
-    _url: str,
-    *,
-    ttl_seconds: int | None = None,
-) -> None:
-    host = _normalized_host(_url)
-    if not host:
-        return
-    resolved_ttl_seconds = max(
-        1,
-        int(
-            ttl_seconds
-            if ttl_seconds is not None
-            else crawler_runtime_settings.pacing_host_cache_ttl_seconds
-        ),
-    )
-    now = time.monotonic()
-    protected_interval_seconds = _host_interval_ms(protected=True) / 1000.0
-    async with _HOST_PACING_LOCK:
-        _prune_expired_hosts(now=now, ttl_seconds=resolved_ttl_seconds)
-        next_allowed_at = _HOST_NEXT_ALLOWED_AT.get(host, now)
-        _HOST_NEXT_ALLOWED_AT[host] = max(next_allowed_at, now + protected_interval_seconds)
-        _enforce_host_cache_limit()
-
-
-def _host_interval_ms(*, protected: bool) -> int:
-    base_interval_ms = max(
-        0,
-        int(crawler_runtime_settings.acquire_host_min_interval_ms),
-    )
-    if not protected:
-        return base_interval_ms
-    return max(
-        base_interval_ms,
-        int(crawler_runtime_settings.protected_host_additional_interval_ms),
-    )
-
-
-def _prune_expired_hosts(*, now: float, ttl_seconds: int) -> None:
-    # allowed_at is a future timestamp; an entry is stale when the scheduled
-    # window *plus* the TTL has elapsed (i.e., the host hasn't been paced for
-    # longer than ttl_seconds since its last allowed_at).
-    expired_hosts = [
-        host
-        for host, allowed_at in _HOST_NEXT_ALLOWED_AT.items()
-        if now > allowed_at + ttl_seconds
-    ]
-    for host in expired_hosts:
-        _HOST_NEXT_ALLOWED_AT.pop(host, None)
-
-
-def _enforce_host_cache_limit() -> None:
-    max_entries = max(
-        1,
-        int(crawler_runtime_settings.pacing_host_cache_max_entries),
-    )
-    _trim_host_cache(_HOST_NEXT_ALLOWED_AT, max_entries=max_entries)
-
-
-def _trim_host_cache(cache: dict[str, float], *, max_entries: int) -> None:
-    overflow = len(cache) - max_entries
-    if overflow <= 0:
-        return
-    for host, _ in sorted(cache.items(), key=lambda item: item[1])[:overflow]:
-        cache.pop(host, None)
+__all__ = [
+    "apply_protected_host_backoff",
+    "asyncio",
+    "crawler_runtime_settings",
+    "record_fetch_outcome",
+    "reset_pacing_state",
+    "wait_for_host_slot",
+]
 

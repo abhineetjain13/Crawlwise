@@ -1,10 +1,12 @@
-"""Export service runtime settings."""
-
 from __future__ import annotations
 
 MAX_RECORD_PAGE_SIZE = 1000
+ARTIFACT_STORAGE_BACKEND = "local"
 EXPORT_PAGING_HEADER = "X-Export-Paging"
 EXPORT_TOTAL_HEADER = "X-Export-Total"
 EXPORT_PARTIAL_HEADER = "X-Export-Partial"
+EXPORT_QUALITY_GATE_HEADER = "X-Export-Quality-Gate"
+EXPORT_QUALITY_REPORT_HEADER = "X-Export-Quality-Report"
+EXPORT_REQUIRED_FIELD_MIN_FILL_RATE = 0.8
 MARKDOWN_EXCERPT_MAX_LENGTH = 500
 MARKDOWN_LONG_FORM_THRESHOLD = 180

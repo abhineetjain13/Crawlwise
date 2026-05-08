@@ -192,6 +192,17 @@ def test_runtime_settings_reject_inverted_quality_thresholds() -> None:
         )
 
 
+def test_runtime_settings_reject_invalid_run_health_thresholds() -> None:
+    with pytest.raises(
+        ValueError,
+        match="run_health_failed_error_rate must be >= run_health_degraded_error_rate",
+    ):
+        CrawlerRuntimeSettings(
+            run_health_degraded_error_rate=0.4,
+            run_health_failed_error_rate=0.2,
+        )
+
+
 def test_selectors_export_does_not_drive_keep_worthy_tags() -> None:
     selectors = importlib.import_module("app.services.config.selectors")
     exports = load_export_data(
@@ -300,6 +311,43 @@ def test_legacy_migration_start_detects_missing_data_enrichment_tables(
     assert (
         migrations._resolve_legacy_start_revision_sync(object())
         == migrations._DATA_ENRICHMENT_BASELINE
+    )
+
+
+def test_legacy_migration_start_detects_missing_content_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Inspector:
+        def get_table_names(self) -> list[str]:
+            return [
+                "users",
+                "crawl_runs",
+                "crawl_records",
+                "data_enrichment_jobs",
+                "enriched_products",
+            ]
+
+        def get_columns(self, table_name: str) -> list[dict[str, str]]:
+            if table_name == "crawl_runs":
+                return [{"name": "queue_owner"}]
+            if table_name == "crawl_records":
+                return [
+                    {"name": "url_identity_key"},
+                    {"name": "enrichment_status"},
+                    {"name": "enriched_at"},
+                ]
+            return []
+
+    monkeypatch.setattr(migrations, "inspect", lambda _connection: Inspector())
+    monkeypatch.setattr(
+        migrations.Base.metadata,
+        "create_all",
+        lambda *args, **kwargs: None,
+    )
+
+    assert (
+        migrations._resolve_legacy_start_revision_sync(object())
+        == migrations._CONTENT_FINGERPRINT_BASELINE
     )
 
 

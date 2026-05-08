@@ -1518,7 +1518,7 @@ async def test_process_single_url_log_uses_generic_extraction_label_when_no_adap
 
 
 @pytest.mark.asyncio
-async def test_process_single_url_skips_duplicate_run_identity_records_during_persistence(
+async def test_process_single_url_upserts_duplicate_run_identity_records(
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
@@ -1553,17 +1553,21 @@ async def test_process_single_url_skips_duplicate_run_identity_records_during_pe
     monkeypatch.setattr(
         "app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules
     )
-    monkeypatch.setattr(
-        "app.services.pipeline.core.extract_records",
-        lambda *args, **kwargs: [
+    extracted_prices = iter(["19.99", "24.99"])
+
+    def _extract_records(*args, **kwargs):
+        del args, kwargs
+        return [
             {
                 "title": "Widget Prime",
+                "price": next(extracted_prices),
                 "source_url": "https://example.com/products/widget-prime",
                 "url": "https://example.com/products/widget-prime",
                 "_source": "json_ld",
             }
-        ],
-    )
+        ]
+
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
 
     async def _persist_artifacts(**kwargs):
         del kwargs
@@ -1578,9 +1582,11 @@ async def test_process_single_url_skips_duplicate_run_identity_records_during_pe
     second = await process_single_url(db_session, run, run.url)
     rows, total = await get_run_records(db_session, run.id, 1, 20)
 
-    assert len(first.records) == 1
-    assert len(second.records) == 1
+    assert first.records[0]["price"] == "19.99"
+    assert second.records[0]["price"] == "24.99"
     assert total == 1
+    assert rows[0].content_fingerprint
+    assert rows[0].data["price"] == "24.99"
     assert rows[0].data["url"] == "https://example.com/products/widget-prime"
 
 
