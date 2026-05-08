@@ -55,11 +55,11 @@
   color-scheme: light;
 
   /* ── Fonts
-     Primary : Outfit — modern geometric sans
+     Primary : Inter — modern geometric sans
      Mono     : JetBrains Mono — code clarity
      Override via Next.js font loader through CSS var on <html>            */
   --font-primary-family:
-    var(--font-primary-source, 'Outfit'), 'Geist', 'SF Pro Text', system-ui, sans-serif;
+    var(--font-primary-source, 'Inter'), 'Geist', 'SF Pro Text', system-ui, sans-serif;
   --font-mono-family:
     var(--font-jetbrains-mono, 'JetBrains Mono'), 'JetBrains Mono', ui-monospace, Consolas,
     monospace;

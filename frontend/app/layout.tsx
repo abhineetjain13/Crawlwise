@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
 import './globals.css';
 
-import { JetBrains_Mono, Outfit } from 'next/font/google';
+import { Inter, JetBrains_Mono } from 'next/font/google';
 
 import { AppShell } from '../components/layout/app-shell';
 import { QueryProvider } from '../components/ui/query-provider';
 
-// Primary sans — Outfit
-const mainFont = Outfit({
+// Primary sans — Inter
+const mainFont = Inter({
   subsets: ['latin'],
   variable: '--font-primary-source',
   weight: ['300', '400', '500', '600', '700'],
