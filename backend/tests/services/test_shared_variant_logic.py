@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from bs4 import BeautifulSoup
 
+from app.services.extract.detail_materializer import build_detail_record
 from app.services.extract.shared_variant_logic import (
     _variant_choice_container_for_input,
     _variant_choice_container_is_overbroad,
@@ -16,6 +19,10 @@ from app.services.extract.shared_variant_logic import (
     variant_option_value_is_noise,
 )
 from app.services.extract.detail_dom_extractor import extract_variants_from_dom
+
+
+def _next_f_script(fragment: str) -> str:
+    return f"<script>self.__next_f.push([1,{json.dumps(fragment)}])</script>"
 
 
 def test_resolve_variants_pairs_color_with_size_cartesian() -> None:
@@ -332,6 +339,195 @@ def test_resolve_variant_group_name_rejects_report_reason_select() -> None:
     assert resolve_variant_group_name(soup.select_one("select")) == ""
 
 
+def test_build_detail_record_extracts_bhphoto_resolution_and_screen_size_variants() -> None:
+    html = """
+        <html>
+          <body>
+            <main class="product-detail">
+              <h1>Cozyla 32&quot; 4K Calendar+ 2</h1>
+              <select id="styledSelect3" data-selenium="dropdownButton">
+                <option>1</option>
+                <option>2</option>
+                <option>3</option>
+                <option>4</option>
+                <option>5</option>
+              </select>
+              <div class="rightSideSection_RiltKdop13">
+                <div class="groups_PzIntyCftI">
+                  <div class="group_r0s1X7lmt1">
+                    <div data-selenium="itemOptionsGroupHeader">Resolution</div>
+                    <div data-selenium="itemConfigurationContainer">
+                      <a class="itemLink_r0s1X7lmt1" href="/c/product/1882298-REG/cozyla_cd_8v543f2_white_us_32_calendar_gen2_white.html">1080p</a>
+                    </div>
+                    <div data-selenium="itemConfigurationContainer">
+                      <a class="itemLink_r0s1X7lmt1 itemLinkSelected_r0s1X7lmt1" href="/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html">4K</a>
+                    </div>
+                  </div>
+                  <div class="group_r0s1X7lmt1">
+                    <div data-selenium="itemOptionsGroupHeader">Screen Size</div>
+                    <div data-selenium="itemConfigurationContainer">
+                      <a class="itemLink_r0s1X7lmt1 itemLinkDisabled_r0s1X7lmt1" href="/c/product/1896032-REG/cozyla_cd_8s543f2_white_us_calendar_gen2_15_6_white.html">15.6&quot;</a>
+                    </div>
+                    <div data-selenium="itemConfigurationContainer">
+                      <a class="itemLink_r0s1X7lmt1 itemLinkDisabled_r0s1X7lmt1" href="/c/product/1882296-REG/cozyla_cd_8r543f2_white_us_24_calendar_gen2_white.html">24&quot;</a>
+                    </div>
+                    <div data-selenium="itemConfigurationContainer">
+                      <a class="itemLink_r0s1X7lmt1 itemLinkSelected_r0s1X7lmt1" href="/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html">32&quot;</a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </main>
+          </body>
+        </html>
+        """
+    soup = BeautifulSoup(html, "html.parser")
+
+    assert [
+        normalized_variant_axis_key(resolve_variant_group_name(group))
+        for group in iter_variant_choice_groups(soup)
+    ] == ["resolution", "screen_size"]
+
+    record = build_detail_record(
+        html,
+        "https://www.bhphotovideo.com/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html",
+        "ecommerce_detail",
+        ["variants"],
+    )
+
+    variants = [row for row in record.get("variants", []) if isinstance(row, dict)]
+    assert {row.get("resolution") for row in variants if row.get("resolution")} == {
+        "1080p",
+        "4K",
+    }
+    assert {row.get("screen_size") for row in variants if row.get("screen_size")} == {
+        '15.6"',
+        '24"',
+        '32"',
+    }
+
+
+def test_build_detail_record_extracts_wayfair_color_variants_from_next_f_state() -> None:
+    html = "\n".join(
+        [
+            "<html><body><main class='product-detail'><h1>Bryce Power Reclining Sofa with Power Headrest</h1></main>",
+            _next_f_script(
+                "fd:"
+                + json.dumps(
+                    [
+                        "$",
+                        "$L11c",
+                        None,
+                        {
+                            "data": {
+                                "listing": {
+                                    "displayListingId": "XTYA1522",
+                                    "__typename": "MarketplaceListing",
+                                },
+                                "choiceCategories": [
+                                    {
+                                        "name": "Upholstery Color",
+                                        "variantChoices": {
+                                            "edges": [
+                                                {
+                                                    "node": {
+                                                        "choice": {
+                                                            "displayId": 94673718,
+                                                            "name": "Brown",
+                                                        },
+                                                        "selectableVariant": {
+                                                            "listingUrl": "https://www.wayfair.com/furniture/pdp/flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html?piid=94673718",
+                                                            "fulfillmentv2": {
+                                                                "stockStatus": "IN_STOCK"
+                                                            },
+                                                        },
+                                                    }
+                                                },
+                                                {
+                                                    "node": {
+                                                        "choice": {
+                                                            "displayId": 94673717,
+                                                            "name": "Tan",
+                                                        },
+                                                        "selectableVariant": {
+                                                            "listingUrl": "https://www.wayfair.com/furniture/pdp/flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html?piid=94673717",
+                                                            "fulfillmentv2": {
+                                                                "stockStatus": "IN_STOCK"
+                                                            },
+                                                        },
+                                                    }
+                                                },
+                                            ]
+                                        },
+                                        "__typename": "MarketplaceListingVariantChoiceCategory",
+                                    }
+                                ],
+                                "__typename": "MarketplaceListingVariant",
+                            }
+                        },
+                    ]
+                )
+            ),
+            _next_f_script(
+                "e1:"
+                + json.dumps(
+                    [
+                        "$",
+                        "$Lf1",
+                        None,
+                        {
+                            "data": {
+                                "displayName": "Bryce Power Reclining Sofa with Power Headrest",
+                                "listingUrl": "https://www.wayfair.com/furniture/pdp/flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html?piid=94673717",
+                                "pricing": {
+                                    "primaryPrice": {
+                                        "price": {
+                                            "value": {
+                                                "amount": "2499.99",
+                                                "currency": {"code": "USD"},
+                                            }
+                                        }
+                                    }
+                                },
+                                "fulfillmentv2": {"stockStatus": "IN_STOCK"},
+                                "choiceCategories": [
+                                    {
+                                        "name": "Upholstery Color",
+                                        "selectedVariantChoice": {
+                                            "choice": {
+                                                "name": "Tan",
+                                                "displayId": 94673717,
+                                            }
+                                        },
+                                    }
+                                ],
+                                "__typename": "MarketplaceListingVariant",
+                            }
+                        },
+                    ]
+                )
+            ),
+            "</body></html>",
+        ]
+    )
+    record = build_detail_record(
+        html,
+        "https://www.wayfair.com/furniture/pdp/flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html",
+        "ecommerce_detail",
+        ["variants"],
+    )
+
+    variants = [row for row in record.get("variants", []) if isinstance(row, dict)]
+    assert {
+        row.get("upholstery_color")
+        for row in variants
+        if row.get("upholstery_color")
+    } == {
+        "Brown",
+        "Tan",
+    }
+
+
 def test_variant_select_groups_reject_cookie_consent_token_selects() -> None:
     soup = BeautifulSoup(
         """
@@ -619,7 +815,7 @@ def test_dom_variant_extraction_filters_fulfillment_noise_from_color_group() -> 
         "209 Mocha Latte - soft mocha brown matte",
         "210 Satin Corset - rose gold shimmer",
     ]
-    assert all(set(row) <= {"color"} for row in record["variants"])
+    assert all(set(row) <= {"color", "_validated"} for row in record["variants"])
 
 
 def test_variant_choice_container_is_overbroad_avoids_css_select_scans() -> None:

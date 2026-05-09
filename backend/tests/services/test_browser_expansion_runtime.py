@@ -3794,9 +3794,12 @@ async def test_recover_browser_challenge_keeps_original_response_when_retry_stay
 
 
 @pytest.mark.asyncio
-async def test_recover_browser_challenge_skips_retry_for_real_chrome() -> None:
+async def test_recover_browser_challenge_runs_for_real_chrome() -> None:
     original_response = SimpleNamespace(
         status=403, headers={"content-type": "text/html"}
+    )
+    retried_response = SimpleNamespace(
+        status=200, headers={"content-type": "text/html"}
     )
 
     class _Page:
@@ -3804,21 +3807,25 @@ async def test_recover_browser_challenge_skips_retry_for_real_chrome() -> None:
 
         def __init__(self) -> None:
             self.goto_calls = 0
+            self.wait_calls = 0
 
         async def goto(self, *_args, **_kwargs):
             self.goto_calls += 1
-            return original_response
+            return retried_response
 
         async def wait_for_timeout(self, _ms: int) -> None:
+            self.wait_calls += 1
             return None
 
     page = _Page()
+    classify_calls = {"count": 0}
 
     async def _get_page_html(_page: Any) -> str:
-        raise AssertionError("real chrome challenge recovery should not read HTML")
+        return "<html><body>product title $12.00 add to cart</body></html>"
 
     async def _classify_blocked_page(_html: str, _status_code: int):
-        raise AssertionError("real chrome challenge recovery should not classify")
+        classify_calls["count"] += 1
+        return SimpleNamespace(blocked=classify_calls["count"] == 1, provider_hits=[])
 
     result = await browser_recovery.recover_browser_challenge(
         page,
@@ -3836,6 +3843,8 @@ async def test_recover_browser_challenge_skips_retry_for_real_chrome() -> None:
     )
 
     assert result is original_response
+    assert result.browser_recovered_status == 200
+    assert page.wait_calls == 1
     assert page.goto_calls == 0
 
 

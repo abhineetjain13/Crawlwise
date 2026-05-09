@@ -1035,7 +1035,7 @@ async def test_execute_listing_traversal_ignores_invalid_timeout_value() -> None
 
 
 @pytest.mark.asyncio
-async def test_execute_listing_traversal_rejects_auto_mode() -> None:
+async def test_execute_listing_traversal_rejects_unsupported_mode() -> None:
     page = _FakePage(
         surface="job_listing",
         initial_state=_State(
@@ -1054,7 +1054,7 @@ async def test_execute_listing_traversal_rejects_auto_mode() -> None:
     result = await execute_listing_traversal(
         page,
         surface="job_listing",
-        traversal_mode="auto",
+        traversal_mode="unsupported_mode",
         max_pages=2,
         max_scrolls=2,
     )

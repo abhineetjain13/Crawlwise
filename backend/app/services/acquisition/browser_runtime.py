@@ -1374,7 +1374,10 @@ async def browser_fetch(
                 response, navigation_strategy = await _run_browser_stage(
                     stage="navigation",
                     page=page,
-                    timeout_seconds=_remaining(),
+                    timeout_seconds=min(
+                        _remaining(),
+                        float(crawler_runtime_settings.browser_render_timeout_seconds),
+                    ),
                     phase_timings_ms=phase_timings_ms,
                     operation=lambda: navigate_browser_page_impl(
                         page,

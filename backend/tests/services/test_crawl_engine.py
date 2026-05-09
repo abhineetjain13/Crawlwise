@@ -3644,6 +3644,25 @@ def test_detail_rejection_keeps_rich_wayfair_pdp_with_promotional_title() -> Non
     )
 
 
+def test_detail_identity_rejects_wrong_explicit_variant_query_match() -> None:
+    requested_url = "https://example.com/products/widget-prime?variant=22222222"
+    record = {
+        "title": "Widget Prime",
+        "url": "https://example.com/products/widget-prime?variant=11111111",
+        "sku": "11111111",
+        "price": "10.00",
+    }
+
+    assert (
+        detail_extractor.detail_record_rejection_reason(
+            record,
+            page_url=requested_url,
+            requested_page_url=requested_url,
+        )
+        == "detail_identity_mismatch"
+    )
+
+
 def test_detail_rejection_keeps_rich_pdp_without_strong_identity_fields() -> None:
     requested_url = (
         "https://www.wayfair.com/furniture/pdp/"

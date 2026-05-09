@@ -76,6 +76,8 @@ def backfill_detail_price_from_html(
         # PDP shows localized price. Ignore conflicting structured price, but
         # still allow visible DOM price or an existing parent price to repair
         # the record and nested variants.
+        if _detail_price_value_is_low_signal(visible_price):
+            visible_price = None
         html_currency = None
         jsonld_price_bundle = (None, None, None)
 
@@ -229,11 +231,13 @@ def reconcile_detail_currency_with_url(
     )
     before_currency = text_or_none(record.get("currency"))
 
-    _reconcile_container_currency(
-        record,
-        expected_currency=expected_currency,
-        strong_host_hint=strong_host_hint,
-    )
+    adapter_price = "adapter" in record_field_sources(record, "price")
+    if not (strong_host_hint and adapter_price and before_currency != expected_currency):
+        _reconcile_container_currency(
+            record,
+            expected_currency=expected_currency,
+            strong_host_hint=strong_host_hint,
+        )
     if before_currency != text_or_none(record.get("currency")):
         append_record_field_source(record, "currency", "url_currency_hint")
 
@@ -251,15 +255,17 @@ def reconcile_detail_currency_with_url(
             )
 
     variants = record.get("variants")
+    adapter_variants = "adapter" in record_field_sources(record, "variants")
     if isinstance(variants, list):
         for index, variant in enumerate(variants):
             if isinstance(variant, dict):
                 before_currency = text_or_none(variant.get("currency"))
-                _reconcile_container_currency(
-                    variant,
-                    expected_currency=expected_currency,
-                    strong_host_hint=strong_host_hint,
-                )
+                if not (strong_host_hint and adapter_variants and before_currency != expected_currency):
+                    _reconcile_container_currency(
+                        variant,
+                        expected_currency=expected_currency,
+                        strong_host_hint=strong_host_hint,
+                    )
                 if before_currency != text_or_none(variant.get("currency")):
                     append_record_field_source(
                         record,

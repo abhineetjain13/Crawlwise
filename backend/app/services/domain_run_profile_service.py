@@ -8,7 +8,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import DomainRunProfile
-from app.services.config.domain_profiles import AUTO_TRAVERSAL, TRAVERSAL_MODE_VALUES
+from app.services.config.domain_profiles import TRAVERSAL_MODE_VALUES
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
 from app.models.crawl_settings import (
@@ -69,7 +69,11 @@ def _coerce_optional_choice(value: object, allowed: set[str]) -> str | None:
 
 def _normalize_traversal_mode(value: object) -> str | None:
     normalized = str(value or "").strip().lower()
-    if normalized == AUTO_TRAVERSAL:
+    if normalized in {"", "none", "auto"}:
+        return None
+    if normalized == "pagination":
+        return "paginate"
+    if normalized == "infinite_scroll":
         return "scroll"
     return normalized if normalized in TRAVERSAL_MODE_VALUES else None
 

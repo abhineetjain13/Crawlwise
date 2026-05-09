@@ -28,6 +28,7 @@ from app.services.config.extraction_rules import (
     DETAIL_LOW_SIGNAL_TITLE_VALUES,
     DETAIL_LEGAL_TAIL_PATTERNS,
     DETAIL_LONG_TEXT_DISCLAIMER_PATTERNS,
+    DETAIL_LONG_TEXT_LEADING_ATTRIBUTE_BLOB_PATTERN,
     DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS,
     DETAIL_LONG_TEXT_UI_TAIL_PHRASES,
     DETAIL_LONG_TEXT_UI_TAIL_MIN_PRODUCT_WORDS,
@@ -446,7 +447,7 @@ def _promote_product_details_description(record: dict[str, Any]) -> None:
 
 def sanitize_detail_long_text(text: str, *, title: str) -> str:
     cleaned_text = _strip_long_text_ui_tail(
-        _strip_bracket_artifact_noise(clean_text(text))
+        _strip_leading_attribute_blob(_strip_bracket_artifact_noise(clean_text(text)))
     )
     if _text_is_structured_object_repr(cleaned_text) or _text_is_structured_json_array(
         cleaned_text
@@ -546,6 +547,9 @@ def detail_long_text_chunk_is_variant_size_sequence(text: str) -> bool:
 
 _BRACKET_RUN_RE = re.compile(r"(?:\[\s*){2,}|(?:\]\s*){2,}")
 _BRACKETS_RE = re.compile(r"[\[\]]+")
+_LEADING_ATTRIBUTE_BLOB_RE = re.compile(
+    str(DETAIL_LONG_TEXT_LEADING_ATTRIBUTE_BLOB_PATTERN), re.I
+)
 
 
 def _text_is_structured_object_repr(text: str) -> bool:
@@ -588,6 +592,14 @@ def _strip_bracket_artifact_noise(text: str) -> str:
         candidates.sort(key=lambda item: (-item[0], item[1]))
         return candidates[0][2]
     return clean_text(current)
+
+
+def _strip_leading_attribute_blob(text: str) -> str:
+    cleaned = clean_text(text)
+    if not cleaned:
+        return ""
+    stripped = clean_text(_LEADING_ATTRIBUTE_BLOB_RE.sub("", cleaned, count=1))
+    return stripped or cleaned
 
 
 def _strip_long_text_ui_tail(text: str) -> str:

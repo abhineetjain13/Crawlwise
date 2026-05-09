@@ -94,7 +94,7 @@ Config tunables for all buckets: `app/services/config/*`
 | `POST /api/crawls` | Create and dispatch crawl runs |
 | `GET /api/crawls/{id}/records` | List extracted records |
 | `GET /api/records/{id}/provenance` | Full extraction provenance |
-| `GET /api/crawls/{id}/export/*` | JSON / CSV / markdown / discoverist export |
+| `GET /api/crawls/{id}/export/*` | JSON / CSV / artifacts / discoverist export |
 | `WS /api/crawls/{id}/logs/ws` | Real-time log streaming |
 | `GET/POST /api/review/{id}` | Review payload and save approved mapping |
 | `GET/POST/PUT/DELETE /api/selectors` | Selector CRUD, suggest, test, preview |

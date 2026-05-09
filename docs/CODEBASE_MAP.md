@@ -158,7 +158,11 @@ Canonical config owner:
 | `extract/detail_title_scorer.py` | Detail title promotion and shell-title scoring |
 | `extract/shared_variant_logic.py` | Canonical variant identity, merge, richness, grouping, and axis helpers |
 | `extract/variant_dom_cues.py` | Variant DOM cue and sibling-signal helpers |
-| `extract/variant_record_normalization.py` | Variant axis/value normalization delegated by detail record finalization before public variant flattening |
+| `extract/variant_dom_provenance.py` | DOM variant provenance capture for validator input |
+| `extract/variant_group_validator.py` | Evidence-based DOM variant group admission and rejection logging |
+| `extract/variant_record_normalization.py` | Variant value normalization delegated by detail record finalization before public variant flattening |
+| `extract/variant_structural_pruning.py` | Structural variant row pruning for non-DOM/raw variant records |
+| `extract/variant_value_guards.py` | Variant value and URL quality gates shared by DOM validation and normalization |
 | `extract/*` | Other extraction helpers |
 
 Canonical config owners:
@@ -170,6 +174,7 @@ Canonical config owners:
 | `config/public_record_policy.py` | Public persisted/exported record exclusions, URL safety, and identity value policy |
 | `config/variant_policy.py` | Public variant axes, flat variant transport fields, and variant axis aliases |
 | `config/extraction_rules.py` | extraction/runtime selector tokens, structured-source key maps, detail selectors, shell/utility path rules |
+| `config/variant_migration_rules.py` | Variant migration selectors, validation thresholds, and residual noise/url gates |
 | `config/selectors.py` | DOM selectors |
 | `config/platforms.json` | adapter metadata, signatures, JS mappings, readiness selectors |
 | `config/network_payload_specs.py` | payload specs and endpoint tokens |

@@ -42,6 +42,8 @@ HARNESS_MODE_FULL_PIPELINE = "full_pipeline"
 DEFAULT_SITE_SET_PATH = (
     Path(__file__).resolve().parent / "test_site_sets" / "commerce_browser_heavy.json"
 )
+DEFAULT_HARNESS_EMAIL = "admin@admin.com"
+DEFAULT_HARNESS_PASSWORD = "AdminPassword123!"
 _VARIANT_AXIS_FIELDS = tuple(
     dict.fromkeys(
         str(token).strip().lower()
@@ -1536,15 +1538,15 @@ async def _ensure_harness_user_id(session) -> int:
         raise RuntimeError(
             "Harness user access is disabled outside local/test environments"
         )
-    harness_email = str(os.getenv("HARNESS_EMAIL") or "").strip().lower()
-    harness_password = str(os.getenv("HARNESS_PASSWORD") or "").strip()
+    harness_email = (
+        str(os.getenv("HARNESS_EMAIL") or DEFAULT_HARNESS_EMAIL).strip().lower()
+    )
+    harness_password = str(
+        os.getenv("HARNESS_PASSWORD") or DEFAULT_HARNESS_PASSWORD
+    ).strip()
     harness_role = (
         str(os.getenv("HARNESS_ROLE") or "harness").strip().lower() or "harness"
     )
-    if not harness_email:
-        raise RuntimeError("HARNESS_EMAIL is required for harness user bootstrap.")
-    if not harness_password:
-        raise RuntimeError("HARNESS_PASSWORD is required for harness user bootstrap.")
     user = (
         await session.execute(select(User).where(User.email == harness_email).limit(1))
     ).scalar_one_or_none()

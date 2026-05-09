@@ -17,6 +17,10 @@ from app.services.config.extraction_rules import (
     DETAIL_LONG_TEXT_RANK_FIELDS,
     DETAIL_PRIMARY_DOM_CONTEXT_SELECTOR,
 )
+from app.services.config.variant_migration_rules import (
+    VARIANT_STRONG_OPTION_SELECTOR,
+    VARIANT_WEAK_OPTION_SELECTOR,
+)
 from app.services.config.field_mappings import (
     DOM_HIGH_VALUE_FIELDS,
     DOM_OPTIONAL_CUE_FIELDS,
@@ -49,6 +53,14 @@ from app.services.extract.detail_raw_signals import (
 )
 from app.services.extract.detail_state_variant_targets import (
     state_variant_targets as _state_variant_targets,
+)
+from app.services.extract.variant_group_validator import (
+    VariantGroupValidator,
+)
+from app.services.extract.variant_dom_provenance import (
+    build_variant_candidate_group,
+    variant_option_node_types,
+    weak_variant_option_node_allowed,
 )
 from app.services.js_state_helpers import select_variant
 from app.services.extract.shared_variant_logic import (
@@ -712,14 +724,16 @@ def _collect_variant_choice_entries(
     )
     entries_by_value: dict[str, dict[str, object]] = {}
     visible_text_cache: dict[int, str] = {}
-    for node in container.select(
-        "[role='radio'], "
-        "[role='option'], "
-        "button, "
-        "a[href], "
-        "[data-value], [data-option-value], "
-        "[aria-pressed], [aria-selected], [data-state], [data-selected]"
-    )[:24]:
+    option_nodes = list(container.select(str(VARIANT_STRONG_OPTION_SELECTOR)))[:24]
+    if len(option_nodes) < 2:
+        option_nodes = list(container.select(str(VARIANT_WEAK_OPTION_SELECTOR)))[:24]
+    for node in option_nodes:
+        if not weak_variant_option_node_allowed(
+            node,
+            container=container,
+            page_url=page_url,
+        ):
+            continue
         cleaned = _coerce_variant_option_value(
             coercion_axis,
             _variant_choice_entry_value(
@@ -931,7 +945,7 @@ def extract_variants_from_dom(
     page_url: str,
     js_state_objects: dict[str, Any] | None = None,
 ) -> dict[str, object]:
-    option_groups: list[dict[str, object]] = []
+    candidate_groups = []
     for select in iter_variant_select_groups(soup):
         raw_option_values = [
             clean_text(option.get_text(" ", strip=True))
@@ -989,12 +1003,14 @@ def extract_variants_from_dom(
             )
         )
         if len(deduped_values) >= 2:
-            option_groups.append(
-                {
-                    "name": cleaned_name,
-                    "values": deduped_values,
-                    "entries": option_entries,
-                }
+            candidate_groups.append(
+                build_variant_candidate_group(
+                    select,
+                    name=cleaned_name,
+                    values=deduped_values,
+                    entries=option_entries,
+                    extractor_path="select",
+                )
             )
 
     for container in iter_variant_choice_groups(soup):
@@ -1012,14 +1028,32 @@ def extract_variants_from_dom(
             deduped_values,
         )
         if len(deduped_values) >= 2:
-            option_groups.append(
-                {
-                    "name": cleaned_name,
-                    "values": deduped_values,
-                    "entries": option_entries,
-                }
+            candidate_groups.append(
+                build_variant_candidate_group(
+                    container,
+                    name=cleaned_name,
+                    values=deduped_values,
+                    entries=option_entries,
+                    extractor_path=(
+                        "choice_radio"
+                        if any(
+                            item in {"input_radio", "role_radio"}
+                            for item in variant_option_node_types(
+                                container,
+                                extractor_path="choice",
+                            )
+                        )
+                        else "choice_button"
+                    ),
+                )
             )
 
+    validator = VariantGroupValidator()
+    option_groups = [
+        group.as_option_group()
+        for group in candidate_groups
+        if validator.validate(group, page_url=page_url)
+    ]
     expanded_option_groups: list[dict[str, object]] = []
     for group in option_groups:
         compound_groups = _expand_compound_option_group(group)
@@ -1252,6 +1286,8 @@ def extract_variants_from_dom(
             page_url=page_url,
         )
         if flat_variants:
+            for variant in flat_variants:
+                variant["_validated"] = True
             record["variants"] = flat_variants
             record["variant_count"] = len(flat_variants)
         if active_variant:

@@ -559,6 +559,10 @@ def _coerce_structured_candidate_value(
     payload: object,
     source_key: str = "",
 ) -> object | None:
+    if canonical == "url":
+        urls = extract_urls(value, page_url)
+        if urls:
+            return urls[0]
     if canonical in {
         "price",
         "sale_price",
@@ -605,7 +609,7 @@ def _structured_alias_allowed(
         "image_url",
         "additional_images",
         "url",
-    } and (payload_types & {"brand", "review", "reviewrating"}):
+    } and (payload_types & {"brand", "organization", "person", "review", "reviewrating"}):
         return False
     if canonical == "brand" and "person" in payload_types:
         return False
@@ -637,9 +641,9 @@ def _structured_alias_value_allowed(
 def _structured_payload_types(payload: dict[str, object]) -> set[str]:
     raw_types = payload.get("@type")
     normalized_types = {
-        str(item or "").strip().lower()
+        _normalize_structured_payload_type(item)
         for item in (raw_types if isinstance(raw_types, list) else [raw_types])
-        if str(item or "").strip()
+        if _normalize_structured_payload_type(item)
     }
     irrelevant_types = {
         str(value).strip().lower()
@@ -651,6 +655,16 @@ def _structured_payload_types(payload: dict[str, object]) -> set[str]:
     return normalized_types
 
 
+def _normalize_structured_payload_type(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    for separator in ("#", "/"):
+        if separator in text:
+            text = text.rsplit(separator, 1)[-1]
+    return text
+
+
 def collect_structured_candidates(
     payload: object,
     alias_lookup: dict[str, str],
@@ -659,6 +673,7 @@ def collect_structured_candidates(
     *,
     depth: int = 0,
     limit: int = _structured_candidate_traversal_limit,
+    in_variant_context: bool = False,
 ) -> None:
     if depth > limit:
         return
@@ -744,6 +759,7 @@ def collect_structured_candidates(
                     candidates,
                     depth=depth + 1,
                     limit=limit,
+                    in_variant_context=in_variant_context,
                 )
                 continue
             normalized_key = normalize_field_key(key)
@@ -761,9 +777,15 @@ def collect_structured_candidates(
                 "hasvariant",
             }:
                 continue
+            child_in_variant_context = in_variant_context or normalized_key in {
+                "has_variant",
+                "hasvariant",
+                "variants",
+            }
             canonical = alias_lookup.get(normalized_key)
             if (
                 canonical
+                and not in_variant_context
                 and not (
                     review_like
                     and canonical
@@ -799,8 +821,11 @@ def collect_structured_candidates(
                 candidates,
                 depth=depth + 1,
                 limit=limit,
+                in_variant_context=child_in_variant_context,
             )
-        if "product" in normalized_type or "productgroup" in normalized_type:
+        if not in_variant_context and (
+            "product" in normalized_type or "productgroup" in normalized_type
+        ):
             offer = payload.get("offers")
             offer = offer[0] if isinstance(offer, list) and offer else offer
             aggregate = payload.get("aggregateRating")
@@ -949,6 +974,7 @@ def collect_structured_candidates(
                 candidates,
                 depth=depth + 1,
                 limit=limit,
+                in_variant_context=in_variant_context,
             )
 
 

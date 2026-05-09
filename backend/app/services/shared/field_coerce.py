@@ -1255,7 +1255,7 @@ def _coerce_brand_text(value: object) -> str | None:
     if not text:
         return None
     text = re.sub(r"^\s*\d+\s+(?=[A-Za-z])", "", text).strip()
-    if not text:
+    if not text or not re.search(r"[A-Za-z]", text):
         return None
     parsed = urlparse(text)
     if parsed.scheme in {"http", "https", "ftp", "mailto"} or parsed.netloc:

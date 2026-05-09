@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from app.core import migrations
 from app.models.crawl_settings import CrawlRunSettings
 from app.schemas.crawl import (
     DomainRunAcquisitionContract,
@@ -283,74 +282,6 @@ def test_domain_run_acquisition_contract_accepts_legacy_handoff_flag() -> None:
     assert contract.handoff_eligible is True
 
 
-def test_legacy_migration_start_detects_missing_data_enrichment_tables(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Inspector:
-        def get_table_names(self) -> list[str]:
-            return ["users", "crawl_runs", "crawl_records"]
-
-        def get_columns(self, table_name: str) -> list[dict[str, str]]:
-            if table_name == "crawl_runs":
-                return [{"name": "queue_owner"}]
-            if table_name == "crawl_records":
-                return [
-                    {"name": "url_identity_key"},
-                    {"name": "enrichment_status"},
-                    {"name": "enriched_at"},
-                ]
-            return []
-
-    monkeypatch.setattr(migrations, "inspect", lambda _connection: Inspector())
-    monkeypatch.setattr(
-        migrations.Base.metadata,
-        "create_all",
-        lambda *args, **kwargs: None,
-    )
-
-    assert (
-        migrations._resolve_legacy_start_revision_sync(object())
-        == migrations._DATA_ENRICHMENT_BASELINE
-    )
-
-
-def test_legacy_migration_start_detects_missing_content_fingerprint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Inspector:
-        def get_table_names(self) -> list[str]:
-            return [
-                "users",
-                "crawl_runs",
-                "crawl_records",
-                "data_enrichment_jobs",
-                "enriched_products",
-            ]
-
-        def get_columns(self, table_name: str) -> list[dict[str, str]]:
-            if table_name == "crawl_runs":
-                return [{"name": "queue_owner"}]
-            if table_name == "crawl_records":
-                return [
-                    {"name": "url_identity_key"},
-                    {"name": "enrichment_status"},
-                    {"name": "enriched_at"},
-                ]
-            return []
-
-    monkeypatch.setattr(migrations, "inspect", lambda _connection: Inspector())
-    monkeypatch.setattr(
-        migrations.Base.metadata,
-        "create_all",
-        lambda *args, **kwargs: None,
-    )
-
-    assert (
-        migrations._resolve_legacy_start_revision_sync(object())
-        == migrations._CONTENT_FINGERPRINT_BASELINE
-    )
-
-
 def test_invalid_traversal_mode_raises_configuration_error() -> None:
     settings = CrawlRunSettings.from_value(
         {
@@ -363,8 +294,24 @@ def test_invalid_traversal_mode_raises_configuration_error() -> None:
         settings.traversal_mode()
 
 
-def test_auto_traversal_is_preserved_when_advanced_enabled() -> None:
+def test_fetch_profile_invalid_traversal_mode_raises_configuration_error() -> None:
     settings = CrawlRunSettings.from_value(
+        {
+            "advanced_enabled": True,
+            "fetch_profile": {
+                "traversal_mode": "unsupported_mode",
+            },
+        }
+    )
+
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        settings.traversal_mode()
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        settings.normalized_for_storage()
+
+
+def test_auto_traversal_mode_raises_configuration_error() -> None:
+    fetch_profile_settings = CrawlRunSettings.from_value(
         {
             "advanced_enabled": True,
             "fetch_profile": {
@@ -372,23 +319,35 @@ def test_auto_traversal_is_preserved_when_advanced_enabled() -> None:
             },
         }
     )
-
-    assert settings.traversal_mode() == "auto"
-    assert settings.normalized_for_storage()["fetch_profile"]["traversal_mode"] == "auto"
-
-
-def test_auto_traversal_is_normalized_to_none_when_advanced_disabled() -> None:
-    settings = CrawlRunSettings.from_value(
+    top_level_settings = CrawlRunSettings.from_value(
         {
-            "advanced_enabled": False,
-            "fetch_profile": {
-                "traversal_mode": "auto",
-            },
+            "advanced_enabled": True,
+            "traversal_mode": "auto",
         }
     )
 
-    assert settings.traversal_mode() is None
-    assert settings.normalized_for_storage()["fetch_profile"]["traversal_mode"] is None
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        fetch_profile_settings.traversal_mode()
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        fetch_profile_settings.normalized_for_storage()
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        top_level_settings.traversal_mode()
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        top_level_settings.normalized_for_storage()
+
+
+def test_top_level_invalid_traversal_mode_raises_configuration_error() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "advanced_enabled": True,
+            "traversal_mode": "unsupported_mode",
+        }
+    )
+
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        settings.traversal_mode()
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        settings.normalized_for_storage()
 
 
 def test_crawl_run_settings_preserves_advanced_mode_storage_contract() -> None:

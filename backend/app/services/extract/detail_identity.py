@@ -28,6 +28,10 @@ from app.services.config.extraction_rules import (
     PRODUCT_SLUG_MIN_TERMINAL_TOKENS,
     YEAR_SLUG_PATTERN,
 )
+from app.services.config.public_record_policy import (
+    PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_KEYS,
+    PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_PREFIXES,
+)
 from app.services.config.surface_hints import detail_path_hints
 from app.services.extract.listing_candidate_ranking import (
     job_listing_url_is_hub as _job_listing_url_is_hub,
@@ -43,6 +47,16 @@ from app.services.field_value_core import (
 from app.services.field_url_normalization import same_site
 
 logger = logging.getLogger(__name__)
+_DETAIL_IDENTITY_QUERY_KEYS = frozenset(
+    str(value).strip().lower()
+    for value in tuple(PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_KEYS or ())
+    if str(value).strip()
+)
+_DETAIL_IDENTITY_QUERY_PREFIXES = tuple(
+    str(value).strip().lower()
+    for value in tuple(PUBLIC_RECORD_DETAIL_CANONICAL_QUERY_PREFIXES or ())
+    if str(value).strip()
+)
 _DETAIL_URL_PLACEHOLDER_SEGMENTS = frozenset(
     {
         str(value).strip().lower()
@@ -511,10 +525,24 @@ def _record_matches_requested_detail_identity(
     requested_page_url: str,
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
+    requested_query_codes = _detail_query_identity_codes_from_url(requested_page_url)
     record_field_codes = _detail_identity_codes_from_record_fields(record)
+    if requested_query_codes and detail_identity_codes_match(
+        requested_query_codes,
+        record_field_codes,
+    ):
+        return True
     if detail_identity_codes_match(requested_codes, record_field_codes):
         return True
     record_url_codes = _detail_identity_codes_from_url(record.get("url"))
+    record_query_codes = _detail_query_identity_codes_from_url(record.get("url"))
+    if requested_query_codes and detail_identity_codes_match(
+        requested_query_codes,
+        record_query_codes,
+    ):
+        return True
+    if requested_query_codes and record_query_codes:
+        return False
     requested_title = _detail_title_from_url(requested_page_url)
     requested_tokens = _detail_identity_tokens(requested_title)
     candidate_tokens = _detail_identity_tokens(record.get("title"))
@@ -558,6 +586,13 @@ def _detail_url_matches_requested_identity(
 ) -> bool:
     requested_codes = _detail_identity_codes_from_url(requested_page_url)
     candidate_codes = _detail_identity_codes_from_url(candidate_url)
+    requested_query_codes = _detail_query_identity_codes_from_url(requested_page_url)
+    candidate_query_codes = _detail_query_identity_codes_from_url(candidate_url)
+    if requested_query_codes:
+        if detail_identity_codes_match(requested_query_codes, candidate_query_codes):
+            return True
+        if candidate_query_codes:
+            return False
     if detail_identity_codes_match(requested_codes, candidate_codes):
         return True
     requested_title = _detail_title_from_url(requested_page_url)
@@ -619,6 +654,27 @@ def _detail_identity_codes_from_url(url: object) -> set[str]:
         normalized = _detail_segment_code(match.group(1))
         if normalized:
             codes.add(normalized)
+    codes.update(_detail_query_identity_codes_from_url(text))
+    return codes
+
+
+def _detail_query_identity_codes_from_url(url: object) -> set[str]:
+    text = text_or_none(url)
+    if not text:
+        return set()
+    parsed = urlparse(text)
+    codes: set[str] = set()
+    for key, value in parse_qsl(parsed.query, keep_blank_values=False):
+        normalized_key = str(key or "").strip().lower()
+        if not normalized_key:
+            continue
+        if normalized_key in _DETAIL_IDENTITY_QUERY_KEYS or any(
+            normalized_key.startswith(prefix)
+            for prefix in _DETAIL_IDENTITY_QUERY_PREFIXES
+        ):
+            normalized_value = _detail_segment_code(value)
+            if normalized_value:
+                codes.add(normalized_value)
     return codes
 
 
@@ -762,6 +818,7 @@ def _detail_redirect_identity_is_mismatched(
 
 detail_identity_codes_from_record_fields = _detail_identity_codes_from_record_fields
 detail_identity_codes_from_url = _detail_identity_codes_from_url
+detail_query_identity_codes_from_url = _detail_query_identity_codes_from_url
 detail_identity_tokens = _detail_identity_tokens
 detail_redirect_identity_is_mismatched = _detail_redirect_identity_is_mismatched
 detail_title_from_url = _detail_title_from_url

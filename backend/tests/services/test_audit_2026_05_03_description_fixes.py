@@ -176,3 +176,16 @@ def test_sanitize_detail_long_text_promotes_product_details_when_description_mis
         "Better than leaving notes on the fridge, this display keeps your "
         "family calendar, chores, and reminders in one shared place."
     )
+
+
+def test_sanitize_detail_long_text_strips_leading_attribute_blob() -> None:
+    value = (
+        'dwMarker="content" dwContentID="2e9e9ec4fcf1e75d585b39b46b" '
+        "Outer carton packaging, insert and leaflet are recyclable with the "
+        "exception of the laminated label."
+    )
+
+    assert sanitize_detail_long_text(value, title="Aganice Aromatique Candle") == (
+        "Outer carton packaging, insert and leaflet are recyclable with the "
+        "exception of the laminated label."
+    )

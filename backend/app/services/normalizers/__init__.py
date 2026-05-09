@@ -150,6 +150,11 @@ def _canonicalize_decimal_candidate(value: str) -> str | None:
         if tail.isdigit() and len(tail) in {1, 2} and re.search(r"\d", head):
             return head.replace(",", "").replace(".", "") + "." + tail
         return candidate.replace(",", "")
+    if "." in candidate:
+        parts = candidate.split(".")
+        if len(parts) > 1 and all(part.isdigit() for part in parts):
+            if all(len(part) == 3 for part in parts[1:]):
+                return "".join(parts)
     return candidate
 
 

@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import itertools
 import logging
 import re
@@ -50,6 +49,7 @@ from app.services.config.extraction_rules import (
     VARIANT_AXIS_TECHNICAL_PATTERNS,
     VARIANT_UI_NOISE_EXACT_MATCH_MAX_LENGTH,
 )
+from app.services.config.variant_migration_rules import VARIANT_OPTION_VALUE_NOISE_FULLMATCH_PATTERNS_EXTRA, VARIANT_OPTION_VALUE_UI_NOISE_PHRASES_EXTRA
 from app.services.config.variant_policy import OPTION_SCALAR_FIELDS, PUBLIC_VARIANT_AXIS_FIELDS
 from app.services.extract.variant_dom_cues import (
     select_variant_nodes as _select_variant_nodes,
@@ -117,58 +117,18 @@ _variant_promo_noise_tokens = frozenset(
     for token in tuple(VARIANT_PROMO_NOISE_TOKENS or ())
     if str(token).strip()
 )
-_variant_artifact_value_tokens = frozenset(
-    re.sub(r"[^a-z0-9%#]+", "", str(token).strip().lower())
-    for token in tuple(DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or ())
-    if re.sub(r"[^a-z0-9%#]+", "", str(token).strip().lower())
-)
-_variant_option_value_ui_noise_phrases = tuple(
-    cleaned.casefold()
-    for token in tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ())
-    if (cleaned := clean_text(token))
-)
-_variant_option_noise_phrases = tuple(
-    cleaned.casefold()
-    for token in tuple(VARIANT_OPTION_NOISE_PHRASES or ())
-    if (cleaned := clean_text(token))
-)
-_variant_size_alias_suffixes = tuple(
-    str(token).strip().lower()
-    for token in tuple(VARIANT_SIZE_ALIAS_SUFFIXES or ())
-    if str(token).strip()
-)
-_variant_axis_allowed_single_tokens = frozenset(
-    str(token).strip().lower()
-    for token in tuple(VARIANT_AXIS_ALLOWED_SINGLE_TOKENS or ())
-    if str(token).strip()
-)
+_variant_artifact_value_tokens = frozenset(re.sub(r"[^a-z0-9%#]+", "", str(token).strip().lower()) for token in tuple(DETAIL_VARIANT_ARTIFACT_VALUE_TOKENS or ()) if re.sub(r"[^a-z0-9%#]+", "", str(token).strip().lower()))
+_variant_option_value_ui_noise_phrases = tuple(cleaned.casefold() for token in (*tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES or ()), *tuple(VARIANT_OPTION_VALUE_UI_NOISE_PHRASES_EXTRA or ())) if (cleaned := clean_text(token)))
+_variant_option_noise_phrases = tuple(cleaned.casefold() for token in tuple(VARIANT_OPTION_NOISE_PHRASES or ()) if (cleaned := clean_text(token)))
+_variant_size_alias_suffixes = tuple(str(token).strip().lower() for token in tuple(VARIANT_SIZE_ALIAS_SUFFIXES or ()) if str(token).strip())
+_variant_axis_allowed_single_tokens = frozenset(str(token).strip().lower() for token in tuple(VARIANT_AXIS_ALLOWED_SINGLE_TOKENS or ()) if str(token).strip())
 variant_axis_allowed_single_tokens = _variant_axis_allowed_single_tokens
-_variant_axis_generic_tokens = frozenset(
-    str(token).strip().lower()
-    for token in tuple(VARIANT_AXIS_GENERIC_TOKENS or ())
-    if str(token).strip()
-)
-_variant_axis_technical_patterns = tuple(
-    re.compile(str(pattern), re.I)
-    for pattern in tuple(VARIANT_AXIS_TECHNICAL_PATTERNS or ())
-    if str(pattern).strip()
-)
-_variant_quantity_attr_tokens = frozenset(
-    str(token).strip().lower()
-    for token in tuple(VARIANT_QUANTITY_ATTR_TOKENS or ())
-    if str(token).strip()
-)
-_variant_option_value_exact_noise_tokens = frozenset(
-    str(token).strip().lower()
-    for token in tuple(VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS or ())
-    if str(token).strip()
-)
+_variant_axis_generic_tokens = frozenset(str(token).strip().lower() for token in tuple(VARIANT_AXIS_GENERIC_TOKENS or ()) if str(token).strip())
+_variant_axis_technical_patterns = tuple(re.compile(str(pattern), re.I) for pattern in tuple(VARIANT_AXIS_TECHNICAL_PATTERNS or ()) if str(pattern).strip())
+_variant_quantity_attr_tokens = frozenset(str(token).strip().lower() for token in tuple(VARIANT_QUANTITY_ATTR_TOKENS or ()) if str(token).strip())
+_variant_option_value_exact_noise_tokens = frozenset(str(token).strip().lower() for token in tuple(VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS or ()) if str(token).strip())
 _variant_option_value_noise_patterns = VARIANT_OPTION_VALUE_NOISE_PATTERNS or {}
-_variant_option_value_noise_fullmatch_regexes = tuple(
-    re.compile(str(pattern), re.I)
-    for pattern in tuple(_variant_option_value_noise_patterns.get("fullmatch") or ())
-    if str(pattern).strip()
-)
+_variant_option_value_noise_fullmatch_regexes = tuple(re.compile(str(pattern), re.I) for pattern in (*tuple(_variant_option_value_noise_patterns.get("fullmatch") or ()), *tuple(VARIANT_OPTION_VALUE_NOISE_FULLMATCH_PATTERNS_EXTRA or ())) if str(pattern).strip())
 _variant_option_value_noise_search_regexes = tuple(
     re.compile(str(pattern), re.I)
     for pattern in tuple(_variant_option_value_noise_patterns.get("search") or ())
@@ -377,6 +337,33 @@ def _choice_option_texts(node: Any) -> list[str]:
 def _descendant_variant_group_name(node: Any) -> str:
     if not hasattr(node, "select"):
         return ""
+    for child in node.find_all(
+        ["legend", "label", "h1", "h2", "h3", "h4", "h5", "h6", "div", "span"],
+        limit=int(VARIANT_DESCENDANT_SCAN_LIMIT),
+        recursive=False,
+    ):
+        child_tag = str(getattr(child, "name", "") or "").strip().lower()
+        child_role = str(child.get("role") or "").strip().lower() if hasattr(child, "get") else ""
+        if child_tag in {"a", "button", "input", "option"} or (
+            hasattr(child, "get")
+            and (
+                child.get("data-selected") not in (None, "", [], {})
+                or child.get("aria-selected") not in (None, "", [], {})
+                or child_role in {"radio", "option"}
+            )
+        ) or (
+            hasattr(child, "select")
+            and child.select(
+                "a[href], button, input[type='radio'], input[type='checkbox'], "
+                "[role='radio'], [role='option'], [data-selected], [aria-selected]"
+            )
+        ):
+            continue
+        raw_value = clean_text(child.get_text(" ", strip=True))
+        if not raw_value or len(raw_value.split()) > 4:
+            continue
+        if resolved_name := _resolve_visible_variant_group_name(raw_value):
+            return resolved_name
     for child in node.select("label")[: int(VARIANT_DESCENDANT_SCAN_LIMIT)]:
         sr_only = child.select_one(".sr-only, .visually-hidden")
         raw_value = (
@@ -432,7 +419,37 @@ def _descendant_variant_choice_inputs(node: Any, *, limit: int) -> list[Any]:
         input_type = str(child.get("type") or "").strip().lower() if hasattr(child, "get") else ""
         if input_type in {"radio", "checkbox"}:
             inputs.append(child)
+    remaining = normalized_limit - len(inputs)
+    if remaining <= 0:
+        return inputs
+    for child in node.find_all("a", attrs={"href": True}, limit=remaining):
+        if _anchor_node_has_variant_signal(child):
+            inputs.append(child)
     return inputs
+
+def _anchor_node_has_variant_signal(node: Any) -> bool:
+    href = text_or_none(node.get("href")) if hasattr(node, "get") else None
+    if not href:
+        return False
+    href_lower = href.casefold()
+    if any(marker in href_lower for marker in ("/product/", "/products/", "/p/", "?piid=", "&piid=", "variant=")):
+        return True
+    if any(
+        node.get(attr) not in (None, "", [], {})
+        for attr in ("data-selected", "aria-current", "aria-pressed")
+    ):
+        return True
+    probe_parts: list[str] = []
+    for attr_name in ("class", "id", "data-testid"):
+        value = node.get(attr_name) if hasattr(node, "get") else None
+        if isinstance(value, list):
+            probe_parts.extend(str(item) for item in value if item)
+        elif value not in (None, "", [], {}):
+            probe_parts.append(str(value))
+    probe = clean_text(" ".join(probe_parts)).lower()
+    return any(
+        token in probe for token in ("selected", "current", "checked", "variant", "swatch", "option")
+    )
 
 
 def _descendant_group_label_nodes(node: Any, *, limit: int) -> list[Any]:
@@ -586,8 +603,7 @@ def resolve_variant_group_name(node: Any) -> str:
         )
     ):
         return inferred_from_values
-    nearby = _nearby_variant_group_name(node)
-    if nearby:
+    if nearby := _nearby_variant_group_name(node):
         return nearby
     if hasattr(node, "select"):
         for child in node.select(
@@ -691,10 +707,17 @@ def _nearby_variant_group_name(node: Any) -> str:
     for _ in range(int(VARIANT_SIBLING_SEARCH_DEPTH)):
         sibling = getattr(current, "previous_sibling", None)
         while sibling is not None:
+            if hasattr(sibling, "select") and sibling.select(
+                "a[href], button, input[type='radio'], input[type='checkbox'], "
+                "[role='radio'], [role='option']"
+            ):
+                sibling = getattr(sibling, "previous_sibling", None)
+                continue
             if hasattr(sibling, "get_text"):
-                extracted = _semantic_group_label_from_text(
-                    sibling.get_text(" ", strip=True)
-                )
+                sibling_text = sibling.get_text(" ", strip=True)
+                extracted = _resolve_visible_variant_group_name(
+                    sibling_text
+                ) or _semantic_group_label_from_text(sibling_text)
                 if extracted:
                     return extracted
             sibling = getattr(sibling, "previous_sibling", None)
@@ -725,9 +748,7 @@ def _is_sequential_integer_run(
     *,
     min_length: int = int(VARIANT_SEQUENTIAL_INTEGER_MIN_RUN),
 ) -> bool:
-    """Return True when every value is a bare integer and the set forms a
-    contiguous run of >= min_length values.  This is the signature of a quantity
-    selector (1, 2, 3 … N), not a product variant axis."""
+    """Return True for contiguous integer runs, which signal quantity selectors."""
     if min_length <= 0:
         raise ValueError("min_length must be positive")
     if len(values) < min_length:
@@ -898,8 +919,7 @@ def variant_axis_name_is_semantic(value: object) -> bool:
 
 
 def _select_is_quantity_node(node: Any) -> bool:
-    """Return True when the <select> element signals it is a quantity picker,
-    not a product variant axis."""
+    """Return True when the <select> element is a quantity picker."""
     if not hasattr(node, "get"):
         return False
     for attr_name in ("name", "id", "aria-label", "data-testid"):
@@ -943,12 +963,7 @@ def iter_variant_select_groups(soup: Any) -> list[Any]:
 
 
 def iter_variant_choice_groups(soup: Any) -> list[Any]:
-    """Find variant groups with selector, input inference, button heuristics, then swatch parent walking.
-
-    Safeguards: VARIANT_SWATCH_BUTTON_SELECTOR is sliced by VARIANT_SWATCH_BUTTON_LIMIT,
-    parent walking is capped by VARIANT_SWATCH_PARENT_DEPTH, and _parent_swatch_cache
-    avoids repeated parent selector scans.
-    """
+    """Find variant groups via selectors, input inference, buttons, then swatch parents."""
     groups: list[Any] = []
     seen_ids: set[int] = set()
     for container in _select_variant_nodes(soup, VARIANT_CHOICE_GROUP_SELECTOR):
@@ -971,7 +986,7 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
     if len(groups) >= int(VARIANT_CHOICE_GROUP_MAX):
         return groups
     # discovery of variant choice containers for input elements and specific buttons
-    for node in soup.select("select, input[type='radio'], input[type='checkbox']"):
+    for node in soup.select("input[type='radio'], input[type='checkbox']"):
         if variant_node_in_noise_context(node):
             continue
         candidate = _variant_choice_container_for_input(node)
@@ -1007,6 +1022,11 @@ def iter_variant_choice_groups(soup: Any) -> list[Any]:
             # Cache parent sibling counts so we never re-select the same parent
             _parent_swatch_cache: dict[int, list[Any]] = {}
             for btn in btn_slice:
+                if (
+                    str(getattr(btn, "name", "") or "").strip().lower() == "a"
+                    and not _anchor_node_has_variant_signal(btn)
+                ):
+                    continue
                 parent = getattr(btn, "parent", None)
                 depth = 0
                 while parent is not None and depth < int(VARIANT_SWATCH_PARENT_DEPTH):
@@ -1219,21 +1239,7 @@ def resolve_variants(
     options_matrix: dict[str, list[str]],
     variants: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Resolve variants as a Cartesian product matrix.
-
-    Treats variants as a Cartesian product of option axes rather than
-    independent dicts, correctly pairing sizes with colors when nested
-    deeply.  Eliminates mismatch errors between option1/option2 arrays
-    and their corresponding variants in complex nested schemas common
-    in Salesforce Commerce Cloud and Magento.
-
-    Computes the full combination matrix from *options_matrix*, matches
-    each cell to its corresponding variant row via ``option_values``, and
-    returns variants in deterministic Cartesian order.  Duplicate variants
-    mapping to the same combination are collapsed (richer row wins).
-    Variants that lack full ``option_values`` are appended at the end to
-    avoid data loss.
-    """
+    """Resolve variants as a Cartesian product matrix, preserving unmatched rows."""
     if not options_matrix or not variants:
         return list(variants)
 
@@ -1286,13 +1292,7 @@ def resolve_variants(
 
 
 def variant_identity(variant: dict[str, Any]) -> str | None:
-    """Canonical identity for a variant row.
-
-    Priority: ``variant_id`` > ``sku`` > sorted ``option_values`` pairs > ``url``.
-    Used by both the JS-state product-merge path and the post-extraction
-    record-level dedupe path so two rows are considered the same iff this
-    function returns the same string for them.
-    """
+    """Canonical identity for a variant row."""
     if not isinstance(variant, dict):
         return None
     variant_id = text_or_none(variant.get("variant_id"))
@@ -1447,10 +1447,7 @@ def _rewrite_variant_row_size_alias(
 
 
 def variant_row_richness(variant: dict[str, Any]) -> tuple[int, int, int]:
-    """Compare key for two rows that share an identity.
-
-    Higher is richer. Larger row, more option axes, presence of stock signals.
-    """
+    """Compare key for two rows that share an identity."""
     populated_fields = sum(
         1 for value in variant.values() if value not in (None, "", [], {})
     )
@@ -1481,20 +1478,7 @@ def merge_variant_pair(
 
 
 def merge_variant_rows(*row_lists: Any) -> list[dict[str, Any]]:
-    """Merge variant row lists by canonical identity. Richer row wins per identity.
-
-    Two-stage algorithm:
-    1) Exact-identity dedupe: rows sharing the same ``variant_identity`` are
-       merged via ``merge_variant_pair`` (richer row as primary). Order is
-       preserved by first appearance using ``ordered_keys``.
-    2) Semantic merge: rows sharing the same ``variant_semantic_identity``
-       (e.g. same size+color but different SKU) are merged similarly via
-       ``merge_variant_pair`` using ``variant_row_richness`` to pick primary.
-       ``emitted_semantic`` prevents duplicates from being emitted twice.
-
-    Rows with no semantic identity are preserved and re-emitted unchanged
-    (no stable way to dedupe them).
-    """
+    """Merge variant rows by canonical identity, keeping richer data per identity."""
     merged_by_identity: dict[str, dict[str, Any]] = {}
     ordered_keys: list[str] = []
     identityless_rows: list[dict[str, Any]] = []

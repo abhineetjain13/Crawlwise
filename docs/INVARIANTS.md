@@ -146,8 +146,7 @@ When `llm_enabled=True` and active config allows the relevant LLM workflow, LLM 
 
 **Rule:** Acquisition returns observational facts only: URL, final URL, status, method, headers, blocked state, diagnostics, and artifacts. It does not invent blocker causes, insert retries not in policy, or escalate without evidence.
 
-Browser acquisition may use Patchright or real Chrome to produce better observations: rendered HTML, network payloads, page markdown, visible text, accessibility text, readiness probes, screenshots when enabled, and explicit detail-expansion artifacts (HTML/JSON from clicked size/color variant controls, expanded accordion sections, etc.). These are observation artifacts. They are allowed inputs to extraction and LLM repair.
-
+Browser acquisition may use Patchright or real Chrome to produce better observations: rendered HTML, network payloads, visible text, accessibility text, readiness probes, and screenshots when enabled. It may also produce explicit detail-expansion artifacts (HTML/JSON from clicked size/color variant controls, expanded accordion sections, etc.). These are observation artifacts and are allowed inputs to extraction and LLM repair.
 Browser acquisition must not fabricate fields. It must not run hidden page scripts that directly assign `price`, `brand`, `variants`, or other logical fields outside the normal extraction/repair provenance path.
 
 Field-aware browser retry is allowed when policy and diagnostics justify it. A non-browser fetch that produces a low-quality ecommerce detail record missing requested/default high-value fields may retry browser. Default ecommerce detail retry targets stay limited to `price`, `title`, and `image_url`; user-requested fields are added explicitly. A Patchright result with usable content may escalate once to real Chrome only when high-value fields remain missing and diagnostics show weak rendered evidence. Every retry must be logged.
@@ -203,12 +202,12 @@ Detail extraction must also reject collection/category URLs that expose product-
 
 ## 8. Persistence — User-Facing Payload Only
 
-**Rule:** `record.data` contains only populated logical fields. No empty values, no `_` internals, no raw manifest containers, no markdown with navigation links, no site chrome.
+**Rule:** `record.data` contains only populated logical fields. No empty values, no `_` internals, no raw manifest containers, no internal page-context blobs, no site chrome.
 
 **VIOLATION signatures:**
 - Exported CSV contains fields like `_raw`, `_source`, `__nuxt`, or empty string columns
 - `record.data` contains breadcrumb text, footer links, or support page anchors
-- Markdown in detail records contains visible-link sections appended after usable body content was already present
+- Detail records contain breadcrumb/support/link spillover or other internal page-context scaffolding
 
 ---
 
@@ -228,7 +227,8 @@ Detail extraction must also reject collection/category URLs that expose product-
 - Run-scoped and domain-scoped browser storage must stay engine-scoped; `chromium`, `patchright`, and `real_chrome` state must not bleed across engines.
 - Browser-to-HTTP handoff may only reuse sanitized engine-scoped session state on the same proxy identity. If proxy affinity cannot be proven, skip handoff and stay browser-first.
 - Host browser-first memory is for repeated hard blocks, not one noisy challenge hit.
-- Detail browser fetches to hosts with recent challenge history may warm the site origin (e.g., preflight DNS, TCP/TLS handshake, or resource prefetch) before direct PDP navigation; that warmup happens before the target nav, not after a challenge page already landed.
+- When launching real-Chrome for detail fetches and no reusable engine-scoped `real_chrome` domain state exists, acquisition may warm the site origin before direct PDP navigation; once reusable `real_chrome` domain state exists, later fetches skip warmup.
+- Real Chrome is not challenge-exempt. If warmup or the direct PDP nav lands on a challenge shell, acquisition must still run the bounded challenge wait/activity/retry loop before declaring the page blocked.
 - Learned acquisition contracts live in editable `DomainRunProfile` memory scoped by normalized `(domain, surface)`. They own durable engine choice and handoff eligibility; explicit run settings always override them.
 - Future crawls must reuse the successful acquisition/data-extraction path and learned selectors for the domain/surface without fresh experimentation unless the user explicitly changes settings, enables experimentation, resets learned memory, or the contract becomes stale.
 - Only contracts with `handoff_eligible=true` may trigger curl handoff. Browser success alone is not enough; rendered extraction, traversal, or network-payload dependence must disable handoff.

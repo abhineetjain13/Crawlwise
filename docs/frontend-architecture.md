@@ -20,7 +20,6 @@ Key client libraries:
 - Next.js App Router
 - React Query
 - Lucide icons
-- React Markdown
 
 ## 2. Route Map
 
@@ -126,7 +125,7 @@ Primary files:
 Responsibilities:
 
 - poll run state while active
-- show records, JSON, markdown, and logs
+- show records, JSON, and logs
 - consume websocket logs when available
 - show quality/verdict/progress signals
 - expose pause/resume/kill and export actions

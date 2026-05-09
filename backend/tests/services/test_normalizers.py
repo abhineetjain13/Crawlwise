@@ -48,6 +48,10 @@ def test_normalize_decimal_price_supports_suffix_currency_and_decimal_comma() ->
     assert normalize_decimal_price("62,99 €") == "62.99"
 
 
+def test_normalize_decimal_price_treats_dot_thousands_as_grouping() -> None:
+    assert normalize_decimal_price("€17.000") == "17000"
+
+
 def test_normalize_decimal_price_rejects_negative_values() -> None:
     # Regression: gemini audit DQ-4 — Gucci/Sony emitted -1 / -9 default
     # fallbacks that leaked into exports. Negative prices must become None.
@@ -157,6 +161,7 @@ def test_normalize_availability_schema_url() -> None:
 
 def test_field_coercion_repairs_source_quality_before_enrichment() -> None:
     assert coerce_field_value("brand", {"0": "Apple"}, "") == "Apple"
+    assert coerce_field_value("brand", "8552", "") is None
     assert (
         coerce_field_value("availability", "https://schema.org/LimitedAvailability", "")
         == "limited_stock"

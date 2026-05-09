@@ -48,7 +48,7 @@ Routers registered in `backend/app/main.py`:
 Important route groups:
 
 - `api/crawls.py`: create runs, CSV ingestion, logs, websocket updates, pause/resume/kill, commit fields, commit LLM suggestions
-- `api/records.py`: records list plus JSON/CSV/markdown/artifacts/discoverist exports and provenance
+- `api/records.py`: records list plus JSON/CSV/artifacts/discoverist exports and provenance
 - `api/review.py`: review payload, artifact HTML, save review mapping
 - `api/selectors.py`: selector CRUD, cross-surface listing by domain, suggestion, test, preview HTML
 - `api/llm.py`: provider catalog, config CRUD, connection test, cost log
@@ -86,7 +86,7 @@ Current live behavior:
 - `locality_profile`
 - `diagnostics_profile`
 - `advanced_enabled` / `advanced_mode` as UI-mode compatibility fields
-- resolved traversal mode derived from `fetch_profile.traversal_mode`
+- resolved traversal mode derived from explicit `fetch_profile.traversal_mode`; legacy `auto` traversal is rejected/normalized away
 - `max_records` as a traversal stop target, not a persisted-row hard cap
 - `sleep_ms`
 - `respect_robots_txt`
@@ -233,7 +233,7 @@ Current live behavior:
 - browser-to-HTTP handoff is guarded: only sanitized engine-scoped session state is exported, direct-lane reuse is allowed, proxy-scoped replay is skipped unless proxy affinity is explicit, and drift/challenge re-entry falls back to browser
 - successful acquisition paths can autosave an editable `DomainRunProfile.acquisition_contract`; future runs may reuse a proven browser engine, mark whether curl-cookie handoff is actually eligible, and record whether rendering, traversal, or network payloads were required. Host memory no longer owns the durable success path; it only biases short-lived protection/backoff choices.
 - browser diagnostics now persist explicit lane identity (`browser_engine`, `browser_profile`, launch mode, native-context flag, stealth-enabled flag) so metrics and audits can distinguish shaped Chromium from native real Chrome without inferring from free-form logs
-- traversal is explicit and separate from browser escalation
+- traversal is explicit and separate from browser escalation; only explicit traversal modes are supported
 - JSON-expected acquisition now stays in `acquisition/http_client.py`; adapters consume decoded payloads instead of compensating for transport quirks
 - browser network interception is bounded through a small response-queue worker pool with per-endpoint payload budgets instead of untracked background tasks
 - adapter-owned acquisition URL normalization now runs before runtime policy selection, so platform-specific URL cleanup stays in adapters instead of generic acquisition code
@@ -258,15 +258,16 @@ Current live behavior:
 - detail-page expansion is field-aware and commerce-safe: requested fields now contribute expansion tokens, blocked action labels such as add-to-cart/login are skipped, and ARIA-driven affordances (`aria-expanded`, `aria-controls`, tabs, summaries) are considered even when the initial detail readiness probe already looks usable
 - detail-page expansion now short-circuits when the current rendered DOM already exposes the requested section headings, avoiding unrelated follow-up clicks that would otherwise mutate an already-extractable detail page
 - thin browser listing results can trigger one bounded recovery re-acquisition that performs ordered listing actions (`clear filters`, `view all`, `next page`) before traversal/extraction, and the pipeline only keeps the retry when it improves record count
-- browser acquisition now generates internal `page_markdown` context from rendered HTML plus visible links and the accessibility snapshot; detail-page serialization prunes review/Q&A/payment containers and drops low-signal chrome lines before persistence so semantic expansion stays anchored to product content instead of whole-page UI noise
+- browser acquisition keeps internal rendered-page evidence (rendered HTML, visible text, accessibility snapshots, expansion artifacts, network payloads), but markdown is no longer a first-class runtime/export artifact
 - browser screenshots are staged to temp files inside the artifacts area and then persisted by the pipeline, avoiding large in-memory PNG handoffs on the hot path
 - a single shared HTTP client pool in `acquisition/runtime.py` is keyed on `(proxy, address-family preference, force_ipv4)`; `acquisition/http_client.py` no longer maintains a second pool and simply delegates to `get_shared_http_client`
 - curl_cffi impersonation target is now an actionable setting (`crawler_runtime_settings.curl_impersonate_target`, default `chrome131`) rather than dead config, and httpx clients ship with a matching default Chrome `User-Agent`/`Accept` header set so direct HTTP requests present a coherent identity
 - acquisition identity now repairs malformed browser client-hint headers before Playwright contexts are created, and the shared HTTP default headers advertise the same Chrome client-hint family (`sec-ch-ua*`, `Upgrade-Insecure-Requests`) when the configured UA is Chrome-like instead of sending a partial browser header set
 - tracked detail URLs are normalized upstream before reuse: extracted and user-entered commerce/job targets now drop low-signal click/search context params (`utm_*`, `click_*`, `content_source`, `pf_from`, `sr_prefetch`, `qs`, and similar short replay flags) while preserving functional params such as `variant`, `q`, and `id`
 - hosts with repeated hard blocks can temporarily prefer browser-first acquisition within the pacing TTL, but one successful browser recovery clears that host memory so random PDP challenges do not taint the whole host
-- risky detail browser navigations can spend the configured `origin_warm_pause_ms` budget warming the site origin before the direct PDP navigation, which gives consent/session code a chance to settle before the high-risk page load
-- origin warmup now respects the active lane profile and runs without the removed stealth layer
+- risky detail browser navigations can spend the configured `origin_warm_pause_ms` budget warming the site origin before the direct PDP navigation, but real Chrome only does that on the first engine/domain run without reusable domain state
+- once sanitized engine-scoped `real_chrome` domain state exists, later real-Chrome fetches skip origin warmup and go straight to the target URL
+- real Chrome is not challenge-exempt: if warmup or the direct PDP nav lands on a challenge shell, acquisition runs the same bounded challenge wait/activity/retry loop before returning a blocked verdict
 - browser contexts accept a per-fetch `proxy` for rotated-proxy traversal; `temporary_browser_page` is a thin wrapper over `SharedBrowserRuntime.page(proxy=...)`
 - `browser_identity` is host-OS-locked via `browserforge`, with a small regeneration loop to reject fingerprints whose UA tokens disagree with the OS
 - browser identity also normalizes exposed runtime hardware upstream: `hardwareConcurrency` is clamped to host-consistent values, `deviceMemory` is bucketed like Chrome, and page JS sees the same values as the generated context identity.

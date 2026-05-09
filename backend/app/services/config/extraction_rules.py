@@ -23,6 +23,9 @@ AMAZON_DETAIL_PRICE_SELECTORS = (
     "#priceblock_ourprice",
     "#priceblock_dealprice",
 )
+AMAZON_DETAIL_TABLE_IGNORED_LABELS = frozenset(
+    {"best sellers rank", "customer reviews"}
+)
 
 _EXPORTS_PATH = Path(__file__).with_name("extraction_rules.exports.json")
 _STATIC_EXPORTS = {
@@ -86,7 +89,7 @@ VARIANT_SWATCH_BUTTON_SELECTOR = (
     "button[class*='swatch' i], button[class*='color-option' i],"
     " button[class*='color-selector' i], button[class*='size-option' i],"
     " button[class*='size-selector' i], button[class*='variant' i],"
-    " button[data-option], button[data-value], a[class*='swatch' i],"
+    " button[data-option], button[data-value], a[href], a[class*='swatch' i],"
     " div[class*='swatch' i], div[role='radio'],"
     " [data-testid*='variants-selector' i]"
 )
@@ -267,6 +270,9 @@ DETAIL_LONG_TEXT_UI_TAIL_PHRASES = (
     "show more",
     "more details",
     "learn more",
+)
+DETAIL_LONG_TEXT_LEADING_ATTRIBUTE_BLOB_PATTERN = (
+    r"^(?:[a-z][\w:-]*\s*=\s*(?:\"[^\"]*\"|'[^']*')\s*){1,8}"
 )
 DETAIL_LONG_TEXT_TRUNCATED_TAIL_TOKENS = frozenset(
     {
@@ -1480,14 +1486,8 @@ VARIANT_AXIS_ALLOWED_SINGLE_TOKENS = frozenset(
 )
 VARIANT_AXIS_GENERIC_TOKENS = frozenset(
     {
-        "attribute",
-        "choice",
-        "dropdown",
-        "option",
-        "options",
-        "select",
-        "selected",
-        "selector",
+        "attribute", "choice", "dropdown", "option", "options",
+        "please", "shoe", "shoes", "select", "selected", "selector",
         "styledselect",
         "swatch",
         "variant",

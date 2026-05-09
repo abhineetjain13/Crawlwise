@@ -497,6 +497,7 @@ def sanitize_variant_row(
             variant_url,
             requested_page_url=identity_url,
         )
+        and not _variant_has_public_axis_or_identity_signal(variant)
     ):
         return False
     title = clean_text(variant.get("title"))
@@ -528,6 +529,22 @@ def sanitize_variant_row(
             "color",
             *variant_axis_allowed_single_tokens,
         )
+    )
+
+
+def _variant_has_public_axis_or_identity_signal(variant: dict[str, Any]) -> bool:
+    if any(
+        clean_text(variant.get(field_name))
+        for field_name in ("sku", "variant_id", "barcode", "size", "color")
+    ):
+        return True
+    option_values = variant.get("option_values")
+    if not isinstance(option_values, dict):
+        return False
+    return any(
+        normalized_variant_axis_key(axis_name)
+        and clean_text(axis_value)
+        for axis_name, axis_value in option_values.items()
     )
 
 

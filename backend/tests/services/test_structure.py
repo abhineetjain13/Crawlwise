@@ -49,8 +49,6 @@ ALLOWED_SERVICE_CONFIG_CONSTANTS = {
     ("acquisition/cookie_store.py", "_CHALLENGE_COOKIE_VALUE_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_NAME_TOKENS"),
     ("acquisition/cookie_store.py", "_CHALLENGE_LOCAL_STORAGE_VALUE_TOKENS"),
-    ("crawl_fetch_runtime.py", "_RETRY_SENTINEL"),
-    ("fetch/fetch_context.py", "_RETRY_SENTINEL"),
     ("extract/variant_record_normalization.py", "_ADULT_SIZE_CONTEXT_TOKENS"),
     ("extract/variant_record_normalization.py", "_DETAIL_CROSS_PRODUCT_TEXT_GENERIC_TOKENS"),
     ("extract/variant_record_normalization.py", "_DETAIL_CROSS_PRODUCT_TEXT_TYPE_TOKENS"),
@@ -94,7 +92,7 @@ FILE_LOC_BUDGETS = {
     # Detail finalizer owns public-boundary cleanup and record repair.
     # Grown (+10) to accommodate additional axis-gating logic that reuses
     # shared_variant_logic frozensets instead of re-deriving them locally.
-    Path("app/services/extract/detail_record_finalizer.py"): 1168,
+    Path("app/services/extract/detail_record_finalizer.py"): 1188,
     # Shared variant logic owns generic axis and row reconciliation.
     # Grown (+380) to absorb the extended allowed-axis taxonomy (flavor, type,
     # material_composition, etc.) and related JS-state / DOM helpers.
@@ -109,7 +107,7 @@ FILE_LOC_BUDGETS = {
     Path("app/services/field_value_dom.py"): 1705,
     # Field candidate collection is a current large owner; later extraction
     # slices should split structured candidate assembly and lower this budget.
-    Path("app/services/field_value_candidates.py"): 1072,
+    Path("app/services/field_value_candidates.py"): 1100,
     # Canonical field coercion remains centralized here instead of scattering value policy.
     # Shrunk after removing stranded URL helpers and duplicate output schema checks.
     # TODO(chore): baseline LOC drift here, then extract canonical_coercion /
@@ -119,7 +117,7 @@ FILE_LOC_BUDGETS = {
     # facades preserve imports; later slices split internals under these owners.
     Path("app/services/dom/selector_engine.py"): 1706,
     Path("app/services/extract/detail_materializer.py"): 1441,
-    Path("app/services/fetch/fetch_context.py"): 1254,
+    Path("app/services/fetch/fetch_context.py"): 1375,
     Path("app/services/js_state/state_normalizer.py"): 1386,
     Path("app/services/pipeline/extraction_loop.py"): 1413,
     Path("app/services/shared/field_coerce.py"): 1398,

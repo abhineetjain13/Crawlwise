@@ -2009,18 +2009,14 @@ async def test_fetch_page_falls_back_to_httpx_after_curl_transport_errors(
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_retries_curl_before_httpx_fallback(
+async def test_fetch_page_attempts_curl_once_before_httpx_fallback(
     monkeypatch: pytest.MonkeyPatch,
     patch_settings,
 ) -> None:
     import httpx
 
     await crawl_fetch_runtime.reset_fetch_runtime_state()
-    patch_settings(
-        http_max_retries=2,
-        http_retry_backoff_base_ms=0,
-        http_retry_backoff_max_ms=0,
-    )
+    patch_settings()
     curl_calls: list[int] = []
     http_calls: list[str] = []
 
@@ -2059,16 +2055,8 @@ async def test_fetch_page_retries_curl_before_httpx_fallback(
     )
 
     assert result.method == "httpx"
-    assert len(curl_calls) == 3
+    assert len(curl_calls) == 1
     assert http_calls == ["https://example.com/products/widget"]
-
-
-def test_retryable_status_ignores_invalid_config_values(patch_settings) -> None:
-    patch_settings(http_retry_status_codes=[429, "503", "not-a-code"])
-
-    assert crawl_fetch_runtime._retryable_status_for_http_fetch(429) is True
-    assert crawl_fetch_runtime._retryable_status_for_http_fetch(503) is True
-    assert crawl_fetch_runtime._retryable_status_for_http_fetch(500) is False
 
 
 @pytest.mark.asyncio
@@ -2496,6 +2484,68 @@ async def test_fetch_page_uses_cookie_handoff_before_browser_first(
             "cookie_header": "session=ok",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_emits_http_strategy_and_escalation_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+    url = "https://example.com/products/widget"
+    events: list[tuple[str, str]] = []
+
+    async def _on_event(level: str, message: str) -> None:
+        events.append((level, message))
+
+    async def _fake_curl(request_url: str, timeout: float, *, proxy: str | None = None):
+        del timeout, proxy
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body>thin shell</body></html>",
+            status_code=200,
+            method="curl_cffi",
+            blocked=False,
+        )
+
+    async def _fake_browser(request_url, timeout, **kwargs):
+        del timeout, kwargs
+        return PageFetchResult(
+            url=request_url,
+            final_url=request_url,
+            html="<html><body><h1>Widget Prime</h1></body></html>",
+            status_code=200,
+            method="browser",
+            blocked=False,
+            browser_diagnostics={"browser_engine": "patchright"},
+        )
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "load_host_protection_policy",
+        AsyncMock(return_value=HostProtectionPolicy(host="example.com")),
+    )
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "_should_escalate_to_browser_async",
+        AsyncMock(return_value=True),
+    )
+    try:
+        result = await crawl_fetch_runtime.fetch_page(
+            url,
+            surface="ecommerce_detail",
+            on_event=_on_event,
+        )
+    finally:
+        await crawl_fetch_runtime.reset_fetch_runtime_state()
+
+    assert result.method == "browser"
+    messages = [message for _level, message in events]
+    assert any(message.startswith("Acquisition strategy: http-first") for message in messages)
+    assert any("HTTP attempt 1/" in message for message in messages)
+    assert any("Escalating to browser after HTTP result" in message for message in messages)
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from html import unescape
-from itertools import product
+from itertools import permutations, product
 from urllib.parse import urljoin, urlparse
 
 from selectolax.lexbor import LexborHTMLParser
@@ -17,6 +17,7 @@ from app.services.adapters.base import (
     selectolax_node_text,
 )
 from app.services.config.extraction_rules import (
+    AMAZON_DETAIL_TABLE_IGNORED_LABELS,
     AMAZON_DETAIL_PRICE_SELECTORS,
     AMAZON_PRICE_CONTAINER_SELECTOR,
     AMAZON_PRICE_FRACTION_SELECTOR,
@@ -68,7 +69,9 @@ def _normalize_price_text(value: object) -> str | None:
         text,
         re.I,
     )
-    return match.group(0) if match else None
+    if not match:
+        return None
+    return re.sub(r"^([A-Z]{3})(?=\d)", r"\1 ", match.group(0), flags=re.I)
 
 
 def _price_from_price_node(price_node: object) -> str | None:
@@ -302,7 +305,12 @@ class AmazonAdapter(BaseAdapter):
         ):
             header = _clean_detail_text(selectolax_node_text(row.css_first("th")))
             value = _clean_detail_text(selectolax_node_text(row.css_first("td")))
-            if header and value:
+            normalized_header = str(header or "").strip().lower().removesuffix(":")
+            if (
+                header
+                and value
+                and normalized_header not in AMAZON_DETAIL_TABLE_IGNORED_LABELS
+            ):
                 values[header] = value
         for item in parser.css("#detailBullets_feature_div li"):
             text = _clean_detail_text(selectolax_node_text(item))
@@ -311,7 +319,12 @@ class AmazonAdapter(BaseAdapter):
             key, value = text.split(":", 1)
             cleaned_key = _clean_detail_text(key)
             cleaned_value = _clean_detail_text(value)
-            if cleaned_key and cleaned_value:
+            normalized_key = str(cleaned_key or "").strip().lower().removesuffix(":")
+            if (
+                cleaned_key
+                and cleaned_value
+                and normalized_key not in AMAZON_DETAIL_TABLE_IGNORED_LABELS
+            ):
                 values.setdefault(cleaned_key, cleaned_value)
         return values
 
@@ -370,7 +383,11 @@ class AmazonAdapter(BaseAdapter):
         raw_dims = state.get("sortedDimValuesForAllDims")
         if not isinstance(raw_dims, Mapping):
             return {}
-        dim_order = self._twister_dimension_order(parser, raw_dims)
+        dim_order = self._twister_dimension_order(
+            parser,
+            raw_dims,
+            raw_variations=state.get("sortedVariations"),
+        )
         if not dim_order:
             return {}
         axis_entries: dict[str, list[dict[str, object]]] = {}
@@ -429,6 +446,8 @@ class AmazonAdapter(BaseAdapter):
         self,
         parser: LexborHTMLParser,
         raw_dims: Mapping[object, object],
+        *,
+        raw_variations: object = None,
     ) -> list[str]:
         dim_keys = [str(key) for key in raw_dims.keys()]
         ordered: list[str] = []
@@ -438,7 +457,70 @@ class AmazonAdapter(BaseAdapter):
             if dim in raw_dims and dim not in ordered:
                 ordered.append(dim)
         ordered.extend(dim for dim in dim_keys if dim not in ordered)
-        return ordered
+        if len(ordered) <= 1 or not isinstance(raw_variations, list):
+            return ordered
+        return self._best_twister_dimension_order(
+            ordered,
+            raw_dims=raw_dims,
+            raw_variations=raw_variations,
+        )
+
+    def _best_twister_dimension_order(
+        self,
+        dim_order: list[str],
+        *,
+        raw_dims: Mapping[object, object],
+        raw_variations: list[object],
+    ) -> list[str]:
+        if len(dim_order) <= 1:
+            return dim_order
+        best_order = dim_order
+        best_score = self._score_twister_dimension_order(
+            dim_order,
+            raw_dims=raw_dims,
+            raw_variations=raw_variations,
+        )
+        for candidate in permutations(dim_order):
+            candidate_order = list(candidate)
+            score = self._score_twister_dimension_order(
+                candidate_order,
+                raw_dims=raw_dims,
+                raw_variations=raw_variations,
+            )
+            if score > best_score:
+                best_order = candidate_order
+                best_score = score
+        return best_order
+
+    def _score_twister_dimension_order(
+        self,
+        dim_order: list[str],
+        *,
+        raw_dims: Mapping[object, object],
+        raw_variations: list[object],
+    ) -> tuple[int, int]:
+        valid_rows = 0
+        valid_cells = 0
+        axis_lengths = [
+            len(raw_dims.get(dim) or [])
+            if isinstance(raw_dims.get(dim), list)
+            else 0
+            for dim in dim_order
+        ]
+        for row in raw_variations:
+            if not isinstance(row, list) or len(row) != len(axis_lengths):
+                continue
+            row_valid = True
+            row_valid_cells = 0
+            for index, axis_length in zip(row, axis_lengths, strict=False):
+                if not isinstance(index, int) or axis_length <= 0 or index < 0 or index >= axis_length:
+                    row_valid = False
+                    continue
+                row_valid_cells += 1
+            if row_valid:
+                valid_rows += 1
+            valid_cells += row_valid_cells
+        return valid_rows, valid_cells
 
     def _twister_variants(
         self,

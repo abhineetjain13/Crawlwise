@@ -27,6 +27,7 @@ from app.services.domain_run_profile_service import (
     resolve_url_acquisition_recipe,
     save_domain_run_profile,
 )
+from app.services.exceptions import CrawlerConfigurationError
 from app.services.crawl_state import get_control_request, update_run_status
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -266,29 +267,29 @@ def test_normalize_acquisition_contract_accepts_legacy_handoff_flag() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_crawl_run_preserves_auto_traversal_when_advanced_enabled(
+async def test_create_crawl_run_rejects_invalid_traversal_mode(
     db_session: AsyncSession,
     test_user,
 ) -> None:
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/collections/widgets",
-            "surface": "ecommerce_listing",
-            "settings": {
-                "advanced_enabled": True,
-                "fetch_profile": {
-                    "traversal_mode": "auto",
+    with pytest.raises(
+        CrawlerConfigurationError,
+        match="Unsupported traversal_mode",
+    ):
+        await create_crawl_run(
+            db_session,
+            test_user.id,
+            {
+                "run_type": "crawl",
+                "url": "https://example.com/collections/widgets",
+                "surface": "ecommerce_listing",
+                "settings": {
+                    "advanced_enabled": True,
+                    "fetch_profile": {
+                        "traversal_mode": "unsupported_mode",
+                    },
                 },
             },
-        },
-    )
-
-    assert run.settings["advanced_enabled"] is True
-    assert run.settings["traversal_mode"] == "auto"
-    assert run.settings["fetch_profile"]["traversal_mode"] == "auto"
+        )
 
 
 @pytest.mark.asyncio
@@ -512,6 +513,29 @@ async def test_record_acquisition_contract_outcome_counts_empty_detail_failure(
 def test_normalize_domain_run_profile_rejects_invalid_source_run_id() -> None:
     with pytest.raises(ValueError, match="source_run_id must be a positive integer"):
         normalize_domain_run_profile({}, source_run_id="invalid")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("legacy_value", "expected"),
+    [
+        ("pagination", "paginate"),
+        ("infinite_scroll", "scroll"),
+    ],
+)
+def test_normalize_domain_run_profile_translates_legacy_traversal_mode(
+    legacy_value: str,
+    expected: str,
+) -> None:
+    normalized = normalize_domain_run_profile(
+        {
+            "fetch_profile": {
+                "traversal_mode": legacy_value,
+            }
+        },
+        source_run_id=91,
+    )
+
+    assert normalized["fetch_profile"]["traversal_mode"] == expected
 
 
 @pytest.mark.asyncio

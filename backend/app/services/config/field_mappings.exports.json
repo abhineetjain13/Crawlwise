@@ -1009,6 +1009,9 @@
     "items": [
       "color",
       "colour",
+      "productId",
+      "product_id",
+      "productid",
       "sku",
       "size",
       "variant"

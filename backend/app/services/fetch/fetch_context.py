@@ -1,7 +1,3 @@
-# PHASE-3 DELETE TARGETS:
-# _safe_int -> replaced by shared.coerce_primitives.safe_int (DELETE this function in Phase 3)
-# clean_text, slug_tokens -> replaced by shared.text_coerce (DELETE in Phase 3)
-# absolute_url, same_host -> replaced by shared.url_utils (DELETE in Phase 3)
 from __future__ import annotations
 
 import asyncio
@@ -81,6 +77,15 @@ def _attach_exception_browser_diagnostics(
     setattr(exc, "browser_diagnostics", dict(diagnostics))
 
 
+async def _emit_fetch_event(on_event: object | None, level: str, message: str) -> None:
+    if on_event is None:
+        return
+    try:
+        await on_event(level, message)
+    except Exception:
+        logger.debug("Fetch event callback failed", exc_info=True)
+
+
 @dataclass(slots=True)
 class _FetchRuntimeContext:
     url: str
@@ -112,13 +117,6 @@ class _FetchRuntimeContext:
 
 
 def _ensure_scheme(url: str) -> str:
-    """Prepend ``https://`` when *url* has no scheme.
-
-    Inputs that already include a scheme are returned unchanged. Inputs that
-    start with ``/``, ``#``, or ``javascript:`` are also returned unchanged;
-    callers must validate or reject those values separately because this helper
-    does not guarantee an absolute URL.
-    """
     stripped = str(url or "").strip()
     if not stripped:
         return stripped
@@ -309,6 +307,16 @@ async def fetch_page(
         prefer_browser=prefer_browser,
         host_preference_enabled=host_preference_enabled,
     )
+    await _emit_fetch_event(
+        context.on_event,
+        "info",
+        _acquisition_strategy_message(
+            context=context,
+            prefer_browser=prefer_browser,
+            host_preference_enabled=host_preference_enabled,
+            browser_first=browser_first,
+        ),
+    )
     if browser_first:
         handoff_result = await _try_browser_http_handoff(context)
         if handoff_result is not None:
@@ -323,19 +331,24 @@ async def fetch_page(
             traversal_required=context.traversal_required,
             host_preference_enabled=host_preference_enabled,
         )
-        browser_result = await _run_browser_attempts(
-            context,
-            reason=resolved_browser_reason,
-            requested_fields=context.requested_fields,
-            listing_recovery_mode=context.listing_recovery_mode,
-            capture_screenshot=context.capture_screenshot,
-            proxies=context.proxies,
-        )
-        await _update_host_result_memory(
-            context,
-            result=browser_result,
-        )
-        return browser_result
+        try:
+            browser_result = await _run_browser_attempts(
+                context,
+                reason=resolved_browser_reason,
+                requested_fields=context.requested_fields,
+                listing_recovery_mode=context.listing_recovery_mode,
+                capture_screenshot=context.capture_screenshot,
+                proxies=context.proxies,
+            )
+            await _update_host_result_memory(
+                context,
+                result=browser_result,
+            )
+            return browser_result
+        except Exception as exc:
+            context.last_error = exc
+            if prefer_browser or context.fetch_mode == "browser_only" or _hard_browser_requirement(context=context):
+                raise
 
     if context.prefer_curl_handoff:
         handoff_result = await _try_browser_http_handoff(context)
@@ -488,6 +501,43 @@ def _browser_escalation_allowed(
     if context.fetch_mode == "http_only":
         return _hard_browser_requirement(context=context, runtime_policy=runtime_policy)
     return True
+
+
+def _acquisition_strategy_message(
+    *,
+    context: _FetchRuntimeContext,
+    prefer_browser: bool,
+    host_preference_enabled: bool,
+    browser_first: bool,
+) -> str:
+    if browser_first:
+        return (
+            "Acquisition strategy: browser-first "
+            f"(reason={_browser_first_reason(context=context, prefer_browser=prefer_browser, host_preference_enabled=host_preference_enabled)}, "
+            f"fetch_mode={context.fetch_mode})"
+        )
+    return (
+        "Acquisition strategy: http-first "
+        f"(fetch_mode={context.fetch_mode}, timeout={_resolve_http_timeout(context):.1f}s, "
+        f"max_attempts={_http_max_attempts()})"
+    )
+
+
+def _browser_first_reason(
+    *,
+    context: _FetchRuntimeContext,
+    prefer_browser: bool,
+    host_preference_enabled: bool,
+) -> str:
+    if context.fetch_mode == "browser_only":
+        return "fetch_mode:browser_only"
+    if prefer_browser:
+        return "prefer_browser"
+    if host_preference_enabled:
+        return "host-preference"
+    if _hard_browser_requirement(context=context):
+        return "hard_requirement"
+    return "auto"
 
 
 async def _run_browser_attempts(
@@ -808,15 +858,9 @@ async def _run_http_fetcher_attempts(
     fetcher,
     proxy: str | None,
 ) -> tuple[PageFetchResult | None, bool]:
-    try:
-        retries = int(crawler_runtime_settings.http_max_retries or 0)
-    except (TypeError, ValueError):
-        logger.warning(
-            "Invalid http_max_retries=%r; using no retries",
-            crawler_runtime_settings.http_max_retries,
-        )
-        retries = 0
-    max_attempts = max(1, retries + 1)
+    max_attempts = (
+        1 if fetcher is _curl_fetch and not crawler_runtime_settings.force_httpx else _http_max_attempts()
+    )
     for attempt in range(1, max_attempts + 1):
         result = await _attempt_http_fetch(
             context,
@@ -836,7 +880,7 @@ async def _run_http_fetcher_attempts(
             attempt=attempt,
             max_attempts=max_attempts,
         )
-        if handled_result is _RETRY_SENTINEL:
+        if handled_result is _retry_sentinel:
             continue
         if isinstance(handled_result, PageFetchResult):
             return handled_result, vendor_block_confirmed
@@ -844,8 +888,8 @@ async def _run_http_fetcher_attempts(
     return None, False
 
 
-_RETRY_SENTINEL = object()
-_HTTP_ATTEMPT_FAILED = object()
+_retry_sentinel = object()
+_http_attempt_failed = object()
 
 
 async def _attempt_http_fetch(
@@ -857,6 +901,14 @@ async def _attempt_http_fetch(
     max_attempts: int,
 ) -> PageFetchResult | object:
     http_timeout = _resolve_http_timeout(context)
+    await _emit_fetch_event(
+        context.on_event,
+        "info",
+        (
+            f"HTTP attempt {attempt}/{max_attempts} via {fetcher.__name__} "
+            f"(timeout={http_timeout:.1f}s, proxy={display_proxy(proxy)})"
+        ),
+    )
     try:
         await wait_for_host_slot(
             context.url,
@@ -877,8 +929,26 @@ async def _attempt_http_fetch(
             exc_info=True,
         )
         if attempt < max_attempts:
-            await _sleep_before_retry(attempt)
-        return _HTTP_ATTEMPT_FAILED
+            delay_ms = _retry_delay_ms(attempt)
+            await _emit_fetch_event(
+                context.on_event,
+                "info",
+                (
+                    f"HTTP attempt {attempt}/{max_attempts} failed via {fetcher.__name__}: "
+                    f"{type(exc).__name__}; retrying in {delay_ms}ms"
+                ),
+            )
+            await _sleep_retry_delay(delay_ms=delay_ms)
+        else:
+            await _emit_fetch_event(
+                context.on_event,
+                "warning",
+                (
+                    f"HTTP attempt {attempt}/{max_attempts} failed via {fetcher.__name__}: "
+                    f"{type(exc).__name__}"
+                ),
+            )
+        return _http_attempt_failed
     except RuntimeError as exc:
         context.last_error = exc
         logger.debug(
@@ -888,7 +958,15 @@ async def _attempt_http_fetch(
             proxy or "direct",
             exc_info=True,
         )
-        return _HTTP_ATTEMPT_FAILED
+        await _emit_fetch_event(
+            context.on_event,
+            "warning",
+            (
+                f"HTTP attempt {attempt}/{max_attempts} failed via {fetcher.__name__}: "
+                f"{type(exc).__name__}"
+            ),
+        )
+        return _http_attempt_failed
 
 
 async def _handle_http_result(
@@ -928,20 +1006,20 @@ async def _handle_http_result(
             result.final_url or result.url or context.url,
             ttl_seconds=context.host_memory_ttl_seconds,
         )
-    if (
-        _retryable_status_for_http_fetch(result.status_code)
-        and not vendor
-        and not should_browser_escalate
-        and attempt < max_attempts
-    ):
-        await _sleep_before_retry(attempt)
-        return _RETRY_SENTINEL, False
     if should_browser_escalate and _browser_escalation_allowed(
         context=context,
         runtime_policy=result_runtime_policy,
     ):
         browser_reason = context.browser_reason or (
             f"vendor-block:{vendor}" if vendor else "http-escalation"
+        )
+        await _emit_fetch_event(
+            context.on_event,
+            "info",
+            (
+                "Escalating to browser after HTTP result "
+                f"(status={result.status_code}, method={result.method}, reason={browser_reason})"
+            ),
         )
         browser_proxies = _browser_escalation_proxies(
             context=context,
@@ -961,6 +1039,23 @@ async def _handle_http_result(
             result=browser_result,
         )
         return browser_result, bool(vendor)
+    if (
+        _retryable_status_for_http_fetch(result.status_code)
+        and not vendor
+        and not should_browser_escalate
+        and attempt < max_attempts
+    ):
+        delay_ms = _retry_delay_ms(attempt)
+        await _emit_fetch_event(
+            context.on_event,
+            "info",
+            (
+                f"HTTP attempt {attempt}/{max_attempts} returned retryable status "
+                f"{result.status_code}; retrying in {delay_ms}ms"
+            ),
+        )
+        await _sleep_retry_delay(delay_ms=delay_ms)
+        return _retry_sentinel, False
     if is_non_retryable_http_status(result.status_code):
         logger.info(
             "Returning non-retryable HTTP status %s for %s without browser fallback",
@@ -981,6 +1076,65 @@ async def _handle_http_result(
         result=result,
     )
     return result, bool(vendor)
+
+
+def _retryable_status_for_http_fetch(status_code: int) -> bool:
+    code = int(status_code or 0)
+    retryable_codes: set[int] = set()
+    for value in list(crawler_runtime_settings.http_retry_status_codes or []):
+        try:
+            retryable_codes.add(int(value))
+        except (TypeError, ValueError):
+            logger.warning("Ignoring invalid http retry status code: %r", value)
+    return code in retryable_codes
+
+
+async def _sleep_before_retry(attempt: int) -> None:
+    await _sleep_retry_delay(delay_ms=_retry_delay_ms(attempt))
+
+
+def _http_max_attempts() -> int:
+    try:
+        retries = int(crawler_runtime_settings.http_max_retries or 0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid http_max_retries=%r; using no retries",
+            crawler_runtime_settings.http_max_retries,
+        )
+        retries = 0
+    return max(1, retries + 1)
+
+
+def _retry_delay_ms(attempt: int) -> int:
+    try:
+        raw_base_ms = int(crawler_runtime_settings.http_retry_backoff_base_ms or 0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid http_retry_backoff_base_ms %r, defaulting to 0",
+            crawler_runtime_settings.http_retry_backoff_base_ms,
+        )
+        raw_base_ms = 0
+    try:
+        raw_max_ms = int(crawler_runtime_settings.http_retry_backoff_max_ms or 0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid http_retry_backoff_max_ms %r, defaulting to 0",
+            crawler_runtime_settings.http_retry_backoff_max_ms,
+        )
+        raw_max_ms = 0
+    base_ms = max(0, raw_base_ms)
+    max_ms = max(base_ms, raw_max_ms)
+    delay_ms = min(max_ms, base_ms * (2 ** max(0, attempt - 1)))
+    if delay_ms <= 0:
+        return 0
+    jitter_ms = secrets.randbelow(max(1, delay_ms // 4) + 1)
+    return delay_ms + jitter_ms
+
+
+async def _sleep_retry_delay(*, delay_ms: int) -> None:
+    if delay_ms <= 0:
+        return
+    await asyncio.sleep(delay_ms / 1000)
 
 
 def _attach_browser_attempt_diagnostics(
@@ -1202,43 +1356,6 @@ async def _update_host_result_memory(
         proxy_used=proxy_used,
         ttl_seconds=context.host_memory_ttl_seconds,
     )
-
-
-def _retryable_status_for_http_fetch(status_code: int) -> bool:
-    code = int(status_code or 0)
-    retryable_codes: set[int] = set()
-    for value in list(crawler_runtime_settings.http_retry_status_codes or []):
-        try:
-            retryable_codes.add(int(value))
-        except (TypeError, ValueError):
-            logger.warning("Ignoring invalid http retry status code: %r", value)
-    return code in retryable_codes
-
-
-async def _sleep_before_retry(attempt: int) -> None:
-    try:
-        raw_base_ms = int(crawler_runtime_settings.http_retry_backoff_base_ms or 0)
-    except (TypeError, ValueError):
-        logger.warning(
-            "Invalid http_retry_backoff_base_ms %r, defaulting to 0",
-            crawler_runtime_settings.http_retry_backoff_base_ms,
-        )
-        raw_base_ms = 0
-    try:
-        raw_max_ms = int(crawler_runtime_settings.http_retry_backoff_max_ms or 0)
-    except (TypeError, ValueError):
-        logger.warning(
-            "Invalid http_retry_backoff_max_ms %r, defaulting to 0",
-            crawler_runtime_settings.http_retry_backoff_max_ms,
-        )
-        raw_max_ms = 0
-    base_ms = max(0, raw_base_ms)
-    max_ms = max(base_ms, raw_max_ms)
-    delay_ms = min(max_ms, base_ms * (2 ** max(0, attempt - 1)))
-    if delay_ms <= 0:
-        return
-    jitter_ms = secrets.randbelow(max(1, delay_ms // 4) + 1)
-    await asyncio.sleep((delay_ms + jitter_ms) / 1000)
 
 
 __all__ = [

@@ -196,3 +196,16 @@ https://store.hermanmiller.com/office-chairs-aeron/aeron-chair/2195348.html?sku=
 https://fellowproducts.com/products/stagg-ekg-electric-pour-over-kettle
 https://www.bluenile.com/engagement-rings/design-your-own-ring/classic-four-prong-solitaire-engagement-ring-in-platinum-item-194156
 https://www.roamluggage.com/collections/luggage/products/large-check-in
+
+
+https://www.aesop.com/home-fragrance/candles/aganice-aromatique-candle/HM03.html#tab=description
+https://rh.com/us/en/catalog/product/product.jsp/prod38810412
+https://www.amazon.com/Sparkling-Prebiotic-Beverage-Vinegar-Seltzer/dp/B0F5Y3X8PP/?th=1
+https://amsterdamvintagewatches.com/shop/rolex-day-date-18038-champagne-5/
+https://www.bhphotovideo.com/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html
+https://arcteryx.com/ca/en/shop/mens/norvan-ld-4-gtx-shoe-0397
+https://www.bluenile.com/engagement-rings/design-your-own-ring/riviera-pave-diamond-engagement-ring-in-14k-white-gold-1-6-ct-tw-item-195326
+https://www.brilliantearth.com/Secret-Halo-1.5mm-Diamond-Ring-14K-Gold-BE1D13065-76823478/
+
+listing failure:
+https://arcteryx.com/ca/en/c/mens/footwear-run/wid-kjyr4dq9?intcmp=c-mens-footwear-climb-wid-kjyr4dq9_t2_c-mens-footwear-run-wid-kjyr4dq9

@@ -42,6 +42,7 @@ from app.services.field_value_core import (
     absolute_url,
     clean_text,
     coerce_field_value,
+    extract_urls,
     finalize_record,
     is_title_noise,
     object_dict as _object_dict,
@@ -79,6 +80,7 @@ from app.services.extract.detail_shell_filter import (
 from app.services.extract.detail_identity import (
     detail_identity_codes_from_record_fields as _detail_identity_codes_from_record_fields,
     detail_identity_codes_from_url as _detail_identity_codes_from_url,
+    detail_query_identity_codes_from_url as _detail_query_identity_codes_from_url,
     detail_identity_tokens as _detail_identity_tokens,
     detail_redirect_identity_is_mismatched as _detail_redirect_identity_is_mismatched,
     detail_title_from_url as _detail_title_from_url,
@@ -99,6 +101,7 @@ from app.services.extract.detail_price_extractor import (
     drop_low_signal_zero_detail_price,
     reconcile_detail_currency_with_url as _reconcile_detail_currency_with_url,
 )
+from app.services.field_url_normalization import same_site
 from app.services.extract.detail_title_scorer import (
     promote_detail_title,
     title_needs_promotion,
@@ -631,7 +634,11 @@ def _detail_structured_payload_is_irrelevant_product(
     if not looks_product_like:
         return False
     raw_candidate_url = payload.get("url") or payload.get("@id")
-    candidate_url = absolute_url(page_url, raw_candidate_url)
+    candidate_urls = extract_urls(raw_candidate_url, page_url)
+    candidate_url = _preferred_structured_payload_url(
+        candidate_urls,
+        requested_page_url=requested_page_url,
+    )
     candidate_record = {
         "title": payload.get("name") or payload.get("title"),
         "description": payload.get("description"),
@@ -641,6 +648,13 @@ def _detail_structured_payload_is_irrelevant_product(
         or payload.get("productID"),
         "part_number": payload.get("mpn"),
     }
+    if _structured_variant_leaf_conflicts_with_base_request(
+        candidate_urls=candidate_urls,
+        candidate_record=candidate_record,
+        requested_page_url=requested_page_url,
+        requested_codes=requested_codes,
+    ):
+        return True
     if _record_matches_requested_detail_identity(
         candidate_record,
         requested_page_url=requested_page_url,
@@ -670,6 +684,61 @@ def _detail_structured_payload_is_irrelevant_product(
     ):
         return True
     return False
+
+
+def _preferred_structured_payload_url(
+    candidate_urls: list[str],
+    *,
+    requested_page_url: str,
+) -> str:
+    if not candidate_urls:
+        return ""
+    requested_query_codes = _detail_query_identity_codes_from_url(requested_page_url)
+    if requested_query_codes:
+        for candidate_url in candidate_urls:
+            if _detail_query_identity_codes_from_url(candidate_url) & requested_query_codes:
+                return candidate_url
+    for candidate_url in candidate_urls:
+        if _detail_url_matches_requested_identity(
+            candidate_url,
+            requested_page_url=requested_page_url,
+        ):
+            return candidate_url
+    for candidate_url in candidate_urls:
+        if (
+            same_site(requested_page_url, candidate_url)
+            and not _detail_url_is_utility(candidate_url)
+        ):
+            return candidate_url
+    return candidate_urls[0]
+
+
+def _structured_variant_leaf_conflicts_with_base_request(
+    *,
+    candidate_urls: list[str],
+    candidate_record: dict[str, object],
+    requested_page_url: str,
+    requested_codes: set[str] | None,
+) -> bool:
+    if len(candidate_urls) < 2:
+        return False
+    if _detail_query_identity_codes_from_url(requested_page_url):
+        return False
+    has_base_like_url = any(
+        _detail_url_matches_requested_identity(
+            candidate_url,
+            requested_page_url=requested_page_url,
+        )
+        and not _detail_query_identity_codes_from_url(candidate_url)
+        for candidate_url in candidate_urls
+    )
+    has_variant_specific_url = any(
+        _detail_query_identity_codes_from_url(candidate_url)
+        for candidate_url in candidate_urls
+    )
+    if not has_base_like_url or not has_variant_specific_url:
+        return False
+    return True
 
 
 def _variant_signal_strength(variants: object) -> tuple[int, int, int, int]:
@@ -721,6 +790,8 @@ def _should_collect_dom_variants(
     candidates: dict[str, list[object]],
     dom_variants: dict[str, object],
 ) -> bool:
+    if not _dom_variants_are_validated(dom_variants):
+        return False
     if not any(candidates.get(field_name) for field_name in VARIANT_DOM_FIELD_NAMES):
         return True
     existing_variants = finalize_candidate_value(
@@ -738,6 +809,13 @@ def _should_collect_dom_variants(
         return True
     dom_strength = _variant_signal_strength(dom_variants.get("variants"))
     return dom_strength > existing_strength
+
+
+def _dom_variants_are_validated(dom_variants: dict[str, object]) -> bool:
+    rows = dom_variants.get("variants") if isinstance(dom_variants, dict) else None
+    return isinstance(rows, list) and bool(rows) and all(
+        isinstance(row, dict) and row.get("_validated") is True for row in rows
+    )
 
 
 def _materialize_image_fields(

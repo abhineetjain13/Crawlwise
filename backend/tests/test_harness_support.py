@@ -1045,7 +1045,7 @@ async def test_ensure_harness_user_id_reuses_user_by_configured_email(
 
 
 @pytest.mark.asyncio
-async def test_ensure_harness_user_id_requires_email_without_env(
+async def test_ensure_harness_user_id_uses_local_default_credentials_without_env(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1054,28 +1054,17 @@ async def test_ensure_harness_user_id_requires_email_without_env(
     monkeypatch.delenv("HARNESS_PASSWORD", raising=False)
     monkeypatch.delenv("HARNESS_ROLE", raising=False)
 
-    with pytest.raises(
-        RuntimeError,
-        match="HARNESS_EMAIL is required for harness user bootstrap.",
-    ):
-        await harness_support._ensure_harness_user_id(db_session)
+    user_id = await harness_support._ensure_harness_user_id(db_session)
+    user = (
+        await db_session.execute(
+            select(harness_support.User).where(
+                harness_support.User.email == harness_support.DEFAULT_HARNESS_EMAIL
+            )
+        )
+    ).scalar_one()
 
-
-@pytest.mark.asyncio
-async def test_ensure_harness_user_id_requires_password_without_env(
-    db_session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("APP_ENV", "development")
-    monkeypatch.setenv("HARNESS_EMAIL", "harness@example.invalid")
-    monkeypatch.delenv("HARNESS_PASSWORD", raising=False)
-    monkeypatch.delenv("HARNESS_ROLE", raising=False)
-
-    with pytest.raises(
-        RuntimeError,
-        match="HARNESS_PASSWORD is required for harness user bootstrap.",
-    ):
-        await harness_support._ensure_harness_user_id(db_session)
+    assert user_id == user.id
+    assert user.role == "harness"
 
 
 @pytest.mark.asyncio

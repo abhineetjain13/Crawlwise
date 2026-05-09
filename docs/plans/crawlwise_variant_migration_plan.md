@@ -1,8 +1,21 @@
 # Crawlwise — Variant Architecture Migration Plan
 
-**Status:** Confirmed technical debt audit. All file references, function names, line numbers, and structural facts are verified from direct source reads.
+**Status:** IMPLEMENTED. Fast-track leak fixes and structural validator migration are in code. Focused variant/detail/normalizer/structure verification passes.
 **Files covered:** `variant_dom_cues.py`, `detail_dom_extractor.py` (1392 lines), `shared_variant_logic.py` (1562 lines), `variant_record_normalization.py` (1472 lines), `detail_materializer.py` (45k), `extraction_rules.py` (53k), `variant_policy.py`.
-**Test coverage:** One variant test file found: `test_shared_variant_logic.py` (22k). No test for `variant_record_normalization.py`, `detail_dom_extractor.py`, or `detail_materializer.py` variant paths.
+**Test coverage:** Added regression wall for confirmed leak classes, scope fail-closed behavior, and group validator scoring. Existing shared/detail/normalizer variant tests pass.
+
+## Implementation Closure
+
+- Phase 0: Done — `test_variant_regression.py`, `test_variant_scope.py`, `test_variant_group_validator.py`.
+- Phase 1: Done — word-count gate, residual noise phrases/patterns, product-like URL guard.
+- Phase 2: Done — no whole-page variant fallback; bounded soft scopes; `variant_scope_miss` runtime metric.
+- Phase 3: Done — strong/weak option selectors; weak anchors/buttons require variant evidence.
+- Phase 4: Done — `VariantCandidateGroup`, provenance capture, evidence validator, decision logging.
+- Phase 5: Done — structural row pruning moved out of `variant_record_normalization.py`; normalizer delegates structural decisions and keeps value cleanup/final contract.
+- Phase 6: Done — DOM variants must carry `_validated` before materializer can prefer them; marker stripped before public output.
+- Phase 7: Done — validator debug decision log and scope miss metric.
+
+**Verified:** `pytest tests/services/test_detail_extractor_structured_sources.py tests/services/test_shared_variant_logic.py tests/services/test_variant_regression.py tests/services/test_variant_scope.py tests/services/test_variant_group_validator.py tests/services/test_normalizers.py tests/services/test_structure.py -q` -> 285 passed, 1 skipped.
 
 ---
 
@@ -726,4 +739,3 @@ After the migration, the token lists in `extraction_rules.py` remain but serve a
 - `VARIANT_OPTION_VALUE_EXACT_NOISE_TOKENS` → same, residual filter
 
 You will still add tokens occasionally for long-tail edge cases, but you will not be adding them to compensate for a missed structural decision. Each new token should have a clear answer to: "why did this pass group validation?" If the answer is "it shouldn't have", fix the validator, not the token list.
-

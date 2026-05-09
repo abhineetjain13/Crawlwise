@@ -11,7 +11,6 @@ from html import unescape
 from typing import Any, Protocol
 
 import regex as regex_lib
-from app.services.config.domain_profiles import AUTO_TRAVERSAL
 from app.services.exceptions import CrawlerConfigurationError
 from app.services.xpath_service import validate_xpath_syntax
 
@@ -122,6 +121,19 @@ def collect_target_urls(
 _TRAVERSAL_MODES = {"paginate", "scroll", "load_more", "single", "sitemap", "crawl"}
 
 
+def _normalize_traversal_mode_value(value: object) -> str | None:
+    mode = str(value or "").strip().lower()
+    if mode in {"", "none"}:
+        return None
+    if mode == "pagination":
+        return "paginate"
+    if mode == "infinite_scroll":
+        return "scroll"
+    if mode == "view_all":
+        return "load_more"
+    return mode
+
+
 def resolve_traversal_mode(settings: object) -> str | None:
     """Resolve and validate the traversal mode from settings."""
     settings_view = _settings_view(settings)
@@ -138,17 +150,11 @@ def resolve_traversal_mode(settings: object) -> str | None:
     )
     fetch_profile = settings_view.get("fetch_profile")
     if isinstance(fetch_profile, dict) and fetch_profile:
-        fetch_profile_mode = str(fetch_profile.get("traversal_mode") or "").strip().lower()
-        if fetch_profile_mode in {"", "none"}:
+        fetch_profile_mode = _normalize_traversal_mode_value(
+            fetch_profile.get("traversal_mode")
+        )
+        if fetch_profile_mode is None:
             return None
-        if fetch_profile_mode == AUTO_TRAVERSAL:
-            return AUTO_TRAVERSAL if advanced_enabled else None
-        if fetch_profile_mode == "pagination":
-            fetch_profile_mode = "paginate"
-        if fetch_profile_mode == "infinite_scroll":
-            fetch_profile_mode = "scroll"
-        if fetch_profile_mode == "view_all":
-            fetch_profile_mode = "load_more"
         if fetch_profile_mode in _TRAVERSAL_MODES:
             return fetch_profile_mode
         logger.error("Unrecognized traversal_mode=%r", fetch_profile_mode)
@@ -157,25 +163,11 @@ def resolve_traversal_mode(settings: object) -> str | None:
         )
     if advanced_flag_present and not advanced_enabled:
         return None
-    mode = (
-        str(
-            settings_view.get("traversal_mode")
-            or settings_view.get("advanced_mode")
-            or ""
-        )
-        .strip()
-        .lower()
+    mode = _normalize_traversal_mode_value(
+        settings_view.get("traversal_mode") or settings_view.get("advanced_mode")
     )
-    if mode in {"", "none"}:
+    if mode is None:
         return None
-    if mode == AUTO_TRAVERSAL:
-        return AUTO_TRAVERSAL if advanced_enabled else None
-    if mode == "pagination":
-        mode = "paginate"
-    if mode == "infinite_scroll":
-        mode = "scroll"
-    if mode == "view_all":
-        mode = "load_more"
     if mode in _TRAVERSAL_MODES:
         return mode
     logger.error("Unrecognized traversal_mode=%r", mode)

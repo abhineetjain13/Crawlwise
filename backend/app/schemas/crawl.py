@@ -16,7 +16,6 @@ from pydantic import (
     model_validator,
 )
 from app.schemas.selectors import SelectorRecordResponse
-from app.services.config.domain_profiles import AUTO_TRAVERSAL
 from app.services.publish.verdict import run_health_verdict
 
 _DISPLAY_HIDDEN_RECORD_FIELDS = {"page_markdown", "table_markdown", "record_type"}
@@ -233,15 +232,6 @@ class DomainRunFetchProfile(BaseModel):
     max_pages: int = Field(default=5, ge=1, le=100)
     max_scrolls: int = Field(default=8, ge=0, le=100)
     host_memory_ttl_seconds: int | None = Field(default=None, ge=1, le=86_400)
-
-    @field_validator("traversal_mode", mode="before")
-    @classmethod
-    def _coerce_legacy_auto_traversal(cls, value: object) -> object:
-        normalized = str(value or "").strip().lower()
-        if normalized == AUTO_TRAVERSAL:
-            raise ValueError('traversal_mode "auto" is legacy and unsupported')
-        return value
-
 
 class DomainRunLocalityProfile(BaseModel):
     geo_country: str = "auto"

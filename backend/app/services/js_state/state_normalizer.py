@@ -35,6 +35,9 @@ from app.services.field_value_core import (
     surface_alias_lookup,
     text_or_none,
 )
+from app.services.js_state.marketplace_choice_mapper import (
+    extract_marketplace_choice_products,
+)
 from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
@@ -268,6 +271,10 @@ def _extract_product_payloads_from_normalized(
             candidate = _path_value(normalized_payload, root_path)
             if _looks_like_product_payload(candidate):
                 products.append((dict(candidate), extractor))
+    products.extend(
+        (product, None)
+        for product in extract_marketplace_choice_products(normalized_payload)
+    )
     products.extend((product, None) for product in _find_product_payloads(normalized_payload))
     if products:
         return _dedupe_product_payloads(products)

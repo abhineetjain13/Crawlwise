@@ -39,6 +39,10 @@ _NON_STATE_ASSIGNMENT_REGEXES = tuple(
     for pattern in NON_STATE_ASSIGNMENT_PATTERNS
     if str(pattern).strip()
 )
+_NEXT_F_PUSH_REGEX = re.compile(
+    r"self\.__next_f\.push\(\[1,\"(.*?)\"\]\)",
+    re.S,
+)
 logger = logging.getLogger(__name__)
 JSON_LD_CONTEXT_KEY = "@context"
 JSON_LD_ID_KEY = "@id"
@@ -251,7 +255,28 @@ def harvest_js_state_objects(soup: BeautifulSoup | None, html: str) -> dict[str,
         payload = _extract_assignment_payload(html, state_name)
         if payload is not None:
             state_objects[state_name] = payload
+    next_f_payloads = _extract_next_f_payloads(html)
+    if next_f_payloads:
+        state_objects["__NEXT_F__"] = next_f_payloads
     return state_objects
+
+
+def _extract_next_f_payloads(html: str) -> list[Any]:
+    payloads: list[Any] = []
+    for raw_fragment in _NEXT_F_PUSH_REGEX.findall(html):
+        try:
+            decoded = json.loads(f"\"{raw_fragment}\"")
+        except json.JSONDecodeError:
+            continue
+        _, _, payload_fragment = str(decoded).partition(":")
+        payload_fragment = payload_fragment.strip()
+        if not payload_fragment or payload_fragment[0] not in "[{":
+            continue
+        try:
+            payloads.append(json.loads(payload_fragment))
+        except json.JSONDecodeError:
+            continue
+    return payloads
 
 
 def _assignment_state_patterns() -> tuple[str, ...]:

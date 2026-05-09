@@ -311,6 +311,19 @@ def test_sanitize_variant_row_keeps_option_label_titles_with_variant_signals() -
     assert variant["title"] == "Large"
 
 
+def test_sanitize_variant_row_keeps_same_site_variant_url_with_axis_signal() -> None:
+    variant = {
+        "color": "Deep Pink",
+        "url": "https://www.amazon.com/dp/B09LD8VFS1/ref=twister_B0CZ8ZQL8C?_encoding=UTF8&psc=1",
+    }
+
+    assert sanitize_variant_row(
+        variant,
+        identity_url="https://www.amazon.com/Philips-Sonicare-Toothbrush-Rechargeable-HX3681/dp/B09LD7WRVS?th=1",
+    )
+    assert variant["color"] == "Deep Pink"
+
+
 def test_detail_image_family_requires_full_media_code_match() -> None:
     assert not detail_image_matches_primary_family(
         "https://cdn.example.com/a999999/image.jpg",
@@ -4414,6 +4427,57 @@ def test_extract_detail_drops_decimal_price_when_currency_conflicts_with_host_hi
     assert "price" not in rows[0]
 
 
+def test_extract_detail_does_not_backfill_low_signal_price_after_currency_conflict() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Poppi Soda",
+          "offers": {"price": "2153.05", "priceCurrency": "INR"}
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Poppi Soda</h1>
+          <span class="a-price"><span class="a-offscreen">$1.00</span></span>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.amazon.com/dp/B0F5Y3X8PP",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    assert "price" not in rows[0]
+
+
+def test_currency_reconcile_keeps_adapter_localized_price_over_host_hint() -> None:
+    record = {
+        "price": "INR 2,153.05",
+        "currency": "INR",
+        "variants": [{"price": "INR 2,153.05", "currency": "INR", "size": "12 pack"}],
+        "_field_sources": {"price": ["adapter"], "variants": ["adapter"]},
+    }
+
+    reconcile_detail_currency_with_url(
+        record,
+        page_url="https://www.amazon.com/dp/B0F5Y3X8PP",
+    )
+
+    assert record["price"] == "INR 2,153.05"
+    assert record["currency"] == "INR"
+    assert record["variants"][0]["currency"] == "INR"
+
+
 def test_extract_detail_cleans_tracking_pixels_and_video_thumbs_from_images() -> None:
     html = """
     <html>
@@ -5758,6 +5822,94 @@ def test_extract_hm_productgroup_detail_from_code_only_url() -> None:
     assert record["url"] == "https://www2.hm.com/en_in/productpage.1317259001.html"
     assert record["image_url"] == "https://image.hm.com/assets/hm/9e/92/main.jpg"
     assert "size" not in record
+
+
+def test_extract_detail_ignores_variant_leaf_jsonld_scalars_for_base_request() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Widget Prime - Black",
+          "sku": "11111111",
+          "url": [
+            "https://example.com/products/widget-prime?variant=11111111",
+            "https://example.com/products/widget-prime"
+          ],
+          "offers": {
+            "@type": "Offer",
+            "price": "10.00",
+            "priceCurrency": "USD"
+          },
+          "seller": {
+            "@type": "Organization",
+            "name": "Acme",
+            "url": "https://example.com"
+          }
+        }
+        </script>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "ProductGroup",
+          "name": "Widget Prime",
+          "url": "https://example.com/products/widget-prime",
+          "offers": {
+            "@type": "Offer",
+            "price": "10.00",
+            "priceCurrency": "USD"
+          },
+          "hasVariant": [
+            {
+              "@type": "Product",
+              "name": "Widget Prime - Black",
+              "sku": "11111111",
+              "offers": {
+                "@type": "Offer",
+                "url": "https://example.com/products/widget-prime?variant=11111111",
+                "price": "10.00",
+                "priceCurrency": "USD"
+              }
+            },
+            {
+              "@type": "Product",
+              "name": "Widget Prime - Tan",
+              "sku": "22222222",
+              "offers": {
+                "@type": "Offer",
+                "url": "https://example.com/products/widget-prime?variant=22222222",
+                "price": "10.00",
+                "priceCurrency": "USD"
+              }
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Widget Prime</h1>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Widget Prime"
+    assert record["url"] == "https://example.com/products/widget-prime"
+    assert record["price"] == "10.00"
+    assert record["currency"] == "USD"
+    assert "sku" not in record
 
 
 def test_extract_detail_backfills_current_price_variants_and_strips_unavailable_suffixes() -> None:

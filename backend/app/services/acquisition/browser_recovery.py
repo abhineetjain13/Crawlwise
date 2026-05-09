@@ -5,10 +5,6 @@ import time
 from contextlib import suppress
 from typing import Any, Callable
 
-from app.services.acquisition.browser_diagnostics import (
-    REAL_CHROME_BROWSER_ENGINE,
-    normalize_browser_engine,
-)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import (
     ANCHOR_SELECTOR,
@@ -34,8 +30,6 @@ async def recover_browser_challenge(
 ):
     phase_timings_ms.setdefault("challenge_wait", 0)
     phase_timings_ms.setdefault("challenge_retry", 0)
-    if normalize_browser_engine(browser_engine) == REAL_CHROME_BROWSER_ENGINE:
-        return response
     max_wait_seconds = max(0.0, float(challenge_wait_max_seconds or 0))
     if max_wait_seconds <= 0:
         return response

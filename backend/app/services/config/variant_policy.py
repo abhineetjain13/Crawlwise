@@ -43,6 +43,9 @@ VARIANT_AXIS_CANONICAL_MAPPING: dict[frozenset[str], str] = {
         }
     ): COLOR_FIELD,
     frozenset({SIZE_FIELD, "sizes", "frame size", "frame_size"}): SIZE_FIELD,
+    frozenset({"resolution", "resolutions", "display resolution", "display_resolution"}): "resolution",
+    frozenset({"screen size", "screen_size", "display size", "display_size"}): "screen_size",
+    frozenset({"upholstery color", "upholstery_color"}): "upholstery_color",
     frozenset({"type", "types"}): "type",
     frozenset({"switch", "switches", "switch type", "switch_type"}): "switches",
     frozenset({"fit", "fits"}): "fit",
@@ -90,6 +93,9 @@ VARIANT_AXIS_CANONICAL_MAPPING: dict[frozenset[str], str] = {
 PUBLIC_VARIANT_AXIS_FIELDS: tuple[str, ...] = (
     COLOR_FIELD,
     SIZE_FIELD,
+    "resolution",
+    "screen_size",
+    "upholstery_color",
     "type",
     "switches",
     "fit",
