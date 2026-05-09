@@ -72,3 +72,13 @@ backend/tests/fixtures/artifact_html/
 
 # Local agent debug hub
 agent_debug/
+
+# Site crawl artifacts (never track)
+image.png
+screenshots/
+artifacts/
+**/artifacts/
+test-sites-issues/
+zyte/**/*.json
+zyte/**/*.md
+zyte/**/__pycache__/

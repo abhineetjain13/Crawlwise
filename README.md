@@ -12,7 +12,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16%2B-black?logo=next.js)](https://nextjs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B-4169E1?logo=postgresql)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7%2B-DC382D?logo=redis)](https://redis.io/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
 
 > 🕷️ A research-first crawling framework that prioritizes **deterministic extraction** over opaque LLM inference — for ecommerce, jobs, automobiles, and any structured target.
 
@@ -231,4 +231,4 @@ The authors assume no liability for misuse. Always obtain explicit permission be
 
 ## 📜 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see the [LICENSE](LICENSE) file for details.
