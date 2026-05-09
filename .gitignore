@@ -5,6 +5,7 @@
 node_modules/
 zyte/
 /test-sites-issues
+TEST_SITES.md
 
 .hypothesis/
 .scannerwork/
