@@ -1,196 +1,41 @@
 from __future__ import annotations
+
 import json
-import logging
 import time
-from json import loads as parse_json
 from string import Template
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Any
+
 from app.core.metrics import observe_llm_task_duration, record_llm_task_outcome
-from app.models.crawl import CrawlRun
-from app.models.llm import LLMCostLog, LLMCostLogOutcome
 from app.services.config.llm_runtime import (
     PARSE_PROVIDER_JSON_ERROR,
     llm_runtime_settings,
 )
+from app.services.llm_budget import reserve_run_llm_call
 from app.services.llm_cache import (
     build_llm_cache_key,
     load_cached_llm_result,
     store_cached_llm_result,
 )
-from app.services.llm_budget import reserve_run_llm_call
 from app.services.llm_config_service import (
     get_prompt_task,
     load_prompt_file,
     resolve_provider_api_key,
     resolve_run_config,
 )
-from app.services.llm_provider_client import call_provider_with_retry, estimate_cost_usd
-from app.services.extraction_html_helpers import prune_html_tree
+from app.services.llm_cost_logging import record_llm_cost_log
 from app.services.llm_errors import ERROR_PREFIX, LLMErrorCategory, classify_error
-from app.services.llm_types import LLMTaskResult
-from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
-from bs4 import BeautifulSoup, Tag
-from pydantic import (
-    AfterValidator,
-    BaseModel,
-    ConfigDict,
-    Field,
-    TypeAdapter,
-    ValidationError,
-    field_validator,
+from app.services.llm_payloads import parse_payload, validate_task_payload
+from app.services.llm_prompt_rendering import (
+    enforce_token_limit,
+    extract_structured_data,
+    safe_truncate_for_prompt,
+    stringify_prompt_value,
+    truncate_html,
+    truncate_json_literal,
 )
-from sqlalchemy.exc import SQLAlchemyError
+from app.services.llm_provider_client import call_provider_with_retry
+from app.services.llm_types import LLMTaskResult
 from sqlalchemy.ext.asyncio import AsyncSession
-
-logger = logging.getLogger(__name__)
-
-def _require_present_value(value: Any) -> Any:
-    if value in (None, "", [], {}):
-        raise ValueError("must not be empty")
-    return value
-
-
-def _require_non_empty_text(value: str) -> str:
-    normalized = str(value or "").strip()
-    if not normalized:
-        raise ValueError("must not be empty")
-    return normalized
-
-
-def _require_payload_key(value: object) -> str:
-    normalized = str(value or "").strip()
-    if not normalized or normalized.startswith("_"):
-        raise ValueError("must be a non-empty field key")
-    return normalized
-
-
-def _require_schema_field_name(value: str) -> str:
-    normalized = str(value or "").strip()
-    if not normalized or not _is_valid_schema_field_name(normalized):
-        raise ValueError("contains an invalid field name")
-    return normalized
-
-
-_FieldKey = Annotated[str, AfterValidator(_require_payload_key)]
-_NonEmptyText = Annotated[str, AfterValidator(_require_non_empty_text)]
-_PresentValue = Annotated[Any, AfterValidator(_require_present_value)]
-_SchemaFieldName = Annotated[str, AfterValidator(_require_schema_field_name)]
-
-
-class _XPathSelector(TypedDict):
-    field_name: _NonEmptyText
-    xpath: NotRequired[str]
-    css_selector: NotRequired[str]
-
-
-class _CanonicalFieldReview(TypedDict):
-    suggested_value: _PresentValue
-    source: _NonEmptyText
-    supporting_sources: NotRequired[list[_NonEmptyText]]
-
-
-class _ReviewBucketItem(TypedDict):
-    key: _NonEmptyText
-    value: _PresentValue
-    source: _NonEmptyText
-
-
-class _FieldCleanupReviewPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    canonical: dict[_FieldKey, _CanonicalFieldReview] = Field(default_factory=dict)
-    review_bucket: list[_ReviewBucketItem] = Field(default_factory=list)
-
-
-class _PageClassificationPayload(TypedDict):
-    page_type: Literal["listing", "detail", "challenge", "error", "unknown"]
-    has_secondary_listing: bool
-    wait_selector_hint: str
-    reasoning: str
-
-
-class _SchemaInferencePayload(TypedDict):
-    confirmed_fields: list[_SchemaFieldName]
-    new_fields: list[_SchemaFieldName]
-    absent_fields: list[_SchemaFieldName]
-
-
-class _ProductIntelligenceEnrichmentPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    normalized_title: str = ""
-    style_name: str = ""
-    model_name: str = ""
-    inferred_attributes: dict[str, Any] = Field(default_factory=dict)
-    suggested_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    match_explanation: str = ""
-    mismatch_risks: list[str] = Field(default_factory=list)
-    reason_updates: list[dict[str, Any]] = Field(default_factory=list)
-
-    @field_validator("reason_updates")
-    @classmethod
-    def _validate_reason_updates(
-        cls, value: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        allowed = {
-            "reason_name",
-            "reason_code",
-            "description",
-            "source",
-            "timestamp",
-            "conflicting_value",
-            "resolution_action",
-        }
-        for item in value:
-            unknown = set(item) - allowed
-            if unknown:
-                raise ValueError(
-                    f"unknown reason_updates keys: {', '.join(sorted(unknown))}"
-                )
-        return value
-
-
-class _ProductIntelligenceBrandInferencePayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    brand: str = ""
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    rationale: str = ""
-
-
-class _DataEnrichmentSemanticPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    category_path: str | None = None
-    color_family: str | None = None
-    size_normalized: list[str] | None = None
-    size_system: str | None = None
-    gender_normalized: str | None = None
-    materials_normalized: list[str] | None = None
-    availability_normalized: str | None = None
-    intent_attributes: list[str] | None = None
-    audience: list[str] | None = None
-    style_tags: list[str] | None = None
-    ai_discovery_tags: list[str] | None = None
-    suggested_bundles: list[str] | None = None
-
-
-_PAYLOAD_ADAPTERS: dict[str, TypeAdapter[Any]] = {
-    "direct_record_extraction": TypeAdapter(list[dict[_FieldKey, Any]]),
-    "xpath_discovery": TypeAdapter(list[_XPathSelector]),
-    "missing_field_extraction": TypeAdapter(dict[_FieldKey, Any]),
-    "field_cleanup_review": TypeAdapter(_FieldCleanupReviewPayload),
-    "page_classification": TypeAdapter(_PageClassificationPayload),
-    "schema_inference": TypeAdapter(_SchemaInferencePayload),
-    "product_intelligence_enrichment": TypeAdapter(
-        _ProductIntelligenceEnrichmentPayload
-    ),
-    "product_intelligence_brand_inference": TypeAdapter(
-        _ProductIntelligenceBrandInferencePayload
-    ),
-    "data_enrichment_semantic": TypeAdapter(_DataEnrichmentSemanticPayload),
-}
 
 
 async def run_prompt_task(
@@ -219,51 +64,6 @@ async def run_prompt_task(
             seconds=time.monotonic() - started_at,
         )
         return result
-
-    async def _record_cost_log(
-        *,
-        provider: str,
-        model: str,
-        input_tokens: int,
-        output_tokens: int,
-        error_message: str = "",
-        error_category: LLMErrorCategory = LLMErrorCategory.NONE,
-    ) -> None:
-        try:
-            persisted_run_id = run_id
-            if run_id is not None:
-                existing_run = await session.get(CrawlRun, run_id)
-                if existing_run is None:
-                    persisted_run_id = None
-            session.add(
-                LLMCostLog(
-                    run_id=persisted_run_id,
-                    provider=provider,
-                    model=model,
-                    task_type=task_type,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cost_usd=estimate_cost_usd(
-                        provider, model, input_tokens, output_tokens
-                    ),
-                    domain=domain,
-                    outcome=(
-                        LLMCostLogOutcome.ERROR.value
-                        if error_message
-                        else LLMCostLogOutcome.SUCCESS.value
-                    ),
-                    error_category=(
-                        ""
-                        if error_category == LLMErrorCategory.NONE
-                        else str(error_category)
-                    ),
-                    error_message=str(error_message or ""),
-                )
-            )
-            await session.flush()
-        except SQLAlchemyError:
-            await session.rollback()
-            logger.warning("Failed to persist LLM cost log", exc_info=True)
 
     config = await resolve_run_config(session, run_id=run_id, task_type=task_type)
     task = get_prompt_task(task_type)
@@ -296,9 +96,9 @@ async def run_prompt_task(
         )
 
     rendered_user_prompt = Template(user_template).safe_substitute(
-        {key: _stringify_prompt_value(value) for key, value in variables.items()}
+        {key: stringify_prompt_value(value) for key, value in variables.items()}
     )
-    safe_user_prompt = _enforce_token_limit(rendered_user_prompt)
+    safe_user_prompt = enforce_token_limit(rendered_user_prompt)
     provider = str(config.get("provider") or "")
     model = str(config.get("model") or "")
     response_type = str(task.get("response_type") or "object")
@@ -343,7 +143,11 @@ async def run_prompt_task(
     )
     if raw.startswith(ERROR_PREFIX):
         error_category = classify_error(raw)
-        await _record_cost_log(
+        await _record_cost(
+            session,
+            run_id=run_id,
+            task_type=task_type,
+            domain=domain,
             provider=provider,
             model=model,
             input_tokens=input_tokens,
@@ -363,10 +167,14 @@ async def run_prompt_task(
             )
         )
 
-    payload: object = _parse_payload(raw, response_type=response_type)
+    payload: object = parse_payload(raw, response_type=response_type)
     if payload is None:
         error_message = PARSE_PROVIDER_JSON_ERROR
-        await _record_cost_log(
+        await _record_cost(
+            session,
+            run_id=run_id,
+            task_type=task_type,
+            domain=domain,
             provider=provider,
             model=model,
             input_tokens=input_tokens,
@@ -390,10 +198,14 @@ async def run_prompt_task(
         inner = payload.get(str(task["data_key"]))
         if isinstance(inner, (dict, list)):
             payload = inner
-    payload, validation_error = _validate_task_payload(task_type, payload)
+    payload, validation_error = validate_task_payload(task_type, payload)
     if validation_error is not None:
         error_message = f"Error: {validation_error}"
-        await _record_cost_log(
+        await _record_cost(
+            session,
+            run_id=run_id,
+            task_type=task_type,
+            domain=domain,
             provider=provider,
             model=model,
             input_tokens=input_tokens,
@@ -413,7 +225,11 @@ async def run_prompt_task(
             )
         )
 
-    await _record_cost_log(
+    await _record_cost(
+        session,
+        run_id=run_id,
+        task_type=task_type,
+        domain=domain,
         provider=provider,
         model=model,
         input_tokens=input_tokens,
@@ -441,8 +257,8 @@ async def discover_xpath_candidates(
     missing_fields: list[str],
     existing_values: dict[str, object],
 ) -> tuple[list[dict], str | None]:
-    structured_data = _extract_structured_data(html_text)
-    structured_data_json = _truncate_json_literal(
+    structured_data = extract_structured_data(html_text)
+    structured_data_json = truncate_json_literal(
         structured_data,
         llm_runtime_settings.existing_values_max_chars * 2,
     )
@@ -454,12 +270,12 @@ async def discover_xpath_candidates(
         variables={
             "url": url,
             "missing_fields_json": json.dumps(missing_fields),
-            "existing_values_json": _truncate_json_literal(
+            "existing_values_json": truncate_json_literal(
                 existing_values,
                 llm_runtime_settings.existing_values_max_chars,
             ),
             "structured_data_json": structured_data_json,
-            "html_snippet": _truncate_html(
+            "html_snippet": truncate_html(
                 html_text,
                 llm_runtime_settings.html_snippet_max_chars,
                 anchors=missing_fields,
@@ -492,11 +308,11 @@ async def extract_records_directly(
             "url": url,
             "surface": surface,
             "requested_fields_json": json.dumps(list(requested_fields or [])),
-            "existing_records_json": _truncate_json_literal(
-                _safe_truncate_for_prompt(list(existing_records or [])),
+            "existing_records_json": truncate_json_literal(
+                safe_truncate_for_prompt(list(existing_records or [])),
                 llm_runtime_settings.candidate_evidence_max_chars,
             ),
-            "html_snippet": _truncate_html(
+            "html_snippet": truncate_html(
                 html_text,
                 llm_runtime_settings.html_snippet_max_chars,
                 anchors=list(requested_fields or []),
@@ -527,11 +343,11 @@ async def extract_missing_fields(
         variables={
             "url": url,
             "missing_fields_json": json.dumps(missing_fields),
-            "existing_values_json": _truncate_json_literal(
+            "existing_values_json": truncate_json_literal(
                 existing_values,
                 llm_runtime_settings.existing_values_max_chars,
             ),
-            "html_snippet": _truncate_html(
+            "html_snippet": truncate_html(
                 html_text,
                 llm_runtime_settings.html_snippet_max_chars,
                 anchors=missing_fields,
@@ -566,19 +382,19 @@ async def review_field_candidates(
             "url": url,
             "canonical_fields_json": json.dumps(canonical_fields),
             "target_fields_json": json.dumps(target_fields),
-            "existing_values_json": _truncate_json_literal(
+            "existing_values_json": truncate_json_literal(
                 {field: existing_values.get(field) for field in target_fields},
                 llm_runtime_settings.existing_values_max_chars,
             ),
-            "candidate_evidence_json": _truncate_json_literal(
-                _safe_truncate_for_prompt(candidate_evidence),
+            "candidate_evidence_json": truncate_json_literal(
+                safe_truncate_for_prompt(candidate_evidence),
                 llm_runtime_settings.candidate_evidence_max_chars,
             ),
-            "discovered_sources_json": _truncate_json_literal(
+            "discovered_sources_json": truncate_json_literal(
                 discovered_sources,
                 llm_runtime_settings.discovered_sources_max_chars,
             ),
-            "html_snippet": _truncate_html(
+            "html_snippet": truncate_html(
                 html_text,
                 llm_runtime_settings.html_snippet_max_chars,
                 anchors=[
@@ -594,502 +410,28 @@ async def review_field_candidates(
     )
 
 
-def _parse_payload(raw_text: str, *, response_type: str) -> dict | list | None:
-    if response_type == "array":
-        return _parse_json_array(raw_text)
-    return _parse_json_object(raw_text)
-
-
-def _validate_task_payload(
+async def _record_cost(
+    session: AsyncSession,
+    *,
+    run_id: int | None,
     task_type: str,
-    payload: object,
-) -> tuple[object, str | None]:
-    adapter = _PAYLOAD_ADAPTERS.get(str(task_type or "").strip())
-    if adapter is None:
-        return payload, None
-    try:
-        validated = adapter.validate_python(payload)
-    except ValidationError as exc:
-        return payload, _format_validation_error(task_type, exc)
-    return validated.model_dump() if isinstance(
-        validated, BaseModel
-    ) else validated, None
-
-
-def _format_validation_error(task_type: str, exc: ValidationError) -> str:
-    error = exc.errors()[0]
-    location = ".".join(str(part) for part in error.get("loc", ()) if part != "root")
-    detail = str(error.get("msg") or "invalid payload")
-    suffix = f" at {location}" if location else ""
-    return f"{task_type} payload validation failed{suffix}: {detail}"
-
-
-def _is_valid_schema_field_name(value: str) -> bool:
-    return (
-        bool(value)
-        and len(value) <= llm_runtime_settings.schema_field_name_max_length
-        and value.replace("_", "").isalnum()
-        and value.lower() == value
-        and not value.startswith("_")
-        and not value.isdigit()
+    domain: str,
+    provider: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    error_message: str = "",
+    error_category: LLMErrorCategory = LLMErrorCategory.NONE,
+) -> None:
+    await record_llm_cost_log(
+        session,
+        run_id=run_id,
+        task_type=task_type,
+        domain=domain,
+        provider=provider,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        error_message=error_message,
+        error_category=error_category,
     )
-
-
-def _parse_json_object(raw_text: str) -> dict | None:
-    start = raw_text.find("{")
-    end = raw_text.rfind("}")
-    if start == -1 or end < start:
-        return None
-    try:
-        payload = parse_json(raw_text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _parse_json_array(raw_text: str) -> list | None:
-    start = raw_text.find("[")
-    end = raw_text.rfind("]")
-    if start == -1 or end < start:
-        return None
-    try:
-        payload = parse_json(raw_text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, list) else None
-
-
-def _load_prune_stripped_tags() -> frozenset[str]:
-    return frozenset(
-        tag.strip()
-        for tag in llm_runtime_settings.html_prune_stripped_tags.split(",")
-        if tag.strip()
-    )
-
-
-def _load_prune_preserved_script_types() -> frozenset[str]:
-    return frozenset(
-        t.strip().lower()
-        for t in llm_runtime_settings.html_prune_preserved_script_types.split(",")
-        if t.strip()
-    )
-
-
-def _load_prune_preserved_attrs() -> frozenset[str]:
-    return frozenset(
-        attr.strip()
-        for attr in llm_runtime_settings.html_prune_preserved_attrs.split(",")
-        if attr.strip()
-    )
-
-
-def _load_prune_preserved_script_ids() -> frozenset[str]:
-    return frozenset(
-        sid.strip()
-        for sid in llm_runtime_settings.html_prune_preserved_script_ids.split(",")
-        if sid.strip()
-    )
-
-
-def _load_prune_strip_attr_prefixes() -> tuple[str, ...]:
-    return tuple(
-        prefix.strip().lower()
-        for prefix in llm_runtime_settings.html_prune_strip_attr_prefixes.split(",")
-        if prefix.strip()
-    )
-
-
-def _load_prune_preserved_data_attr_prefixes() -> tuple[str, ...]:
-    return tuple(
-        prefix.strip().lower()
-        for prefix in llm_runtime_settings.html_prune_preserved_data_attr_prefixes.split(
-            ","
-        )
-        if prefix.strip()
-    )
-
-
-def _prune_html_for_llm(html_text: str) -> str:
-    stripped_tags = _load_prune_stripped_tags()
-    preserved_script_types = _load_prune_preserved_script_types()
-    preserved_attrs = _load_prune_preserved_attrs()
-    preserved_data_prefixes = _load_prune_preserved_data_attr_prefixes()
-    preserved_script_ids = _load_prune_preserved_script_ids()
-    strip_attr_prefixes = _load_prune_strip_attr_prefixes()
-
-    def _preserve_tag(tag: Tag) -> bool:
-        if tag.name != "script":
-            return False
-        script_type = str(tag.get("type") or "").strip().lower()
-        return (
-            script_type in preserved_script_types
-            or str(tag.get("id") or "") in preserved_script_ids
-        )
-
-    def _keep_attr(key: str, _value: object) -> bool:
-        return key in preserved_attrs or not _should_strip_llm_attr(
-            key,
-            strip_attr_prefixes=strip_attr_prefixes,
-            preserved_data_prefixes=preserved_data_prefixes,
-        )
-
-    soup = prune_html_tree(
-        BeautifulSoup(html_text, "html.parser"),
-        drop_tags=set(stripped_tags),
-        attr_filter=_keep_attr,
-        preserve_tag=_preserve_tag,
-    )
-    for tag in soup.find_all(True):
-        if tag.get("style"):
-            del tag["style"]
-    return str(soup)
-
-
-def _should_strip_llm_attr(
-    attr_name: str,
-    *,
-    strip_attr_prefixes: tuple[str, ...],
-    preserved_data_prefixes: tuple[str, ...],
-) -> bool:
-    normalized = str(attr_name or "").strip().lower()
-    if not normalized:
-        return False
-    if normalized.startswith("data-") and any(
-        normalized.startswith(prefix) for prefix in preserved_data_prefixes
-    ):
-        return False
-    return any(normalized.startswith(prefix) for prefix in strip_attr_prefixes)
-
-
-def _extract_structured_data(html_text: str) -> dict[str, object]:
-    soup = BeautifulSoup(html_text, "html.parser")
-    structured: dict[str, object] = {}
-
-    def _append_structured_item(type_name: str, item: dict[str, object]) -> None:
-        existing = structured.get(type_name)
-        if isinstance(existing, list):
-            existing.append(item)
-        else:
-            structured[type_name] = [item]
-
-    for item in parse_json_ld(soup):
-        if isinstance(item, dict) and item.get("@type"):
-            type_name = str(item["@type"]).split("/")[-1]
-            _append_structured_item(type_name, item)
-    for key, value in harvest_js_state_objects(soup, html_text).items():
-        if key == "__NEXT_DATA__" and isinstance(value, dict):
-            structured[key] = value
-    return structured
-
-
-def _truncate_html(
-    html_text: str,
-    limit: int,
-    *,
-    anchors: list[str] | None = None,
-) -> str:
-    if limit <= 0:
-        return ""
-    pruned = _render_html_text(_prune_html_for_llm(html_text))
-    if len(pruned) <= limit:
-        return pruned
-    focused = _focus_html_context(pruned, anchors or [])
-    return (focused or pruned)[:limit]
-
-
-def _render_html_text(value: str) -> str:
-    soup = BeautifulSoup(str(value or ""), "html.parser")
-    for node in soup.find_all("br"):
-        node.replace_with("\n")
-    lines: list[str] = []
-    seen: set[str] = set()
-    block_tags = [
-        tag.strip()
-        for tag in llm_runtime_settings.html_render_block_tags.split(",")
-        if tag.strip()
-    ]
-    for node in soup.find_all(block_tags):
-        text = "\n".join(
-            line.strip()
-            for line in node.get_text(separator="\n", strip=True).splitlines()
-            if line.strip()
-        ).strip()
-        if not text:
-            continue
-        lowered = " ".join(text.lower().split())
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        lines.append(text)
-    if lines:
-        return "\n".join(lines)
-    return "\n".join(
-        line.strip()
-        for line in soup.get_text(separator="\n", strip=True).splitlines()
-        if line.strip()
-    ).strip()
-
-
-def _focus_html_context(rendered_text: str, anchors: list[str]) -> str:
-    normalized_anchors = _normalize_html_anchor_terms(anchors)
-    if not normalized_anchors:
-        return ""
-    focused_lines: list[str] = []
-    seen: set[str] = set()
-    previous_line = ""
-    for raw_line in rendered_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        lowered = line.lower()
-        if not any(anchor in lowered for anchor in normalized_anchors):
-            previous_line = line
-            continue
-        if previous_line and previous_line not in seen:
-            focused_lines.append(previous_line)
-            seen.add(previous_line)
-        if line not in seen:
-            focused_lines.append(line)
-            seen.add(line)
-        previous_line = line
-    return "\n".join(focused_lines)
-
-
-def _normalize_html_anchor_terms(values: list[str]) -> list[str]:
-    terms: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        raw = str(value or "").strip().lower()
-        if not raw:
-            continue
-        for candidate in {
-            raw,
-            raw.replace("_", " "),
-            raw.replace("&", "and"),
-        }:
-            cleaned = " ".join(candidate.split())
-            if (
-                len(cleaned) < llm_runtime_settings.html_anchor_min_length
-                or cleaned in seen
-            ):
-                continue
-            seen.add(cleaned)
-            terms.append(cleaned)
-    return sorted(terms, key=len, reverse=True)
-
-
-def _safe_truncate_for_prompt(
-    value: object,
-    max_str_len: int = llm_runtime_settings.prompt_safe_truncate_max_str_len,
-    max_list_items: int = llm_runtime_settings.prompt_safe_truncate_max_list_items,
-) -> object:
-    if isinstance(value, str):
-        return value[:max_str_len] + "..." if len(value) > max_str_len else value
-    if isinstance(value, list):
-        truncated = [
-            _safe_truncate_for_prompt(
-                item,
-                max_str_len=max_str_len,
-                max_list_items=max_list_items,
-            )
-            for item in value[:max_list_items]
-        ]
-        if len(value) > max_list_items:
-            truncated.append(f"... ({len(value) - max_list_items} more items)")
-        return truncated
-    if isinstance(value, dict):
-        return {
-            str(key): _safe_truncate_for_prompt(
-                item,
-                max_str_len=max_str_len,
-                max_list_items=max_list_items,
-            )
-            for key, item in value.items()
-        }
-    return value
-
-
-def _truncate_json_literal(value: Any, limit: int) -> str:
-    compact = _compact_json_value(value)
-    rendered = json.dumps(compact, default=str)
-    if len(rendered) <= limit:
-        return rendered
-    if isinstance(compact, dict):
-        trimmed: dict[str, Any] = {}
-        for key, item in compact.items():
-            candidate = {**trimmed, key: item}
-            if len(json.dumps(candidate, default=str)) > limit:
-                break
-            trimmed[key] = item
-        return json.dumps(trimmed, default=str)
-    if isinstance(compact, list):
-        trimmed_list: list[Any] = []
-        for item in compact:
-            candidate_list = [*trimmed_list, item]
-            if len(json.dumps(candidate_list, default=str)) > limit:
-                break
-            trimmed_list.append(item)
-        return json.dumps(trimmed_list, default=str)
-    return json.dumps(str(compact)[: max(0, limit - 2)], default=str)
-
-
-def _enforce_token_limit(
-    text: str,
-    limit: int = llm_runtime_settings.prompt_token_limit,
-) -> str:
-    char_limit = limit * llm_runtime_settings.prompt_token_char_multiplier
-    if len(text) <= char_limit:
-        return text
-    suffix = "\n\n[TRUNCATED DUE TO TOKEN LIMIT]"
-    budget = max(0, char_limit - len(suffix))
-    sections = text.split("\n\n")
-    kept: list[str] = []
-    used = 0
-    for section in sections:
-        separator = 0 if not kept else 2
-        section_len = len(section)
-        if used + separator + section_len <= budget:
-            kept.append(section)
-            used += separator + section_len
-            continue
-        remaining = budget - used - separator
-        if remaining > 0:
-            trimmed = _trim_prompt_section(section, remaining)
-            if trimmed:
-                kept.append(trimmed)
-        break
-    if not kept:
-        return suffix.strip()
-    return "\n\n".join(kept) + suffix
-
-
-def _trim_prompt_section(section: str, budget: int) -> str:
-    if budget <= 0:
-        return ""
-    placeholder = "[TRUNCATED]"
-    if len(section) <= budget:
-        return section
-    if "\n" not in section:
-        return section[:budget]
-    header, body = section.split("\n", 1)
-    preserved_header = header[:budget]
-    if len(preserved_header) >= budget:
-        return preserved_header
-    remainder_budget = budget - len(preserved_header) - 1
-    if remainder_budget <= 0:
-        return preserved_header
-    trimmed_body = _trim_prompt_section_body(body, remainder_budget, placeholder)
-    if not trimmed_body:
-        return preserved_header
-    return f"{preserved_header}\n{trimmed_body}"
-
-
-def _trim_prompt_section_body(body: str, budget: int, placeholder: str) -> str:
-    if budget <= 0:
-        return ""
-    stripped = body.strip()
-    if len(stripped) <= budget:
-        return stripped
-    if stripped.startswith(("{", "[")):
-        if len(stripped) <= llm_runtime_settings.prompt_json_reparse_max_chars:
-            try:
-                parsed = parse_json(stripped)
-            except json.JSONDecodeError:
-                return _truncate_structured_text(stripped, budget, placeholder)
-            else:
-                return _truncate_json_literal(parsed, budget)
-        return _truncate_structured_text(stripped, budget, placeholder)
-    if budget <= len(placeholder):
-        return placeholder[:budget]
-    return stripped[: budget - len(placeholder)].rstrip() + placeholder
-
-
-def _truncate_structured_text(text: str, budget: int, placeholder: str) -> str:
-    if budget <= 0:
-        return ""
-    if len(text) <= budget:
-        return text
-    if "\n" in text:
-        framed = _truncate_structured_lines(text, budget, placeholder)
-        if framed:
-            return framed
-    if budget <= len(placeholder):
-        return placeholder[:budget]
-    closing = ""
-    if text.startswith("{") and budget > len(placeholder) + 1:
-        closing = "}"
-    elif text.startswith("[") and budget > len(placeholder) + 1:
-        closing = "]"
-    head_budget = budget - len(placeholder) - len(closing)
-    if head_budget <= 0:
-        return (placeholder + closing)[:budget]
-    return text[:head_budget].rstrip() + placeholder + closing
-
-
-def _truncate_structured_lines(text: str, budget: int, placeholder: str) -> str:
-    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return ""
-    closing = ""
-    if text.startswith("{") and text.rstrip().endswith("}"):
-        closing = "}"
-    elif text.startswith("[") and text.rstrip().endswith("]"):
-        closing = "]"
-    suffix = f"\n{placeholder}{closing}" if closing else f"\n{placeholder}"
-    if len(lines[0]) + len(suffix) > budget:
-        return ""
-    kept = [lines[0]]
-    used = len(lines[0])
-    for line in lines[1:]:
-        next_used = used + 1 + len(line)
-        if next_used + len(suffix) > budget:
-            break
-        kept.append(line)
-        used = next_used
-    if len(kept) == len(lines):
-        return "\n".join(kept)
-    return "\n".join(kept) + suffix
-
-
-def _compact_json_value(
-    value: Any,
-    *,
-    depth: int = 0,
-    max_depth: int = llm_runtime_settings.prompt_compact_json_max_depth,
-) -> Any:
-    if value in (None, "", [], {}):
-        return value
-    if depth >= max_depth:
-        return _compact_leaf_value(value)
-    if isinstance(value, dict):
-        compact: dict[str, Any] = {}
-        for index, (key, item) in enumerate(value.items()):
-            if index >= llm_runtime_settings.prompt_compact_json_max_keys:
-                break
-            compact[str(key)] = _compact_json_value(
-                item,
-                depth=depth + 1,
-                max_depth=max_depth,
-            )
-        return compact
-    if isinstance(value, list):
-        return [
-            _compact_json_value(item, depth=depth + 1, max_depth=max_depth)
-            for item in value[: llm_runtime_settings.prompt_compact_json_max_list_items]
-        ]
-    return _compact_leaf_value(value)
-
-
-def _compact_leaf_value(value: Any) -> Any:
-    if isinstance(value, str):
-        stripped = value.strip()
-        if len(stripped) > llm_runtime_settings.prompt_compact_leaf_string_max_chars:
-            return stripped[: llm_runtime_settings.prompt_compact_leaf_string_max_chars]
-        return stripped
-    return value
-
-
-def _stringify_prompt_value(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, indent=2, default=str)

@@ -4252,7 +4252,7 @@ async def test_origin_warmup_skips_for_rotating_proxy_profile() -> None:
 
 
 @pytest.mark.asyncio
-async def test_origin_warmup_skips_for_real_chrome() -> None:
+async def test_origin_warmup_runs_for_real_chrome_without_saved_domain_state() -> None:
     page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
 
     await browser_runtime._maybe_warm_origin_before_navigation(
@@ -4263,6 +4263,26 @@ async def test_origin_warmup_skips_for_real_chrome() -> None:
         browser_reason="http-escalation",
         host_policy_snapshot=None,
         proxy_profile=None,
+        timeout_seconds=5,
+        phase_timings_ms={},
+    )
+
+    assert len(page.spawned_pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_origin_warmup_skips_for_real_chrome_with_saved_domain_state() -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
+
+    await browser_runtime._maybe_warm_origin_before_navigation(
+        page,
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+        browser_engine="real_chrome",
+        browser_reason="http-escalation",
+        host_policy_snapshot=None,
+        proxy_profile=None,
+        skip_for_reusable_domain_state=True,
         timeout_seconds=5,
         phase_timings_ms={},
     )
@@ -4289,6 +4309,55 @@ async def test_origin_warmup_skips_for_known_vendor_block_memory() -> None:
     assert page.spawned_pages == []
 
 
+@pytest.mark.asyncio
+async def test_browser_fetch_skips_real_chrome_warmup_when_domain_cookies_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Widget</h1></body></html>")
+    captured_skip_flags: list[bool] = []
+
+    async def _fake_runtime(**_kwargs):
+        return _FakeRuntime(page)
+
+    async def _fake_load_storage_state_for_domain(*_args, **_kwargs):
+        return {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "abc",
+                    "domain": ".example.com",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        }
+
+    async def _fake_warm_origin(*_args, **kwargs):
+        captured_skip_flags.append(bool(kwargs.get("skip_for_reusable_domain_state")))
+
+    monkeypatch.setattr(
+        browser_runtime,
+        "_load_storage_state_for_domain",
+        _fake_load_storage_state_for_domain,
+    )
+    monkeypatch.setattr(
+        browser_runtime,
+        "_maybe_warm_origin_before_navigation",
+        _fake_warm_origin,
+    )
+
+    await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        browser_engine="real_chrome",
+        browser_reason="http-escalation",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert captured_skip_flags == [True]
+
+
 def test_browser_runtime_snapshot_uses_capacity_fallback_for_pooled_runtimes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4306,10 +4375,10 @@ def test_browser_runtime_snapshot_uses_capacity_fallback_for_pooled_runtimes(
             return None
 
     monkeypatch.setattr(
-        browser_runtime, "_DIRECT_BROWSER_RUNTIMES", {"direct": _FakeRuntime()}
+        browser_runtime._BROWSER_POOL, "direct", {"direct": _FakeRuntime()}
     )
     monkeypatch.setattr(
-        browser_runtime, "_PROXIED_BROWSER_RUNTIMES", {"proxy": _FakeRuntime()}
+        browser_runtime._BROWSER_POOL, "proxied", {"proxy": _FakeRuntime()}
     )
 
     snapshot = browser_runtime.browser_runtime_snapshot()

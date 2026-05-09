@@ -3,12 +3,11 @@ import asyncio
 from dataclasses import dataclass, replace
 import inspect
 import logging
-import re
 import time
 from typing import Any, cast
 from urllib.parse import urlsplit
 import httpx
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 from patchright.async_api import Error as PlaywrightError
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 

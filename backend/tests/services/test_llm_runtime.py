@@ -7,6 +7,7 @@ import pytest
 from app.services import llm_tasks
 from app.models.llm import LLMCostLog
 from app.services import llm_runtime
+from app.services import llm_prompt_rendering
 from app.services.llm_provider_client import estimate_cost_usd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,9 +24,13 @@ def test_estimate_cost_usd_uses_configured_groq_rates() -> None:
 def test_render_html_text_preserves_br_newlines_and_uses_configured_block_tags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(llm_tasks.llm_runtime_settings, "html_render_block_tags", "p")
+    monkeypatch.setattr(
+        llm_prompt_rendering.llm_runtime_settings, "html_render_block_tags", "p"
+    )
     assert (
-        llm_tasks._render_html_text("<div><p>Line 1<br>Line 2</p><h1>Ignored</h1></div>")
+        llm_prompt_rendering.render_html_text(
+            "<div><p>Line 1<br>Line 2</p><h1>Ignored</h1></div>"
+        )
         == "Line 1\nLine 2"
     )
 
@@ -440,7 +445,7 @@ async def test_run_prompt_task_rejects_unknown_product_intelligence_reason_keys(
 def test_trim_prompt_section_body_skips_expensive_large_json_reparse() -> None:
     large_json = '{"items":[' + ",".join('"value"' for _ in range(5000)) + "]}"
 
-    trimmed = llm_tasks._trim_prompt_section_body(
+    trimmed = llm_prompt_rendering.trim_prompt_section_body(
         large_json,
         120,
         "[TRUNCATED]",
@@ -461,7 +466,7 @@ def test_truncate_html_prefers_dense_anchor_context() -> None:
     </body></html>
     """
 
-    rendered = llm_tasks._truncate_html(html, 80, anchors=["salary"])
+    rendered = llm_prompt_rendering.truncate_html(html, 80, anchors=["salary"])
 
     assert "<h1>" not in rendered
     assert "Compensation" in rendered
@@ -474,6 +479,6 @@ def test_truncate_html_renders_plain_text_blocks() -> None:
         "<h1>Product Title</h1><p>Short description.</p><ul><li>Free shipping</li></ul>"
     )
 
-    rendered = llm_tasks._truncate_html(html, 200)
+    rendered = llm_prompt_rendering.truncate_html(html, 200)
 
     assert rendered == "Product Title\nShort description.\nFree shipping"

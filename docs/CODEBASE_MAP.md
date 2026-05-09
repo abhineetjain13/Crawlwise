@@ -210,11 +210,15 @@ All selector memory is scoped by normalized `(domain, surface)`.
 | File | Purpose |
 |---|---|
 | `llm_runtime.py` | Pipeline LLM entry |
+| `llm_tasks.py` | Prompt task orchestration and typed task wrappers |
+| `llm_prompt_rendering.py` | Prompt variable rendering, HTML pruning, structured evidence shaping, and prompt truncation |
+| `llm_payloads.py` | Provider JSON parsing and task-specific payload validation |
+| `llm_cost_logging.py` | LLM cost log persistence |
 | `llm_provider_client.py` | Provider HTTP clients |
 | `llm_config_service.py` | Config CRUD and key encryption |
 | `llm_cache.py` | Redis-backed response dedupe |
 | `llm_circuit_breaker.py` | Error classification and cost protection |
-| `llm_tasks.py` | Provider retry logic |
+| `llm_budget.py` | Per-run LLM call budget guard |
 | `llm_types.py` | LLM-internal types |
 
 ---

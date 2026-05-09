@@ -12,6 +12,9 @@
         "zyte_error",
         "scalar_field_pollution"
       ],
+      "critical_issues": [
+        "scalar_field_pollution"
+      ],
       "architecture_buckets": [
         "baseline_gap",
         "variant_extraction"
@@ -129,6 +132,7 @@
       "failure_modes": [
         "crawler_missing_record"
       ],
+      "critical_issues": [],
       "architecture_buckets": [
         "record_alignment"
       ],
@@ -177,20 +181,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.goat.com/sneakers/dunk-low-black-white-dd1391-100",
-      "failure_modes": [
-        "crawler_missing_core_fields"
-      ],
-      "architecture_buckets": [
-        "core_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "core_fields",
-          "crawler": [
-            "price"
-          ],
-          "zyte": "present"
-        },
         {
           "field": "sku",
           "crawler": "DD1391 100",
@@ -262,28 +256,15 @@
       "zyte_status": "ok",
       "crawler_url": "https://stockx.com/nike-dunk-low-retro-white-black-2021",
       "failure_modes": [
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap",
+        "availability_mismatch"
+      ],
+      "critical_issues": [
         "availability_mismatch"
       ],
       "architecture_buckets": [
-        "availability_extraction",
-        "variant_extraction"
+        "availability_extraction"
       ],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 0,
-          "zyte": 6
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [],
-          "zyte": [
-            "color",
-            "size"
-          ]
-        },
         {
           "field": "title",
           "crawler": "Nike Dunk Low Retro White Black Panda",
@@ -412,29 +393,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.nike.com/t/air-force-1-07-mens-shoes-jBrhbr/CW2288-111",
-      "failure_modes": [
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "variant_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 22,
-          "zyte": 26
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [
-            "size"
-          ],
-          "zyte": [
-            "color",
-            "size"
-          ]
-        },
         {
           "field": "title",
           "crawler": "Nike Air Force 1 '07 Men's Shoes",
@@ -838,19 +800,15 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.amazon.com/dp/B08J5F3G18",
       "failure_modes": [
-        "image_coverage_gap",
+        "price_outlier"
+      ],
+      "critical_issues": [
         "price_outlier"
       ],
       "architecture_buckets": [
-        "media_extraction",
         "price_extraction"
       ],
       "mismatches": [
-        {
-          "field": "image_count",
-          "crawler": 1,
-          "zyte": 8
-        },
         {
           "field": "price",
           "crawler": "135977.51",
@@ -921,6 +879,9 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.apple.com/shop/buy-iphone/iphone-16",
       "failure_modes": [
+        "price_outlier"
+      ],
+      "critical_issues": [
         "price_outlier"
       ],
       "architecture_buckets": [
@@ -996,6 +957,9 @@
       "zyte_status": "ok",
       "crawler_url": "https://kith.com/collections/mens-footwear-sneakers/products/st40002-02000",
       "failure_modes": [
+        "identity_mismatch"
+      ],
+      "critical_issues": [
         "identity_mismatch"
       ],
       "architecture_buckets": [
@@ -1751,18 +1715,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.farfetch.com/in/shopping/men/philipp-plein-leather-disco-biker-jacket-item-18497263.aspx",
-      "failure_modes": [
-        "image_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "image_count",
-          "crawler": 5,
-          "zyte": 6
-        },
         {
           "field": "sku",
           "crawler": "14080",
@@ -1864,6 +1820,7 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.ssense.com/en-us/men/product/willy-chavarria/brown-ruff-rider-leather-jacket/19072301",
       "failure_modes": [],
+      "critical_issues": [],
       "architecture_buckets": [],
       "mismatches": [
         {
@@ -1943,6 +1900,7 @@
       "failure_modes": [
         "zyte_error"
       ],
+      "critical_issues": [],
       "architecture_buckets": [
         "baseline_gap"
       ],
@@ -2024,15 +1982,12 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.target.com/p/tobago-stripe-duvet-cover-set-levtex-home/-/A-1002150739?preselect=1002150742#lnk=sametab",
       "failure_modes": [
-        "scalar_field_pollution",
-        "crawler_missing_core_fields",
-        "crawler_missing_description",
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap"
+        "scalar_field_pollution"
+      ],
+      "critical_issues": [
+        "scalar_field_pollution"
       ],
       "architecture_buckets": [
-        "core_extraction",
-        "text_extraction",
         "variant_extraction"
       ],
       "mismatches": [
@@ -2040,31 +1995,6 @@
           "field": "size_looks_polluted",
           "crawler": "twin/twin xl",
           "zyte": "twin/twin xl"
-        },
-        {
-          "field": "core_fields",
-          "crawler": [
-            "brand",
-            "price"
-          ],
-          "zyte": "present"
-        },
-        {
-          "field": "description_best",
-          "crawler": null,
-          "zyte": "Highlights LEVTEX TOBAGO STRIPE BLUE : The Tobago Stripe Blue duvet collection is a classic ticking stripe. The set consists of a duvet cove and matching pillow shams. THE TOBAGO STRIPE BLUE DESIGN: One of our most popular sets, Tobago Stripe Blue is cool and breezy. The front is a classic stripe and the reverse is same pattern. Button closures at the bottom of the duvet cover are durable and easy to use. SOFT AND COMFORTABLE LUXURY: Made from 100% cotton that will never feel heavy, stiff or uncomfortable, the Tobago Stripe Blue Duvet Cover Set has an ultra soft feel that you’ll simply love. Our duvet cover is very generously sized to give your bedroom a feeling of comfort and luxury. Make sure it is the correct size to fit your duvet inner. EASY CARE: Pre washed for your convenience, the Selesta Blue quilt is easy to look after. Simply machine wash on a cold, gentle cycle, then line dry or tumble dry at low temperature."
-        },
-        {
-          "field": "variant_count",
-          "crawler": 0,
-          "zyte": 3
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [],
-          "zyte": [
-            "size"
-          ]
         }
       ],
       "zyte": {
@@ -2154,22 +2084,14 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.walmart.com/ip/Apple-AirPods-with-Charging-Case-2nd-Generation/604342441",
-      "failure_modes": [
-        "description_richness_gap"
-      ],
-      "architecture_buckets": [
-        "text_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
         {
           "field": "color",
           "crawler": "White",
           "zyte": "White - Out of stock"
-        },
-        {
-          "field": "description_length",
-          "crawler": 444,
-          "zyte": 750
         }
       ],
       "zyte": {
@@ -2252,6 +2174,7 @@
       "failure_modes": [
         "zyte_error"
       ],
+      "critical_issues": [],
       "architecture_buckets": [
         "baseline_gap"
       ],
@@ -2398,6 +2321,7 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.homedepot.com/p/MSI-Yellow-Pebbles-12-in-x-12-in-Polished-Quartzite-Floor-and-Wall-Tile-10-sq-ft-case-LPEBMYEL1212POL/202515091",
       "failure_modes": [],
+      "critical_issues": [],
       "architecture_buckets": [],
       "mismatches": [],
       "zyte": {
@@ -2460,13 +2384,12 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.ulta.com/p/shape-tape-concealer-xlsImpprod14251035",
       "failure_modes": [
-        "scalar_field_pollution",
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap",
-        "image_coverage_gap"
+        "scalar_field_pollution"
+      ],
+      "critical_issues": [
+        "scalar_field_pollution"
       ],
       "architecture_buckets": [
-        "media_extraction",
         "variant_extraction"
       ],
       "mismatches": [
@@ -2474,23 +2397,6 @@
           "field": "size_looks_polluted",
           "crawler": "0.33 oz",
           "zyte": "0.33 oz"
-        },
-        {
-          "field": "variant_count",
-          "crawler": 0,
-          "zyte": 48
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [],
-          "zyte": [
-            "color"
-          ]
-        },
-        {
-          "field": "image_count",
-          "crawler": 3,
-          "zyte": 12
         },
         {
           "field": "title",
@@ -2919,6 +2825,7 @@
         "crawler_missing_record",
         "zyte_error"
       ],
+      "critical_issues": [],
       "architecture_buckets": [
         "baseline_gap",
         "record_alignment"
@@ -2958,6 +2865,7 @@
       "failure_modes": [
         "zyte_error"
       ],
+      "critical_issues": [],
       "architecture_buckets": [
         "baseline_gap"
       ],
@@ -3020,31 +2928,14 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://shop.lululemon.com/p/men-joggers/Abc-Jogger/_/prod8530240",
-      "failure_modes": [
-        "crawler_missing_core_fields",
-        "description_richness_gap"
-      ],
-      "architecture_buckets": [
-        "core_extraction",
-        "text_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "core_fields",
-          "crawler": [
-            "brand"
-          ],
-          "zyte": "present"
-        },
         {
           "field": "sku",
           "crawler": "147151490",
           "zyte": "prod8530240"
-        },
-        {
-          "field": "description_length",
-          "crawler": 104,
-          "zyte": 1171
         }
       ],
       "zyte": {
@@ -3805,36 +3696,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://in.puma.com/in/en/pd/speedcat-sneakers/406329?swatch=02",
-      "failure_modes": [
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap",
-        "image_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction",
-        "variant_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 8,
-          "zyte": 16
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [
-            "color"
-          ],
-          "zyte": [
-            "color",
-            "size"
-          ]
-        },
-        {
-          "field": "image_count",
-          "crawler": 9,
-          "zyte": 10
-        },
         {
           "field": "brand",
           "crawler": "PUMA",
@@ -4094,6 +3959,7 @@
       "failure_modes": [
         "crawler_missing_record"
       ],
+      "critical_issues": [],
       "architecture_buckets": [
         "record_alignment"
       ],
@@ -4331,29 +4197,14 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.sephora.com/product/colorful-eyeshadow-P515026",
-      "failure_modes": [
-        "variant_coverage_gap",
-        "description_richness_gap"
-      ],
-      "architecture_buckets": [
-        "text_extraction",
-        "variant_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 42,
-          "zyte": 51
-        },
         {
           "field": "sku",
           "crawler": "COLORFUL-EYESHADOW-P515026",
           "zyte": "2820108"
-        },
-        {
-          "field": "description_length",
-          "crawler": 140,
-          "zyte": 993
         }
       ],
       "zyte": {
@@ -5116,44 +4967,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.zappos.com/p/womens-hoka-bondi-9-berry-jam-berry-patch/product/9984296/color/318988",
-      "failure_modes": [
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap",
-        "image_coverage_gap",
-        "description_richness_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction",
-        "text_extraction",
-        "variant_extraction"
-      ],
-      "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 16,
-          "zyte": 40
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [
-            "size"
-          ],
-          "zyte": [
-            "color",
-            "size"
-          ]
-        },
-        {
-          "field": "image_count",
-          "crawler": 1,
-          "zyte": 7
-        },
-        {
-          "field": "description_length",
-          "crawler": 523,
-          "zyte": 1638
-        }
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
+      "mismatches": [],
       "zyte": {
         "url": "https://www.zappos.com/kratos/p/womens-hoka-bondi-9-berry-jam-berry-patch/product/9984296/color/318988?zlfid=191&ref=pd_search_nr-1-bqcp_1",
         "status": "ok",
@@ -5556,29 +5373,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.macys.com/shop/product/tommy-hilfiger-mens-hiday-casualized-hybrid-oxfords?ID=19116329",
-      "failure_modes": [
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "variant_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 9,
-          "zyte": 20
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [
-            "color"
-          ],
-          "zyte": [
-            "color",
-            "size"
-          ]
-        },
         {
           "field": "sku",
           "crawler": "199277621121USA",
@@ -5834,39 +5632,19 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.bhphotovideo.com/c/product/1882297-REG/cozyla_cd_8v543f0_white_us_32_4k_calendar_gen2_white.html",
       "failure_modes": [
-        "crawler_missing_core_fields",
-        "image_coverage_gap",
-        "availability_mismatch",
-        "description_richness_gap"
+        "availability_mismatch"
+      ],
+      "critical_issues": [
+        "availability_mismatch"
       ],
       "architecture_buckets": [
-        "availability_extraction",
-        "core_extraction",
-        "media_extraction",
-        "text_extraction"
+        "availability_extraction"
       ],
       "mismatches": [
-        {
-          "field": "core_fields",
-          "crawler": [
-            "image_url"
-          ],
-          "zyte": "present"
-        },
-        {
-          "field": "image_count",
-          "crawler": 0,
-          "zyte": 7
-        },
         {
           "field": "availability",
           "crawler": "in_stock",
           "zyte": "out_of_stock"
-        },
-        {
-          "field": "description_length",
-          "crawler": 770,
-          "zyte": 934
         }
       ],
       "zyte": {
@@ -6079,46 +5857,14 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.asos.com/us/asos-curve/asos-design-curve-lightweight-pull-on-barrel-pants-in-darkwash/prd/210397084",
-      "failure_modes": [
-        "crawler_missing_core_fields",
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap",
-        "description_richness_gap"
-      ],
-      "architecture_buckets": [
-        "core_extraction",
-        "text_extraction",
-        "variant_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "core_fields",
-          "crawler": [
-            "price"
-          ],
-          "zyte": "present"
-        },
-        {
-          "field": "variant_count",
-          "crawler": 0,
-          "zyte": 6
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [],
-          "zyte": [
-            "size"
-          ]
-        },
         {
           "field": "sku",
           "crawler": "155394360",
           "zyte": "210397084"
-        },
-        {
-          "field": "description_length",
-          "crawler": 174,
-          "zyte": 499
         }
       ],
       "zyte": {
@@ -6235,27 +5981,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.wayfair.com/furniture/pdp/flexsteel-bryce-power-reclining-sofa-with-power-headrest-xtya1522.html?piid=94673717&auctionId=db4b38eb-7955-4fc9-8d81-0dae00f68111&trackingId={\"adType\":\"WSP\",\"auctionId\":\"db4b38eb-7955-4fc9-8d81-0dae00f68111\"}&adTypeId=1",
-      "failure_modes": [
-        "crawler_missing_core_fields",
-        "image_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "core_extraction",
-        "media_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "core_fields",
-          "crawler": [
-            "brand"
-          ],
-          "zyte": "present"
-        },
-        {
-          "field": "image_count",
-          "crawler": 13,
-          "zyte": 14
-        },
         {
           "field": "title",
           "crawler": "Flexsteel Bryce Power Reclining Sofa with Power Headrest & Reviews | Wayfair",
@@ -6372,6 +6101,7 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.zara.com/us/en/rustic-cotton-t-shirt-p04424306.html",
       "failure_modes": [],
+      "critical_issues": [],
       "architecture_buckets": [],
       "mismatches": [
         {
@@ -6544,18 +6274,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://us.frankbody.com/products/original-coffee-scrub",
-      "failure_modes": [
-        "image_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "image_count",
-          "crawler": 10,
-          "zyte": 15
-        },
         {
           "field": "brand",
           "crawler": "Frank Body",
@@ -6647,26 +6369,15 @@
       "zyte_status": "ok",
       "crawler_url": "https://colourpop.com/products/going-coconuts-eyeshadow-palette",
       "failure_modes": [
-        "variant_coverage_gap",
-        "image_coverage_gap",
+        "identity_mismatch"
+      ],
+      "critical_issues": [
         "identity_mismatch"
       ],
       "architecture_buckets": [
-        "identity_extraction",
-        "media_extraction",
-        "variant_extraction"
+        "identity_extraction"
       ],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 8,
-          "zyte": 26
-        },
-        {
-          "field": "image_count",
-          "crawler": 11,
-          "zyte": 13
-        },
         {
           "field": "title",
           "crawler": "Going Coconuts",
@@ -6972,19 +6683,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.fashionnova.com/products/just-vibes-strapless-pant-set-yellow",
-      "failure_modes": [
-        "image_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction"
-      ],
-      "mismatches": [
-        {
-          "field": "image_count",
-          "crawler": 8,
-          "zyte": 12
-        }
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
+      "mismatches": [],
       "zyte": {
         "url": "https://www.fashionnova.com/products/just-vibes-strapless-pant-set-yellow?recommendationAttributionId=error-nosto-1-fallback-nosto-1-copy-1720644688978",
         "status": "ok",
@@ -7107,6 +6809,7 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.puravidabracelets.com/products/black-seascape-stretch-bracelet",
       "failure_modes": [],
+      "critical_issues": [],
       "architecture_buckets": [],
       "mismatches": [
         {
@@ -7623,11 +7326,12 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.untuckit.com/collections/shirts/products/cameron-wr-2",
       "failure_modes": [
-        "variant_axis_pollution",
-        "description_richness_gap"
+        "variant_axis_pollution"
+      ],
+      "critical_issues": [
+        "variant_axis_pollution"
       ],
       "architecture_buckets": [
-        "text_extraction",
         "variant_extraction"
       ],
       "mismatches": [
@@ -7686,11 +7390,6 @@
           "field": "size",
           "crawler": "Small",
           "zyte": "S"
-        },
-        {
-          "field": "description_length",
-          "crawler": 47,
-          "zyte": 709
         }
       ],
       "zyte": {
@@ -8364,6 +8063,7 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.decathlon.co.uk/p/pressurised-padel-balls-pb-speed-tri-pack/347273/m8804642",
       "failure_modes": [],
+      "critical_issues": [],
       "architecture_buckets": [],
       "mismatches": [],
       "zyte": {
@@ -8430,6 +8130,7 @@
       "failure_modes": [
         "zyte_error"
       ],
+      "critical_issues": [],
       "architecture_buckets": [
         "baseline_gap"
       ],
@@ -8514,20 +8215,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.discogs.com/release/249504-Rick-Astley-Never-Gonna-Give-You-Up?redirected=true",
-      "failure_modes": [
-        "crawler_missing_core_fields"
-      ],
-      "architecture_buckets": [
-        "core_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "core_fields",
-          "crawler": [
-            "brand"
-          ],
-          "zyte": "present"
-        },
         {
           "field": "sku",
           "crawler": "SW1hZ2U6NjcxOTYzNw==",
@@ -8599,25 +8290,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.ifixit.com/products/iphone-16-plus-battery",
-      "failure_modes": [
-        "variant_coverage_gap",
-        "image_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction",
-        "variant_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 2,
-          "zyte": 3
-        },
-        {
-          "field": "image_count",
-          "crawler": 2,
-          "zyte": 4
-        },
         {
           "field": "brand",
           "crawler": "iFixit",
@@ -8712,13 +8388,12 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.vitacost.com/vitacost-vitamin-d3-mini-gels",
       "failure_modes": [
-        "scalar_field_pollution",
-        "image_coverage_gap",
-        "description_richness_gap"
+        "scalar_field_pollution"
+      ],
+      "critical_issues": [
+        "scalar_field_pollution"
       ],
       "architecture_buckets": [
-        "media_extraction",
-        "text_extraction",
         "variant_extraction"
       ],
       "mismatches": [
@@ -8728,19 +8403,9 @@
           "zyte": "1 Softgel"
         },
         {
-          "field": "image_count",
-          "crawler": 1,
-          "zyte": 2
-        },
-        {
           "field": "size",
           "crawler": "100 Softgels 200 Softgels 365 Softgels",
           "zyte": "1 Softgel"
-        },
-        {
-          "field": "description_length",
-          "crawler": 157,
-          "zyte": 2028
         }
       ],
       "zyte": {
@@ -8801,6 +8466,7 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.rockler.com/rockler-table-saw-crosscut-sled",
       "failure_modes": [],
+      "critical_issues": [],
       "architecture_buckets": [],
       "mismatches": [],
       "zyte": {
@@ -8874,25 +8540,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.backmarket.com/en-us/p/iphone-15-plus",
-      "failure_modes": [
-        "crawler_missing_description",
-        "image_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction",
-        "text_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "description_best",
-          "crawler": null,
-          "zyte": "Absolutely amazing, I was very skeptical about buying from this website. I DO NOT regret it. Phone came with 87% battery life (very very good) especially for a refurbished phone. I will be buying another iPhone from them! Also real quick, when I opened the package and inspected the phone, it was in really good condition. No scratches or dents. Looked brand NEW! Thank you so much for the pristine iPhone 15 plus !!!!!! Show more"
-        },
-        {
-          "field": "image_count",
-          "crawler": 1,
-          "zyte": 8
-        },
         {
           "field": "brand",
           "crawler": "Apple",
@@ -9574,16 +9225,13 @@
       "crawler_url": "https://31philliplim.com/collections/the-luna-bag-1/products/luna-1",
       "failure_modes": [
         "scalar_field_pollution",
-        "variant_axis_pollution",
-        "variant_coverage_gap",
-        "image_coverage_gap",
-        "price_outlier",
-        "description_richness_gap"
+        "variant_axis_pollution"
+      ],
+      "critical_issues": [
+        "scalar_field_pollution",
+        "variant_axis_pollution"
       ],
       "architecture_buckets": [
-        "media_extraction",
-        "price_extraction",
-        "text_extraction",
         "variant_extraction"
       ],
       "mismatches": [
@@ -9629,34 +9277,9 @@
           ]
         },
         {
-          "field": "variant_count",
-          "crawler": 3,
-          "zyte": 24
-        },
-        {
-          "field": "image_count",
-          "crawler": 13,
-          "zyte": 21
-        },
-        {
           "field": "sku",
           "crawler": "AE26-B570-VRA-LI600",
           "zyte": "10065661296954"
-        },
-        {
-          "field": "price",
-          "crawler": "59400.00",
-          "zyte": "595.00"
-        },
-        {
-          "field": "currency",
-          "crawler": "INR",
-          "zyte": "USD"
-        },
-        {
-          "field": "description_length",
-          "crawler": 444,
-          "zyte": 566
         }
       ],
       "zyte": {
@@ -10273,6 +9896,9 @@
       "failure_modes": [
         "identity_mismatch"
       ],
+      "critical_issues": [
+        "identity_mismatch"
+      ],
       "architecture_buckets": [
         "identity_extraction"
       ],
@@ -10349,30 +9975,15 @@
       "zyte_status": "ok",
       "crawler_url": "https://ar.puma.com/pd/zapatillas-mostro-ecstasy-unisex/397328.html",
       "failure_modes": [
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap",
+        "price_outlier"
+      ],
+      "critical_issues": [
         "price_outlier"
       ],
       "architecture_buckets": [
-        "price_extraction",
-        "variant_extraction"
+        "price_extraction"
       ],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 19,
-          "zyte": 21
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [
-            "size"
-          ],
-          "zyte": [
-            "color",
-            "size"
-          ]
-        },
         {
           "field": "color",
           "crawler": "Verde",
@@ -10731,19 +10342,15 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.karenmillen.com/eu/product/karen-millen-cotton-utility-button-detail-barrel-leg-trouser_bkk28382",
       "failure_modes": [
-        "image_coverage_gap",
+        "availability_mismatch"
+      ],
+      "critical_issues": [
         "availability_mismatch"
       ],
       "architecture_buckets": [
-        "availability_extraction",
-        "media_extraction"
+        "availability_extraction"
       ],
       "mismatches": [
-        {
-          "field": "image_count",
-          "crawler": 5,
-          "zyte": 8
-        },
         {
           "field": "availability",
           "crawler": "limited_stock",
@@ -11025,43 +10632,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail",
-      "failure_modes": [
-        "crawler_missing_core_fields",
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap",
-        "image_coverage_gap"
-      ],
-      "architecture_buckets": [
-        "core_extraction",
-        "media_extraction",
-        "variant_extraction"
-      ],
-      "mismatches": [
-        {
-          "field": "core_fields",
-          "crawler": [
-            "brand"
-          ],
-          "zyte": "present"
-        },
-        {
-          "field": "variant_count",
-          "crawler": 0,
-          "zyte": 6
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [],
-          "zyte": [
-            "size"
-          ]
-        },
-        {
-          "field": "image_count",
-          "crawler": 1,
-          "zyte": 8
-        }
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
+      "mismatches": [],
       "zyte": {
         "url": "https://www.firstcry.com/babyhug/babyhug-denim-woven-sleeveless-top-and-pant-set-with-floral-print-blue/22346676/product-detail",
         "status": "ok",
@@ -11164,34 +10738,15 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.kitchenaid.com/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html",
       "failure_modes": [
-        "variant_coverage_gap",
-        "variant_axis_coverage_gap",
-        "image_coverage_gap",
+        "price_outlier"
+      ],
+      "critical_issues": [
         "price_outlier"
       ],
       "architecture_buckets": [
-        "media_extraction",
-        "price_extraction",
-        "variant_extraction"
+        "price_extraction"
       ],
       "mismatches": [
-        {
-          "field": "variant_count",
-          "crawler": 0,
-          "zyte": 4
-        },
-        {
-          "field": "variant_axes",
-          "crawler": [],
-          "zyte": [
-            "color"
-          ]
-        },
-        {
-          "field": "image_count",
-          "crawler": 5,
-          "zyte": 6
-        },
         {
           "field": "title",
           "crawler": "13-Cup Food Processor",
@@ -11304,15 +10859,12 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.phase-eight.com/product/lucinda-spot-midi-dress-10015500806.html",
       "failure_modes": [
-        "variant_axis_pollution",
-        "crawler_missing_core_fields",
-        "image_coverage_gap",
-        "description_richness_gap"
+        "variant_axis_pollution"
+      ],
+      "critical_issues": [
+        "variant_axis_pollution"
       ],
       "architecture_buckets": [
-        "core_extraction",
-        "media_extraction",
-        "text_extraction",
         "variant_extraction"
       ],
       "mismatches": [
@@ -11338,27 +10890,9 @@
           "zyte": []
         },
         {
-          "field": "core_fields",
-          "crawler": [
-            "brand",
-            "image_url"
-          ],
-          "zyte": "present"
-        },
-        {
-          "field": "image_count",
-          "crawler": 0,
-          "zyte": 13
-        },
-        {
           "field": "sku",
           "crawler": "PE1001550",
           "zyte": "10015500806"
-        },
-        {
-          "field": "description_length",
-          "crawler": 18,
-          "zyte": 561
         }
       ],
       "zyte": {
@@ -11478,6 +11012,7 @@
       "zyte_status": "ok",
       "crawler_url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos/products/italian-seersucker-sutton-suit-2",
       "failure_modes": [],
+      "critical_issues": [],
       "architecture_buckets": [],
       "mismatches": [
         {
@@ -11911,21 +11446,15 @@
       "zyte_status": "ok",
       "crawler_url": "https://savannahs.com/collections/all-boots/products/pavlova-100-lace-up-blush-satin-boots-cl28517s",
       "failure_modes": [
-        "image_coverage_gap",
-        "availability_mismatch",
-        "description_richness_gap"
+        "availability_mismatch"
+      ],
+      "critical_issues": [
+        "availability_mismatch"
       ],
       "architecture_buckets": [
-        "availability_extraction",
-        "media_extraction",
-        "text_extraction"
+        "availability_extraction"
       ],
       "mismatches": [
-        {
-          "field": "image_count",
-          "crawler": 7,
-          "zyte": 8
-        },
         {
           "field": "sku",
           "crawler": "CL28517S360",
@@ -11940,11 +11469,6 @@
           "field": "availability",
           "crawler": "in_stock",
           "zyte": "out_of_stock"
-        },
-        {
-          "field": "description_length",
-          "crawler": 219,
-          "zyte": 285
         }
       ],
       "zyte": {
@@ -12135,29 +11659,14 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://www.grailed.com/listings/92502018-peter-do-velcro-strap-set-up-blazer-pants",
-      "failure_modes": [
-        "image_coverage_gap",
-        "description_richness_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction",
-        "text_extraction"
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
       "mismatches": [
-        {
-          "field": "image_count",
-          "crawler": 12,
-          "zyte": 21
-        },
         {
           "field": "size",
           "crawler": "xs",
           "zyte": "36"
-        },
-        {
-          "field": "description_length",
-          "crawler": 507,
-          "zyte": 743
         }
       ],
       "zyte": {
@@ -12247,26 +11756,10 @@
       "alignment": "matched",
       "zyte_status": "ok",
       "crawler_url": "https://desertcart.in/products/808107894-hormone-healthy-eats-100-recipes-to-balance-your-hormones-support",
-      "failure_modes": [
-        "image_coverage_gap",
-        "description_richness_gap"
-      ],
-      "architecture_buckets": [
-        "media_extraction",
-        "text_extraction"
-      ],
-      "mismatches": [
-        {
-          "field": "image_count",
-          "crawler": 2,
-          "zyte": 6
-        },
-        {
-          "field": "description_length",
-          "crawler": 1211,
-          "zyte": 1819
-        }
-      ],
+      "failure_modes": [],
+      "critical_issues": [],
+      "architecture_buckets": [],
+      "mismatches": [],
       "zyte": {
         "url": "https://www.desertcart.in/products/808107894-hormone-healthy-eats-100-recipes-to-balance-your-hormones-support?source=search",
         "status": "ok",

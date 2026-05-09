@@ -11,7 +11,6 @@ from app.services.config.field_mappings import (
     APPLY_URL_FIELD,
     CANONICAL_URL_FIELD,
     URL_FIELD,
-    VARIANTS_FIELD,
 )
 
 _EXPORTS_PATH = Path(__file__).with_name("field_mappings.exports.json")

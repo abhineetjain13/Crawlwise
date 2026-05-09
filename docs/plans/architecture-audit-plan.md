@@ -2,7 +2,7 @@
 
 **Created:** 2026-05-08
 **Agent:** Codex
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Touches buckets:** Crawl orchestration, acquisition, extraction, LLM runtime, structure tests
 
 ## Goal
@@ -17,11 +17,11 @@ Turn `docs/audits/architecture-audit-plan.md` into current, executable architect
 - [x] Listing DOM duplicate helpers are removed in favor of `extract/listing_card_fragments.py`.
 - [x] `pipeline/core.py` facade is deleted after all imports/tests stop using it.
 - [x] Browser runtime pool state has one explicit owner and public runtime functions stay stable.
-- [ ] Acquisition page flow and traversal are split by real ownership with no behavior change.
-- [ ] Variant/detail extraction owners are partially consolidated without redesigning detail candidate selection.
-- [ ] LLM prompt, parse, provider orchestration, and budget/cache concerns are separated.
+- [x] Acquisition page flow and traversal are split by real ownership with no behavior change.
+- [x] Variant/detail extraction owners are partially consolidated without redesigning detail candidate selection.
+- [x] LLM prompt, parse, provider orchestration, and budget/cache concerns are separated.
 - [x] `backend/tests/services/test_structure.py` ratchets every completed cleanup.
-- [ ] `.\.venv\Scripts\python.exe -m pytest tests -q` exits 0.
+- [x] `.\.venv\Scripts\python.exe -m pytest tests -q` exits 0.
 
 ## Do Not Touch
 
@@ -51,25 +51,25 @@ Turn `docs/audits/architecture-audit-plan.md` into current, executable architect
 **Verify:** browser/acquisition focused tests.
 
 ### Slice 4: Acquisition Flow Decomposition
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Files:** `acquisition/traversal.py`, `acquisition/browser_page_flow.py`, moved owners, tests
 **What:** Split traversal by mode/policy/result helpers. Split page flow by navigation, readiness, capture/finalization. Preserve behavior.
 **Verify:** traversal, browser expansion, crawl fetch tests.
 
 ### Slice 5: Extraction And Variant Decomposition
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Files:** `extract/shared_variant_logic.py`, `extract/variant_record_normalization.py`, `extract/detail_materializer.py`, `extract/detail_record_finalizer.py`, tests
 **What:** Consolidate variant axis, DOM cues, grouping, and normalization into clear owners. Separate detail assembly from detail quality cleanup. Do not redesign field-by-field candidate selection.
 **Verify:** detail, variant, field value, pipeline tests.
 
 ### Slice 6: LLM Runtime Cleanup
-**Status:** TODO
+**Status:** COMPLETE
 **Files:** `llm_tasks.py`, LLM runtime owners, tests
 **What:** Separate prompt building, response parsing, provider call orchestration, and budget/cache guards. Preserve explicit LLM gating.
 **Verify:** LLM runtime tests.
 
 ### Slice 7: Architecture Ratchet
-**Status:** TODO
+**Status:** COMPLETE
 **Files:** `backend/tests/services/test_structure.py`, affected owners
 **What:** Tighten structure budgets after each split. Remove allowlist entries in the same slice as debt removal. Add guard for stale facades.
 **Verify:** full backend suite and ruff.
@@ -95,3 +95,7 @@ Turn `docs/audits/architecture-audit-plan.md` into current, executable architect
 - 2026-05-08: Structure ratchet passes with exact current LOC budgets and a stale-facade guard for deleted `pipeline/core.py` (`9 passed`).
 - 2026-05-08: Focused extraction/pipeline verify passed: `test_field_value_dom.py`, `test_detail_extractor_structured_sources.py`, `test_detail_extractor_priority_and_selector_self_heal.py`, `test_shared_variant_logic.py`, `test_pipeline_core.py` (`315 passed, 1 skipped`).
 - 2026-05-08: Ruff passed on touched backend files and tests. Full `ruff check app tests` is blocked by unrelated existing unused imports in `acquisition/browser_page_flow.py` and `config/public_record_policy.py`.
+- 2026-05-09: Rewired stale `harness_support.py` import from deleted `pipeline.core` facade to `pipeline.extraction_loop`; full suite collection now reaches all tests.
+- 2026-05-09: Split LLM task internals into `llm_prompt_rendering.py`, `llm_payloads.py`, and `llm_cost_logging.py`; `llm_tasks.py` now owns orchestration and task wrappers only. Updated `docs/CODEBASE_MAP.md` and lowered `llm_tasks.py` LOC budget to 480.
+- 2026-05-09: Fixed final extraction regressions found by full suite: irrelevant same-site structured product payloads now carry the mismatch flag used by shell rejection, and variant normalization strips configured option-value noise such as `OptOut` after flattening.
+- 2026-05-09: Final verify passed: `.\.venv\Scripts\python.exe -m pytest tests -q` (`1541 passed, 4 skipped`) and `.\.venv\Scripts\python.exe -m ruff check app tests` (`All checks passed`).

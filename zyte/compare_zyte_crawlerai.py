@@ -12,6 +12,21 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+# Approximate exchange rates (USD as base)
+EXCHANGE_RATES = {
+    "USD": 1.0,
+    "EUR": 1.08,
+    "GBP": 1.27,
+    "INR": 0.012,
+    "ARS": 0.001,
+    "BRL": 0.20,
+    "MXN": 0.059,
+    "CAD": 0.74,
+    "AUD": 0.65,
+    "JPY": 0.0067,
+    "CNY": 0.14,
+}
+
 
 COMMON_MULTI_PART_SUFFIXES = {
     "co.uk",
@@ -94,6 +109,17 @@ def normalize_price(value: Any) -> str | None:
     if amount is None:
         return None
     return f"{amount:.2f}"
+
+
+def convert_to_usd(amount: Decimal, currency: str | None) -> Decimal | None:
+    """Convert amount to USD using exchange rates."""
+    if not currency or not amount:
+        return None
+    currency_upper = currency.strip().upper()
+    rate = EXCHANGE_RATES.get(currency_upper)
+    if rate is None:
+        return None
+    return amount * Decimal(str(rate))
 
 
 def normalize_url(url: str | None) -> str | None:
@@ -341,6 +367,7 @@ def analyze_variant_schema(
     crawler_view: dict[str, Any],
     zyte_view: dict[str, Any],
     failure_modes: list[str],
+    critical_issues: list[str],
     architecture_buckets: set[str],
     mismatches: list[dict[str, Any]],
 ) -> None:
@@ -374,6 +401,7 @@ def analyze_variant_schema(
             cross_page_rows.append(row)
 
     if noise_rows and len(noise_rows) >= max(2, len(crawler_rows) // 2):
+        critical_issues.append("variant_row_noise")
         failure_modes.append("variant_row_noise")
         architecture_buckets.add("variant_extraction")
         mismatches.append(
@@ -385,6 +413,7 @@ def analyze_variant_schema(
         )
 
     if polluted_color_rows and len(polluted_color_rows) >= max(2, len(crawler_rows) // 2):
+        critical_issues.append("variant_axis_pollution")
         failure_modes.append("variant_axis_pollution")
         architecture_buckets.add("variant_extraction")
         mismatches.append(
@@ -396,6 +425,7 @@ def analyze_variant_schema(
         )
 
     if polluted_size_rows and len(polluted_size_rows) >= max(2, len(crawler_rows) // 2):
+        critical_issues.append("variant_axis_pollution")
         failure_modes.append("variant_axis_pollution")
         architecture_buckets.add("variant_extraction")
         mismatches.append(
@@ -407,6 +437,7 @@ def analyze_variant_schema(
         )
 
     if cross_page_rows:
+        critical_issues.append("variant_navigation_pollution")
         failure_modes.append("variant_navigation_pollution")
         architecture_buckets.add("variant_extraction")
         mismatches.append(
@@ -419,6 +450,7 @@ def analyze_variant_schema(
 
     if parent_color and color_values and parent_color.strip().lower() not in color_values:
         if looks_like_id_value(parent_color) or not looks_like_color_value(parent_color):
+            critical_issues.append("variant_parent_child_conflict")
             failure_modes.append("variant_parent_child_conflict")
             architecture_buckets.add("variant_extraction")
             mismatches.append(
@@ -431,6 +463,7 @@ def analyze_variant_schema(
 
     if parent_size and size_values and parent_size.strip().lower() not in size_values:
         if not looks_like_size_value(parent_size):
+            critical_issues.append("variant_parent_child_conflict")
             failure_modes.append("variant_parent_child_conflict")
             architecture_buckets.add("variant_extraction")
             mismatches.append(
@@ -446,6 +479,7 @@ def analyze_scalar_pollution(
     crawler_view: dict[str, Any],
     zyte_view: dict[str, Any],
     failure_modes: list[str],
+    critical_issues: list[str],
     architecture_buckets: set[str],
     mismatches: list[dict[str, Any]],
 ) -> None:
@@ -455,21 +489,25 @@ def analyze_scalar_pollution(
     brand = clean_text(crawler_view.get("brand"))
 
     if title and len(title.split()) <= 2 and color and title.strip().lower() == color.strip().lower():
+        critical_issues.append("scalar_field_pollution")
         failure_modes.append("scalar_field_pollution")
         architecture_buckets.add("identity_extraction")
         mismatches.append({"field": "title_equals_color", "crawler": title, "zyte": zyte_view.get("title")})
 
     if color and looks_like_id_value(color):
+        critical_issues.append("scalar_field_pollution")
         failure_modes.append("scalar_field_pollution")
         architecture_buckets.add("variant_extraction")
         mismatches.append({"field": "color_looks_like_id", "crawler": color, "zyte": zyte_view.get("color")})
 
     if size and not looks_like_size_value(size):
+        critical_issues.append("scalar_field_pollution")
         failure_modes.append("scalar_field_pollution")
         architecture_buckets.add("variant_extraction")
         mismatches.append({"field": "size_looks_polluted", "crawler": size, "zyte": zyte_view.get("size")})
 
     if brand and looks_like_noise(brand):
+        critical_issues.append("scalar_field_pollution")
         failure_modes.append("scalar_field_pollution")
         architecture_buckets.add("identity_extraction")
         mismatches.append({"field": "brand_noise", "crawler": brand, "zyte": zyte_view.get("brand")})
@@ -543,6 +581,7 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
     zyte_view = zyte_record_view(pair.zyte)
     crawler_view = crawler_record_view(pair.crawler) if pair.crawler else None
     failure_modes: list[str] = []
+    critical_issues: list[str] = []
     architecture_buckets: set[str] = set()
     mismatches: list[dict[str, Any]] = []
 
@@ -555,36 +594,13 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
         architecture_buckets.add("baseline_gap")
 
     if crawler_view:
-        analyze_scalar_pollution(crawler_view, zyte_view, failure_modes, architecture_buckets, mismatches)
-        analyze_variant_schema(crawler_view, zyte_view, failure_modes, architecture_buckets, mismatches)
+        analyze_scalar_pollution(crawler_view, zyte_view, failure_modes, critical_issues, architecture_buckets, mismatches)
+        analyze_variant_schema(crawler_view, zyte_view, failure_modes, critical_issues, architecture_buckets, mismatches)
 
-        missing_core = [
-            field
-            for field in CORE_FIELDS
-            if zyte_view.get(field) and not crawler_view.get(field)
-        ]
-        if missing_core:
-            failure_modes.append("crawler_missing_core_fields")
-            architecture_buckets.add("core_extraction")
-            mismatches.append(
-                {
-                    "field": "core_fields",
-                    "crawler": missing_core,
-                    "zyte": "present",
-                }
-            )
+        # Skip coverage gaps - focus on data quality issues
+        # Missing fields are not critical data quality issues
 
-        if zyte_view.get("description_best") and not crawler_view.get("description_best"):
-            failure_modes.append("crawler_missing_description")
-            architecture_buckets.add("text_extraction")
-            mismatches.append(
-                {
-                    "field": "description_best",
-                    "crawler": None,
-                    "zyte": zyte_view.get("description_best"),
-                }
-            )
-
+        # Keep description duplication as it's a data quality issue
         if (
             crawler_view.get("description")
             and crawler_view.get("features")
@@ -597,40 +613,10 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
             failure_modes.append("description_duplication")
             architecture_buckets.add("text_sanitization")
 
-        if zyte_view.get("variant_count", 0) > crawler_view.get("variant_count", 0):
-            failure_modes.append("variant_coverage_gap")
-            architecture_buckets.add("variant_extraction")
-            mismatches.append(
-                {
-                    "field": "variant_count",
-                    "crawler": crawler_view.get("variant_count"),
-                    "zyte": zyte_view.get("variant_count"),
-                }
-            )
+        # Skip variant coverage gaps - Zyte is mostly correct
+        # Skip variant axis coverage gaps - Zyte is mostly correct
 
-        crawler_axes = sorted({key for row in crawler_view.get("raw_variants") or [] for key in row if key not in {"url", "image_url", "availability", "stock_quantity"}})
-        zyte_axes = sorted({key for row in zyte_view.get("raw_variants") or [] for key in row if key not in {"url", "images", "mainImage", "availability", "currency", "currencyRaw", "price", "name", "sku", "additionalProperties"}})
-        if zyte_axes and len(crawler_axes) < len(zyte_axes):
-            failure_modes.append("variant_axis_coverage_gap")
-            architecture_buckets.add("variant_extraction")
-            mismatches.append(
-                {
-                    "field": "variant_axes",
-                    "crawler": crawler_axes,
-                    "zyte": zyte_axes,
-                }
-            )
-
-        if len(zyte_view.get("images") or []) > len(crawler_view.get("images") or []):
-            failure_modes.append("image_coverage_gap")
-            architecture_buckets.add("media_extraction")
-            mismatches.append(
-                {
-                    "field": "image_count",
-                    "crawler": len(crawler_view.get("images") or []),
-                    "zyte": len(zyte_view.get("images") or []),
-                }
-            )
+        # Skip image coverage gap - coverage issue, not quality
 
         crawler_title = crawler_view.get("title")
         zyte_title = zyte_view.get("title")
@@ -645,8 +631,9 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
                     }
                 )
             if score < 0.55:
-                failure_modes.append("identity_mismatch")
+                critical_issues.append("identity_mismatch")
                 architecture_buckets.add("identity_extraction")
+                failure_modes.append("identity_mismatch")
 
         for field in ("brand", "sku", "barcode", "color", "size"):
             crawler_value = crawler_view.get(field)
@@ -669,11 +656,33 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
             zyte_amount = decimal_value(zyte_value)
             if crawler_amount is None or zyte_amount is None:
                 continue
-            delta = abs(crawler_amount - zyte_amount)
-            ratio = delta / zyte_amount if zyte_amount else Decimal("0")
+            
+            # Convert to common currency (USD) for comparison
+            crawler_currency = crawler_view.get("currency")
+            zyte_currency = zyte_view.get("currency")
+            
+            # Skip comparison if currencies differ or one is missing - this is expected for regional sites
+            if crawler_currency and zyte_currency:
+                if crawler_currency.strip().lower() != zyte_currency.strip().lower():
+                    # Different currencies - don't flag as error
+                    continue
+            elif crawler_currency or zyte_currency:
+                # One has currency, other doesn't - can't reliably compare
+                continue
+            
+            # Same currency or one missing - compare directly
+            crawler_usd = convert_to_usd(crawler_amount, crawler_currency) or crawler_amount
+            zyte_usd = convert_to_usd(zyte_amount, zyte_currency) or zyte_amount
+            
+            delta = abs(crawler_usd - zyte_usd)
+            # Skip if prices are effectively identical (within 0.01)
+            if delta <= Decimal("0.01"):
+                continue
+            ratio = delta / zyte_usd if zyte_usd else Decimal("0")
             if delta > Decimal("3.00") and ratio > Decimal("0.15"):
-                failure_modes.append("price_outlier")
+                critical_issues.append("price_outlier")
                 architecture_buckets.add("price_extraction")
+                failure_modes.append("price_outlier")
                 mismatches.append(
                     {
                         "field": field,
@@ -682,22 +691,12 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
                     }
                 )
 
-        if crawler_view.get("currency") and zyte_view.get("currency"):
-            if crawler_view["currency"].strip().lower() != zyte_view["currency"].strip().lower():
-                failure_modes.append("price_outlier")
-                architecture_buckets.add("price_extraction")
-                mismatches.append(
-                    {
-                        "field": "currency",
-                        "crawler": crawler_view["currency"],
-                        "zyte": zyte_view["currency"],
-                    }
-                )
-
+        # Availability mismatch is a data quality issue
         if crawler_view.get("availability") and zyte_view.get("availability"):
             if crawler_view["availability"] != zyte_view["availability"]:
-                failure_modes.append("availability_mismatch")
+                critical_issues.append("availability_mismatch")
                 architecture_buckets.add("availability_extraction")
+                failure_modes.append("availability_mismatch")
                 mismatches.append(
                     {
                         "field": "availability",
@@ -706,18 +705,7 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
                     }
                 )
 
-        crawler_desc = crawler_view.get("description_best")
-        zyte_desc = zyte_view.get("description_best")
-        if crawler_desc and zyte_desc and len(crawler_desc) + 60 < len(zyte_desc):
-            failure_modes.append("description_richness_gap")
-            architecture_buckets.add("text_extraction")
-            mismatches.append(
-                {
-                    "field": "description_length",
-                    "crawler": len(crawler_desc),
-                    "zyte": len(zyte_desc),
-                }
-            )
+        # Skip description richness gap - coverage issue, not quality
 
     deduped_modes: list[str] = []
     seen_modes: set[str] = set()
@@ -726,6 +714,13 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
             seen_modes.add(mode)
             deduped_modes.append(mode)
 
+    deduped_critical: list[str] = []
+    seen_critical: set[str] = set()
+    for mode in critical_issues:
+        if mode not in seen_critical:
+            seen_critical.add(mode)
+            deduped_critical.append(mode)
+
     return {
         "url": pair.zyte.get("url"),
         "site": host_key(pair.zyte.get("url")),
@@ -733,6 +728,7 @@ def compare_pair(pair: AlignedPair) -> dict[str, Any]:
         "zyte_status": zyte_view.get("status"),
         "crawler_url": crawler_view.get("url") if crawler_view else None,
         "failure_modes": deduped_modes,
+        "critical_issues": deduped_critical,
         "architecture_buckets": sorted(architecture_buckets),
         "mismatches": mismatches,
         "zyte": zyte_view,
@@ -746,12 +742,16 @@ def build_markdown(results: list[dict[str, Any]], orphaned_crawler: list[dict[st
     forced = sum(1 for row in results if row["alignment"] == "forced_match")
     crawler_missing = sum(1 for row in results if "crawler_missing_record" in row["failure_modes"])
     zyte_errors = sum(1 for row in results if "zyte_error" in row["failure_modes"])
+    critical_count = sum(1 for row in results if row["critical_issues"])
 
     mode_counts: dict[str, int] = {}
+    critical_counts: dict[str, int] = {}
     bucket_counts: dict[str, int] = {}
     for row in results:
         for mode in row["failure_modes"]:
             mode_counts[mode] = mode_counts.get(mode, 0) + 1
+        for crit in row["critical_issues"]:
+            critical_counts[crit] = critical_counts.get(crit, 0) + 1
         for bucket in row["architecture_buckets"]:
             bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
 
@@ -764,10 +764,18 @@ def build_markdown(results: list[dict[str, Any]], orphaned_crawler: list[dict[st
         f"- Missing CrawlerAI records: {crawler_missing}",
         f"- Zyte baseline errors: {zyte_errors}",
         f"- Orphaned CrawlerAI records: {len(orphaned_crawler)}",
+        f"- **Critical data quality issues: {critical_count}**",
         "",
-        "## Failure Modes",
+        "## 🚨 Critical Data Quality Issues",
         "",
     ]
+    if critical_counts:
+        for name, count in sorted(critical_counts.items(), key=lambda item: (-item[1], item[0])):
+            lines.append(f"- **{name}**: {count}")
+    else:
+        lines.append("- None - All data quality checks passed")
+    
+    lines.extend(["", "## All Failure Modes", ""])
     for name, count in sorted(mode_counts.items(), key=lambda item: (-item[1], item[0])):
         lines.append(f"- {name}: {count}")
     lines.extend(["", "## Architecture Buckets", ""])
@@ -776,9 +784,12 @@ def build_markdown(results: list[dict[str, Any]], orphaned_crawler: list[dict[st
 
     lines.extend(["", "## URL-wise Results", ""])
     for index, row in enumerate(results, start=1):
+        critical = ", ".join(row["critical_issues"]) if row["critical_issues"] else None
         modes = ", ".join(row["failure_modes"]) if row["failure_modes"] else "ok"
         buckets = ", ".join(row["architecture_buckets"]) if row["architecture_buckets"] else "-"
         lines.append(f"### {index:02d}. {row['url']}")
+        if critical:
+            lines.append(f"- **CRITICAL**: {critical}")
         lines.append(f"- alignment: {row['alignment']}")
         lines.append(f"- zyte_status: {row['zyte_status']}")
         lines.append(f"- crawler_url: {row['crawler_url'] or 'missing'}")

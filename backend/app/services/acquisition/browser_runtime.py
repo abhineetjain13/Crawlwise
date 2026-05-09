@@ -1255,6 +1255,7 @@ async def browser_fetch(
         proxied_page_factory=proxied_page_factory,
     )
     runtime_bridge_used = browser_proxy_mode == "page"
+    skip_origin_warmup = False
     runtime: SharedBrowserRuntime | None = None
     payload_capture = None
     popup_guard_registrations: list[tuple[Any, str, Any]] = []
@@ -1310,6 +1311,17 @@ async def browser_fetch(
             runtime_bridge_used = (
                 bool(bridge_flag()) if callable(bridge_flag) else False
             )
+            if (
+                runtime_engine == _REAL_CHROME_BROWSER_ENGINE
+                and allow_storage_state
+                and normalized_domain
+            ):
+                skip_origin_warmup = bool(
+                    await _load_storage_state_for_domain(
+                        normalized_domain,
+                        browser_engine=runtime_engine,
+                    )
+                )
             await _emit_browser_event(
                 on_event,
                 "info",
@@ -1352,6 +1364,7 @@ async def browser_fetch(
                     browser_reason=browser_reason,
                     host_policy_snapshot=host_policy_snapshot,
                     proxy_profile=proxy_profile,
+                    skip_for_reusable_domain_state=skip_origin_warmup,
                     timeout_seconds=_remaining(),
                     phase_timings_ms=phase_timings_ms,
                 )
@@ -1603,6 +1616,7 @@ async def _maybe_warm_origin_before_navigation(
     browser_reason: str | None,
     host_policy_snapshot: dict[str, object] | None,
     proxy_profile: dict[str, object] | None,
+    skip_for_reusable_domain_state: bool = False,
     timeout_seconds: float,
     phase_timings_ms: dict[str, int],
 ) -> None:
@@ -1611,7 +1625,7 @@ async def _maybe_warm_origin_before_navigation(
         return
     if _proxy_requires_fresh_browser_state(proxy_profile):
         return
-    if _normalize_browser_engine(browser_engine) == _REAL_CHROME_BROWSER_ENGINE:
+    if skip_for_reusable_domain_state:
         return
     reason = str(browser_reason or "").strip().lower()
     if reason in {

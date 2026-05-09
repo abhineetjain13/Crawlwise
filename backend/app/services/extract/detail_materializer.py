@@ -227,18 +227,27 @@ def _collect_structured_payload_candidates(
 ) -> None:
     identity_url = requested_page_url or page_url
     if identity_url:
+        requested_title = _detail_title_from_url(identity_url)
+        requested_tokens = _detail_identity_tokens(requested_title)
+        requested_codes = _detail_identity_codes_from_url(identity_url)
         had_irrelevant_product_payload = (
             isinstance(payload, dict)
             and _detail_structured_payload_is_irrelevant_product(
                 payload,
                 page_url=page_url,
                 requested_page_url=identity_url,
+                requested_title=requested_title,
+                requested_tokens=requested_tokens,
+                requested_codes=requested_codes,
             )
         )
         payload = _prune_irrelevant_detail_structured_payload(
             payload,
             page_url=page_url,
             requested_page_url=identity_url,
+            requested_title=requested_title,
+            requested_tokens=requested_tokens,
+            requested_codes=requested_codes,
         )
         if had_irrelevant_product_payload and payload in (None, "", [], {}):
             candidates.setdefault("_irrelevant_detail_structured_product", []).append(

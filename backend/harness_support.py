@@ -16,7 +16,7 @@ from app.models.user import User
 from app.services._batch_runtime import process_run
 from app.services.adapters.registry import registered_adapters
 from app.services.crawl_crud import create_crawl_run, get_run_records
-from app.services.pipeline.core import process_single_url
+from app.services.pipeline.extraction_loop import process_single_url
 from app.services.pipeline.types import URLProcessingConfig
 from app.services.platform_policy import (
     configured_adapter_names,

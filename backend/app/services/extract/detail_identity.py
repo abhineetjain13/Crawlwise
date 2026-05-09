@@ -679,6 +679,17 @@ def _detail_redirect_identity_is_mismatched(
         return False
 
     if current and requested == current:
+        candidate_url = text_or_none(record.get("url"))
+        if (
+            candidate_url
+            and candidate_url != requested
+            and same_site(requested, candidate_url)
+            and not _detail_url_matches_requested_identity(
+                candidate_url,
+                requested_page_url=requested,
+            )
+        ):
+            return True
         has_product_like_signal = any(
             record.get(field_name) not in (None, "", [], {})
             for field_name in (

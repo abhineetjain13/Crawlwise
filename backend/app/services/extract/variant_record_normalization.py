@@ -49,7 +49,7 @@ from app.services.extract.shared_variant_logic import (
     collapse_duplicate_size_aliases,
     merge_variant_pair,
     normalized_variant_axis_key,
-    variant_option_value_matches_ui_noise,
+    variant_option_value_is_noise,
     variant_identity,
     variant_row_richness,
     variant_semantic_identity,
@@ -573,7 +573,7 @@ def _value_is_placeholder(value: str) -> bool:
 
 
 def _value_is_ui_noise(value: str) -> bool:
-    return variant_option_value_matches_ui_noise(value)
+    return variant_option_value_is_noise(value)
 
 
 def _drop_polluted_parent_scalar_axes(record: dict[str, Any]) -> None:

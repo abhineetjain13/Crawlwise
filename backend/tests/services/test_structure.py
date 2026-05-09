@@ -127,8 +127,10 @@ FILE_LOC_BUDGETS = {
     Path("app/services/data_enrichment/service.py"): 1455,
     # JS state mapping stays centralized to avoid adapter-specific drift.
     Path("app/services/js_state_mapper.py"): 1386,
-    # LLM task runtime owns prompt validation, provider calls, cost logging, and typed errors.
-    Path("app/services/llm_tasks.py"): 1095,
+    # LLM task runtime now only orchestrates task execution. Prompt rendering,
+    # payload validation, provider calls, budget/cache, and cost logging have
+    # separate owners.
+    Path("app/services/llm_tasks.py"): 480,
     # Product Intelligence service owns job + discovery orchestration with brand and enrichment LLM helpers.
     Path("app/services/product_intelligence/service.py"): 1190,
 }
